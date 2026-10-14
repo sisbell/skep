@@ -386,6 +386,8 @@ fn the_load_steps_back_from_a_slice_less_checkpoint_and_replays_the_true_table()
                 skipped: vec![],
                 replayed: 0,
                 tail_cut: 0,
+                tail_cut_intact: 0,
+                began: true,
                 identity_resolved_empty: false,
             })
         );
@@ -448,6 +450,8 @@ fn a_slice_less_checkpoint_with_no_credential_deposit_loads_as_the_empty_table_a
             skipped: vec![],
             replayed: 0,
             tail_cut: 0,
+            tail_cut_intact: 0,
+            began: false,
             identity_resolved_empty: true,
         })
     );

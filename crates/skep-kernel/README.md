@@ -33,7 +33,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   loaded from.
 - **Read seams** — the kernel answers facts and says nothing: `Recovery`
   carries the start point, the bases passed over, the commits
-  `replayed` and the bytes of un-acked tail cut (`tail_cut`);
+  `replayed`, the bytes of un-acked tail cut (`tail_cut`) and the
+  intact frames among them no torn write leaves (`tail_cut_intact`),
+  and whether the open `began` a journal where none stood;
+  `poison_cause` why the write paths halted, where they have;
   `last_reclaimed_bytes` the journal bytes the last landing reclaimed;
   `inline_checkpoints` and `last_inline_checkpoint_failure` how many
   checkpoints `transact` ran on a writer and how the last one failed,
@@ -42,7 +45,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `CheckpointError::Landed`, naming the step (`LandedStep`); and
   `boundaries_above` answers every committed boundary above a position
   with its signature slot in one scan from the base below it, where
-  `attestation_at` answers one boundary per scan.
+  `attestation_at` answers one boundary per scan. Every failure on a
+  journal file names the file and the act, `{file}: {act}: {error}`,
+  its kind kept; a halt on unreadable committed data names, wherever
+  the damage has a place, the files it lies in and the act that
+  clears it.
 - **Keyed critical sections** — every write names the `LockKey`s it
   would hold. Under the v1 single applier one lock serializes all writes,
   and the keys are the seam a per-key realization will use without

@@ -7,6 +7,7 @@
 mod applier;
 mod history;
 
+use std::any::Any;
 use std::fmt;
 use std::fs::{self, File};
 use std::io;
@@ -14,7 +15,7 @@ use std::num::NonZeroU64;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use arc_swap::{ArcSwap, ArcSwapOption};
@@ -22,7 +23,7 @@ use parking_lot::Mutex;
 
 use crate::checkpoint::{self, CheckpointHeader};
 use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
-use crate::error::{CheckpointError, LandedStep, OpenError, TxnError};
+use crate::error::{at_file, CheckpointError, LandedStep, OpenError, TxnError};
 use crate::journal::{
     self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
 };
@@ -41,11 +42,14 @@ use applier::ApplierLock;
 /// (AUTH-2.86) — and the two acts of the open itself: how many commits it
 /// replayed above that start point, and how many bytes of un-acked tail it
 /// cut, so the open's own landing can be said in figures rather than left to
-/// the silence between two lines. A report and never a verdict: a skipped
-/// base is no failure of the open — the derivation succeeded from an older
-/// one — and the chain's one failure, the exhausted chain, is
-/// [`OpenError::BadCheckpoint`]'s. Absent under [`Durability::InMemory`],
-/// which loads nothing, replays nothing and cuts nothing.
+/// the silence between two lines — with the two facts that tell an operator
+/// what those figures do not: whether the cut tail held intact frames no
+/// torn write leaves, and whether any journal stood in the directory at all.
+/// A report and never a verdict: a skipped base is no failure of the open —
+/// the derivation succeeded from an older one — and the chain's one failure,
+/// the exhausted chain, is [`OpenError::BadCheckpoint`]'s. Absent under
+/// [`Durability::InMemory`], which loads nothing, replays nothing and cuts
+/// nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recovery {
     /// `S_load` — the coordinate of the base the recovered world was folded
@@ -66,11 +70,33 @@ pub struct Recovery {
     /// The BYTES the open's tail truncation removed: the active segment's
     /// length above the last committed marker, plus every wholly-later
     /// segment it discarded — §7's un-acked / torn tail, physically cut
-    /// before any write is served. `0` where the last committed marker ended
-    /// the journal, as it does after every clean shutdown. A count and not an
-    /// option: a cut that took nothing and no cut leave the same journal, so
-    /// the two are one fact, and every journaled open runs the cut.
+    /// before any write is served: a write caught before its commit was
+    /// durable, and so never acknowledged — save where
+    /// [`Recovery::tail_cut_intact`] counts a frame. `0` where the last
+    /// committed marker ended the journal, as it does after every clean
+    /// shutdown. A count and not an option: a cut that took nothing and no cut
+    /// leave the same journal, so the two are one fact, and every journaled
+    /// open runs the cut.
     pub tail_cut: u64,
+    /// Of the frames the cut removed, the INTACT ones of a kind no torn write
+    /// leaves: a commit marker that commits nothing, or a frame whose CRC
+    /// passes and that does not decode. `0` after every clean shutdown and
+    /// after nearly every crash — a crash leaves one only where the disk
+    /// wrote an append's pages out of order. Rot in the journal's last
+    /// committed transaction leaves one, and so does a rewrite of it (the
+    /// open item in [`Kernel::open`]'s damage model): the cut then may have
+    /// taken a transaction this kernel ACKNOWLEDGED, which a copy taken
+    /// before this open still holds. Counted, so that cut is said rather than
+    /// taken in silence.
+    pub tail_cut_intact: u64,
+    /// Whether NO JOURNAL STOOD in the directory — no segment and no
+    /// checkpoint when the open listed it — so the open began a journal at
+    /// genesis rather than recovering one. Right on a fresh board's first
+    /// open, and the one tell, on a board that had a journal, that the
+    /// directory opened is not where the journal lives: a volume not mounted
+    /// over its mount point, a mistyped path — where every later write lands
+    /// on a new journal beside the real one, out of sight of it.
+    pub began: bool,
 }
 
 /// One installed committed state: the root's identity IS the version
@@ -446,6 +472,13 @@ pub struct Kernel<W: WorldState> {
     /// slow fsync.
     checkpoint_mutex: Mutex<()>,
     poisoned: AtomicBool,
+    /// WHY the kernel halted, in words: set once, by [`Kernel::poison`], the
+    /// one site that raises `poisoned` from the commit path, BEFORE it raises
+    /// it — so a reader that sees the flag reads the cause — and read
+    /// lock-free by [`Kernel::poison_cause`]. The first poisoning's cause
+    /// stands: a halted kernel commits nothing more, so nothing later can be
+    /// the reason it halted.
+    poison_cause: OnceLock<String>,
     /// THE DUE FLAG (§6, the deferred arm): set by a crossing under
     /// [`CheckpointPolicy::Deferred`] in place of an inline checkpoint, read
     /// lock-free by [`Kernel::checkpoint_due`], and CLEARED FIRST by every
@@ -730,7 +763,7 @@ impl<W: WorldState> Kernel<W> {
             use std::os::unix::fs::DirBuilderExt;
             builder.mode(0o700);
         }
-        builder.create(dir)?;
+        builder.create(dir).map_err(at_file(dir.display(), "create"))?;
         let lock = journal::acquire_journal_lock(dir)?;
         // THE STRAY TEMP FILE, removed under the flock before anything is
         // listed: a checkpoint a crash or a failed write left half-written
@@ -743,6 +776,11 @@ impl<W: WorldState> Kernel<W> {
         let stray_checkpoint_removed = checkpoint::remove_stray_tmp(dir)?;
         let segs = journal::list_segments(dir)?;
         let checkpoints = checkpoint::list(dir)?;
+        // NO JOURNAL STOOD here: what this open begins is a journal at
+        // genesis, which the report says ([`Recovery::began`]) — right on a
+        // fresh board, and the one tell of a directory that is not where the
+        // board's journal lives.
+        let began = segs.is_empty() && checkpoints.is_empty();
 
         // The base, with its whole fallback chain: newest retained checkpoint
         // that loads and seeds → next-older retained → genesis-while-reachable;
@@ -752,8 +790,8 @@ impl<W: WorldState> Kernel<W> {
             OpenError::BadCheckpoint { cause: fail.cause }
         })?;
         // The report's first two members, read off the base before the fold
-        // consumes it; its other two are the scan's count and the cut's,
-        // known once each has run.
+        // consumes it; the rest are the scan's counts and the cut's, known
+        // once each has run, and whether a journal stood at all, known above.
         let start_point = Seq(base.s_load());
         let skipped = base.skipped().to_vec();
 
@@ -777,11 +815,12 @@ impl<W: WorldState> Kernel<W> {
                 });
             }
             // The probe reads a frame header and no `Seq`, so the coordinate
-            // is the base's own: where the scan would have begun.
-            FirstSyncWord::Damaged(found) => {
+            // is the base's own: where the scan would have begun. The
+            // account names the segment, the one file the remedy touches.
+            FirstSyncWord::Damaged { found, segment } => {
                 return Err(OpenError::Corruption {
                     at: Seq(base.s_load()),
-                    cause: Some(journal::damaged_sync_word_cause(found)),
+                    cause: Some(journal::damaged_sync_word_cause(found, &segment)),
                 });
             }
         }
@@ -789,15 +828,16 @@ impl<W: WorldState> Kernel<W> {
         // Pass 1: derive W, classify the corrupt runs and verify the chain
         // (§7). A scan that could not take a segment in within its bounds —
         // enumerate its frame stream in bounded work, or read it in bounded
-        // memory — produces no outcome at all and halts here. Of the runs it
-        // does report, those beyond W and the EOF ones are the un-acked/torn
-        // tail, physically discarded below, and those at or below S_load are
+        // memory — produces no outcome at all and halts here, its account
+        // naming the segment and the bound it broke. Of the runs it does
+        // report, those beyond W and the EOF ones are the un-acked/torn tail,
+        // physically discarded below, and those at or below S_load are
         // already embodied in the base.
         let scan = base.scan(&segs, None).map_err(|fail| match fail {
             ScanFail::Io(e) => OpenError::Io(e),
-            ScanFail::Unscannable { at } => OpenError::Corruption {
+            ScanFail::Unscannable { at, cause } => OpenError::Corruption {
                 at: Seq(at),
-                cause: None,
+                cause: Some(cause),
             },
         })?;
         // Every at-rest verdict, in the order it speaks
@@ -841,10 +881,17 @@ impl<W: WorldState> Kernel<W> {
         // also before the appender is opened over that segment, whose length
         // this cut settles and which the appender reads once. What it cut, in
         // bytes, is the open's to report, as the commits the fold replayed
-        // are: the scan counted those as it closed their markers.
+        // are: the scan counted those as it closed their markers, and the
+        // intact frames of no writer's in the tail as it met them.
         let tail_cut = journal::truncate_tail(dir, &scan)?;
-        let recovery =
-            Recovery { start_point, skipped, replayed: scan.commits_above_base, tail_cut };
+        let recovery = Recovery {
+            start_point,
+            skipped,
+            replayed: scan.commits_above_base,
+            tail_cut,
+            tail_cut_intact: scan.tail_intact,
+            began,
+        };
 
         let writer =
             JournalWriter::open_active(dir, next_seq, chain_head, salt_source)?.with_seam(seam);
@@ -879,6 +926,7 @@ impl<W: WorldState> Kernel<W> {
             }),
             checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
+            poison_cause: OnceLock::new(),
             checkpoint_due: AtomicBool::new(false),
             inline_checkpoints: AtomicU64::new(0),
             last_inline_failure: ArcSwapOption::empty(),
@@ -1118,7 +1166,12 @@ impl<W: WorldState> Kernel<W> {
         // predecessor, which leaves halting as the only sound answer.
         let state = &mut *applier;
         let Some((first, last)) = state.sequencer.mint(n) else {
-            self.poisoned.store(true, Ordering::Release);
+            self.poison(format!(
+                "no position is left above position {} for a transaction of {n} records: a \
+                 journal whose head leaves no position above it is refused at the next open, so \
+                 none was committed",
+                state.sequencer.high_water
+            ));
             return Err(TxnError::Poisoned);
         };
 
@@ -1167,9 +1220,19 @@ impl<W: WorldState> Kernel<W> {
                     // the high-water advanced over what survives. The
                     // committed one replays at the next open() as a lost-ack
                     // op (§1/§3, SAFE(b)(iii)).
-                    UnwindRepair::Unrepaired | UnwindRepair::AfterBarrier => {
-                        self.poisoned.store(true, Ordering::Release);
-                    }
+                    UnwindRepair::Unrepaired(repair) => self.poison(format!(
+                        "a panic unwound out of the commit of {}{}, and the truncation that \
+                         repairs it failed ({repair}): its frames may stand on disk, so the next \
+                         open decides whether it stands",
+                        positions(first, last),
+                        panic_words(&*payload)
+                    )),
+                    UnwindRepair::AfterBarrier => self.poison(format!(
+                        "a panic unwound out of the commit of {}{} after its barrier and before \
+                         its install: it is durable, so the next open replays it",
+                        positions(first, last),
+                        panic_words(&*payload)
+                    )),
                 }
                 drop(applier);
                 resume_unwind(payload)
@@ -1196,8 +1259,13 @@ impl<W: WorldState> Kernel<W> {
                 Err(TxnError::OverBudget { bytes })
             }
             // The truncation itself could not complete durably (§1).
-            Ok(Err(CommitFail::Unrepaired)) => {
-                self.poisoned.store(true, Ordering::Release);
+            Ok(Err(CommitFail::Unrepaired { failed, repair })) => {
+                self.poison(format!(
+                    "the commit of {} failed ({failed}), and the truncation that repairs it \
+                     failed too ({repair}): its frames may stand on disk, so the next open \
+                     decides whether it stands",
+                    positions(first, last)
+                ));
                 Err(TxnError::Poisoned)
             }
             Ok(Ok(bytes)) => {
@@ -1246,6 +1314,15 @@ impl<W: WorldState> Kernel<W> {
     fn note_inline_run(&self, outcome: Result<Seq, CheckpointError>) {
         self.last_inline_failure.store(outcome.err().map(|e| Arc::new(e.to_string())));
         self.inline_checkpoints.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// HALT THE WRITE PATHS (§1/§3), saying why: the cause is kept FIRST,
+    /// then the flag raised, so a reader of [`Kernel::poison_cause`] that saw
+    /// [`Kernel::is_poisoned`] answer `true` reads the cause beside it. The
+    /// one door to the commit path's halt, so no poisoning goes unsaid.
+    fn poison(&self, cause: String) {
+        let _ = self.poison_cause.set(cause);
+        self.poisoned.store(true, Ordering::Release);
     }
 
     /// One committed state, pinned (MIC clauses 4 & 6; A3/V0/V2). One
@@ -1358,9 +1435,23 @@ impl<W: WorldState> Kernel<W> {
     /// NOT a gate: a kernel healthy at this call may poison before the next
     /// write, so the authoritative answer is the refusal [`Kernel::transact`]
     /// returns. Poison is terminal in the other direction, so a `true` here is
-    /// actionable without a race.
+    /// actionable without a race. Why it halted is [`Kernel::poison_cause`]'s.
     pub fn is_poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Acquire)
+    }
+
+    /// WHY this kernel halted its write paths, in words an operator acts on,
+    /// or `None` while it has not: which of the three unrecoverable failures
+    /// [`TxnError::Poisoned`] lists it was, the transaction by its positions —
+    /// the operator stream's word for its coordinates — and
+    /// the failures' own words — each naming its segment and its act, the
+    /// truncation's beside the step's it failed to repair — and what the next
+    /// open does with what stands. Kept as text, set once, before the halt is
+    /// visible, by the commit path's one poisoning door. Lock-free, like
+    /// [`Kernel::is_poisoned`], and for the operator's stream: it names files
+    /// and failures, so it is not a member to serve to every reader.
+    pub fn poison_cause(&self) -> Option<&str> {
+        self.poison_cause.get().map(String::as_str)
     }
 
     /// Whether a checkpoint is DUE (§6, the deferred arm): a commit has
@@ -1602,6 +1693,26 @@ impl<W: WorldState> Kernel<W> {
     pub fn flush(&self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// A transaction as a poisoning's cause names it: by its one position, or
+/// the first and last of a composite's.
+fn positions(first: u64, last: u64) -> String {
+    if first == last {
+        format!("the transaction at position {first}")
+    } else {
+        format!("the transaction at positions {first}–{last}")
+    }
+}
+
+/// A panic's own words, where its payload is text, as a poisoning's cause
+/// carries them — ` ({words})` — and nothing where it is not.
+fn panic_words(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|words| words.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .map_or_else(String::new, |words| format!(" ({words})"))
 }
 
 /// THE WRITE-FAULT SEAM's DOORS (`test-hooks` builds only; `hooks.rs` is the

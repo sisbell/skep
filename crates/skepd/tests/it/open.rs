@@ -15,7 +15,10 @@
 //!   {path}` the second, and `open: recovered from {checkpoint.n |
 //!   genesis}, {k} commits replayed, in {d} ms` stands on stderr before the
 //!   serving line — `{k}` the kernel's count across a reopen with no
-//!   checkpoint and one with a checkpoint at a known position.
+//!   checkpoint and one with a checkpoint at a known position. A fresh
+//!   board's first open says, after its landing, `open: no journal stood in
+//!   the data directory: this open began a new board at genesis — …`; a
+//!   reopen says none.
 //! * THE HOOK: a worker's panic inside its handler's catch is ONE prefixed,
 //!   timed `failure:` line naming `skepd-worker` and the site, nothing of
 //!   Rust's own hook's text, and the worker serves its next request.
@@ -446,6 +449,11 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
+/// The beginning's line, after its head: the open found no journal in the
+/// directory and began a board rather than recovering one.
+const BEGAN: &str =
+    "no journal stood in the data directory: this open began a new board at genesis";
+
 /// The `open:` lines of `whole` that say a tail cut, after their heads.
 fn tail_cut_lines(whole: &[String]) -> Vec<String> {
     whole
@@ -602,11 +610,23 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("data");
 
-    // FIRST LIFE: a fresh board — genesis, nothing replayed.
+    // FIRST LIFE: a fresh board — genesis, nothing replayed, and a board
+    // BEGUN, said after the landing, which reads alike either way.
     let mut first = serve_and_read_the_open(&dir, &[]);
     assert_eq!(first.data_dir_line, format!("data-dir {}", dir.display()));
     let (base, replayed, _) = recovered_figures(&first.recovered_line);
     assert_eq!((base.as_str(), replayed), ("genesis", 0), "{}", first.recovered_line);
+    let began = await_said(&mut first.stderr, "open", BEGAN);
+    assert!(
+        began.contains("the directory named above is not where it lives"),
+        "the beginning says what it means on a board that had a journal: {began}"
+    );
+    let at = |seen: &[String], prefix: &str| seen.iter().position(|l| said(l, "open", prefix));
+    assert!(
+        at(&first.stderr.seen, "recovered from ") < at(&first.stderr.seen, BEGAN),
+        "the beginning follows the landing it qualifies:\n{}",
+        first.stderr.seen.join("\n")
+    );
     // N commits over the wire: the delegate, the home's mint, three inserts
     // — five, as the feed testifies.
     let (home, session) = delegate_a_home(first.port);
@@ -624,6 +644,15 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
         ("genesis", commits.len() as u64),
         "FINDING (m7): the landing's count is not the commits the open replayed: {}",
         second.recovered_line
+    );
+    // A journal stood, so nothing was begun: read on past where the line
+    // would stand — the media limits are said after it — and none was said.
+    await_said(&mut second.stderr, "open", "media limits: ");
+    assert_eq!(
+        at(&second.stderr.seen, BEGAN),
+        None,
+        "a reopen recovered its journal and began none:\n{}",
+        second.stderr.seen.join("\n")
     );
     second.child.kill();
 

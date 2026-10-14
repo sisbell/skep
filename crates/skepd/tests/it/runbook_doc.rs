@@ -59,7 +59,9 @@ fn service(heading: &str) -> String {
 /// (`operations.md` §1.1 m3; §4 row 8; CUT 1): the list carries the tail
 /// cut's line, `open: journal tail cut (`, after the stray `checkpoint.tmp`'s
 /// and before the media limits', where the open says it, with the
-/// inventory's `journal.tail_cut` beside it; and each line the binary
+/// inventory's `journal.tail_cut` beside it, and its second arm — a tail
+/// holding intact frames, under `failure:` — after it; the beginning's line,
+/// after the recovery's landing it qualifies; and each line the binary
 /// classes that the list once quoted bare — the stray `checkpoint.tmp`'s and
 /// the media limits' under `open:`, the first head's and the cell index's
 /// landing under `landing:`, the pruner's refused thread under `failure:` —
@@ -99,6 +101,19 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     };
     classed("checkpoint.tmp found (", Class::Open);
     classed("journal tail cut (", Class::Open);
+    // …and the tail cut's second arm, quoted after the first: a cut that
+    // may have taken an acknowledged write is the failure it is.
+    classed("of its frames intact on disk", Class::Failure);
+    assert!(
+        at("open: journal tail cut (") < at("of its frames intact on disk"),
+        "the tail cut's two arms, the report's own first"
+    );
+    // The beginning, quoted with the recovery's landing it follows.
+    classed("no journal stood in the data directory:", Class::Open);
+    assert!(
+        at("open: recovered from ") < at("no journal stood in the data directory:"),
+        "the beginning follows the landing it qualifies"
+    );
     classed("media limits:", Class::Open);
     classed("H.1 written at open", Class::Landing);
     classed("pruner: the OS refused its thread (", Class::Failure);

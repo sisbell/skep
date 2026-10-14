@@ -19,10 +19,12 @@ use crate::world::World;
 /// What [`Engine::open`] FOUND in the journal directory and DID there
 /// (AUTH-2.85, AUTH-2.86): M2's own account of the open — the start point its
 /// derivation resolved from, every retained checkpoint it passed over, each
-/// with why, the commits it replayed above the start point and the un-acked
-/// tail it cut, in bytes — and the one fact only this assembler can add to
-/// it, whether the start point's identity slice was RESOLVED to the empty
-/// table rather than carried (AUTH-2.83). The daemon above logs them at
+/// with why, the commits it replayed above the start point, the un-acked
+/// tail it cut, in bytes, with the intact frames among them no torn write
+/// leaves, and whether any journal stood to recover at all — and the one
+/// fact only this assembler can add to it, whether the start point's
+/// identity slice was RESOLVED to the empty table rather than carried
+/// (AUTH-2.83). The daemon above logs them at
 /// startup: a skipped checkpoint with the start point it resolved from, a
 /// slice-less checkpoint that resolved empty — the operator's one tell of a
 /// build that wrote no slice — and the open's own landing in figures. A
@@ -47,6 +49,18 @@ pub struct Recovery {
     /// The bytes of un-acked tail the open cut, as M2 counted them
     /// (`skep_kernel::Recovery`'s `tail_cut`); `0` after a clean shutdown.
     pub tail_cut: u64,
+    /// Of the frames that cut removed, the intact ones no torn write leaves —
+    /// a commit marker that commits nothing, a frame whose CRC passes and
+    /// that does not decode — as M2 counted them
+    /// (`skep_kernel::Recovery`'s `tail_cut_intact`): `0` after every clean
+    /// shutdown and nearly every crash, and otherwise the sign that the cut
+    /// may have taken a write the daemon acknowledged.
+    pub tail_cut_intact: u64,
+    /// Whether no journal stood in the directory, so the open BEGAN one at
+    /// genesis rather than recovered one (`skep_kernel::Recovery`'s
+    /// `began`): right on a fresh board's first open, and on any other the
+    /// tell that the directory opened is not where the journal lives.
+    pub began: bool,
     /// Whether the start point carried no identity slice and its link slice
     /// held no credential deposit, so its table RESOLVED empty (AUTH-2.83) —
     /// the true table, and the one case a slice-less base is a start point.
@@ -225,6 +239,8 @@ impl Engine {
             skipped: found.skipped.clone(),
             replayed: found.replayed,
             tail_cut: found.tail_cut,
+            tail_cut_intact: found.tail_cut_intact,
+            began: found.began,
             identity_resolved_empty: kernel.snapshot().world().identity_resolved,
         });
         Ok(Engine { stores: EngineStores::new(kernel), recovery })

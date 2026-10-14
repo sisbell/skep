@@ -21,6 +21,7 @@
 //! name a checkpoint by `(seq, chain_head, body_hash)`. The CRC stays as the
 //! first, cheap bit-rot check `load` runs before anything else.
 
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,7 +31,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::error::{stamp_text, Cause, NO_MIGRATION_REMEDY};
+use crate::error::{at_file, stamp_text, Cause, NO_MIGRATION_REMEDY};
 use crate::journal::{codec, fsync_dir};
 use crate::{Seam, Seq, Step};
 
@@ -134,24 +135,54 @@ pub struct CheckpointHeader {
     pub len: u64,
 }
 
+/// The refusal of a checkpoint under another FORMAT STAMP: the stamp found,
+/// against the one this build reads and writes. Its [`fmt::Display`] is the
+/// whole refusal, the ruled remedy last ([`NO_MIGRATION_REMEDY`]) — what an
+/// EXHAUSTED fallback chain says through [`crate::OpenError::BadCheckpoint`]'s
+/// cause, where no base stands in and the board cannot open (PUB-1.2). Typed,
+/// rather than a sentence, for the one reader that must say less:
+/// [`ForeignStamp::fact`] is the refusal without the remedy, which a base the
+/// chain passed over while an older one stood in carries
+/// ([`crate::SkippedBase`]'s `why`) — the board opened whole, and the remedy
+/// for a board that cannot open would have its operator delete one that can.
+#[derive(Debug)]
+pub(crate) struct ForeignStamp {
+    found: [u8; 4],
+}
+
+impl ForeignStamp {
+    /// The refusal's FACT: the stamp found and the one this build reads,
+    /// without the remedy.
+    pub(crate) fn fact(&self) -> String {
+        format!(
+            "checkpoint is not this build's format: it opens with the stamp `{}`, this build \
+             reads and writes `{}` only",
+            stamp_text(&self.found),
+            stamp_text(&MAGIC)
+        )
+    }
+}
+
+impl fmt::Display for ForeignStamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}; {NO_MIGRATION_REMEDY}", self.fact())
+    }
+}
+
+impl std::error::Error for ForeignStamp {}
+
 /// The one parse of a checkpoint header, for [`CheckpointMeta::load`] and
 /// [`CheckpointMeta::header`] alike, in the order that makes each check mean
 /// something: the stamp FIRST, so another format's header has none of its
 /// other fields read as this format's — refused by name with the ruled remedy
-/// ([`NO_MIGRATION_REMEDY`]) — then the seq against `named_seq`, the
-/// directory entry's claim. The name-versus-header cross-check compares two
-/// independent sources, which is what makes it a check rather than a
-/// tautology: the seq comes from the directory, the header from the bytes.
+/// ([`ForeignStamp`]) — then the seq against `named_seq`, the directory
+/// entry's claim. The name-versus-header cross-check compares two independent
+/// sources, which is what makes it a check rather than a tautology: the seq
+/// comes from the directory, the header from the bytes.
 fn parse_header(named_seq: u64, bytes: &[u8; HEADER_LEN]) -> Result<Header, LoadRefused> {
     let stamp: [u8; 4] = field::<0, 4>(bytes);
     if stamp != MAGIC {
-        return Err(format!(
-            "checkpoint is not this build's format: it opens with the stamp `{}`, this build \
-             reads and writes `{}` only; {NO_MIGRATION_REMEDY}",
-            stamp_text(&stamp),
-            stamp_text(&MAGIC)
-        )
-        .into());
+        return Err(Box::new(ForeignStamp { found: stamp }));
     }
     let seq = u64::from_le_bytes(field::<SEQ_AT, 8>(bytes));
     if seq != named_seq {
@@ -199,20 +230,27 @@ pub(crate) struct CheckpointMeta {
 /// Read the [`HEADER_LEN`] bytes a checkpoint file opens with, and nothing
 /// after them — the one read of a header, for [`CheckpointMeta::load`] and
 /// [`CheckpointMeta::header`] alike, so a file too short to hold one answers
-/// [`SHORT_OF_HEADER`] whichever reader met it.
-fn read_header(file: &mut File) -> Result<[u8; HEADER_LEN], LoadRefused> {
+/// [`SHORT_OF_HEADER`] whichever reader met it, and one that cannot be read
+/// names itself, `name` being the file's name in the directory.
+fn read_header(file: &mut File, name: &str) -> Result<[u8; HEADER_LEN], LoadRefused> {
     let mut bytes = [0u8; HEADER_LEN];
     file.read_exact(&mut bytes).map_err(|e| -> LoadRefused {
         if e.kind() == io::ErrorKind::UnexpectedEof {
             SHORT_OF_HEADER.into()
         } else {
-            e.into()
+            at_file(name, "read")(e).into()
         }
     })?;
     Ok(bytes)
 }
 
 impl CheckpointMeta {
+    /// The file's name in the journal directory, `checkpoint.{seq}` — the
+    /// words a refusal names it by.
+    fn name(&self) -> String {
+        checkpoint_name(self.seq)
+    }
+
     /// Load and validate this checkpoint, or say why it cannot stand in as a
     /// base: unreadable, short of its own header, a foreign format stamp, a
     /// header seq disagreeing with the name, a file whose length disagrees
@@ -245,14 +283,15 @@ impl CheckpointMeta {
     /// see [`fn@write`] for what a drifted half costs, which is every retained
     /// base at once and no signal that it happened.
     pub(crate) fn load<W: DeserializeOwned>(&self) -> Result<Loaded<W>, LoadRefused> {
-        let mut file = File::open(&self.path)?;
-        let header = parse_header(self.seq, &read_header(&mut file)?)?;
+        let name = self.name();
+        let mut file = File::open(&self.path).map_err(at_file(&name, "read"))?;
+        let header = parse_header(self.seq, &read_header(&mut file, &name)?)?;
         // The file's length and the header's `body_len` are both claims; the
         // read is sized only once they agree, so a file extended past its body
         // sizes nothing. Checked, since a header claiming near `u64::MAX`
         // would otherwise overflow the sum: a panic in a checked build, and in
         // a release one a wrap back onto a length that matches.
-        let file_len = file.metadata()?.len();
+        let file_len = file.metadata().map_err(at_file(&name, "read"))?.len();
         if (HEADER_LEN as u64).checked_add(header.body_len) != Some(file_len) {
             return Err(format!(
                 "checkpoint file is {file_len} bytes, its header claims {HEADER_LEN} + {}",
@@ -267,7 +306,7 @@ impl CheckpointMeta {
         body.try_reserve_exact(usize::try_from(header.body_len)?)?;
         // `take` holds the read to the agreed figure even if the file grows
         // beneath it; a file that shrank beneath it reads short, refused below.
-        file.take(header.body_len).read_to_end(&mut body)?;
+        file.take(header.body_len).read_to_end(&mut body).map_err(at_file(&name, "read"))?;
         if body.len() as u64 != header.body_len {
             return Err(format!(
                 "checkpoint body is {} bytes, its header claims {}",
@@ -306,7 +345,9 @@ impl CheckpointMeta {
     /// its checksum and hash need the body, and `body_hash` is what a party
     /// holding the file verifies it by.
     pub(crate) fn header(&self) -> Result<CheckpointHeader, LoadRefused> {
-        let header = parse_header(self.seq, &read_header(&mut File::open(&self.path)?)?)?;
+        let name = self.name();
+        let mut file = File::open(&self.path).map_err(at_file(&name, "read"))?;
+        let header = parse_header(self.seq, &read_header(&mut file, &name)?)?;
         Ok(CheckpointHeader {
             seq: Seq(self.seq),
             chain_head: header.chain_head,
@@ -316,9 +357,12 @@ impl CheckpointMeta {
     }
 }
 
-/// The fixed temp name a checkpoint is built through, in `dir`.
+/// The fixed temp name a checkpoint is built through.
+const TMP_NAME: &str = "checkpoint.tmp";
+
+/// Where the fixed temp name stands in `dir`.
 fn tmp_path(dir: &Path) -> PathBuf {
-    dir.join("checkpoint.tmp")
+    dir.join(TMP_NAME)
 }
 
 /// Remove a stray `checkpoint.tmp` from `dir` — a checkpoint a crash or a
@@ -334,9 +378,9 @@ pub(crate) fn remove_stray_tmp(dir: &Path) -> io::Result<Option<u64>> {
     let len = match fs::metadata(&tmp) {
         Ok(meta) => meta.len(),
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
+        Err(e) => return Err(at_file(TMP_NAME, "stat")(e)),
     };
-    fs::remove_file(&tmp)?;
+    fs::remove_file(&tmp).map_err(at_file(TMP_NAME, "remove"))?;
     fsync_dir(dir)?;
     Ok(Some(len))
 }
@@ -385,8 +429,8 @@ pub(crate) fn newest_header(dir: &Path) -> Option<CheckpointHeader> {
 /// names fail the name parse and are skipped.
 pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     let mut checkpoints = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(dir).map_err(at_file(dir.display(), "list"))? {
+        let entry = entry.map_err(at_file(dir.display(), "list"))?;
         let name = entry.file_name();
         let Some(seq) = name.to_str().and_then(parse_checkpoint_name) else {
             continue;
@@ -448,7 +492,7 @@ pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Opt
             false
         };
         if remove {
-            fs::remove_file(&cp.path)?;
+            fs::remove_file(&cp.path).map_err(at_file(cp.name(), "remove"))?;
         } else {
             floor.get_or_insert(cp.seq);
         }
@@ -467,10 +511,12 @@ pub(crate) enum WriteFail {
     /// could not encode. Nothing was written, not even the temp file: the
     /// encode precedes the first file operation.
     Serialize(Cause),
-    /// A file operation BEFORE the rename failed. No `checkpoint.tmp`
-    /// survives it: the rename is what publishes a checkpoint, so a failure
-    /// before it leaves no base, and the temp file is removed before this is
-    /// answered — best-effort, its own failure folded into the account (§6).
+    /// A file operation BEFORE the rename failed, named by its file and its
+    /// act — `checkpoint.tmp: create`, `write`, `fsync`, or `rename to
+    /// checkpoint.{seq}` — its kind kept. No `checkpoint.tmp` survives it: the
+    /// rename is what publishes a checkpoint, so a failure before it leaves no
+    /// base, and the temp file is removed before this is answered —
+    /// best-effort, its own failure folded into the account (§6).
     Io(io::Error),
     /// The directory's fsync AFTER the rename failed: the base is on disk,
     /// whole, under its own name — the rename published it — and what the
@@ -537,13 +583,13 @@ impl From<io::Error> for WriteFail {
 /// seam's ([`Step`]) — the temp file's creation, its fsync, and the
 /// directory's fsync after the rename — each hooked through `seam` BEFORE
 /// it runs, after every step before it has completed: an armed failure
-/// answers in the step's place and travels out of the kind armed, as
-/// [`WriteFail::Io`] for the two before the rename, the removal above running
-/// for a failure inside the window as for any, and as [`WriteFail::Landed`]
-/// for the directory's fsync, the base on disk; an armed panic unwinds there,
-/// and runs no removal. `seam` is the kernel's, handed by
-/// [`crate::Kernel::checkpoint`]; in a build without the feature its hook is
-/// a no-op.
+/// answers in the step's place, named as the real step's failure is named,
+/// and travels out of the kind armed, as [`WriteFail::Io`] for the two before
+/// the rename, the removal above running for a failure inside the window as
+/// for any, and as [`WriteFail::Landed`] for the directory's fsync, the base
+/// on disk; an armed panic unwinds there, and runs no removal. `seam` is the
+/// kernel's, handed by [`crate::Kernel::checkpoint`]; in a build without the
+/// feature its hook is a no-op.
 pub(crate) fn write<W: Serialize>(
     dir: &Path,
     seq: u64,
@@ -559,7 +605,6 @@ pub(crate) fn write<W: Serialize>(
     let _ = body.try_reserve_exact(usize::try_from(hint).unwrap_or(usize::MAX));
     codec().serialize_into(&mut body, world).map_err(|e| WriteFail::Serialize(e))?;
     let tmp = tmp_path(dir);
-    seam.before(Step::CheckpointCreate)?;
     // The temp file is born `0600` on unix — the mode set at creation,
     // whatever the process umask — and the rename below carries it onto
     // `checkpoint.<seq>`: a base is the world whole, owner-only from its
@@ -571,7 +616,10 @@ pub(crate) fn write<W: Serialize>(
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(&tmp)?;
+    let mut f = seam
+        .before(Step::CheckpointCreate)
+        .and_then(|()| opts.open(&tmp))
+        .map_err(at_file(TMP_NAME, "create"))?;
     let mut header = Vec::with_capacity(HEADER_LEN);
     header.extend_from_slice(&MAGIC);
     header.extend_from_slice(&seq.to_le_bytes());
@@ -584,12 +632,15 @@ pub(crate) fn write<W: Serialize>(
     // the rename below is what publishes it. A failure inside answers with
     // the file removed.
     let published = (|| -> io::Result<()> {
-        f.write_all(&header)?;
-        f.write_all(&body)?;
-        seam.before(Step::CheckpointSync)?;
-        f.sync_all()?;
+        f.write_all(&header)
+            .and_then(|()| f.write_all(&body))
+            .map_err(at_file(TMP_NAME, "write"))?;
+        seam.before(Step::CheckpointSync)
+            .and_then(|()| f.sync_all())
+            .map_err(at_file(TMP_NAME, "fsync"))?;
         drop(f);
         fs::rename(&tmp, checkpoint_path(dir, seq))
+            .map_err(at_file(TMP_NAME, format!("rename to {}", checkpoint_name(seq))))
     })();
     if let Err(failed) = published {
         let removal = match fs::remove_file(&tmp) {
@@ -606,8 +657,12 @@ pub(crate) fn write<W: Serialize>(
         }));
     }
     // Past the rename: the base is on disk whatever follows, which is what
-    // a failure from here answers over (`WriteFail::Landed`'s card).
-    seam.before(Step::CheckpointDirSync).and_then(|()| fsync_dir(dir)).map_err(WriteFail::Landed)
+    // a failure from here answers over (`WriteFail::Landed`'s card). The
+    // seam's failure is named as the directory's own sync names its own.
+    seam.before(Step::CheckpointDirSync)
+        .map_err(at_file(dir.display(), "sync"))
+        .and_then(|()| fsync_dir(dir))
+        .map_err(WriteFail::Landed)
 }
 
 #[cfg(test)]

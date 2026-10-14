@@ -366,9 +366,9 @@ fn a_failure_after_the_base_landed_names_the_base_and_its_step_and_re_reads_the_
             line,
             &format!(
                 "failure: checkpoint FAILED (the head stood at position {at} when the run began): \
-                 the volume is full (injected StorageFull at CheckpointSync); the \
-                 journal is not reclaimed and holds every commit; the next attempt is at the \
-                 cadence's next crossing"
+                 the volume is full (checkpoint.tmp: fsync: injected StorageFull at \
+                 CheckpointSync); the journal is not reclaimed and holds every commit; the next \
+                 attempt is at the cadence's next crossing"
             )
         );
         assert_eq!(sd.daemon().newest_checkpoint().map(|h| h.seq), before, "no base landed");

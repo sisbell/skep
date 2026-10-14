@@ -122,7 +122,16 @@ fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
     let seg = seg_file(dir.path(), 1);
     flip_byte(&seg, FRAME_HEADER_LEN + 1); // T1's record: sync is lost here
     match k.world_at(Seq(2)) {
-        Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(0)),
+        Err(HistoryError::Corruption { at, cause }) => {
+            assert_eq!(at, Seq(0));
+            // The coordinate is the base's, which says nothing of where the
+            // damage lies; the account names the segment that refused.
+            let cause = cause.expect("the refusal names the segment it could not enumerate");
+            assert!(
+                cause.to_string().starts_with("seg-1.wal's frames could not be enumerated"),
+                "got {cause}"
+            );
+        }
         other => panic!("expected Corruption at the base, got {other:?}"),
     }
 }
@@ -494,8 +503,12 @@ fn boundaries_above_halts_on_at_rest_damage_and_writes_nothing() {
     flip_byte(&seg, spans[2].0 + FRAME_HEADER_LEN + 1);
     for p in [0u64, 1, 2] {
         match k.boundaries_above(Seq(p)) {
-            Err(HistoryError::Corruption { at, cause: None }) => {
-                assert_eq!(at, Seq(3), "above {p}")
+            Err(HistoryError::Corruption { at, cause: Some(cause) }) => {
+                assert_eq!(at, Seq(3), "above {p}");
+                assert!(
+                    cause.to_string().starts_with("corrupt run in seg-1.wal from byte "),
+                    "above {p}, the run's account names its segment: {cause}"
+                );
             }
             other => panic!("expected Corruption above {p}, got {other:?}"),
         }
@@ -513,8 +526,12 @@ fn boundaries_above_halts_on_at_rest_damage_and_writes_nothing() {
     let damaged = fs::read(&seg).unwrap();
     for p in [3u64, 4] {
         match k.boundaries_above(Seq(p)) {
-            Err(HistoryError::Corruption { at, cause: None }) => {
-                assert_eq!(at, Seq(6), "above {p}")
+            Err(HistoryError::Corruption { at, cause: Some(cause) }) => {
+                assert_eq!(at, Seq(6), "above {p}");
+                assert!(
+                    cause.to_string().starts_with("corrupt run in seg-1.wal from byte "),
+                    "above {p}, the run's account names its segment: {cause}"
+                );
             }
             other => panic!("expected Corruption above {p}, got {other:?}"),
         }

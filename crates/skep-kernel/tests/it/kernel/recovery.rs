@@ -2,6 +2,8 @@
 //! tail cut and its coordinates reused, halts that cut nothing, the fallback
 //! chain, and one live kernel per journal.
 
+use std::io;
+
 use super::*;
 use crate::mutilate::{append_bytes, ckpt_file, copy_dir, flip_byte, seg_file, truncate_file};
 use skep_kernel::OpenError;
@@ -122,6 +124,10 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
     let recovery = k.recovery().expect("journaled");
     assert_eq!(recovery.tail_cut, spans[5].0 + 3 - spans[4].0, "the bytes cut, exactly");
     assert_eq!(recovery.replayed, 2);
+    // A crash's torn tail holds an intact RECORD and a torn marker — nothing
+    // no torn write leaves — so the cut is reported as the crash's alone.
+    assert_eq!(recovery.tail_cut_intact, 0, "a crash's torn tail is nothing but a crash's");
+    assert!(!recovery.began, "a journal stood: this open recovered it");
     // Under Rollback the next session reuses the discarded coordinates —
     // safe exactly because the stale tail is gone (§1/§7 Txn uniqueness).
     assert_eq!(commit(&k, 30), Seq(3));
@@ -260,16 +266,21 @@ fn an_unreadable_segment_fails_the_open_as_io_not_as_corruption() {
     let err = Kernel::open(cfg_fsync(dir.path()), genesis())
         .expect_err("an unreadable segment is not something to recover around");
     assert!(matches!(err, OpenError::Io(_)), "got {err:?}");
-    // The cause travels, and it is the environment's — not the media's.
+    // The cause travels, and it is the environment's — not the media's — on
+    // the file and the act that met it, so the operator knows which to fix.
     assert!(std::error::Error::source(&err).is_some());
+    assert!(err.to_string().contains("seg-1.wal: read: "), "the file and the act: {err}");
 }
 
 #[test]
-fn post_commit_rot_of_the_final_txn_demotes_w_silently() {
+fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_marker() {
     // The documented §7 blind spot, asserted as specified: rot in the LAST
     // committed txn's record leaves its marker intact but checksum-failing,
-    // W demotes to the prior marker, and the acked txn is silently discarded
-    // as tail — no Corruption signal (out of scope for v1).
+    // W demotes to the prior marker, and the acked txn is discarded as tail —
+    // no Corruption signal (out of scope for v1). Not in silence, though: the
+    // marker the cut took is intact, which no torn write leaves, and the
+    // open's report counts it, so the cut of a write that may have been
+    // acknowledged is said rather than passed off as a crash's.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     commit(&k, 10);
@@ -283,6 +294,14 @@ fn post_commit_rot_of_the_final_txn_demotes_w_silently() {
     assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
     assert_eq!(fs::metadata(&seg).unwrap().len(), spans[4].0); // physically discarded
+    let recovery = k.recovery().expect("journaled");
+    let (marker_start, marker_len) = spans[5];
+    assert_eq!(
+        recovery.tail_cut,
+        marker_start + marker_len - spans[4].0,
+        "T3 cut whole, its marker with it"
+    );
+    assert_eq!(recovery.tail_cut_intact, 1, "T3's intact marker, counted as the rot's tell");
 }
 
 #[test]
@@ -396,7 +415,12 @@ fn the_format_probe_opens_the_segment_the_scan_begins_at_and_names_the_base() {
             cause: Some(cause),
         }) => {
             assert_eq!(at, Seq(6), "named at the base's own coordinate, where the scan begins");
-            assert!(cause.to_string().contains("damaged sync word"), "got {cause}");
+            let account = cause.to_string();
+            assert!(account.contains("damaged sync word"), "got {account}");
+            // …and on the file it lies in: which segment the scan reads first
+            // turns on the base and the skip rule, which the operator cannot
+            // work out from a coordinate.
+            assert!(account.contains("seg-5.wal opens with"), "the file named: {account}");
         }
         other => panic!("expected the damaged-sync-word halt at the base, got {other:?}"),
     }
@@ -418,8 +442,9 @@ fn an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run()
     // halves now HALT — `Corruption`, nothing folded, nothing cut — and what
     // this fixture makes the subject is the SYMMETRY: the same coordinate,
     // two accounts. A damaged segment is a corrupt run, which speaks first
-    // and carries no cause; an absent one is a chain break, whose cause says
-    // which link failed.
+    // and names the file its bytes lie in — closed here, so the act it names
+    // loses nothing, and this fixture performs it; an absent one is a chain
+    // break, whose cause says which link failed.
     let tmp = tempdir().unwrap();
     let fixture = tmp.path().join("fixture");
     let k = Kernel::open(cfg_fsync(&fixture), genesis()).unwrap();
@@ -434,9 +459,12 @@ fn an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run()
 
     // Damaged: the middle segment's frames stop passing their CRC, so the
     // resync opens a run inside (S_load, W] that lands on T9's first intact
-    // frame — a loud halt at 9, the run's verdict, with no cause: the run's
-    // own bytes are unreadable. (T9's link fails too — it chains from a T8
-    // the run swallowed — but the run names the root cause and speaks first.)
+    // frame — a loud halt at 9, the run's verdict. The run's own bytes are
+    // unreadable, but where they lie is not: the account names seg-5.wal from
+    // its first byte to its end, CLOSED — seg-9.wal follows it — so the act
+    // it names is one file's restore. (T9's link fails too — it chains from a
+    // T8 the run swallowed — but the run names the root cause and speaks
+    // first.)
     let damaged = tmp.path().join("damaged");
     copy_dir(&fixture, &damaged);
     let mid = seg_file(&damaged, 5);
@@ -444,10 +472,27 @@ fn an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run()
     fs::write(&mid, vec![0u8; len]).unwrap();
     let err = Kernel::<TestWorld>::open(cfg_fsync(&damaged), genesis())
         .expect_err("a corrupt run in the replayed range is a halt");
-    assert!(
-        matches!(err, OpenError::Corruption { at: Seq(9), cause: None }),
-        "a damaged segment is a corrupt run, named at the next intact frame: got {err:?}"
-    );
+    let OpenError::Corruption { at: Seq(9), cause: Some(cause) } = &err else {
+        panic!("a damaged segment is a corrupt run, named at the next intact frame: got {err:?}")
+    };
+    let account = cause.to_string();
+    for named in [
+        "corrupt run in seg-5.wal from byte 0 to its end",
+        "seg-5.wal is closed — seg-9.wal follows it",
+        "restore seg-5.wal alone from a copy that holds seg-9.wal",
+    ] {
+        assert!(account.contains(named), "{named:?} missing from: {account}");
+    }
+    // …and the act it names is the whole repair: the closed segment, restored
+    // alone from a copy that holds the segment after it, reopens the journal
+    // at its true head — the halt cut nothing, and the chain verifies every
+    // link the restored file carries.
+    fs::copy(seg_file(&fixture, 5), &mid).unwrap();
+    let k = Kernel::<TestWorld>::open(cfg_fsync(&damaged), genesis())
+        .expect("one closed segment restored from a copy reopens the journal");
+    assert_eq!(k.current_seq(), Seq(9), "nothing is lost");
+    assert_eq!(items(&k).len(), 9);
+    drop(k);
 
     // Absent: the same records, unreachable the other way. The scan reads
     // seg-1 (T1..T4) and then seg-9; T9's marker chains from T8's value, the
@@ -555,11 +600,23 @@ fn open_creates_the_journal_directory_it_was_pointed_at() {
     let dir = tmp.path().join("not-yet");
     assert!(!dir.exists());
     let k = Kernel::open(cfg_fsync(&dir), genesis()).unwrap();
+    // The open says it BEGAN a journal rather than recovered one — the one
+    // tell, on a board that had a journal, that the directory opened is not
+    // where it lives.
+    assert!(k.recovery().expect("journaled").began, "no journal stood: this open began one");
     assert_eq!(commit(&k, 1), Seq(1));
     drop(k);
     // …and what it created is a journal a reopen recovers from.
     let k = Kernel::open(cfg_fsync(&dir), genesis()).unwrap();
     assert_eq!(items(&k), vec![1]);
+    assert!(!k.recovery().expect("journaled").began, "a journal stood: this open recovered it");
+    drop(k);
+    // An existing directory that holds no journal — a mount point the volume
+    // did not mount over — is a beginning too, said the same way.
+    let empty = tmp.path().join("mount-point");
+    fs::create_dir(&empty).unwrap();
+    let k = Kernel::open(cfg_fsync(&empty), genesis()).unwrap();
+    assert!(k.recovery().expect("journaled").began, "an empty directory held no journal");
 }
 
 /// A `checkpoint.tmp` a crash left — no base, and room kept on the volume —
@@ -606,9 +663,15 @@ fn a_journal_admits_one_live_kernel_at_a_time() {
     let dir = tempdir().unwrap();
     let k1 = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     // Exclusive advisory ownership (Lifecycle): appender OR recoverer, never
-    // both — a second open() fails with the acquisition error.
+    // both — a second open() fails with the acquisition error, its kind kept
+    // for the callers that branch on it, and its words saying what it MEANS:
+    // another process holds the journal directory, not a disk that failed.
     let err = Kernel::open(cfg_fsync(dir.path()), genesis()).err().unwrap();
-    assert!(matches!(err, OpenError::Io(_)), "got {err:?}");
+    let OpenError::Io(io_err) = &err else { panic!("got {err:?}") };
+    assert_eq!(io_err.kind(), io::ErrorKind::WouldBlock, "the kind, kept: {io_err}");
+    let words = io_err.to_string();
+    assert!(words.starts_with("kernel.lock: lock: "), "the file and the act: {words}");
+    assert!(words.contains("another process holds it"), "what the refusal means: {words}");
     // …and the exclusion ends with the kernel that held it, so the journal is
     // reopenable rather than owned for the life of the process.
     drop(k1);

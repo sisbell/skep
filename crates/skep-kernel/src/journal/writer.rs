@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use super::segment::segment_name;
 use super::{
     encode_record, encode_txn, fsync_dir, list_segments, record_frame_len, record_payload_len,
     segment_path, Attestation, CHAIN_GENESIS, MARKER_FRAME_LEN, MAX_FRAME_LEN, MAX_TXN_BYTES,
     SEGMENT_ROTATE_BYTES,
 };
 use crate::config::SaltSource;
-use crate::error::Cause;
+use crate::error::{at_file, Cause};
 use crate::{Seam, Step};
 
 /// How a commit failed (§1). Three of these leave the journal where the
@@ -23,7 +24,9 @@ use crate::{Seam, Step};
 /// cleanly-failed transaction may be re-invoked, an unencodable one needs the
 /// record fixed, an over-budget one needs the transaction split. The fourth
 /// may have left a durable un-acked marker that a successor would collide
-/// with on recovery, and has no remedy but to halt.
+/// with on recovery, and has no remedy but to halt. Every I/O failure here
+/// names the active segment and the act that failed ahead of the OS's words,
+/// its kind kept.
 #[derive(Debug)]
 pub(crate) enum CommitFail {
     /// The active segment is durably back where this transaction found it: no
@@ -50,9 +53,17 @@ pub(crate) enum CommitFail {
     OverBudget { bytes: u64 },
     /// The truncation could not itself complete durably; frames of this
     /// transaction, possibly including its marker, may survive (§1/§3). The
-    /// only sound response is to halt, so no error travels with it — nothing
-    /// about which write failed changes what the caller must do.
-    Unrepaired,
+    /// only sound response is to halt, and nothing about which write failed
+    /// changes that; both failures travel all the same — the step's that
+    /// failed first and the repair's — because they are what the halt is
+    /// said with ([`crate::Kernel::poison_cause`]): an operator told the
+    /// kernel halted acts on which file, which act and which error.
+    Unrepaired {
+        /// The append's or the barrier's own failure.
+        failed: io::Error,
+        /// The truncation's failure, which left the frames standing.
+        repair: io::Error,
+    },
 }
 
 /// What an unwind out of the commit region left in the journal (§3).
@@ -62,7 +73,8 @@ pub(crate) enum UnwindRepair {
     /// file, or the repair durably removed what it had appended.
     Clean,
     /// The repair could not complete durably: an un-acked marker may survive.
-    Unrepaired,
+    /// Carries the truncation's failure, which the halt is said with.
+    Unrepaired(io::Error),
     /// The unwind came after the barrier: the transaction is durably
     /// committed, and whether its effect was ever installed cannot be
     /// accounted for from here.
@@ -86,6 +98,9 @@ enum InFlight {
 pub(crate) struct JournalWriter {
     dir: PathBuf,
     file: File,
+    /// The active segment's name in the journal directory, which every I/O
+    /// failure of the append, the barrier and the repair is named by.
+    name: String,
     len: u64,
     /// The commit chain's running value: the chain of the last COMMITTED
     /// transaction in this journal, which the next one links from
@@ -147,11 +162,16 @@ impl JournalWriter {
         let segs = list_segments(dir)?;
         match segs.last() {
             Some(seg) => {
-                let file = OpenOptions::new().append(true).open(&seg.path)?;
-                let len = file.metadata()?.len();
+                let name = seg.name();
+                let file = OpenOptions::new()
+                    .append(true)
+                    .open(&seg.path)
+                    .and_then(|file| file.metadata().map(|meta| (file, meta.len())));
+                let (file, len) = file.map_err(at_file(&name, "open"))?;
                 Ok(JournalWriter {
                     dir: dir.to_path_buf(),
                     file,
+                    name,
                     len,
                     chain,
                     salt_source,
@@ -182,6 +202,7 @@ impl JournalWriter {
         seam: Seam,
     ) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
+        let name = segment_name(first_seq);
         // Born `0600` on unix: the segment is the board's history whole, and
         // the mode is set at creation so the process umask cannot loosen it.
         let mut opts = OpenOptions::new();
@@ -191,15 +212,16 @@ impl JournalWriter {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let file = opts.open(&path)?;
+        let file = opts.open(&path).map_err(at_file(&name, "create"))?;
         // The new entry must be durable before any commit acked out of this
         // segment can rely on recovery finding the file (§1: fsync-of-dir on
         // rotate / first init).
         fsync_dir(dir)?;
-        let len = file.metadata()?.len();
+        let len = file.metadata().map_err(at_file(&name, "create"))?.len();
         Ok(JournalWriter {
             dir: dir.to_path_buf(),
             file,
+            name,
             len,
             chain,
             salt_source,
@@ -259,9 +281,9 @@ impl JournalWriter {
                 self.in_flight = InFlight::Idle;
                 Ok(buf.len() as u64)
             }
-            Err(e) => Err(match self.truncate_to(mark) {
-                Ok(()) => CommitFail::Clean(e),
-                Err(_) => CommitFail::Unrepaired,
+            Err(failed) => Err(match self.truncate_to(mark) {
+                Ok(()) => CommitFail::Clean(failed),
+                Err(repair) => CommitFail::Unrepaired { failed, repair },
             }),
         }
     }
@@ -281,7 +303,7 @@ impl JournalWriter {
             InFlight::Idle => UnwindRepair::Clean,
             InFlight::Appending { mark } => match self.truncate_to(mark) {
                 Ok(()) => UnwindRepair::Clean,
-                Err(_) => UnwindRepair::Unrepaired,
+                Err(repair) => UnwindRepair::Unrepaired(repair),
             },
             InFlight::Barriered => UnwindRepair::AfterBarrier,
         }
@@ -290,14 +312,17 @@ impl JournalWriter {
     /// Durably truncate back to `mark` — the §1 barrier-failure / §3
     /// unwind-guard tail truncation, idempotent and retried harmlessly. `Err`
     /// is a truncation that could not itself complete durably, leaving the
-    /// segment where it was; nothing about WHICH write failed changes what
-    /// either caller must do, so both drop it. The seam's
+    /// segment where it was, named `{segment}: truncate: …`; nothing about
+    /// WHICH write failed changes what either caller must do — halt — and
+    /// both carry it out as what the halt is said with. The seam's
     /// [`Step::JournalRepair`] is hooked before the truncation, so an armed
     /// failure is exactly that `Err`.
     fn truncate_to(&mut self, mark: u64) -> io::Result<()> {
-        self.seam.before(Step::JournalRepair)?;
-        self.file.set_len(mark)?;
-        self.file.sync_data()?;
+        self.seam
+            .before(Step::JournalRepair)
+            .and_then(|()| self.file.set_len(mark))
+            .and_then(|()| self.file.sync_data())
+            .map_err(at_file(&self.name, "truncate"))?;
         self.len = mark;
         self.in_flight = InFlight::Idle;
         Ok(())
@@ -336,20 +361,26 @@ impl JournalWriter {
 
     /// Append the transaction's frames, the seam's [`Step::JournalAppend`]
     /// hooked before the write: an armed failure there is a transaction no
-    /// byte of which reached the file.
+    /// byte of which reached the file. A failure is named `{segment}:
+    /// append: …`, the armed one as the real one.
     fn append(&mut self, buf: &[u8]) -> io::Result<()> {
-        self.seam.before(Step::JournalAppend)?;
-        self.file.write_all(buf)?;
+        self.seam
+            .before(Step::JournalAppend)
+            .and_then(|()| self.file.write_all(buf))
+            .map_err(at_file(&self.name, "append"))?;
         self.len += buf.len() as u64;
         Ok(())
     }
 
     /// The durability barrier: ONE fsync of records+marker (§1), the seam's
     /// [`Step::JournalBarrier`] hooked before it: an armed failure there is
-    /// the frames appended and none of them durable.
+    /// the frames appended and none of them durable. A failure is named
+    /// `{segment}: fsync: …`.
     fn barrier(&mut self) -> io::Result<()> {
-        self.seam.before(Step::JournalBarrier)?;
-        self.file.sync_data()
+        self.seam
+            .before(Step::JournalBarrier)
+            .and_then(|()| self.file.sync_data())
+            .map_err(at_file(&self.name, "fsync"))
     }
 }
 

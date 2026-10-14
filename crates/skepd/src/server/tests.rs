@@ -348,6 +348,8 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
         skipped: vec![],
         replayed: 9,
         tail_cut: 0,
+        tail_cut_intact: 0,
+        began: false,
         identity_resolved_empty: false,
     };
     assert_eq!(
@@ -362,6 +364,58 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
     // ONE rendering of the base: the landing's and the warnings' alike.
     assert_eq!(Base(Seq(0)).to_string(), "genesis");
     assert_eq!(Base(Seq(77)).to_string(), "checkpoint.77");
+}
+
+/// THE OPEN's BEGINNING AND ITS TAIL CUT, pinned whole: the beginning's line
+/// says no journal stood and what that means on a board that had one; the
+/// tail cut's two arms say opposite things of the acknowledged writes — a
+/// crash's tail under the report's own class, `open`, and a tail holding
+/// intact frames no torn write leaves under `failure`, with where the bytes
+/// still are — and an open that cut nothing, or gave no account, says
+/// neither.
+#[test]
+fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words() {
+    use skep_engine::Recovery;
+
+    assert_eq!(
+        BeganLine.to_string(),
+        "no journal stood in the data directory: this open began a new board at genesis — on a \
+         board that had one, the directory named above is not where it lives (a volume not \
+         mounted over it, a mistyped --data-dir): stop the daemon before a write lands on the new \
+         board"
+    );
+
+    let account = |tail_cut: u64, tail_cut_intact: u64| Recovery {
+        start_point: Seq(0),
+        skipped: vec![],
+        replayed: 2,
+        tail_cut,
+        tail_cut_intact,
+        began: false,
+        identity_resolved_empty: false,
+    };
+    assert!(TailCutLine::of(None).is_none(), "no account, nothing cut");
+    assert!(TailCutLine::of(Some(&account(0, 0))).is_none(), "a clean close cut nothing");
+
+    let crash = TailCutLine::of(Some(&account(55, 0))).expect("a crash's tail");
+    assert!(matches!(crash.class(), Class::Open), "a crash's tail is the report's own line");
+    assert_eq!(
+        crash.to_string(),
+        "journal tail cut (55 bytes): the un-acked tail a crash or a kill left past the last \
+         committed marker — a write caught before its commit was durable, never acknowledged — \
+         removed by the open; every acknowledged write stands"
+    );
+
+    let rot = TailCutLine::of(Some(&account(109, 1))).expect("a tail with an intact frame");
+    assert!(matches!(rot.class(), Class::Failure), "an acknowledged write may be among the cut");
+    assert_eq!(
+        rot.to_string(),
+        "journal tail cut (109 bytes), 1 of its frames intact on disk — a commit marker whose \
+         records failed their check, or a frame no writer of this format writes, the signature \
+         of rot in or a rewrite of the journal's last transaction rather than of a crash: a write \
+         this daemon acknowledged may be among the cut; a copy taken before this open holds the \
+         bytes; check the volume and its device"
+    );
 }
 
 /// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
@@ -401,14 +455,16 @@ fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
 }
 
 /// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): every line of the
-/// open's report said from `open_under` — the version's, the directory's,
-/// the recovery's, the stray `checkpoint.tmp`'s, the tail cut's, the media
-/// limits' and the upload setting's — goes out through `say_open_line`,
-/// which emits under `Class::Open`, and no site in the open spells the
-/// class itself — read off the source, since no suite captures the stream
-/// in-process; the class word on the stream itself is pinned by the
-/// child-process suite (`tests/it/open.rs`), which reads `open:` on the
-/// binary's stderr. And the version line is said FIRST, before the
+/// open's report said from `open_under` under the report's own class — the
+/// version's, the directory's, the recovery's, the beginning's, the stray
+/// `checkpoint.tmp`'s, the tail cut's, the media limits' and the upload
+/// setting's — goes out through `say_open_line`, which emits under
+/// `Class::Open`, and no site in the open spells that class itself — read
+/// off the source, since no suite captures the stream in-process; the class
+/// word on the stream itself is pinned by the child-process suite
+/// (`tests/it/open.rs`), which reads `open:` on the binary's stderr. The
+/// tail cut's failure arm, said under its own class, is the one line of the
+/// report beside the door. And the version line is said FIRST, before the
 /// directory's.
 #[test]
 fn the_opens_own_lines_go_through_the_classed_door() {
@@ -419,9 +475,19 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        7,
-        "the seven lines — the version, the directory, the recovery, the stray checkpoint.tmp, \
-         the tail cut, the media limits, the upload setting — each through the door"
+        8,
+        "the eight lines — the version, the directory, the recovery, the beginning, the stray \
+         checkpoint.tmp, the tail cut, the media limits, the upload setting — each through the \
+         door"
+    );
+    assert!(
+        open_under.contains("say_open_line(BeganLine)"),
+        "the beginning's line is a rendered value through the door"
+    );
+    assert!(
+        open_under.find("say_open_line(RecoveredLine::of(").expect("the landing")
+            < open_under.find("say_open_line(BeganLine)").expect("the beginning's line"),
+        "the beginning is said after the landing it qualifies"
     );
     assert!(
         !open_under.contains("notice::emit(Class::Open,"),
@@ -839,6 +905,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         skipped: vec![],
         replayed: 0,
         tail_cut: 0,
+        tail_cut_intact: 0,
+        began: false,
         identity_resolved_empty: false,
     };
     assert!(recovery_warnings(Some(&carried)).is_empty(), "a carried start point: nothing to say");
@@ -851,6 +919,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         }],
         replayed: 2048,
         tail_cut: 0,
+        tail_cut_intact: 0,
+        began: false,
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&stepped_back));
@@ -873,6 +943,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         ],
         replayed: 2048,
         tail_cut: 0,
+        tail_cut_intact: 0,
+        began: false,
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&two_skipped_one_stood));
@@ -893,6 +965,8 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         skipped: vec![],
         replayed: 0,
         tail_cut: 0,
+        tail_cut_intact: 0,
+        began: false,
         identity_resolved_empty: true,
     };
     let lines = recovery_warnings(Some(&resolved_empty));

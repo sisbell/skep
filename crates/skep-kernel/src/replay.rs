@@ -12,8 +12,8 @@
 //! over an ordered, ranged set with no coordinate twice — so this module
 //! applies what it is given.
 
-use crate::checkpoint::{CheckpointMeta, LoadRefused, Loaded};
-use crate::error::Cause;
+use crate::checkpoint::{CheckpointMeta, ForeignStamp, LoadRefused, Loaded};
+use crate::error::{Cause, RebuildError};
 use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::{Seq, WorldState};
 
@@ -30,8 +30,30 @@ use crate::{Seq, WorldState};
 pub struct SkippedBase {
     /// The checkpoint's coordinate.
     pub seq: Seq,
-    /// Why it could not stand in as a base.
+    /// Why it could not stand in as a base: the refusal's FACT, never a
+    /// remedy for the board. A base is passed over only where an older one
+    /// stood in, so the board opened whole, and the two refusals that end on
+    /// a remedy — another format's stamp (delete the data directory) and a
+    /// slice the base cannot seed (restore from backup) — are the EXHAUSTED
+    /// chain's remedies, said through [`crate::OpenError::BadCheckpoint`]'s
+    /// cause where no base stands in (PUB-1.2, AUTH-2.88). Here they say
+    /// what refused and nothing an operator of a serving board must undo.
     pub why: String,
+}
+
+/// A refusal's account as a skipped base carries it ([`SkippedBase`]'s
+/// `why`): the fact alone where the refusal ends on the exhausted chain's
+/// remedy — [`ForeignStamp::fact`], [`RebuildError::fact`] — and the
+/// refusal's own sentence for every other, which names no remedy for the
+/// board.
+fn skip_account(refused: &LoadRefused) -> String {
+    if let Some(stamp) = refused.downcast_ref::<ForeignStamp>() {
+        return stamp.fact();
+    }
+    if let Some(unresolved) = refused.downcast_ref::<RebuildError>() {
+        return unresolved.fact();
+    }
+    refused.to_string()
 }
 
 /// A base to fold onto: the world embodying every record with
@@ -205,7 +227,7 @@ pub(crate) fn select_base<W: WorldState>(
             },
             Err(refused) => refused,
         };
-        skipped.push(SkippedBase { seq: Seq(cp.seq), why: refused.to_string() });
+        skipped.push(SkippedBase { seq: Seq(cp.seq), why: skip_account(&refused) });
         // Newest-first, so the first refusal met is the newest base's — the
         // one this derivation most wanted, and the one an operator needs if
         // nothing below it stands in either.

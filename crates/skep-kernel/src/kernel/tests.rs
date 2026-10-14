@@ -429,8 +429,8 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
     // Damage at offset 0 is NOT a format event: it stays the scan's. The junk
     // opens a corrupt run that lands on T1's marker (inferred max 1), and T2
     // committed after it, so the run lies inside the committed region and the
-    // open halts there — the run's own verdict, with no account and every
-    // byte as found.
+    // open halts there — the run's own verdict, its account naming the
+    // segment the run lies in, and every byte as found.
     let mut junk = data.clone();
     junk[..4].copy_from_slice(&[0xAB, 0xCD, 0xEF, 0x01]);
     // Every frame back to this build's stamp but the first, which is junk.
@@ -444,10 +444,14 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
     }
     fs::write(&seg, &junk).unwrap();
     let out = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new());
-    assert!(
-        matches!(out, Err(OpenError::Corruption { at: Seq(2), cause: None })),
-        "junk at offset 0 is the scan's corrupt run — not a format, not a damaged word: {out:?}"
-    );
+    match out {
+        Err(OpenError::Corruption { at: Seq(2), cause: Some(cause) }) => assert!(
+            cause.to_string().starts_with("corrupt run in seg-1.wal from byte 0 to byte "),
+            "junk at offset 0 is the scan's corrupt run — not a format, not a damaged word: \
+             {cause}"
+        ),
+        other => panic!("expected the corrupt run's halt at 2, got {other:?}"),
+    }
     assert_eq!(fs::read(&seg).unwrap(), junk, "a halted open touched the segment");
 }
 
@@ -485,7 +489,8 @@ fn one_damaged_sync_word_is_refused_as_damage_not_as_another_format() {
         "got {err:?}"
     );
     let rendered = err.to_string();
-    for named in ["damaged sync word", "`SKJ5`", "`SKJ4`"] {
+    for named in ["damaged sync word", "seg-1.wal opens with `SKJ5`", "`SKJ4`", "Restore seg-1.wal"]
+    {
         assert!(rendered.contains(named), "{named} missing from: {rendered}");
     }
     assert!(
@@ -1114,6 +1119,12 @@ fn a_sequencer_with_no_room_left_halts_instead_of_wrapping() {
     });
     assert!(matches!(out, Err(TxnError::Poisoned)), "got {out:?}");
     assert!(k.is_poisoned());
+    // …and says why, naming the head it could not commit above.
+    let cause = k.poison_cause().expect("a halted kernel keeps why it halted");
+    assert!(
+        cause.starts_with(&format!("no position is left above position {}", u64::MAX)),
+        "got {cause}"
+    );
     assert_eq!(k.snapshot().world().as_slice(), &[] as &[u64]);
 }
 
@@ -1313,10 +1324,11 @@ fn a_poisoned_in_memory_kernel_refuses_a_checkpoint_rather_than_answering_the_no
 /// THE KIND TRAVELS (`test-hooks`): `StorageFull` armed at the append
 /// reaches the caller as `TxnError::Durability` of that kind — through the
 /// writer's `CommitFail::Clean` and `transact`'s one arm for it, the message
-/// naming the step — the channel a full volume at a write is read from
-/// above the kernel; and the kernel is left as any durability failure
-/// leaves it: unpoisoned, the order rolled back, the next commit landing at
-/// the coordinate the refused one drew.
+/// naming the segment and the act that failed, then the step's own words —
+/// the channel a full volume at a write is read from above the kernel; and
+/// the kernel is left as any durability failure leaves it: unpoisoned, the
+/// order rolled back, the next commit landing at the coordinate the refused
+/// one drew.
 #[test]
 fn a_storage_full_append_answers_durability_with_the_kind() {
     let dir = tempfile::tempdir().unwrap();
@@ -1332,7 +1344,7 @@ fn a_storage_full_append_answers_durability_with_the_kind() {
         other => panic!("expected the append's failure as Durability, got {other:?}"),
     };
     assert_eq!(e.kind(), io::ErrorKind::StorageFull, "the kind, unchanged: {e}");
-    assert_eq!(e.to_string(), "injected StorageFull at JournalAppend");
+    assert_eq!(e.to_string(), "seg-1.wal: append: injected StorageFull at JournalAppend");
     assert!(!k.is_poisoned());
     assert_eq!(k.current_seq(), Seq(0));
     let (_, seq) = k
@@ -1632,8 +1644,16 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
     picky_commit(&k, b"c");
     assert_eq!(
         k.recovery(),
-        Some(&Recovery { start_point: Seq(0), skipped: vec![], replayed: 0, tail_cut: 0 }),
-        "a fresh journal's open: genesis, nothing skipped, nothing replayed, nothing cut"
+        Some(&Recovery {
+            start_point: Seq(0),
+            skipped: vec![],
+            replayed: 0,
+            tail_cut: 0,
+            tail_cut_intact: 0,
+            began: true,
+        }),
+        "a fresh journal's open: genesis, nothing skipped, nothing replayed, nothing cut, \
+         and a journal begun rather than recovered"
     );
     drop(k);
 
@@ -1649,6 +1669,10 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
     assert_eq!(recovery.skipped[0].seq, newer);
     assert!(recovery.skipped[0].why.contains("`picky` slice"), "{}", recovery.skipped[0].why);
     assert!(recovery.skipped[0].why.contains("not a start point"), "{}", recovery.skipped[0].why);
+    // …and NO remedy: an older base stood in and the journal opened whole, so
+    // the exhausted chain's "restore … from backup" is no act owed here.
+    assert!(!recovery.skipped[0].why.contains("restore"), "{}", recovery.skipped[0].why);
+    assert!(!recovery.began, "a journal stood, so this open recovered it");
     // The history read runs the same chain: at the poisoned boundary the
     // newer base is passed over and the older one folded forward.
     assert_eq!(
@@ -1667,6 +1691,50 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
     )
     .unwrap();
     assert!(mem.recovery().is_none(), "nothing was loaded, so nothing is reported");
+}
+
+/// A base under ANOTHER STAMP is skipped like any refused base where an older
+/// one stands in — and its account says only what was found: the stamp.
+/// PUB-1.2's "delete the data directory" is the EXHAUSTED chain's remedy, and
+/// on this path the journal opened whole, so a skip account carrying it would
+/// tell the operator of a serving board to destroy it. One flipped bit in the
+/// newest checkpoint's numeral is all it takes: `SKC4` → `SKC5`.
+#[test]
+fn a_skipped_base_under_another_stamp_is_named_without_the_exhausted_chains_remedy() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
+    };
+    let k = Kernel::<Vec<u64>>::open(cfg.clone(), Vec::new()).unwrap();
+    for x in [10u64, 20] {
+        k.transact::<_, ()>(&[], |stg| {
+            stg.push(x);
+            Ok(())
+        })
+        .unwrap();
+        k.checkpoint().expect("a checkpoint");
+    }
+    drop(k);
+    let path = dir.path().join("checkpoint.2");
+    let mut data = fs::read(&path).unwrap();
+    data[3] ^= 0x01; // bit 0 of the numeral: `SKC4` → `SKC5`
+    fs::write(&path, &data).unwrap();
+
+    let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).expect("the older base stands in");
+    assert_eq!(k.snapshot().world().as_slice(), &[10, 20], "the journal opened whole");
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.start_point, Seq(1));
+    assert_eq!(recovery.skipped.len(), 1, "{recovery:?}");
+    assert_eq!(recovery.skipped[0].seq, Seq(2));
+    let why = &recovery.skipped[0].why;
+    assert!(why.contains("`SKC5`"), "the stamp found: {why}");
+    assert!(!why.contains("delete the data directory"), "the exhausted chain's remedy: {why}");
 }
 
 /// The exhausted chain: the one retained base refuses to seed and the journal

@@ -72,7 +72,9 @@ fn health(port: u16) -> (bool, u64) {
 }
 
 /// One write refused by the volume at `step`: the arm, the write, and the
-/// refusal's shape — `durability`, `retry`, the seam's text as `detail`.
+/// refusal's shape — `durability`, `retry`, and as `detail` the segment the
+/// write met, the act that failed and the seam's text, as the kernel names
+/// every failure on a journal file.
 fn refuse_at(sd: &Skepd, session: &str, step: Step) {
     let port = sd.port();
     sd.daemon().fail_the_next_checkpoint_step(step, ErrorKind::StorageFull);
@@ -82,10 +84,22 @@ fn refuse_at(sd: &Skepd, session: &str, step: Step) {
         (Some("rejected"), Some("durability"), Some("retry")),
         "the volume's refusal, a true no-op: {v}"
     );
+    let act = match step {
+        Step::JournalAppend => "append",
+        Step::JournalBarrier => "fsync",
+        other => unreachable!("a write meets the journal's append or barrier, not {other:?}"),
+    };
+    let detail = v["detail"].as_str().unwrap_or_else(|| panic!("a detail: {v}"));
+    let (segment, said) =
+        detail.split_once(": ").unwrap_or_else(|| panic!("the file named first: {v}"));
+    assert!(
+        segment.starts_with("seg-") && segment.ends_with(".wal"),
+        "the segment the write met, by its name: {v}"
+    );
     assert_eq!(
-        v["detail"].as_str(),
-        Some(format!("injected StorageFull at {step:?}").as_str()),
-        "the I/O text as detail: {v}"
+        said,
+        format!("{act}: injected StorageFull at {step:?}"),
+        "the act and the I/O text as detail: {v}"
     );
 }
 

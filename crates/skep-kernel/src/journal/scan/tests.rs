@@ -54,6 +54,12 @@ fn flip_byte(path: &Path, offset: usize) {
     fs::write(path, data).unwrap();
 }
 
+/// How each corrupt run ended, in scan order — the classification the halts
+/// read, apart from where each run's bytes lie.
+fn ends(out: &ScanOutcome) -> Vec<&RunEnd> {
+    out.runs.iter().map(|run| &run.end).collect()
+}
+
 fn committed_seqs(out: &ScanOutcome) -> Vec<u64> {
     let mut s: Vec<u64> = out.committed_records.iter().map(|r| r.seq).collect();
     s.sort_unstable();
@@ -398,8 +404,8 @@ fn a_marker_at_the_seq_ceiling_classifies_without_wrapping() {
     let segs = list_segments(dir.path()).unwrap();
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(
-        out.runs,
-        vec![RunEnd::Landed {
+        ends(&out),
+        vec![&RunEnd::Landed {
             inferred_max: u64::MAX,
             at: u64::MAX
         }]
@@ -507,11 +513,16 @@ fn a_foreign_stamp_is_told_from_damage() {
     // Every one-bit flip of this build's numeral keeps the `SKJ` prefix,
     // so by its word alone each reads as another format's stamp; the
     // frame after it opens with this build's, which no other format's
-    // journal does.
+    // journal does. The answer names the segment, the one file the
+    // remedy touches.
     for bit in 0..8 {
         let word = [b'S', b'K', b'J', MAGIC[3] ^ (1 << bit)];
         opened_with(&word);
-        assert_eq!(probe(&segs, 0), FirstSyncWord::Damaged(word), "bit {bit} of the numeral");
+        assert_eq!(
+            probe(&segs, 0),
+            FirstSyncWord::Damaged { found: word, segment: "seg-1.wal".into() },
+            "bit {bit} of the numeral"
+        );
     }
     opened_with(&[0xAB, 0xCD, 0xEF, 0x01]);
     assert_eq!(probe(&segs, 0), FirstSyncWord::Scan, "junk is damage, not a format");
@@ -742,11 +753,17 @@ fn corrupt_record_classifies_by_marker_landing() {
     flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(
-        out.runs,
-        vec![RunEnd::Landed {
+        ends(&out),
+        vec![&RunEnd::Landed {
             inferred_max: 2,
             at: 3
         }]
+    );
+    // …and where its bytes lie: from T2's record frame to T2's marker, in
+    // the one segment, which is the active one — no segment after it.
+    assert_eq!(
+        out.runs[0].place,
+        RunPlace { segments: vec!["seg-1.wal".into()], from: starts[2], to: Some(starts[3]), next: None }
     );
     // T2's marker no longer validates its records_checksum → uncommitted;
     // W is still bounded by the last committed marker (T3's).
@@ -760,12 +777,12 @@ fn corrupt_record_classifies_by_marker_landing() {
 #[test]
 fn a_halt_names_the_run_before_the_chain_and_only_a_history_read_halts_above_the_head() {
     // The order the at-rest verdicts speak in has one site, which both
-    // doors share: the corrupt run first — the root cause, carrying no
-    // account, its own bytes being unreadable — then the chain's own
-    // verdicts, each with its account. And the two doors differ only in
-    // where a run is fatal: a recovery discards a run above the committed
-    // head as the torn tail, while a history read truncates nothing and
-    // halts on it.
+    // doors share: the corrupt run first — the root cause, its account
+    // where its unreadable bytes lie and the act that clears them — then
+    // the chain's own verdicts, each with its account. And the two doors
+    // differ only in where a run is fatal: a recovery discards a run above
+    // the committed head as the torn tail, while a history read truncates
+    // nothing and halts on it.
     let journal_of_three = || {
         let dir = tempdir().unwrap();
         let mut writer = fresh_writer(dir.path());
@@ -778,15 +795,25 @@ fn a_halt_names_the_run_before_the_chain_and_only_a_history_read_halts_above_the
 
     // T2's record rotted: the run lands on T2's marker, and T3 — chained
     // from the T2 this scan never saw — breaks the chain at 3. Both
-    // verdicts stand; the run speaks, without an account.
+    // verdicts stand; the run speaks, naming where its bytes lie and that
+    // they lie in the active segment, which no one file restores.
     let dir = journal_of_three();
     let segs = list_segments(dir.path()).unwrap();
     let starts = frame_starts(&segs[0].path);
     flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert!(out.chain_verdict().is_some(), "the chain's verdict stands beside the run");
-    assert!(matches!(out.halt_to_head(), Some((3, None))), "the run speaks first");
-    assert!(matches!(out.halt_anywhere(), Some((3, None))), "the run speaks first");
+    let run_account = format!("corrupt run in seg-1.wal from byte {} to byte {}", starts[2], starts[3]);
+    for (door, halt) in [("to head", out.halt_to_head()), ("anywhere", out.halt_anywhere())] {
+        match halt {
+            Some((3, Some(cause))) => {
+                let cause = cause.to_string();
+                assert!(cause.starts_with(&run_account), "{door}: the run speaks first: {cause}");
+                assert!(cause.contains("seg-1.wal is the active segment"), "{door}: {cause}");
+            }
+            other => panic!("{door}: expected the run at 3, got {other:?}"),
+        }
+    }
 
     // T3's record rotted: the run lands on T3's marker ABOVE the committed
     // head (2). Recovery's door calls it the torn tail; a history read's
@@ -798,7 +825,7 @@ fn a_halt_names_the_run_before_the_chain_and_only_a_history_read_halts_above_the
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.committed_head, 2);
     assert!(out.halt_to_head().is_none(), "a recovery discards it as the tail");
-    assert!(matches!(out.halt_anywhere(), Some((4, None))), "a history read halts");
+    assert!(matches!(out.halt_anywhere(), Some((4, Some(_)))), "a history read halts");
 
     // No run, one rewritten chain field: the chain's verdict speaks, with
     // its account, at either door.
@@ -833,8 +860,8 @@ fn corrupt_marker_lands_on_next_record() {
     flip_byte(&segs[0].path, starts[4] + FRAME_HEADER_LEN + 1);
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(
-        out.runs,
-        vec![RunEnd::Landed {
+        ends(&out),
+        vec![&RunEnd::Landed {
             inferred_max: 3,
             at: 4
         }]
@@ -863,8 +890,8 @@ fn a_record_a_run_lands_on_cannot_vouch_for_its_group() {
     flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(
-        out.runs,
-        vec![RunEnd::Landed {
+        ends(&out),
+        vec![&RunEnd::Landed {
             inferred_max: 2,
             at: 3
         }]
@@ -892,8 +919,8 @@ fn resync_rejects_coincidental_magic_inside_payload() {
     flip_byte(&segs[0].path, starts[0] + FRAME_HEADER_LEN + 1);
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(
-        out.runs,
-        vec![RunEnd::Landed {
+        ends(&out),
+        vec![&RunEnd::Landed {
             inferred_max: 1,
             at: 2
         }]
@@ -929,18 +956,21 @@ fn resynchronization_over_planted_frame_headers_is_bounded() {
     // The scan refuses, at the base's own coordinate. That refusal is the
     // whole of what there is to check here: what such a scan derived is a
     // prefix, so it produces no outcome at all — there is no committed
-    // head to read short, and no cut for a truncation to be aimed with.
-    let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
-    assert!(
-        matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
-        "got {fail:?}"
-    );
+    // head to read short, and no cut for a truncation to be aimed with —
+    // and its account names the segment it could not enumerate.
+    match scan(&segs, 0, None, CHAIN_GENESIS).err() {
+        Some(ScanFail::Unscannable { at: 0, cause }) => assert!(
+            cause.to_string().starts_with("seg-1.wal's frames could not be enumerated within 8"),
+            "the account names the segment and the budget: {cause}"
+        ),
+        other => panic!("expected the budget's refusal at 0, got {other:?}"),
+    }
     // …at the base's OWN coordinate, whatever it is: above a base at 1 the
     // one (active) segment is still read, and refused at 1 — which a refusal
     // spelled `at: 0` answers only at genesis.
     let fail = scan(&segs, 1, None, CHAIN_GENESIS).err();
     assert!(
-        matches!(fail, Some(ScanFail::Unscannable { at: 1 })),
+        matches!(fail, Some(ScanFail::Unscannable { at: 1, .. })),
         "got {fail:?}"
     );
 }
@@ -977,7 +1007,7 @@ fn resynchronization_charges_every_rejection_even_between_intact_frames() {
 
     let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
     assert!(
-        matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
+        matches!(fail, Some(ScanFail::Unscannable { at: 0, .. })),
         "got {fail:?}"
     );
 }
@@ -1002,17 +1032,24 @@ fn a_segment_longer_than_any_writer_produces_is_refused_before_it_is_read() {
         .unwrap()
         .set_len(MAX_SEGMENT_LEN + 1)
         .unwrap();
-    let fail = scan(&segs, 0, None, CHAIN_GENESIS).err();
-    assert!(
-        matches!(fail, Some(ScanFail::Unscannable { at: 0 })),
-        "got {fail:?}"
-    );
+    // The account names the file and the length it claims, beside the
+    // ceiling no writer here reaches.
+    match scan(&segs, 0, None, CHAIN_GENESIS).err() {
+        Some(ScanFail::Unscannable { at: 0, cause }) => assert!(
+            cause.to_string().starts_with(&format!(
+                "seg-1.wal is {} bytes, past the {MAX_SEGMENT_LEN} ",
+                MAX_SEGMENT_LEN + 1
+            )),
+            "the account names the segment and its length: {cause}"
+        ),
+        other => panic!("expected the ceiling's refusal at 0, got {other:?}"),
+    }
     // …at the base's OWN coordinate, whatever it is: above a base at 1 the
     // one (active) segment is still read, and refused at 1 — which a refusal
     // spelled `at: 0` answers only at genesis.
     let fail = scan(&segs, 1, None, CHAIN_GENESIS).err();
     assert!(
-        matches!(fail, Some(ScanFail::Unscannable { at: 1 })),
+        matches!(fail, Some(ScanFail::Unscannable { at: 1, .. })),
         "got {fail:?}"
     );
 }
@@ -1034,12 +1071,127 @@ fn torn_tail_reaches_eof() {
     }
     let segs = list_segments(dir.path()).unwrap();
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
-    assert_eq!(out.runs, vec![RunEnd::Eof]);
+    assert_eq!(ends(&out), vec![&RunEnd::Eof]);
     assert_eq!(out.committed_head, 2);
     assert_eq!(committed_seqs(&out), vec![1, 2]);
     // The cut sits at the last committed marker's frame end.
     let prefix_end = intact_prefix_end(&segs[0].path);
     assert_tail(&out, &segs[0].path, prefix_end);
+    // A torn write leaves no intact frame of no writer's in the tail.
+    assert_eq!(out.tail_intact, 0, "a crash's torn tail is nothing but torn bytes");
+}
+
+/// A corrupt run's account names where its bytes lie — the segment or
+/// segments, the byte it begins at, the byte or the end it reaches — and the
+/// act that clears it, which turns on whether those segments are CLOSED: a
+/// closed segment's bytes never change once the next segment begins, so the
+/// files alone, from a copy that holds the segment after them, restore the
+/// journal whole; the active one's do, so a run that reaches into it is
+/// cleared by a whole directory's copy.
+#[test]
+fn a_corrupt_runs_account_names_its_files_and_whether_they_alone_restore_the_journal() {
+    let fixture = || {
+        let dir = tempdir().unwrap();
+        let mut writer = fresh_writer(dir.path());
+        write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
+        write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
+        write_txn(&mut writer, 3, vec![rec(30)]);
+        drop(writer);
+        let segs = list_segments(dir.path()).unwrap();
+        assert_eq!(segs.len(), 2, "the fixture rotates");
+        (dir, segs)
+    };
+    let halted = |segs: &[SegmentMeta]| -> (u64, String) {
+        let out = scan(segs, 0, None, CHAIN_GENESIS).unwrap();
+        match out.halt_to_head() {
+            Some((at, Some(cause))) => (at, cause.to_string()),
+            other => panic!("expected a run inside the committed region, got {other:?}"),
+        }
+    };
+    // seg-1: 0=T1 rec, 1=T1 marker. seg-2: 0=T2 rec, 1=T2 marker, 2=T3 rec, 3=T3 marker.
+
+    // T1's record rotted: the run lies in the closed seg-1, from T1's record
+    // to the marker it lands on — seg-1 alone restores it.
+    let (_dir, segs) = fixture();
+    let seg1 = frame_starts(&segs[0].path);
+    flip_byte(&segs[0].path, seg1[0] + FRAME_HEADER_LEN + 1);
+    let (at, cause) = halted(&segs);
+    assert_eq!(at, 2);
+    for named in [
+        format!("corrupt run in seg-1.wal from byte {} to byte {}", seg1[0], seg1[1]),
+        "seg-1.wal is closed — seg-2.wal follows it".into(),
+        "restore seg-1.wal alone from a copy that holds seg-2.wal, and reopen".into(),
+        "nothing is lost".into(),
+    ] {
+        assert!(cause.contains(&named), "{named:?} missing from: {cause}");
+    }
+
+    // T1's marker rotted: the run reaches seg-1's end and lands on the first
+    // frame of seg-2 — whose bytes hold none of it — so seg-1 alone again.
+    let (_dir, segs) = fixture();
+    let seg1 = frame_starts(&segs[0].path);
+    flip_byte(&segs[0].path, seg1[1] + FRAME_HEADER_LEN + 1);
+    let (at, cause) = halted(&segs);
+    assert_eq!(at, 2);
+    let reaching = format!("corrupt run in seg-1.wal from byte {} to its end", seg1[1]);
+    assert!(cause.starts_with(&reaching), "{reaching:?} does not open: {cause}");
+    assert!(cause.contains("restore seg-1.wal alone from a copy that holds seg-2.wal"), "{cause}");
+
+    // T1's marker and T2's record rotted: the run spans both segments and
+    // reaches into the active one, which no copy of one file restores.
+    let (_dir, segs) = fixture();
+    let seg1 = frame_starts(&segs[0].path);
+    let seg2 = frame_starts(&segs[1].path);
+    flip_byte(&segs[0].path, seg1[1] + FRAME_HEADER_LEN + 1);
+    flip_byte(&segs[1].path, seg2[0] + FRAME_HEADER_LEN + 1);
+    let (at, cause) = halted(&segs);
+    assert_eq!(at, 3);
+    let spanning =
+        format!("corrupt run from byte {} of seg-1.wal to byte {} of seg-2.wal", seg1[1], seg2[1]);
+    assert!(cause.starts_with(&spanning), "{spanning:?} does not open: {cause}");
+    assert!(cause.contains("seg-2.wal is the active segment"), "{cause}");
+    assert!(cause.contains("restore the journal directory whole from one copy"), "{cause}");
+    assert!(!cause.contains("alone"), "no one file restores a run in the active segment: {cause}");
+}
+
+/// THE TAIL's TELL: an intact frame of a kind no torn write leaves — a commit
+/// marker that commits nothing, a frame whose CRC passes and that does not
+/// decode — is counted where no committed marker follows it, which is the
+/// tail the cut removes: rot in the last committed transaction's record
+/// leaves that transaction's marker intact and committing nothing, and is
+/// counted; the same rot one transaction earlier is followed by a commit,
+/// and is not; and a crash's torn bytes are no frame at all.
+#[test]
+fn an_intact_frame_no_torn_write_leaves_is_counted_where_the_tail_holds_it() {
+    let journal_of_three = || {
+        let dir = tempdir().unwrap();
+        let mut writer = fresh_writer(dir.path());
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        write_txn(&mut writer, 3, vec![rec(30)]);
+        dir
+    };
+    // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
+
+    // The LAST transaction's record rotted: its marker stands intact, closes
+    // nothing, and lies in the tail.
+    let dir = journal_of_three();
+    let segs = list_segments(dir.path()).unwrap();
+    let starts = frame_starts(&segs[0].path);
+    flip_byte(&segs[0].path, starts[4] + FRAME_HEADER_LEN + 1);
+    let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    assert_eq!(out.committed_head, 2, "the rotted transaction is cut as the tail");
+    assert_eq!(out.tail_intact, 1, "its intact marker is counted");
+
+    // T2's record rotted: T2's marker is as intact, and T3 commits after it,
+    // so it lies in no tail.
+    let dir = journal_of_three();
+    let segs = list_segments(dir.path()).unwrap();
+    let starts = frame_starts(&segs[0].path);
+    flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
+    let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    assert_eq!(out.committed_head, 3);
+    assert_eq!(out.tail_intact, 0, "a commit after it resets the count");
 }
 
 #[test]
@@ -1213,12 +1365,15 @@ fn a_slot_past_the_cap_at_rest_closes_no_boundary_and_panics_nothing() {
     let segs = list_segments(dir.path()).unwrap();
     let out = scan(&segs, 0, Some(2), CHAIN_GENESIS).unwrap();
     assert_eq!(
-        out.runs,
-        vec![RunEnd::Eof],
+        ends(&out),
+        vec![&RunEnd::Eof],
         "the wide slot is a frame no writer of this stamp emits"
     );
     assert_eq!(out.committed_head, 1, "…which commits nothing");
     assert_eq!(out.closing_marker(2).map(|_| ()), Err(1), "…and closes no boundary");
+    // …and the tail the cut takes holds it, intact and of no writer's: the
+    // one frame counted, where a crash's torn bytes are counted none.
+    assert_eq!(out.tail_intact, 1, "the undecodable intact frame is the tail's tell");
 }
 
 #[test]
@@ -1316,16 +1471,19 @@ fn a_boundary_scan_judges_the_at_rest_verdicts_as_a_record_scan_does() {
     // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
 
     // T2's record rotted: the run lands on T2's marker and T3's link breaks;
-    // the run speaks, without an account, from either mode — and the list
-    // the boundary scan holds is missing exactly the commit the run ate,
-    // which is why a caller halts before reading it.
+    // the run speaks, with the account of where its bytes lie, from either
+    // mode — and the list the boundary scan holds is missing exactly the
+    // commit the run ate, which is why a caller halts before reading it.
     let dir = journal_of_three();
     let segs = list_segments(dir.path()).unwrap();
     let starts = frame_starts(&segs[0].path);
     flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
     let records = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     let boundaries = scan_boundaries(&segs, 0, CHAIN_GENESIS).unwrap();
-    assert_eq!(halt_of(&records), Some((3, None)));
+    match halt_of(&records) {
+        Some((3, Some(cause))) => assert!(cause.starts_with("corrupt run in seg-1.wal"), "{cause}"),
+        other => panic!("expected the run at 3, got {other:?}"),
+    }
     assert_eq!(halt_of(&boundaries), halt_of(&records));
     assert_eq!(boundaries.chain_break(), records.chain_break());
     assert_eq!(boundaries.runs, records.runs);

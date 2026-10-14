@@ -570,19 +570,24 @@ fn a_storage_full_barrier_is_the_same_no_op() {
 /// of `Durability`: the kernel reports the halt, a later `transact` is
 /// refused `Poisoned` before its closure runs, a later `checkpoint` answers
 /// `CheckpointError::Poisoned`, and reads serve the last consistent root.
-/// The reopen says WHY the halt: after the barrier's failure the repair
-/// never ran, so its un-acked marker survived in the file and REPLAYS as
-/// the lost-ack commit it is — the successor a live kernel would have
-/// minted over it is what the poison refuses; after the append's, nothing
-/// reached the file and the reopen is clean. Poison does not persist.
+/// The kernel KEEPS why it halted ([`Kernel::poison_cause`]): the
+/// transaction's position, the step's own failure and the repair's, each
+/// naming its segment and its act — the two kinds armed apart, as a full
+/// volume and the read-only remount after it are. The reopen says WHY the
+/// halt: after the barrier's failure the repair never ran, so its un-acked
+/// marker survived in the file and REPLAYS as the lost-ack commit it is —
+/// the successor a live kernel would have minted over it is what the poison
+/// refuses; after the append's, nothing reached the file and the reopen is
+/// clean. Poison does not persist.
 #[test]
 fn a_repair_that_fails_poisons_the_kernel() {
-    for failing in [Step::JournalAppend, Step::JournalBarrier] {
+    for (failing, act) in [(Step::JournalAppend, "append"), (Step::JournalBarrier, "fsync")] {
         let dir = tempdir().unwrap();
         let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
         commit(&k, 10);
+        assert_eq!(k.poison_cause(), None, "{failing:?}: a healthy kernel has no cause");
         k.fail_the_next(failing, io::ErrorKind::StorageFull);
-        k.fail_the_next(Step::JournalRepair, io::ErrorKind::StorageFull);
+        k.fail_the_next(Step::JournalRepair, io::ErrorKind::ReadOnlyFilesystem);
         let out = k.transact::<(), ()>(&[], |stg| {
             stg.push(TestRec::Append(20));
             Ok(())
@@ -590,6 +595,20 @@ fn a_repair_that_fails_poisons_the_kernel() {
         assert!(matches!(out, Err(TxnError::Poisoned)), "{failing:?}: got {out:?}");
         assert!(k.is_poisoned(), "{failing:?}: the repair's failure halts the kernel");
         assert!(k.armed_steps().is_empty(), "{failing:?}: both arms fired");
+        assert_eq!(
+            k.poison_cause(),
+            Some(
+                format!(
+                    "the commit of the transaction at position 2 failed (seg-1.wal: {act}: \
+                     injected StorageFull at {failing:?}), and the truncation that repairs it \
+                     failed too (seg-1.wal: truncate: injected ReadOnlyFilesystem at \
+                     JournalRepair): its frames may stand on disk, so the next open decides \
+                     whether it stands"
+                )
+                .as_str()
+            ),
+            "{failing:?}: the cause names the transaction, both failures and their files"
+        );
 
         let ran = std::cell::Cell::new(false);
         let out = k.transact::<(), ()>(&[], |stg| {
@@ -608,6 +627,7 @@ fn a_repair_that_fails_poisons_the_kernel() {
         drop(k);
         let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
         assert!(!k.is_poisoned(), "{failing:?}: poison does not persist");
+        assert_eq!(k.poison_cause(), None, "{failing:?}: nor does its cause");
         let replayed = match failing {
             Step::JournalBarrier => vec![10, 20],
             _ => vec![10],

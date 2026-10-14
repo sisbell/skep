@@ -468,12 +468,14 @@ fn reclaimed(fail: replay::Unreachable) -> HistoryError {
 /// A scan that produced no outcome, in the history reads' vocabulary: a
 /// segment that could not be read, and a segment that could not be taken in
 /// within the scan's bounds — [`HistoryError::Corruption`] at the base's own
-/// coordinate, with no account, as [`crate::OpenError::Corruption`] carries
-/// it.
+/// coordinate, its account naming the segment and the bound it broke, as
+/// [`crate::OpenError::Corruption`] carries it.
 fn scan_refusal(fail: ScanFail) -> HistoryError {
     match fail {
         ScanFail::Io(e) => HistoryError::Io(e),
-        ScanFail::Unscannable { at } => HistoryError::Corruption { at: Seq(at), cause: None },
+        ScanFail::Unscannable { at, cause } => {
+            HistoryError::Corruption { at: Seq(at), cause: Some(cause) }
+        }
     }
 }
 

@@ -138,6 +138,10 @@ fn a_write_that_fails_past_the_temp_files_creation_removes_it() {
         WriteFail::Landed(_) => unreachable!("the rename did not run, so no base landed"),
     };
     assert!(!text.contains("could not be removed"), "the removal succeeded: {text}");
+    assert!(
+        text.starts_with("checkpoint.tmp: rename to checkpoint.7: "),
+        "the failure names the file and the act: {text}"
+    );
 
     // The name cleared, the same write lands whole.
     fs::remove_dir(checkpoint_path(dir.path(), 7)).unwrap();
@@ -296,6 +300,13 @@ fn a_foreign_stamp_is_refused_by_name_with_the_remedy() {
     for named in ["`SKC2`", "`SKC4`", "not this build's format", "delete the data directory"] {
         assert!(refused.contains(named), "{named} missing from: {refused}");
     }
+    // …and the refusal is TYPED, so a base the fallback chain passed over
+    // while an older one stood in can carry its fact without the remedy —
+    // the board opened, and deleting its directory is no act it owes.
+    let typed = list(dir.path()).unwrap()[0].load::<Vec<u64>>().expect_err("still refused");
+    let stamp = typed.downcast_ref::<ForeignStamp>().expect("the refusal is the foreign stamp's");
+    assert!(stamp.fact().contains("`SKC2`"), "the fact names the stamp: {}", stamp.fact());
+    assert!(!stamp.fact().contains("delete"), "the fact names no remedy: {}", stamp.fact());
 }
 
 #[test]
@@ -412,6 +423,11 @@ fn a_base_that_cannot_be_read_says_so_rather_than_looking_damaged() {
     assert!(
         refused.downcast_ref::<io::Error>().is_some(),
         "the read's own failure travels, not a damage account: {refused}"
+    );
+    // …named on the file, so the operator knows which base, and the act.
+    assert!(
+        refused.to_string().starts_with("checkpoint.5: read: "),
+        "the failure names the file and the act: {refused}"
     );
 }
 
@@ -545,6 +561,13 @@ fn each_checkpoint_step_fires_its_arm_once_and_leaves_what_its_card_says() {
         };
         assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind armed");
         assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
+        // …named as the real step's failure is: the file, then the act.
+        let named = match step {
+            Step::CheckpointCreate => "checkpoint.tmp: create: ".to_string(),
+            Step::CheckpointSync => "checkpoint.tmp: fsync: ".to_string(),
+            _ => format!("{}: sync: ", dir.path().display()),
+        };
+        assert!(e.to_string().starts_with(&named), "{step:?}: names the file and the act: {e}");
         assert!(!tmp.exists(), "{step:?}: no temp file survives a failure");
         assert_eq!(base.exists(), landed, "{step:?}: the base is on disk iff the rename ran");
         assert!(seam.armed_steps().is_empty(), "{step:?}: fired and disarmed");

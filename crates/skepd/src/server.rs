@@ -827,6 +827,15 @@ impl Daemon {
         // EVERY open, not on a skip alone, after the account above of what
         // was passed over on the way to that base.
         say_open_line(RecoveredLine::of(engine.recovery(), open_ms));
+        // THE BEGINNING (AUTH-2.86's family of startup reports): where no
+        // journal stood in the directory the landing above reads `recovered
+        // from genesis` all the same, so the open says it BEGAN a board —
+        // the expected line on a fresh board's first start, and on a board
+        // that had a journal the one tell that the directory opened is not
+        // where it lives, before a write lands beside the real journal.
+        if engine.recovery().is_some_and(|recovery| recovery.began) {
+            say_open_line(BeganLine);
+        }
         // THE STRAY TEMP FILE (jw-R4; AUTH-2.86's family of startup reports):
         // a checkpoint a crash or a full volume left half-written, which the
         // kernel's open found and removed — said here, the kernel answering
@@ -840,20 +849,18 @@ impl Daemon {
         }
         // THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8): the bytes the
         // kernel's open took off the journal above its last committed marker
-        // — the un-acked tail a crash or a kill left, a write caught before
-        // its commit was durable and so never acknowledged — said here as the
-        // stray file is, the kernel answering the figure
-        // (`Recovery::tail_cut`), and nothing where nothing was cut, which is
-        // every open after a clean close. The inventory reports the same
-        // figure as `journal.tail_cut`.
-        let tail_cut = engine.recovery().map_or(0, |recovery| recovery.tail_cut);
-        if tail_cut > 0 {
-            say_open_line(format_args!(
-                "journal tail cut ({tail_cut} bytes): the un-acked tail a crash or a kill \
-                 left past the last committed marker — a write caught before its commit was \
-                 durable, never acknowledged — removed by the open; every acknowledged write \
-                 stands"
-            ));
+        // (`Recovery::tail_cut`), said here as the stray file is, and nothing
+        // where nothing was cut, which is every open after a clean close. Of
+        // two arms ([`TailCutLine`]): a crash's or a kill's tail, said under
+        // `Class::Open` through the door; and a tail holding intact frames
+        // no torn write leaves (`Recovery::tail_cut_intact`), where the cut
+        // may have taken an acknowledged write, said as the failure it is.
+        // The inventory reports the same bytes as `journal.tail_cut`.
+        if let Some(cut) = TailCutLine::of(engine.recovery()) {
+            match cut.class() {
+                Class::Open => say_open_line(cut),
+                class => notice::emit(class, cut),
+            }
         }
         // THE START POINT's SIZE, read once here: the byte bound of the
         // cadence and the floor in force both scale by a checkpoint's size,
@@ -2139,14 +2146,106 @@ impl fmt::Display for RecoveredLine {
     }
 }
 
+/// THE OPEN's BEGINNING, said after the recovery's landing where the
+/// engine's account says no journal stood in the directory
+/// (`Recovery::began`): no segment and no checkpoint, so the open began a
+/// board at genesis rather than recovering one. The landing reads `recovered
+/// from genesis` either way; this line is what tells them apart — the
+/// expected line on a fresh board's first start, and on a board that had a
+/// journal the tell that the directory opened is not where it lives: a
+/// volume not mounted over its mount point, a mistyped `--data-dir`. A pure
+/// value the unit suite pins by `to_string()`; emitted under `Class::Open`
+/// through [`say_open_line`].
+struct BeganLine;
+
+impl fmt::Display for BeganLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "no journal stood in the data directory: this open began a new board at genesis — on \
+             a board that had one, the directory named above is not where it lives (a volume not \
+             mounted over it, a mistyped --data-dir): stop the daemon before a write lands on the \
+             new board",
+        )
+    }
+}
+
+/// THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8), in the operator
+/// stream's words, rendered from the engine's account of its open: the
+/// bytes the open took off the journal above its last committed marker
+/// (`Recovery::tail_cut`) and, of the frames among them, the intact ones no
+/// torn write leaves (`Recovery::tail_cut_intact`). Two arms, since the two
+/// say opposite things of the acknowledged writes:
+///
+/// * none intact — the tail a crash or a kill left, a write caught before
+///   its commit was durable and so never acknowledged: `Class::Open`;
+/// * some intact — a commit marker whose records failed their check, or a
+///   frame no writer of this format writes: the signature of rot in, or a
+///   rewrite of, the journal's last transaction (the kernel's damage
+///   model), where the cut may have taken a write this daemon acknowledged
+///   — `Class::Failure`, naming where the bytes still are and the act.
+///
+/// A pure value the unit suite pins by `to_string()` and [`TailCutLine::class`].
+struct TailCutLine {
+    bytes: u64,
+    intact: u64,
+}
+
+impl TailCutLine {
+    /// The line from the engine's account — `None` where nothing was cut,
+    /// which is every open after a clean close, and where the engine gave no
+    /// account (`Durability::InMemory`, which no daemon opens under).
+    fn of(recovery: Option<&Recovery>) -> Option<TailCutLine> {
+        let recovery = recovery?;
+        (recovery.tail_cut > 0)
+            .then_some(TailCutLine { bytes: recovery.tail_cut, intact: recovery.tail_cut_intact })
+    }
+
+    /// The class the line is said under: the report's own, `Class::Open`,
+    /// for a crash's tail; `Class::Failure` where the cut may have taken an
+    /// acknowledged write.
+    fn class(&self) -> Class {
+        if self.intact == 0 {
+            Class::Open
+        } else {
+            Class::Failure
+        }
+    }
+}
+
+impl fmt::Display for TailCutLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let TailCutLine { bytes, intact } = self;
+        if *intact == 0 {
+            write!(
+                f,
+                "journal tail cut ({bytes} bytes): the un-acked tail a crash or a kill left past \
+                 the last committed marker — a write caught before its commit was durable, never \
+                 acknowledged — removed by the open; every acknowledged write stands"
+            )
+        } else {
+            write!(
+                f,
+                "journal tail cut ({bytes} bytes), {intact} of its frames intact on disk — a \
+                 commit marker whose records failed their check, or a frame no writer of this \
+                 format writes, the signature of rot in or a rewrite of the journal's last \
+                 transaction rather than of a crash: a write this daemon acknowledged may be \
+                 among the cut; a copy taken before this open holds the bytes; check the volume \
+                 and its device"
+            )
+        }
+    }
+}
+
 /// THE OPEN's OWN LINES, SAID: the one classed door for every line of the
-/// open's report said from `open_under` — the version's, the directory's,
-/// the recovery's landing, the stray `checkpoint.tmp`'s, the tail cut's, the
-/// media gate's limits and the upload setting's, the seven the unit suite
-/// pins as this door's callers — each rendered here under `Class::Open`, the
-/// ruled lines as pure values and the conditional or borrowed ones built as
-/// they are said, so no site in the open spells the class. Through the
-/// queue, as every notice is.
+/// open's report said from `open_under` under the report's own class — the
+/// version's, the directory's, the recovery's landing, the beginning's, the
+/// stray `checkpoint.tmp`'s, the tail cut's, the media gate's limits and the
+/// upload setting's, the eight the unit suite pins as this door's callers —
+/// each rendered here under `Class::Open`, the ruled lines as pure values and
+/// the conditional or borrowed ones built as they are said, so no site in
+/// the open spells the class. The tail cut's failure arm is said under its
+/// own class, `Class::Failure`, beside the door. Through the queue, as every
+/// notice is.
 fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
 }

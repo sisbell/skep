@@ -4,6 +4,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::error::at_file;
+
 /// A journal segment file, named by its `firstSeq` (§1). Every operation over
 /// a slice of these reads a neighbour's name as this segment's bound, so the
 /// slice must be ascending by `first_seq` as [`list_segments`] produces it.
@@ -16,10 +18,20 @@ use std::path::{Path, PathBuf};
 /// `pub(super)`: the writer and the scan open the files. Two facts about
 /// coverage leave this file — [`scanned_above`]'s yield, which the scan walks
 /// and the format probe opens, and [`reaches_genesis`]'s answer — and the
-/// names never do.
+/// names leave it only as words: [`SegmentMeta::name`], which a refusal names
+/// a file by and nothing parses.
 pub(crate) struct SegmentMeta {
     first_seq: u64,
     pub(super) path: PathBuf,
+}
+
+impl SegmentMeta {
+    /// The file's name in the journal directory, `seg-<firstSeq>.wal` — the
+    /// words an operator's line names the segment by, and never read back
+    /// for its coverage.
+    pub(super) fn name(&self) -> String {
+        segment_name(self.first_seq)
+    }
 }
 
 /// The one file name a segment beginning at `first_seq` has:
@@ -30,7 +42,7 @@ pub(crate) struct SegmentMeta {
 /// change to either that the other does not match makes every segment on disk
 /// invisible to recovery, which reads as an empty journal rather than as a
 /// failure.
-fn segment_name(first_seq: u64) -> String {
+pub(super) fn segment_name(first_seq: u64) -> String {
     format!("seg-{first_seq}.wal")
 }
 
@@ -55,8 +67,8 @@ fn parse_segment_name(name: &str) -> Option<u64> {
 /// (checkpoints, the lock file) fail the name parse and are skipped.
 pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
     let mut segs = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    for entry in fs::read_dir(dir).map_err(at_file(dir.display(), "list"))? {
+        let entry = entry.map_err(at_file(dir.display(), "list"))?;
         let name = entry.file_name();
         let Some(first_seq) = name.to_str().and_then(parse_segment_name) else {
             continue;
@@ -127,8 +139,8 @@ pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
     for (i, seg) in segs.iter().enumerate() {
         match inferred_last_seq(&segs, i) {
             Some(last) if last <= floor => {
-                let len = fs::metadata(&seg.path)?.len();
-                fs::remove_file(&seg.path)?;
+                let len = fs::metadata(&seg.path).map_err(at_file(seg.name(), "remove"))?.len();
+                fs::remove_file(&seg.path).map_err(at_file(seg.name(), "remove"))?;
                 reclaimed = reclaimed.saturating_add(len);
             }
             _ => break,
@@ -140,11 +152,12 @@ pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
 
 /// Fsync a directory so entry creations/deletions/renames are durable. On
 /// non-unix targets this is a no-op (v1 targets unix; the design's dir-fsync
-/// obligations are discharged there).
+/// obligations are discharged there). A failure names the directory by its
+/// path and the act, `sync`.
 pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(dir)?.sync_all()?;
+        File::open(dir).and_then(|d| d.sync_all()).map_err(at_file(dir.display(), "sync"))?;
     }
     #[cfg(not(unix))]
     {
@@ -153,12 +166,23 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// The lock file's name in the journal directory.
+const LOCK_NAME: &str = "kernel.lock";
+
+/// The words a held lock is refused with, in the act's place: what holds it
+/// and what clears it, since `WouldBlock`'s own words — `Resource temporarily
+/// unavailable` — say neither.
+const LOCK_HELD: &str = "lock: another process holds it — a second kernel open over this journal \
+                         directory, a daemon or a tool; stop it, or open another directory";
+
 /// Take the `open()`-held exclusive advisory lock on the journal directory
 /// (Lifecycle): at most one live kernel — appender *or* recoverer — per
 /// journal. flock semantics, so the lock dies with the process; a second
-/// `open()` fails with the acquisition error (surfaced as `OpenError::Io`).
-/// The lock file is born `0600` on unix where this creates it, as every
-/// file of the kernel's is; one that already stands keeps its mode.
+/// `open()` fails with the acquisition error (surfaced as `OpenError::Io`),
+/// of kind `WouldBlock` and named as what it is ([`LOCK_HELD`]), so the
+/// refusal says a second process holds the journal rather than that a read
+/// failed. The lock file is born `0600` on unix where this creates it, as
+/// every file of the kernel's is; one that already stands keeps its mode.
 pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
     let mut opts = OpenOptions::new();
     opts.create(true).truncate(false).write(true);
@@ -167,8 +191,11 @@ pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let f = opts.open(dir.join("kernel.lock"))?;
-    fs2::FileExt::try_lock_exclusive(&f)?;
+    let f = opts.open(dir.join(LOCK_NAME)).map_err(at_file(LOCK_NAME, "open"))?;
+    fs2::FileExt::try_lock_exclusive(&f).map_err(|e| {
+        let act = if e.kind() == io::ErrorKind::WouldBlock { LOCK_HELD } else { "lock" };
+        at_file(LOCK_NAME, act)(e)
+    })?;
     Ok(f)
 }
 

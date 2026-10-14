@@ -27,6 +27,52 @@ pub(crate) fn stamp_text(stamp: &[u8; 4]) -> String {
 /// what each holds.
 pub(crate) type Cause = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+/// An I/O failure at one of the journal directory's files, as an operator
+/// reads it: `{file}: {act}: {the OS's words}` — the file by its name in the
+/// journal directory (`seg-5.wal`, `checkpoint.tmp`, `kernel.lock`), the
+/// directory itself by its path, the act that failed, and the OS's own
+/// account last: the convention every other writer of the daemon's data
+/// directory keeps (`operations.md` §1.1 row 2), so a line says which file,
+/// on which volume, under which act, where a bare `Input/output error` says
+/// none of the three. Made only by [`at_file`], which carries it as the
+/// payload of an `io::Error` of the SAME KIND as the failure it names, so a
+/// caller that answers by kind — the lock race by `WouldBlock`, the full
+/// volume by `StorageFull` — answers as it would to the bare error; and the
+/// OS's error itself is this one's `source`, so a reporter walking the chain
+/// reaches it, its OS code with it.
+#[derive(Debug)]
+pub(crate) struct FileFailure {
+    file: String,
+    act: String,
+    error: io::Error,
+}
+
+impl fmt::Display for FileFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}: {}", self.file, self.act, self.error)
+    }
+}
+
+impl std::error::Error for FileFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+/// The `map_err` that names `file` and `act` on an I/O failure — the one
+/// door to a [`FileFailure`], applied once, at the file operation that
+/// failed, and rendered only where one does: the failure keeps its kind, and
+/// gains the file and the act ahead of the OS's words.
+pub(crate) fn at_file(
+    file: impl fmt::Display,
+    act: impl fmt::Display,
+) -> impl FnOnce(io::Error) -> io::Error {
+    move |error| {
+        let kind = error.kind();
+        io::Error::new(kind, FileFailure { file: file.to_string(), act: act.to_string(), error })
+    }
+}
+
 /// Why [`crate::WorldState::rebuild_derived`] could not SEED a base — M2's
 /// OWN vocabulary, and slice-agnostic (the AUTH spec's M2 seam delta,
 /// AUTH-2.85): the method is this crate's trait's, so its refusal is nameable
@@ -52,16 +98,31 @@ pub enum RebuildError {
     },
 }
 
-impl fmt::Display for RebuildError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl RebuildError {
+    /// The refusal's FACT — the slice and that the base is not a start point —
+    /// without the remedy [`fmt::Display`] ends on. The remedy is the
+    /// EXHAUSTED chain's: it is what [`OpenError::BadCheckpoint`]'s cause
+    /// says when no base stands in (AUTH-2.88). A base the chain passed over
+    /// while an older one stood in owes no restore, so a skipped base carries
+    /// the fact alone ([`crate::SkippedBase`]'s `why`, AUTH-2.86).
+    pub(crate) fn fact(&self) -> String {
         match self {
-            RebuildError::Unresolved { slice } => write!(
-                f,
+            RebuildError::Unresolved { slice } => format!(
                 "the `{slice}` slice could not be resolved from this checkpoint, so it is not a \
-                 start point: restore a checkpoint that carries the slice, or a journal that \
-                 reaches one, from backup"
+                 start point"
             ),
         }
+    }
+}
+
+impl fmt::Display for RebuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}: restore a checkpoint that carries the slice, or a journal that reaches one, \
+             from backup",
+            self.fact()
+        )
     }
 }
 
@@ -108,6 +169,15 @@ pub enum OpenError {
     /// chain is exhausted, a newest base that could not be read is
     /// [`OpenError::BadCheckpoint`]'s `cause`, carrying the read's own
     /// failure.
+    ///
+    /// The error NAMES ITS FILE AND ITS ACT ahead of the OS's words —
+    /// `seg-5.wal: read: Input/output error (os error 5)`, the directory by
+    /// its path where the directory's own act failed — and keeps the OS
+    /// error's kind, so a caller that answers by kind answers as it would to
+    /// the bare error. The held lock is `WouldBlock`, worded as the act that
+    /// clears it: `kernel.lock: lock: another process holds it — a second
+    /// kernel open over this journal directory, a daemon or a tool; stop it,
+    /// or open another directory: {the OS's words}`.
     Io(io::Error),
     /// No retained checkpoint loads AND SEEDS, and genesis is unreachable
     /// (its covering journal reclaimed). Recovery internally falls back
@@ -134,10 +204,11 @@ pub enum OpenError {
         /// slice carries [`RebuildError`]'s sentence, which names its own
         /// remedy — a base that carries the slice, or a journal that reaches
         /// one (AUTH-2.88). A base that could not be READ at all carries the
-        /// read's own I/O failure, which names its own remedy — a permission,
-        /// a device — rather than any of the four above. `None` when no
-        /// candidate was tried at all — the journal retains no checkpoint,
-        /// and only its unreachable genesis was ever available.
+        /// read's own I/O failure, which names the file and its own remedy —
+        /// `checkpoint.{n}: read: Permission denied (os error 13)`, a
+        /// permission, a device — rather than any of the four above. `None`
+        /// when no candidate was tried at all — the journal retains no
+        /// checkpoint, and only its unreachable genesis was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
     /// Durable committed data the recovered state needs cannot be read, or
@@ -156,8 +227,10 @@ pub enum OpenError {
     ///    bounded memory — a file longer than any segment this journal's
     ///    writer produces — so nothing derived from it would be more than a
     ///    prefix;
-    /// 3. a corrupt run inside the genuinely-replayed range `(S_load, W]` (a
-    ///    run reaching EOF is the un-acked / torn tail, not this);
+    /// 3. a corrupt run inside the genuinely-replayed range `(S_load, W]`: a
+    ///    span of frames that fail their CRC or do not decode, with an intact
+    ///    frame after it (a run reaching EOF is the un-acked / torn tail, not
+    ///    this);
     /// 4. THE BASE MISMATCH: the committed marker closing the base's seq
     ///    carries a chain that is not the checkpoint header's `chain_head` —
     ///    two stored values disagree, and nothing is recomputed;
@@ -187,9 +260,10 @@ pub enum OpenError {
         /// coordinate, where the scan began, since the damage lies somewhere
         /// in the segments it reads — above the base, or below it in a segment
         /// straddling it — and the scan could not get past the damage to say
-        /// where; for a corrupt run, the next INTACT frame's coordinate — the
-        /// run's own seqs are unreadable, so this bounds the damage rather
-        /// than locating it; for the base
+        /// which coordinates it holds (the account names the file instead); for
+        /// a corrupt run, the next INTACT frame's coordinate — the run's own
+        /// seqs are unreadable, so this bounds the damage rather than locating
+        /// it, and the account locates it by file and byte; for the base
         /// mismatch, the base's seq; for the edited transaction, the last seq of
         /// its own records — not its marker's, which in one shape is the
         /// rewritten field; for a chain break, the `last_seq` of the first
@@ -197,20 +271,27 @@ pub enum OpenError {
         /// committed head itself; for an undecodable or repeated record, that
         /// record's own `Seq`.
         at: Seq,
-        /// The account of what could not be read, where there is one: a
-        /// damaged sync word's names the word found and a remedy that keeps
-        /// the journal — restore the segment — where
-        /// [`OpenError::ForeignFormat`]'s would discard it; the base mismatch,
-        /// the edited transaction and a chain break each say which chain link
-        /// failed and how; and a committed record that does not decode carries
-        /// the serializer's own refusal, which is what separates a
-        /// writer/reader skew — a binary rolled back over a record format —
-        /// from bit-rot, two conditions this variant otherwise reports alike
-        /// and an operator must not treat alike. `None` for the rest: a
-        /// corrupt run's own bytes are unreadable, an unenumerable or
-        /// oversized segment is a budget verdict, an exhausted order is
-        /// arithmetic, and a `Seq` the committed set presents twice is a
-        /// malformed journal rather than an unreadable one.
+        /// The account of what could not be read, where there is one, NAMING
+        /// THE FILE wherever the damage lies in one: a damaged sync word's
+        /// names the segment, the word found and a remedy that keeps the
+        /// journal — restore that segment — where
+        /// [`OpenError::ForeignFormat`]'s would discard it; an unenumerable or
+        /// oversized segment's names the segment and the bound it broke; a
+        /// corrupt run's names the segments its bytes lie in, the bytes it
+        /// spans, and the act that clears it — a run wholly in CLOSED
+        /// segments, whose bytes never change once the next segment begins,
+        /// is cleared by restoring those files alone from a copy that holds
+        /// the segment after them, where a run in the ACTIVE segment rewinds
+        /// the journal to the copy restored; the base mismatch names the
+        /// checkpoint file, and it, the edited transaction and a chain break
+        /// each say which chain link failed and how; and a committed record
+        /// that does not decode carries the serializer's own refusal, which is
+        /// what separates a writer/reader skew — a binary rolled back over a
+        /// record format — from bit-rot, two conditions this variant otherwise
+        /// reports alike and an operator must not treat alike. `None` for the
+        /// rest: an exhausted order is arithmetic, and a `Seq` the committed
+        /// set presents twice is a malformed journal rather than an unreadable
+        /// one.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
 }
@@ -318,6 +399,9 @@ pub enum CheckpointError {
     /// removes its own before this is answered. So the call is safe to retry,
     /// and a retry re-does the whole sequence from a fresh root. A failure
     /// AFTER the rename is [`CheckpointError::Landed`], which names the step.
+    /// The error names its file and its act ahead of the OS's words —
+    /// `checkpoint.tmp: fsync: No space left on device (os error 28)` — and
+    /// keeps the OS error's kind, as [`OpenError::Io`]'s does.
     Io(io::Error),
     /// A base LANDED — the rename that publishes it ran — and a step after it
     /// failed: `step` names which of the three, `cause` carries the I/O
@@ -342,7 +426,8 @@ pub enum CheckpointError {
     /// A prior unrecoverable failure — any [`TxnError::Poisoned`] lists, a
     /// `Seq` order with no room left among them — has halted the kernel
     /// (§1/§3). No checkpoint was attempted, nothing was written, and none
-    /// will be until the kernel is reopened.
+    /// will be until the kernel is reopened. Which failure halted it is
+    /// [`crate::Kernel::poison_cause`]'s to say.
     Poisoned,
 }
 
@@ -469,7 +554,8 @@ pub enum HistoryError {
     /// a refused base, passed over for the next-older one as recovery passes
     /// it, and where nothing below it stands in, a newest base that could not
     /// be read is [`HistoryError::Reclaimed`]'s `cause`, carrying the read's
-    /// own failure.
+    /// own failure. The error names its file and its act ahead of the OS's
+    /// words, and keeps the OS error's kind, as [`OpenError::Io`]'s does.
     Io(io::Error),
     /// Corrupt data in the scanned region — the same conditions, the same
     /// coordinate and the same account, that [`OpenError::Corruption`]
@@ -586,6 +672,11 @@ pub enum TxnError<E> {
     /// the call returns [`Poisoned`] instead (§1: a surviving un-acked marker
     /// would let a successor collide on recovery).
     ///
+    /// The error names the segment and the act that failed ahead of the OS's
+    /// words — `seg-5.wal: fsync: Input/output error (os error 5)` — and keeps
+    /// the OS error's kind, so a full volume is `StorageFull` whatever step
+    /// met it.
+    ///
     /// [`Poisoned`]: TxnError::Poisoned
     Durability(io::Error),
     /// The staged records could not be turned into journal frames at all — a
@@ -652,7 +743,9 @@ pub enum TxnError<E> {
     /// (in place of `Durability`; a panic-path poisoning propagates the panic
     /// instead) and by every later `transact`; reads
     /// (`snapshot`/`current_seq`) keep serving the last consistent root. Do
-    /// not re-invoke.
+    /// not re-invoke. Which of these halted it, with the transaction's
+    /// coordinates and the failures' own words, is
+    /// [`crate::Kernel::poison_cause`]'s to say.
     Poisoned,
 }
 

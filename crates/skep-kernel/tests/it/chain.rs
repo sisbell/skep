@@ -848,14 +848,21 @@ fn c04_the_signature_slot_is_a_chain_input_a_slot_filled_stripped_or_altered_bre
         Err(err) => err,
     };
     let next_record = Seq(golden.txn(OP + 1).first_seq);
-    assert!(
-        matches!(
-            &err,
-            EngineError::Open(OpenError::Corruption { at, cause: None }) if *at == next_record
+    match &err {
+        EngineError::Open(OpenError::Corruption { at, cause: Some(cause) })
+            if *at == next_record =>
+        {
+            assert!(
+                cause.to_string().starts_with("corrupt run in seg-1.wal from byte "),
+                "an inconsistent slot is an undecodable frame: a corrupt run landing on the next \
+                 transaction's first record, its account naming the segment — got {cause}"
+            )
+        }
+        other => panic!(
+            "an inconsistent slot is an undecodable frame: a corrupt run landing on the next \
+             transaction's first record — got {other:?}"
         ),
-        "an inconsistent slot is an undecodable frame: a corrupt run landing on the next \
-         transaction's first record, no cause — got {err:?}"
-    );
+    }
 }
 
 /// CASE 5 — TWO WHOLE TRANSACTIONS SWAPPED, frames intact, CRCs valid, every marker

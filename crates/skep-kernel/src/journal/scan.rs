@@ -14,7 +14,7 @@ use super::{
     Parsed, Txn, FRAME_HEADER_LEN, MAGIC, MARKER_FRAME_LEN, MAX_SEGMENT_LEN, MAX_TXN_BYTES,
     RESYNC_BUDGET_PASSES, STAMP_PREFIX,
 };
-use crate::error::{stamp_text, Cause};
+use crate::error::{at_file, stamp_text, Cause};
 
 /// How a corrupt run (a span the scan skipped via magic-resync) ended (§7).
 #[derive(Debug, PartialEq, Eq)]
@@ -60,6 +60,65 @@ impl RunEnd {
     }
 }
 
+/// One corrupt run as the walk met it: how it ended ([`RunEnd`]), which the
+/// halts classify, and where its bytes lie in the journal's files
+/// ([`RunPlace`]), which the account of a fatal one names ([`run_cause`]).
+#[derive(Debug, PartialEq, Eq)]
+struct Run {
+    end: RunEnd,
+    place: RunPlace,
+}
+
+/// Where a corrupt run's bytes lie: resolved to file names by the walk while
+/// the segment list is in hand, as [`TailCut`] is, so the account names the
+/// files that were scanned and no others. The run's own `Seq`s are
+/// unreadable, but its place in the files is not — which is what the act
+/// that clears it turns on: a run wholly in CLOSED segments, whose bytes
+/// never change once the segment after them begins (the writer appends only
+/// to the active segment and rotates only after a committed marker, and the
+/// tail cut never shortens a segment that ends on one), is cleared by those
+/// files alone from any copy that holds the segment after them; a run in
+/// the ACTIVE segment, which every commit extends, is not.
+#[derive(Debug, PartialEq, Eq)]
+struct RunPlace {
+    /// The segment files holding the run's bytes, first to last, by name.
+    segments: Vec<String>,
+    /// The byte of the first of them at which the run begins.
+    from: usize,
+    /// The byte of the last of them at which the intact frame that closed
+    /// the run begins; `None` where the run reaches that segment's end.
+    to: Option<usize>,
+    /// The segment listed after the last of them — `None` where the last is
+    /// the active segment.
+    next: Option<String>,
+}
+
+impl RunPlace {
+    /// The place of a run the walk opened at byte `from` of `segs[first]`
+    /// and closed at `landing` — the segment index and byte of the intact
+    /// frame that closed it, `None` for a run that reached the journal's end.
+    /// A landing at a segment's first byte holds none of the run: the run
+    /// ended with the segment before, which is never the run's own first
+    /// segment, since a run begins at a byte before the frame it lands on.
+    fn of(
+        segs: &[SegmentMeta],
+        (first, from): (usize, usize),
+        landing: Option<(usize, usize)>,
+    ) -> RunPlace {
+        let (last, to) = match landing {
+            Some((segment, 0)) => (segment - 1, None),
+            Some((segment, byte)) => (segment, Some(byte)),
+            None => (segs.len() - 1, None),
+        };
+        RunPlace {
+            segments: segs[first..=last].iter().map(SegmentMeta::name).collect(),
+            from,
+            to,
+            next: segs.get(last + 1).map(SegmentMeta::name),
+        }
+    }
+}
+
 /// Why a scan could not produce an outcome (§7). Both answers are the
 /// caller's to phrase in its own error vocabulary; neither leaves a partial
 /// [`ScanOutcome`] for anyone to draw a verdict from.
@@ -80,8 +139,11 @@ pub(crate) enum ScanFail {
         /// The base's own coordinate, where the scan began: the damage lies
         /// somewhere in the segments it reads — above the base, or below it in
         /// a segment straddling it — and the scan could not get past the
-        /// damage to say where.
+        /// damage to say which coordinates it holds.
         at: u64,
+        /// The segment that refused, by name, the bound it broke, and the act
+        /// that clears it ([`oversized_cause`], [`unenumerable_cause`]).
+        cause: Cause,
     },
 }
 
@@ -187,11 +249,25 @@ pub(crate) struct ScanOutcome {
     /// contributes boundaries with no base left to fold from. Never raised
     /// when `bound` is `None`, which asks no boundary question.
     nearest_below_bound: u64,
-    /// Corrupt runs in scan order — what [`ScanOutcome::halt_to_head`] and
-    /// [`ScanOutcome::halt_anywhere`] classify, through
-    /// [`ScanOutcome::fatal_run`]. The verdict on a run belongs to those, not
-    /// to a caller re-deriving the classifier.
-    runs: Vec<RunEnd>,
+    /// Corrupt runs in scan order, each with where its bytes lie — what
+    /// [`ScanOutcome::halt_to_head`] and [`ScanOutcome::halt_anywhere`]
+    /// classify, through [`ScanOutcome::fatal_run`], and name the fatal one
+    /// by. The verdict on a run belongs to those, not to a caller re-deriving
+    /// the classifier.
+    runs: Vec<Run>,
+    /// The INTACT frames after the last committed marker of a kind no torn
+    /// write leaves: a commit marker that commits nothing, or a frame whose
+    /// CRC passes and that does not decode. Counted by the walk and reset by
+    /// every committed marker ([`ScanOutcome::collect_commit`]), so once the
+    /// scan returns it counts them in the tail the cut removes
+    /// ([`truncate_tail`]) — what a recovery reports as
+    /// [`crate::Recovery`]'s `tail_cut_intact`. A crash leaves one only where
+    /// the disk wrote an append's pages out of order; rot in the last
+    /// committed transaction, or a rewrite of it, leaves one too (the open
+    /// item in [`crate::Kernel::open`]'s damage model), which is why it is
+    /// counted rather than cut in silence. Never bounded, for the reason the
+    /// head is not.
+    pub tail_intact: u64,
     /// The tail-truncation cut, `None` when nothing was scanned — what
     /// [`truncate_tail`] cuts. Resolved here and read there, so no caller can
     /// aim a truncation at a region other than the one this scan judged.
@@ -394,6 +470,9 @@ impl ScanOutcome {
         } else if marker.last_seq == self.s_load && marker.chain != self.chain_at_base {
             self.base_mismatch.get_or_insert(self.s_load);
         }
+        // Whatever intact frame of no writer's preceded this marker lies below
+        // a committed one now, and so outside any tail a cut removes.
+        self.tail_intact = 0;
         self.committed_head = self.committed_head.max(marker.last_seq);
         let Collect::Records { bound } = self.collect else {
             // The boundary mode keeps no record: the group, and every record
@@ -415,13 +494,13 @@ impl ScanOutcome {
     /// at-rest verdict, in the order the verdicts speak — the corrupt run a
     /// recovery cannot answer around, then the chain's own, in
     /// [`ScanOutcome::chain_verdict`]'s order — as the coordinate naming the
-    /// damage and its account where it has one (a corrupt run's own bytes are
-    /// unreadable, so it carries none). The run speaks first because it is
-    /// the root cause: a run that swallowed a transaction breaks the chain at
-    /// the next one. The order has one site, [`ScanOutcome::halt_on`], which
-    /// this and [`ScanOutcome::halt_anywhere`] share, so no caller can ask the
-    /// chain before the run, or one of the chain's verdicts without the
-    /// others.
+    /// damage and its account (a corrupt run's own bytes are unreadable, so
+    /// its account is where they lie, which the walk knows, and the act that
+    /// clears it). The run speaks first because it is the root cause: a run
+    /// that swallowed a transaction breaks the chain at the next one. The
+    /// order has one site, [`ScanOutcome::halt_on`], which this and
+    /// [`ScanOutcome::halt_anywhere`] share, so no caller can ask the chain
+    /// before the run, or one of the chain's verdicts without the others.
     ///
     /// The run is classified within the committed region this scan derived:
     /// a run above the committed head is the un-acked / torn tail, which
@@ -445,18 +524,20 @@ impl ScanOutcome {
     }
 
     /// The order both halts share, once each has classified its run: the run
-    /// first, carrying no account, then the chain's own verdicts.
-    fn halt_on(&self, fatal_run: Option<u64>) -> Option<Halt> {
+    /// first, with the account of where its bytes lie and the act that clears
+    /// it ([`run_cause`]), then the chain's own verdicts.
+    fn halt_on(&self, fatal_run: Option<(u64, &RunPlace)>) -> Option<Halt> {
         fatal_run
-            .map(|at| (at, None))
+            .map(|(at, place)| (at, Some(run_cause(place))))
             .or_else(|| self.chain_verdict().map(|(at, cause)| (at, Some(cause))))
     }
 
     /// The corrupt run a fold over `(s_load, bound]` cannot answer around: the
     /// `at` payload of the first run whose inferred `Seq` max lands in that
-    /// range — durable committed data the folded state needs, and unreadable.
-    /// Halt, never drop (§7). `bound = None` is unbounded above: every run
-    /// above the base is fatal, however far above it lands.
+    /// range — durable committed data the folded state needs, and unreadable
+    /// — and where its bytes lie. Halt, never drop (§7). `bound = None` is
+    /// unbounded above: every run above the base is fatal, however far above
+    /// it lands.
     ///
     /// The run is classified by its `inferred_max` and REPORTED by its `at`,
     /// and keeping the two apart is what the boundary case turns on: a run
@@ -465,12 +546,12 @@ impl ScanOutcome {
     /// base — where classifying by `at` would spuriously halt. An
     /// [`RunEnd::Eof`] run is never fatal: it is the un-acked / torn tail,
     /// which the last committed marker precedes.
-    fn fatal_run(&self, bound: Option<u64>) -> Option<u64> {
-        self.runs.iter().find_map(|run| match *run {
+    fn fatal_run(&self, bound: Option<u64>) -> Option<(u64, &RunPlace)> {
+        self.runs.iter().find_map(|run| match run.end {
             RunEnd::Landed { inferred_max, at }
                 if inferred_max > self.s_load && bound.is_none_or(|b| inferred_max <= b) =>
             {
-                Some(at)
+                Some((at, &run.place))
             }
             _ => None,
         })
@@ -742,20 +823,26 @@ impl PendingTxn {
 /// ceiling exists to refuse. `take` bounds the read even when the file grows
 /// after its length is read — a live appender beneath
 /// [`crate::Kernel::world_at`] — and a read that reaches past the ceiling
-/// refuses as well, since what it holds is then a prefix of the file.
-fn read_segment(path: &Path, s_load: u64) -> Result<Vec<u8>, ScanFail> {
-    let file = File::open(path)?;
-    let claimed = file.metadata()?.len();
+/// refuses as well, since what it holds is then a prefix of the file. Either
+/// refusal names the segment and its length ([`oversized_cause`]); a read that
+/// fails names the segment and the act.
+fn read_segment(seg: &SegmentMeta, s_load: u64) -> Result<Vec<u8>, ScanFail> {
+    let name = seg.name();
+    let file = File::open(&seg.path).map_err(at_file(&name, "read"))?;
+    let claimed = file.metadata().map_err(at_file(&name, "read"))?.len();
     if claimed > MAX_SEGMENT_LEN {
-        return Err(ScanFail::Unscannable { at: s_load });
+        return Err(ScanFail::Unscannable { at: s_load, cause: oversized_cause(&name, claimed) });
     }
     // `claimed` is at most the ceiling, 2^27, so the cast is exact on any 32-
     // or 64-bit target and the reservation is the file's own size, as
     // `fs::read` would make it.
     let mut buf = Vec::with_capacity(claimed as usize);
-    file.take(MAX_SEGMENT_LEN + 1).read_to_end(&mut buf)?;
+    file.take(MAX_SEGMENT_LEN + 1).read_to_end(&mut buf).map_err(at_file(&name, "read"))?;
     if buf.len() as u64 > MAX_SEGMENT_LEN {
-        return Err(ScanFail::Unscannable { at: s_load });
+        return Err(ScanFail::Unscannable {
+            at: s_load,
+            cause: oversized_cause(&name, buf.len() as u64),
+        });
     }
     Ok(buf)
 }
@@ -919,6 +1006,7 @@ fn walk(
         committed_records: Vec::new(),
         nearest_below_bound: s_load,
         runs: Vec::new(),
+        tail_intact: 0,
         tail: None,
         chain_head: chain_at_base,
         chain_break: None,
@@ -936,15 +1024,17 @@ fn walk(
     // below falls to when no committed marker is found anywhere.
     let mut first_scanned: Option<usize> = None;
     let mut pending: Option<PendingTxn> = None;
-    // A corrupt run has begun and its end is not yet known. The next intact
-    // frame closes it — `RunEnd::landed_on_record` or `landed_on_marker` —
-    // and end-of-journal closes it as `RunEnd::Eof`.
-    let mut run_open = false;
+    // A corrupt run has begun — at this segment index and byte — and its end
+    // is not yet known. The next intact frame closes it —
+    // `RunEnd::landed_on_record` or `landed_on_marker` — and end-of-journal
+    // closes it as `RunEnd::Eof`; either way the run is recorded with the
+    // place its bytes span (`RunPlace::of`).
+    let mut run_began: Option<(usize, usize)> = None;
     for (seg_index, seg) in scanned_above(segs, s_load) {
         if first_scanned.is_none() {
             first_scanned = Some(seg_index);
         }
-        let buf = read_segment(&seg.path, s_load)?;
+        let buf = read_segment(seg, s_load)?;
         // This segment's resynchronization budget. EVERY rejected candidate
         // charges, not only the ones a resync landed on: a payload can plant
         // a valid frame between two expensive rejections, which clears the
@@ -968,9 +1058,11 @@ fn walk(
                                 .unwrap_or_else(|| {
                                     PendingTxn::open(record.txn, &outcome.chain_head)
                                 });
-                            if run_open {
-                                outcome.runs.push(RunEnd::landed_on_record(record.seq));
-                                run_open = false;
+                            if let Some(began) = run_began.take() {
+                                outcome.runs.push(Run {
+                                    end: RunEnd::landed_on_record(record.seq),
+                                    place: RunPlace::of(segs, began, Some((seg_index, pos))),
+                                });
                                 // A record a run landed on cannot vouch for its
                                 // group: opened here, the run may have been
                                 // this transaction's own earlier frames; already
@@ -982,62 +1074,82 @@ fn walk(
                             pending = Some(group);
                         }
                         Ok(FramePayload::Marker(marker)) => {
-                            if run_open {
-                                outcome.runs.push(RunEnd::landed_on_marker(marker.last_seq));
-                                run_open = false;
+                            if let Some(began) = run_began.take() {
+                                outcome.runs.push(Run {
+                                    end: RunEnd::landed_on_marker(marker.last_seq),
+                                    place: RunPlace::of(segs, began, Some((seg_index, pos))),
+                                });
                             }
-                            if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
-                                if group.commits(&marker) {
+                            match pending.take_if(|group| group.txn == marker.txn) {
+                                Some(group) if group.commits(&marker) => {
                                     outcome.collect_commit(marker, group);
                                     // The cut is unbounded for the reason the
                                     // head is: it must name the last committed
                                     // marker wherever it sits.
                                     cut = Some((seg_index, end as u64));
-                                } else if group.clean && outcome.uncommitted_intact.is_none() {
-                                    // Every frame intact, the marker intact,
-                                    // and it does not close them: no writer
-                                    // produces this — the marker was edited.
-                                    // Named at the GROUP's last seq, the
-                                    // marker's being the forged field in one
-                                    // of the two shapes. Not committed all
-                                    // the same: the scan records, the
-                                    // callers halt.
-                                    outcome.uncommitted_intact =
-                                        Some(group.last_seq.unwrap_or(marker.last_seq));
                                 }
-                                // else: torn txn — not committed; its frames are
-                                // either beyond W (tail, truncated) or explained
-                                // by a corrupt run the caller classifies (§7).
-                            } else if let Some(group) =
-                                pending.as_ref().filter(|group| group.clean)
-                            {
-                                // A clean group whose next intact frame is
-                                // ANOTHER transaction's marker: the writer
-                                // emits a transaction's marker immediately
-                                // after its own records, so no writer leaves
-                                // this — the marker's `txn` was rewritten, and
-                                // the group it should have closed can never
-                                // commit. Named at the group's own last seq,
-                                // as a refused close is; the group stays open
-                                // and inert, as a non-matching marker leaves it.
-                                if outcome.uncommitted_intact.is_none() {
-                                    outcome.uncommitted_intact = group.last_seq;
+                                Some(group) => {
+                                    // An intact marker that commits nothing:
+                                    // a crash leaves one only where the disk
+                                    // wrote an append's pages out of order, so
+                                    // it is counted as the tail's own tell
+                                    // (`ScanOutcome::tail_intact`).
+                                    outcome.tail_intact += 1;
+                                    if group.clean && outcome.uncommitted_intact.is_none() {
+                                        // Every frame intact, the marker intact,
+                                        // and it does not close them: no writer
+                                        // produces this — the marker was edited.
+                                        // Named at the GROUP's last seq, the
+                                        // marker's being the forged field in one
+                                        // of the two shapes. Not committed all
+                                        // the same: the scan records, the
+                                        // callers halt.
+                                        outcome.uncommitted_intact =
+                                            Some(group.last_seq.unwrap_or(marker.last_seq));
+                                    }
+                                    // else: torn txn — not committed; its frames
+                                    // are either beyond W (tail, truncated) or
+                                    // explained by a corrupt run the caller
+                                    // classifies (§7).
+                                }
+                                None => {
+                                    outcome.tail_intact += 1;
+                                    if let Some(group) = pending.as_ref().filter(|group| group.clean)
+                                    {
+                                        // A clean group whose next intact frame
+                                        // is ANOTHER transaction's marker: the
+                                        // writer emits a transaction's marker
+                                        // immediately after its own records, so
+                                        // no writer leaves this — the marker's
+                                        // `txn` was rewritten, and the group it
+                                        // should have closed can never commit.
+                                        // Named at the group's own last seq, as
+                                        // a refused close is; the group stays
+                                        // open and inert, as a non-matching
+                                        // marker leaves it.
+                                        if outcome.uncommitted_intact.is_none() {
+                                            outcome.uncommitted_intact = group.last_seq;
+                                        }
+                                    }
                                 }
                             }
                         }
                         // Intact by CRC but undecodable: under one stamp no
                         // writer of this format writes it and no torn write
                         // leaves it, so it is a rewrite. It joins run
-                        // classification, and an open group is no longer
-                        // clean: mid-history the run lands on the next intact
-                        // frame and halts the caller; in the LAST transaction
-                        // the run lies above the committed head, where §7
-                        // calls it the torn tail, and the transaction is cut
-                        // though its CRC proves these are the bytes that were
-                        // written — the open item in `Kernel::open`'s damage
-                        // model.
+                        // classification, it is counted as the tail's own tell
+                        // where no committed marker follows it, and an open
+                        // group is no longer clean: mid-history the run lands
+                        // on the next intact frame and halts the caller; in the
+                        // LAST transaction the run lies above the committed
+                        // head, where §7 calls it the torn tail, and the
+                        // transaction is cut though its CRC proves these are the
+                        // bytes that were written — the open item in
+                        // `Kernel::open`'s damage model, which the count is what
+                        // reports.
                         Err(_) => {
-                            run_open = true;
+                            run_began.get_or_insert((seg_index, pos));
+                            outcome.tail_intact += 1;
                             if let Some(group) = pending.as_mut() {
                                 group.clean = false;
                             }
@@ -1051,9 +1163,12 @@ fn walk(
                         // Everything derived so far is a prefix, so none of it
                         // travels: no verdict can be drawn from it and no
                         // truncation aimed with it.
-                        return Err(ScanFail::Unscannable { at: s_load });
+                        return Err(ScanFail::Unscannable {
+                            at: s_load,
+                            cause: unenumerable_cause(&seg.name()),
+                        });
                     }
-                    run_open = true;
+                    run_began.get_or_insert((seg_index, pos));
                     // A group open across a corrupt frame may have lost one
                     // of its own: whatever its marker says of it is the
                     // run's to explain, never the edited-transaction verdict.
@@ -1068,8 +1183,8 @@ fn walk(
             }
         }
     }
-    if run_open {
-        outcome.runs.push(RunEnd::Eof);
+    if let Some(began) = run_began {
+        outcome.runs.push(Run { end: RunEnd::Eof, place: RunPlace::of(segs, began, None) });
     }
     // Everything past the last committed marker is tail. When the scanned
     // region holds no committed marker at all, everything scanned is tail:
@@ -1117,11 +1232,97 @@ fn chain_break_cause(at: u64) -> Cause {
 /// operator's, named here, rather than a silent fallback to an older base
 /// that would leave the edited header on disk for the next head to publish.
 fn base_mismatch_cause(at: u64) -> Cause {
+    // The checkpoint's own file name at `at` (`checkpoint.<seq>`, §6), spelled
+    // here because the journal's module sits below the checkpoint's.
+    let checkpoint = format!("checkpoint.{at}");
     format!(
-        "chain break at the base: the checkpoint at {at} carries a chain_head that is not the \
-         chain the journal's own commit marker closing {at} carries — the checkpoint header was \
-         rewritten, or the marker was; nothing was recomputed, two stored values disagree. Remove \
-         or restore the checkpoint and the open re-verifies from the base below it"
+        "chain break at the base: {checkpoint} carries a chain_head that is not the chain the \
+         journal's own commit marker closing {at} carries — the checkpoint header was rewritten, \
+         or the marker was; nothing was recomputed, two stored values disagree. Remove or restore \
+         {checkpoint} and the open re-verifies from the base below it"
+    )
+    .into()
+}
+
+/// The account a fatal corrupt run travels with ([`ScanOutcome::halt_on`]):
+/// where its bytes lie — the segments, the byte it begins at and the byte or
+/// the end it reaches — and the act that clears it, which turns on whether
+/// those segments are CLOSED ([`RunPlace`]): restoring them alone from a copy
+/// that holds the segment after them loses nothing, and the open verifies
+/// what was restored by the commit chain; a run in the ACTIVE segment is
+/// cleared only by a whole directory's copy, which rewinds the journal to it.
+fn run_cause(place: &RunPlace) -> Cause {
+    let (first, last) = match place.segments.as_slice() {
+        [only] => (only, only),
+        [first, .., last] => (first, last),
+        // `RunPlace::of` slices from the segment the run began in, which
+        // holds its first byte, so the list is never empty.
+        [] => unreachable!("a corrupt run's bytes lie in the segment it began in"),
+    };
+    let one = place.segments.len() == 1;
+    let span = match (one, place.to) {
+        (true, Some(to)) => format!("in {first} from byte {} to byte {to}", place.from),
+        (true, None) => format!("in {first} from byte {} to its end", place.from),
+        (false, Some(to)) => format!("from byte {} of {first} to byte {to} of {last}", place.from),
+        (false, None) => format!("from byte {} of {first} to the end of {last}", place.from),
+    };
+    let files = names_list(&place.segments);
+    let act = match &place.next {
+        Some(next) => {
+            let (are, them) = if one { ("is", "it") } else { ("are", "them") };
+            format!(
+                "{files} {are} closed — {next} follows {them} — and a closed segment's bytes never \
+                 change: restore {files} alone from a copy that holds {next}, and reopen; the \
+                 open verifies what it restores by the commit chain, and nothing is lost"
+            )
+        }
+        None => format!(
+            "{last} is the active segment, which every commit extends, so a copy of it holds only \
+             the commits made before the copy was taken: restore the journal directory whole from \
+             one copy, which rewinds the journal to that copy"
+        ),
+    };
+    format!(
+        "corrupt run {span}: its frames fail their CRC or do not decode, and an intact frame \
+         follows it; {act}"
+    )
+    .into()
+}
+
+/// `names` as one list in a sentence: `a`, `a and b`, `a, b and c`.
+fn names_list(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// The account a segment longer than any this journal's writer produces
+/// travels with ([`ScanFail::Unscannable`]): the file, its length and the
+/// ceiling, and the act — the file is not read whole, so what it holds is the
+/// operator's to judge.
+fn oversized_cause(segment: &str, len: u64) -> Cause {
+    format!(
+        "{segment} is {len} bytes, past the {MAX_SEGMENT_LEN} no segment this journal's writer \
+         produces reaches: a file that is not one of this journal's segments, or one grown by \
+         damage, refused rather than read whole — move it out of the journal directory where it \
+         is not this journal's, and restore it from a copy where it is"
+    )
+    .into()
+}
+
+/// The account a segment whose frames could not be enumerated within the
+/// resynchronization budget travels with ([`ScanFail::Unscannable`]): the
+/// file and the budget, and the act. Honest damage almost never spends the
+/// budget; damage that sends the scan into a record whose own bytes plant
+/// frame headers does, and a copy of the segment from before the damage
+/// clears it.
+fn unenumerable_cause(segment: &str) -> Cause {
+    format!(
+        "{segment}'s frames could not be enumerated within {RESYNC_BUDGET_PASSES} passes over it: \
+         damage inside it sent the scan into a record whose own bytes plant frame headers; \
+         restore {segment} from a copy"
     )
     .into()
 }
@@ -1142,16 +1343,16 @@ fn uncommitted_intact_cause(at: u64) -> Cause {
 }
 
 /// The account a damaged sync word travels with ([`FirstSyncWord::Damaged`]):
-/// the word found, why it is damage and not a format, and the remedy — which
-/// is NOT [`crate::OpenError::ForeignFormat`]'s, the journal being this build's.
-pub(crate) fn damaged_sync_word_cause(found: [u8; 4]) -> Cause {
+/// the segment and the word found, why it is damage and not a format, and the
+/// remedy — which is NOT [`crate::OpenError::ForeignFormat`]'s, the journal
+/// being this build's — named on the file it applies to.
+pub(crate) fn damaged_sync_word_cause(found: [u8; 4], segment: &str) -> Cause {
     format!(
-        "damaged sync word: the first frame the scan would read opens with `{found}`, where the \
-         frame after it opens with this build's `{ours}` — another format's journal carries its \
-         stamp in every frame, so this is one damaged word in a journal this build wrote, and the \
-         frame's CRC does not cover it. Restore the segment from a copy, or rewrite those four \
-         bytes to `{ours}` and reopen, when the scan judges the frame by its CRC; this journal \
-         needs no migration",
+        "damaged sync word: {segment} opens with `{found}`, where its second frame opens with \
+         this build's `{ours}` — another format's journal carries its stamp in every frame, so \
+         this is one damaged word in a journal this build wrote, and the frame's CRC does not \
+         cover it. Restore {segment} from a copy, or rewrite its first four bytes to `{ours}` and \
+         reopen, when the scan judges the frame by its CRC; this journal needs no migration",
         found = stamp_text(&found),
         ours = stamp_text(&MAGIC),
     )
@@ -1178,7 +1379,13 @@ pub(crate) enum FirstSyncWord {
     /// successor opens with this build's: ONE damaged word in a journal this
     /// build wrote. The frame CRC covers the length and the payload and not
     /// the sync word, so nothing else about the frame says so.
-    Damaged([u8; 4]),
+    Damaged {
+        /// The word the segment opens with.
+        found: [u8; 4],
+        /// The segment's name in the journal directory, which the remedy
+        /// names: the one file to restore, or whose four bytes to rewrite.
+        segment: String,
+    },
 }
 
 /// THE FIRST-SYNC-WORD PROBE (§8 of the encoding report): what the first
@@ -1205,16 +1412,18 @@ pub(crate) enum FirstSyncWord {
 /// wherever it likes, and scanning such a journal would wipe it.
 ///
 /// Reads the first frame's header and four bytes at its successor, whatever
-/// the segment's size.
+/// the segment's size; a read that fails names the segment and the act.
 pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<FirstSyncWord> {
     let Some((_, first)) = scanned_above(segs, s_load).next() else {
         return Ok(FirstSyncWord::Scan);
     };
-    let mut file = File::open(&first.path)?;
+    let name = first.name();
+    let mut file = File::open(&first.path).map_err(at_file(&name, "read"))?;
     let mut header = Vec::with_capacity(FRAME_HEADER_LEN);
     (&mut file)
         .take(FRAME_HEADER_LEN as u64)
-        .read_to_end(&mut header)?;
+        .read_to_end(&mut header)
+        .map_err(at_file(&name, "read"))?;
     // The header's first two fields, each read as the four bytes it is: the
     // sync word, then the `len` that says where the successor begins.
     let Some((&word, rest)) = header.split_first_chunk::<4>() else {
@@ -1227,11 +1436,12 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
         return Ok(FirstSyncWord::Foreign(word));
     };
     let len = u32::from_le_bytes(len);
-    file.seek(SeekFrom::Start(FRAME_HEADER_LEN as u64 + u64::from(len)))?;
     let mut successor = Vec::with_capacity(MAGIC.len());
-    file.take(MAGIC.len() as u64).read_to_end(&mut successor)?;
+    file.seek(SeekFrom::Start(FRAME_HEADER_LEN as u64 + u64::from(len)))
+        .and_then(|_| file.take(MAGIC.len() as u64).read_to_end(&mut successor))
+        .map_err(at_file(&name, "read"))?;
     Ok(if successor == MAGIC {
-        FirstSyncWord::Damaged(word)
+        FirstSyncWord::Damaged { found: word, segment: name }
     } else {
         FirstSyncWord::Foreign(word)
     })
@@ -1264,16 +1474,30 @@ pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<u64> {
     let Some(tail) = &scan.tail else {
         return Ok(0);
     };
-    let f = OpenOptions::new().write(true).open(&tail.segment)?;
-    let mut cut = f.metadata()?.len().saturating_sub(tail.offset);
-    f.set_len(tail.offset)?;
-    f.sync_data()?;
+    let truncating = at_file(file_name(&tail.segment), "truncate");
+    let mut cut = 0;
+    OpenOptions::new()
+        .write(true)
+        .open(&tail.segment)
+        .and_then(|f| {
+            cut = f.metadata()?.len().saturating_sub(tail.offset);
+            f.set_len(tail.offset)?;
+            f.sync_data()
+        })
+        .map_err(truncating)?;
     for path in &tail.discard {
-        cut = cut.saturating_add(fs::metadata(path)?.len());
-        fs::remove_file(path)?;
+        let len = fs::metadata(path)
+            .and_then(|meta| fs::remove_file(path).map(|()| meta.len()))
+            .map_err(at_file(file_name(path), "remove"))?;
+        cut = cut.saturating_add(len);
     }
     fsync_dir(dir)?;
     Ok(cut)
+}
+
+/// A journal file's name, by its path, as a refusal names it.
+fn file_name(path: &Path) -> String {
+    path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned()
 }
 
 #[cfg(test)]

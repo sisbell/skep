@@ -210,6 +210,12 @@ fn each_journal_step_fires_its_arm_once_and_the_step_then_runs_for_real() {
         };
         assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{step:?}: the kind armed");
         assert!(e.to_string().contains(&format!("{step:?}")), "{step:?}: names the step: {e}");
+        // …named as the real step's failure is: the segment, then the act.
+        let act = if step == Step::JournalAppend { "append" } else { "fsync" };
+        assert!(
+            e.to_string().starts_with(&format!("seg-1.wal: {act}: ")),
+            "{step:?}: names the segment and the act: {e}"
+        );
         assert!(!installed, "{step:?}: nothing installed");
         assert_eq!(fs::metadata(&seg).unwrap().len(), mark, "{step:?}: back at the mark");
         assert!(seam.armed_steps().is_empty(), "{step:?}: fired and disarmed");
@@ -230,7 +236,16 @@ fn each_journal_step_fires_its_arm_once_and_the_step_then_runs_for_real() {
     seam.fail_the_next(Step::JournalBarrier, io::ErrorKind::StorageFull);
     seam.fail_the_next(Step::JournalRepair, io::ErrorKind::StorageFull);
     let out = writer.commit_txn(1, vec![rec(10)], None, |_| {});
-    assert!(matches!(out, Err(CommitFail::Unrepaired)), "got {out:?}");
+    // Both failures travel, each named on the segment: the barrier's, and the
+    // truncation's that left its frames standing — what the halt is said with.
+    match out {
+        Err(CommitFail::Unrepaired { failed, repair }) => {
+            assert!(failed.to_string().starts_with("seg-1.wal: fsync: "), "{failed}");
+            assert!(repair.to_string().starts_with("seg-1.wal: truncate: "), "{repair}");
+            assert!(repair.to_string().contains("JournalRepair"), "{repair}");
+        }
+        other => panic!("expected the unrepaired failure, got {other:?}"),
+    }
     assert!(seam.armed_steps().is_empty(), "both arms fired");
     let left = fs::metadata(&seg).unwrap().len();
     assert!(left > 0, "the barrier's frames stand: the repair never ran");

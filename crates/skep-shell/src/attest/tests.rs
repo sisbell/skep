@@ -1,6 +1,7 @@
 //! THE COMPOSER's FENCE: the spelling it reads a frame in — the trunk, a
-//! V-spec, an I-address's split, a tumbler and an address within their
-//! component budget, the wire's value faults faced as its own halt — and THE
+//! V-spec, an I-address's split, an I-range made where its reach is
+//! spellable, a tumbler and an address within their component budget, the
+//! wire's value faults faced as its own halt — and THE
 //! BOARD's BUDGETS it keeps: each pinned to the board's own where the board
 //! exports it, and each held before the work it bounds, against a fake board
 //! that counts the reads the composer makes — a list past the wire's, a slot
@@ -63,6 +64,20 @@ fn the_composer_reads_a_frame_as_the_wire_spells_it() {
     assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));
     let span = extent_span("1.0.1.0.1.0.1.4", 3).unwrap();
     assert_eq!((span.start().to_string(), span.width().to_string()), ("1.0.1.0.1.0.1.4".to_string(), "0.0.0.0.0.0.0.3".to_string()));
+}
+
+/// AN I-RANGE is made where its reach is spellable and nowhere else: three
+/// positions from `prefix.1` walk 1, 2, 3, and a range whose reach passes
+/// `u64::MAX` is none — the one bound every walk of its positions stands on,
+/// whether the range came from an `image` run or a shot's copied run.
+#[test]
+fn an_i_range_is_made_where_its_reach_is_spellable() {
+    let range = IRange::new("1.0.1.0.2.0.1", 1, 3).expect("a spellable range");
+    assert_eq!((range.positions().collect::<Vec<_>>(), range.width()), (vec![1, 2, 3], 3));
+    assert_eq!(IRange::new("1.0.1.0.2.0.1", u64::MAX - 2, 2).map(IRange::width), Some(2), "a reach at u64::MAX is spellable");
+    assert!(IRange::new("1.0.1.0.2.0.1", u64::MAX, 1).is_none(), "a reach past it is none");
+    let image = json!({"i_start": "1.0.1.0.2.0.1.18446744073709551615", "width": "1"});
+    assert!(image_run(&image, "1.0.1.0.2").unwrap_err().to_string().contains("is no I-extent"), "an `image` run whose reach passes it is refused");
 }
 
 /// THE BOARD's BUDGETS the board exports are the shell's: the frame cap the
@@ -303,7 +318,7 @@ fn a_read_back_is_held_to_its_extent_its_map_and_the_body_budget() {
     let c = g.composer();
     let read = |origin: &'static str, spent: &mut usize| {
         let mut wanted = Wanted::new(origin);
-        wanted.want(if origin == "1.0.1.0.3" { "1.0.1.0.3.0.1" } else { "1.0.1.0.2.0.1" }, 1, 3);
+        wanted.want(IRange::new(if origin == "1.0.1.0.3" { "1.0.1.0.3.0.1" } else { "1.0.1.0.2.0.1" }, 1, 3).expect("a spellable range"));
         c.read_back(wanted, spent)
     };
     assert!(read("1.0.1.0.4", &mut 0).unwrap_err().to_string().contains("more than one delivery"));

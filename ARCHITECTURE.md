@@ -1206,16 +1206,18 @@ Rules that hold across its files:
   `call`'s dispatch to one arm per call, and `CALLS`, the list a transport
   admits a call by, is spelled from the same enum, so no name is listed
   that the dispatch does not answer.
-- **A session ends once.** A death signal is met by two hands that end
+- **A session ends once.** A death signal is met by two callers that end
   sessions — the shell on a call's thread, at its dial or at a read its
   attest composer made (`Unattested::Died`, no refusal of the composer's),
   and the board's feed thread on its own — and both run `Sessions::end`;
   the resend meets it too and runs no end, leaving its line standing for
   the session the end leaves behind. The entry's `OnceLock` is the gate:
-  the hand whose initializer runs derives the reason, registers the
-  restart arm's re-open and emits the one `session-died`; a hand that
+  the caller whose initializer runs derives the reason, registers the
+  restart arm's re-open and emits the one `session-died`; a caller that
   comes while it runs waits, answers that reason and does nothing else; a
-  hand that panics mid-end leaves the cell unset for the next. An entry
+  caller that panics mid-end leaves the cell unset for the next. A caller
+  here is the code that meets the death; a hand stays the corpus's, the
+  writer of a record or a row, as a retirement's reason names it. An entry
   leaves the table by that sequence or by `close`, and `Sessions` exposes
   no other removal.
 - **A session's rows precede its death.** `close` takes the session out of
@@ -1328,9 +1330,10 @@ Rules that hold across its files:
   absent because it was spelled wrong.
 
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
-its children run the shell against a daemon spawned in-process over a temp
-data dir: `door` the shell's own frame, `modes` the two session modes,
-`boards` each board's node, wait and stop, `held` the held-burst store.
+its children run the shell: `door` the shell alone, with no daemon behind
+it; `modes` the two session modes, `boards` each board's node, wait and
+stop, and `held` the held-burst store, against a daemon spawned in-process
+over a temp data dir.
 `hold/tests.rs` and its children `write` and `resend` drive the hold over a
 fake board; the other modules test themselves over fakes and temp dirs;
 and `tests/it/tidy.rs` holds the arrangement — the declaration order, every

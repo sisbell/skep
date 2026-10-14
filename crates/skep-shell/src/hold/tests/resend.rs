@@ -67,7 +67,7 @@ fn the_resend_sends_its_lines_in_k_order_across_the_documents() {
 }
 
 /// THE DEATH SIGNAL at a resend's dial leaves its line standing (§3c.4: the
-/// death is neither held nor faced): the session's end is the hand's that
+/// death is neither held nor faced): the session's end is the caller's that
 /// meets it, and the line waits for the session that stands — never `done`,
 /// never re-marked; the next probe, the token answering again, sends and
 /// keeps it (the mutant that settles the line at the death marks the

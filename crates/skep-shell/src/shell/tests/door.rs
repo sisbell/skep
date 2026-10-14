@@ -1,4 +1,4 @@
-//! THE SHELL's OWN FRAME, with no daemon behind it: an `/op-at` refusal
+//! THE SHELL ALONE, with no daemon behind it: an `/op-at` refusal
 //! rebuilt into the board's verdict under the wire's status; the dispatch
 //! naming every call by its own spelling — `fetch` answered `streamed_call`
 //! through it — and logging each as one entry of its outcome and sizes, and

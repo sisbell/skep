@@ -32,7 +32,7 @@
 //!   unreachable board, and the shell's own armed refusals, each named by
 //!   ONE token from one closed list.
 //! * `wire` — THE WIRE's SHARED FACTS the composer, the held store, the
-//!   hold's door and its resend, and the call log read: the board's frame
+//!   burst's door and the resend, and the call log read: the board's frame
 //!   cap and a frame's compact bytes, the tumbler component budget and an
 //!   address read within it, the document address in its one spelling, and
 //!   the wire's value forms both ways with the insert's value budget.
@@ -65,7 +65,7 @@
 //! * `sessions` — THE SESSION TABLE: every token this shell holds, beside
 //!   the board it is valid at, under the reference the page holds, the two
 //!   openings (bare, signed), the attest a session's key signs, and a
-//!   session's END — one sequence, whichever hand met the death signal —
+//!   session's END — one sequence, whichever caller met the death signal —
 //!   with the reason a `session-died` carries, derived from public reads as
 //!   §4b.2 says under the key store the table holds; a leaving session's
 //!   drafts supplement, one per principal, released to another standing

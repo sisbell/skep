@@ -1,5 +1,5 @@
 //! THE WIRE's SHARED FACTS: what the composer (`attest`), the held store
-//! (`held`), the hold's door and its resend (`hold`) and the call log the
+//! (`held`), the burst's door and the resend (`hold`) and the call log the
 //! shell keeps (`shell`) each read of the board's wire and none of them owns
 //! — the board's frame cap and how a frame is measured against it, the
 //! tumbler component budget and an address read within it, a document

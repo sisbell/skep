@@ -294,7 +294,7 @@ impl Holds {
     /// re-marked and faced; a reissue-class answer counted against the line
     /// and reissued at the next probe, so its third `durability` holds it; a
     /// refusal the table holds nowhere left standing for the next probe,
-    /// never `done`; the death signal left to the hand that ends the
+    /// never `done`; the death signal left to the caller that ends the
     /// session — the session that stands resends after its read. `Continue`
     /// where the line is settled and sending goes on, `Break` where the
     /// line's document stops at it.

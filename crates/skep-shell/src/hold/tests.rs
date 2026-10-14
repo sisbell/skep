@@ -416,7 +416,7 @@ impl Ground {
     }
 
     /// `frame` admitted at the ground's session — a test's own frame, which
-    /// the door lets in.
+    /// the burst's door lets in.
     fn burst(&self, frame: &Value) -> Burst {
         Burst::admit(frame.clone(), &self.session).unwrap()
     }

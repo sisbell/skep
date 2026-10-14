@@ -606,9 +606,10 @@ impl Shell {
         self.sessions.get(session_reference).ok_or_else(|| Refusal::shell(Name::SESSION_ENDED, json!({"session": session_reference})))
     }
 
-    /// A death signal met on `session`'s token under the shell's hands: the
-    /// session ended by the one sequence the board's feed thread runs too,
-    /// whichever hand came first; the call's refusal, carrying the reason.
+    /// A death signal met on `session`'s token at one of the shell's calls:
+    /// the session ended by the one sequence the board's feed thread runs
+    /// too, whichever caller came first; the call's refusal, carrying the
+    /// reason.
     fn died(&self, session: &SessionEntry) -> Refusal {
         let reason = self.sessions.end(session, &mut self.feed(&session.board_reference), &self.bus);
         Refusal::shell(Name::SESSION_DIED, json!({"session": session.reference, "reason": reason}))

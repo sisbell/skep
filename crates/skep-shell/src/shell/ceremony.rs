@@ -252,7 +252,7 @@ impl Shell {
         }
         let key = sessions::signing_key(&self.store, board.dialed(), principal, || Mode::of(&health))?;
         let walk = walk_to_set(board, &account)?;
-        sessions::key_standing(board, &walk, &key, Site::Tail)?;
+        sessions::diagnose_key(board, &walk, &key, Site::Tail)?;
         let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(&self.store))?;
         let mut warnings: Vec<String> = Vec::new();
         if reads.anything_owed() {

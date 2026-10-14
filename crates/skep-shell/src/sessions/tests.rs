@@ -1,10 +1,10 @@
 //! THE SESSION TABLE's FENCE: a session registered under a fresh reference,
-//! beside the board it stands at; its END run once whichever hand meets the
-//! death — a second hand answering the first's reason, two hands at once one
-//! derivation, a hand that panics mid-end leaving the end to the next — a
-//! principal's supplement following its standing sessions, a key's standing
-//! named by the list it stands in, and a session's key attesting the ten
-//! kinds with an entry frame alone.
+//! beside the board it stands at; its END run once whichever caller meets
+//! the death — a second caller answering the first's reason, two callers at
+//! once one derivation, a caller that panics mid-end leaving the end to the
+//! next — a principal's supplement following its standing sessions, a key's
+//! diagnosis named by the list it stands in, and a session's key attesting
+//! the ten kinds with an entry frame alone.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -104,7 +104,7 @@ fn the_table_registers_sessions_under_fresh_references() {
 /// `close`. A session closed first is closed once, and a death met after
 /// the close answers the reason the page's own close carries.
 #[test]
-fn a_session_ends_once_and_a_second_hand_answers_the_first_reason() {
+fn a_session_ends_once_and_a_second_caller_answers_the_first_reason() {
     let (board, sessions, bus) = (nowhere(), Sessions::new(None), EventBus::new());
     let rx = bus.subscribe();
     let mut supplements = Recorded::default();
@@ -118,7 +118,7 @@ fn a_session_ends_once_and_a_second_hand_answers_the_first_reason() {
     assert_eq!(died[0].data["reason"], reason);
     assert_eq!(supplements.0.last().map(String::as_str), Some("narrow 1"));
     let touched = supplements.0.len();
-    assert_eq!(sessions.end(&entry, &mut supplements, &bus), reason, "the second hand answers the first's reason");
+    assert_eq!(sessions.end(&entry, &mut supplements, &bus), reason, "the second caller answers the first's reason");
     assert!(rx.try_recv().is_err(), "and emits nothing");
     assert_eq!(supplements.0.len(), touched, "and touches no supplement");
     assert!(sessions.close(&entry.reference).is_none(), "nothing is left to close");
@@ -157,22 +157,22 @@ fn a_principals_supplement_follows_its_standing_sessions() {
     assert_eq!(supplements.0.last().map(String::as_str), Some("narrow 1"));
 }
 
-/// Two hands meet one death at once: the second waits on the entry's
+/// Two callers meet one death at once: the second waits on the entry's
 /// `OnceLock` while the first derives the reason, then answers that reason —
 /// one derivation (one dial), one event, one supplement touched.
 #[test]
-fn a_second_hand_waits_for_the_reason_the_first_derives() {
+fn a_second_caller_waits_for_the_reason_the_first_derives() {
     let (entered, at_the_dial) = channel();
     let gated = Arc::new(Gated { calls: AtomicUsize::new(0), entered: Mutex::new(entered), gate: (Mutex::new(false), Condvar::new()) });
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&gated)));
     let (sessions, bus) = (Sessions::new(None), EventBus::new());
     let rx = bus.subscribe();
     let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
-    let (mut first_hand, mut second_hand) = (Recorded::default(), Recorded::default());
+    let (mut first_caller, mut second_caller) = (Recorded::default(), Recorded::default());
     let (first, second) = thread::scope(|s| {
-        let first = s.spawn(|| sessions.end(&entry, &mut first_hand, &bus));
+        let first = s.spawn(|| sessions.end(&entry, &mut first_caller, &bus));
         at_the_dial.recv().unwrap();
-        let second = s.spawn(|| sessions.end(&entry, &mut second_hand, &bus));
+        let second = s.spawn(|| sessions.end(&entry, &mut second_caller, &bus));
         thread::sleep(Duration::from_millis(50));
         *gated.gate.0.lock().unwrap() = true;
         gated.gate.1.notify_all();
@@ -182,7 +182,7 @@ fn a_second_hand_waits_for_the_reason_the_first_derives() {
     assert_eq!(second, first);
     assert_eq!(gated.calls.load(Ordering::SeqCst), 1, "the reason was derived once");
     assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
-    assert_eq!((first_hand.0, second_hand.0), (vec!["narrow 1".to_string()], vec![]));
+    assert_eq!((first_caller.0, second_caller.0), (vec!["narrow 1".to_string()], vec![]));
 }
 
 /// A dialer whose first exchange panics, every later one unanswered.
@@ -199,28 +199,28 @@ impl Dialer for PanicsOnce {
     }
 }
 
-/// A hand that panics mid-end ends nothing, and the next hand derives
+/// A caller that panics mid-end ends nothing, and the next caller derives
 /// the reason and says the one `session-died`.
 #[test]
-fn a_hand_that_panics_mid_end_leaves_the_end_to_the_next() {
+fn a_caller_that_panics_mid_end_leaves_the_end_to_the_next() {
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), PanicsOnce(AtomicUsize::new(0))));
     let (sessions, bus) = (Sessions::new(None), EventBus::new());
     let rx = bus.subscribe();
     let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sessions.end(&entry, &mut Recorded::default(), &bus)));
-    assert!(panicked.is_err() && rx.try_recv().is_err(), "the first hand ended nothing");
+    assert!(panicked.is_err() && rx.try_recv().is_err(), "the first caller ended nothing");
     assert_eq!(sessions.end(&entry, &mut Recorded::default(), &bus)["arm"], "unreachable");
     assert_eq!(rx.try_iter().filter(|e| e.name == EventName::SessionDied).count(), 1);
 }
 
-/// THE KEY's STANDING names a key face by the list the key stands in — the
+/// THE KEY's DIAGNOSIS names a key face by the list the key stands in — the
 /// one rule `session`'s and `bind`'s refusals share: an enrolled key
 /// answers `Ok`, and no read is made; a retired key is `retired`, its face
 /// composed without the records a board that does not answer withholds; a
 /// key in neither list is `not_enrolled` (the mutants that name every face
 /// one name, or one list's face the other's).
 #[test]
-fn a_keys_standing_is_named_by_the_list_it_stands_in() {
+fn a_keys_diagnosis_is_named_by_the_list_it_stands_in() {
     let public = skep_client::sign::signer_from_seed(&[7; 32]).public_key().clone();
     let fingerprint = Fingerprint::of(&public);
     let key = KeyFacts { path: std::path::PathBuf::from("/nowhere/key"), fingerprint, public: public.clone(), label: None, anchor: false };
@@ -228,19 +228,19 @@ fn a_keys_standing_is_named_by_the_list_it_stands_in() {
     let enrolled = skep_client::KeySet { as_of: 1, enrolled: vec![skep_client::board::EnrolledKey { fingerprint, key: public, anchor: false }], retired: Vec::new() };
     let retired = skep_client::KeySet { as_of: 1, enrolled: Vec::new(), retired: vec![skep_client::board::RetiredKey { fingerprint, anchor: false }] };
     let board = nowhere();
-    assert!(key_standing(&board, &walk(enrolled), &key, Site::Session).is_ok(), "an enrolled key stands");
-    let refused = key_standing(&board, &walk(retired), &key, Site::Session).unwrap_err();
+    assert!(diagnose_key(&board, &walk(enrolled), &key, Site::Session).is_ok(), "an enrolled key is diagnosed enrolled");
+    let refused = diagnose_key(&board, &walk(retired), &key, Site::Session).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("retired", Some("halt")), "{refused}");
-    let refused = key_standing(&board, &walk(skep_client::KeySet::default()), &key, Site::Tail).unwrap_err();
+    let refused = diagnose_key(&board, &walk(skep_client::KeySet::default()), &key, Site::Tail).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("not_enrolled", Some("halt")), "{refused}");
 }
 
 /// A SESSION's KEY ATTESTS the ten kinds that have an entry frame and no
 /// other: a signed session names the key that opened it for an `insert`
 /// and none for a `delete`, and a bare session names none for either —
-/// what `attest` signs with and the hold's door keeps an attest's room for
+/// what `attest` signs with and the burst's door keeps an attest's room for
 /// (the mutants that attest a bare session's write, or every kind, leave
-/// the door keeping room no send takes, or none where a send does).
+/// the burst's door keeping room no send takes, or none where a send does).
 #[test]
 fn a_sessions_key_attests_the_checked_kinds_alone() {
     let sessions = Sessions::new(None);

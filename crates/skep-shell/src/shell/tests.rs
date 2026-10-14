@@ -7,7 +7,7 @@
 //! the wait for an event, a drafts page read under a token
 //! (`changes_under`), every seed a walk made (`seeds_of`), and every event
 //! held to its declaration (`assert_events_declared`).
-//! `door` holds the shell's own frame, with no daemon behind it; `modes`
+//! `door` holds the shell alone, with no daemon behind it; `modes`
 //! the bare and the signed session modes end to end; `boards` each board's
 //! own node, wait and stop beside another's; `held` the held-burst store
 //! against the real daemon.

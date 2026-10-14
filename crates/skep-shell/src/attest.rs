@@ -45,6 +45,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
+use std::ops::Range;
 
 use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
@@ -193,12 +194,41 @@ impl OwnedDocTerm {
     }
 }
 
+/// An I-RANGE as the composer counts it: the I-addresses `prefix.first` up
+/// to, not including, `prefix.reach` — a run `image` answers, or one a shot
+/// copies in, its `i_start` split at its last component ([`split_i`]) and its
+/// width added. Made by [`IRange::new`] alone, where the reach is spellable,
+/// so every walk of its positions stands on one bound, asked once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IRange<'a> {
+    prefix: &'a str,
+    first: u64,
+    reach: u64,
+}
+
+impl<'a> IRange<'a> {
+    /// `width` positions from `prefix.first`, where `first + width` is
+    /// spellable; none where it is not.
+    fn new(prefix: &'a str, first: u64, width: u64) -> Option<IRange<'a>> {
+        Some(IRange { prefix, first, reach: first.checked_add(width)? })
+    }
+
+    /// The last components of its positions, in order.
+    fn positions(self) -> Range<u64> {
+        self.first..self.reach
+    }
+
+    /// How many positions it holds.
+    fn width(self) -> u64 {
+        self.reach - self.first
+    }
+}
+
 /// One run of a shot as its body takes it, in the shot's V-order: a COPIED
-/// run by the I-addresses whose values it brings in — its origin, and the
-/// prefix, first last component and width of its I-addresses — or a WINDOW
-/// onto another document's I-space.
+/// run by the I-range whose values it brings in, and its origin — or a
+/// WINDOW onto another document's I-space.
 enum ShotPart<'f> {
-    Copied { origin: &'f str, prefix: &'f str, first: u64, width: u64 },
+    Copied { origin: &'f str, range: IRange<'f> },
     Window { start: Address, width: NonZeroU64 },
 }
 
@@ -370,10 +400,10 @@ fn split_i(i_addr: &str) -> Option<(&str, u64)> {
 /// THE `insert` ARM's TERMS, read off the frame alone — no read made: the
 /// document's trunk, and the body over the declared deposit and the values,
 /// each recognized as the board's parse recognizes it, within its budgets.
-/// The composer's `insert` arm, and the hold's door for a burst a signed
-/// session attests at every send (`hold`'s `Burst::admit`), which asks it
-/// before the burst can be held: an insert the composer cannot attest is
-/// one no resend of it could ever send.
+/// The composer's `insert` arm, and what the burst's door (`hold`'s
+/// `Burst::admit`) asks of an insert a signed session attests at every
+/// send, before the burst can be held: an insert the composer cannot attest
+/// is one no resend of it could ever send.
 pub fn insert_terms(frame: &Value) -> Result<(Address, EntryBody), Halt> {
     let doc = member(frame, "doc")?;
     let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "an insert's doc term is the document's trunk"))?;
@@ -382,15 +412,13 @@ pub fn insert_terms(frame: &Value) -> Result<(Address, EntryBody), Halt> {
     Ok((addr(&trunk, "doc")?, entry_body_insert(declared.as_ref(), values.iter().map(AsRef::as_ref))))
 }
 
-/// One run of an `image` answer: its I-address's prefix and first last
-/// component, and its width — the run's positions, `first` to `first +
-/// width`, all spellable.
-fn image_run<'v>(run: &'v Value, origin: &str) -> Result<(&'v str, u64, u64), Halt> {
+/// One run of an `image` answer as the I-range it maps: its `i_start` split
+/// at its last component and its width added, the reach spellable.
+fn image_run<'v>(run: &'v Value, origin: &str) -> Result<IRange<'v>, Halt> {
     let bad = || fault(format!("a run `image` answered over {origin} is no I-extent"), run.to_string());
     let (prefix, first) = run["i_start"].as_str().and_then(split_i).ok_or_else(bad)?;
     let width: u64 = run["width"].as_str().and_then(|w| w.parse().ok()).ok_or_else(bad)?;
-    first.checked_add(width).ok_or_else(bad)?;
-    Ok((prefix, first, width))
+    IRange::new(prefix, first, width).ok_or_else(bad)
 }
 
 impl<'f> Wanted<'f> {
@@ -398,10 +426,9 @@ impl<'f> Wanted<'f> {
         Wanted { origin, ranges: HashMap::new() }
     }
 
-    /// The run of `width` positions from `prefix.first` wanted. PRECONDITION:
-    /// `first + width` is spellable, as [`Composer::publish_body`] has asked.
-    fn want(&mut self, prefix: &'f str, first: u64, width: u64) {
-        self.ranges.entry(prefix).or_default().push(WantedRange { first, reach: first + width, index: 0 });
+    /// The positions of `range` wanted.
+    fn want(&mut self, range: IRange<'f>) {
+        self.ranges.entry(range.prefix).or_default().push(WantedRange { first: range.first, reach: range.reach, index: 0 });
     }
 
     /// THE READ BEGUN: the wanted ranges of each prefix merged and sorted,
@@ -561,7 +588,7 @@ impl Composer<'_> {
             let runs = image["runs"].as_array().map(Vec::as_slice).unwrap_or_default();
             let mut mapped = 0u64;
             for run in runs {
-                let (_, _, width) = image_run(run, origin)?;
+                let width = image_run(run, origin)?.width();
                 mapped = mapped.checked_add(width).filter(|m| *m <= extent).ok_or_else(|| disagree(origin, "maps more positions than its extent"))?;
             }
             if mapped != extent {
@@ -570,10 +597,10 @@ impl Composer<'_> {
             let delivery = self.read(&frames::retrieve_v(origin, 1, extent))?;
             let mut positions = delivered_values(&delivery);
             for run in runs {
-                let (prefix, first, width) = image_run(run, origin)?;
-                for n in first..first + width {
+                let range = image_run(run, origin)?;
+                for n in range.positions() {
                     match positions.next() {
-                        Some(Ok(value)) => reading.keep(prefix, n, &value, spent)?,
+                        Some(Ok(value)) => reading.keep(range.prefix, n, &value, spent)?,
                         Some(Err(item)) => {
                             return Err(fault(
                                 format!("a position of {origin} cannot be read back for the shot's body"),
@@ -619,8 +646,8 @@ impl Composer<'_> {
             let origin_trunk = trunk_text(origin);
             let draft_native = draft.is_some_and(|d| d == origin || draft_trunk.as_deref() == origin_trunk.as_deref());
             if origin_trunk.as_deref() == Some(trunk) || draft_native {
-                let (prefix, first) = split_i(i_start)
-                    .filter(|(_, first)| first.checked_add(width.get()).is_some())
+                let range = split_i(i_start)
+                    .and_then(|(prefix, first)| IRange::new(prefix, first, width.get()))
                     .ok_or_else(|| fault("a copied run's `i_start` is no I-address its width can follow", run.to_string()))?;
                 // Each a sum of some of the runs `placed` sums, so neither
                 // passes it.
@@ -632,8 +659,8 @@ impl Composer<'_> {
                     wants.push(Wanted::new(origin));
                     wants.len() - 1
                 });
-                wants[i].want(prefix, first, width.get());
-                parts.push(ShotPart::Copied { origin, prefix, first, width: width.get() });
+                wants[i].want(range);
+                parts.push(ShotPart::Copied { origin, range });
             } else {
                 parts.push(ShotPart::Window { start: addr(i_start, "runs[].i_start")?, width });
             }
@@ -664,12 +691,12 @@ impl Composer<'_> {
         let mut body = PublishBody::within(MAX_FRAME_BYTES, base).map_err(body_refused)?;
         for part in &parts {
             match part {
-                ShotPart::Copied { origin, prefix, first, width } => {
+                ShotPart::Copied { origin, range } => {
                     let read_back = &read_backs[origins[origin]];
-                    for n in *first..*first + *width {
-                        let value = read_back.value(prefix, n).ok_or_else(|| {
+                    for n in range.positions() {
+                        let value = read_back.value(range.prefix, n).ok_or_else(|| {
                             fault(
-                                format!("the shot copies in {prefix}.{n}, which {origin}'s arrangement does not hold"),
+                                format!("the shot copies in {}.{n}, which {origin}'s arrangement does not hold", range.prefix),
                                 "a copied run's values are read back through its origin's own arrangement; a position outside it cannot be composed",
                             )
                         })?;

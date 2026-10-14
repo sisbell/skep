@@ -387,7 +387,7 @@ fn a_sessions_open_position_is_the_boards_position_read_before_it_opened() {
 }
 
 /// THE RESTART under the signed mode: the session the daemon's restart
-/// ended is met by the hand that meets it first — the board's feed thread,
+/// ended is met by the caller that meets it first — the board's feed thread,
 /// here, before any call — and ENDED ONCE: one `session-died` on the
 /// restart arm, re-opened under a fresh reference the arm names and
 /// registered, its supplement widened (an `index` event names it), and a
@@ -525,8 +525,8 @@ fn a_write_busy_is_reissued_once_within_the_call() {
     sd.shutdown();
 }
 
-/// A DEATH SIGNAL MET AT A READ THE ATTEST NEEDS ends the session by the
-/// shell's own hand (`Sessions::end`) and is no refusal of the composer's: a
+/// A DEATH SIGNAL MET AT A READ THE ATTEST NEEDS ends the session at the
+/// call itself (`Sessions::end`) and is no refusal of the composer's: a
 /// signed session's token closed at the board while its feed stands quiet,
 /// then a `make_link` whose V-spec slot the composer resolves through
 /// `image` under that token — the call answers `session_died` with the
@@ -545,7 +545,7 @@ fn a_death_met_at_a_read_the_attest_needs_ends_the_session() {
     let board = signed.board_references().remove(0);
     let session = signed.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     // The feed widens the session's supplement, then falls quiet: nothing
-    // commits, so the call is the first hand to meet the death.
+    // commits, so the call is the first caller to meet the death.
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut widened = false;
     let mut quiet_since = Instant::now();
@@ -714,7 +714,7 @@ fn a_scripted_claim_places_its_anchors_where_its_script_says() {
     sd.shutdown();
 }
 
-/// A DEATH SIGNAL AT A CALL's OWN DIAL ends the session by the shell's hand
+/// A DEATH SIGNAL AT A CALL's OWN DIAL ends the session at the call itself
 /// (`Sessions::end`) at each dial a call makes under its token — an `op`'s
 /// `/op`, an `/op-at` read's, and `fetch`'s `/blob`: three sessions as
 /// principals the board seats no account for, so no supplement presents
@@ -735,7 +735,7 @@ fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
     let board = shell.board_references().remove(0);
     let sessions: Vec<String> = (2..=4).map(|principal| shell.call("session", &json!({"board": board, "principal": principal})).unwrap()["session"].as_str().unwrap().to_string()).collect();
     // The board falls quiet: nothing commits, so each call is the first
-    // hand to meet its session's death.
+    // caller to meet its session's death.
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut quiet_since = Instant::now();
     while quiet_since.elapsed() < Duration::from_millis(500) {

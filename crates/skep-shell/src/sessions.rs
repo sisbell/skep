@@ -12,22 +12,23 @@
 //! board, and the SIGNED content-scoped handshake behind AUTH-5.65's
 //! pre-check, each refusal under the armed name the row spells. A write
 //! under a session that holds a key carries the attest that key signs
-//! ([`SessionEntry::attest`]), whichever hand sends it — a call's `op`, or
-//! the held-burst resend's.
+//! ([`SessionEntry::attest`]), whichever caller sends it — a call's `op`,
+//! or the held-burst resend's.
 //!
-//! THE END ([`Sessions::end`]): a death signal is met by two hands — the
+//! THE END ([`Sessions::end`]): a death signal is met by two callers — the
 //! shell, when a call's token answers `Skepd-Session: closed`, and the
 //! board's feed thread, when its consumer's read or a drafts page does —
 //! and both run the one sequence here, so the reason is derived once, the
-//! restart arm's re-open is registered whichever hand met it — at the dying
-//! session's board, under the key store the table holds for it — and one
-//! `session-died` goes out. The entry's `OnceLock` is the gate: the hand
-//! whose initializer runs ends the session, a hand that comes while it runs
-//! waits and answers that reason, and a hand that panics mid-end leaves the
-//! cell unset for the next to take the end over. An entry leaves the table
-//! by that sequence or by a close —
-//! the page's own, or the shell's stop ([`Sessions::close`]) — and no
-//! other way.
+//! restart arm's re-open is registered whichever caller met it — at the
+//! dying session's board, under the key store the table holds for it — and
+//! one `session-died` goes out. The entry's `OnceLock` is the gate: the
+//! caller whose initializer runs ends the session, a caller that comes while
+//! it runs waits and answers that reason, and a caller that panics mid-end
+//! leaves the cell unset for the next to take the end over. A CALLER here
+//! is the code that meets the death; a HAND is the corpus's, the writer of
+//! a record or a row (§3c.5, §4b.2), as THE ARM below names a retirement's.
+//! An entry leaves the table by that sequence or by a close — the page's
+//! own, or the shell's stop ([`Sessions::close`]) — and no other way.
 //!
 //! ONE SUPPLEMENT PER PRINCIPAL ([`Sessions::release`]): the consumer holds
 //! one drafts supplement per (board, principal), and two tabs open two
@@ -111,8 +112,8 @@ pub struct SessionEntry {
     /// burst's `base` on a document no acked write of this session names
     /// (§3c.2), so the resend's read sees every row that could have moved it.
     pub opened_at: u64,
-    /// The reason its end carried, set once by the hand that ended it — a
-    /// second hand waits while the first derives it, then answers it.
+    /// The reason its end carried, set once by the caller that ended it — a
+    /// second caller waits while the first derives it, then answers it.
     end: OnceLock<Value>,
 }
 
@@ -121,7 +122,7 @@ impl SessionEntry {
     /// that opened it — where the session holds one and `op` is one of the
     /// ten kinds that have an entry frame (`attest::in_checked_set`); none
     /// otherwise. What [`SessionEntry::attest`] signs with, and what the
-    /// hold's door keeps an attest's room for (`Burst::admit`).
+    /// burst's door keeps an attest's room for (`Burst::admit`).
     pub fn attesting_key(&self, op: &str) -> Option<&Fingerprint> {
         match &self.facts.kind {
             SessionKind::Signed { fingerprint, .. } if in_checked_set(op) => Some(fingerprint),
@@ -155,15 +156,18 @@ impl SessionEntry {
         composer.attach(frame)
     }
 
-    /// The session as the search consumer reads it: its token, its principal
-    /// and its account — `""` where the board answered it none, as a search
-    /// under it reads; no supplement mounts for such a session.
-    pub fn session_ref(&self) -> SessionRef<'_> {
+    /// The session as the search consumer reads it: skep-client's
+    /// `SessionRef`, a view LENDING the consumer its token, its principal and
+    /// its account — `""` where the board answered it none, as a search under
+    /// it reads; no supplement mounts for such a session. It is no session
+    /// reference of THE PIN's (`client.md` §4b.1): that is
+    /// [`SessionEntry::reference`], a name that grants nothing.
+    pub fn search_view(&self) -> SessionRef<'_> {
         SessionRef { token: &self.token, principal: self.facts.principal, account: self.facts.account.as_deref().unwrap_or("") }
     }
 }
 
-/// A board's drafts supplements as the hand that registers or ends a
+/// A board's drafts supplements as the caller that registers or ends a
 /// session reaches them (`client.md` §4e.3's WIDEN and NARROW): the shell
 /// through the board's feed handle, the feed thread directly.
 pub trait Supplements {
@@ -222,17 +226,18 @@ impl Sessions {
     }
 
     /// THE END of a session whose token met the death signal, run by
-    /// whichever hand met it (the module doc). In the entry's `OnceLock` the
-    /// session leaves the table and its reason is derived from public reads
-    /// at its board; on the restart arm the re-opened session enters under a
-    /// fresh reference at the same board, named in the reason as `session`.
+    /// whichever caller met it (the module doc). In the entry's `OnceLock`
+    /// the session leaves the table and its reason is derived from public
+    /// reads at its board; on the restart arm the re-opened session enters
+    /// under a fresh reference at the same board, named in the reason as
+    /// `session`.
     /// Then `session-died` goes out and the drafts supplement is widened
     /// under the re-opened token, or RELEASED ([`Sessions::release`]) —
     /// NARROW "at `session-died` in every arm but the shell's own restart"
     /// (`client.md` §4e.3) where no other session of the principal stands at
-    /// the board, the supplement handed to one that does. A hand that finds
-    /// the reason already derived answers it and does nothing else. The
-    /// reason.
+    /// the board, the supplement handed to one that does. A caller that
+    /// finds the reason already derived answers it and does nothing else.
+    /// The reason.
     pub fn end(&self, entry: &SessionEntry, supplements: &mut dyn Supplements, bus: &EventBus) -> Value {
         let (mut ended_here, mut reopened) = (false, None);
         let reason = entry
@@ -273,10 +278,10 @@ impl Sessions {
     }
 
     /// A CLOSE — the page's own, or the shell's stop: the session's end
-    /// settled as the `closed` arm — waiting, as a second hand's `end` does,
-    /// for a hand deriving another — and the session out of the table; the
-    /// entry, or `None` where this shell holds no session under `reference`
-    /// any more — a death met first, or a close before.
+    /// settled as the `closed` arm — waiting, as a second caller's `end`
+    /// does, for a caller deriving another — and the session out of the
+    /// table; the entry, or `None` where this shell holds no session under
+    /// `reference` any more — a death met first, or a close before.
     pub fn close(&self, reference: &str) -> Option<Arc<SessionEntry>> {
         let entry = self.get(reference)?;
         entry.end.set(closed()).ok()?;
@@ -351,12 +356,13 @@ pub fn signer(store: &FileStore, path: &Path) -> Result<Box<dyn Signer>, Refusal
     store.signer(&KeySelector::Path(path)).map_err(|e| Refusal::of_named(Name::STORE_UNREADABLE, e.into()))
 }
 
-/// THE KEY's STANDING in the set `walk` reached (AUTH-5.25), under the armed
-/// names every row that signs spells: `Ok` where the key is enrolled;
-/// `retired` where it stands in the retired list (AUTH-2.98), `not_enrolled`
-/// where it stands in neither — each with the face `key_face` composes at
-/// `site`.
-pub fn key_standing(board: &Board, walk: &Walk, key: &KeyFacts, site: Site) -> Result<(), Refusal> {
+/// THE KEY's DIAGNOSIS (`client.md` §2.2's three-state diagnosis, "shared by
+/// `verify`, `session`'s pre-check and `enroll`"; AUTH-5.25) in the set
+/// `walk` reached, faced under the armed names every row that signs spells:
+/// `Ok` where the key is enrolled; `retired` where it stands in the retired
+/// list (AUTH-2.98), `not_enrolled` where it stands in neither — each with
+/// the face `key_face` composes at `site`.
+pub fn diagnose_key(board: &Board, walk: &Walk, key: &KeyFacts, site: Site) -> Result<(), Refusal> {
     let own = [(key.fingerprint, key.public.clone())];
     key_face(board, walk, &key.fingerprint, &own, site).map_err(|h| {
         let name = match KeyDiagnosis::of(&walk.set, &key.fingerprint) {
@@ -379,7 +385,7 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
         return Err(Refusal::of_named(Name::ORIGIN_STATE, h));
     }
     let pre = precheck(board, principal, &key.fingerprint).map_err(|h| Refusal::of_named(Name::NOT_REGISTERED, h))?;
-    key_standing(board, &pre.walk, &key, Site::Session)?;
+    diagnose_key(board, &pre.walk, &key, Site::Session)?;
     let session = handshake_prechecked(board, Scope::Content, &*signer, &pre, Site::Session).map_err(|h| Refusal::of_named(Name::BUSY, h))?;
     let facts = Facts {
         principal,
@@ -406,7 +412,7 @@ pub fn closed() -> Value {
 /// restart arm the session re-opened in its place; `store` where the shell
 /// holds a key store for that re-open. Run inside [`Sessions::end`] alone,
 /// in the entry's `OnceLock`: the re-open it makes is a session no other
-/// hand registers.
+/// caller registers.
 fn derive_death(store: Option<&FileStore>, entry: &SessionEntry) -> Death {
     let board: &Board = &entry.board;
     let not_reopened = |reason: Value| Death { reason, reopened: None };

@@ -11,16 +11,16 @@
 //! `resolve(send)` answering once the lines are handed back, before any
 //! dial; a board the holds were not opened over stopped as the caller's
 //! bug; the stored frame without its attest; P38's halted file refusing
-//! every act, `resolve` among them, a copy the store cannot make, and a
-//! queue kept in memory for want of its file taking the file once it
-//! empties and never before; no `held` event when a session's open reads
-//! its file. THE DOOR: a burst the board takes at no send refused at the
-//! act and held never — past the frame cap as sent, or as a signed resend
-//! would send it, naming no document, an insert a signed session cannot
-//! attest — the read of the board's `H.1` an attest signs over halting as
-//! the composer's own refusal; one the queue has no room for, by its frames'
-//! bytes or by its lines, refused `held_full`; and each
-//! board's hold its own, a burst at one board answered while another
+//! every act at the principal's door, `resolve` among them, a copy the
+//! store cannot make, and a queue kept in memory for want of its file taking
+//! the file once it empties and never before; no `held` event when a
+//! session's open reads its file. THE BURST's DOOR: a burst the board takes
+//! at no send refused at the act and held never — past the frame cap as
+//! sent, or as a signed resend would send it, naming no document, an insert
+//! a signed session cannot attest — the read of the board's `H.1` an attest
+//! signs over halting as the composer's own refusal; one the queue has no
+//! room for, by its frames' bytes or by its lines, refused `held_full`; and
+//! each board's hold its own, a burst at one board answered while another
 //! board's hold is held, dialed and kept at the board its session stands at.
 
 use super::*;
@@ -451,21 +451,22 @@ fn sized_frame(bytes: usize) -> Value {
     insert(DOC, json!([{"atom": "x".repeat(bytes - overhead)}]))
 }
 
-/// THE DOOR refuses at the act a burst the board takes at no send, and holds
-/// none of it: a frame one byte past the board's frame cap — at a running
-/// board and at a stopped one, where it would otherwise be held without a
-/// dial — while a frame at the cap exactly is dialed and acked; a burst
-/// naming no document, an element where its document goes, or a document
-/// in another spelling, refused `malformed_args` undialed, and behind a
-/// standing line unheld (the mutants that drop the size or the document
-/// check dial a frame no send of which the board takes, and hold a line
-/// none could ever clear, every later burst of the principal behind it).
+/// THE BURST's DOOR refuses at the act a burst the board takes at no send,
+/// and holds none of it: a frame one byte past the board's frame cap — at a
+/// running board and at a stopped one, where it would otherwise be held
+/// without a dial — while a frame at the cap exactly is dialed and acked; a
+/// burst naming no document, an element where its document goes, or a
+/// document in another spelling, refused `malformed_args` undialed, and
+/// behind a standing line unheld (the mutants that drop the size or the
+/// document check dial a frame no send of which the board takes, and hold a
+/// line none could ever clear, every later burst of the principal behind
+/// it).
 #[test]
-fn a_burst_the_board_takes_at_no_send_is_refused_at_the_door() {
+fn a_burst_the_board_takes_at_no_send_is_refused_at_the_bursts_door() {
     let g = ground();
     for stopped in [false, true] {
         g.holds.set_node_stopped("b-1", stopped);
-        let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES + 1)) else { panic!("refused at the door") };
+        let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES + 1)) else { panic!("refused at the burst's door") };
         let v = refused.to_value();
         assert_eq!((refused.name(), v["bytes"].as_u64(), v["cap"].as_u64()), ("frame_too_large", Some(MAX_FRAME_BYTES as u64 + 1), Some(MAX_FRAME_BYTES as u64)), "{v}");
         assert!(g.lines().is_empty() && g.fake.sends() == 0, "stopped {stopped}: nothing held, nothing sent");
@@ -473,36 +474,36 @@ fn a_burst_the_board_takes_at_no_send_is_refused_at_the_door() {
     g.holds.set_node_stopped("b-1", false);
     let undocumented = [json!({"op": "insert", "values": ["b"]}), insert("1.0.1.0.1.0.1.1", json!(["b"])), insert("01.0.1.0.1", json!(["b"]))];
     for frame in &undocumented {
-        let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, frame.clone()) else { panic!("refused at the door: {frame}") };
+        let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, frame.clone()) else { panic!("refused at the burst's door: {frame}") };
         assert_eq!(refused.name(), "malformed_args", "{frame}");
     }
-    assert_eq!(g.fake.sends(), 0, "no burst the door refuses is dialed");
+    assert_eq!(g.fake.sends(), 0, "nothing the burst's door refuses is dialed");
     let OpAnswer::Answered(Ok(ack)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES)) else { panic!("a frame at the cap is sent") };
     assert_eq!((ack["resp"].as_str(), g.fake.sends()), (Some("ack"), 1));
     g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
     for frame in &undocumented {
-        let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, frame.clone()) else { panic!("refused at the door: {frame}") };
+        let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, frame.clone()) else { panic!("refused at the burst's door: {frame}") };
         assert_eq!(refused.name(), "malformed_args", "{frame}");
     }
     assert_eq!(g.lines().len(), 1, "nothing was held behind the standing line");
 }
 
-/// Under a session whose key attests an insert, the door keeps the room the
-/// attest of every resend takes, and asks the composer's terms of the frame
-/// alone: a frame at the cap unattested, which no attested send fits, is
-/// refused `frame_too_large`; one the room fits is held behind a standing
-/// line; and an insert whose values the composer cannot spell is refused
-/// `attest_not_composed` before it is held (the mutant that leaves no room
-/// holds a burst every resend of which the board refuses `413`).
+/// Under a session whose key attests an insert, the burst's door keeps the
+/// room the attest of every resend takes, and asks the composer's terms of
+/// the frame alone: a frame at the cap unattested, which no attested send
+/// fits, is refused `frame_too_large`; one the room fits is held behind a
+/// standing line; and an insert whose values the composer cannot spell is
+/// refused `attest_not_composed` before it is held (the mutant that leaves no
+/// room holds a burst every resend of which the board refuses `413`).
 #[test]
 fn a_signed_sessions_burst_keeps_room_for_its_attest() {
     let g = ground_in(TempDir::new().unwrap(), keyed_facts(), 0);
     g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
-    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES)) else { panic!("refused at the door") };
+    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES)) else { panic!("refused at the burst's door") };
     assert_eq!(refused.name(), "frame_too_large", "{refused}");
     let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES - attest_room())) else { panic!("held behind") };
     assert_eq!(held["cause"], "behind", "{held}");
-    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!([7]))) else { panic!("refused at the door") };
+    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!([7]))) else { panic!("refused at the burst's door") };
     assert_eq!(refused.name(), "attest_not_composed", "{refused}");
     assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
 }

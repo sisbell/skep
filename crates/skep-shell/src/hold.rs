@@ -17,24 +17,26 @@
 //!
 //! A BURST is an `op` under a session (never the guest form) whose
 //! `frame["op"]` is one of [`BURST_KINDS`] — the burst machine's five — on a
-//! draft. It enters by ONE DOOR, [`Burst::admit`], which refuses at the act a
-//! frame the board takes at no send — one past the board's frame cap, one
-//! naming no document, an insert a signed session cannot attest — since a
-//! held line of it could be sent and resolved never, and would hold every
-//! later burst of its principal `behind` it; and it is held WITHOUT a dial
-//! where a hold stands — the own node stopped, the board halted, a line of
-//! the principal's already held. The resend sends each held line through the
-//! same reader of an answer, a reissue-class answer there reissued at the
-//! next probe.
+//! draft. It enters by ONE DOOR, THE BURST's DOOR, [`Burst::admit`], which
+//! refuses at the act a frame the board takes at no send — one past the
+//! board's frame cap, one naming no document, an insert a signed session
+//! cannot attest — since a held line of it could be sent and resolved never,
+//! and would hold every later burst of its principal `behind` it; and it is
+//! held WITHOUT a dial where a hold stands — the own node stopped, the board
+//! halted, a line of the principal's already held. The resend sends each
+//! held line through the same reader of an answer, a reissue-class answer
+//! there reissued at the next probe.
 //!
 //! THE QUEUE is each principal's [`HeldQueue`], in `k` order across the
 //! board's documents: copied to `held/<chain>/principal-<n>.held` where this
 //! shell holds the board's directory (§3c.1), kept in memory alone where
 //! another window holds it or the directory is out of reach (§3c.3), and
 //! opened only under a session as its principal (P39) — at the session's
-//! open, or at the first touch after it. THE PROBE ([`Holds::probe`]) and
-//! THE RESEND it lets run, which drain the queue once the board returns,
-//! are the child module `resend`'s.
+//! open, or at the first touch after it — by THE PRINCIPAL's DOOR,
+//! [`Holds::principal_hold`], which every act on a principal's queue takes,
+//! a burst's among them once the burst's door has let it in. THE PROBE
+//! ([`Holds::probe`]) and THE RESEND it lets run, which drain the queue once
+//! the board returns, are the child module `resend`'s.
 //!
 //! EACH BOARD's HOLD ITS OWN LOCK, the boards fixed at the open: a board's
 //! appends, each synced to disk, its file's read at a session's open and its
@@ -286,7 +288,8 @@ pub enum Resolved {
 
 /// A BURST ADMITTED: a frame of [`BURST_KINDS`] some send of which the board
 /// can take, and its document — what every held line is made of. Built by
-/// [`Burst::admit`] alone, so the hold holds no frame the door did not see.
+/// [`Burst::admit`] alone, so the hold holds no frame the burst's door did
+/// not see.
 #[derive(Debug)]
 pub struct Burst {
     frame: Value,
@@ -294,11 +297,12 @@ pub struct Burst {
 }
 
 impl Burst {
-    /// THE DOOR a burst enters the hold by, the refusal faced at the act where
-    /// the board would refuse the frame at EVERY send — each such frame, held,
-    /// would be sent and resolved never, and hold every later burst of its
-    /// principal `behind` it for the shell's life and past it on disk —
-    /// checked in this order, the first unmet answering:
+    /// THE BURST's DOOR, the one a burst enters the hold by, the refusal
+    /// faced at the act where the board would refuse the frame at EVERY send
+    /// — each such frame, held, would be sent and resolved never, and hold
+    /// every later burst of its principal `behind` it for the shell's life
+    /// and past it on disk — checked in this order, the first unmet
+    /// answering:
     ///
     /// * its op one of the five kinds, else `malformed_args`;
     /// * its `doc` a document address in its one spelling
@@ -505,8 +509,8 @@ enum Custody {
     /// finds the queue empty, so no line is ever renumbered.
     Unwritable(String),
     /// Nowhere: P38's HALT (§3c.3) — no burst sent and no line held for the
-    /// principal at this board, each act answered `store_halted` by the door
-    /// every act takes, [`Holds::principal_hold`].
+    /// principal at this board, each act answered `store_halted` by the
+    /// principal's door, [`Holds::principal_hold`], which every act takes.
     Halted { path: PathBuf, why: HaltWhy },
 }
 
@@ -684,15 +688,15 @@ impl Holds {
         }
     }
 
-    /// THE PRINCIPAL's HOLD at `board_hold`'s board — the one door every
-    /// entry that names a principal takes: a session's open, a burst, a hold,
-    /// `held` and `resolve`. A principal whose custody is not settled, and
-    /// whose queue holds no line, is opened here under `session`'s account:
-    /// its file where the board's directory is this shell's, memory alone
-    /// otherwise. Under the session that stands, so the restart arm's re-open
-    /// is covered too. Refused `store_halted` where P38 halted the
-    /// principal's file (§3c.3): every act's refusal, answered at the door,
-    /// so no act reaches a halted principal's queue.
+    /// THE PRINCIPAL's HOLD at `board_hold`'s board — THE PRINCIPAL's DOOR,
+    /// the one every entry that names a principal takes: a session's open, a
+    /// burst, a hold, `held` and `resolve`. A principal whose custody is not
+    /// settled, and whose queue holds no line, is opened here under
+    /// `session`'s account: its file where the board's directory is this
+    /// shell's, memory alone otherwise. Under the session that stands, so the
+    /// restart arm's re-open is covered too. Refused `store_halted` where P38
+    /// halted the principal's file (§3c.3): every act's refusal, answered at
+    /// the principal's door, so no act reaches a halted principal's queue.
     fn principal_hold<'b>(&self, board_hold: &'b mut BoardHold, session: &SessionEntry) -> Result<&'b mut PrincipalHold, Refusal> {
         let BoardHold { directory, principals, .. } = board_hold;
         let principal = session.facts.principal;
@@ -722,12 +726,12 @@ impl Holds {
 
     /// THE `op` ROW's SESSION FORM, `/op-at`'s aside: ONE frame under
     /// `session` at the board it stands at. A burst ([`is_burst`]) enters by
-    /// its door and may be held (`send_burst`); any other frame — a write the
-    /// hold never holds, or a read — is attested where an attest is owed,
-    /// dialed and reissued within the call, its ack noted for the base, and
-    /// every other answer faced as the refusal it is: a REFUSED run, a lost
-    /// answer and a third `durability` among them (§3c.4: "a non-burst write
-    /// that fails … is faced at its act").
+    /// the burst's door and may be held (`send_burst`); any other frame — a
+    /// write the hold never holds, or a read — is attested where an attest is
+    /// owed, dialed and reissued within the call, its ack noted for the base,
+    /// and every other answer faced as the refusal it is: a REFUSED run, a
+    /// lost answer and a third `durability` among them (§3c.4: "a non-burst
+    /// write that fails … is faced at its act").
     pub fn send(&self, session: &SessionEntry, frame: Value) -> OpAnswer {
         if is_burst(&frame) {
             return self.send_burst(session, frame);
@@ -743,15 +747,16 @@ impl Holds {
     }
 
     /// THE BURST's WRITE PATH (§3c.4), its checks in this order, the first
-    /// that holds answering: ADMITTED ([`Burst::admit`]), its refusal faced
-    /// at the act; refused `store_halted` where P38 halted the principal's
-    /// file (the door, [`Holds::principal_hold`]); HELD WITHOUT A DIAL where
-    /// a hold stands at the board — the own node stopped, else the board
-    /// halted, else a line of the principal's already held (`behind`); else
-    /// dialed within the call ([`Holds::dial_within_call`]): an ack carried
-    /// and its `at` noted; a hold-class answer or a REFUSED run held and
-    /// answered `held` — a third `durability` among them (§3c.4's rider);
-    /// anything else faced at the act.
+    /// that holds answering: ADMITTED by the burst's door ([`Burst::admit`]),
+    /// its refusal faced at the act; refused `store_halted` where P38 halted
+    /// the principal's file (the principal's door, [`Holds::principal_hold`]);
+    /// HELD WITHOUT A DIAL where a hold stands at the board — the own node
+    /// stopped, else the board halted, else a line of the principal's already
+    /// held (`behind`); else dialed within the call
+    /// ([`Holds::dial_within_call`]): an ack carried and its `at` noted; a
+    /// hold-class answer or a REFUSED run held and answered `held` — a third
+    /// `durability` among them (§3c.4's rider); anything else faced at the
+    /// act.
     fn send_burst(&self, session: &SessionEntry, frame: Value) -> OpAnswer {
         let burst = match Burst::admit(frame, session) {
             Ok(burst) => burst,

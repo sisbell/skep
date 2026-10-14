@@ -82,11 +82,11 @@ pub enum Searcher {
 
 impl Searcher {
     /// Who searches, as the consumer takes it: the guest, or the session's
-    /// own view ([`SessionEntry::session_ref`]).
+    /// search view ([`SessionEntry::search_view`]).
     fn as_who(&self) -> Who<'_> {
         match self {
             Searcher::Guest => Who::Guest,
-            Searcher::Session(session) => Who::Session(session.session_ref()),
+            Searcher::Session(session) => Who::Session(session.search_view()),
         }
     }
 }
@@ -562,7 +562,7 @@ impl<'b> Feeder<'b> {
         for session in self.sessions.on_board(&self.entry.reference) {
             let principal = session.facts.principal;
             if c.mounted(principal) {
-                faces.push((Some(principal), state_json(&c.state(Who::Session(session.session_ref())))));
+                faces.push((Some(principal), state_json(&c.state(Who::Session(session.search_view())))));
             }
         }
         for (principal, state) in faces {
@@ -681,7 +681,7 @@ impl Supplements for Feeder<'_> {
         self.last_index_state.remove(&Some(principal));
         self.open_consumer();
         if let Some(c) = &self.consumer {
-            if let Err(h) = c.widen(session.session_ref()) {
+            if let Err(h) = c.widen(session.search_view()) {
                 self.say(format_args!("the supplement for principal {principal} could not widen: {h}"));
             }
         }
@@ -804,7 +804,7 @@ fn place_json(p: &Place) -> Value {
 }
 
 /// THE SEARCH ANSWER as the row shapes it: `{hits, places, state}` with the
-/// crate's five facts beside them.
+/// crate's `total` and its four flags beside them.
 fn answer_json(a: &SearchAnswer) -> Value {
     json!({
         "hits": a.hits.iter().map(hit_json).collect::<Vec<_>>(),

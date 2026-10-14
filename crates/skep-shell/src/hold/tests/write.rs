@@ -1,27 +1,31 @@
 //! THE WRITE PATH over a fake board: a `halted` hold before any dial
-//! `sent: false`; the `base` a hold takes from every kind of ack; the
-//! refused run's `resolve(drop)` dropping it and every line held behind it
-//! on its own document alone, and a drop's `held` event saying the state of
-//! the line that stands first after it; a held line under the board's own
-//! directory; a refusal the table holds nowhere faced at the first dial, a
-//! `write_busy` and a first and second `durability` reissued within the
-//! first dial's call and a third holding the burst; a write the hold never
-//! holds taking the same path, faced where a burst is held and its ack
-//! noted for the base; the death signal at a write's dial holding nothing;
-//! `resolve(send)` answering once the lines are handed back, before any
-//! dial; a board the holds were not opened over stopped as the caller's
-//! bug; the stored frame without its attest; P38's halted file refusing
-//! every act at the principal's door, `resolve` among them, a copy the
-//! store cannot make, and a queue kept in memory for want of its file taking
-//! the file once it empties and never before; no `held` event when a
-//! session's open reads its file. THE BURST's DOOR: a burst the board takes
-//! at no send refused at the act and held never — past the frame cap as
-//! sent, or as a signed resend would send it, naming no document, an insert
-//! a signed session cannot attest — the read of the board's `H.1` an attest
-//! signs over halting as the composer's own refusal; one the queue has no
-//! room for, by its frames' bytes or by its lines, refused `held_full`; and
-//! each board's hold its own, a burst at one board answered while another
-//! board's hold is held, dialed and kept at the board its session stands at.
+//! `sent: false`; a burst held under the first hold that stands, over all
+//! eight cells of the three; the `base` a hold takes from every kind of
+//! ack; the refused run's `resolve(drop)` dropping it and every line held
+//! behind it on its own document alone, and a drop's `held` event saying
+//! the state of the line that stands first after it; a held line under the
+//! board's own directory; a refusal the table holds nowhere faced at the
+//! first dial, a `write_busy` and a first and second `durability` reissued
+//! within the first dial's call and a third holding the burst; a write the
+//! hold never holds taking the same path, faced where a burst is held and
+//! its ack noted for the base; the death signal at a write's dial holding
+//! nothing; `resolve(send)` answering once the lines are handed back,
+//! before any dial; a board the holds were not opened over stopped as the
+//! caller's bug; the stored frame without its attest; P38's halted file
+//! refusing every act at the principal's door, `resolve` among them, a copy
+//! the store cannot make, and a queue kept in memory for want of its file
+//! taking the file once it empties and never before; no `held` event when a
+//! session's open reads its file, and a misplaced file set aside and said
+//! on TALK alone. THE BURST's DOOR: a burst the board takes at no send
+//! refused at the act and held never — past the frame cap as sent, or as a
+//! signed resend would send it, a page-supplied attest counted out of every
+//! resend, naming no document, an insert a signed session cannot attest —
+//! the read of the board's `H.1` an attest signs over halting as the
+//! composer's own refusal, and its answer lost holding the burst unsent;
+//! one the queue has no room for, by its frames' bytes or by its lines,
+//! refused `held_full`; and each board's hold its own, a burst at one board
+//! answered while another board's hold is held, dialed and kept at the
+//! board its session stands at.
 
 use super::*;
 
@@ -37,6 +41,45 @@ fn a_halted_hold_before_any_dial_is_sent_false() {
     let lines = g.lines();
     assert_eq!((lines[0]["cause"].as_str(), lines[0]["sent"].as_bool()), (Some("halted"), Some(false)), "{lines:?}");
     assert_eq!(g.fake.sends(), 0, "no dial was made");
+}
+
+/// A BURST IS HELD UNDER THE FIRST HOLD THAT STANDS (§3c.4; `send_burst`'s
+/// order), the law over all eight cells of the three: the own node stopped,
+/// else the board's writes halted, else a line of the principal's already
+/// held — the burst held under the first that stands with no dial made, and
+/// dialed where none does (the mutant that reorders the three faces the
+/// page `halted` for a stop the person made, or `behind` for a board that
+/// takes no write).
+#[test]
+fn a_burst_is_held_under_the_first_hold_that_stands() {
+    for stopped in [false, true] {
+        for halted in [false, true] {
+            for line in [false, true] {
+                let cell = format!("stopped {stopped}, halted {halted}, a line standing {line}");
+                let g = ground();
+                if line {
+                    g.hold(&insert(OTHER, json!(["a"])), "unreachable", false);
+                }
+                g.holds.set_node_stopped("b-1", stopped);
+                g.fake.writes_halted.store(halted, Ordering::SeqCst);
+                g.holds.note_health("b-1", &g.session.board.health().unwrap());
+                let first = if stopped {
+                    Some("stopped")
+                } else if halted {
+                    Some("halted")
+                } else if line {
+                    Some("behind")
+                } else {
+                    None
+                };
+                let OpAnswer::Answered(Ok(answer)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]))) else { panic!("{cell}: answered") };
+                match first {
+                    Some(cause) => assert_eq!((answer["resp"].as_str(), answer["cause"].as_str(), g.fake.sends()), (Some("held"), Some(cause), 0), "{cell}: {answer}"),
+                    None => assert_eq!((answer["resp"].as_str(), g.fake.sends()), (Some("ack"), 1), "{cell}: {answer}"),
+                }
+            }
+        }
+    }
 }
 
 /// THE BASE a hold takes (§3c.2): the `at` of the last ACKED write on its
@@ -444,6 +487,31 @@ fn no_held_event_goes_out_when_a_sessions_open_reads_its_file() {
     assert!(g.states().is_empty(), "and says nothing of it");
 }
 
+/// A MISPLACED HELD FILE IS SET ASIDE AND SAID in the shell's own window
+/// (§3c.3; P39): a principal's file whose header names another board's
+/// chain, found at its session's open, is moved aside under `aside_name`'s
+/// form, the queue opened fresh, and the aside's path said on TALK — and on
+/// no event the page reads (the mutant that sets the file aside unsaid
+/// leaves the person's held text gone from every list with nothing said).
+#[test]
+fn a_misplaced_held_file_is_set_aside_and_said_on_talk() {
+    let store = TempDir::new().unwrap();
+    let (ours, theirs) = (Chain::parse(&"ab".repeat(32)).unwrap(), Chain::parse(&"ef".repeat(32)).unwrap());
+    HeldDir::new(store.path(), ours).ensure().unwrap();
+    let held = store.path().join("held").join(ours.to_string());
+    let header = format!("{{\"type\":\"skep-held-bursts\",\"v\":1,\"board\":\"{theirs}\",\"principal\":1,\"account\":\"1.0.1\"}}\n");
+    std::fs::write(held.join("principal-1.held"), header).unwrap();
+    let g = ground_in(store, bare_facts(), 0);
+    let aside = held.join(skep_search::aside_name("principal-1.held", &theirs, 1));
+    assert!(aside.is_file(), "the misplaced file is set aside at {}", aside.display());
+    assert!(g.lines().is_empty(), "the principal's queue is opened fresh");
+    let said = g.said.lock().unwrap().clone();
+    let line = format!("held: principal 1's held file named another board or principal, and is set aside at {}", aside.display());
+    assert!(said.contains(&line), "{said:?}");
+    let events: Vec<String> = g.rx.try_iter().map(|e| e.data.to_string()).collect();
+    assert!(events.iter().all(|data| !data.contains("aside")), "the aside crossed to the page: {events:?}");
+}
+
 /// An insert of one atom, its frame's JSON spelling exactly `bytes` long —
 /// one value, so no value budget speaks before the frame's own.
 fn sized_frame(bytes: usize) -> Value {
@@ -508,6 +576,31 @@ fn a_signed_sessions_burst_keeps_room_for_its_attest() {
     assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
 }
 
+/// A PAGE-SUPPLIED ATTEST IS COUNTED OUT OF EVERY RESEND (`Burst::admit`):
+/// the held line keeps the frame without it, and every resend under a
+/// session whose key attests the kind carries the shell's own — so a frame
+/// riding the page's attest is measured as its bytes stripped of that
+/// member and grown by the room the shell's takes: at the cap it is held,
+/// one byte past it refused `frame_too_large` (the mutant that strips
+/// nothing refuses a burst every resend of which fits; the one that strips
+/// past the member holds a burst no resend of which does).
+#[test]
+fn a_page_supplied_attest_is_counted_out_of_every_resend() {
+    let g = ground_in(TempDir::new().unwrap(), keyed_facts(), 0);
+    g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    let carrying = |bytes: usize| {
+        let mut frame = sized_frame(bytes);
+        frame["attest"] = json!({"alg": "x", "sig": "00"});
+        frame
+    };
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, carrying(MAX_FRAME_BYTES - attest_room())) else { panic!("held behind") };
+    assert_eq!(held["cause"], "behind", "{held}");
+    let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, carrying(MAX_FRAME_BYTES - attest_room() + 1)) else { panic!("refused at the burst's door") };
+    let v = refused.to_value();
+    assert_eq!((refused.name(), v["bytes"].as_u64()), ("frame_too_large", Some(MAX_FRAME_BYTES as u64 + 1)), "{v}");
+    assert_eq!(g.lines().len(), 2, "the one admitted burst held, and nothing else");
+}
+
 /// A HEAD READ THAT HALTS is the composer's refusal: under a session whose
 /// key attests an insert, the read of the board's `H.1` the attest signs
 /// over answered with the death signal — no session's answer, a token-free
@@ -524,6 +617,26 @@ fn a_head_read_that_halts_is_the_composers_refusal() {
     assert_eq!(refused.name(), "attest_not_composed", "{refused}");
     assert_eq!(g.fake.sends(), 0, "nothing dialed");
     assert!(g.lines().is_empty() && g.states().is_empty(), "nothing held, nothing said");
+}
+
+/// A READ THE ATTEST NEEDS, ITS ANSWER LOST, holds the burst like the
+/// dial's own failure — and `sent: false`, since the write never left
+/// (`Dialed`'s `From<Unattested>`): under a session whose key attests an
+/// insert, the read of the board's `H.1` the attest signs over meets a
+/// transport fault the table reads as a lost answer, and the burst is held
+/// `unreachable`, its line unsent and nothing dialed (the mutant that faces
+/// the read's failure loses the burst; the one that keeps the table's
+/// `sent` sends the resend to read for a landing that never happened).
+#[test]
+fn an_unanswered_read_the_attest_needs_holds_the_burst_unsent() {
+    let fake = Fake::new();
+    fake.head_unreachable.store(true, Ordering::SeqCst);
+    let g = ground_over(fake, TempDir::new().unwrap(), keyed_facts(), 0);
+    let OpAnswer::Answered(Ok(held)) = g.holds.send_burst(&g.session, insert(DOC, json!(["a"]))) else { panic!("held, nothing sent") };
+    assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
+    let lines = g.lines();
+    assert_eq!(lines[0]["sent"], false, "the write never left: {lines:?}");
+    assert_eq!(g.fake.sends(), 0, "nothing dialed");
 }
 
 /// THE QUEUE's BUDGET at the hold: with the principal's standing frames at

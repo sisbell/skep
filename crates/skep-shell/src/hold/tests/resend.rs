@@ -9,10 +9,12 @@
 //! beside it; THE ORDER, the lines sent in `k` order across the documents;
 //! the own hand on a read; a refusal the table holds nowhere, and the death
 //! signal, leaving a resent line standing; a second window's burst resent
-//! from memory; every principal's lines resent by one probe; one drain per
-//! board at a time, and a drain that unwinds leaving the board free to drain
-//! again; a move facing its own document alone; and the own node stopped,
-//! `writes.halted` and a third `durability` holding a burst over time.
+//! from memory; every principal's lines resent by one probe, and a probe
+//! with no line standing dialing nothing; one drain per board at a time,
+//! and a drain that unwinds leaving the board free to drain again; a move
+//! facing its own document alone; and the own node stopped,
+//! `writes.halted` and a third `durability` holding a burst over time, a
+//! reused ordinal's reissues counted afresh.
 
 use super::*;
 
@@ -573,4 +575,47 @@ fn a_third_durability_on_a_resent_line_holds_it() {
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 4);
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()));
+}
+
+/// A REUSED ORDINAL STARTS ITS REISSUES AFRESH (§3c.4's rider, counted per
+/// line; §3c.3's compaction, which starts the ordinals again): a line
+/// reissued twice and then kept leaves the queue empty, so the next line
+/// held takes ordinal 1 again — and its first `durability` is reissued,
+/// never counted as the settled line's third (the mutant that keeps a
+/// settled line's count holds the person's next burst at its first
+/// `durability`).
+#[test]
+fn a_reused_ordinal_starts_its_reissues_afresh() {
+    let g = ground();
+    g.fake.op_rejected.next(2, retry("durability"));
+    let first = g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    for _ in 0..3 {
+        g.holds.probe("b-1");
+    }
+    assert_eq!(g.fake.sends(), 3, "reissued twice, then sent and kept");
+    assert!(g.lines().is_empty(), "the line is kept and the queue empties");
+    let again = g.hold(&insert(DOC, json!(["b"])), "unreachable", false);
+    assert_eq!((first["held"].as_u64(), again["held"].as_u64()), (Some(1), Some(1)), "the ordinal is reused");
+    g.fake.op_rejected.next(1, retry("durability"));
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.sends(), g.lines()[0]["cause"].as_str()), (4, Some("unreachable")), "the new line's first `durability` is reissued");
+}
+
+/// THE PROBE READS `/health` ONLY WHILE A LINE STANDS (§3c.4): a probe over
+/// an empty queue dials nothing; a line held is sent and kept by the next
+/// probe, its one `/health` read the probe's own; and the probe after it,
+/// the queue empty again, reads nothing more (the mutant that probes every
+/// board at every cadence reads `/health` for the shell's life).
+#[test]
+fn a_probe_with_no_line_standing_dials_nothing() {
+    let g = ground();
+    let reads = || g.fake.health_reads.load(Ordering::SeqCst);
+    g.holds.probe("b-1");
+    assert_eq!((reads(), g.fake.sends()), (0, 0), "an empty queue is probed for nothing");
+    g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
+    g.holds.probe("b-1");
+    assert_eq!((reads(), g.fake.sends()), (1, 1), "a standing line is probed and sent");
+    assert!(g.lines().is_empty(), "and kept");
+    g.holds.probe("b-1");
+    assert_eq!(reads(), 1, "the queue empty again, the probe reads nothing more");
 }

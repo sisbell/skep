@@ -3,14 +3,16 @@
 //! naming every call by its own spelling — `fetch` answered `streamed_call`
 //! through it — and logging each as one entry of its outcome and sizes, and
 //! `fetch` logging its own call, a stream's as its body is dropped; a
-//! present argument of another form refused before any dial, and every
-//! optional argument a call row declares read in its declared form; the
-//! guest form refusing every write kind of the wire undialed and reading
-//! the board its reference or its origin names; a search's `opts` read as
-//! one value, and its query held to the shell's bound at every target; a
-//! `select` of two keys or none refused by its name, a label the box
-//! refuses `empty_label` naming its cause, and the signed mode's check
-//! naming a keyless store; the shell's options printing no seed and the
+//! present argument of another form refused before any dial, `fetch`'s
+//! address among them, and every optional argument a call row declares
+//! read in its declared form; the guest form refusing every write kind of
+//! the wire undialed and reading the board its reference or its origin
+//! names, the reference first and the target before the frame; a search's
+//! `opts` read as one value, and its query held to the shell's bound at
+//! every target; a `select` of two keys or none refused by its name, a
+//! label the box refuses `empty_label` naming its cause, and the signed
+//! mode's check naming a keyless store; a probe of an own node that does
+//! not answer `unreachable`; the shell's options printing no seed and the
 //! open's preconditions stopped loudly; every day dated as the calendar
 //! counts it; and the stop abandoning a walk that waits on the page, a walk
 //! begun after it asking the page nothing, and a search after it answered
@@ -183,18 +185,19 @@ fn every_declared_optional_argument_is_read_in_its_form() {
 
 /// THE GUEST FORM's SEARCH reads the board its reference or its canonical
 /// origin names (§4b.1's `search` row): the shell's own board's origin is
-/// that board — the target its reference is — an origin the shell holds no
-/// board at answers with no index, a non-canonical one is refused
-/// `not_canonical`, and a guest form naming neither is refused
-/// `malformed_args` (the mutants that answer every origin with no index, or
-/// read a missing target as a search with no index).
+/// that board — the target its reference is — and a reference is read
+/// first, an origin beside it unread; an origin the shell holds no board at
+/// answers with no index, a non-canonical one is refused `not_canonical`,
+/// and a guest form naming neither is refused `malformed_args` (the mutants
+/// that answer every origin with no index, read the origin ahead of the
+/// reference, or read a missing target as a search with no index).
 #[test]
 fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     let dir = TempDir::new().unwrap();
     let own = nowhere();
     let (shell, _) = open_shell(&own, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
-    for args in [json!({"guest": true, "board": board}), json!({"guest": true, "origin": own})] {
+    for args in [json!({"guest": true, "board": board}), json!({"guest": true, "origin": own}), json!({"guest": true, "board": board, "origin": "not an origin"})] {
         assert!(matches!(shell.guest_target(&args), Ok(GuestTarget::Board(entry)) if entry.reference == board), "{args}");
     }
     let answer = shell.call("search", &json!({"guest": true, "origin": "http://127.0.0.1:9", "query": "x"})).unwrap();
@@ -340,6 +343,50 @@ fn a_fetch_logs_its_own_call() {
     assert_eq!(sizes(&logged[1]), (Some("stream".into()), Some(guest.to_string().len() as u64), Some(2)), "{}", logged[1]);
 }
 
+/// A FETCH's ADDRESS IS READ BEFORE ANY DIAL (`fetch`'s row: `i` an
+/// address, else `malformed_args` naming it), so no page's text reaches the
+/// request line the shell sends: an address carrying a second query member,
+/// one carrying a line break and a header of its own, one in another
+/// spelling and one of another type are each refused naming `i` while a
+/// listener at the named origin counts no connection — and an address in
+/// its one spelling there is dialed (the mutant that drops the check
+/// splices the page's text into the request the board is sent).
+#[test]
+fn a_fetchs_address_is_read_before_any_dial() {
+    let dir = TempDir::new().unwrap();
+    let shell = boardless(&dir);
+    let (origin, dials) = counting_listener();
+    let fetch = |i: Value| shell.fetch(&json!({"guest": true, "origin": origin, "i": i}));
+    for i in [json!("1.0.1.0.1.0.1.1&i=1.0.2.0.1.0.1.1"), json!("1.0.1.0.1.0.1.1 HTTP/1.1\r\nX-Injected: 1"), json!("01.0.1.0.1.0.1.1"), json!(7)] {
+        let refused = fetch(i.clone()).unwrap_err().to_value();
+        assert_eq!((refused["name"].as_str(), refused["what"].as_str()), (Some("malformed_args"), Some("i")), "{i}: {refused}");
+    }
+    assert_eq!(dials.load(Ordering::SeqCst), 0, "no address of another form is dialed");
+    assert_eq!(fetch(json!("1.0.1.0.1.0.1.1")).unwrap_err().name(), "unreachable", "the listener answers nothing");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while dials.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(dials.load(Ordering::SeqCst) >= 1, "an address in its one spelling is dialed");
+}
+
+/// A PROBE OF A NODE THAT DOES NOT ANSWER is `unreachable` (`probe()`'s
+/// row): a shell whose own node is a board nothing answers at names that
+/// node, dialed and signed at itself, and its state `unreachable`; a shell
+/// over no board names none (the mutant that reads the node's silence as
+/// `running` tells the page a node it cannot reach stands).
+#[test]
+fn a_probe_of_a_node_that_does_not_answer_is_unreachable() {
+    let (dir, other) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let own = nowhere();
+    let (talk, _) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&own).unwrap()], dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.own_node = Some(Origin::parse(&own).unwrap());
+    let shell = Shell::open(opts);
+    assert_eq!(shell.call("probe", &json!({})).unwrap(), json!({"daemon": "unreachable", "dialed": own, "signed": own}));
+    assert_eq!(boardless(&other).call("probe", &json!({})).unwrap(), json!({"daemon": "unreachable", "dialed": null, "signed": null}));
+}
+
 /// A listener that accepts every connection, counts it and drops it: a
 /// board that answers nothing and says how many dials reached it.
 fn counting_listener() -> (String, Arc<AtomicUsize>) {
@@ -360,8 +407,10 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
 /// `WRITE_KINDS` is the wire's sixteen write kinds (`docs/wire.md`
 /// §Operations; skepd's `parse_op`), each refused `write_in_guest_form`
 /// naming its op while a listener at the named origin counts no connection
-/// — and a guest READ there is dialed, so the listener sees what a dial
-/// would be (the mutant that dials first and refuses after).
+/// — the target the form names read first, so a write at a board this
+/// shell never issued is `unknown_board` — and a guest READ there is
+/// dialed, so the listener sees what a dial would be (the mutants that dial
+/// first and refuse after, or refuse the write before its target is read).
 #[test]
 fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
     let mut listed = WRITE_KINDS.to_vec();
@@ -394,6 +443,8 @@ fn the_guest_form_refuses_every_write_kind_of_the_wire_without_a_dial() {
         let v = refused.to_value();
         assert_eq!((refused.name(), v["op"].as_str()), ("write_in_guest_form", Some(op)), "{v}");
     }
+    let unknown = shell.call("op", &json!({"guest": true, "board": "b-nowhere", "frame": {"op": "insert"}})).unwrap_err();
+    assert_eq!(unknown.name(), "unknown_board", "the target is read before the frame: {unknown}");
     assert_eq!(dials.load(Ordering::SeqCst), 0, "no write in the guest form is dialed");
     let read = shell.call("op", &json!({"guest": true, "origin": origin, "frame": {"op": "doc_metadata", "doc": "1.0.1.0.1"}}));
     assert_eq!(read.unwrap_err().name(), "unreachable", "the listener answers nothing");

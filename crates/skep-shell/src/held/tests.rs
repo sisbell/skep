@@ -145,9 +145,11 @@ fn the_header_is_written_once_v_read_first_and_the_forms_are_byte_equal() {
 /// A HEADER OF ANOTHER FORM halts with its own face (§3c.2, P38): a `type`
 /// not the store's, or none, no `v`, a `v` of 0 or of a string — each the
 /// unknown-member face; a newer `v` the newer face whatever its `type`, `v`
-/// read first; a header that is no JSON object the damaged face (the
-/// mutants that drop the `type` check, read a missing `v` as 1, take any
-/// `v` but 1 as newer, or read `type` before `v`).
+/// read first; a header that is no JSON object, and a file with no complete
+/// header line — empty, or its header torn before its newline — the damaged
+/// face (the mutants that drop the `type` check, read a missing `v` as 1,
+/// take any `v` but 1 as newer, read `type` before `v`, or open a file of no
+/// whole header as a fresh queue).
 #[test]
 fn a_header_of_another_form_halts_with_its_face() {
     let header = |members: &str| format!("{{{members}\"board\":\"{}\",\"principal\":1,\"account\":\"1.0.1\"}}\n", chain());
@@ -159,6 +161,8 @@ fn a_header_of_another_form_halts_with_its_face() {
         ("a v of a string", header("\"type\":\"skep-held-bursts\",\"v\":\"1\","), HaltWhy::UnknownMember),
         ("a newer v of another type", header("\"type\":\"skep-other\",\"v\":3,"), HaltWhy::Newer),
         ("no object", "[1]\n".to_string(), HaltWhy::Damaged),
+        ("an empty file", String::new(), HaltWhy::Damaged),
+        ("a header torn before its newline", header("\"type\":\"skep-held-bursts\",\"v\":1,").trim_end().to_string(), HaltWhy::Damaged),
     ];
     for (cell, header, why) in cells {
         let tmp = TempDir::new().unwrap();

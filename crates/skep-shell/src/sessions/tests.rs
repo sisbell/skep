@@ -2,10 +2,11 @@
 //! beside the board it stands at; its END run once whichever caller meets
 //! the death — a second caller answering the first's reason, two callers at
 //! once one derivation, a caller that panics mid-end leaving the end to the
-//! next — a principal's supplement following its standing sessions, a key's
-//! diagnosis named by the list it stands in, a session's key attesting the
-//! ten kinds with an entry frame alone, and a frame no attest is owed for
-//! borrowed as it stands, never copied.
+//! next — and a signed session's death read off its set and its account,
+//! the retirement ahead of the genesis; a principal's supplement following
+//! its standing sessions, a key's diagnosis named by the list it stands in,
+//! a session's key attesting the ten kinds with an entry frame alone, and a
+//! frame no attest is owed for borrowed as it stands, never copied.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -197,6 +198,69 @@ impl Dialer for PanicsOnce {
 
     fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
         Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// A board answering `/health` as a claimed board under local trust, and
+/// `key_set` with the answer `sets` holds for the account the frame names —
+/// every other read refused, so a death's read of the records finds none.
+struct KeySets(HashMap<&'static str, Value>);
+
+impl Dialer for KeySets {
+    fn exchange(&self, _: &Origin, req: &Request) -> Result<Response, DialError> {
+        let answer = |v: Value| Ok(Response { status: 200, headers: Headers::default(), body: v.to_string().into_bytes() });
+        if req.path.starts_with("/health") {
+            return answer(json!({"ok": true, "log_position": 10, "auth": {"claimant": "1.0.1", "local_trust": true, "origins": [], "signed_origins": []}, "writes": {"halted": false}}));
+        }
+        let frame: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        match (frame["op"].as_str(), frame["account"].as_str().and_then(|account| self.0.get(account))) {
+            (Some("key_set"), Some(set)) => answer(set.clone()),
+            _ => answer(json!({"resp": "rejected", "code": "doc_not_registered", "disposition": "reorder"})),
+        }
+    }
+
+    fn stream(&self, _: &Origin, _: &RequestHead, _: &mut dyn Read, _: &mut dyn FnMut(&Headers)) -> Result<StreamedResponse, DialError> {
+        Err(DialError::Connect("no stream here".into()))
+    }
+}
+
+/// A `key_set` answer as of `as_of`: the keys `enrolled`, the fingerprints
+/// `retired`.
+fn key_set_answer(as_of: u64, enrolled: &[&skep_identity::PublicKey], retired: &[Fingerprint]) -> Value {
+    let enrolled: Vec<Value> = enrolled.iter().map(|k| json!({"alg": k.alg(), "key": k.to_hex(), "fingerprint": Fingerprint::of(k).to_hex()})).collect();
+    let retired: Vec<Value> = retired.iter().map(|f| json!({"fingerprint": f.to_hex()})).collect();
+    json!({"resp": "key_set", "as_of": as_of, "enrolled": enrolled, "retired": retired})
+}
+
+/// A SIGNED SESSION's DEATH IS READ OFF ITS SET AND ITS ACCOUNT (§4b.2's
+/// arms; `derive_death`): its key standing in the retired list of the set
+/// it authenticated against is the RETIREMENT, in AUTH-5.77's no-hand form
+/// where the board withholds the records that would name the hand; a
+/// session by reference whose acted-as account now holds a set of its own
+/// is the GENESIS, the `seeded` arm naming the set's first key; that account
+/// keyless still, the restart; and where both stand the retirement is read
+/// first (the mutants that drop either arm, read the enrolled list for the
+/// retired one, take the session's set for its account's, or read the
+/// genesis first — each faces the page a restart, or the wrong death).
+#[test]
+fn a_signed_sessions_death_is_read_off_its_set_and_its_account() {
+    let key = skep_client::sign::signer_from_seed(&[7; 32]).public_key().clone();
+    let session_key = Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let (retired, empty, seeded) = (key_set_answer(4, &[], &[session_key]), key_set_answer(4, &[], &[]), key_set_answer(9, &[&key], &[]));
+    let no_hand = json!({"arm": "retired", "fingerprint": "5a".repeat(32), "own": false, "hand": null, "position": null, "label": null});
+    let genesis = json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": Fingerprint::of(&key).to_hex()});
+    let cells = [
+        ("its key retired", signed_open(1, "1.0.1", "1.0.1"), vec![("1.0.1", retired.clone())], no_hand.clone()),
+        ("its account seeded", signed_open(1, "1.0.1.1", "1.0.1"), vec![("1.0.1", empty.clone()), ("1.0.1.1", seeded.clone())], genesis),
+        ("its account keyless still", signed_open(1, "1.0.1.1", "1.0.1"), vec![("1.0.1", empty.clone()), ("1.0.1.1", empty)], json!({"arm": "restart", "reopened": false})),
+        ("both at once", signed_open(1, "1.0.1.1", "1.0.1"), vec![("1.0.1", retired), ("1.0.1.1", seeded)], no_hand),
+    ];
+    for (cell, open, sets, reason) in cells {
+        let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), KeySets(sets.into_iter().collect())));
+        let sessions = Sessions::new(None);
+        let entry = sessions.register(&at("b-1", board), open, &mut Recorded::default());
+        assert_eq!(sessions.end(&entry, &mut Recorded::default(), &EventBus::new()), reason, "{cell}");
+        assert_eq!(sessions.len(), 0, "{cell}: the session left the table");
     }
 }
 

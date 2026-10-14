@@ -7,8 +7,9 @@
 //! spelling. And the ground its two children stand on: a fake board (`Fake`) —
 //! its `H.1`, its `/changes` rows, a draft's text, the frames POSTed to `/op`
 //! recorded and a refusal or the death signal armed for a send — the holds
-//! over it with a session opened as the shell opens one (`Ground`), and each
-//! `held` event, `held` row and `held` answer held to its declaration.
+//! over it with a session opened as the shell opens one and every line the
+//! hold says on TALK recorded (`Ground`), and each `held` event, `held` row
+//! and `held` answer held to its declaration.
 //! `write` holds the one path of a session's `op` — a burst's door and its
 //! hold, and a write the hold never holds; `resend` the probe and the resend
 //! walk.
@@ -175,8 +176,9 @@ impl<T: Clone> Armed<T> {
 }
 
 /// A board under test: the chain `board_term` reads — or no `H.1` at all,
-/// where one is armed missing, or the death signal, where its read is armed
-/// closed; the `/changes` rows the read sees, each served
+/// where one is armed missing, the death signal, where its read is armed
+/// closed, or an answer lost on the way, where it is armed unanswered; the
+/// `/changes` rows the read sees, each served
 /// only past the query's `since` and at or under its `under`, or a refusal
 /// armed in the page's place; the draft's text, of which a `retrieve_v`
 /// answers the positions it names — or no answer, the death signal, or one
@@ -190,6 +192,7 @@ struct Fake {
     chain: String,
     no_head: AtomicBool,
     head_closed: AtomicBool,
+    head_unreachable: AtomicBool,
     rows: Mutex<Vec<Value>>,
     changes_refused: Mutex<Option<(u16, Value)>>,
     text: Mutex<String>,
@@ -218,6 +221,7 @@ impl Fake {
             chain: chain.to_string(),
             no_head: AtomicBool::new(false),
             head_closed: AtomicBool::new(false),
+            head_unreachable: AtomicBool::new(false),
             rows: Mutex::new(Vec::new()),
             changes_refused: Mutex::new(None),
             text: Mutex::new(String::new()),
@@ -324,6 +328,9 @@ impl Dialer for Fake {
                     if self.head_closed.load(Ordering::SeqCst) {
                         return Ok(closed());
                     }
+                    if self.head_unreachable.load(Ordering::SeqCst) {
+                        return Err(DialError::Io("the head read's answer was lost".into()));
+                    }
                     if self.no_head.load(Ordering::SeqCst) {
                         return Ok(ok(json!({"resp": "delivery", "items": []})));
                     }
@@ -372,13 +379,15 @@ impl Supplements for NoSupplements {
 }
 
 /// The holds over the fake board, a session registered and its open read as
-/// the shell reads it — the ground every resend cell stands on; the store
-/// directory kept for the ground's life.
+/// the shell reads it — the ground every resend cell stands on; every line
+/// the hold says on TALK, in order; the store directory kept for the ground's
+/// life.
 struct Ground {
     holds: Arc<Holds>,
     fake: Arc<Fake>,
     session: Arc<SessionEntry>,
     rx: Receiver<Event>,
+    said: Arc<Mutex<Vec<String>>>,
     store: TempDir,
 }
 
@@ -461,11 +470,14 @@ fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) ->
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
     let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [Arc::clone(&entry)]);
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&said);
+    let talk: Talk = Arc::new(move |line: &str| kept.lock().unwrap().push(line.to_string()));
+    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), talk, [Arc::clone(&entry)]);
     let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at };
     let session = sessions.register(&entry, open, &mut NoSupplements);
     holds.open_session(&session);
-    Ground { holds, fake, session, rx, store }
+    Ground { holds, fake, session, rx, said, store }
 }
 
 fn insert(doc: &str, values: Value) -> Value {

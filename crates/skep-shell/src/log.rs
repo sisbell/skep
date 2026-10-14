@@ -346,6 +346,36 @@ mod tests {
         assert!(!kept.contains(&token) && !kept.contains("Skepd-Session") && !kept.contains("1.0.1.0.1"), "{kept}");
     }
 
+    /// THE DIALER's RECORD OF AN ANSWERED DIAL keeps the board's status and
+    /// the bytes its answer carried: an exchange answered `200` with five
+    /// bytes is recorded `200` and five out, and a stream answered `200` and
+    /// dropped unread `200` and none out — its body the reader's, never
+    /// counted at the dial (the mutants that record an answer's size as
+    /// none, or a stream's status as none).
+    #[test]
+    fn the_dialers_record_of_an_answered_dial_keeps_its_status_and_size() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+        let board = std::thread::spawn(move || {
+            for stream in listener.incoming().take(2) {
+                let mut stream = stream.unwrap();
+                let mut head = BufReader::new(stream.try_clone().unwrap());
+                while head.read_line(&mut String::new()).unwrap() > 2 {}
+                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello").unwrap();
+            }
+        });
+        let log = Arc::new(Log::new());
+        let dialer = ShellDialer::new(Arc::clone(&log));
+        assert_eq!(dialer.exchange(&origin, &Request::get("/health")).unwrap().body, b"hello");
+        let head = RequestHead { method: Method::Get, path: "/blob?i=1.0.1.0.1.0.1.1".into(), headers: Vec::new(), content_length: None };
+        drop(dialer.stream(&origin, &head, &mut std::io::empty(), &mut |_| {}).unwrap());
+        board.join().unwrap();
+        let records: Vec<(String, Option<u64>, Option<u64>)> =
+            log.entries().iter().map(|e| (e["path"].as_str().unwrap_or("?").to_string(), e["status"].as_u64(), e["bytes_out"].as_u64())).collect();
+        assert_eq!(records, [("/health".to_string(), Some(200), Some(5)), ("/blob".to_string(), Some(200), Some(0))]);
+    }
+
     /// THE STOP DIALS NOTHING: once a clone of the shell's dialer is stopped,
     /// an exchange and a stream through the dialer itself at a board
     /// listening — its backlog would take the connection — are each refused

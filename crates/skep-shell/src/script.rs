@@ -138,6 +138,41 @@ mod tests {
         assert!(e.to_string().contains("line 2"));
     }
 
+    /// THE GRAMMAR REFUSES EVERY NEAR MISS, the law over its fixed forms:
+    /// each form parses as written, and refuses with a word past its own and
+    /// with one short of it — a form's argument missing, a sheet's index
+    /// joined by another word — every refusal naming its line (the mutants
+    /// that read a form's first words and drop the rest, or take a sheet's
+    /// index from a longer tail, read a line the grammar never wrote).
+    #[test]
+    fn the_grammar_refuses_every_near_miss() {
+        let forms = [
+            "confirm yes",
+            "confirm no",
+            "retype sheet",
+            "retype sheet 1",
+            "retype wrong",
+            "retype declined",
+            "destination /tmp/a",
+            "import file /tmp/k",
+            "import sheet",
+            "import sheet 1",
+            "import typed 00ff abcd",
+            "import neither",
+            "kept",
+            "placed",
+            "abandon",
+        ];
+        let refused = |line: &str| parse(line).map(drop).map_err(|e| e.line);
+        for form in forms {
+            assert!(parse(form).is_ok_and(|answers| answers.len() == 1), "`{form}` parses");
+            assert_eq!(refused(&format!("{form} extra")), Err(1), "`{form} extra`");
+        }
+        for short in ["confirm", "typed", "retype", "destination", "import file", "import typed 00ff", "import"] {
+            assert_eq!(refused(short), Err(1), "`{short}`");
+        }
+    }
+
     /// A typed import's seed is in no text the script's values print: its
     /// answer's `Debug` shows the seed as `…`, and a refused `import typed`
     /// line is named by its form alone.

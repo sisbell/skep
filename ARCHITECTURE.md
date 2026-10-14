@@ -1331,9 +1331,9 @@ Rules that hold across its files:
 
 Its suites are unit modules beside the code they test. `shell/tests.rs` and
 its children run the shell: `door` the shell alone, with no daemon behind
-it; `modes` the two session modes, `boards` each board's node, wait and
-stop, and `held` the held-burst store, against a daemon spawned in-process
-over a temp data dir.
+it; `modes` the two session modes, `ceremonies` the ceremonial rows end to
+end, `boards` each board's node, wait and stop, and `held` the held-burst
+store, against a daemon spawned in-process over a temp data dir.
 `hold/tests.rs` and its children `write` and `resend` drive the hold over a
 fake board; the other modules test themselves over fakes and temp dirs;
 and `tests/it/tidy.rs` holds the arrangement — the declaration order, every

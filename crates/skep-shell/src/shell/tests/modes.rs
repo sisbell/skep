@@ -8,14 +8,16 @@
 //! seed the walk made and the store's location in no answer, no event and
 //! no log entry — a paper claim's among them — a scripted claim's anchors
 //! placed where its script says, a search's query recorded nowhere, every
-//! event held to its declaration, and a closed session's
-//! drafts rows ahead of its `session-died`; a death signal at a call's own
-//! dial ending its session, and a released supplement keeping its drafts
-//! cursor; then the signed mode over the same store: a
-//! publish-class write acked — the attest the shell composed — and the same
-//! write under the bare mode refused, and every kind with an entry frame
-//! judged and acked; a session's open position the board's own, read before
-//! it opened; the daemon's restart under the signed mode: the session it
+//! event held to its declaration, and a closed session's drafts rows ahead
+//! of its `session-died`; a death signal at a call's own dial ending its
+//! session, a released supplement keeping its drafts cursor, and a session
+//! opened after its principal's narrow fed from its own open; then the
+//! signed mode over the same store: a publish-class write acked — the
+//! attest the shell composed — and the same write under the bare mode
+//! refused, and every kind with an entry frame judged and acked, an `emit`
+//! and a record deposited into a published document among them; a
+//! session's open position the board's own, read before it opened; the
+//! daemon's restart under the signed mode: the session it
 //! ended, ended once, re-opened under a fresh reference its arm names, and
 //! written under; a bare session's death at a restart and at the flip to
 //! ENFORCING; the declared fields of the real answers; a `write_busy`
@@ -286,14 +288,22 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// under the signed session — the composer is the daemon's twin, so each
 /// kind the cell above leaves unsent goes to the daemon here: a shot with a
 /// base group and a window segment, `fork`, `version`, `nullify`,
-/// `assert_sup`, and `edit_link` with its successor's type in each of the
-/// wire's two forms, `{"addrs": […]}` and `{"resolve": […]}`. Each frame
-/// goes first under a bare session of the same principal, whose
+/// `assert_sup`, `edit_link` with its successor's type in each of the
+/// wire's two forms, `{"addrs": […]}` and `{"resolve": […]}`, and an `emit`
+/// of the PredDef class — Unary, so its `to` is empty, and a class that
+/// confers no behavior on what it names (wire.md's own example takes
+/// Retired, whose read filter would hide the member the edit cells read).
+/// Each frame goes first under a bare session of the same principal, whose
 /// `signed_session_required` proves the write publish-class, so the signed
-/// session's ack proves its attest verified, never dropped (a composer arm
-/// that spells a doc term or a slot otherwise is refused
-/// `attestation_invalid:signature`; one that reads no `{"resolve"}` slot
-/// refuses the edit unsent, `attest_not_composed`).
+/// session's ack proves its attest verified, never dropped. Then the one
+/// `insert` a published document admits (PUB-2.59): a record deposited at
+/// the fresh position past its head member's extent, the member named and
+/// its trunk the frame's `doc` term — held from the bare session as the
+/// refused run the board's verdict makes it, and acked under the signed
+/// one (a composer arm that spells a doc term or a slot otherwise, signs
+/// over the member named, drops the declared deposit, or reads an atom as
+/// its bytes, is refused `attestation_invalid:signature`; one that reads no
+/// `{"resolve"}` slot refuses the edit unsent, `attest_not_composed`).
 #[test]
 fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session() {
     let dir = TempDir::new().unwrap();
@@ -347,6 +357,8 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
             "edit_link, its type resolved",
             json!({"op": "edit_link", "original": resolved, "d_s": other, "d_a": doc, "successor": {"from": [vspec("1.1")], "to": [vspec("1.2")], "ty": {"resolve": [vspec("1.3")]}}}),
         ),
+        // A typed relation of the PredDef class: Unary, so `to` is empty.
+        ("emit", json!({"op": "emit", "home": doc, "ty": [{"start": "1.1.0.1.0.1.0.1.1", "width": "0.0.0.0.0.0.0.0.1"}], "from": member, "to": []})),
     ];
     for (kind, frame) in cells {
         let refused = bare.call("op", &json!({"session": bare_session, "frame": frame})).unwrap_err();
@@ -354,6 +366,19 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         let acked = signed.call("op", &json!({"session": signed_session, "frame": frame})).unwrap_or_else(|r| panic!("{kind}: {r}\n{}", talk()));
         assert!(acked["resp"].as_str().is_some_and(|resp| resp.starts_with("ack")), "{kind}: {acked}");
     }
+    // The record deposit names the head member, so a `doc` term that is not
+    // the trunk shows; under the bare session it is a burst, held as the
+    // REFUSED run `signed_session_required`'s permanent disposition makes it
+    // (the bare shell is another window here, so its answer says so).
+    let token = signed.sessions.get(&signed_session).unwrap().token.clone();
+    let next = skep_client::ceremony::deposit::next_content_ordinal(&signed.boards[0].board, Some(&token), &other).unwrap();
+    let deposit = json!({"op": "insert", "doc": other_member, "at": {"subspace": "1", "ordinal": next.to_string()}, "values": [{"atom": "xy"}], "deposit": "1.1.0.1.0.1.0.3.1"});
+    let held = bare.call("op", &json!({"session": bare_session, "frame": deposit})).unwrap();
+    assert_eq!(held["resp"], "held", "the bare session's deposit is a refused run: {held}");
+    let rows = bare.call("held", &json!({"session": bare_session})).unwrap();
+    assert_eq!((rows[0]["cause"].as_str(), rows[0]["refusal"]["detail"].as_str()), (Some("credential_refused:signed_session_required"), Some("signed_session_required")), "{rows}");
+    let acked = signed.call("op", &json!({"session": signed_session, "frame": deposit})).unwrap_or_else(|r| panic!("the deposit: {r}\n{}", talk()));
+    assert!(acked["resp"].as_str().is_some_and(|resp| resp.starts_with("ack")), "the deposit: {acked}");
     signed.shutdown();
     bare.shutdown();
     sd.shutdown();
@@ -803,6 +828,42 @@ fn a_released_supplement_keeps_its_drafts_cursor() {
         let at = at.as_u64().unwrap();
         assert_eq!(fed.iter().filter(|row| **row == at).count(), 1, "the drafts row at {at} reaches the page once: {fed:?}");
     }
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// A SESSION OPENED AFTER ITS PRINCIPAL's NARROW IS FED FROM ITS OWN OPEN
+/// (the `feed` update's definition: "a session's drafts at the position the
+/// session opened at"): a session mints a draft and closes, the last of its
+/// principal at the board, so the supplement narrows and its drafts cursor
+/// goes with it; a session opened after it mints another, fed under its own
+/// reference — and the first draft's row reaches the page once, never again
+/// under the new session (the mutant whose widen starts a fresh cursor at 0
+/// re-feeds the principal's whole drafts history at every reload).
+#[test]
+fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let open = || shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let mint = |session: &str| shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["at"].as_u64().unwrap();
+    let drafts_row = |at: u64| move |e: &Event| e.name == EventName::Feed && e.data["update"]["class"] == "drafts" && e.data["update"]["at"] == at;
+    let first = open();
+    let before = mint(&first);
+    wait_for(&seen, drafts_row(before));
+    assert_eq!(shell.call("close", &json!({"session": first})).unwrap(), json!({}));
+    let second = open();
+    let after = mint(&second);
+    let fed = wait_for(&seen, drafts_row(after));
+    assert_eq!(fed.data["update"]["session"], second, "{fed:?}");
+    let fed_before = seen.lock().unwrap().iter().filter(|e| drafts_row(before)(e)).count();
+    assert_eq!(fed_before, 1, "the first draft's row reaches the page once");
     shell.shutdown();
     sd.shutdown();
 }

@@ -10,8 +10,8 @@
 //! positive control beside them, a shot's body composed from the values it
 //! copies in, run for run, as the signer's own builder spells it. And THE
 //! COMPOSER's CONTRACT: a death signal at one of its reads the session's
-//! end, never its own refusal; a frame past its precondition stopped
-//! loudly.
+//! end, and a board's refusal of one its verdict verbatim, never the
+//! composer's own refusal; a frame past its precondition stopped loudly.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -379,6 +379,23 @@ fn a_death_signal_at_a_read_is_the_sessions_end() {
     let shot = json!({"op": "publish", "doc": "1.0.1.0.1", "draft": "1.0.1.0.2", "runs": [run("1.0.1.0.2", "1.0.1.0.2.0.1.1", 2)]});
     assert!(matches!(c.publish_body(&shot, "1.0.1.0.1"), Err(Unattested::Died)));
     assert_eq!(g.fake.dialed(), ["image", "retrieve_doc_v_span_set"], "each stopped at its first read");
+}
+
+/// A BOARD's REFUSAL AT A READ the composer makes is the board's verdict,
+/// carried verbatim (`Unattested`'s refusal; `Composer::read`): a V-spec
+/// slot whose source the board does not hold answers the board's own
+/// `doc_not_registered`, of the `refused` kind, stopped at that one read
+/// (the mutant that routes a read's rejection through the composer's own
+/// halt answers it `attest_not_composed`, and the page is told the shell
+/// could not sign where the board said why).
+#[test]
+fn a_boards_refusal_at_a_read_is_its_verdict_verbatim() {
+    let g = Ground::over(Fake::default());
+    match g.composer().slot(&json!([vspec("1.0.1.0.7")]), "from") {
+        Err(Unattested::Refused(r)) => assert_eq!((r.name(), r.to_value()["kind"].as_str()), ("doc_not_registered", Some("refused")), "{r}"),
+        other => panic!("the board's verdict was not carried: {other:?}"),
+    }
+    assert_eq!(g.fake.dialed(), ["image"], "stopped at its one read");
 }
 
 /// THE COMPOSER's PRECONDITION is its caller's — discharged by

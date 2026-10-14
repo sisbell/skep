@@ -1,4 +1,4 @@
-//! THE SHELL's SUITE, its cells in four children over the ground shared
+//! THE SHELL's SUITE, its cells in five children over the ground shared
 //! here: a real daemon spawned in-process over a temp data dir and started
 //! again at its port (`spawn`, `spawn_at`), a shell opened over it as a
 //! transport opens one (`open_shell`), the board claimed through the
@@ -8,9 +8,10 @@
 //! (`changes_under`), every seed a walk made (`seeds_of`), and every event
 //! held to its declaration (`assert_events_declared`).
 //! `door` holds the shell alone, with no daemon behind it; `modes`
-//! the bare and the signed session modes end to end; `boards` each board's
-//! own node, wait and stop beside another's; `held` the held-burst store
-//! against the real daemon.
+//! the bare and the signed session modes end to end; `ceremonies` the
+//! ceremonial rows end to end, each death they cause read for its hand;
+//! `boards` each board's own node, wait and stop beside another's; `held`
+//! the held-burst store against the real daemon.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -31,6 +32,7 @@ use crate::hold::{Burst, PROBE_CADENCE};
 use crate::sessions::SessionKind;
 
 mod boards;
+mod ceremonies;
 mod door;
 mod held;
 mod modes;

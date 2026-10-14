@@ -157,14 +157,16 @@ docker build -t skep-hosted:debug --build-arg REVISION=$(git rev-parse HEAD) \
 docker build -t skep-cli --target skep-cli --build-arg REVISION=$(git rev-parse HEAD) .
 ```
 
-The daemon is built `--no-default-features`: the image serves no `/dump`
-and no page at `GET /`. The sidecar's `skep` is built without `tls`,
-since it dials loopback and signs nothing. The one file builds for
-`linux/arm64` (an Apple-silicon Mac) and `linux/amd64` (the server) under
-buildx — `docker buildx build --platform linux/amd64 -t skep-hosted .`
-cross-builds under emulation — and every base image is pinned by digest.
-`scripts/docker-smoke.sh` builds all three and proves the image on the
-machine it runs on; run it after every build.
+`REVISION` is the commit the images' labels name, and their binaries'
+`--version` lines its first twelve characters; a build that passes none
+names `unknown`. The daemon is built `--no-default-features`: the image
+serves no `/dump` and no page at `GET /`. The sidecar's `skep` is built
+without `tls`, since it dials loopback and signs nothing. The one file
+builds for `linux/arm64` (an Apple-silicon Mac) and `linux/amd64` (the
+server) under buildx — `docker buildx build --platform linux/amd64 -t
+skep-hosted .` cross-builds under emulation — and every base image is
+pinned by digest. `scripts/docker-smoke.sh` builds all three and proves
+the image on the machine it runs on; run it after every build.
 
 **Run.** Every setting, named once. Baked into the image:
 `SKEPD_DATA_DIR=/var/lib/skepd/board` (one level below the volume's
@@ -178,8 +180,9 @@ omitted where none did (the start line then says the off-board test is
 off and a hosted board must supply one: expected, until there is a
 registry); `SKEPD_UPLOADS` (on by default); `SKEPD_WORKERS` (at or above
 the floor `skepd --help` prints); and `SKEPD_BLOCKED_PREFIXES`, naming a
-mounted file replaced by rename, when the serving layer issues one. On
-the `docker run` line: `--init` (the daemon handles no signal, so as PID 1
+mounted file replaced by rename, when the serving layer issues one. The
+provisioning service's boards carry `SKEPD_ORIGIN` alone of these, the
+rest at the daemon's defaults. On the `docker run` line: `--init` (the daemon handles no signal, so as PID 1
 without an init it would not take SIGTERM), `--read-only` (the volume is
 the only writable path), `--cap-drop ALL`, `--security-opt
 no-new-privileges`, `--ulimit nofile=1024:1024` (the daemon sizes its 64

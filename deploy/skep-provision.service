@@ -16,7 +16,9 @@ Description=skep-provision — the service behind this host's board sign-up
 # start lists the Engine's volumes: the service starts once the Engine and
 # the network are up, and is stopped, or restarted, with the Engine
 # (UNVERIFIED HERE: that the Engine's unit is docker.service on this
-# distribution, and that it pulls network-online.target in)
+# distribution, and that it pulls network-online.target in); the Engine's
+# restart stops every board's run and Caddy's, which `--restart on-failure`
+# may not bring back (RUNBOOK.md §10 step 12)
 After=docker.service network-online.target
 Requires=docker.service
 
@@ -30,22 +32,31 @@ SupplementaryGroups=docker
 # HERE): the service refuses a state directory other users can read
 StateDirectory=skep-provision
 StateDirectoryMode=0700
-# OWNER@EXAMPLE and noreply@skep.host are PLACEHOLDERS: put the owner's
+# <OWNER-MAILBOX> and noreply@skep.host are PLACEHOLDERS: put the owner's
 # mailbox, which the failure page names and where an answer to the mail
-# goes, and the mail's sending address. --mailer is the relay client's
-# path: msmtp's where the distribution installs it (UNVERIFIED HERE), or
-# sendmail's. The --mailer and --from lines are the two lines to DROP
-# together to run without mail (each line of the command but the last ends
-# in the backslash that joins it to the next). --state-dir is the directory
-# StateDirectory= makes; --workers 3 and --connections 16 are the defaults,
-# said.
+# goes, and the mail's sending address. <OWNER-MAILBOX> is one the address
+# rule refuses, so a unit installed with it unreplaced refuses to start,
+# naming --reply-to. --mailer is the relay client's path: msmtp's where the
+# distribution installs it (UNVERIFIED HERE), or sendmail's; one that cannot
+# be run refuses the start. The --mailer and --from lines are the two lines
+# to DROP together to run without mail (each line of the command but the
+# last ends in the backslash that joins it to the next). --state-dir is the
+# directory StateDirectory= makes; --workers 3 and --connections 16 are the
+# defaults, said, sized against LimitNOFILE= below — the crate's suite reads
+# this line back and holds it to both. Every setting is on this line and
+# read once, at start: a change is this file edited, `systemctl
+# daemon-reload` and a restart (RUNBOOK.md §10 step 5).
 # --listen 0.0.0.0:8842 binds every interface: Caddy runs in a container
 # and cannot reach the host's loopback, and the VM's firewall admits 443
 # alone, so Caddy reaches the service at the host's address on the bridge
 # (UNVERIFIED HERE; a TO TEST on the VM, RUNBOOK.md §10).
+# --boards-dir is left at its default, /etc/caddy/boards: it is the list of
+# boards the sweep at start spares, every labelled volume it lacks removed
+# (RUNBOOK.md §10 step 3); never point it at another directory while boards
+# stand.
 ExecStart=/usr/local/bin/skep-provision serve \
     --state-dir /var/lib/skep-provision \
-    --reply-to OWNER@EXAMPLE \
+    --reply-to <OWNER-MAILBOX> \
     --mailer /usr/bin/msmtp \
     --from noreply@skep.host \
     --workers 3 \
@@ -54,20 +65,27 @@ ExecStart=/usr/local/bin/skep-provision serve \
 # every state file the service makes is 0600 under 0700; each snippet it
 # writes it sets 0644 itself, for Caddy to read
 UMask=0077
-# a restart on any exit but 0 (1, a refused start; 2, a usage refusal) and
-# on a crash; not on `systemctl stop` (SIGTERM is a clean stop to systemd)
+# a restart on exit 1, a refused start (its one line each time), and on a
+# crash; never on exit 2, a usage refusal, which no retry mends — the unit
+# stops, failed, the usage text in the journal once; and not on
+# `systemctl stop` (SIGTERM is a clean stop to systemd)
 Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=5
 # the service handles no signal: SIGTERM ends it at once; a board a stop
 # cuts off before its snippet is written is removed by the sweep at the
-# next start, and one cut off after it stands, its invite still issued
-# (RUNBOOK §10 step 9)
+# next start, and one cut off after it stands, its invite still issued,
+# the next start naming it until the invite is marked spent (RUNBOOK §10
+# step 9)
 KillSignal=SIGTERM
 TimeoutStopSec=10
-# the open-file limit the daemon's units set: the sixteen connection
-# threads' sockets, the pipes of a docker call while one runs — four posts'
-# looks at once, the workers' steps, the sender's mailer — some sixty
-# descriptors at most, the rest headroom
+# the open-file limit the daemon's units set: the connection threads'
+# sockets and the pipes of a docker call while one runs — four posts' looks
+# at once, the workers' steps, the sender's mailer — within the descriptor
+# budget the card of DEFAULT_CONNECTIONS states
+# (crates/skep-provision/src/args.rs), the rest headroom; an `accept` that
+# meets it is said once, `connections: accept failed (…)`, and its recovery
+# once
 LimitNOFILE=1024
 # the serving line on stdout and the log on stderr carry no time of their
 # own; the journal adds it

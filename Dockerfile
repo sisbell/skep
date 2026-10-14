@@ -51,12 +51,21 @@ COPY --from=planner /src/recipe.json recipe.json
 RUN cargo chef cook --release -p skepd --no-default-features --recipe-path recipe.json \
  && cargo chef cook --release -p skep-cli --bin skep --no-default-features --recipe-path recipe.json
 COPY . .
+# THE COMMIT the two binaries' `--version` names. .git is outside the
+# context, so it arrives as REVISION, the build argument the images' labels
+# read too, and reaches the compiler as SKEP_GIT_SHA (each binary's
+# `option_env!`), cut to the twelve characters scripts/release-pack.sh
+# names a release by; `unknown` where the build names none. Declared after
+# the dependency layer, whose cache a new commit therefore leaves standing.
+ARG REVISION=unknown
 # THE TWO BUILD LINES. `-p skepd` alone — a `--workspace` build turns the
 # signer on for everything it builds (RUNBOOK.md §3 step 1) — and
 # `--no-default-features`: `observe` off (no `GET /dump`), `client` never on
 # (no page at `GET /`; AUTH-4.57 (e)). The sidecar's `skep` without `tls`:
 # the hosted arm dials loopback and signs nothing.
-RUN cargo build --release --locked -p skepd --no-default-features \
+RUN SKEP_GIT_SHA="$(printf '%.12s' "$REVISION")" \
+ && export SKEP_GIT_SHA \
+ && cargo build --release --locked -p skepd --no-default-features \
  && cargo build --release --locked -p skep-cli --bin skep --no-default-features
 # The volume's root, made here because the runtime has no shell: owned by
 # the daemon's user and closed. THE DATA DIRECTORY IS ONE LEVEL BELOW IT,
@@ -89,8 +98,9 @@ CMD ["skep", "--help"]
 FROM ${RUNTIME} AS skep-hosted
 # The OCI labels: the source, the version (the workspace's `version`,
 # passed by the build script; the default restates it), the revision (the
-# git commit, a build argument since .git is outside the context) and the
-# licenses.
+# git commit, a build argument since .git is outside the context — the
+# builder compiles its first twelve characters into `skepd --version`) and
+# the licenses.
 ARG VERSION=0.1.0
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="skep-hosted" \

@@ -9,8 +9,9 @@
 //! interval and saturating at the last instant; one handle per request,
 //! closed with its stream; the expiry, an expired upload's stream appending
 //! nothing, and a stream's append judged by its record and not its expiry;
-//! a settle judging its upload once, before it receives; the end; and the
-//! listings in identifier order.
+//! a settle judging its upload once, before it receives; the end; the
+//! listings in identifier order; and a stopped log answering its cause,
+//! every refusal naming it, until a compaction lifts it.
 
 use std::fs;
 use std::thread;
@@ -53,7 +54,7 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
         assert_eq!(compacted, (true, false), "the records' log past its trigger, the lease log empty");
         appends.join().expect("the appending thread")
     });
-    assert_eq!(store.stopped_logs(), (false, false));
+    assert_eq!(store.stopped_logs(), (None, None));
     assert_eq!(lines("uploads.log"), 3 + 20, "the current records and the raced appends, in the one file");
     assert_eq!(store.compact_logs_if_past(4, 1_024).unwrap(), (false, false), "under the minimum after");
     drop(store);
@@ -70,6 +71,52 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
     assert_eq!(lines("uploads.log"), 23 + 23);
     assert_eq!(reopened.compact_logs_if_past(4, 46).unwrap(), (true, false));
     assert_eq!(lines("uploads.log"), 0);
+}
+
+/// A STOPPED LOG ANSWERS ITS CAUSE, AND EVERY REFUSAL NAMES IT
+/// (`Store::stopped_logs`): the records' log past its trigger is rewritten
+/// with `blobs/` written and searched but not read, so the rewrite is
+/// renamed over the log and the root's fsync refused — the log STOPS, and
+/// the store answers why, the act that failed past the rename and the OS's
+/// cause; a creation then is refused naming the log and that cause; and the
+/// next compaction, the root readable, rewrites the log whatever its count
+/// and lifts the stop.
+#[cfg(unix)]
+#[test]
+fn a_stopped_log_answers_its_cause_and_every_refusal_names_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    for _ in 0..8 {
+        let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
+        store.end_upload("k", &rec.id, 0).unwrap();
+    }
+    let mode = fs::metadata(&root).unwrap().permissions();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&root).is_ok();
+    let compacted = (!privileged).then(|| store.compact_logs_if_past(4, 8));
+    fs::set_permissions(&root, mode).unwrap();
+    let Some(compacted) = compacted else { return };
+    assert!(compacted.is_err(), "the rewrite fails past its rename");
+    let (cause, leases) = store.stopped_logs();
+    let cause = cause.expect("the records' log stopped");
+    assert_eq!(leases, None, "the lease log takes appends");
+    assert!(cause.starts_with("its rewrite failed past its rename (blobs/: fsync: "), "{cause}");
+    let refused = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).expect_err("a stopped log");
+    assert_eq!(
+        refused.to_string(),
+        format!("blobs/uploads.log takes no append until a compaction completes: {cause}"),
+        "the refusal names the log and the stop's cause"
+    );
+    assert_eq!(
+        store.compact_logs_if_past(4, 1_024).unwrap(),
+        (true, false),
+        "a stopped log rewritten whatever its count"
+    );
+    assert_eq!(store.stopped_logs(), (None, None), "and the stop lifted");
+    store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).expect("a creation lands again");
 }
 
 /// (1) THE IDENTIFIER: 32 lowercase hex of 128 OS bits — two mints differ

@@ -11,7 +11,12 @@
 //! log — a twin never read in place of its log; and before any of it, a
 //! link at a name open acts on — symbolic, or a second hard link to a file
 //! the store writes in place — or a special file there failing the open,
-//! nothing it names touched and no open left waiting.
+//! nothing it names touched and no open left waiting, every such entry named
+//! in one refusal with the act for its kind. THE OPEN's ACCOUNT
+//! (`Store::opened`): each repair counted, a store or a log found absent
+//! answered made, a log's cut told from a crash's by the whole lines it
+//! took; an open refused at a log naming the log and its act, the kind kept;
+//! and the inspection refusing what the open refuses, never hanging.
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
@@ -28,8 +33,9 @@ use crate::{every_deposit_unplaced, hex_of, open, put_whole, standing, HORIZON, 
 /// creates nothing"): over a root holding a standing upload, a retired
 /// one's lines, two leases — one lapsed — a torn tail on each log, an
 /// orphan partial and an aside, the inspection answers every record and
-/// every lease the logs fold to, the lines on disk torn tail included, the
-/// listings by class — and leaves every byte and every file as found,
+/// every lease the logs fold to, what each log's reading found — its torn
+/// tail the cut an open would make, a half-written tail taking no whole
+/// line — the listings by class — and leaves every byte and every file as found,
 /// where the open cuts the tails, drops the retired lines, removes the
 /// orphan and the aside and rewrites both logs; a root that is no
 /// directory is `NotFound`, and nothing is created for it.
@@ -79,11 +85,17 @@ fn the_inspection_reads_the_stores_as_they_stand_and_writes_nothing() {
     assert_eq!(leases, vec![("j".into(), live_hex.clone()), ("k".into(), lapsed_hex.clone())], "every lease, lapsed ones too");
     let lapsed = inspection.leases().iter().find(|l| l.hex == lapsed_hex).unwrap();
     assert!(now >= lapsed.expires, "lapsed by the reader's own judgment of the expiry");
-    // Lines on disk: the standing record's creation and byte received, the
-    // ended one's creation and retirement, each whole PUT's creation and
-    // retirement, and the torn tail (no newline: not a line); two leases
-    // and the torn tail.
-    assert_eq!(inspection.log_lines(), (8, 2));
+    // What each log's reading found: the standing record's creation and byte
+    // received, the ended one's creation and retirement, each whole PUT's
+    // creation and retirement — eight lines — and two leases; each log's torn
+    // tail (no newline: no line) the cut an open would make, six bytes and
+    // no whole line past it: a half-written tail, losing nothing.
+    let (uploads_log, leases_log) = inspection.logs();
+    for (log, name, lines) in [(uploads_log, "blobs/uploads.log", 8), (leases_log, "blobs/leases.log", 2)] {
+        assert_eq!((log.name.as_str(), log.absent, log.lines, log.unread), (name, false, lines, 0), "{name}");
+        let cut = log.cut.expect("the torn tail is where trust ends");
+        assert_eq!((cut.bytes(), cut.lines_after), (6, 0), "{name}: a half-written tail alone");
+    }
     assert_eq!(inspection.designation_dirs().unwrap(), vec!["blake3"]);
     let mut blobs = inspection.blobs_of("blake3").unwrap();
     blobs.sort();
@@ -257,6 +269,7 @@ fn a_record_line_lacking_any_member_reads_as_no_upload() {
     log += &line(&whole, None);
     fs::write(root.join("uploads.log"), log).unwrap();
     let store = open(&root, 1);
+    assert_eq!(store.opened().uploads_log.unread, members.len(), "each line read as no record, and counted");
     for (n, &member) in members.iter().enumerate() {
         assert_eq!(store.upload("k", &id_of(n), 1), None, "lacking {member}: no record");
         assert!(!partial(&id_of(n)).exists(), "lacking {member}: its partial an orphan open removes");
@@ -370,7 +383,8 @@ fn a_record_line_whose_offset_passes_its_length_is_no_record() {
 /// upload is retired and its partial removed; and the records log is
 /// compacted to the current records. Beside them, every aside a crash left
 /// is removed — and a name that only begins as an aside's is none, and is
-/// left.
+/// left. The open's account (`Store::opened`) counts each act, one apiece,
+/// the foreign directory's orphan and the name no aside has among none.
 #[test]
 fn open_reconciles_the_partials_and_the_records_both_ways() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -403,6 +417,15 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     // Reopened past `expired`'s expiry alone.
     let now = expired.expires;
     let store = open(&root, now);
+    let opened = store.opened();
+    assert_eq!(
+        (opened.expired_uploads, opened.records_without_partial, opened.partials_cut_back, opened.records_set_back),
+        (1, 1, 1, 1),
+        "the open's account, act by act: {opened:?}"
+    );
+    assert_eq!((opened.orphan_partials, opened.asides), (1, 1), "this build's orphan and the aside alone: {opened:?}");
+    assert_eq!((opened.uploads, opened.leases, opened.root_made), (3, 0, false), "{opened:?}");
+    assert_eq!((opened.uploads_log.cut, opened.uploads_log.unread), (None, 0), "a whole log, every line read");
     let r = store.upload("k", &kept.id, now).expect("kept stands");
     assert_eq!(r.offset, 4);
     assert_eq!(fs::metadata(partial(&kept.id)).unwrap().len(), 4);
@@ -452,9 +475,10 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
 /// (clause (4) retires "a record that names no temp file", and a record
 /// naming one that cannot be read still names it): the reconciliation
 /// answers the failure rather than reading it as an absence, writing no
-/// retirement a later open would remove the partial as an orphan for; once
-/// the partial can be read again, the upload stands where its record left
-/// it, its bytes whole.
+/// retirement a later open would remove the partial as an orphan for — the
+/// failure naming the partial by its directory and the act, never by its
+/// file name, an upload's identifier; once the partial can be read again,
+/// the upload stands where its record left it, its bytes whole.
 #[cfg(unix)]
 #[test]
 fn a_partial_that_cannot_be_read_fails_the_open_and_retires_nothing() {
@@ -466,12 +490,14 @@ fn a_partial_that_cannot_be_read_fails_the_open_and_retires_nothing() {
     let mode = fs::metadata(&designation_dir).unwrap().permissions();
     // Read and written, never searched: no partial in it can be stat'ed.
     fs::set_permissions(&designation_dir, fs::Permissions::from_mode(0o600)).unwrap();
-    let opened = Store::open(&root, HORIZON, 2).map(drop).map_err(|e| e.kind());
+    let opened = Store::open(&root, HORIZON, 2).map(drop).map_err(|e| (e.kind(), e.to_string()));
     fs::set_permissions(&designation_dir, mode).unwrap();
-    if opened.is_ok() {
+    let Err((kind, message)) = opened else {
         return; // a privileged process searches any directory: nothing to inject
-    }
-    assert_eq!(opened, Err(std::io::ErrorKind::PermissionDenied), "the open answers the failure");
+    };
+    assert_eq!(kind, std::io::ErrorKind::PermissionDenied, "the open answers the failure: {message}");
+    assert!(message.starts_with("a partial in blobs/blake3/: stat: "), "named by its directory and its act: {message}");
+    assert!(!message.contains(&rec.id.to_hex()), "never by its identifier: {message}");
     let store = open(&root, 3);
     assert_eq!(store.upload("k", &rec.id, 3).map(|r| r.offset), Some(3), "the upload stands where its record left it");
     assert_eq!(fs::read(designation_dir.join(format!(".upload-{}", rec.id.to_hex()))).unwrap(), b"abc", "its partial whole");
@@ -559,6 +585,178 @@ fn a_link_at_a_name_open_acts_on_fails_the_open_and_touches_nothing() {
     assert!(store.asides_of("blake3").unwrap().is_empty(), "and the aside is swept at open");
 }
 
+/// ONE REFUSAL NAMES EVERY PLANTED ENTRY, AND THE ACT FOR EACH KIND
+/// (`blobs::refuse_links_and_special_files`): a hard-link copy taken of a
+/// live board gives every log and partial a second link at once, so the
+/// open refuses once — not once per entry over as many starts — naming
+/// each: the log, the partial by its directory alone (its file name an
+/// upload's identifier), and a symbolic link beside them; and it says what
+/// makes each kind and the act that clears it.
+#[cfg(unix)]
+#[test]
+fn one_refusal_names_every_planted_entry_and_the_act_for_each_kind() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let rec = {
+        let store = open(&root, 0);
+        put_whole(&store, "k", b"a deposit", 1);
+        standing(&store, "k", 100, b"abc", 2)
+    };
+    let copy = dir.path().join("copy");
+    fs::create_dir(&copy).unwrap();
+    fs::hard_link(root.join("uploads.log"), copy.join("uploads.log")).unwrap();
+    fs::hard_link(root.join("blake3").join(format!(".upload-{}", rec.id.to_hex())), copy.join("partial")).unwrap();
+    fs::remove_file(root.join("leases.log")).unwrap();
+    symlink(copy.join("uploads.log"), root.join("leases.log")).unwrap();
+    let refused = Store::open(&root, HORIZON, 3).map(drop).expect_err("the open is refused");
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData, "{refused}");
+    let message = refused.to_string();
+    for named in [
+        "blobs/ holds 3 entries the blob store never makes",
+        "blobs/uploads.log has 2 links",
+        "a partial in blobs/blake3/ has 2 links",
+        "blobs/leases.log is a symbolic link",
+        "a hard-link copy (cp -al, ln) makes one",
+        "from the board directory's copy (Restore)",
+    ] {
+        assert!(message.contains(named), "{named:?} in the one refusal: {message}");
+    }
+    assert!(!message.contains(&rec.id.to_hex()), "a partial never named by its identifier: {message}");
+    assert!(!message.contains(&dir.path().display().to_string()), "never an absolute path: {message}");
+}
+
+/// AN OPEN REFUSED AT A LOG NAMES IT, ITS ACT AND ITS CAUSE, THE KIND KEPT
+/// (`blobs.rs`, EVERY FAILURE NAMES ITS FILE AND ITS ACT; `operations.md`
+/// §1.1 row 2's form): a lease log the process may not read refuses the
+/// open with `blobs/leases.log: read: Permission denied …` — the text the
+/// daemon's `blob store: {e}` carries whole — and never names the file by
+/// its absolute path.
+#[cfg(unix)]
+#[test]
+fn an_open_refused_at_a_log_names_the_log_and_its_act_and_keeps_the_kind() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let log = root.join("leases.log");
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
+    // A privileged process reads a mode-000 file: nothing to inject.
+    let privileged = fs::File::open(&log).is_ok();
+    let refused = (!privileged).then(|| Store::open(&root, HORIZON, 1).map(drop));
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o600)).unwrap();
+    let Some(refused) = refused else { return };
+    let e = refused.expect_err("the open is refused at the log");
+    assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "the kind kept: {e}");
+    assert!(e.to_string().starts_with("blobs/leases.log: read: "), "the file and the act named: {e}");
+    assert!(!e.to_string().contains(&dir.path().display().to_string()), "never an absolute path: {e}");
+}
+
+/// WHAT THE OPEN FOUND ABSENT IT ANSWERS MADE (`Store::opened`): a fresh
+/// root is made, both its logs with it, and the account says so; a reopen
+/// finds all three standing; and a lease log removed from beside a standing
+/// root — a copy that stopped before it, a hand that removed it — is made
+/// empty, every lease it held reading as none, and answered absent, which
+/// nothing else would say.
+#[test]
+fn what_the_open_found_absent_it_answers_made() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let hex = {
+        let store = open(&root, 0);
+        let opened = store.opened();
+        assert!(opened.root_made, "a fresh root is made: {opened:?}");
+        assert!(opened.uploads_log.absent && opened.leases_log.absent, "and both its logs: {opened:?}");
+        put_whole(&store, "k", b"a deposit", 1).hex
+    };
+    let store = open(&root, 2);
+    let opened = store.opened();
+    assert!(!opened.root_made && !opened.uploads_log.absent && !opened.leases_log.absent, "{opened:?}");
+    assert_eq!(opened.leases, 1, "{opened:?}");
+    drop(store);
+    fs::remove_file(root.join("leases.log")).unwrap();
+    let store = open(&root, 3);
+    let opened = store.opened();
+    assert_eq!((opened.root_made, opened.uploads_log.absent, opened.leases_log.absent), (false, false, true));
+    assert_eq!(opened.leases_log.name, "blobs/leases.log", "the log named by its place");
+    assert_eq!(opened.leases, 0, "every lease it held reads as none");
+    assert_eq!(store.lease_state("k", "blake3", &hex, 3), LeaseState::None);
+}
+
+/// A DAMAGED LOG's CUT IS TOLD FROM A CRASH's (`Store::opened`, `TailCut`):
+/// three deposits' lease lines. A crash's tail — bytes of a line with no
+/// newline — is cut taking no whole line, and every lease stands. Then the
+/// first line damaged in place — a bad sector, a damaged copy — and the
+/// open's tail check cuts at it, the two whole lines after it with it:
+/// their leases, which a PUT answered 200 over, read as none, and the
+/// account names the cut and the two lines among it.
+#[test]
+fn a_damaged_lease_log_is_cut_and_the_open_answers_the_whole_lines_it_took() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let hexes: Vec<String> = {
+        let store = open(&root, 0);
+        (0u8..3).map(|i| put_whole(&store, "k", &[i; 4], 1).hex).collect()
+    };
+    let log = root.join("leases.log");
+    let whole = fs::read(&log).unwrap();
+    let mut torn = whole.clone();
+    torn.extend_from_slice(b"{\"designation\":\"bla");
+    fs::write(&log, &torn).unwrap();
+    let store = open(&root, 2);
+    let read = &store.opened().leases_log;
+    let cut = read.cut.expect("the torn tail cut");
+    assert_eq!((read.lines, cut.at, cut.bytes(), cut.lines_after), (3, whole.len() as u64, 19, 0), "{read:?}");
+    assert_eq!(store.opened().leases, 3, "a crash's tail: every lease stands");
+    drop(store);
+    let mut damaged = fs::read(&log).unwrap();
+    damaged[0] = b'x';
+    fs::write(&log, &damaged).unwrap();
+    let store = open(&root, 3);
+    let read = &store.opened().leases_log;
+    let cut = read.cut.expect("trust ends at the damaged line");
+    assert_eq!((read.lines, cut.at, cut.len, cut.lines_after), (0, 0, damaged.len() as u64, 2), "{read:?}");
+    assert_eq!(store.opened().leases, 0, "the leases the cut took");
+    for hex in &hexes {
+        assert_eq!(store.lease_state("k", "blake3", hex, 3), LeaseState::None, "{hex}: answered over, and gone");
+    }
+}
+
+/// THE INSPECTION REFUSES WHAT THE OPEN REFUSES, AND NEVER HANGS
+/// (`Store::inspect`): a hard-link copy of a live board — its logs sharing
+/// their inodes with the board's, no copy at all — is refused, naming each
+/// log and the act; and a FIFO at the lease log's name, whose read would
+/// wait for good, is refused inside a bounded wait, named.
+#[cfg(unix)]
+#[test]
+fn the_inspection_refuses_what_the_open_refuses_and_never_hangs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let copy = dir.path().join("copy").join("blobs");
+    fs::create_dir_all(&copy).unwrap();
+    for log in ["uploads.log", "leases.log"] {
+        fs::hard_link(root.join(log), copy.join(log)).unwrap();
+    }
+    let refused = Store::inspect(&copy).expect_err("a hard-link copy is no copy");
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData, "{refused}");
+    for named in ["blobs/uploads.log has 2 links", "blobs/leases.log has 2 links", "(cp -al, ln)"] {
+        assert!(refused.to_string().contains(named), "{named:?}: {refused}");
+    }
+    fs::remove_file(root.join("leases.log")).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(root.join("leases.log")).status().expect("mkfifo runs");
+    assert!(made.success(), "a FIFO made at the lease log's name");
+    let (tx, rx) = std::sync::mpsc::channel();
+    // On a thread of its own: an inspection that read the FIFO would wait for good.
+    std::thread::spawn(move || {
+        let _ = tx.send(Store::inspect(&root).map(drop).map_err(|e| (e.kind(), e.to_string())));
+    });
+    let inspected = rx.recv_timeout(Duration::from_secs(5)).expect("the inspection answers inside a bounded wait");
+    let (kind, message) = inspected.expect_err("a FIFO refuses the inspection");
+    assert_eq!(kind, std::io::ErrorKind::InvalidData, "{message}");
+    assert!(message.contains("blobs/leases.log is a special file"), "named: {message}");
+}
+
 /// A SPECIAL FILE AT A NAME OPEN ACTS ON FAILS THE OPEN AND NEVER HANGS IT
 /// (`blobs::refuse_links_and_special_files`): a FIFO planted at the lease
 /// log's name — where open's read of the log would wait for good on a writer
@@ -582,7 +780,7 @@ fn a_special_file_at_a_name_open_acts_on_fails_the_open_and_never_hangs_it() {
     let opened = rx.recv_timeout(Duration::from_secs(5)).expect("the open answers inside a bounded wait");
     let (kind, message) = opened.expect_err("a FIFO fails the open");
     assert_eq!(kind, std::io::ErrorKind::InvalidData, "{message}");
-    assert!(message.contains("leases.log") && message.contains("a special file"), "named: {message}");
+    assert!(message.contains("blobs/leases.log is a special file"), "named: {message}");
 }
 
 /// OPEN COMPACTS EACH LOG TO ITS CURRENT RECORDS — NONE AMONG THEM — OVER

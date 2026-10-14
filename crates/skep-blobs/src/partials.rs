@@ -41,7 +41,7 @@ use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::blobs::{fsync_dir, names_in, not_found_as_none, remove_if_present};
+use crate::blobs::{dir_label, fsync_dir, named, names_in, not_found_as_none, partial_label, remove_if_present};
 use crate::uploads::{UploadId, UploadRecords};
 
 pub use handle::HashFunction;
@@ -88,7 +88,7 @@ pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Resul
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder.create(&dir)?;
+    builder.create(&dir).map_err(|e| named(e, dir_label(&dir, 2), "create"))?;
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -96,26 +96,45 @@ pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Resul
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let f = opts.open(partial_path(root, designation, id))?;
-    f.sync_all()?;
-    fsync_dir(&dir)?;
+    let created = |e| named(e, partial_label(&dir), "create");
+    let f = opts.open(partial_path(root, designation, id)).map_err(created)?;
+    f.sync_all().map_err(created)?;
+    fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
     Ok(())
 }
 
 /// Remove a partial, its directory fsynced where one went; absent is fine.
 pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Result<()> {
-    if remove_if_present(&partial_path(root, designation, id))? {
-        fsync_dir(&root.join(designation))?;
+    let dir = root.join(designation);
+    if remove_if_present(&partial_path(root, designation, id)).map_err(|e| named(e, partial_label(&dir), "remove"))? {
+        fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
     }
     Ok(())
 }
 
+/// What the reconciliation did, by act — the open's account's figures
+/// ([`Opened`](crate::Opened)).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Reconciled {
+    /// Expired uploads removed, the partial and then the record.
+    pub expired: usize,
+    /// Records retired, their partials gone.
+    pub without_partial: usize,
+    /// Partials cut back to their records' offsets.
+    pub cut_back: usize,
+    /// Records set back to their partials' lengths.
+    pub set_back: usize,
+    /// Orphan partials removed — partials no record names.
+    pub orphans: usize,
+}
+
 /// THE RECONCILIATION AT OPEN, both ways: every standing record held to its
 /// partial, and every orphan removed under the designations this build pins
-/// alone ([`HashFunction::ALL`]).
-pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<()> {
+/// alone ([`HashFunction::ALL`]). Answers what it did ([`Reconciled`]).
+pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<Reconciled> {
+    let mut did = Reconciled::default();
     // The identifiers the standing records name, by designation directory.
-    let mut named: HashMap<String, HashSet<UploadId>> = HashMap::new();
+    let mut named_ids: HashMap<String, HashSet<UploadId>> = HashMap::new();
     // Records first: expired ones removed as the end and the pruner remove
     // one, the partial before the record; the rest held to their partials.
     let all: Vec<_> = records.all().cloned().collect();
@@ -123,25 +142,31 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         if !r.stands(now_ms) {
             remove(root, &r.designation, &r.id)?;
             records.retire(&r.id)?;
+            did.expired += 1;
             continue;
         }
         let path = partial_path(root, &r.designation, &r.id);
+        let partial = |e| named(e, partial_label(&root.join(&r.designation)), "stat");
         // Absent is the one answer that retires: a record naming a partial
         // that cannot be read still names one, so that failure fails the
         // open, and nothing is retired for a later open to remove as orphan.
-        let Some(meta) = not_found_as_none(fs::metadata(&path))? else {
+        let Some(meta) = not_found_as_none(fs::metadata(&path)).map_err(partial)? else {
             records.retire(&r.id)?;
+            did.without_partial += 1;
             continue;
         };
         let len = meta.len();
         if len > r.offset {
-            let f = OpenOptions::new().write(true).open(&path)?;
-            f.set_len(r.offset)?;
-            f.sync_all()?;
+            let cut = |e| named(e, partial_label(&root.join(&r.designation)), "cut back");
+            let f = OpenOptions::new().write(true).open(&path).map_err(cut)?;
+            f.set_len(r.offset).map_err(cut)?;
+            f.sync_all().map_err(cut)?;
+            did.cut_back += 1;
         } else if len < r.offset {
             records.set_back(&r.id, len)?;
+            did.set_back += 1;
         }
-        named.entry(r.designation.clone()).or_default().insert(r.id);
+        named_ids.entry(r.designation.clone()).or_default().insert(r.id);
     }
     // Then the directories this build pins, each function's it computes:
     // every partial no record names there is an orphan. A directory under
@@ -149,17 +174,18 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
     // is left (clause (4)), as the pruner's pass leaves it.
     for function in HashFunction::ALL {
         let designation = function.designation();
-        let named_here = named.get(designation);
+        let named_here = named_ids.get(designation);
         let orphans = names_in(root, designation, |name, _| {
             id_of_partial_name(name).is_some_and(|id| !named_here.is_some_and(|ids| ids.contains(&id)))
         })?;
         let dir = root.join(designation);
         for name in &orphans {
-            fs::remove_file(dir.join(name))?;
+            fs::remove_file(dir.join(name)).map_err(|e| named(e, partial_label(&dir), "remove"))?;
         }
         if !orphans.is_empty() {
-            fsync_dir(&dir)?;
+            fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
         }
+        did.orphans += orphans.len();
     }
-    Ok(())
+    Ok(did)
 }

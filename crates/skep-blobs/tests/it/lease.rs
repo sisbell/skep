@@ -42,7 +42,7 @@ fn the_lease_log_past_its_trigger_is_compacted_to_the_latest_lease() {
     assert_eq!(lines("leases.log"), 1, "the latest line alone");
     assert_eq!(lines("uploads.log"), 0, "no record stands");
     assert_eq!(store.lease_state("k", "blake3", &fin.hex, 9), LeaseState::Live { size: 14, expires: 9 + INTERVAL_MS }, "the latest expiry");
-    assert_eq!(store.stopped_logs(), (false, false));
+    assert_eq!(store.stopped_logs(), (None, None));
     drop(store);
     let reopened = open(&root, 9);
     assert_eq!(reopened.lease_state("k", "blake3", &fin.hex, 9), LeaseState::Live { size: 14, expires: 9 + INTERVAL_MS });
@@ -132,6 +132,8 @@ fn the_latest_lease_wins_and_open_compacts_to_it() {
     let store = open(&root, now);
     let lines = fs::read_to_string(root.join("leases.log")).unwrap().lines().count();
     assert_eq!(lines, 1, "compacted: k's latest line alone");
+    let opened = store.opened();
+    assert_eq!((opened.leases_past_horizon, opened.leases), (1, 1), "j's dropped past the horizon, and counted");
     assert_eq!(store.lease_state("j", "blake3", &hex_of(b"old"), now), LeaseState::None);
     assert_eq!(store.lease_state("k", "blake3", &hex, now), LeaseState::Lapsed { expires: 3_000 + INTERVAL_MS });
 }
@@ -322,6 +324,7 @@ fn a_lease_line_naming_a_malformed_name_is_no_lease() {
     let log: String = malformed.iter().map(|(d, h)| line(d, h)).chain([line("blake3", &hex)]).collect();
     fs::write(root.join("leases.log"), log).unwrap();
     let store = open(&root, 1);
+    assert_eq!(store.opened().leases_log.unread, malformed.len(), "each malformed line read as no lease, and counted");
     for (d, h) in &malformed {
         assert_eq!(store.lease_state("k", d, h, 1), LeaseState::None, "{d:?}/{h:?}");
         assert!(!store.any_live_lease(d, h, 1), "{d:?}/{h:?}: live for no principal");

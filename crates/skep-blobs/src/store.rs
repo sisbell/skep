@@ -72,8 +72,12 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use crate::blobs::{self, aside_name, designation_ok, fsync_dir, hex_ok, is_aside_name};
+use crate::blobs::{
+    self, aside_name, designation_ok, dir_label, fsync_dir, hex_ok, is_aside_name, label, named, not_found_as_none,
+    partial_label,
+};
 use crate::error::BlobError;
+use crate::jsonl::LogRead;
 use crate::lease::{Lease, LeaseLog, LeaseState};
 use crate::partials::{self, Handle, HashFunction, SYNC_GRAIN};
 use crate::uploads::{expiry, UploadId, UploadRecord, UploadRecords};
@@ -132,6 +136,63 @@ pub struct Finished {
     pub size: u64,
 }
 
+/// WHAT THE OPEN DID ([`Store::opened`]; `media.md` §The media stores,
+/// "OPEN's PASSES OVER BOTH STORES"; the register M-I5 (c)): the open
+/// repairs before it answers anything, and each repair is an act on what a
+/// depositor holds — a log's torn tail cut, the lines it cannot read
+/// dropped, a lease past the horizon dropped, an expired upload removed, a
+/// record and its partial held to each other, an orphan partial and an
+/// aside removed, a store or a log found absent and made empty. The store
+/// writes no operator stream; this is the account its embedder says, as
+/// the kernel's recovery is the journal's — every figure here a fact the
+/// store alone holds, the open's own, made once.
+///
+/// What tells routine from damage: a log's [`TailCut`](crate::TailCut)
+/// with whole lines past its first untrusted one, a log's `unread` lines,
+/// and a log found `absent` beside a root that stood are each a loss of
+/// leases or uploads a client was answered over — a damaged log, a copy
+/// that stopped short or that another build wrote — which the open has
+/// already acted on and nothing else will say. The rest are the open's
+/// ordinary repairs after a crash or a stop.
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct Opened {
+    /// No directory stood at the root: the open made it, and both logs in
+    /// it, empty. Over a board whose journal names a deposit's file — a
+    /// restore that left `blobs/` out — every such file is a hole.
+    pub root_made: bool,
+    /// The upload records' log, `uploads.log`, as the open read it.
+    pub uploads_log: LogRead,
+    /// The lease log, `leases.log`, as the open read it.
+    pub leases_log: LogRead,
+    /// The uploads standing once the open is done.
+    pub uploads: usize,
+    /// The leases held once the open is done.
+    pub leases: usize,
+    /// Leases lapsed past the horizon, dropped from the log.
+    pub leases_past_horizon: usize,
+    /// Expired uploads removed — the partial, then the record.
+    pub expired_uploads: usize,
+    /// Upload records retired, their partials gone — a crash past a
+    /// finish's rename, a copy that took the record and not the partial.
+    pub records_without_partial: usize,
+    /// Partials cut back to their records' offsets — bytes past the durable
+    /// point, which no client was answered over.
+    pub partials_cut_back: usize,
+    /// Records set back to their partials' lengths — a copy that took a
+    /// partial before its record.
+    pub records_set_back: usize,
+    /// Partials no record names, removed under this build's designations.
+    pub orphan_partials: usize,
+    /// Asides removed — a replace's second names its deferred unlink never
+    /// took, and the pruner's own.
+    pub asides: usize,
+}
+
 /// The store: one root and the four stores under it. Every method takes
 /// `&self`, and the store's own locks keep its records whole across uploads.
 ///
@@ -184,13 +245,25 @@ pub struct Finished {
 /// the two every act that writes a stopped log answers `Io`: on the records'
 /// log a creation, a byte received and a retirement — an end's, an expiry's,
 /// a finish's last step; on the leases' every finish, at its lease's sync,
-/// past its rename (what that leaves: [`Stream::finish`]). The next open
-/// reads the log afresh, its tail check cutting the torn line the failed cut
-/// left ([`Store::open`]).
+/// past its rename (what that leaves: [`Stream::finish`]). The stop keeps
+/// its cause in the operator's words — the act that failed and the OS's
+/// cause, a full volume told apart from a read-only mount or a failing
+/// device — which every refused append names and [`Store::stopped_logs`]
+/// answers. The next open reads the log afresh, its tail check cutting the
+/// torn line the failed cut left ([`Store::open`]).
+///
+/// EVERY FAILURE NAMES ITS FILE AND ITS ACT — `{file}: {act}: {cause}`, the
+/// kind kept, the file named within the data directory and a partial by its
+/// directory alone (`blobs.rs`) — save the deferred unlink's
+/// ([`Store::unlink_asides`]), whose one embedder names the aside itself
+/// ([`Store::next_aside`]).
 pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
     leases: Mutex<LeaseLog>,
+    /// What this store's open did ([`Opened`]), held for its embedder to
+    /// read and say.
+    opened: Opened,
     /// THE FINISH LOCK, which runs the finishes one at a time: every
     /// [`Stream::finish`] holds this from its first act to its answer, so two
     /// finishes of one hash never interleave the replace's check, link and
@@ -258,8 +331,11 @@ impl Store {
     /// before any of it, every name the store acts on is held to what the
     /// store makes: a symbolic link, a special file, or a second link to a
     /// file the store writes in place fails the open as `InvalidData`,
-    /// naming it, and nothing is followed or written through it (`blobs.rs`,
-    /// `refuse_links_and_special_files`).
+    /// naming every one it found and the act that clears each kind, and
+    /// nothing is followed or written through it (`blobs.rs`,
+    /// `refuse_links_and_special_files`). Every other failure names its file
+    /// and its act. What the open did, it answers ([`Store::opened`]): the
+    /// store says nothing itself, and its embedder says it.
     ///
     /// PRECONDITION: no other `Store` is open over `root` while this one
     /// lives, in this process or another. Its open would act on the root
@@ -277,6 +353,8 @@ impl Store {
     /// over the same directory fails there, before it reaches `blobs/`.
     pub fn open(root: impl AsRef<Path>, horizon: Duration, now_ms: u64) -> io::Result<Store> {
         let root = root.as_ref();
+        let at_root = |act: &'static str| move |e: io::Error| named(e, dir_label(root, 1), act);
+        let root_made = not_found_as_none(fs::symlink_metadata(root)).map_err(at_root("stat"))?.is_none();
         // `blobs/` is born `0700` on unix — every directory the store makes
         // is, and every file `0600` — the mode set at creation so the
         // process umask cannot loosen it: the deposited bytes are the
@@ -288,26 +366,49 @@ impl Store {
             use std::os::unix::fs::DirBuilderExt;
             builder.mode(0o700);
         }
-        builder.create(root)?;
+        builder.create(root).map_err(at_root("create"))?;
         blobs::refuse_links_and_special_files(root)?;
-        let leases = LeaseLog::open(root, horizon, now_ms)?;
-        let mut uploads = UploadRecords::open(root)?;
-        partials::reconcile(root, &mut uploads, now_ms)?;
-        blobs::sweep_asides(root)?;
+        let (leases, leases_log, leases_past_horizon) = LeaseLog::open(root, horizon, now_ms)?;
+        let (mut uploads, uploads_log) = UploadRecords::open(root)?;
+        let reconciled = partials::reconcile(root, &mut uploads, now_ms)?;
+        let asides = blobs::sweep_asides(root)?;
         uploads.compact()?;
         // Listed before the root's fsync, so every directory in the set is
         // one that fsync makes durable.
         let root_synced = blobs::dirs_under(root)?.into_iter().collect();
-        fsync_dir(root)?;
+        fsync_dir(root).map_err(at_root("fsync"))?;
+        let opened = Opened {
+            root_made,
+            uploads_log,
+            leases_log,
+            uploads: uploads.all().count(),
+            leases: leases.count(),
+            leases_past_horizon,
+            expired_uploads: reconciled.expired,
+            records_without_partial: reconciled.without_partial,
+            partials_cut_back: reconciled.cut_back,
+            records_set_back: reconciled.set_back,
+            orphan_partials: reconciled.orphans,
+            asides,
+        };
         Ok(Store {
             root: root.to_path_buf(),
             uploads: Mutex::new(uploads),
             leases: Mutex::new(leases),
+            opened,
             finishing: Mutex::new(FinishState { root_synced, aside_serial: 0 }),
             aside_queue: Mutex::new(Vec::new()),
             #[cfg(feature = "test-hooks")]
             hooks: Mutex::new(hooks::Hooks::default()),
         })
+    }
+
+    /// WHAT THIS STORE's OPEN DID ([`Opened`]): its repairs and what it
+    /// found of the two logs, for the embedder to say — the open's account,
+    /// made once and read as often as asked. The store says none of it
+    /// itself.
+    pub fn opened(&self) -> &Opened {
+        &self.opened
     }
 
     // ── the directory, as the pruner reads it ────────────────────────────
@@ -346,7 +447,8 @@ impl Store {
     /// in two acts instead — [`Store::rename_aside`] under its arm, the aside
     /// removed after it — so the arm is never held across the freeing.
     pub fn unlink_blob(&self, designation: &str, hex: &str) -> io::Result<bool> {
-        self.blob_path(designation, hex).map_or(Ok(false), |path| blobs::remove_if_present(&path))
+        self.blob_path(designation, hex)
+            .map_or(Ok(false), |path| blobs::remove_if_present(&path).map_err(|e| named(e, label(&path, 3), "remove")))
     }
 
     /// RENAME ASIDE the file at `<designation>/<hex>` — the pruner's one act
@@ -380,7 +482,7 @@ impl Store {
         match fs::rename(&path, path.with_file_name(&name)) {
             Ok(()) => Ok(Some(name)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
+            Err(e) => Err(named(e, label(&path, 3), "rename aside")),
         }
     }
 
@@ -393,7 +495,8 @@ impl Store {
         if !designation_ok(designation) || !is_aside_name(name) {
             return Ok(false);
         }
-        blobs::remove_if_present(&self.root.join(designation).join(name))
+        let aside = self.root.join(designation).join(name);
+        blobs::remove_if_present(&aside).map_err(|e| named(e, label(&aside, 3), "remove"))
     }
 
     /// The path a blob of `designation` and `hex` has, or `None` where
@@ -414,7 +517,7 @@ impl Store {
         let Some(path) = self.blob_path(designation, hex) else {
             return Ok(None);
         };
-        Ok(blobs::not_found_as_none(fs::metadata(path))?.filter(fs::Metadata::is_file).map(|m| m.len()))
+        size_of(&path)
     }
 
     /// The volume's free space at the root, in bytes — the floor's read.
@@ -449,10 +552,16 @@ impl Store {
         Ok((uploads?, leases?))
     }
 
-    /// Which logs have STOPPED — `(uploads, leases)`: an append's cut-back
-    /// or a compaction failed past its rename, and the log takes no append
-    /// until a compaction completes; the pass's line names one.
-    pub fn stopped_logs(&self) -> (bool, bool) {
+    /// Which logs have STOPPED, each by its cause — `(uploads, leases)`, the
+    /// cause in the operator's words where the log has stopped and `None`
+    /// where it takes appends: an append failed and its cut-back failed
+    /// too, or a compaction failed past its rename — each with the OS's
+    /// cause, a full volume told apart from a read-only mount or a failing
+    /// device, so the act that clears it can be named. The log takes no
+    /// append until a compaction completes; the pass's line names the stop
+    /// and its cause, and a pass that lifts it reads it here before its
+    /// rewrite.
+    pub fn stopped_logs(&self) -> (Option<String>, Option<String>) {
         (self.uploads.lock().log_stopped(), self.leases.lock().log_stopped())
     }
 
@@ -463,11 +572,19 @@ impl Store {
     /// sweeps nothing, fsyncs nothing, creates nothing and holds nothing
     /// open afterwards — the logs read as the open reads them, trust ending
     /// at a torn tail cut IN MEMORY alone, every record and every lease they
-    /// hold folded to its latest line, standing or not; the files, partials
-    /// and asides listed by name on demand. It takes no lock and needs no
-    /// exclusion: it can stand beside a serving daemon's store, each of its
-    /// readings one moment's of one file. A `root` that is no directory is
-    /// `NotFound`.
+    /// hold folded to its latest line, standing or not, and what each
+    /// reading found ([`Inspection::logs`]): the cut an open would make and
+    /// the lines it would drop, so a copy whose log is damaged is told from
+    /// one that holds it whole; the files, partials and asides listed by
+    /// name on demand. Before any of it, every name it reads is held to what
+    /// the store makes, as the open holds them (`blobs.rs`,
+    /// `refuse_links_and_special_files`): a symbolic link or a special file
+    /// at a log's name — a FIFO, whose read never ends — or a second link to
+    /// a file the store writes in place — a hard-link copy of a live board,
+    /// which is no copy — is refused as `InvalidData`, naming each, and
+    /// never followed or read. It takes no lock and needs no exclusion: it
+    /// can stand beside a serving daemon's store, each of its readings one
+    /// moment's of one file. A `root` that is no directory is `NotFound`.
     pub fn inspect(root: impl AsRef<Path>) -> io::Result<Inspection> {
         let root = root.as_ref();
         if !root.is_dir() {
@@ -476,9 +593,10 @@ impl Store {
                 format!("{} is no blob store: no such directory", root.display()),
             ));
         }
-        let (uploads, upload_lines) = UploadRecords::read_as_found(root)?;
-        let (leases, lease_lines) = LeaseLog::read_as_found(root)?;
-        Ok(Inspection { root: root.to_path_buf(), uploads, upload_lines, leases, lease_lines })
+        blobs::refuse_links_and_special_files(root)?;
+        let (uploads, uploads_log) = UploadRecords::read_as_found(root)?;
+        let (leases, leases_log) = LeaseLog::read_as_found(root)?;
+        Ok(Inspection { root: root.to_path_buf(), uploads, uploads_log, leases, leases_log })
     }
 
     /// THE PULL's INSTALL — the operator's restore (`media.md` §Recovery,
@@ -492,10 +610,25 @@ impl Store {
     /// no record names, so a daemon's open that meets it mid-pull removes
     /// it as an orphan and the pull is run again. NO lease, NO record, NO
     /// lock: a restore of bytes a committed cell already names — which is
-    /// the caller's to have read — never a deposit. Where `expected` names
-    /// a hex and the bytes hash to another, nothing is installed: the temp
-    /// file is removed and the mismatch answered as `InvalidData`, naming
-    /// both. Answers the file's designation, hex and size.
+    /// the caller's to have read — never a deposit. Answers the file's
+    /// designation, hex and size.
+    ///
+    /// INTO A BOARD THAT STANDS: the root is made where absent, owner-only,
+    /// but never its parent, the board's own directory — a pull handed a
+    /// mistyped directory is refused, naming it, where it would otherwise
+    /// make the directory and report the restore done, the hole standing.
+    ///
+    /// WHAT AN `Err` SAYS, BY THE RENAME: every failure before it reads
+    /// `nothing installed: {file}: {act}: {cause}` — the source by the path
+    /// handed in, the store's files by their names within the data
+    /// directory, the temp file removed — and where `expected` names a hex
+    /// and the bytes hash to another, `nothing installed: the file's bytes
+    /// hash to {hex}, not the {expected} the cell names`, as `InvalidData`.
+    /// A failure past the rename — the directory's fsync or the root's —
+    /// reads `installed at {file}, but {file}: fsync: {cause}`, its kind
+    /// kept: the file stands under its hash, ending the hole, and a power
+    /// loss before a sync that succeeds may still take it, so the pull is
+    /// run again once the volume answers.
     ///
     /// Beside a serving daemon: its finishes take the store's own locks and
     /// never this call's, so a finish of the same hash racing this rename is
@@ -508,21 +641,29 @@ impl Store {
         expected: Option<&str>,
     ) -> io::Result<Finished> {
         let root = root.as_ref();
+        let source = source.as_ref();
         let designation = function.designation();
         let dir = root.join(designation);
-        // The designation directory born `0700` and the temp file `0600`
-        // on unix, as the finish's are — the mode set at creation, the
-        // rename carrying the file's onto its hex name.
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
+        let refused = |e: io::Error| io::Error::new(e.kind(), format!("nothing installed: {e}"));
+        let board = root.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        if !board.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "nothing installed: no directory stands at {}: the pull installs into a board's own directory \
+                     and makes none",
+                    board.display()
+                ),
+            ));
         }
-        builder.create(&dir)?;
-        let mut from = fs::File::open(source.as_ref())?;
-        let temp = partials::partial_path(root, designation, &UploadId::mint()?);
+        // The root and the designation directory born `0700` and the temp
+        // file `0600` on unix, as the finish's are — the mode set at
+        // creation, the rename carrying the file's onto its hex name.
+        make_dir(root).map_err(|e| refused(named(e, dir_label(root, 1), "create")))?;
+        make_dir(&dir).map_err(|e| refused(named(e, dir_label(&dir, 2), "create")))?;
+        let mut from = fs::File::open(source).map_err(|e| refused(named(e, source.display(), "open")))?;
+        let temp = partials::partial_path(root, designation, &UploadId::mint().map_err(refused)?);
+        let temp_name = format!("the pull's temp file in {}", dir_label(&dir, 2));
         let (hex, size) = {
             let mut opts = fs::OpenOptions::new();
             opts.write(true).create(true).truncate(true);
@@ -531,7 +672,7 @@ impl Store {
                 use std::os::unix::fs::OpenOptionsExt;
                 opts.mode(0o600);
             }
-            let mut out = opts.open(&temp)?;
+            let mut out = opts.open(&temp).map_err(|e| refused(named(e, &temp_name, "create")))?;
             let mut hasher = blake3::Hasher::new();
             let mut buf = [0u8; 64 * 1024];
             let mut size = 0u64;
@@ -539,17 +680,17 @@ impl Store {
                 let n = match io::Read::read(&mut from, &mut buf) {
                     Ok(0) => break Ok(()),
                     Ok(n) => n,
-                    Err(e) => break Err(e),
+                    Err(e) => break Err(named(e, source.display(), "read")),
                 };
                 hasher.update(&buf[..n]);
                 if let Err(e) = io::Write::write_all(&mut out, &buf[..n]) {
-                    break Err(e);
+                    break Err(named(e, &temp_name, "write"));
                 }
                 size += n as u64;
             };
-            if let Err(e) = copied.and_then(|()| out.sync_all()) {
+            if let Err(e) = copied.and_then(|()| out.sync_all().map_err(|e| named(e, &temp_name, "sync"))) {
                 let _ = blobs::remove_if_present(&temp);
-                return Err(e);
+                return Err(refused(e));
             }
             (hasher.finalize().to_hex().to_string(), size)
         };
@@ -558,16 +699,28 @@ impl Store {
                 let _ = blobs::remove_if_present(&temp);
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("the file's bytes hash to {hex}, not the {expected} the cell names: nothing installed"),
+                    format!("nothing installed: the file's bytes hash to {hex}, not the {expected} the cell names"),
                 ));
             }
         }
-        if let Err(e) = fs::rename(&temp, dir.join(&hex)) {
+        let to = dir.join(&hex);
+        if let Err(e) = fs::rename(&temp, &to) {
             let _ = blobs::remove_if_present(&temp);
-            return Err(e);
+            return Err(refused(named(e, label(&to, 3), "install")));
         }
-        fsync_dir(&dir)?;
-        fsync_dir(root)?;
+        fsync_dir(&dir)
+            .map_err(|e| named(e, dir_label(&dir, 2), "fsync"))
+            .and_then(|()| fsync_dir(root).map_err(|e| named(e, dir_label(root, 1), "fsync")))
+            .map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!(
+                        "installed at {}, but {e}: the file stands under its hash and a power loss may yet take \
+                         it; run the pull again once the volume answers",
+                        label(&to, 3)
+                    ),
+                )
+            })?;
         Ok(Finished { designation: designation.to_string(), hex, size })
     }
 
@@ -674,7 +827,9 @@ impl Store {
     /// before its finish answers. Answers the count unlinked, an aside
     /// already gone counted with them. A failure leaves that aside and the
     /// rest queued for the next call, and open removes any aside a crash
-    /// leaves.
+    /// leaves. Its failure is the OS's alone, the one store failure that
+    /// names no file: the aside it met stands at the queue's head, and
+    /// [`Store::next_aside`] names it — the daemon's line names it so, once.
     pub fn unlink_asides(&self) -> io::Result<usize> {
         let mut queued = std::mem::take(&mut *self.aside_queue.lock()).into_iter();
         let mut done = 0;
@@ -819,9 +974,9 @@ impl Store {
 pub struct Inspection {
     root: PathBuf,
     uploads: Vec<UploadRecord>,
-    upload_lines: usize,
+    uploads_log: LogRead,
     leases: Vec<Lease>,
-    lease_lines: usize,
+    leases_log: LogRead,
 }
 
 impl Inspection {
@@ -872,10 +1027,15 @@ impl Inspection {
         &self.leases
     }
 
-    /// The count of lines each log holds on disk — `(uploads, leases)`,
-    /// torn tail included — beside the records they fold to.
-    pub fn log_lines(&self) -> (usize, usize) {
-        (self.upload_lines, self.lease_lines)
+    /// WHAT EACH LOG's READING FOUND — `(uploads, leases)`, as an open
+    /// would find them ([`LogRead`]): the whole lines trusted, where trust
+    /// ends short of the file's end — the cut an open would make, made
+    /// nowhere here — and the lines that read as no record. A copy is proved
+    /// whole where neither cut takes whole lines past its first untrusted
+    /// one and no line reads as nothing; a half-written tail alone — a live
+    /// copy taken mid-append — loses nothing an answer was given over.
+    pub fn logs(&self) -> (&LogRead, &LogRead) {
+        (&self.uploads_log, &self.leases_log)
     }
 
     /// The path a blob of `designation` and `hex` has, as [`Store::blob_path`]
@@ -890,7 +1050,32 @@ impl Inspection {
         let Some(path) = self.blob_path(designation, hex) else {
             return Ok(None);
         };
-        Ok(blobs::not_found_as_none(fs::metadata(path))?.filter(fs::Metadata::is_file).map(|m| m.len()))
+        size_of(&path)
+    }
+}
+
+/// THE SIZE CHECK's one read of a blob's path: `Ok(Some(size))` where a
+/// file stands, `Ok(None)` where none does — no entry, or an entry that is
+/// no file — and any other failure answered, the file named.
+fn size_of(path: &Path) -> io::Result<Option<u64>> {
+    let meta = not_found_as_none(fs::metadata(path)).map_err(|e| named(e, label(path, 3), "stat"))?;
+    Ok(meta.filter(fs::Metadata::is_file).map(|m| m.len()))
+}
+
+/// MAKE `dir` where absent — owner-only, `0700` on unix, the mode set at
+/// creation — and its parent never: the pull's one way to make a directory
+/// ([`Store::install_file`]), so a board's own directory that does not stand
+/// is never made under a mistyped path.
+fn make_dir(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(dir) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        made => made,
     }
 }
 
@@ -1067,33 +1252,43 @@ impl Stream<'_> {
             self.handle.written(),
             self.length,
         );
-        store.before(Step::PartialSync)?;
+        let dir = store.root.join(&self.designation);
+        // Each step's failure is named as the act's own would be — the
+        // hazard seam's injected one among them — and the link and the
+        // rename both as the install of the hash's file, never by the aside:
+        // a client reads this text in `blob_io`'s detail, and an aside named
+        // there would say the file was already here (`media.md` Op inventory
+        // 1, "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE").
+        store.before(Step::PartialSync).map_err(|e| named(e, partial_label(&dir), "sync"))?;
         self.handle.sync()?;
         let hex = self.handle.hash().to_hex().to_string();
-        let dir = store.root.join(&self.designation);
         let from = partials::partial_path(&store.root, &self.designation, &self.id);
         let to = dir.join(&hex);
+        let install = |e| named(e, label(&to, 3), "install");
         let aside = if to.is_file() {
             // THE REPLACE: the replaced instance keeps a name through the
             // rename, so the rename frees nothing; the aside is unlinked after
             // the answer. A link, not a rename aside: the hash is never
             // without a file, whatever fails next.
-            store.before(Step::LinkAside)?;
+            store.before(Step::LinkAside).map_err(install)?;
             let n = finishing.aside_serial;
             finishing.aside_serial += 1;
             let aside = dir.join(aside_name(&hex, n));
-            fs::hard_link(&to, &aside)?;
+            fs::hard_link(&to, &aside).map_err(install)?;
             Some(aside)
         } else {
             None
         };
-        store.before(Step::Rename)?;
-        fs::rename(&from, &to)?;
-        store.before(Step::DirSync)?;
-        fsync_dir(&dir)?;
+        store.before(Step::Rename).and_then(|()| fs::rename(&from, &to)).map_err(install)?;
+        store
+            .before(Step::DirSync)
+            .and_then(|()| fsync_dir(&dir))
+            .map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
         if !finishing.root_synced.contains(&self.designation) {
-            store.before(Step::RootSync)?;
-            fsync_dir(&store.root)?;
+            store
+                .before(Step::RootSync)
+                .and_then(|()| fsync_dir(&store.root))
+                .map_err(|e| named(e, dir_label(&store.root, 1), "fsync"))?;
             finishing.root_synced.insert(self.designation.clone());
         }
         store.before(Step::LeaseSync)?;

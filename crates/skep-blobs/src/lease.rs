@@ -24,7 +24,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::blobs::{designation_ok, hex_ok};
-use crate::jsonl::Log;
+use crate::jsonl::{Log, LogRead};
 use crate::uploads::{millis, past_trigger};
 
 /// The log's file name under the root.
@@ -132,24 +132,37 @@ impl LeaseLog {
     /// Open the log under `root`: the tail checked, the latest line of each
     /// principal's lease on each hash kept, every lease lapsed past the
     /// `horizon` at `now_ms` dropped, and the log rewritten where anything
-    /// was dropped.
-    pub fn open(root: &Path, horizon: Duration, now_ms: u64) -> io::Result<LeaseLog> {
-        let (log, values) = Log::open(root.join(LEASES_LOG))?;
-        let mut leases = fold(&values);
+    /// was dropped. Answers the log, what the reading found — the lines that
+    /// read as no lease counted among it — and the count of leases the
+    /// horizon dropped.
+    pub fn open(root: &Path, horizon: Duration, now_ms: u64) -> io::Result<(LeaseLog, LogRead, usize)> {
+        let (log, values, mut found) = Log::open(root.join(LEASES_LOG))?;
+        let (mut leases, unread) = fold(&values);
+        found.unread = unread;
+        let read = leases.len();
         leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
+        let past_horizon = read - leases.len();
         let mut opened = LeaseLog { log, leases, horizon };
         opened.compact()?;
-        Ok(opened)
+        Ok((opened, found, past_horizon))
     }
 
     /// THE LOG AS FOUND, folded (`Log::read_as_found`): each principal's
     /// latest lease on each hash, in the map's order, no horizon applied —
-    /// every lease the log holds, lapsed ones included — and the count of
-    /// lines on disk. The inspection's read, which cuts no tail, opens
+    /// every lease the log holds, lapsed ones included — and what the
+    /// reading found. The inspection's read, which cuts no tail, opens
     /// nothing for appending and creates no file.
-    pub fn read_as_found(root: &Path) -> io::Result<(Vec<Lease>, usize)> {
-        let (values, lines) = Log::read_as_found(&root.join(LEASES_LOG))?;
-        Ok((fold(&values).into_values().collect(), lines))
+    pub fn read_as_found(root: &Path) -> io::Result<(Vec<Lease>, LogRead)> {
+        let (values, mut found) = Log::read_as_found(&root.join(LEASES_LOG))?;
+        let (leases, unread) = fold(&values);
+        found.unread = unread;
+        Ok((leases.into_values().collect(), found))
+    }
+
+    /// The count of leases held — the open's account's figure, read once
+    /// the horizon has dropped what it drops.
+    pub fn count(&self) -> usize {
+        self.leases.len()
     }
 
     /// Append `lease` as the principal's current lease on the hash and SYNC
@@ -236,20 +249,26 @@ impl LeaseLog {
         Ok(true)
     }
 
-    /// Whether the log has stopped (`Log::stopped`).
-    pub fn log_stopped(&self) -> bool {
-        self.log.stopped()
+    /// The log's stop's cause, where it has stopped (`Log::stopped`).
+    pub fn log_stopped(&self) -> Option<String> {
+        self.log.stopped().map(str::to_string)
     }
 }
 
 /// Fold a log's lines into the leases they leave: each principal's latest
-/// line on each hash, a line of no shape this build reads folded to nothing.
-fn fold(values: &[Value]) -> BTreeMap<(String, String, String), Lease> {
+/// line on each hash, a line of no shape this build reads folded to nothing
+/// — and counted, the second figure: the lines read as no lease, which the
+/// open's account carries ([`LogRead::unread`]).
+fn fold(values: &[Value]) -> (BTreeMap<(String, String, String), Lease>, usize) {
     let mut leases = BTreeMap::new();
+    let mut unread = 0;
     for v in values {
-        if let Some(l) = Lease::parse(v) {
-            leases.insert((l.designation.clone(), l.hex.clone(), l.principal.clone()), l);
+        match Lease::parse(v) {
+            Some(l) => {
+                leases.insert((l.designation.clone(), l.hex.clone(), l.principal.clone()), l);
+            }
+            None => unread += 1,
         }
     }
-    leases
+    (leases, unread)
 }

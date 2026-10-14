@@ -41,8 +41,12 @@
 //! (never under [`crate::limits::COMPACTION_MIN_LINES`]), under the store's
 //! own lock on that log's appends alone and NO arm of the credential lock
 //! (P22: the honest-null arm compacted by its reclaimer); a log that has
-//! STOPPED — a compaction failed past its rename — takes no append until a
-//! compaction completes, and the pass's line names it. The pass never
+//! STOPPED — an append whose cut back to its last whole line failed too, or
+//! a compaction that failed past its rename — takes no append until a
+//! compaction completes, and the pass's line names it WITH ITS CAUSE, the
+//! OS's own (a full volume told apart from a read-only mount or a failing
+//! device, so the act that clears it is the one named), and names a stop
+//! the pass's own rewrite lifted with the cause it had. The pass never
 //! touches a partial whose upload stands, and reads no directory's bytes
 //! as a scope (M-I6: the scopes stay record-derived).
 //!
@@ -111,9 +115,15 @@ pub struct PrunePass {
     /// Why a compaction failed, if one did — the operator line's reason;
     /// the logs then stopped are named beside it.
     pub compaction_failed: Option<String>,
-    /// The logs STOPPED after this pass — `(uploads, leases)`: each takes
-    /// no append until a compaction completes.
-    pub stopped: (bool, bool),
+    /// The logs STOPPED after this pass — `(uploads, leases)`, each by its
+    /// cause as the store keeps it (`Store::stopped_logs`), `None` where
+    /// the log takes appends: each takes no append until a compaction
+    /// completes.
+    pub stopped: (Option<String>, Option<String>),
+    /// The stops this pass's compaction LIFTED — `(uploads, leases)`, each
+    /// by the cause it had: a log stopped before the rewrite and taking
+    /// appends after it.
+    pub lifted: (Option<String>, Option<String>),
     /// THE FIRST FAILURE of steps (a)–(c), if one (`operations.md` §4 row
     /// 5; §1.1 row 35): the step it came from and the cause the store
     /// answered. The steps after it did not run — as the `?` that once
@@ -175,12 +185,15 @@ impl PassStep {
 
 impl PrunePass {
     /// THE COMPACTION HALF of the pass's line — `; uploads.log and
-    /// leases.log compacted`, `; a compaction FAILED: {why}`, `; STOPPED:
-    /// {log} takes no append until a compaction completes`, each where it
+    /// leases.log compacted`, `; {log}'s stop lifted, rewritten whole after
+    /// {cause}`, `; a compaction FAILED: {why}`, `; STOPPED: {log} takes no
+    /// append until a compaction completes — {cause}`, each where it
     /// applies and nothing where no log moved and none has stopped — what
     /// line 34 ends with and line 35 carries after the failure, so the
     /// stopped-or-compacted half is one rendering on both (`operations.md`
-    /// §1.1 row 35: "names the failure AND the stopped logs").
+    /// §1.1 row 35: "names the failure AND the stopped logs"). A stop is
+    /// said with its cause, the act that clears it turning on that cause:
+    /// room on a full volume, the mount or the device where they refuse.
     pub fn compaction(&self) -> impl fmt::Display + '_ {
         Compaction(self)
     }
@@ -198,21 +211,23 @@ impl fmt::Display for Compaction<'_> {
             (false, true) => f.write_str("; leases.log compacted")?,
             (false, false) => {}
         }
+        for (log, cause) in [("uploads.log", &pass.lifted.0), ("leases.log", &pass.lifted.1)] {
+            if let Some(cause) = cause {
+                write!(f, "; {log}'s stop lifted, rewritten whole after {cause}")?;
+            }
+        }
         if let Some(why) = &pass.compaction_failed {
             write!(f, "; a compaction FAILED: {why}")?;
         }
-        match pass.stopped {
-            (true, true) => f.write_str(
-                "; STOPPED: uploads.log and leases.log take no append until a compaction completes",
-            ),
-            (true, false) => {
-                f.write_str("; STOPPED: uploads.log takes no append until a compaction completes")
+        for (log, cause) in [("uploads.log", &pass.stopped.0), ("leases.log", &pass.stopped.1)] {
+            if let Some(cause) = cause {
+                write!(
+                    f,
+                    "; STOPPED: {log} takes no append until a compaction completes — {cause}"
+                )?;
             }
-            (false, true) => {
-                f.write_str("; STOPPED: leases.log takes no append until a compaction completes")
-            }
-            (false, false) => Ok(()),
         }
+        Ok(())
     }
 }
 
@@ -285,7 +300,8 @@ impl Pruner {
             compacted_uploads: false,
             compacted_leases: false,
             compaction_failed: None,
-            stopped: (false, false),
+            stopped: (None, None),
+            lifted: (None, None),
             failed: None,
         };
         // (a)–(c), to the first failure or the halt; the error kept beside
@@ -433,11 +449,13 @@ impl Pruner {
 /// (d) THE LOGS' COMPACTION: each log rewritten where it has passed the
 /// trigger — or has STOPPED, whatever its count — under the store's lock on
 /// that log's appends alone — no arm of the credential lock is held here —
-/// and the stopped logs read after it. Run on EVERY exit of the pass, a
-/// failed step's included. A failure here is the report's and never the
-/// pass's: the next pass tries again, and a stopped log is rewritten then
-/// whatever its count.
+/// and the stopped logs read before and after it: a stop standing before
+/// the rewrite and gone after it is one this pass LIFTED, said with the
+/// cause it had. Run on EVERY exit of the pass, a failed step's included. A
+/// failure here is the report's and never the pass's: the next pass tries
+/// again, and a stopped log is rewritten then whatever its count.
 fn compact_logs(store: &Store, report: &mut PrunePass) {
+    let before = store.stopped_logs();
     match store.compact_logs_if_past(COMPACTION_TRIGGER, COMPACTION_MIN_LINES) {
         Ok((uploads, leases)) => {
             report.compacted_uploads = uploads;
@@ -446,6 +464,10 @@ fn compact_logs(store: &Store, report: &mut PrunePass) {
         Err(e) => report.compaction_failed = Some(e.to_string()),
     }
     report.stopped = store.stopped_logs();
+    report.lifted = (
+        before.0.filter(|_| report.stopped.0.is_none()),
+        before.1.filter(|_| report.stopped.1.is_none()),
+    );
 }
 
 /// THE CADENCE: the pruner thread's clock and stop, one condvar — a wait of

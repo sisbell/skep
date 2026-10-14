@@ -7,7 +7,7 @@ use serde_json::json;
 fn a_log_reads_back_its_lines_and_cuts_a_torn_tail() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
-    let (mut log, values) = Log::open(path.clone()).unwrap();
+    let (mut log, values, _) = Log::open(path.clone()).unwrap();
     assert!(values.is_empty(), "an absent log holds no line");
     log.append_synced(&json!({"n": 1})).unwrap();
     log.append_unsynced(&json!({"n": 2})).unwrap();
@@ -15,7 +15,7 @@ fn a_log_reads_back_its_lines_and_cuts_a_torn_tail() {
     let whole = fs::read_to_string(&path).unwrap();
     assert_eq!(whole, "{\"n\":1}\n{\"n\":2}\n");
     fs::write(&path, format!("{whole}{{\"n\":3")).unwrap();
-    let (_, values) = Log::open(path.clone()).unwrap();
+    let (_, values, _) = Log::open(path.clone()).unwrap();
     assert_eq!(values, vec![json!({"n": 1}), json!({"n": 2})]);
     assert_eq!(fs::read_to_string(&path).unwrap(), whole, "the torn tail is cut");
 }
@@ -31,7 +31,7 @@ fn trust_ends_at_the_first_torn_line_whatever_tore_it() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("x.log");
         fs::write(&path, format!("{{\"n\":1}}\n{torn}{{\"n\":4}}\n")).unwrap();
-        let (_, values) = Log::open(path.clone()).unwrap();
+        let (_, values, _) = Log::open(path.clone()).unwrap();
         assert_eq!(values, vec![json!({"n": 1})], "{torn:?}: the lines before it alone");
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "{torn:?}: cut there, the line after it too");
     }
@@ -49,7 +49,7 @@ fn a_whole_object_without_its_newline_is_a_torn_tail() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
     fs::write(&path, "{\"n\":1}\n{\"n\":2}").unwrap();
-    let (mut log, values) = Log::open(path.clone()).unwrap();
+    let (mut log, values, _) = Log::open(path.clone()).unwrap();
     assert_eq!(values, vec![json!({"n": 1})], "the unterminated object is no line");
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "and is cut off the file");
     log.append_synced(&json!({"n": 3})).unwrap();
@@ -57,26 +57,66 @@ fn a_whole_object_without_its_newline_is_a_torn_tail() {
     assert_eq!(Log::open(path).unwrap().1, vec![json!({"n": 1}), json!({"n": 3})], "the next append stands");
 }
 
+/// EACH READING ANSWERS WHAT IT FOUND (`LogRead`, `TailCut`): an absent log
+/// found absent — the inspection making nothing, the open making it empty;
+/// a whole one trusted to its end, no cut; a half-written tail — a crash's,
+/// its newline never written — cut with no whole line past it; and a
+/// damaged line mid-file cut with the two whole lines after it, which no
+/// crash takes — the inspection's reading answering exactly what the open
+/// then finds and cuts.
+#[test]
+fn each_reading_answers_where_trust_ended_and_the_whole_lines_the_cut_took() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("x.log");
+    let name = label(&path, 2);
+    let (_, found) = Log::read_as_found(&path).unwrap();
+    assert_eq!((found.absent, found.lines, found.cut), (true, 0, None), "absent");
+    assert!(!path.exists(), "and the inspection makes nothing");
+    let (_, _, found) = Log::open(path.clone()).unwrap();
+    assert_eq!(
+        (found.name.as_str(), found.absent, found.lines, found.cut),
+        (name.as_str(), true, 0, None),
+        "absent: the open makes it empty, the log named by its place"
+    );
+    for (bytes, lines, cut) in [
+        ("{\"n\":1}\n{\"n\":2}\n", 2, None),
+        ("{\"n\":1}\n{\"n\"", 1, Some((8, 12, 0))),
+        ("{\"n\":1}\ngarbage\n{\"n\":3}\n{\"n\":4}\n", 1, Some((8, 32, 2))),
+    ] {
+        fs::write(&path, bytes).unwrap();
+        let (_, as_found) = Log::read_as_found(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), bytes, "{bytes:?}: the inspection cuts nothing");
+        let (_, _, opened) = Log::open(path.clone()).unwrap();
+        assert_eq!(as_found, opened, "{bytes:?}: the inspection answers what the open finds");
+        assert_eq!((opened.absent, opened.lines, opened.unread), (false, lines, 0), "{bytes:?}");
+        assert_eq!(opened.cut.map(|c| (c.at, c.len, c.lines_after)), cut, "{bytes:?}");
+        let kept = cut.map_or(bytes.len() as u64, |(at, _, _)| at);
+        assert_eq!(fs::metadata(&path).unwrap().len(), kept, "{bytes:?}: the open cut there");
+    }
+}
+
 /// AN APPEND THAT FAILS is cut back off the file: a write cut short —
 /// part of the line on disk, then an error, as a full disk gives —
 /// leaves the file at its whole lines, the next append lands on a whole
 /// line, and the reopen reads every whole line, the one after the
-/// failure included.
+/// failure included. The failure is answered named — the log by its place,
+/// the act, the cause.
 #[test]
 fn a_failed_append_is_cut_back_off_the_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
-    let (mut log, _) = Log::open(path.clone()).unwrap();
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
     log.append_synced(&json!({"n": 1})).unwrap();
     let cut_short = log.append_by(&json!({"n": 2}), |file, line| {
         file.write_all(&line[..4])?;
         Err(io::Error::other("no space left on the device"))
     });
-    assert!(cut_short.is_err());
+    let failed = cut_short.expect_err("the write cut short");
+    assert_eq!(failed.to_string(), format!("{}: append: no space left on the device", label(&path, 2)));
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "the torn line is cut back off the file");
     log.append_synced(&json!({"n": 3})).unwrap();
     drop(log);
-    let (_, values) = Log::open(path.clone()).unwrap();
+    let (_, values, _) = Log::open(path.clone()).unwrap();
     assert_eq!(values, vec![json!({"n": 1}), json!({"n": 3})], "the line after the failure stands");
 }
 
@@ -96,7 +136,7 @@ fn a_failed_append_leaves_the_file_as_it_found_it_whatever_opened_or_rewrote_it(
             "reopened over a torn tail" => fs::write(&path, "{\"n\":1}\n{\"n\":2}\n{\"n\"").unwrap(),
             _ => {}
         }
-        let (mut log, _) = Log::open(path.clone()).unwrap();
+        let (mut log, _, _) = Log::open(path.clone()).unwrap();
         match state {
             "fresh" => log.append_synced(&json!({"n": 1})).unwrap(),
             "compacted shorter" => {
@@ -127,13 +167,15 @@ fn a_failed_append_leaves_the_file_as_it_found_it_whatever_opened_or_rewrote_it(
 
 /// AN APPEND WHOSE CUT-BACK FAILS TOO stops the log: every later append
 /// is refused, so the torn line stays the file's tail, the one place
-/// open's tail check cuts without taking a whole line with it. A
-/// compaction writes the file whole and lifts the stop.
+/// open's tail check cuts without taking a whole line with it. The stop
+/// keeps its cause — the append's failure and the cut's, each the OS's —
+/// which the append that stopped the log says at once and every refusal
+/// after it names. A compaction writes the file whole and lifts the stop.
 #[test]
 fn a_failed_cut_back_stops_the_log_until_a_compaction() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
-    let (mut log, _) = Log::open(path.clone()).unwrap();
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
     log.append_synced(&json!({"n": 1})).unwrap();
     // A read-only file, as a failing disk leaves the log's: the rest of
     // the write fails at the OS, and so does the cut. The torn bytes land
@@ -144,14 +186,30 @@ fn a_failed_cut_back_stops_the_log_until_a_compaction() {
         other.write_all(&line[..4])?;
         file.write_all(&line[4..])
     });
-    assert!(failed.is_err());
+    let failed = failed.expect_err("the write and its cut back both refused");
+    assert!(
+        failed.to_string().ends_with("so it takes no append until a compaction completes"),
+        "the append that stops the log says so: {failed}"
+    );
+    let cause = log.stopped().expect("the log stopped").to_string();
+    assert!(
+        cause.starts_with("its append failed (")
+            && cause.contains(") and the cut back to its last whole line failed too ("),
+        "the stop keeps both causes: {cause}"
+    );
     log.file = open_append(&path).unwrap();
-    assert!(log.append_synced(&json!({"n": 3})).is_err(), "a stopped log takes no append");
+    let refused = log.append_synced(&json!({"n": 3})).expect_err("a stopped log takes no append");
+    assert_eq!(
+        refused.to_string(),
+        format!("{} takes no append until a compaction completes: {cause}", label(&path, 2)),
+        "its refusal names the log and the stop's cause"
+    );
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n{\"n\"", "the torn line stays the tail");
     log.compact(vec![json!({"n": 1})].into_iter()).unwrap();
+    assert_eq!(log.stopped(), None, "a completed compaction lifts the stop");
     log.append_synced(&json!({"n": 4})).unwrap();
     drop(log);
-    let (_, values) = Log::open(path.clone()).unwrap();
+    let (_, values, _) = Log::open(path.clone()).unwrap();
     assert_eq!(values, vec![json!({"n": 1}), json!({"n": 4})], "compacted whole, the stop lifted");
 }
 
@@ -168,7 +226,7 @@ fn a_compaction_that_fails_past_its_rename_stops_the_log() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
-    let (mut log, _) = Log::open(path.clone()).unwrap();
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
     log.append_synced(&json!({"n": 1})).unwrap();
     log.append_synced(&json!({"n": 2})).unwrap();
     let mode = fs::metadata(dir.path()).unwrap().permissions();
@@ -179,12 +237,17 @@ fn a_compaction_that_fails_past_its_rename_stops_the_log() {
     if compacted.is_ok() {
         return; // a privileged process reads any directory: nothing to inject
     }
+    let cause = log.stopped().expect("stopped past its rename").to_string();
+    assert!(
+        cause.starts_with(&format!("its rewrite failed past its rename ({}: fsync: ", dir_label(dir.path(), 1))),
+        "the stop's cause names the act that failed past the rename: {cause}"
+    );
     assert!(appended.is_err(), "a log whose compaction failed past its rename takes no append");
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":2}\n", "the rewrite stands at the name");
     log.compact(vec![json!({"n": 2})].into_iter()).unwrap();
     log.append_synced(&json!({"n": 4})).unwrap();
     drop(log);
-    let (_, values) = Log::open(path).unwrap();
+    let (_, values, _) = Log::open(path).unwrap();
     assert_eq!(values, vec![json!({"n": 2}), json!({"n": 4})], "a completed compaction lifts the stop");
 }
 
@@ -199,7 +262,7 @@ fn a_compaction_that_fails_past_its_rename_stops_the_log() {
 fn a_compaction_that_fails_before_its_rename_leaves_the_log_as_it_was() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
-    let (mut log, _) = Log::open(path.clone()).unwrap();
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
     log.append_synced(&json!({"n": 1})).unwrap();
     log.append_synced(&json!({"n": 2})).unwrap();
     fs::create_dir(path.with_extension("compact")).unwrap();
@@ -223,7 +286,7 @@ fn the_line_count_decides_the_compaction() {
     let inode = |p: &Path| std::os::unix::fs::MetadataExt::ino(&fs::metadata(p).unwrap());
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("x.log");
-    let (mut log, _) = Log::open(path.clone()).unwrap();
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
     log.append_synced(&json!({"k": "a", "v": 1})).unwrap();
     log.append_synced(&json!({"k": "b", "v": 1})).unwrap();
     // Two lines, two current records: nothing to drop, no rewrite.

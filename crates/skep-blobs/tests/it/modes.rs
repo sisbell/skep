@@ -67,10 +67,11 @@ fn tree_modes(root: &Path) -> Vec<(PathBuf, bool, u32)> {
 
 /// (a) THE BLOB STORE's FILES ARE OWNER-ONLY: `blobs/` born `0700`; the
 /// designation directory `0700`; the partial, the finish's blob, the
-/// seam's planted blob and both logs `0600`; the pull's path over a root
-/// that does not yet exist making every component `0700` and the file
-/// `0600`; and after a reopen's compaction the rewritten log — the twin's
-/// own file, by inode — `0600` too. Every entry under each root, exactly.
+/// seam's planted blob and both logs `0600`; the pull's path into a board
+/// whose `blobs/` does not yet exist making both directories it makes
+/// `0700` and the file `0600`; and after a reopen's compaction the
+/// rewritten log — the twin's own file, by inode — `0600` too. Every entry
+/// under each root, exactly.
 #[cfg(unix)]
 #[test]
 fn the_stores_directories_and_files_are_owner_only_whatever_the_umask() {
@@ -108,13 +109,16 @@ fn the_stores_directories_and_files_are_owner_only_whatever_the_umask() {
         assert_eq!(mode_of(&root.join(log)), 0o600, "{log} is 0600");
     }
 
-    // THE PULL's PATH over a root that does not yet exist: every component
-    // it makes is 0700, the installed file 0600.
-    let pulled_root = tmp.path().join("pulled").join("blobs");
+    // THE PULL's PATH into a board whose `blobs/` does not yet exist: the
+    // board's own directory stands — the pull makes none — and both
+    // directories the pull makes under it are 0700, the installed file 0600.
+    let board = tmp.path().join("pulled");
+    fs::create_dir(&board).expect("the board's directory");
+    let pulled_root = board.join("blobs");
     let source = tmp.path().join("picture");
     fs::write(&source, b"the picture's bytes").expect("a source file");
     let pulled = Store::install_file(&pulled_root, HashFunction::Blake3, &source, None).expect("the pull installs");
-    for dir in [tmp.path().join("pulled"), pulled_root.clone(), pulled_root.join("blake3")] {
+    for dir in [pulled_root.clone(), pulled_root.join("blake3")] {
         assert_eq!(mode_of(&dir), 0o700, "the pull made {} 0700", dir.display());
     }
     assert_eq!(mode_of(&pulled_root.join("blake3").join(&pulled.hex)), 0o600, "the pulled file is 0600");

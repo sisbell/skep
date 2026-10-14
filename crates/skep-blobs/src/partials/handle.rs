@@ -13,6 +13,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use super::partial_path;
+use crate::blobs::{named, partial_label};
 use crate::uploads::UploadId;
 
 /// THE HASH FUNCTIONS A HANDLE COMPUTES — one: BLAKE3's default hash of the
@@ -64,9 +65,12 @@ impl HashFunction {
 /// that fails marks the handle TORN — the file may then hold bytes no hasher
 /// covers, or bytes whose durability nothing vouches for — and a torn handle
 /// takes no further write or sync: the next resume opens the partial afresh
-/// at its record's offset.
+/// at its record's offset. Every failure names the partial by its directory
+/// ([`partial_label`]), never by its file name, an upload's identifier.
 pub(crate) struct Handle {
     file: File,
+    /// The partial as a line names it: `a partial in blobs/blake3/`.
+    name: String,
     hasher: blake3::Hasher,
     written: u64,
     torn: bool,
@@ -81,21 +85,24 @@ pub(crate) struct Handle {
 /// absent one — a finish's rename took it — is I/O too.
 pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Handle> {
     let path = partial_path(root, designation, id);
-    let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-    let len = file.metadata()?.len();
+    let name = partial_label(&root.join(designation));
+    let mut file = OpenOptions::new().read(true).write(true).open(&path).map_err(|e| named(e, &name, "open"))?;
+    let len = file.metadata().map_err(|e| named(e, &name, "stat"))?.len();
     if len < offset {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("partial {} holds {len} bytes, its record {offset}", path.display()),
+            format!("{name} holds {len} bytes, short of its record's offset {offset}: refused and never extended"),
         ));
     }
     if len > offset {
-        file.set_len(offset)?;
-        file.sync_all()?;
+        let cut = |e| named(e, &name, "cut back");
+        file.set_len(offset).map_err(cut)?;
+        file.sync_all().map_err(cut)?;
     }
-    let hasher = hash_prefix(&mut file, offset)?;
-    file.seek(SeekFrom::End(0))?;
-    Ok(Handle { file, hasher, written: offset, torn: false })
+    let read = |e| named(e, &name, "read");
+    let hasher = hash_prefix(&mut file, offset).map_err(read)?;
+    file.seek(SeekFrom::End(0)).map_err(read)?;
+    Ok(Handle { file, name, hasher, written: offset, torn: false })
 }
 
 /// The hasher over the first `len` bytes of `file`, read from its start by
@@ -133,7 +140,7 @@ impl Handle {
         self.refuse_torn()?;
         if let Err(e) = self.file.write_all(bytes) {
             self.torn = true;
-            return Err(e);
+            return Err(named(e, &self.name, "write"));
         }
         self.hasher.update(bytes);
         self.written += bytes.len() as u64;
@@ -148,7 +155,7 @@ impl Handle {
         self.refuse_torn()?;
         if let Err(e) = self.file.sync_all() {
             self.torn = true;
-            return Err(e);
+            return Err(named(e, &self.name, "sync"));
         }
         Ok(())
     }
@@ -156,9 +163,10 @@ impl Handle {
     /// A torn handle's refusal of a write or a sync.
     fn refuse_torn(&self) -> io::Result<()> {
         if self.torn {
-            return Err(io::Error::other(
-                "an earlier write or sync of this partial failed: the next resume reopens the partial",
-            ));
+            return Err(io::Error::other(format!(
+                "{}: an earlier write or sync of it failed: the next resume reopens it",
+                self.name
+            )));
         }
         Ok(())
     }

@@ -109,7 +109,11 @@ pub enum ToolError {
     /// — a restore of nothing, refused rather than deposited.
     Unnamed { hex: String },
     /// The pull's install refused the file — its bytes hash to another
-    /// hash than the one named — or could not be written.
+    /// hash than the one named, no board directory stands at the path, or
+    /// it could not be written: `nothing installed: …` — or installed it
+    /// and could not make the install durable: `installed at …, but …`.
+    /// The store's error says which side of the rename it failed on
+    /// (`Store::install_file`), and is said whole.
     Install(io::Error),
 }
 
@@ -141,7 +145,7 @@ impl fmt::Display for ToolError {
                 "no committed reference cell names {hex}: the pull restores a file a cell already \
                  names and deposits nothing"
             ),
-            ToolError::Install(e) => write!(f, "nothing installed: {e}"),
+            ToolError::Install(e) => write!(f, "{e}"),
         }
     }
 }

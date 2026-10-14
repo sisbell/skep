@@ -1,6 +1,8 @@
 //! THE FILES (`media.md` §The media stores; M-I5 (c)): the size check's
-//! read, a size that cannot be read answered as a failure and never as an
-//! absence; the name check at every entry point, and the designation a
+//! read, a size that cannot be read answered as a failure — the file and
+//! the act named — and never as an absence; the pull's install, which makes
+//! no board's directory and says on which side of its rename a failure
+//! fell; the name check at every entry point, and the designation a
 //! creation's function files under; a well-formed name with nothing behind
 //! it — no directory yet, an aside another remover took, an entry that is
 //! no file — absent to every read and act; the directory listings, each
@@ -132,8 +134,16 @@ fn install_file_installs_by_the_puts_order_replaces_and_refuses_another_hash() {
     let err = skep_blobs::Store::install_file(&root, HashFunction::Blake3, &source, Some(&wrong)).expect_err("refused");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
     assert!(err.to_string().contains(&wrong) && err.to_string().contains(&hex), "{err}");
+    assert_eq!(err.to_string().matches("nothing installed").count(), 1, "said once: {err}");
+    assert!(err.to_string().starts_with("nothing installed: "), "{err}");
     assert_eq!(partials(&root), 0, "nothing left behind");
-    assert!(skep_blobs::Store::install_file(&root, HashFunction::Blake3, dir.path().join("absent"), None).is_err());
+    let absent = dir.path().join("absent");
+    let err = skep_blobs::Store::install_file(&root, HashFunction::Blake3, &absent, None).expect_err("no source");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
+    assert!(
+        err.to_string().starts_with(&format!("nothing installed: {}: open: ", absent.display())),
+        "the source named as handed in, and the act: {err}"
+    );
     let store = open(&root, 0);
     assert_eq!(store.blob_size("blake3", &hex).unwrap(), Some(bytes.len() as u64), "a plain file to the store");
     assert_eq!(store.lease_state("k", "blake3", &hex, 0), skep_blobs::LeaseState::None, "no lease");
@@ -143,6 +153,73 @@ fn install_file_installs_by_the_puts_order_replaces_and_refuses_another_hash() {
     assert_eq!(fin.hex, hex);
     assert_eq!(fs::read(root.join("blake3").join(&hex)).unwrap(), bytes, "replaced");
     assert_eq!(partials(&root), 0);
+}
+
+/// THE PULL MAKES NO BOARD's DIRECTORY (`Store::install_file`: "the root is
+/// made where absent … but never its parent"): a pull handed a directory
+/// that does not stand — a mistyped `--data-dir` — is refused `NotFound`,
+/// naming it, and makes nothing there; the same pull into a board whose own
+/// directory stands makes its `blobs/` and installs.
+#[test]
+fn a_pull_into_a_board_directory_that_does_not_stand_makes_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("source");
+    fs::write(&source, b"the picture's bytes").unwrap();
+    let mistyped = dir.path().join("boadr");
+    let err = skep_blobs::Store::install_file(mistyped.join("blobs"), HashFunction::Blake3, &source, None)
+        .expect_err("no board directory stands");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "nothing installed: no directory stands at {}: the pull installs into a board's own directory and \
+             makes none",
+            mistyped.display()
+        )
+    );
+    assert!(!mistyped.exists(), "nothing made where no board stands");
+    let board = dir.path().join("board");
+    fs::create_dir(&board).unwrap();
+    let fin = skep_blobs::Store::install_file(board.join("blobs"), HashFunction::Blake3, &source, None).unwrap();
+    assert!(board.join("blobs").join("blake3").join(&fin.hex).is_file(), "the board's own blobs/ made, the file in it");
+}
+
+/// A PULL THAT FAILS PAST ITS RENAME SAYS THE FILE STANDS
+/// (`Store::install_file`, what an `Err` says by the rename): the file is
+/// renamed onto its hash, then the designation directory's fsync is refused
+/// — the directory written and searched but not read, so the temp file is
+/// made and renamed and the directory's own open fails — and the answer is
+/// `installed at blobs/blake3/<hex>, but …`, the kind kept, never `nothing
+/// installed` over a file that stands under its hash, which it does.
+#[cfg(unix)]
+#[test]
+fn a_pull_that_fails_past_its_rename_says_the_file_stands() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let designation_dir = root.join("blake3");
+    fs::create_dir(&designation_dir).unwrap();
+    let bytes = b"the picture's bytes, past the rename".to_vec();
+    let hex = hex_of(&bytes);
+    let source = dir.path().join("source");
+    fs::write(&source, &bytes).unwrap();
+    let mode = fs::metadata(&designation_dir).unwrap().permissions();
+    fs::set_permissions(&designation_dir, fs::Permissions::from_mode(0o300)).unwrap();
+    // A privileged process opens any directory: nothing to inject.
+    let privileged = fs::File::open(&designation_dir).is_ok();
+    let pulled =
+        (!privileged).then(|| skep_blobs::Store::install_file(&root, HashFunction::Blake3, &source, Some(&hex)));
+    fs::set_permissions(&designation_dir, mode).unwrap();
+    let Some(pulled) = pulled else { return };
+    let err = pulled.expect_err("the directory's fsync is refused past the rename");
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    assert!(
+        err.to_string().starts_with(&format!("installed at blobs/blake3/{hex}, but blobs/blake3/: fsync: ")),
+        "{err}"
+    );
+    assert!(!err.to_string().contains("nothing installed"), "{err}");
+    assert_eq!(fs::read(designation_dir.join(&hex)).unwrap(), bytes, "the file stands under its hash");
 }
 
 /// The size check's read: present with its size, absent as `None`, and a
@@ -171,9 +248,10 @@ fn blob_size_answers_the_files_size_and_nothing_for_a_name_that_is_no_hex() {
 /// AN UNREADABLE SIZE IS A FAILURE, NEVER AN ABSENCE (`Store::blob_size`:
 /// "An I/O failure is no absence"; M-I5 (c), the deposit record exact of
 /// what is on disk): a file whose name cannot be read — its designation
-/// directory listed but not searched — answers the failure, where an
-/// absence would tell the binding and the deposit read the deposit is gone;
-/// readable again, the same file answers its size.
+/// directory listed but not searched — answers the failure, the file named
+/// within the data directory and the act, where an absence would tell the
+/// binding and the deposit read the deposit is gone; readable again, the
+/// same file answers its size.
 #[cfg(unix)]
 #[test]
 fn an_unreadable_size_is_a_failure_never_an_absence() {
@@ -186,12 +264,15 @@ fn an_unreadable_size_is_a_failure_never_an_absence() {
     let mode = fs::metadata(&designation_dir).unwrap().permissions();
     // Read and written, never searched: no name in it can be stat'ed.
     fs::set_permissions(&designation_dir, fs::Permissions::from_mode(0o600)).unwrap();
-    let unreadable = store.blob_size("blake3", &fin.hex).map_err(|e| e.kind());
+    let unreadable = store.blob_size("blake3", &fin.hex).map_err(|e| (e.kind(), e.to_string()));
     fs::set_permissions(&designation_dir, mode).unwrap();
-    if unreadable == Ok(Some(5)) {
-        return; // a privileged process searches any directory: nothing to inject
-    }
-    assert_eq!(unreadable, Err(std::io::ErrorKind::PermissionDenied), "the failure answered, never an absence");
+    let (kind, message) = match unreadable {
+        Ok(Some(5)) => return, // a privileged process searches any directory: nothing to inject
+        Ok(other) => panic!("the failure answered as {other:?}, an absence"),
+        Err(failure) => failure,
+    };
+    assert_eq!(kind, std::io::ErrorKind::PermissionDenied, "the failure answered, never an absence: {message}");
+    assert!(message.starts_with(&format!("blobs/blake3/{}: stat: ", fin.hex)), "named: {message}");
     assert_eq!(store.blob_size("blake3", &fin.hex).unwrap(), Some(5), "readable again, the file answers its size");
 }
 

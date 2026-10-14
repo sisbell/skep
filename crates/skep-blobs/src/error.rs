@@ -30,6 +30,9 @@ pub enum BlobError {
     /// [`Stream`](crate::Stream), [`Store`](crate::Store)); and a resume over
     /// a partial shorter than its record's offset answers `Io`, the partial
     /// refused and never extended ([`Store::resume`](crate::Store::resume)).
+    /// Its text names the file within the data directory and the act —
+    /// `{file}: {act}: {cause}`, a partial by its directory alone — and its
+    /// kind is the OS's.
     Io(io::Error),
     /// The identifier names no upload of THIS principal's: expired,
     /// retired, another principal's, or never minted — ONE answer for all

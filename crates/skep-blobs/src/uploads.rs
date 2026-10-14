@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 
 use crate::blobs::designation_ok;
 use crate::error::BlobError;
-use crate::jsonl::Log;
+use crate::jsonl::{Log, LogRead};
 
 pub use id::{NotAnUploadId, UploadId, IDENTIFIER_BYTES};
 
@@ -190,21 +190,27 @@ pub(crate) struct UploadRecords {
 impl UploadRecords {
     /// Open the log under `root`: the tail checked, every line folded —
     /// a record line replacing the one before it, a retirement dropping
-    /// it. Compaction is the caller's, after the reconciliation with the
-    /// partials ([`UploadRecords::compact`]).
-    pub fn open(root: &Path) -> io::Result<UploadRecords> {
-        let (log, values) = Log::open(root.join(UPLOADS_LOG))?;
-        Ok(UploadRecords { log, records: fold(&values) })
+    /// it. Answers the records and what the reading found, the lines that
+    /// read as no record counted among it. Compaction is the caller's,
+    /// after the reconciliation with the partials
+    /// ([`UploadRecords::compact`]).
+    pub fn open(root: &Path) -> io::Result<(UploadRecords, LogRead)> {
+        let (log, values, mut found) = Log::open(root.join(UPLOADS_LOG))?;
+        let (records, unread) = fold(&values);
+        found.unread = unread;
+        Ok((UploadRecords { log, records }, found))
     }
 
     /// THE LOG AS FOUND, folded (`Log::read_as_found`): the current records
-    /// and the count of lines on disk — the inspection's read, which cuts
-    /// no tail, opens nothing for appending and creates no file.
-    pub fn read_as_found(root: &Path) -> io::Result<(Vec<UploadRecord>, usize)> {
-        let (values, lines) = Log::read_as_found(&root.join(UPLOADS_LOG))?;
-        let mut records: Vec<UploadRecord> = fold(&values).into_values().collect();
+    /// and what the reading found — the inspection's read, which cuts no
+    /// tail, opens nothing for appending and creates no file.
+    pub fn read_as_found(root: &Path) -> io::Result<(Vec<UploadRecord>, LogRead)> {
+        let (values, mut found) = Log::read_as_found(&root.join(UPLOADS_LOG))?;
+        let (records, unread) = fold(&values);
+        found.unread = unread;
+        let mut records: Vec<UploadRecord> = records.into_values().collect();
         records.sort_by_key(|r| r.id);
-        Ok((records, lines))
+        Ok((records, found))
     }
 
     /// THE PRINCIPAL's record by identifier, whatever its expiry — `None`
@@ -400,19 +406,22 @@ impl UploadRecords {
         Ok(true)
     }
 
-    /// Whether the log has stopped (`Log::stopped`): it takes no append
-    /// until a compaction completes.
-    pub fn log_stopped(&self) -> bool {
-        self.log.stopped()
+    /// The log's stop's cause, where it has stopped (`Log::stopped`): it
+    /// takes no append until a compaction completes.
+    pub fn log_stopped(&self) -> Option<String> {
+        self.log.stopped().map(str::to_string)
     }
 }
 
 /// Fold a log's lines into the records they leave: a record line replacing
 /// the one before it, a retirement dropping it, a line of a shape this build
 /// does not read kept on disk and folded to nothing (compaction drops it,
-/// honestly: it named no record this build holds).
-fn fold(values: &[Value]) -> HashMap<UploadId, UploadRecord> {
+/// honestly: it named no record this build holds) — and counted, the
+/// second figure: the lines read as no record, which the open's account
+/// carries ([`LogRead::unread`]).
+fn fold(values: &[Value]) -> (HashMap<UploadId, UploadRecord>, usize) {
     let mut records = HashMap::new();
+    let mut unread = 0;
     for v in values {
         match parse_line(v) {
             Some(Line::Record(r)) => {
@@ -421,10 +430,10 @@ fn fold(values: &[Value]) -> HashMap<UploadId, UploadRecord> {
             Some(Line::Retirement(id)) => {
                 records.remove(&id);
             }
-            None => {}
+            None => unread += 1,
         }
     }
-    records
+    (records, unread)
 }
 
 /// THE ONE TRIGGER RULE both logs read: a stopped log is rewritten
@@ -432,7 +441,7 @@ fn fold(values: &[Value]) -> HashMap<UploadId, UploadRecord> {
 /// otherwise a log is rewritten once its whole lines number at least
 /// `min_lines` and more than `trigger` times its `current` records.
 pub(crate) fn past_trigger(log: &Log, current: usize, trigger: usize, min_lines: usize) -> bool {
-    log.stopped() || (log.lines() >= min_lines && log.lines() > trigger.saturating_mul(current))
+    log.stopped().is_some() || (log.lines() >= min_lines && log.lines() > trigger.saturating_mul(current))
 }
 
 #[cfg(test)]
@@ -452,7 +461,7 @@ mod tests {
     fn each_act_moves_the_figures_it_names_and_keeps_the_rest() {
         let dir = tempfile::tempdir().expect("tempdir");
         let lines = || fs::read_to_string(dir.path().join(UPLOADS_LOG)).unwrap().lines().count();
-        let mut records = UploadRecords::open(dir.path()).unwrap();
+        let (mut records, _) = UploadRecords::open(dir.path()).unwrap();
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
         let created = records.create(id, "k", "blake3", 10, Duration::from_micros(2_500), 100).unwrap();
         assert_eq!(
@@ -476,7 +485,7 @@ mod tests {
         let set_back = records.of_principal("k", &id).cloned().unwrap();
         assert_eq!((set_back.offset, set_back.expires), (4, 202), "lowered, its expiry kept");
         drop(records);
-        let reopened = UploadRecords::open(dir.path()).unwrap();
+        let (reopened, _) = UploadRecords::open(dir.path()).unwrap();
         assert_eq!(reopened.of_principal("k", &id), Some(&set_back), "read back as the last act answered it");
     }
 
@@ -489,7 +498,7 @@ mod tests {
     #[test]
     fn a_mark_past_the_length_stops_as_a_defect_and_writes_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut records = UploadRecords::open(dir.path()).unwrap();
+        let (mut records, _) = UploadRecords::open(dir.path()).unwrap();
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
         records.create(id, "k", "blake3", 10, Duration::from_secs(1), 0).unwrap();
         records.mark_received("k", &id, 4, 1).unwrap();

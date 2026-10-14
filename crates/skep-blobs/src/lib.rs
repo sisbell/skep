@@ -64,20 +64,39 @@
 //!   ([`Store::compact_logs_if_past`] — the daemon's pruner, once a log has
 //!   passed a size trigger, under the store's lock on that log's appends
 //!   alone), which rewrites a stopped log whatever its count; between the
-//!   two a stopped log answers `Io` to every act that writes it ([`Store`]).
+//!   two a stopped log answers `Io` to every act that writes it ([`Store`]),
+//!   naming the stop's cause, which [`Store::stopped_logs`] answers — a full
+//!   volume told apart from a read-only mount or a failing device.
+//! * EVERY FAILURE NAMES ITS FILE AND ITS ACT: an I/O error the store
+//!   answers reads `{file}: {act}: {cause}`, its kind kept — the file as it
+//!   stands within the data directory, `blobs/leases.log`, never by an
+//!   absolute path, and a partial by its directory alone (`blobs.rs`) — so
+//!   the daemon's refused start, its pruner's line, the pull's refusal and
+//!   a client's `blob_io` detail each say which file and which act; save
+//!   the deferred unlink's, which [`Store::next_aside`] names beside it.
 //! * THE OPERATOR's TWO DOORS OPEN THE STORE AS THE DAEMON DOES NOT
 //!   (`media.md` §Recovery): [`Store::inspect`] reads the four stores as
 //!   they stand — the logs' torn tails cut in memory alone, nothing
-//!   reconciled, compacted, swept, synced or created — and
-//!   [`Store::install_file`] writes one file by the PUT's own order and
-//!   nothing else, no lease and no record, beside a serving daemon or a
-//!   stopped one; and [`Store::rename_aside`] is the pruner's act in the
-//!   unlink's place: the file renamed to an aside name under the caller's
-//!   arm, the aside removed after it under none, so the arm is never held
-//!   across the freeing of a file's blocks.
-//! * OPEN RECONCILES AND COMPACTS: first, nothing at a name it acts on
+//!   reconciled, compacted, swept, synced or created — answering what each
+//!   log's reading found ([`Inspection::logs`]), a damaged log told from a
+//!   whole one, and refusing, as the open does, a link or a special file it
+//!   would otherwise follow or wait on; and [`Store::install_file`] writes
+//!   one file by the PUT's own order and nothing else, no lease and no
+//!   record, beside a serving daemon or a stopped one, into a board's
+//!   directory that stands and never one it makes, its refusal saying on
+//!   which side of its rename it fell; and [`Store::rename_aside`] is the
+//!   pruner's act in the unlink's place: the file renamed to an aside name
+//!   under the caller's arm, the aside removed after it under none, so the
+//!   arm is never held across the freeing of a file's blocks.
+//! * OPEN RECONCILES AND COMPACTS, AND ANSWERS WHAT IT DID
+//!   ([`Store::opened`], [`Opened`]): the store writes no operator stream,
+//!   so every repair below — and what it found of the logs, a cut that took
+//!   whole lines past its first untrusted one ([`TailCut`]), lines read as
+//!   nothing, a store or a log found absent — is the account its embedder
+//!   says. First, nothing at a name it acts on
 //!   followed or shared — a symbolic link, a special file, or a second link
-//!   to a file the store writes in place failing the open, named
+//!   to a file the store writes in place failing the open, every one it
+//!   found named in one refusal with the act for its kind
 //!   (`blobs.rs`); both logs tail-checked and rewritten to
 //!   their current records, a line naming a designation or hex the store's
 //!   name check refuses, or an offset past its length, read as no record
@@ -113,10 +132,12 @@ mod error;
 // designation and a hex name must have, the aside name, the listings of the
 // designation directories, open's walk holding every entry it acts on to
 // what the store makes and its sweep of the asides, the directory fsync
-// every install order ends in, and the floor's free-space read.
+// every install order ends in, the floor's free-space read, and the name
+// every failure gives its file and its act.
 mod blobs;
-// The JSON-lines log both record logs are, `Log`: its tail check at open,
-// its append, undone where it fails, and its compaction by the install
+// The JSON-lines log both record logs are, `Log`: its tail check at open
+// and what each reading found (`LogRead`, `TailCut`), its append, undone
+// where it fails, the stop and its cause, and its compaction by the install
 // order.
 mod jsonl;
 // The upload records, `uploads.log`: the records' log, which answers by the
@@ -132,15 +153,17 @@ mod lease;
 // that hash is and the designation it files under).
 mod partials;
 // `Store`, the four opened as one, and `Stream`, an upload open for one
-// request: the order of their acts — the resume, the settle, the finish
-// and its steps, the pruner's acts, the leases' reads; under
-// `test-hooks`, the test seam (`store/hooks.rs`).
+// request: the order of their acts — the open and its account (`Opened`),
+// the resume, the settle, the finish and its steps, the pruner's acts, the
+// leases' reads, the operator's two doors; under `test-hooks`, the test
+// seam (`store/hooks.rs`).
 mod store;
 
 pub use error::BlobError;
+pub use jsonl::{LogRead, TailCut};
 pub use lease::{Lease, LeaseState};
 pub use partials::{HashFunction, SYNC_GRAIN};
-pub use store::{Finished, Inspection, Step, Store, Stream};
+pub use store::{Finished, Inspection, Opened, Step, Store, Stream};
 pub use uploads::{NotAnUploadId, UploadId, UploadRecord, IDENTIFIER_BYTES};
 
 /// What this crate promises without saying so (C-SEND-SYNC, C-GOOD-ERR,
@@ -168,7 +191,10 @@ const _: fn() = || {
     kept::<HashFunction>();
     kept::<Lease>();
     kept::<LeaseState>();
+    kept::<LogRead>();
+    kept::<Opened>();
     kept::<Step>();
+    kept::<TailCut>();
     kept::<UploadId>();
     kept::<UploadRecord>();
 };

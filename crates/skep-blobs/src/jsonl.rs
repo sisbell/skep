@@ -18,14 +18,18 @@
 //! that fails past its rename stops it too: the rewrite then stands at the
 //! log's name, and the file an append would write is the one it replaced,
 //! which no open reads. [`Log`] owns the file, the length and the count of
-//! its whole lines, and the stop; what a line means is its store's
-//! (`uploads.rs`, `lease.rs`).
+//! its whole lines, and the stop with its cause; what a line means is its
+//! store's (`uploads.rs`, `lease.rs`).
 //!
 //! THE LOG IS READ TWO WAYS: [`Log::open`] cuts the torn tail off the file
 //! and opens it for appending — the store's open; [`Log::read_as_found`]
 //! reads the same lines and touches nothing — the inspection's, over a
 //! backup or a directory a daemon serves, where a cut would be a write to a
-//! log this reader does not own.
+//! log this reader does not own. Both answer what the reading found
+//! ([`LogRead`]): the lines trusted, and where trust ended short of the
+//! file's end ([`TailCut`]) — told apart from a crash's half-written tail
+//! by the whole lines the cut takes past the first untrusted one, which a
+//! crash never leaves and damage does.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -33,54 +37,126 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::blobs::{fsync_dir, not_found_as_none};
+use crate::blobs::{dir_label, fsync_dir, label, named, not_found_as_none};
 
-/// One JSON-lines log: its path, its append-mode file, the byte length and
-/// the count of the whole lines the file holds, and whether it has
-/// stopped. The length is what a failed append is cut back to and the
-/// count the one figure the compaction reads; this type's own appends and
-/// rewrites alone move them.
+/// WHAT ONE READING OF A LOG FOUND — the store's open's
+/// ([`Opened`](crate::Opened)), or the inspection's
+/// ([`Inspection::logs`](crate::Inspection::logs)): the log's name, whether
+/// it stood at all, the whole lines trusted, where trust ended short of the
+/// file's end, and the trusted lines that read as no record. The open acts
+/// on all of it — an absent log made empty, the cut made, the unread lines
+/// dropped by its compaction — and says none of it: the embedder says it
+/// (the change feed's own files' cut is the daemon's line `operations.md`
+/// §1.1 row 9 rules; this is the same fact for the blob store's two logs).
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct LogRead {
+    /// The log as a line names it, within the data directory:
+    /// `blobs/uploads.log`, `blobs/leases.log`.
+    pub name: String,
+    /// No file stood at the log's name. The open made it empty — every
+    /// upload or lease it held, where it held one, reads as none; the
+    /// inspection made nothing.
+    pub absent: bool,
+    /// The whole lines trusted: the lines read before the cut, if one.
+    pub lines: usize,
+    /// Where trust ended short of the file's end, if it did: the open cut
+    /// the file there; the inspection read nothing past it and cut nothing.
+    pub cut: Option<TailCut>,
+    /// The trusted lines that read as no record — a shape this build does
+    /// not read, a name the store's check refuses, an offset past its
+    /// length: a line another build wrote, or a damaged one, which the
+    /// open's compaction removes from the file.
+    pub unread: usize,
+}
+
+/// WHERE TRUST ENDED SHORT OF A LOG's END: the first line that is no JSON
+/// object, or that lacks its newline, and every byte after it — read past
+/// by neither reading, and cut off the file by the open.
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct TailCut {
+    /// The byte trust ends at — the end of the last trusted line, where the
+    /// open truncates the file.
+    pub at: u64,
+    /// The file's length before the cut.
+    pub len: u64,
+    /// THE WHOLE LINES CUT PAST THE FIRST UNTRUSTED ONE — newline-ended
+    /// lines after it, which a crash never leaves: a crash or a kill tears
+    /// only the last line, its newline written with it, so `0` is that
+    /// half-written tail and every acknowledged line stands; more is damage
+    /// — a bad sector, a damaged or truncated copy — whose whole lines,
+    /// leases a PUT answered over or offsets a settle answered, the cut
+    /// takes with it.
+    pub lines_after: usize,
+}
+
+impl TailCut {
+    /// The bytes cut: from where trust ends to the file's end.
+    pub fn bytes(&self) -> u64 {
+        self.len.saturating_sub(self.at)
+    }
+}
+
+/// One JSON-lines log: its path and its name, its append-mode file, the
+/// byte length and the count of the whole lines the file holds, and the
+/// stop's cause where it has stopped. The length is what a failed append is
+/// cut back to and the count the one figure the compaction reads; this
+/// type's own appends and rewrites alone move them.
 pub(crate) struct Log {
     path: PathBuf,
+    /// The log as a line names it ([`LogRead::name`]): every error this log
+    /// answers names it so.
+    name: String,
     file: File,
     len: u64,
     lines: usize,
-    /// An append failed and its cut-back failed too — the file may end in a
-    /// torn line, and a line appended after it would be cut with it at the
-    /// next open — or a compaction failed past its rename, where the rewrite
-    /// stands at the path and the open file, the length and the count are
-    /// still the replaced file's, so an append would answer durable over a
-    /// line no open reads. A stopped log takes no append; a compaction that
-    /// completes, which writes the file whole, lifts the stop.
-    stopped: bool,
+    /// THE STOP, with its cause in the operator's words: an append failed
+    /// and its cut-back failed too — the file may end in a torn line, and a
+    /// line appended after it would be cut with it at the next open — or a
+    /// compaction failed past its rename, where the rewrite stands at the
+    /// path and the open file, the length and the count are still the
+    /// replaced file's, so an append would answer durable over a line no
+    /// open reads. A stopped log takes no append, its refusal naming the
+    /// cause; a compaction that completes, which writes the file whole,
+    /// lifts the stop.
+    stopped: Option<String>,
 }
 
 impl Log {
     /// Open the log at `path`, created where absent: read whole, trust
     /// ending at the first line that is no JSON object or that lacks its
     /// newline (a torn tail), which is TRUNCATED off the file there and
-    /// never read past (the honest-null arm's tail check). Answers the log
-    /// and the values of its lines, in order.
-    pub fn open(path: PathBuf) -> io::Result<(Log, Vec<Value>)> {
-        let (values, len) = read_log(&path)?;
-        let file = open_append(&path)?;
+    /// never read past (the honest-null arm's tail check). Answers the log,
+    /// the values of its lines in order, and what the reading found — its
+    /// `unread` the store's to count, as it folds the values.
+    pub fn open(path: PathBuf) -> io::Result<(Log, Vec<Value>, LogRead)> {
+        let name = label(&path, 2);
+        let (values, found, len) = read_log(&path, &name)?;
+        let file = open_append(&path).map_err(|e| named(e, &name, "open"))?;
         let lines = values.len();
-        Ok((Log { path, file, len, lines, stopped: false }, values))
+        Ok((Log { path, name, file, len, lines, stopped: None }, values, found))
     }
 
     /// THE LOG AS FOUND: the values of its whole lines, trust ending at the
     /// first torn line as [`Log::open`]'s read ends it — and the file left
     /// exactly as it was: no cut, no append-mode open, no file created where
     /// none stands. The inspection's read, over a copy or beside a daemon
-    /// that holds the log. Answers the values and the count of the lines on
-    /// disk, torn tail included.
-    pub fn read_as_found(path: &Path) -> io::Result<(Vec<Value>, usize)> {
-        let Some(bytes) = not_found_as_none(fs::read(path))? else {
-            return Ok((Vec::new(), 0));
-        };
-        let on_disk = bytes.iter().filter(|&&b| b == b'\n').count();
-        let (values, _) = whole_lines(&bytes);
-        Ok((values, on_disk))
+    /// that holds the log. Answers the values and what the reading found:
+    /// the cut it would make where the open would make one, cut nowhere.
+    pub fn read_as_found(path: &Path) -> io::Result<(Vec<Value>, LogRead)> {
+        let name = label(path, 2);
+        let bytes = not_found_as_none(fs::read(path)).map_err(|e| named(e, &name, "read"))?;
+        let (values, found, _) = reading(name, bytes.as_deref());
+        Ok((values, found))
     }
 
     /// The count of whole lines the log holds — what the compaction's
@@ -90,11 +166,11 @@ impl Log {
         self.lines
     }
 
-    /// Whether the log has STOPPED: an append's cut-back failed, or a
-    /// compaction failed past its rename; it takes no append until a
-    /// compaction completes.
-    pub fn stopped(&self) -> bool {
-        self.stopped
+    /// THE STOP's CAUSE, where the log has STOPPED: an append's cut-back
+    /// failed, or a compaction failed past its rename; it takes no append
+    /// until a compaction completes. `None` is a log that takes appends.
+    pub fn stopped(&self) -> Option<&str> {
+        self.stopped.as_deref()
     }
 
     /// Append `v` as the log's next line and fsync it — what a figure that
@@ -119,23 +195,35 @@ impl Log {
     /// lines and the cut synced, so a failed append leaves the file as it
     /// found it — what each store's map, moved only after an append returns
     /// (save a retirement's, dropped first: `UploadRecords::retire` says
-    /// why), already assumes. Where the cut fails too, the log stops and the
-    /// append answers its own failure; a stopped log refuses every later
-    /// append. The unit suite drives it with a write that fails partway.
+    /// why), already assumes — and the append answers its failure, the log
+    /// named. Where the cut fails too, the log stops, the cause kept in the
+    /// operator's words ([`Log::stopped`]), and the append answers its own
+    /// failure with the stop said after it, so the act that stopped the log
+    /// says so at the moment it does; a stopped log refuses every later
+    /// append, naming the cause. The unit suite drives it with a write that
+    /// fails partway.
     fn append_by(&mut self, v: &Value, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> io::Result<()> {
-        if self.stopped {
+        if let Some(cause) = &self.stopped {
             return Err(io::Error::other(format!(
-                "{} takes no append until a compaction completes: an earlier append could not be cut back off \
-                 it, or a compaction failed past its rename",
-                self.path.display()
+                "{} takes no append until a compaction completes: {cause}",
+                self.name
             )));
         }
         let line = line_of(v);
         if let Err(e) = write(&mut self.file, &line) {
-            if self.file.set_len(self.len).and_then(|()| self.file.sync_all()).is_err() {
-                self.stopped = true;
-            }
-            return Err(e);
+            return Err(match self.file.set_len(self.len).and_then(|()| self.file.sync_all()) {
+                Ok(()) => named(e, &self.name, "append"),
+                Err(cut) => {
+                    let cause =
+                        format!("its append failed ({e}) and the cut back to its last whole line failed too ({cut})");
+                    let stopped = io::Error::new(
+                        e.kind(),
+                        format!("{}: append: {cause}, so it takes no append until a compaction completes", self.name),
+                    );
+                    self.stopped = Some(cause);
+                    stopped
+                }
+            });
         }
         self.len += line.len() as u64;
         self.lines += 1;
@@ -164,11 +252,12 @@ impl Log {
     /// state: an append that arrives during the rewrite waits on that lock
     /// and lands in the new file once the install order has completed.
     pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<()> {
-        if !self.stopped && current.len() == self.lines {
+        if self.stopped.is_none() && current.len() == self.lines {
             return Ok(());
         }
         let dir = self.path.parent().expect("a log sits in a directory");
         let twin = self.path.with_extension("compact");
+        let at_twin = |e: io::Error, act: &str| named(e, label(&twin, 2), act);
         let mut len = 0;
         let mut lines = 0;
         {
@@ -181,41 +270,78 @@ impl Log {
                 use std::os::unix::fs::OpenOptionsExt;
                 opts.mode(0o600);
             }
-            let mut f = opts.open(&twin)?;
+            let mut f = opts.open(&twin).map_err(|e| at_twin(e, "create"))?;
             for v in current {
                 let line = line_of(&v);
-                f.write_all(&line)?;
+                f.write_all(&line).map_err(|e| at_twin(e, "write"))?;
                 len += line.len() as u64;
                 lines += 1;
             }
-            f.sync_all()?;
+            f.sync_all().map_err(|e| at_twin(e, "sync"))?;
         }
-        fs::rename(&twin, &self.path)?;
+        fs::rename(&twin, &self.path).map_err(|e| named(e, &self.name, "rename its rewrite over it"))?;
         // Past the rename the rewrite stands at the path, and the open file,
-        // the length and the count are the replaced file's: stopped until
-        // the install order completes and they are the rewrite's.
-        self.stopped = true;
-        fsync_dir(dir)?;
-        self.file = open_append(&self.path)?;
-        self.len = len;
-        self.lines = lines;
-        self.stopped = false;
-        Ok(())
+        // the length and the count are the replaced file's: stopped, the
+        // cause kept, until the install order completes and they are the
+        // rewrite's.
+        let installed = fsync_dir(dir)
+            .map_err(|e| named(e, dir_label(dir, 1), "fsync"))
+            .and_then(|()| open_append(&self.path).map_err(|e| named(e, &self.name, "open")));
+        match installed {
+            Ok(file) => {
+                self.file = file;
+                self.len = len;
+                self.lines = lines;
+                self.stopped = None;
+                Ok(())
+            }
+            Err(e) => {
+                self.stopped =
+                    Some(format!("its rewrite failed past its rename ({e}): the rewrite stands at its name"));
+                Err(e)
+            }
+        }
     }
 }
 
-/// The values of a log's whole lines in order and their byte length, the
-/// torn tail cut off the file there ([`Log::open`]'s read). An absent log
-/// holds none.
-fn read_log(path: &Path) -> io::Result<(Vec<Value>, u64)> {
-    let Some(bytes) = not_found_as_none(fs::read(path))? else {
-        return Ok((Vec::new(), 0));
-    };
-    let (values, good) = whole_lines(&bytes);
-    if good < bytes.len() {
-        OpenOptions::new().write(true).open(path)?.set_len(good as u64)?;
+/// The values of a log's whole lines in order, what the reading found and
+/// the bytes trusted — the torn tail cut off the file there ([`Log::open`]'s
+/// read). An absent log holds none, and is found absent.
+fn read_log(path: &Path, name: &str) -> io::Result<(Vec<Value>, LogRead, u64)> {
+    let bytes = not_found_as_none(fs::read(path)).map_err(|e| named(e, name, "read"))?;
+    let (values, found, good) = reading(name.to_string(), bytes.as_deref());
+    if found.cut.is_some() {
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|f| f.set_len(good))
+            .map_err(|e| named(e, name, "cut back"))?;
     }
-    Ok((values, good as u64))
+    Ok((values, found, good))
+}
+
+/// ONE READING OF A LOG's BYTES — `None` where no file stood — the one both
+/// [`read_log`] and [`Log::read_as_found`] make: the values of its whole
+/// lines ([`whole_lines`]), what it found, and the bytes trusted. Where
+/// trust ends short of the end, the cut ([`TailCut`]) counts the whole lines
+/// past the first untrusted one: the bytes from that line's newline, or the
+/// end where it has none, to the end.
+fn reading(name: String, bytes: Option<&[u8]>) -> (Vec<Value>, LogRead, u64) {
+    let Some(bytes) = bytes else {
+        return (Vec::new(), LogRead { name, absent: true, lines: 0, cut: None, unread: 0 }, 0);
+    };
+    let (values, good) = whole_lines(bytes);
+    let cut = (good < bytes.len()).then(|| {
+        let rest = &bytes[good..];
+        let first = rest.iter().position(|&b| b == b'\n').map_or(rest.len(), |at| at + 1);
+        TailCut {
+            at: good as u64,
+            len: bytes.len() as u64,
+            lines_after: rest[first..].iter().filter(|&&b| b == b'\n').count(),
+        }
+    });
+    let lines = values.len();
+    (values, LogRead { name, absent: false, lines, cut, unread: 0 }, good as u64)
 }
 
 /// The values of `bytes`' whole lines in order and the byte length they

@@ -44,10 +44,12 @@ above it.
   the upload records and the lease log — the PUT's fsync order, REPLACE on
   a present hash, the lease's honest-null answer, the pruner's rename
   aside, the logs' runtime compaction on a trigger, the volume's capacity
-  read, and the operator's two doors — the read-only inspection and the
-  pull's install by the PUT's order. It depends on no other skep crate,
-  knows a principal only as an opaque string, holds no lock the daemon's
-  write path takes, and reads no limits record. One feature, default off:
+  read, the open's account of what it repaired and found, every I/O
+  failure named by its file and its act, and the operator's two doors —
+  the read-only inspection and the pull's install by the PUT's order. It
+  depends on no other skep crate, knows a principal only as an opaque
+  string, holds no lock the daemon's write path takes, writes no operator
+  stream, and reads no limits record. One feature, default off:
   `test-hooks` compiles in the test seam, `store/hooks.rs` — a hold or an
   injected failure at a step of the finish, and the methods only tests
   call. `scripts/gate-full.sh` builds the library and its docs without it.
@@ -401,7 +403,7 @@ Rules that hold across its files:
   the daemon's pins — under the store's lock on that log's appends alone;
   an append during the rewrite waits and lands in the new file, and a
   stopped log is rewritten whatever its count (`Store::stopped_logs` says
-  which has stopped).
+  which has stopped, and why).
 - **The capacity is one read with the free space** (`Store::capacity`,
   `Store::free_space`): the same `statvfs`, the total blocks and the
   available ones; what the daemon's default per-account limit and its
@@ -427,27 +429,48 @@ Rules that hold across its files:
   failed past its rename, takes no append until a compaction completes.
   The store compacts at its open and at the caller's runtime compaction,
   so a log stopped while the store serves stays stopped until the next
-  pass's compaction or the next open reads it afresh (`Store`).
-- **Open reconciles and compacts before it answers anything; the
-  inspection does neither.** `Store::open` runs each store's act at open —
-  the logs' compactions, `partials::reconcile`, `blobs::sweep_asides` —
-  and an I/O failure there, as at the size check (`Store::blob_size`), is
-  never read as an absence. Its orphan removal keeps to the designations
-  this build computes (`HashFunction`); another build's designation
-  directory is left, as the pruner leaves it. Before any act, a symbolic
-  link, a special file, or a second link to a file the store writes in
-  place, at a name it acts on, fails the open
-  (`blobs::refuse_links_and_special_files`): nothing is followed or
-  written through. `Store::inspect` reads the same four stores as they
-  stand — each log's lines read through `Log::read_as_found`, its torn
-  tail cut in memory alone — and creates, cuts, renames and syncs nothing,
-  so it can run over a backup or beside a serving daemon's store.
+  pass's compaction or the next open reads it afresh (`Store`). The stop
+  keeps its cause — the act that failed and the OS's cause — which every
+  refused append names and `Store::stopped_logs` answers.
+- **Every failure names its file and its act.** An I/O error the store
+  answers reads `{file}: {act}: {cause}`, its kind the OS's: the file as
+  it stands within the data directory, the root's own name first
+  (`blobs/leases.log`), never by an absolute path, and a partial by its
+  directory alone, its file name an upload's identifier (`blobs::named`,
+  `blobs::label`, `blobs::partial_label`). The one exception is the
+  deferred unlink's, whose embedder names the aside beside it
+  (`Store::next_aside`).
+- **Open reconciles and compacts before it answers anything, and answers
+  what it did; the inspection does neither, and answers what it found.**
+  `Store::open` runs each store's act at open — the logs' compactions,
+  `partials::reconcile`, `blobs::sweep_asides` — and an I/O failure there,
+  as at the size check (`Store::blob_size`), is never read as an absence.
+  Its orphan removal keeps to the designations this build computes
+  (`HashFunction`); another build's designation directory is left, as the
+  pruner leaves it. The store writes no operator stream, so its open's
+  account is its embedder's to say (`Store::opened`, `Opened`): every
+  repair by count, and what each log's reading found (`LogRead`) — a cut
+  that took whole lines past its first untrusted one (`TailCut`), which a
+  crash never leaves and damage does, lines read as nothing, a store or a
+  log found absent and made empty. Before any act, a symbolic link, a
+  special file, or a second link to a file the store writes in place, at
+  a name it acts on, fails the open, every one found named in one refusal
+  with the act for its kind (`blobs::refuse_links_and_special_files`):
+  nothing is followed or written through. `Store::inspect` holds the same
+  names to the same rule, then reads the four stores as they stand — each
+  log's lines read through `Log::read_as_found`, its torn tail cut in
+  memory alone, what the reading found answered (`Inspection::logs`) — and
+  creates, cuts, renames and syncs nothing, so it can run over a backup or
+  beside a serving daemon's store.
 - **The pull's install is the PUT's order with no record** —
   `Store::install_file`: the bytes streamed into a temp file named as a
   partial is (so an open that meets it removes it as an orphan), hashed as
   they are copied, fsynced, renamed onto the hash name, the directory and
-  the root fsynced; held to an expected hash where one is given, nothing
-  installed otherwise; no lease, no record, no lock.
+  the root fsynced; held to an expected hash where one is given; into a
+  board's own directory that stands, never one it makes; no lease, no
+  record, no lock. A refusal says on which side of the rename it fell:
+  `nothing installed: …` before it, `installed at …, but …` past it, the
+  file then standing under its hash.
 - **A caller's bug is no refusal, nor is the store's own.** `Stream::finish`
   panics on a broken precondition, and `UploadRecords::mark_received` on an
   offset past its record's length; `BlobError` carries only answers.
@@ -457,18 +480,21 @@ Rules that hold across its files:
 
 Its integration suite is one binary, `tests/it/`: `finish` (the PUT's order
 under an injected failure at each step, and the finishes run one at a
-time), `replace` (REPLACE and its asides), `blobs` (the name check, the
-listings, the size check, the floor's and the capacity's reads, the rename
-aside, the pull's install), `uploads` (an upload's life while the store
-serves, its identifier, and the records' log's runtime compaction),
-`reopen` (what open makes of the records and partials a crash or a
-restore left, the inspection that touches none of it, and the copy order
-a live copy follows), `lease` (the leases' states, their compaction at
-open and by the trigger, and the pending bytes) and `tidy` (every item
-documented as a test hook or the test seam compiles only under
-`test-hooks`); each module's doc lists its claims. Five unit suites sit beside their code: `store.rs`'s,
-`uploads.rs`'s, `partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the
-last in `jsonl/tests.rs`.
+time), `replace` (REPLACE and its asides, and a failed finish naming the
+hash's file alike whether or not it was here), `blobs` (the name check,
+the listings, the size check, the floor's and the capacity's reads, the
+rename aside, the pull's install and its refusals), `uploads` (an upload's
+life while the store serves, its identifier, the records' log's runtime
+compaction, and a stopped log's cause), `reopen` (what open makes of the
+records and partials a crash or a restore left and the account it answers
+of them, its named refusals, the inspection that touches none of it, and
+the copy order a live copy follows), `lease` (the leases' states, their
+compaction at open and by the trigger, and the pending bytes), `modes`
+(every directory and file the store makes owner-only) and `tidy` (every
+item documented as a test hook or the test seam compiles only under
+`test-hooks`); each module's doc lists its claims. Five unit suites sit
+beside their code: `store.rs`'s, `uploads.rs`'s, `partials/handle.rs`'s,
+`blobs.rs`'s and `jsonl.rs`'s, the last in `jsonl/tests.rs`.
 
 ## The support crate, `skep-util`
 

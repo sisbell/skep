@@ -2,10 +2,11 @@
 //! paragraph, "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY
 //! HERE"): its order under a seeded failure injection at each step, the
 //! hash never without a file; REPLACE's answer, the one a PUT gives where
-//! no file stood, and its repair of a corrupt file; an aside name of its
-//! own for every replace, and the deferred unlink's queue — an aside queued
-//! only at its finish's answer, one already gone counted unlinked, a
-//! failure leaving it and every one after it queued.
+//! no file stood, and its repair of a corrupt file — a failure's text
+//! among the answers, naming the hash's file and never an aside; an aside
+//! name of its own for every replace, and the deferred unlink's queue — an
+//! aside queued only at its finish's answer, one already gone counted
+//! unlinked, a failure leaving it and every one after it queued.
 
 use std::fs;
 use std::sync::{Arc, Barrier};
@@ -14,6 +15,60 @@ use std::thread;
 use skep_blobs::{BlobError, HashFunction, LeaseState, Step};
 
 use crate::{hex_of, open, put_whole, INTERVAL};
+
+/// A FAILED FINISH NAMES THE HASH's FILE, THE SAME WHETHER OR NOT IT WAS
+/// ALREADY HERE (`Stream::finish`; `media.md` Op inventory 1, "NO ANSWER OF
+/// THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE" — a refusal's text,
+/// which a client reads in `blob_io`'s detail, among the answers): failed at
+/// its rename, a fresh finish and a replace answer one text, `{file}:
+/// install: {cause}`, the file the hash's own within the data directory; a
+/// replace failed at its link — the seam's injected failure, and the OS's
+/// own where a name already stands at the aside's — answers the act the
+/// same way, never by the aside's name; and a failure at the directory's
+/// fsync names the directory.
+#[test]
+fn a_failed_finish_names_the_hashs_file_the_same_whether_or_not_it_was_here() {
+    let bytes = b"the picture's bytes".to_vec();
+    let hex = hex_of(&bytes);
+    for (step, planted, blocked) in [
+        (Some(Step::Rename), false, false),
+        (Some(Step::Rename), true, false),
+        (Some(Step::LinkAside), true, false),
+        (None, true, true),
+        (Some(Step::DirSync), false, false),
+    ] {
+        let at = format!("{step:?}, planted {planted}, the aside's name taken {blocked}");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("blobs");
+        let store = open(&root, 0);
+        if planted {
+            store.install("blake3", &hex, b"garbage under the right name").unwrap();
+        }
+        if blocked {
+            // The name this store's first replace links its aside at.
+            fs::write(root.join("blake3").join(format!(".retired-{hex}-0")), b"standing there").unwrap();
+        }
+        store.fail_at(step);
+        let rec = store.create_upload("k", HashFunction::Blake3, bytes.len() as u64, INTERVAL, 1).unwrap();
+        let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
+        stream.append(&bytes, 1).unwrap();
+        let Err(BlobError::Io(e)) = stream.finish(INTERVAL, 1) else {
+            panic!("{at}: the failure answers `Io`");
+        };
+        let text = e.to_string();
+        match step {
+            Some(Step::DirSync) => assert_eq!(text, "blobs/blake3/: fsync: injected failure at DirSync", "{at}"),
+            Some(step) => {
+                assert_eq!(text, format!("blobs/blake3/{hex}: install: injected failure at {step:?}"), "{at}")
+            }
+            None => {
+                assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists, "{at}: {text}");
+                assert!(text.starts_with(&format!("blobs/blake3/{hex}: install: ")), "{at}: {text}");
+            }
+        }
+        assert!(!text.contains(".retired-"), "{at}: never the aside's name: {text}");
+    }
+}
 
 /// THE REPLACE's ORDER, STEP BY STEP (M-I5 (a); "NO ANSWER OF THE UPLOAD
 /// SAYS WHETHER THE FILE WAS ALREADY HERE" — the replaced instance's aside

@@ -655,12 +655,13 @@ impl Daemon {
     /// step failed, the report's own `Display` (its figures, the halt, the
     /// compaction half); ROW 35 under `Class::Failure` where one did —
     /// `pruner: the pass failed: {e}`, the step and the cause — then the SAME
-    /// compaction half (`PrunePass::compaction`: `{log} compacted`, `a
-    /// compaction FAILED`, `STOPPED: {log} takes no append until a compaction
-    /// completes`), so the line names the failure AND whether the stop it may
-    /// have met is lifted or stands. Nothing where the pass did not start
-    /// (`None`: the index not ready). The cadence's loop and the test seam's
-    /// pass say it alike.
+    /// compaction half (`PrunePass::compaction`: `{log} compacted`, `{log}'s
+    /// stop lifted, rewritten whole after {cause}`, `a compaction FAILED`,
+    /// `STOPPED: {log} takes no append until a compaction completes —
+    /// {cause}`), so the line names the failure AND whether the stop it may
+    /// have met is lifted or stands, and why it stood. Nothing where the
+    /// pass did not start (`None`: the index not ready). The cadence's loop
+    /// and the test seam's pass say it alike.
     pub(super) fn say_the_pass(&self, pass: &Option<PrunePass>) {
         let Some(report) = pass else { return };
         match &report.failed {

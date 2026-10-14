@@ -362,7 +362,7 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
         let pass = sd.daemon().prune_now().expect("ready");
         assert!(pass.compacted_uploads && pass.compacted_leases, "{pass:?}");
         assert_eq!(pass.compaction_failed, None, "{pass:?}");
-        assert_eq!(pass.stopped, (false, false), "{pass:?}");
+        assert_eq!(pass.stopped, (None, None), "{pass:?}");
         assert!(pass.to_string().ends_with("; uploads.log and leases.log compacted"), "{pass}");
         assert_eq!(lines("uploads.log"), 3, "rewritten to the standing records");
         assert_eq!(lines("leases.log"), 1, "rewritten to the one lease");
@@ -439,15 +439,17 @@ impl Drop for Unreadable<'_> {
 /// run with `blobs/` unreadable: that pass's first failure is step (b)'s
 /// read of the designation directories, its (d) runs regardless and the
 /// compaction fails PAST its rename, so `uploads.log` STOPS — and its line
-/// 35 names the failure AND the stop. THE STANDING EXPIRED UPLOAD: created
+/// 35 names the failure AND the stop with its cause, the rewrite's failed
+/// fsync. THE STANDING EXPIRED UPLOAD: created
 /// before the stop on a ten-minute interval, lapsed by the clock after it,
 /// so step (a)'s retirement is an append the stopped log refuses — the `?`
 /// that once ended the pass there left the stop standing for the uptime,
 /// creations answering `500 blob_io` and a restart the one cure. NOW: the
 /// next pass fails at (a), the step named, and its (d) rewrites the stopped
 /// log whatever its count: the stop LIFTS — the report's members agree
-/// (`failed` step (a), `compacted_uploads`, `stopped` clear), its line 35
-/// names the failure AND `uploads.log compacted` — a creation resumes, and
+/// (`failed` step (a), `compacted_uploads`, `stopped` clear, `lifted` the
+/// stop's cause), its line 35 names the failure AND `uploads.log compacted`
+/// AND the stop it lifted, by that cause — a creation resumes, and
 /// the pass after owes nothing, under line 34: the store's retirement had
 /// dropped the record in this process before the append the stopped log
 /// refused (its partial removed first), so the compaction wrote the log to
@@ -501,7 +503,12 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         stopping.compaction_failed.is_some(),
         "FINDING (§4 row 5): the failed step skipped the compaction — no stop was met: {stopping:?}"
     );
-    assert_eq!(stopping.stopped, (true, false), "the records' log stopped past its rename: {stopping:?}");
+    let cause = stopping.stopped.0.clone().expect("the records' log stopped past its rename");
+    assert_eq!(stopping.stopped.1, None, "the lease log takes appends: {stopping:?}");
+    assert!(
+        cause.starts_with("its rewrite failed past its rename (blobs/: fsync: "),
+        "the stop's cause names the act that failed past the rename: {cause}"
+    );
     assert!(!stopping.compacted_uploads, "{stopping:?}");
     let said = pass_failures(&sd);
     assert_eq!(said.len(), 1, "{said:?}");
@@ -509,10 +516,10 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         said[0],
         format!(
             "failure: pruner: the pass failed: {failed}; a compaction FAILED: {}; STOPPED: \
-             uploads.log takes no append until a compaction completes",
+             uploads.log takes no append until a compaction completes — {cause}",
             stopping.compaction_failed.as_ref().unwrap()
         ),
-        "line 35 names the failure AND the stopped log"
+        "line 35 names the failure AND the stopped log, by its cause"
     );
     assert!(said[0].contains("step (b), the halts' read: "), "the step named: {}", said[0]);
     // THE STOP IN FORCE: a creation's record is an append the log refuses.
@@ -526,16 +533,21 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     let failed = lifting.failed.clone().expect("step (a)'s retirement is refused by the stopped log");
     assert_eq!(failed.step, PassStep::ExpiredPartials, "{lifting:?}");
     assert!(failed.cause.contains("uploads.log takes no append until a compaction completes"), "{failed}");
+    assert!(failed.cause.contains(&cause), "the refused append names the stop's cause: {failed}");
     assert_eq!(lifting.expired_partials, 0, "{lifting:?}");
     assert!(lifting.compacted_uploads, "FINDING (§4 row 5): the failed step skipped the compaction: {lifting:?}");
     assert_eq!(lifting.compaction_failed, None, "{lifting:?}");
-    assert_eq!(lifting.stopped, (false, false), "the stop lifted by this pass: {lifting:?}");
+    assert_eq!(lifting.stopped, (None, None), "the stop lifted by this pass: {lifting:?}");
+    assert_eq!(lifting.lifted, (Some(cause.clone()), None), "and said lifted, by its cause: {lifting:?}");
     let said = pass_failures(&sd);
     assert_eq!(said.len(), 2, "{said:?}");
     assert_eq!(
         said[1],
-        format!("failure: pruner: the pass failed: {failed}; uploads.log compacted"),
-        "line 35 names the failure AND the compaction that lifted the stop"
+        format!(
+            "failure: pruner: the pass failed: {failed}; uploads.log compacted; uploads.log's stop lifted, \
+             rewritten whole after {cause}"
+        ),
+        "line 35 names the failure AND the compaction that lifted the stop, by the stop's cause"
     );
     // The store's retirement drops the record from its map BEFORE the
     // append the stopped log refused, its partial removed before that

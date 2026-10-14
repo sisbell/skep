@@ -22,16 +22,21 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   rename aside under the caller's arm and the aside's removal after it,
   so no arm is held across the freeing of a file's blocks.
 - **The operator's two doors** — the read-only inspection of the four
-  stores as they stand, which creates, cuts, renames and syncs nothing;
-  and the pull's install of one file by the PUT's own order, no lease and
-  no record.
+  stores as they stand, which creates, cuts, renames and syncs nothing and
+  answers what each log's reading found; and the pull's install of one
+  file by the PUT's own order, no lease and no record, its refusal saying
+  whether anything was installed.
 
 The store knows a principal only as an opaque string, takes no lock of its
-caller's and reads no limits record: what bounds a principal's bytes is the
-daemon's, read off the volume's capacity and free space this store
-answers. Its modules, and its guarantees each linked to the item that
-keeps it, are in its crate root (`src/lib.rs`); the rules that hold across
-its files, in the workspace's `ARCHITECTURE.md` §The blob store.
+caller's, writes no operator stream and reads no limits record: what bounds
+a principal's bytes is the daemon's, read off the volume's capacity and
+free space this store answers, and what an operator is told is the
+daemon's too — the account the store's open answers of what it repaired
+and found, and every I/O failure, named by its file within the data
+directory and its act. Its modules, and its guarantees each linked to the
+item that keeps it, are in its crate root (`src/lib.rs`); the rules that
+hold across its files, in the workspace's `ARCHITECTURE.md` §The blob
+store.
 
 ## License
 

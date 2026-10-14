@@ -91,6 +91,34 @@ Doc comments cite the design rule the code implements, by id (`AUTH-2.2`,
 `PUB-6.30`, `M-I5`). A change that implements or extends a rule carries
 the rule's id; the review checks it.
 
+Doc comments follow Rust's conventions (RFC 1574, the API Guidelines'
+C-FAILURE, the rustdoc book):
+
+- Every block opens with one summary sentence on one line, then a blank
+  line. A function's summary is third person present ("Returns …",
+  "Parses …"); a type's or a constant's says what it is. A sentence that
+  will not fit the file's width (80 columns) becomes a shorter summary
+  with the rest in the next sentence.
+- A function that returns `Result` says when it fails under `# Errors`;
+  one that can panic, a `debug_assert!` included, says when under
+  `# Panics`. A caller's obligation whose breach does not panic is a
+  `**Precondition.**` paragraph. Where the order of the checks decides
+  which refusal a caller gets, the ordered list sits under `# Errors`.
+- Emphasis is markdown, not capitals: a heading inside a block is a bold
+  lead, a code item is a code span, stress is a plain word or italics.
+  Acronyms and rule ids stay as written.
+- A comment states the present. Dates, decision names and history ("no
+  longer", "as before") belong in the commit body; the comment keeps the
+  rule id. A decision number from a design record other than DOCTRINE
+  names its record ("signed-ops D24").
+- A comment says what the code does. One that disagrees with the code is
+  corrected to the code, and where the comment restated a design rule the
+  code does not meet, the commit says so.
+- A public doc names a private item in a code span, not a link.
+- Every public item, and every field and variant of a public type, has a
+  doc. A private item needs none, but a comment it has follows these
+  rules, `//` comments included.
+
 A crate's `README.md` describes its public surface, and a change to that
 surface keeps it true.
 

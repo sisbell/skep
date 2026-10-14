@@ -73,11 +73,11 @@ use skep_client::Origin;
 
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
-use crate::feed::{answer_without_index, query_too_long, BoardEntry, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
+use crate::feed::{answer_without_index, query_too_long, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::Pending;
-use crate::refs::board_reference;
+use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::script;
 use crate::sessions::{self, SessionEntry, Sessions};
@@ -336,13 +336,11 @@ pub struct Shell {
     /// session, the queue `held` and `resolve` read and act on, the own
     /// node's stopped state, and the resend the boards' feed threads drive.
     holds: Arc<Holds>,
-    anchors: PathBuf,
     session_mode: SessionMode,
     talk: Talk,
     /// The own node's board reference, where the shell runs one.
     own_node_reference: Option<String>,
     host_name: String,
-    date: String,
 }
 
 impl fmt::Debug for Shell {
@@ -404,6 +402,13 @@ enum GuestTarget {
     Origin(Origin),
 }
 
+/// Today's date, read when a walk runs: the anchor boxes' default is
+/// derived PER RUN (§4.2 step 2), the label it fills is permanent
+/// (AUTH-5.42), and a desktop shell runs for days.
+fn today() -> String {
+    civil_date(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))
+}
+
 /// `yyyy-mm-dd` from unix seconds (civil-from-days).
 fn civil_date(secs: u64) -> String {
     let z = (secs / 86400) as i64 + 719_468;
@@ -455,33 +460,29 @@ impl Shell {
         // re-opened silently).
         let reopen_store = matches!(opts.session_mode, SessionMode::Signed { .. }).then(|| Arc::clone(&store));
         let sessions = Arc::new(Sessions::new(reopen_store));
-        // The anchors BESIDE the store, never under it (§3.4 refuses a
-        // destination under the store): `<store>-anchors/`.
-        let anchors = {
-            let mut name = opts.store_dir.as_os_str().to_owned();
-            name.push("-anchors");
-            PathBuf::from(name)
-        };
         let arm = Arc::new(match opts.arm {
-            ArmConfig::Auto => DevArm::auto(anchors.clone(), Arc::clone(&opts.talk)),
+            // The auto arm places each anchor BESIDE the store, never under it
+            // (§3.4 refuses a destination under the store): `<store>-anchors/`.
+            ArmConfig::Auto => {
+                let mut anchors = opts.store_dir.as_os_str().to_owned();
+                anchors.push("-anchors");
+                DevArm::auto(PathBuf::from(anchors), Arc::clone(&opts.talk))
+            }
             ArmConfig::Script(answers) => DevArm::script(answers, Arc::clone(&opts.talk)),
         });
         let mut boards = Vec::new();
         let mut own_node_reference = None;
         for origin in &opts.boards {
-            let board = Arc::new(Board::new(origin.clone(), ShellDialer::new(Arc::clone(&log), Arc::clone(&stopping))));
-            let entry = Arc::new(BoardEntry { reference: board_reference(), origin: origin.clone(), board });
+            let entry = Arc::new(BoardEntry::new(Board::new(origin.clone(), ShellDialer::new(Arc::clone(&log), Arc::clone(&stopping)))));
             if opts.own_node.as_ref() == Some(origin) {
                 own_node_reference = Some(entry.reference.clone());
             }
             boards.push(entry);
         }
-        let boards_by_reference = boards.iter().map(|entry| (entry.reference.clone(), Arc::clone(&entry.board)));
-        let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), boards_by_reference);
+        let holds = Holds::new(Arc::clone(&sessions), Arc::clone(&bus), Arc::clone(&store), opts.store_dir.clone(), Arc::clone(&opts.talk), boards.iter().cloned());
         let shared = Shared { bus: Arc::clone(&bus), sessions: Arc::clone(&sessions), data_dir: opts.store_dir.clone(), talk: Arc::clone(&opts.talk), holds: Arc::clone(&holds) };
         let threads: Vec<FeedThreads> = boards.iter().map(|entry| FeedThreads::spawn(Arc::clone(entry), shared.clone())).collect();
         let feeds = boards.iter().zip(&threads).map(|(entry, board_threads)| (entry.reference.clone(), board_threads.feed())).collect();
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         Shell {
             boards,
             feeds,
@@ -494,12 +495,10 @@ impl Shell {
             stopping,
             store,
             holds,
-            anchors,
             session_mode: opts.session_mode,
             talk: opts.talk,
             own_node_reference,
             host_name: host_name(),
-            date: civil_date(secs),
         }
     }
 
@@ -564,7 +563,7 @@ impl Shell {
         let mut keys = Vec::new();
         for entry in &self.boards {
             let mode = || entry.board.health().map(|h| Mode::of(&h)).unwrap_or(Mode::Unclaimed);
-            keys.push(sessions::signing_key(&self.store, &entry.origin, principal, mode)?);
+            keys.push(sessions::signing_key(&self.store, entry.board.dialed(), principal, mode)?);
         }
         Ok(keys)
     }
@@ -651,7 +650,7 @@ impl Shell {
     /// fallback (ps3-4: every board takes it while no board publishes a
     /// display name).
     fn boards(&self) -> Value {
-        Value::Array(self.boards.iter().map(|entry| json!({"board": entry.reference, "name": entry.origin.as_str(), "origin": entry.origin.as_str()})).collect())
+        Value::Array(self.boards.iter().map(|entry| json!({"board": entry.reference, "name": entry.board.dialed().as_str(), "origin": entry.board.dialed().as_str()})).collect())
     }
 
     /// `session(board, principal)` → `{session, principal, account}`: the
@@ -664,7 +663,7 @@ impl Shell {
             SessionMode::Bare { .. } => sessions::open_bare(&entry.board, principal)?,
             SessionMode::Signed { .. } => sessions::open_signed(&entry.board, &self.store, principal)?,
         };
-        let session = self.sessions.register(&entry.reference, Arc::clone(&entry.board), open, &mut self.feed(&entry.reference));
+        let session = self.sessions.register(&entry, open, &mut self.feed(&entry.reference));
         // The principal's held file read whole at its session's open (§3c.7),
         // so `held(session)` lists its lines at once. The resend is NOT run
         // here: the page reads `held(session)` right after opening, and a
@@ -735,19 +734,20 @@ impl Shell {
         }
         let origin = optional(args, "origin", Value::as_str)?.ok_or_else(|| Refusal::malformed("board or origin"))?;
         let origin = Origin::parse(origin).ok_or_else(|| Refusal::shell(Name::NOT_CANONICAL, json!({"origin": origin})))?;
-        Ok(match self.boards.iter().find(|entry| entry.origin == origin) {
+        Ok(match self.boards.iter().find(|entry| *entry.board.dialed() == origin) {
             Some(entry) => GuestTarget::Board(Arc::clone(entry)),
             None => GuestTarget::Origin(origin),
         })
     }
 
-    /// The board the guest form dials, token-free: its target's origin.
-    fn guest_board(&self, args: &Value) -> Result<Board, Refusal> {
-        let origin = match self.guest_target(args)? {
-            GuestTarget::Board(entry) => entry.origin.clone(),
-            GuestTarget::Origin(origin) => origin,
-        };
-        Ok(Board::new(origin, ShellDialer::new(Arc::clone(&self.log), Arc::clone(&self.stopping))))
+    /// The board the guest form dials, token-free: one of this shell's own,
+    /// or a board at the origin its list holds none at, dialed through the
+    /// shell's one dialer.
+    fn guest_board(&self, args: &Value) -> Result<Arc<Board>, Refusal> {
+        Ok(match self.guest_target(args)? {
+            GuestTarget::Board(entry) => Arc::clone(&entry.board),
+            GuestTarget::Origin(origin) => Arc::new(Board::new(origin, ShellDialer::new(Arc::clone(&self.log), Arc::clone(&self.stopping)))),
+        })
     }
 
     /// The frame, and its `at` where the page sent the `/op-at` form.
@@ -845,7 +845,7 @@ impl Shell {
             return Err(Refusal::malformed("i"));
         }
         let (board, session) = if guest_form(args)? {
-            (Arc::new(self.guest_board(args)?), None)
+            (self.guest_board(args)?, None)
         } else {
             let session = self.session(&args["session"])?;
             (Arc::clone(&session.board), Some(session))
@@ -897,8 +897,7 @@ impl Shell {
             if optional(args, "board", Value::as_str)?.is_some_and(|board| board != session.board_reference) {
                 return Err(Refusal::malformed("board"));
             }
-            let who = Searcher::Session { principal: session.facts.principal, token: session.token.clone(), account: session.facts.account.clone().unwrap_or_default() };
-            (session.board_reference.clone(), who)
+            (session.board_reference.clone(), Searcher::Session(session))
         };
         self.feed(&board_reference).search(who, query, opts)
     }

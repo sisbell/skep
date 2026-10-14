@@ -60,6 +60,7 @@ use skep_search::Chain;
 use crate::attest::{attest_room, in_checked_set, insert_terms, Unattested};
 use crate::events::{EventBus, EventName};
 use crate::held::{Done, DoneError, HaltWhy, HeldDir, HeldLine, HeldQueue, Opened, Reason, Unheld, MAX_HELD_FRAME_BYTES, MAX_HELD_LINES};
+use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, SessionKind, Sessions};
 use crate::wire::{document_address, json_len, MAX_FRAME_BYTES};
@@ -602,15 +603,15 @@ pub struct Holds {
 }
 
 impl Holds {
-    /// The holds for a shell over `boards` — each board's reference and the
-    /// board dialed, the shell's for its life: nothing is dialed and nothing
-    /// on disk touched until a session opens at one.
-    pub fn new(sessions: Arc<Sessions>, bus: Arc<EventBus>, key_store: Arc<FileStore>, data_dir: PathBuf, talk: Talk, boards: impl IntoIterator<Item = (String, Arc<Board>)>) -> Arc<Holds> {
+    /// The holds for a shell over `boards` — each board's entry, its
+    /// reference beside the board dialed, the shell's for its life: nothing
+    /// is dialed and nothing on disk touched until a session opens at one.
+    pub fn new(sessions: Arc<Sessions>, bus: Arc<EventBus>, key_store: Arc<FileStore>, data_dir: PathBuf, talk: Talk, boards: impl IntoIterator<Item = Arc<BoardEntry>>) -> Arc<Holds> {
         let boards = boards
             .into_iter()
-            .map(|(reference, board)| {
+            .map(|entry| {
                 let hold = BoardHold { directory: Directory::NotYet("no session has opened at this board yet".to_string()), writes_halted: false, node_stopped: false, principals: HashMap::new() };
-                (reference, BoardSlot { board, hold: Mutex::new(hold), draining: AtomicBool::new(false) })
+                (entry.reference.clone(), BoardSlot { board: Arc::clone(&entry.board), hold: Mutex::new(hold), draining: AtomicBool::new(false) })
             })
             .collect();
         Arc::new(Holds { sessions, bus, key_store, data_dir, talk, boards })

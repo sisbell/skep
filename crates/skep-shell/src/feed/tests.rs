@@ -14,6 +14,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use skep_client::board::Token;
 use skep_client::dial::{DialError, Dialer, Headers, Method, Request, RequestHead, Response, StreamedResponse};
 use skep_client::store::FileStore;
 use skep_client::Origin;
@@ -21,6 +22,12 @@ use skep_search::{Chain, ChainAt};
 use tempfile::TempDir;
 
 use super::*;
+
+/// The board `b-1` under test: a board at `127.0.0.1:9` dialed through
+/// `dialer`, under the reference its sessions and its holds name it by.
+fn entry_over(dialer: impl Dialer + 'static) -> Arc<BoardEntry> {
+    Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), dialer)) })
+}
 
 /// The ten arms spell their names and members as §4b.2 draws them; a saved
 /// pair names its chain in the chain's own spelling, sixty-four lowercase
@@ -162,10 +169,10 @@ fn the_search_answer_is_built_as_its_declarations_say() {
 /// row of the guest's feed, `drafts` for a row of a session's supplement.
 #[test]
 fn an_updates_class_is_published_or_a_sessions_drafts() {
-    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), skep_client::PlainHttp::new()));
+    let entry = entry_over(skep_client::PlainHttp::new());
     let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
     let open = crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
-    let session = Sessions::new(None).register("b-1", board, open, &mut NoSupplements);
+    let session = Sessions::new(None).register(&entry, open, &mut NoSupplements);
     assert_eq!((UpdateClass::Published.as_str(), UpdateClass::Drafts(&session).as_str()), ("published", "drafts"));
 }
 
@@ -202,12 +209,12 @@ impl Committing {
     }
 }
 
-/// The shared context of one board's feed thread over `board`, every
+/// The shared context of one board's feed thread over `entry`, every
 /// session in `sessions`, the index under `store`.
-fn shared_over(board: &Arc<Board>, sessions: &Arc<Sessions>, bus: &Arc<EventBus>, store: &TempDir) -> Shared {
+fn shared_over(entry: &Arc<BoardEntry>, sessions: &Arc<Sessions>, bus: &Arc<EventBus>, store: &TempDir) -> Shared {
     let talk: Talk = Arc::new(|_: &str| {});
     let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(sessions), Arc::clone(bus), keys, store.path().to_path_buf(), Arc::clone(&talk), [("b-1".to_string(), Arc::clone(board))]);
+    let holds = Holds::new(Arc::clone(sessions), Arc::clone(bus), keys, store.path().to_path_buf(), Arc::clone(&talk), [Arc::clone(entry)]);
     Shared { bus: Arc::clone(bus), sessions: Arc::clone(sessions), data_dir: store.path().to_path_buf(), talk, holds }
 }
 
@@ -264,11 +271,10 @@ fn a_board_committing_faster_than_the_feed_thread_reads_costs_a_read_per_turn() 
     let events: String = (1..=commits).map(|n| format!("event: commit\ndata: {{\"log_position\": {n}}}\n\n")).collect();
     let drained = Arc::new(AtomicBool::new(false));
     let fake = Committing::new(Some(events.into_bytes()), &drained, Duration::from_millis(2));
-    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
-    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
-    let shared = shared_over(&board, &Arc::new(Sessions::new(None)), &Arc::new(EventBus::new()), &store);
-    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board }), shared);
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None)), &Arc::new(EventBus::new()), &store);
+    let threads = FeedThreads::spawn(entry, shared);
     let deadline = Instant::now() + Duration::from_secs(10);
     while !drained.load(Ordering::SeqCst) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
@@ -291,12 +297,11 @@ fn a_board_committing_faster_than_the_feed_thread_reads_costs_a_read_per_turn() 
 #[test]
 fn the_feed_thread_reads_health_once_at_its_start() {
     let fake = Committing::new(None, &Arc::new(AtomicBool::new(false)), Duration::ZERO);
-    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
-    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
-    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board: Arc::clone(&board) }), shared_over(&board, &Arc::new(Sessions::new(None)), &bus, &store));
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store));
     let deadline = Instant::now() + Duration::from_secs(10);
     let announced = loop {
         match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
@@ -345,12 +350,11 @@ impl Dialer for Unopenable {
 #[test]
 fn a_search_dials_nothing_where_no_index_stands() {
     let fake = Arc::new(Unopenable { op_dials: AtomicUsize::new(0) });
-    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
-    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
-    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board: Arc::clone(&board) }), shared_over(&board, &Arc::new(Sessions::new(None)), &bus, &store));
+    let threads = FeedThreads::spawn(Arc::clone(&entry), shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store));
     // The feed thread's start runs before its first command: once the
     // stream's failure is announced, the start's one try at the index is made.
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -431,15 +435,14 @@ impl Supplements for NoSupplements {
 #[test]
 fn a_drafts_cursor_the_floor_passed_reads_on_from_the_floor() {
     let fake = Arc::new(Reclaiming { events: Mutex::new(Some(b"event: commit\ndata: {\"log_position\": 11}\n\n".to_vec())) });
-    let origin = Origin::parse("http://127.0.0.1:9").unwrap();
-    let board = Arc::new(Board::new(origin.clone(), Arc::clone(&fake)));
+    let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
     let (sessions, bus) = (Arc::new(Sessions::new(None)), Arc::new(EventBus::new()));
     let rx = bus.subscribe();
     let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
-    let session = sessions.register("b-1", Arc::clone(&board), crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
-    let shared = shared_over(&board, &sessions, &bus, &store);
-    let threads = FeedThreads::spawn(Arc::new(BoardEntry { reference: "b-1".into(), origin, board }), shared);
+    let session = sessions.register(&entry, crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut NoSupplements);
+    let shared = shared_over(&entry, &sessions, &bus, &store);
+    let threads = FeedThreads::spawn(entry, shared);
     let deadline = Instant::now() + Duration::from_secs(10);
     let fed = loop {
         let wait = deadline.saturating_duration_since(Instant::now());
@@ -497,12 +500,13 @@ impl Dialer for Paging {
 /// rather than hanging the suite.
 fn read_over(script: impl Fn(u64, Option<u64>) -> Response + Send + Sync + 'static, since: u64, drafts: bool) -> (Vec<u64>, Option<u64>, Vec<(u64, Option<u64>)>) {
     let fake = Arc::new(Paging { script: Box::new(script), asked: Mutex::new(Vec::new()) });
-    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&fake)));
+    let entry = entry_over(Arc::clone(&fake));
     let session = drafts.then(|| {
         let facts = crate::sessions::Facts { principal: 1, account: Some("1.0.1".into()), kind: crate::sessions::SessionKind::Bare };
         let open = crate::sessions::Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at: 0 };
-        Sessions::new(None).register("b-1", Arc::clone(&board), open, &mut NoSupplements)
+        Sessions::new(None).register(&entry, open, &mut NoSupplements)
     });
+    let board = Arc::clone(&entry.board);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let class = session.as_deref().map_or(UpdateClass::Published, UpdateClass::Drafts);

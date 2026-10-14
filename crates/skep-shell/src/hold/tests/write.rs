@@ -582,15 +582,18 @@ struct TwoBoards {
 fn two_boards() -> TwoBoards {
     let store = TempDir::new().unwrap();
     let fakes = [Fake::on_chain(&"ab".repeat(32)), Fake::on_chain(&"cd".repeat(32))];
-    let boards: Vec<(String, Arc<Board>)> =
-        fakes.iter().enumerate().map(|(i, fake)| (format!("b-{}", i + 1), Arc::new(Board::new(Origin::parse(&format!("http://127.0.0.1:{}", i + 1)).unwrap(), Arc::clone(fake))))).collect();
+    let boards: Vec<Arc<BoardEntry>> = fakes
+        .iter()
+        .enumerate()
+        .map(|(i, fake)| Arc::new(BoardEntry { reference: format!("b-{}", i + 1), board: Arc::new(Board::new(Origin::parse(&format!("http://127.0.0.1:{}", i + 1)).unwrap(), Arc::clone(fake))) }))
+        .collect();
     let table = Arc::new(Sessions::new(None));
     let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(&table), Arc::new(EventBus::new()), keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), boards.clone());
+    let holds = Holds::new(Arc::clone(&table), Arc::new(EventBus::new()), keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), boards.iter().cloned());
     let sessions = boards
-        .into_iter()
-        .map(|(reference, board)| {
-            let session = table.register(&reference, board, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
+        .iter()
+        .map(|entry| {
+            let session = table.register(entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
             holds.open_session(&session);
             session
         })

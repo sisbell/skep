@@ -22,7 +22,7 @@ only those above it (held by `tests/it/tidy.rs`):
 
 | module | holds |
 |---|---|
-| `refs` | the reference registry's NAMES: a board reference (`b-…`) and a session reference (`s-…`) minted from OS entropy per process, never a credential, never derived from an origin or a token (§4b.1, THE PIN) |
+| `refs` | the reference registry's NAMES: a board reference (`b-…`) and a session reference (`s-…`) minted from OS entropy per process, never a credential, never derived from an origin or a token (§4b.1, THE PIN); and `BoardEntry`, one board under the reference minted for it — the pair the shell, a board's feed thread, its holds and every session at it read whole |
 | `log` | `Log`, the call log and the dial log the page's gate reads — sizes, routes and timing, never a token or a body, the latest `MAX_LOG_ENTRIES` kept — and `ShellDialer`, the one `PlainHttp` every board dials through, which dials nothing once the shell's stop stands |
 | `events` | `EventBus`: the seven events of §4b.2 as values, each named by an `EventName`, fanned out to every subscriber in order |
 | `refusal` | `Refusal`, the one refusal shape the page renders — the board's verdict verbatim, a halt's face, the block, the unreachable board, the shell's own — each named by a constant of `Name`, the one closed list |

@@ -97,7 +97,8 @@ fn a_probe_resends_every_principals_lines() {
     let g = ground();
     let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
     let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 };
-    let second = g.holds.sessions.register("b-1", Arc::clone(&g.session.board), open, &mut NoSupplements);
+    let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
+    let second = g.holds.sessions.register(&board, open, &mut NoSupplements);
     g.holds.open_session(&second);
     g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
     g.holds.hold(&second, Burst::admit(insert("1.0.2.0.1", json!(["b"])), &second).unwrap(), Reason::of("unreachable", false)).unwrap();

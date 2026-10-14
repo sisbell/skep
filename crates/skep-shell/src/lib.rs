@@ -17,7 +17,8 @@
 //! * `refs` — THE REFERENCE REGISTRY's names (§4b.1, THE PIN): a board
 //!   reference and a session reference are opaque NAMES this process mints
 //!   from OS entropy, never a credential, never derived from an origin or a
-//!   token, valid in this process alone.
+//!   token, valid in this process alone; and `BoardEntry`, one board under
+//!   the reference minted for it, the pair every reader takes whole.
 //! * `log` — [`Log`], the call log and the dial log the page's gate reads
 //!   (the structure record §6.3's class 5): every call the page made and
 //!   every dial the shell made, sizes and timing, never a token or a body,

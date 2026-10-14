@@ -10,8 +10,9 @@
 //! anchor files placed under the provider's own directory, the re-type
 //! declined, no artifact held. Every answer is SAID on the TALK stream,
 //! naming the moment and what was done and never the seed: the sheet a
-//! walk shows is kept in this process so a script's `retype sheet` can type
-//! it back, and leaves the process nowhere. The NATIVE statements — those
+//! walk shows is kept in this process where a script runs, so its `retype
+//! sheet` can type it back, and dropped by the auto arm, which types no
+//! seed — it leaves the process nowhere. The NATIVE statements — those
 //! naming where key material rests on disk (§4b.3; `person`'s
 //! `NATIVE_RULES`) — are said there too, in the place of the shell's own
 //! window, and sent to no page.
@@ -39,21 +40,22 @@ use crate::Talk;
 enum Kind {
     /// The auto arm, the anchor files' directory.
     Auto { anchors: PathBuf },
-    /// The script's answers, taken in order.
-    Script(Mutex<VecDeque<Answer>>),
+    /// The script's answers, taken in order, and the sheets shown so far —
+    /// never sent anywhere — kept for a `retype sheet` or an `import sheet`
+    /// to type back.
+    Script { answers: Mutex<VecDeque<Answer>>, sheets: Mutex<Vec<SheetFields>> },
 }
 
-/// THE DEV ARM: the kind, the sheets shown so far (kept here, never sent
-/// anywhere), and the TALK sink every answer is said on.
+/// THE DEV ARM: its kind — a script's holding the sheets shown so far — and
+/// the TALK sink every answer is said on.
 pub struct DevArm {
     kind: Kind,
-    sheets: Mutex<Vec<SheetFields>>,
     talk: Talk,
 }
 
 impl std::fmt::Debug for DevArm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DevArm({})", match &self.kind { Kind::Auto { .. } => "auto", Kind::Script(_) => "script" })
+        write!(f, "DevArm({})", match &self.kind { Kind::Auto { .. } => "auto", Kind::Script { .. } => "script" })
     }
 }
 
@@ -61,17 +63,17 @@ impl DevArm {
     /// The AUTO arm: anchor files under `anchors`, every answer said on
     /// `talk`.
     pub fn auto(anchors: PathBuf, talk: Talk) -> DevArm {
-        DevArm { kind: Kind::Auto { anchors }, sheets: Mutex::new(Vec::new()), talk }
+        DevArm { kind: Kind::Auto { anchors }, talk }
     }
 
     /// The SCRIPT arm over `answers`, every answer said on `talk`.
     pub fn script(answers: Vec<Answer>, talk: Talk) -> DevArm {
-        DevArm { kind: Kind::Script(Mutex::new(answers.into())), sheets: Mutex::new(Vec::new()), talk }
+        DevArm { kind: Kind::Script { answers: Mutex::new(answers.into()), sheets: Mutex::new(Vec::new()) }, talk }
     }
 
     /// Whether this is the script arm.
     pub fn is_script(&self) -> bool {
-        matches!(self.kind, Kind::Script(_))
+        matches!(self.kind, Kind::Script { .. })
     }
 
     fn say(&self, line: impl fmt::Display) {
@@ -81,7 +83,7 @@ impl DevArm {
     /// The script's answer for `moment`, or `None` where no script runs (the
     /// auto arm); `Abandon` and an exhausted script answer the abandonment.
     fn scripted(&self, moment: &str) -> Option<Result<Answer, Abandoned>> {
-        let Kind::Script(answers) = &self.kind else { return None };
+        let Kind::Script { answers, .. } = &self.kind else { return None };
         let answer = answers.lock().expect("the script's lock").pop_front();
         Some(match answer {
             None => {
@@ -103,10 +105,17 @@ impl DevArm {
         Err(Abandoned)
     }
 
-    /// THE SHEET (SECRET): kept here for a `retype sheet`, shown to no one.
+    /// THE SHEET (SECRET), shown to no one: kept where a script runs, for
+    /// its `retype sheet` or `import sheet` to type back; dropped by the
+    /// auto arm, which types no seed.
     pub fn sheet(&self, fields: SheetFields) {
-        self.say(format_args!("the sheet for fingerprint {} was shown to no one and kept for a scripted re-type", fields.fingerprint_grouped));
-        self.sheets.lock().expect("the sheets' lock").push(fields);
+        match &self.kind {
+            Kind::Script { sheets, .. } => {
+                self.say(format_args!("the sheet for fingerprint {} was shown to no one and kept for a scripted re-type", fields.fingerprint_grouped));
+                sheets.lock().expect("the sheets' lock").push(fields);
+            }
+            Kind::Auto { .. } => self.say(format_args!("the sheet for fingerprint {} was shown to no one and dropped (the auto arm types no seed)", fields.fingerprint_grouped)),
+        }
     }
 
     /// THE DISMISSAL (SECRET): nothing was displayed, nothing to clear.
@@ -121,10 +130,11 @@ impl DevArm {
     }
 
     /// The seed and the fingerprint's first eight hex digits off the `n`-th
-    /// sheet shown — `None` where no sheet `n` was shown, or its fingerprint
-    /// is shorter than the prefix a typed answer carries.
+    /// sheet a script was shown — `None` where no sheet `n` was kept, or its
+    /// fingerprint is shorter than the prefix a typed answer carries.
     fn off_sheet(&self, n: usize) -> Option<(String, String)> {
-        let sheets = self.sheets.lock().expect("the sheets' lock");
+        let Kind::Script { sheets, .. } = &self.kind else { return None };
+        let sheets = sheets.lock().expect("the sheets' lock");
         let sheet = sheets.get(n)?;
         let prefix = sheet.fingerprint_hex.get(..8)?;
         Some((sheet.seed_grouped.split_whitespace().collect(), prefix.to_string()))
@@ -270,7 +280,8 @@ mod tests {
     }
 
     /// The auto arm answers each SECRET and CONSENT moment as a developer
-    /// would and says so; the seed never reaches the TALK stream.
+    /// would and says so, keeping no sheet it is shown; the seed never
+    /// reaches the TALK stream.
     #[test]
     fn the_auto_arm_answers_and_says_what_it_did_without_the_seed() {
         let (talk, lines) = talk();
@@ -284,7 +295,7 @@ mod tests {
         assert!(matches!(arm.kept_or_placed(std::path::Path::new("/tmp/k")), Ok(KeptOrPlaced::Kept)));
         arm.dismiss();
         let said = lines.lock().unwrap().join("\n");
-        assert!(said.contains("dev arm: the sheet for fingerprint abab abab"), "{said}");
+        assert!(said.contains("dev arm: the sheet for fingerprint abab abab was shown to no one and dropped (the auto arm types no seed)"), "the auto arm keeps no sheet: {said}");
         assert!(!said.contains("5e5e"), "the seed never reaches TALK: {said}");
         assert!(said.contains("anchor 1 is placed under /tmp/anchors/anchor-1"), "{said}");
         assert!(!arm.is_script());

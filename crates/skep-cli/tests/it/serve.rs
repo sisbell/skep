@@ -547,7 +547,8 @@ fn f3_the_person_over_the_bridge_claims_and_a_cancel_abandons() {
     let dir = tempfile::tempdir().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let script = dir.path().join("script.txt");
-    std::fs::write(&script, "# the re-types off the sheets shown, in order\nretype sheet 0\nretype sheet 1\n").unwrap();
+    let (a, b) = (dir.path().join("anchor-a"), dir.path().join("anchor-b"));
+    std::fs::write(&script, format!("# the anchors' two directories, then the re-types off the sheets shown, in order\ndestination {}\ndestination {}\nretype sheet 0\nretype sheet 1\n", a.display(), b.display())).unwrap();
     let provider = Provider::start(&["--board", &origin(sd.port()), "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store")), "--script", s(&script)]);
     let rx = provider.events();
     let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
@@ -588,6 +589,7 @@ fn f3_the_person_over_the_bridge_claims_and_a_cancel_abandons() {
     assert!(moments.iter().filter(|m| m["kind"] == "label").count() >= 2, "the two anchor boxes");
     let said = provider.talk();
     assert!(said.contains("dev arm: the sheet for fingerprint"), "the SECRET sheet went to the dev arm:\n{said}");
+    assert!(said.contains(&format!("anchor 0 is placed under {}", a.display())), "the script placed the anchor:\n{said}");
     assert!(said.contains("the re-type is typed off sheet 0"), "the script answered the re-type:\n{said}");
     assert!(!said.contains("seed_grouped") && moments.iter().all(|m| !m.to_string().contains("seed")), "no seed crossed");
     // The second run: cancelled at the first answerable moment.

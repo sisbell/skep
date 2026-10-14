@@ -1110,7 +1110,8 @@ an item the root re-exports counted as the module it is brought from
 
 - `refs.rs` the reference registry's NAMES: board and session references
   minted from OS entropy per process, never a credential, never derived
-  from an origin or a token (THE PIN).
+  from an origin or a token (THE PIN); `BoardEntry`, one board under the
+  reference minted for it.
 - `log.rs` `Log`, the call and dial log the page's gate reads — sizes,
   routes and timing, never a token or a body — and `ShellDialer`, the
   one `PlainHttp` every board dials through, so no dial escapes the log,
@@ -1155,7 +1156,7 @@ an item the root re-exports counted as the module it is brought from
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder` — the `feed`, `index`, `mode` and
   `daemon` events, the `search` call, the held-burst probe on its cadence
-  and at every hand-over; `BoardEntry`.
+  and at every hand-over.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the private
   row methods behind `call`, which logs each; `fetch`, `answer`, `cancel`,
   `shutdown`; `ShellOptions` and `set_node_state`.

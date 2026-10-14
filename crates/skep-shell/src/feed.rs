@@ -59,45 +59,34 @@ use std::thread;
 use std::time::Instant;
 
 use serde_json::{json, Value};
-use skep_client::board::{ChangesAnswer, ChangesQuery, Token};
+use skep_client::board::{ChangesAnswer, ChangesQuery};
 use skep_client::derive::Mode;
-use skep_client::search::{events, Consumer, Lost, Newer, Place, QueryTooLong, Range, SearchAnswer, SearchDir, SearchOpts, SessionRef, State, Stop, Who};
-use skep_client::{Board, Origin};
+use skep_client::search::{events, Consumer, Lost, Newer, Place, QueryTooLong, Range, SearchAnswer, SearchDir, SearchOpts, State, Stop, Who};
+use skep_client::Board;
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
 use crate::events::{EventBus, EventName};
 use crate::hold::{Holds, PROBE_CADENCE};
+use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, Sessions, Supplements};
 use crate::Talk;
 
-/// One board of the shell: its reference, its origin and the board dialed
-/// through the shell's one logging dialer — shared with the board's holds.
-pub struct BoardEntry {
-    pub reference: String,
-    pub origin: Origin,
-    pub board: Arc<Board>,
-}
-
-impl std::fmt::Debug for BoardEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BoardEntry({}, {})", self.reference, self.origin)
-    }
-}
-
-/// Who searches, owned: the guest, or a session's facts.
+/// Who searches, as it crosses to the feed thread: the guest, or a session
+/// the table holds, whole.
 #[derive(Debug, Clone)]
 pub enum Searcher {
     Guest,
-    Session { principal: u64, token: Token, account: String },
+    Session(Arc<SessionEntry>),
 }
 
 impl Searcher {
-    /// Who searches, as the consumer takes it: a view of this owned twin.
+    /// Who searches, as the consumer takes it: the guest, or the session's
+    /// own view ([`SessionEntry::session_ref`]).
     fn as_who(&self) -> Who<'_> {
         match self {
             Searcher::Guest => Who::Guest,
-            Searcher::Session { principal, token, account } => Who::Session(SessionRef { token, principal: *principal, account }),
+            Searcher::Session(session) => Who::Session(session.session_ref()),
         }
     }
 }
@@ -564,8 +553,7 @@ impl<'b> Feeder<'b> {
         for session in self.sessions.on_board(&self.entry.reference) {
             let principal = session.facts.principal;
             if c.mounted(principal) {
-                let who = Who::Session(SessionRef { token: &session.token, principal, account: session.facts.account.as_deref().unwrap_or("") });
-                faces.push((Some(principal), state_json(&c.state(who))));
+                faces.push((Some(principal), state_json(&c.state(Who::Session(session.session_ref())))));
             }
         }
         for (principal, state) in faces {
@@ -672,7 +660,10 @@ fn read_to_head(board: &Board, class: UpdateClass<'_>, since: u64, mut emit: imp
 /// and the shell's commands land here.
 impl Supplements for Feeder<'_> {
     fn widen(&mut self, session: &Arc<SessionEntry>) {
-        let Some(account) = session.facts.account.as_deref() else { return };
+        // A session the board answered no account for mounts no supplement.
+        if session.facts.account.is_none() {
+            return;
+        }
         let principal = session.facts.principal;
         self.session_references.insert(principal, session.reference.clone());
         self.drafts_since.entry(principal).or_insert(session.opened_at);
@@ -681,7 +672,7 @@ impl Supplements for Feeder<'_> {
         self.last_index_state.remove(&Some(principal));
         self.open_consumer();
         if let Some(c) = &self.consumer {
-            if let Err(h) = c.widen(SessionRef { token: &session.token, principal, account }) {
+            if let Err(h) = c.widen(session.session_ref()) {
                 self.say(format_args!("the supplement for principal {principal} could not widen: {h}"));
             }
         }

@@ -56,6 +56,7 @@ use skep_client::board::{KeySetAnswer, Opened, Scope, SessionBody, Token};
 use skep_client::ceremony::handshake::{handshake_prechecked, key_face, Site};
 use skep_client::derive::records::{credential_records, Hand};
 use skep_client::derive::{origin_arm, precheck, KeyDiagnosis, Mode, Walk};
+use skep_client::search::SessionRef;
 use skep_client::sheet::render_inert;
 use skep_client::sign::Signer;
 use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose, StoreError};
@@ -64,7 +65,7 @@ use skep_identity::Fingerprint;
 
 use crate::attest::{wants_attest, Composer, Unattested};
 use crate::events::{EventBus, EventName};
-use crate::refs::session_reference;
+use crate::refs::{session_reference, BoardEntry};
 use crate::refusal::{Name, Refusal};
 
 /// A session's kind: the bare bind, or the signed content-scoped handshake —
@@ -140,6 +141,13 @@ impl SessionEntry {
         let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, board_term };
         composer.attach(frame)
     }
+
+    /// The session as the search consumer reads it: its token, its principal
+    /// and its account — `""` where the board answered it none, as a search
+    /// under it reads; no supplement mounts for such a session.
+    pub fn session_ref(&self) -> SessionRef<'_> {
+        SessionRef { token: &self.token, principal: self.facts.principal, account: self.facts.account.as_deref().unwrap_or("") }
+    }
 }
 
 /// A board's drafts supplements as the hand that registers or ends a
@@ -191,13 +199,11 @@ impl Sessions {
 
     /// A session opened at `board`, REGISTERED: entered under a fresh
     /// reference — never the token's — its board beside its token, and its
-    /// drafts supplement widened; the entry. PRECONDITION, the caller's, and
-    /// the one place a token is paired with a board: `board` is the board
-    /// `board_reference` names — the `session` row takes both from one board
-    /// entry, as the restart arm's re-open takes both from the session it
-    /// replaces — so every collaborator after reads the pair off the entry.
-    pub fn register(&self, board_reference: &str, board: Arc<Board>, open: Open, supplements: &mut dyn Supplements) -> Arc<SessionEntry> {
-        let entry = self.enter(board_reference, board, open);
+    /// drafts supplement widened; the entry. The board's reference and the
+    /// board itself are read off its entry, so every collaborator after reads
+    /// the pair off the session.
+    pub fn register(&self, board: &BoardEntry, open: Open, supplements: &mut dyn Supplements) -> Arc<SessionEntry> {
+        let entry = self.enter(&board.reference, Arc::clone(&board.board), open);
         supplements.widen(&entry);
         entry
     }
@@ -265,6 +271,11 @@ impl Sessions {
         Some(entry)
     }
 
+    /// A session entered under a fresh reference at the board
+    /// `board_reference` names, `board` beside its token: the one place a
+    /// token is paired with a board, its two callers each passing a pair read
+    /// whole — `register` off a board's entry, `end`'s re-open off the session
+    /// it replaces.
     fn enter(&self, board_reference: &str, board: Arc<Board>, open: Open) -> Arc<SessionEntry> {
         let entry = Arc::new(SessionEntry {
             reference: session_reference(),

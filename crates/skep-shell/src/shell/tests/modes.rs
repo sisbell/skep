@@ -6,8 +6,9 @@
 //! `beyond_head` under the board's own status, `accept`'s armed names read
 //! off the real walk, the stale and foreign references, the token's text, a
 //! seed the walk made and the store's location in no answer, no event and
-//! no log entry — a paper claim's among them — a search's query recorded
-//! nowhere, every event held to its declaration, and a closed session's
+//! no log entry — a paper claim's among them — a scripted claim's anchors
+//! placed where its script says, a search's query recorded nowhere, every
+//! event held to its declaration, and a closed session's
 //! drafts rows ahead of its `session-died`; a death signal at a call's own
 //! dial ending its session, and a released supplement keeping its drafts
 //! cursor; then the signed mode over the same store: a
@@ -672,6 +673,41 @@ fn a_paper_claim_hands_the_page_no_seed_and_no_path() {
     let leaked: Vec<String> = seen.lock().unwrap().iter().map(|e| e.data.to_string()).filter(|data| data.contains(&store_text)).collect();
     assert!(leaked.is_empty() && !all.contains(&store_text), "a path under the store crossed: {leaked:?}");
     assert_events_declared(&seen.lock().unwrap());
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
+    sd.shutdown();
+}
+
+/// A SCRIPTED CLAIM PLACES ITS ANCHORS WHERE ITS SCRIPT SAYS (§4b.3: an
+/// anchor file's destination is the shell's own window's, ONE PER ANCHOR,
+/// and the dev arm's in the provider): a notebook claim under a script of
+/// two `destination` lines — the claim's only SECRET moments where nothing
+/// is printed — lands each anchor file in its own named directory, the dev
+/// arm saying each placement on TALK (the mutant row that hands the walk
+/// destinations of its own lands both files where the script never said,
+/// its two lines unread).
+#[test]
+fn a_scripted_claim_places_its_anchors_where_its_script_says() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let (a, b) = (dir.path().join("anchor-a"), dir.path().join("anchor-b"));
+    let (talk, lines) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk);
+    opts.arm = ArmConfig::Script(vec![script::Answer::Destination(a.clone()), script::Answer::Destination(b.clone())]);
+    let shell = Shell::open(opts);
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::new(Mutex::new(Vec::new())));
+    let board = shell.board_references().remove(0);
+    shell.call("keygen", &json!({"label": "notebook"})).unwrap();
+    let claimed = shell.call("claim", &json!({"board": board, "name": "a name"})).unwrap_or_else(|r| panic!("{r}\n{}", lines.lock().unwrap().join("\n")));
+    assert_eq!(claimed["account"], "1.0.1");
+    let talked = lines.lock().unwrap().join("\n");
+    for (which, place) in [(0, &a), (1, &b)] {
+        let files = std::fs::read_dir(place).map(Iterator::count).unwrap_or(0);
+        assert_eq!(files, 1, "anchor {which}'s one file under {}:\n{talked}", place.display());
+        assert!(talked.contains(&format!("dev arm: anchor {which} is placed under {}", place.display())), "the dev arm placed anchor {which}:\n{talked}");
+    }
     shell.shutdown();
     drop(shell);
     answerer.join().unwrap();

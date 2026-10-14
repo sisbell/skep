@@ -8,16 +8,45 @@
 //! the origin or the token it stands for, and a reference this process
 //! never issued matches nothing: the shell answers THE PIN's stale-reference
 //! refusal for it. The two kinds wear different prefixes, so a session
-//! reference handed where a board's is expected matches nothing either.
+//! reference handed where a board's is expected matches nothing either. A
+//! board reference names one board, its [`BoardEntry`]: minted with the
+//! entry, and read beside its board whole.
+
+use std::fmt;
+use std::sync::Arc;
 
 use skep_client::sign::fresh_bytes;
+use skep_client::Board;
 
 /// The entropy in one reference or moment id, in bytes: ninety-six bits, so
 /// two of one process never collide and none is ever guessed.
 const REFERENCE_BYTES: usize = 12;
 
-/// A fresh BOARD reference: `b-` and twenty-four lowercase hex.
-pub fn board_reference() -> String {
+/// ONE BOARD OF THE SHELL: the board dialed through the shell's one dialer —
+/// its `dialed()` the board's origin — under the opaque reference minted for
+/// it, the name the page holds; the pair the shell, the board's feed thread,
+/// its holds and every session that stands at it read whole.
+pub struct BoardEntry {
+    pub reference: String,
+    pub board: Arc<Board>,
+}
+
+impl BoardEntry {
+    /// `board` under a fresh board reference.
+    pub fn new(board: Board) -> BoardEntry {
+        BoardEntry { reference: board_reference(), board: Arc::new(board) }
+    }
+}
+
+impl fmt::Debug for BoardEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BoardEntry({}, {})", self.reference, self.board.dialed())
+    }
+}
+
+/// A fresh BOARD reference: `b-` and twenty-four lowercase hex — minted for
+/// a [`BoardEntry`] alone.
+fn board_reference() -> String {
     format!("b-{}", hex(&fresh_bytes(REFERENCE_BYTES)))
 }
 
@@ -56,5 +85,18 @@ mod tests {
         assert_ne!(board_reference(), b);
         assert_ne!(session_reference(), s);
         assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+    }
+
+    /// A board's entry takes a fresh board reference beside its board, so two
+    /// entries over one origin take two: a reference names one entry, never
+    /// its origin; the entry prints its reference and its board's origin.
+    #[test]
+    fn a_boards_entry_takes_a_fresh_reference_beside_its_board() {
+        let origin = skep_client::Origin::parse("http://127.0.0.1:9").unwrap();
+        let entry = || BoardEntry::new(Board::new(origin.clone(), skep_client::PlainHttp::new()));
+        let (one, two) = (entry(), entry());
+        assert!(one.reference.starts_with("b-") && one.reference != two.reference, "{} {}", one.reference, two.reference);
+        assert_eq!((one.board.dialed(), two.board.dialed()), (&origin, &origin));
+        assert_eq!(format!("{one:?}"), format!("BoardEntry({}, {origin})", one.reference));
     }
 }

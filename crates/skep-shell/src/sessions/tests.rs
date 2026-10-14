@@ -47,6 +47,12 @@ fn nowhere() -> Arc<Board> {
     Arc::new(Board::new(Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap(), PlainHttp::new()))
 }
 
+/// The entry of `board` under `reference`: a board as the table registers a
+/// session at it.
+fn at(reference: &str, board: Arc<Board>) -> BoardEntry {
+    BoardEntry { reference: reference.into(), board }
+}
+
 /// A dialer that holds each exchange at its gate until the test opens it,
 /// counting them, then answers that the board did not answer.
 struct Gated {
@@ -78,8 +84,8 @@ impl Dialer for Gated {
 fn the_table_registers_sessions_under_fresh_references() {
     let (board, sessions) = (nowhere(), Sessions::new(None));
     let mut supplements = Recorded::default();
-    let one = sessions.register("b-1", Arc::clone(&board), signed_open(1, "1.0.1.1", "1.0.1"), &mut supplements);
-    let two = sessions.register("b-2", nowhere(), signed_open(2, "1.0.1.1", "1.0.1.1"), &mut supplements);
+    let one = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1.1", "1.0.1"), &mut supplements);
+    let two = sessions.register(&at("b-2", nowhere()), signed_open(2, "1.0.1.1", "1.0.1.1"), &mut supplements);
     assert!(one.reference.starts_with("s-") && one.reference != two.reference);
     assert!(Arc::ptr_eq(&one.board, &board) && !Arc::ptr_eq(&two.board, &board), "each session holds the board it was registered at");
     assert_eq!(supplements.0, [format!("widen {}", one.reference), format!("widen {}", two.reference)]);
@@ -101,7 +107,7 @@ fn a_session_ends_once_and_a_second_hand_answers_the_first_reason() {
     let (board, sessions, bus) = (nowhere(), Sessions::new(None), EventBus::new());
     let rx = bus.subscribe();
     let mut supplements = Recorded::default();
-    let entry = sessions.register("b-1", Arc::clone(&board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    let entry = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     let reason = sessions.end(&entry, &mut supplements, &bus);
     assert_eq!(reason["arm"], "unreachable", "{reason}");
     assert!(sessions.get(&entry.reference).is_none());
@@ -115,7 +121,7 @@ fn a_session_ends_once_and_a_second_hand_answers_the_first_reason() {
     assert!(rx.try_recv().is_err(), "and emits nothing");
     assert_eq!(supplements.0.len(), touched, "and touches no supplement");
     assert!(sessions.close(&entry.reference).is_none(), "nothing is left to close");
-    let closed_first = sessions.register("b-1", board, signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    let closed_first = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     assert!(sessions.close(&closed_first.reference).is_some());
     assert!(sessions.close(&closed_first.reference).is_none(), "closed once");
     assert_eq!(sessions.end(&closed_first, &mut supplements, &bus), closed(), "a death met after the close answers its reason");
@@ -131,16 +137,16 @@ fn a_session_ends_once_and_a_second_hand_answers_the_first_reason() {
 fn a_principals_supplement_follows_its_standing_sessions() {
     let (board, sessions, bus) = (nowhere(), Sessions::new(None), EventBus::new());
     let mut supplements = Recorded::default();
-    let first = sessions.register("b-1", Arc::clone(&board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
-    let second = sessions.register("b-1", Arc::clone(&board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
-    sessions.register("b-2", nowhere(), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    let first = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    let second = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    sessions.register(&at("b-2", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     supplements.0.clear();
     sessions.end(&first, &mut supplements, &bus);
     assert_eq!(supplements.0, [format!("widen {}", second.reference)], "the session standing at the board takes the supplement");
     sessions.end(&second, &mut supplements, &bus);
     assert_eq!(supplements.0.last().map(String::as_str), Some("narrow 1"), "none stands at b-1, and the session at b-2 takes nothing");
-    let third = sessions.register("b-1", Arc::clone(&board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
-    let fourth = sessions.register("b-1", board, signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    let third = sessions.register(&at("b-1", Arc::clone(&board)), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
+    let fourth = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut supplements);
     supplements.0.clear();
     assert!(sessions.close(&third.reference).is_some());
     sessions.release("b-1", 1, &mut supplements);
@@ -160,7 +166,7 @@ fn a_second_hand_waits_for_the_reason_the_first_derives() {
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), Arc::clone(&gated)));
     let (sessions, bus) = (Sessions::new(None), EventBus::new());
     let rx = bus.subscribe();
-    let entry = sessions.register("b-1", board, signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+    let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let (mut first_hand, mut second_hand) = (Recorded::default(), Recorded::default());
     let (first, second) = thread::scope(|s| {
         let first = s.spawn(|| sessions.end(&entry, &mut first_hand, &bus));
@@ -199,7 +205,7 @@ fn a_hand_that_panics_mid_end_leaves_the_end_to_the_next() {
     let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:9").unwrap(), PanicsOnce(AtomicUsize::new(0))));
     let (sessions, bus) = (Sessions::new(None), EventBus::new());
     let rx = bus.subscribe();
-    let entry = sessions.register("b-1", board, signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+    let entry = sessions.register(&at("b-1", board), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sessions.end(&entry, &mut Recorded::default(), &bus)));
     assert!(panicked.is_err() && rx.try_recv().is_err(), "the first hand ended nothing");
     assert_eq!(sessions.end(&entry, &mut Recorded::default(), &bus)["arm"], "unreachable");

@@ -456,14 +456,14 @@ fn ground_in(store: TempDir, facts: Facts, opened_at: u64) -> Ground {
 /// read its `H.1` — and `store`, under a session of `facts` opened at
 /// `opened_at`.
 fn ground_over(fake: Arc<Fake>, store: TempDir, facts: Facts, opened_at: u64) -> Ground {
-    let board = Arc::new(Board::new(Origin::parse("http://127.0.0.1:1").unwrap(), Arc::clone(&fake)));
+    let entry = Arc::new(BoardEntry { reference: "b-1".into(), board: Arc::new(Board::new(Origin::parse("http://127.0.0.1:1").unwrap(), Arc::clone(&fake))) });
     let sessions = Arc::new(Sessions::new(None));
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
     let keys = Arc::new(FileStore::open(store.path().join("store")));
-    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [("b-1".to_string(), Arc::clone(&board))]);
+    let holds = Holds::new(Arc::clone(&sessions), bus, keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), [Arc::clone(&entry)]);
     let open = Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts, opened_at };
-    let session = sessions.register("b-1", board, open, &mut NoSupplements);
+    let session = sessions.register(&entry, open, &mut NoSupplements);
     holds.open_session(&session);
     Ground { holds, fake, session, rx, store }
 }

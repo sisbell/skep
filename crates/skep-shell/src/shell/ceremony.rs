@@ -6,9 +6,11 @@
 //! person of `person` — its PUBLIC moments the page's, its SECRET and
 //! CONSENT ones the dev arm's — and answers when the walk ends, a halt the
 //! walk met carried as the row's refusal under the armed name the row
-//! spells.
+//! spells. A row leaves each anchor's destination to the walk, which asks it
+//! of the person ONE PER ANCHOR, the dev arm answering in the place of the
+//! shell's own save dialog (§4b.3); and a walk's options carry the date it
+//! runs on (`today`), the anchor boxes' default derived per run.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
@@ -25,7 +27,7 @@ use skep_client::sheet::{render_inert, Label};
 use skep_client::store::{Binding, KeyFacts, KeySelector, KeyStore, Purpose, StoreError, Unappended};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{optional, principal_arg, Shell};
+use super::{optional, principal_arg, today, Shell};
 use crate::person::BridgePerson;
 use crate::refusal::{Name, Refusal};
 use crate::sessions;
@@ -87,11 +89,6 @@ impl Shell {
     /// one, else the session mode's.
     fn principal_for(&self, args: &Value) -> Result<u64, Refusal> {
         Ok(optional(args, "principal", principal_arg)?.unwrap_or(self.session_mode.principal()))
-    }
-
-    /// Two anchor destinations under the shell's own directory for `walk`.
-    fn anchor_out(&self, walk: &str) -> Vec<PathBuf> {
-        vec![self.anchors.join(format!("{walk}-a")), self.anchors.join(format!("{walk}-b"))]
     }
 
     /// `keygen({label?})` → `{fingerprint, payload, outstanding}`: one
@@ -168,10 +165,10 @@ impl Shell {
     }
 
     /// `claim(board, {principal?, name?, paper?})`: the notebook walk run
-    /// by the shell against the board, the anchors under the shell's own
-    /// directory; `no_key` where the store holds no key at all — the
-    /// notebook door is two calls, `keygen` then `claim` — and
-    /// `already_claimed` where another store's claim stands.
+    /// by the shell against the board, each anchor's destination asked of
+    /// the dev arm, one per anchor (§4b.3); `no_key` where the store holds
+    /// no key at all — the notebook door is two calls, `keygen` then
+    /// `claim` — and `already_claimed` where another store's claim stands.
     pub(super) fn claim(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let principal = optional(args, "principal", principal_arg)?;
@@ -184,10 +181,10 @@ impl Shell {
         let opts = NotebookOptions {
             principal,
             display_name,
-            anchor_out: self.anchor_out("claim"),
+            anchor_out: Vec::new(),
             paper,
             host_name: self.host_name.clone(),
-            date: self.date.clone(),
+            date: today(),
         };
         let mut person = self.person("claim", Some(&entry.reference));
         match claim::notebook(&entry.board, &self.store, &mut person, &opts) {
@@ -239,10 +236,10 @@ impl Shell {
         if !is_address_text(&account) {
             return Err(Refusal::malformed("account"));
         }
-        if origin != entry.origin.as_str() {
-            return Err(Refusal::shell(Name::ORIGIN_DISAGREES, json!({"pasted": origin, "dialed": entry.origin.as_str()})));
-        }
         let board = &entry.board;
+        if origin != board.dialed().as_str() {
+            return Err(Refusal::shell(Name::ORIGIN_DISAGREES, json!({"pasted": origin, "dialed": board.dialed().as_str()})));
+        }
         let health = board.health()?;
         origin_arm(board.signed(), &health).map_err(|h| Refusal::of_named(Name::ORIGIN_STATE, h))?;
         match principal_of(board, &account)? {
@@ -253,7 +250,7 @@ impl Shell {
             Some(a) if a == account => {}
             other => return Err(Refusal::shell(Name::ACCOUNT_DISAGREES, json!({"pasted_account": account, "principal_prefix": other}))),
         }
-        let key = sessions::signing_key(&self.store, &entry.origin, principal, || Mode::of(&health))?;
+        let key = sessions::signing_key(&self.store, board.dialed(), principal, || Mode::of(&health))?;
         let walk = walk_to_set(board, &account)?;
         sessions::key_standing(board, &walk, &key, Site::Tail)?;
         let reads = FirstSessionReads::take(board, &account, &key.fingerprint, Some(&self.store))?;
@@ -265,7 +262,7 @@ impl Shell {
             let _ = session.close();
             warnings.extend(done?.warnings);
         }
-        let line = Binding::Enrollment { origin: entry.origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
+        let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
         let mut out = Map::new();
         if let Err(w) = self.store.bind(&line) {
             self.say(format!("bind: {w}"));
@@ -278,8 +275,8 @@ impl Shell {
     }
 
     /// `recover(board, {principal, lost: [fp], stolen, anchorLost})` → the
-    /// three facts: the device arm, or the loss arm; the import SECRET,
-    /// the dev arm's.
+    /// three facts: the device arm, or the loss arm; the import, and a new
+    /// pair's destinations, SECRET, the dev arm's.
     pub(super) fn recover(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let lost = optional(args, "lost", |v| v.as_array()?.iter().map(|f| f.as_str().map(str::to_string)).collect::<Option<Vec<String>>>())?.unwrap_or_default();
@@ -291,10 +288,10 @@ impl Shell {
             lost,
             stolen,
             anchor_lost,
-            anchor_out: self.anchor_out("recover"),
+            anchor_out: Vec::new(),
             paper: false,
             host_name: self.host_name.clone(),
-            date: self.date.clone(),
+            date: today(),
         };
         let mut person = self.person("recover", Some(&entry.reference));
         match recover::recover(&entry.board, &self.store, &mut person, &opts) {
@@ -364,7 +361,8 @@ impl Shell {
     }
 
     /// `accept(board, {address, label?, paper?, noAnchors?})` →
-    /// `{payload}`: the recipient's beat; `no_address` where none is given.
+    /// `{payload}`: the recipient's beat, each anchor's destination asked of
+    /// the dev arm; `no_address` where none is given.
     pub(super) fn accept(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let Some(address) = optional(args, "address", Value::as_str)?.filter(|a| !a.trim().is_empty()) else {
@@ -376,12 +374,12 @@ impl Shell {
         let opts = accept::AcceptOptions {
             account: address.to_string(),
             label,
-            anchor_out: self.anchor_out("accept"),
+            anchor_out: Vec::new(),
             paper,
             no_anchors,
             hosted: None,
             host_name: self.host_name.clone(),
-            date: self.date.clone(),
+            date: today(),
         };
         let mut person = self.person("accept", Some(&entry.reference));
         match accept::accept(&entry.board, &self.store, &mut person, &opts) {
@@ -396,6 +394,8 @@ impl Shell {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     /// `bind`'s WARNING names the binding line the page records and the

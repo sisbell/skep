@@ -50,11 +50,15 @@ const DEFAULT_CADDY: &str = "caddy";
 const DEFAULT_SUFFIX: &str = "skep.host";
 
 /// THE SERVING RUN's LOG FILE SIZE, by default: the README's serving line's
-/// `max-size=10m` — the operator's to size.
+/// `max-size=10m` — the operator's to size, with the files kept, so that a
+/// board's files hold more than an hour of its stream: a standing state is
+/// said again hourly, and survives a rotation within the hour (the
+/// deployment notes §9 item 12).
 const DEFAULT_LOG_MAX_SIZE: &str = "10m";
 
 /// THE SERVING RUN's LOG FILES KEPT, by default: the README's serving
-/// line's `max-file=5` — the operator's to size.
+/// line's `max-file=5` — the operator's to size, with the file size, by the
+/// hour [`DEFAULT_LOG_MAX_SIZE`]'s card names.
 const DEFAULT_LOG_MAX_FILE: NonZeroU32 = NonZeroU32::new(5).expect("five is not zero");
 
 /// THE WORKERS, by default: three threads, each making one board at a
@@ -242,8 +246,8 @@ whose snippet --boards-dir lacks, so one serve per Docker host.
   --caddy <CONTAINER>     the proxy's container (default {DEFAULT_CADDY})
   --suffix <DOMAIN>       the domain every board's name is under,
                           <NAME>.<DOMAIN> (default {DEFAULT_SUFFIX})
-  --log-max-size <SIZE>   a serving run's log file size, <N>[k|m|g]
-                          (default {DEFAULT_LOG_MAX_SIZE})
+  --log-max-size <SIZE>   a serving run's log file size, <N>[k|m|g], N one
+                          or more (default {DEFAULT_LOG_MAX_SIZE})
   --log-max-file <N>      a serving run's log files kept (default {DEFAULT_LOG_MAX_FILE})
   --workers <N>           the boards made at once: one worker thread each,
                           one or more (default {DEFAULT_WORKERS})
@@ -254,9 +258,10 @@ whose snippet --boards-dir lacks, so one serve per Docker host.
                           more (default {DEFAULT_CONNECTIONS})
   --mailer <PROGRAM>      the host's relay client — sendmail or msmtp —
                           run as <PROGRAM> -t with the message on stdin,
-                          refused at start where it cannot be run; given
-                          with --from or not at all, and without both no
-                          mail is sent
+                          refused at start where it cannot be run; its
+                          configuration the client's own, read at each
+                          send and checked at no start; given with --from
+                          or not at all, and without both no mail is sent
   --from <ADDRESS>        the follow-up mail's sending address
 {fakes}
 invite: one invite minted into the state directory's invite file; its
@@ -267,7 +272,9 @@ invite link printed on stdout, the one line to mail by hand.
   --code <CODE>           the code to mint: 1 to {MAX_CODE_BYTES} letters, digits,
                           '-', '.', '_' or '~'; a fresh random code where
                           none is given
-  --suffix <DOMAIN>       the invite link's host (default {DEFAULT_SUFFIX})
+  --suffix <DOMAIN>       the invite link's host: the serving unit's
+                          --suffix, which this verb does not read (default
+                          {DEFAULT_SUFFIX})
 
   --help                  this text
   --version               this binary's version and the commit it was
@@ -315,6 +322,31 @@ fn word(flag: &str, v: String) -> Result<String, String> {
         return Err(format!("{flag}: '{v}' is not one word that does not begin with '-'"));
     }
     Ok(v)
+}
+
+/// A LOG FILE SIZE, as `--log-max-size` takes one: `<N>[k|m|g]`, `N` digits
+/// alone, one or more and within a `u32` — what Docker's `json-file` driver
+/// takes as `max-size` (as this crate knows Docker — UNVERIFIED HERE). A
+/// size it refuses would refuse every board at its serving run, after the
+/// board's claim, so it is refused here, at the parse.
+fn size(flag: &str, v: String) -> Result<String, String> {
+    let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
+    if !digits.bytes().all(|b| b.is_ascii_digit()) || digits.parse::<NonZeroU32>().is_err() {
+        return Err(format!("{flag}: '{v}' is not a size of one or more, <N>[k|m|g]"));
+    }
+    Ok(v)
+}
+
+/// A PATH a flag names — `--boards-dir`, `--mailer` — any value but the
+/// empty one, which names nothing. Refused here, a usage refusal, exit 2,
+/// which the unit never restarts; met at the start instead it would be a
+/// refused start, exit 1, which the unit restarts every five seconds. An
+/// empty `--state-dir` is none, and meets its own "is required".
+fn path(flag: &str, v: String) -> Result<PathBuf, String> {
+    if v.is_empty() {
+        return Err(format!("{flag}: an empty value names nothing"));
+    }
+    Ok(PathBuf::from(v))
 }
 
 /// A DOMAIN, as `--suffix` takes one: the value [`Domain::parse`] admits,
@@ -379,25 +411,18 @@ fn parse_serve(mut argv: impl Iterator<Item = String>) -> Result<Command, String
                 listen = v.parse().map_err(|_| format!("{flag}: '{v}' is not an address and a port"))?;
             }
             flag @ "--state-dir" => state_dir = Some(PathBuf::from(value(&mut argv, flag)?)).filter(|p| !p.as_os_str().is_empty()),
-            flag @ "--boards-dir" => boards_dir = PathBuf::from(value(&mut argv, flag)?),
+            flag @ "--boards-dir" => boards_dir = path(flag, value(&mut argv, flag)?)?,
             flag @ "--image" => settings.image = word(flag, value(&mut argv, flag)?)?,
             flag @ "--cli-image" => settings.cli_image = word(flag, value(&mut argv, flag)?)?,
             flag @ "--network" => settings.network = word(flag, value(&mut argv, flag)?)?,
             flag @ "--caddy" => settings.caddy = word(flag, value(&mut argv, flag)?)?,
             flag @ "--suffix" => settings.suffix = domain(flag, &value(&mut argv, flag)?)?,
-            flag @ "--log-max-size" => {
-                let v = value(&mut argv, flag)?;
-                let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
-                if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err(format!("{flag}: '{v}' is not a size, <N>[k|m|g]"));
-                }
-                settings.log_max_size = v;
-            }
+            flag @ "--log-max-size" => settings.log_max_size = size(flag, value(&mut argv, flag)?)?,
             flag @ "--log-max-file" => settings.log_max_file = count(flag, &value(&mut argv, flag)?)?,
             flag @ "--workers" => workers = count(flag, &value(&mut argv, flag)?)?,
             flag @ "--connections" => connections = count(flag, &value(&mut argv, flag)?)?,
             flag @ "--reply-to" => reply_to = Some(mail_address(flag, &value(&mut argv, flag)?)?),
-            flag @ "--mailer" => mailer = Some(Mailer::Program(PathBuf::from(value(&mut argv, flag)?))),
+            flag @ "--mailer" => mailer = Some(Mailer::Program(path(flag, value(&mut argv, flag)?)?)),
             flag @ "--from" => from = Some(mail_address(flag, &value(&mut argv, flag)?)?),
             #[cfg(feature = "test-hooks")]
             flag @ "--docker-fake" => docker_fake = Some(PathBuf::from(value(&mut argv, flag)?)),

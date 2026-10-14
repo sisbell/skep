@@ -170,8 +170,9 @@ use crate::wait::Wait;
 use status_map::{PostState, StatusMap};
 
 /// THE QUEUE's DEPTH: four posts WAITING for a worker, the ones the workers
-/// run apart (the provisioning record §5.2's figure); a fifth meets D-8,
-/// "try again later".
+/// run apart, whatever `--workers` is — the provisioning record §5.2's
+/// figure, priced there for one worker and kept for the pool; a fifth meets
+/// D-8, "try again later". No flag sets it: a change to it is a ruling's.
 const QUEUE_DEPTH: usize = 4;
 
 /// THE DARK CLAIM's RETRY: thirty tries two seconds apart while the

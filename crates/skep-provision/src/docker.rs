@@ -161,9 +161,12 @@ fn image_run(name: &Name, own_words: Vec<String>, settings: &Settings) -> Vec<St
 
 /// The run configuration every argv is built from: the operator's flags,
 /// each value through `args`' doors — the tags, the bridge and the proxy's
-/// container one argv word not beginning with `-`, the size `<N>[k|m|g]` —
-/// and used here unchanged: [`Call::argv`] checks none again; the suffix a
-/// [`Domain`], held to its grammar by its type.
+/// container one argv word not beginning with `-`, the size `<N>[k|m|g]`,
+/// `N` one or more — and used here unchanged: [`Call::argv`] checks none
+/// again; the suffix a [`Domain`], held to its grammar by its type. The
+/// serving run's values — the image, the bridge, the suffix, the rotation —
+/// are fixed into each board at its making, and a change to one reaches the
+/// boards made after it alone; a tag is resolved by `docker` at each run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// The hosted image's tag (`--image`).

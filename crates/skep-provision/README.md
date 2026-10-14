@@ -38,38 +38,81 @@ skep-provision --version
 - **`--version`**, the first argument, prints `skep-provision <version>
   (<commit>)`, the form `skepd --version` prints.
 
-A usage refusal (an unknown flag, a missing value, a required flag
-missing, `--mailer` without `--from` or the reverse) exits 2 with the usage
-text; a start refused (a state directory that is loose, another user's,
-cannot be made or is not a directory; another `serve` holding it; a
-`--mailer` that cannot be run; a snippet directory that cannot be read or
-written; an address that cannot be bound; a thread the machine will not
-give — all but the last before the sweep), or an `invite` that printed no
-invite link exits 1, as does a `--version` or `--help` whose text cannot
-be written.
+A usage refusal (an unknown flag, a missing value, a value of the wrong
+form — a log size of nothing, an empty path among them — a required flag
+missing, `--mailer` without `--from` or the reverse) exits 2 with the
+usage text, and the unit never restarts it; a start refused (a state
+directory that is loose, another user's, cannot be made or is not a
+directory; another `serve` holding it; a `--mailer` that cannot be run; a
+snippet directory that cannot be read or written; an address that cannot
+be bound; a thread the machine will not give — all but the last before
+the sweep), or an `invite` that printed no invite link exits 1, as does a
+`--version` or `--help` whose text cannot be written.
 
 ## `serve`'s flags
 
-Each default is a named constant in `src/args.rs`, and the usage text
-renders it from there.
+The command line is the one home of every setting: the service reads no
+environment variable for one — `tests/it/tidy.rs` checks it — so under
+the unit its `ExecStart=` holds them all. Each default is a named
+constant in `src/args.rs`, and the usage text renders it from there; the
+table below is read back against the usage by the crate's own suite.
 
-| flag | default | what it sets |
-|---|---|---|
-| `--state-dir <DIR>` | required | the sign-up file and the invite file; made `0700` where absent, refused at start where any group or other bit is set or where it is another user's, root's among them |
-| `--reply-to <ADDRESS>` | required | the owner's mailbox: the failure page names it, and an answer to the mail goes to it |
-| `--listen <ADDR:PORT>` | `127.0.0.1:8842` (`DEFAULT_LISTEN`) | where the pages are served; how the proxy reaches it is the VM's configuration |
-| `--boards-dir <DIR>` | `/etc/caddy/boards` (`DEFAULT_BOARDS_DIR`) | the proxy's snippet directory, and the list of boards the sweep at start spares: every labelled volume it lacks is removed |
-| `--image <TAG>` | `skep-hosted` (`DEFAULT_IMAGE`) | the hosted image |
-| `--cli-image <TAG>` | `skep-cli` (`DEFAULT_CLI_IMAGE`) | the claim sidecar's image |
-| `--network <BRIDGE>` | `skep` (`DEFAULT_NETWORK`) | the bridge the boards and the proxy share |
-| `--caddy <CONTAINER>` | `caddy` (`DEFAULT_CADDY`) | the proxy's container |
-| `--suffix <DOMAIN>` | `skep.host` (`DEFAULT_SUFFIX`) | the domain every board's name is under, `<name>.<domain>` |
-| `--log-max-size <SIZE>` | `10m` (`DEFAULT_LOG_MAX_SIZE`) | a serving run's log file size |
-| `--log-max-file <N>` | `5` (`DEFAULT_LOG_MAX_FILE`) | a serving run's log files kept |
-| `--workers <N>` | `3` (`DEFAULT_WORKERS`) | the boards made at once: one worker thread each; `0` is a usage refusal |
-| `--connections <N>` | `16` (`DEFAULT_CONNECTIONS`) | the requests served at once: one thread each, made at start, and a descriptor while it serves, which the unit's `LimitNOFILE=` bounds; a further connection waits in the listener's queue; `0` is a usage refusal |
-| `--mailer <PROGRAM>` | none | the host's relay client, run as `<PROGRAM> -t` with the message on stdin, refused at start where it cannot be run; given with `--from` or not at all, and with neither no mail is sent and the serving line says so |
-| `--from <ADDRESS>` | none | the mail's sending address |
+Every flag is **checked** at the parse, a bad value a usage refusal,
+exit 2, which the unit never restarts; and where the parse cannot see the
+whole of it — a directory, a port, a program, a thread — again at start,
+a refused start, exit 1, one line naming the value and the act, each
+before the sweep but a thread the machine will not give, which the pools
+meet after it. Every flag is **read** once, at start: a change is the
+unit's line edited, `daemon-reload` and a restart, which ends what
+RUNBOOK.md §10 step 12 says a stop ends. A setting fixed into each board
+at its making reaches the boards made after the restart alone; a
+standing board keeps its own until it is made again (RUNBOOK.md §10 step
+13).
+
+| flag | default | checked | read | what it sets |
+|---|---|---|---|---|
+| `--state-dir <DIR>` | required | parse, where an empty value is none; start: the door and the serve lock | at start; its files at each use | the sign-up file and the invite file; made `0700` where absent, refused at start where any group or other bit is set or where it is another user's, root's among them |
+| `--reply-to <ADDRESS>` | required | parse: the address rule | at start | the owner's mailbox: the failure page names it, and an answer to the mail goes to it |
+| `--listen <ADDR:PORT>` | `127.0.0.1:8842` (`DEFAULT_LISTEN`) | parse; start: the bind | at start | where the pages are served; how the proxy reaches it is the VM's configuration, the port one half of a pair (RUNBOOK.md §10 step 1) |
+| `--boards-dir <DIR>` | `/etc/caddy/boards` (`DEFAULT_BOARDS_DIR`) | parse, where an empty value is refused; start: read and written | at start; its snippets at each post and each sweep | the proxy's snippet directory, and the list of boards the sweep at start spares: every labelled volume it lacks is removed |
+| `--image <TAG>` | `skep-hosted` (`DEFAULT_IMAGE`) | parse: one word | at start; its tag resolved at each run, the image fixed into each board at its making | the hosted image |
+| `--cli-image <TAG>` | `skep-cli` (`DEFAULT_CLI_IMAGE`) | parse: one word | at start; its tag resolved at each sidecar run | the claim sidecar's image |
+| `--network <BRIDGE>` | `skep` (`DEFAULT_NETWORK`) | parse: one word | at start; fixed into each board at its making | the bridge the boards and the proxy share |
+| `--caddy <CONTAINER>` | `caddy` (`DEFAULT_CADDY`) | parse: one word | at start | the proxy's container, which each route change reloads |
+| `--suffix <DOMAIN>` | `skep.host` (`DEFAULT_SUFFIX`) | parse: the domain grammar | at start; fixed into each board at its making | the domain every board's name is under, `<name>.<domain>`; every `invite`'s `--suffix` is the same |
+| `--log-max-size <SIZE>` | `10m` (`DEFAULT_LOG_MAX_SIZE`) | parse: a size of one or more | at start; fixed into each board at its making | a serving run's log file size, with a `k`, `m` or `g` after it |
+| `--log-max-file <N>` | `5` (`DEFAULT_LOG_MAX_FILE`) | parse: one or more | at start; fixed into each board at its making | a serving run's log files kept |
+| `--workers <N>` | `3` (`DEFAULT_WORKERS`) | parse: one or more; start: a thread each | at start | the boards made at once: one worker thread each |
+| `--connections <N>` | `16` (`DEFAULT_CONNECTIONS`) | parse: one or more; start: a thread each | at start | the requests served at once: one thread each, made at start, and a descriptor while it serves, which the unit's `LimitNOFILE=` bounds; a further connection waits in the listener's queue |
+| `--mailer <PROGRAM>` | none | parse: given with `--from`, never empty; start: a file it can run | at start; the client's own configuration at each send | the host's relay client, run as `<PROGRAM> -t` with the message on stdin; given with `--from` or not at all, and with neither no mail is sent and the serving line says so; its configuration the client's own, which no start checks |
+| `--from <ADDRESS>` | none | parse: the address rule | at start | the mail's sending address |
+
+A tag is resolved by `docker` at every run, not at the start: an image
+rebuilt under `--image`'s tag is the next board's, one rebuilt under
+`--cli-image`'s the next sidecar's, with no restart and no line, and the
+settings line says the tags, never what they resolve to. What no check
+reaches — that the images, the bridge and the proxy's container stand,
+that the relay client is configured — the settings line names for the
+operator to read before a board meets it.
+
+The service finds `docker`, and a bare `--mailer`, on `PATH`, and runs
+each with its own environment: `DOCKER_HOST`, `DOCKER_CONTEXT` and its
+user's Docker configuration choose the Engine every call reaches — the
+unit sets none, so the host's own — and the relay client reads its own
+configuration at every send.
+
+The figures the design fixes are constants, each carded where it is
+defined, and no flag or variable sets them: the queue's depth, the
+looks' cap and the dark claim's retry (`src/flow.rs`), the `/health`
+wait (`src/health.rs`), the mail's retry (`src/sender.rs`), a request's
+caps and deadlines and the status page's refresh (`src/pages.rs`), the
+sign-up file's cap (`src/signups.rs`), the record's key cap
+(`src/record.rs`), the rates a line is said at (`src/rates.rs`), and the
+runs' hardening and the image's port and volume (`src/docker.rs`). A
+change to one is a ruling's, made in the code; nothing at the VM moves
+it. The unit's own settings — its user and group, its state directory,
+its umask, its restarts, its stop and its open-file limit — are
+`deploy/skep-provision.service`'s, each commented where it is set.
 
 A build with the `test-hooks` feature also takes `--docker-fake
 <SCRIPT>`, a scripted Docker runner in place of the host's `docker`, and
@@ -81,10 +124,10 @@ tests turn it on through a dev-dependency on the crate itself.
 ## The requests it answers
 
 One request per connection, read and written through `skep-http`. A pool
-of connection threads (`--connections`, sixteen by default), made at
-start, serves them, a connection past the pool waiting in the listener's
-queue; the request in and the answer out have a minute each, so a client
-that trickles its bytes is cut off rather than holding a thread. A panic
+of connection threads (`--connections`), made at start, serves them, a
+connection past the pool waiting in the listener's queue; the request in
+and the answer out have a minute each, so a client that trickles its
+bytes is cut off rather than holding a thread. A panic
 answering one request costs that connection alone, closed unanswered,
 never its thread, and is said in one line by the binary's own hook —
 `skep-provision: [<name>: ]the <thread> thread panicked at <file:line>`,
@@ -147,10 +190,10 @@ seconds with a `<meta>` refresh. Every status the service writes is one
 
 ## The steps
 
-A pool of worker threads (`--workers`, three by default) makes boards for
-different names at once. The name is the unit of exclusion: a name is
-held from the moment its post is admitted until the board is live or the
-post has failed, a second post for a name in flight is refused on the
+A pool of worker threads (`--workers`) makes boards for different names
+at once. The name is the unit of exclusion: a name is held from the
+moment its post is admitted until the board is live or the post has
+failed, a second post for a name in flight is refused on the
 form (D-4), and so no two workers ever run the steps for one name. A post
 waits on no board being made: its checks run under a short lock on the
 queue and the status map, and its three reads of what stands under its
@@ -189,7 +232,10 @@ saying its end, live or failed, with how long its steps took:
   reload. Where the write or the reload fails, the lock is held on across
   the snippet's removal and the reload that undoes it, so no other board's
   reload loads a snippet whose own route change failed. The lock is held
-  nowhere else.
+  nowhere else. The serving run sets `SKEPD_ORIGIN` alone of the daemon's
+  per-board settings, so each board runs the image's baked settings and
+  the daemon's defaults for the rest: uploads on, no node prefix, the
+  default workers, no blocked-prefix list.
 
 Then the status turns live, the invite is spent, and the mail goes to the
 sender's own thread, its hand-over said with the mails ahead of it. That
@@ -256,9 +302,10 @@ labelled volume whose snippet is gone is half-made to it, however long it
 has stood: a start over a directory emptier than the Engine's volumes — a
 VM restored with its volumes and not the directory, `--boards-dir`
 pointed elsewhere, a route taken down by removing its snippet — removes
-every board it lacks, its run and its volume. Restore the directory with
-the volumes, and take a route down by stopping its run, its snippet left
-(RUNBOOK.md §10 step 3).
+every board it lacks, its run and its volume. Back up and restore the
+directory, the state directory and the volumes as one moment
+(RUNBOOK.md §10 step 14), and take a route down by stopping its run, its
+snippet left (RUNBOOK.md §10 step 3).
 
 The sweep asks one thing of the operator: **one `serve` per Docker host**.
 The label is the host's, the same on every `serve`'s volumes, and a volume

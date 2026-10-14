@@ -2,20 +2,22 @@
 //! default is its named constant; `--mailer` and `--from` come together or
 //! not at all; an unknown flag, a missing value, a value of the wrong form —
 //! an address out of the rule, a code out of the alphabet, a suffix out of
-//! the grammar and an empty word among them, which this door alone refuses —
-//! and a missing required flag, an empty `--state-dir` counted as none, are
-//! each a usage refusal (`main` answers it exit 2 — the binary's suite runs
-//! one), where several hold the first met speaking, and what follows a leading
-//! `--version`, `--help` or `-h` unread; every flag lands in its setting, the
-//! address, the code and the suffix as their own values, and the settings
-//! every board is made with said at start as the flags gave them; `--workers`
-//! defaults to its constant and refuses zero (T21), and `--connections`
-//! likewise; a `test-hooks` build takes `--docker-fake` and `--mailer-fake`
-//! — the shipped build's refusal of both is `scripts/gate-full.sh`'s to
-//! check, every build of this suite having the feature on; the usage text
-//! names every flag and renders every default from its constant; and the
-//! unit's command line, read back, refuses its placeholder and parses once
-//! it is replaced. (The suffix's grammar itself is `domain`'s suite.)
+//! the grammar, a log size of nothing and an empty word or path among them,
+//! which this door alone refuses — and a missing required flag, an empty
+//! `--state-dir` counted as none, are each a usage refusal (`main` answers it
+//! exit 2 — the binary's suite runs one), where several hold the first met
+//! speaking, and what follows a leading `--version`, `--help` or `-h` unread;
+//! every flag lands in its setting, the address, the code and the suffix as
+//! their own values, and the settings every board is made with said at start
+//! as the flags gave them; `--workers` defaults to its constant and refuses
+//! zero (T21), and `--connections` likewise; a `test-hooks` build takes
+//! `--docker-fake` and `--mailer-fake` — the shipped build's refusal of both
+//! is `scripts/gate-full.sh`'s to check, every build of this suite having
+//! the feature on; the usage text names every flag and renders every default
+//! from its constant, and the README's flag table, read back, is the
+//! usage's; and the unit's command line, read back, refuses its placeholder,
+//! parses once it is replaced, and says of its words what its comments say.
+//! (The suffix's grammar itself is `domain`'s suite.)
 
 use std::ffi::OsString;
 
@@ -234,7 +236,9 @@ fn mailer_and_from_come_together_or_not_at_all() {
 /// unreplaced refuses to start, exit 2, which the unit never restarts — and
 /// with the placeholder replaced every other word of it parses: a flag the
 /// unit names that this parser no longer takes is a red test here, never a
-/// unit that fails on the VM.
+/// unit that fails on the VM. What the unit's comments say of its words
+/// holds too: its `--workers` and `--connections` are the defaults, said,
+/// and its `--state-dir` is the directory its `StateDirectory=` makes.
 #[test]
 fn the_units_command_line_refuses_its_placeholder_and_parses_once_replaced() {
     let unit = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/skep-provision.service")).expect("the unit");
@@ -256,7 +260,10 @@ fn the_units_command_line_refuses_its_placeholder_and_parses_once_replaced() {
     assert_eq!(words.first(), Some(&"serve"), "the unit's command line: {command}");
     assert_eq!(parse(argv(&words)), Err(format!("--reply-to: '<OWNER-MAILBOX>' is not an address: {}", address_rule())), "the placeholder, refused");
     let replaced: Vec<&str> = words.iter().map(|&word| if word == "<OWNER-MAILBOX>" { "owner@skep.host" } else { word }).collect();
-    assert!(matches!(parse(argv(&replaced)), Ok(Command::Serve(_))), "the unit's command line, its placeholder replaced: {replaced:?}");
+    let Ok(Command::Serve(s)) = parse(argv(&replaced)) else { panic!("the unit's command line, its placeholder replaced: {replaced:?}") };
+    assert_eq!((s.workers, s.connections), (DEFAULT_WORKERS, DEFAULT_CONNECTIONS), "the unit's comment calls its --workers and --connections the defaults");
+    let named = unit.lines().find_map(|l| l.trim().strip_prefix("StateDirectory=")).expect("the unit's StateDirectory=");
+    assert_eq!(s.state_dir, std::path::Path::new("/var/lib").join(named), "--state-dir is the directory StateDirectory= makes");
     assert!(unit.lines().any(|l| l.trim() == "RestartPreventExitStatus=2"), "a usage refusal, exit 2, is never restarted");
 }
 
@@ -278,6 +285,13 @@ fn each_bad_command_line_is_a_usage_refusal() {
     assert_eq!(serve(&["--suffix", "Skep.Host"]), Err("--suffix: 'Skep.Host' is not a domain of lowercase letters, digits, dots and hyphens".to_owned()), "a suffix out of the grammar");
     assert!(serve(&["--suffix", "skep..host"]).is_err());
     assert!(serve(&["--log-max-size", "10x"]).is_err());
+    assert_eq!(serve(&["--log-max-size", "0"]), Err("--log-max-size: '0' is not a size of one or more, <N>[k|m|g]".to_owned()), "a size Docker refuses at the serving run");
+    for nothing in ["0m", "00g", "99999999999g", "+10m", "m", ""] {
+        assert!(serve(&["--log-max-size", nothing]).is_err(), "{nothing:?}");
+    }
+    assert_eq!(served(&["--log-max-size", "1k"]).settings.log_max_size, "1k", "the least size");
+    assert_eq!(serve(&["--boards-dir", ""]), Err("--boards-dir: an empty value names nothing".to_owned()), "refused at the parse, never a start the unit retries");
+    assert_eq!(serve(&["--mailer", "", "--from", "noreply@skep.host"]), Err("--mailer: an empty value names nothing".to_owned()));
     assert!(serve(&["--log-max-file", "0"]).is_err());
     assert!(serve(&["--from", "not an address", "--mailer", "m"]).is_err());
     assert!(parse(argv(&["serve", "--reply-to", "owner@skep.host"])).expect_err("no state dir").contains("--state-dir is required"));
@@ -380,5 +394,31 @@ fn the_usage_names_every_flag_and_its_default() {
         format!("(default {DEFAULT_CONNECTIONS})"),
     ] {
         assert!(folded.contains(&default), "{default}");
+    }
+}
+
+/// THE README's FLAG TABLE IS THE USAGE's: each of `serve`'s fifteen rows,
+/// read back from the crate's `README.md` at test time, names a flag the
+/// usage names, with the default the usage renders from its constant, and
+/// says when the flag is checked — at the parse first, every one — and when
+/// it is read: a default moved, or a flag added, is a red test here until
+/// the operator's table follows it.
+#[test]
+fn the_readmes_flag_table_is_the_usages() {
+    let readme = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).expect("the README");
+    let text = usage();
+    let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let rows: Vec<&str> = readme.lines().filter(|l| l.starts_with("| `--")).collect();
+    assert_eq!(rows.len(), 15, "serve's fifteen flags: {rows:?}");
+    for row in rows {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        assert_eq!(cells.len(), 7, "five cells — the flag, its default, when it is checked, when it is read, what it sets: {row}");
+        let flag = cells[1].trim_matches('`');
+        assert!(text.contains(&format!("\n  {flag}")), "{flag}: a flag the usage does not name");
+        if let Some(default) = cells[2].strip_prefix('`').and_then(|d| d.split('`').next()) {
+            assert!(folded.contains(&format!("(default {default})")), "{flag}: the README's default {default}, not the usage's");
+        }
+        assert!(cells[3].starts_with("parse"), "{flag}: checked at the parse first: {row}");
+        assert!(cells[4].starts_with("at start"), "{flag}: read once, at start: {row}");
     }
 }

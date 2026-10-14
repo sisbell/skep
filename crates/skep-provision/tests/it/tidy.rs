@@ -25,10 +25,14 @@
 //! dials nothing; `skep-signature` is linked for its verify-only decode,
 //! with no feature.
 //!
+//! THE ENVIRONMENT. No file under `src/` outside a suite reads an
+//! environment variable but `PATH`: the command line is the one home of
+//! every setting, as the crate's README says.
+//!
 //! Each scan asserts that it found what it allows — a file held to its
 //! parent, an edge between modules, a documented item, the manifest's
-//! dependency table — so a scan gone blind fails rather than passing a clean
-//! tree. Comments are not code.
+//! dependency table, the one environment read — so a scan gone blind fails
+//! rather than passing a clean tree. Comments are not code.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -152,6 +156,37 @@ fn the_dependencies_are_the_five() {
     let allowed = BTreeSet::from(["[dependencies]", "[dev-dependencies]"]);
     assert!(dependency_tables.contains("[dependencies]") && dependency_tables.is_subset(&allowed), "Cargo.toml's dependency tables: {dependency_tables:?}");
     assert_eq!(dependencies, BTreeSet::from(DEPENDENCIES), "the crate's five");
+}
+
+/// THE COMMAND LINE IS THE ONE HOME OF EVERY SETTING (the crate's README,
+/// `serve`'s flags): no file under `src/` outside a suite reads an
+/// environment variable but `PATH` — the lookup that finds a bare
+/// `--mailer`, never a setting — so no setting has a second home the usage
+/// does not name, and the unit's `ExecStart=` holds them all. A variable a
+/// child reads, `docker`'s or the relay client's, is the child's own.
+#[test]
+fn no_setting_is_read_from_the_environment() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files(&crate_dir.join("src"), &mut files);
+    let (mut reads, mut faults) = (0, Vec::new());
+    for file in &files {
+        let shown = file.strip_prefix(crate_dir).expect("under the crate").display().to_string();
+        // A suite's reads are its own: no shipped build compiles them.
+        if file.file_name().is_some_and(|name| name == "tests.rs") || file.components().any(|part| part.as_os_str() == "tests") {
+            continue;
+        }
+        for (n, code) in code_lines(&read(file)) {
+            for (i, _) in code.match_indices("env::var") {
+                reads += 1;
+                if !code[i..].starts_with("env::var_os(\"PATH\")") {
+                    faults.push(format!("{shown}:{n}: {}", code.trim()));
+                }
+            }
+        }
+    }
+    assert!(reads > 0, "this check read no environment read at all: the forms it reads have moved");
+    assert!(faults.is_empty(), "a setting read from the environment — give it a flag, which the usage names and the unit's line holds:\n{}", faults.join("\n"));
 }
 
 /// The dependency a manifest line names, where it names one: the key ahead

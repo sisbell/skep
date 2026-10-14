@@ -84,16 +84,19 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// THE TRANSFER DEADLINE: a minute for the request in and a fresh minute for
-/// the answer out, each checked between socket calls — `skepd`'s
-/// `TRANSFER_DEADLINE`, for its reason: the socket timeouts are renewed by
-/// any byte, and without this a sender trickling one every 29 seconds holds
-/// its connection thread, its descriptor and its body's buffer for as long
-/// as it likes, and as many such senders as there are threads hold every
-/// one. The halves are apart, so a request refused for spending its minute
-/// still has one in which to be told so. The budget is the person's uplink,
-/// as the proxy streams a body as it is sent: the largest record the form
-/// carries, 128 KiB, goes as some 140 KB, under 20 seconds at 64 kbit/s; a
-/// record of one to three keys, under 13 KB, in two.
+/// the answer out, each checked between socket calls — `skepd`'s mechanism,
+/// at a figure of its own: `skepd`'s `TRANSFER_DEADLINE`, 30 seconds, is
+/// priced for loopback, which delivers its largest body in milliseconds,
+/// and this one for a person's uplink, below. The mechanism's reason is
+/// `skepd`'s: the socket timeouts are renewed by any byte, and without this
+/// a sender trickling one every 29 seconds holds its connection thread, its
+/// descriptor and its body's buffer for as long as it likes, and as many
+/// such senders as there are threads hold every one. The halves are apart,
+/// so a request refused for spending its minute still has one in which to
+/// be told so. The budget is the person's uplink, as the proxy streams a
+/// body as it is sent: the largest record the form carries, 128 KiB, goes
+/// as some 140 KB, under 20 seconds at 64 kbit/s; a record of one to three
+/// keys, under 13 KB, in two.
 const TRANSFER_DEADLINE: Duration = Duration::from_secs(60);
 
 /// How often a page showing D-7 refreshes itself to the status URL.

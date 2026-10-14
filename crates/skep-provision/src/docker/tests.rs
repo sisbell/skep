@@ -1,17 +1,19 @@
 //! T4 — THE ARGV of every call, token by token, against the documents' run
 //! lines: the smoke's claim run WORD FOR WORD (and read back from
 //! `scripts/docker-smoke.sh` itself, so the script's drift is a red test
-//! too), the deployment notes' serving run, the sidecar's run with `-i` and
-//! `--hosted -`, the `skep health` run, the reload, the two inspects, the
-//! two removals, a failed run's last lines read before its removal, the
-//! labelled volume and the listing by its label (T19);
-//! the image's port and its volume read back from the `Dockerfile`; the
-//! real `Command` built from that argv and nothing else; the real runner,
-//! over a recording script in `docker`'s place — no Docker is run —
-//! passing the argv, the record on stdin and nothing on any other call's,
-//! and the two streams apart; each named method running its own call
-//! through the one method a runner writes; and the fake refusing a call it
-//! was not scripted, its order strict per name and free across names.
+//! too), the deployment notes' serving run — and the RUNBOOK's line that
+//! makes a standing board's serving run again, read back word for word —
+//! the sidecar's run with `-i` and `--hosted -`, the `skep health` run, the
+//! reload, the two inspects, the two removals, a failed run's last lines
+//! read before its removal, the labelled volume and the listing by its
+//! label (T19); the image's port and its volume read back from the
+//! `Dockerfile`; the real `Command` built from that argv and nothing else;
+//! the real runner, over a recording script in `docker`'s place — no Docker
+//! is run — passing the argv, the record on stdin and nothing on any other
+//! call's, and the two streams apart; each named method running its own
+//! call through the one method a runner writes; and the fake refusing a
+//! call it was not scripted, its order strict per name and free across
+//! names.
 
 use std::path::Path;
 
@@ -252,6 +254,19 @@ fn the_serving_run_carries_the_readmes_serving_flags() {
     for switch in ["-d", "--init", "--read-only"] {
         assert!(serving.contains(&switch.to_owned()), "{switch}");
     }
+}
+
+/// THE RUNBOOK's REMAKE LINE IS THE SERVING RUN's, word for word: RUNBOOK
+/// §10 step 13's `docker run`, by which an operator makes a standing
+/// board's serving run again after an upgrade, read back at test time, its
+/// `<name>` this call's and its values the defaults — the line an operator
+/// remakes a board by is the one the service made it with.
+#[test]
+fn the_runbooks_remake_line_is_the_serving_runs() {
+    let runbook = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).expect("the RUNBOOK");
+    let line = runbook.lines().map(str::trim).find(|l| l.starts_with("docker run -d --init --name <name>")).expect("the RUNBOOK's remake line");
+    let words: Vec<String> = line.replace("<name>", "alice").split_whitespace().skip(1).map(str::to_owned).collect();
+    assert_eq!(Call::RunServing(&alice()).argv(&settings()), words);
 }
 
 /// THE IMAGE's BAKED FACTS ARE THE DOCKERFILE's: the port its daemon

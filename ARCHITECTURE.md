@@ -1714,9 +1714,9 @@ Rules that hold across its files:
   name in flight is refused under the book's lock, the very lock that
   admits, so no two posts for one name are ever in flight and the worker
   that takes a post owns its name alone. No mutex is held over a
-  provisioning: a pool of worker threads (`--workers`, three by default)
-  makes boards for different names at once, and posts wait in a queue of
-  four.
+  provisioning: a pool of worker threads (`--workers`) makes boards for
+  different names at once, and posts wait in a queue whose depth is a
+  constant, `QUEUE_DEPTH`.
 - **A post never waits on a provisioning.** Its checks against what is in
   flight and its admission run under the book's short lock on the status
   map, the queue and the held codes — the admission checking what is in
@@ -1725,11 +1725,11 @@ Rules that hold across its files:
   most at once and one per invite code, a fifth answered D-8 with no
   `docker` call; none waits behind a board being made, and a status page
   waits on nothing either.
-- **Connections are a pool, and slowness ends.** `--connections` threads,
-  sixteen by default, each take the next connection off the listener, a
-  further one waiting in the listener's queue; both pools are made at
-  start, no thread is made per connection, and one the OS will not give
-  ends the start, exit 1. An `accept` that fails is said once per episode
+- **Connections are a pool, and slowness ends.** `--connections` threads
+  each take the next connection off the listener, a further one waiting
+  in the listener's queue; both pools are made at start, no thread is
+  made per connection, and one the OS will not give ends the start,
+  exit 1. An `accept` that fails is said once per episode
   across the threads, and its recovery once, `skepd`'s accept pair; the
   pool standing full is said the same way, once as every thread serves
   and once a thread has stood free a hold-down after, with how often it
@@ -1755,7 +1755,22 @@ Rules that hold across its files:
   another user owns, a second `serve` over it, a `--mailer` that cannot be
   run, a snippet directory it cannot write and a port another process
   holds each refuse the start before the sweep, one line naming the cause
-  and the act — never a failure met at the first board.
+  and the act — never a failure met at the first board; and a flag's
+  value no board could take — a log size of nothing, an empty path — is
+  refused at the parse, exit 2, which the unit never restarts. What the
+  start does not check — that the images, the bridge and the proxy's
+  container stand, that the relay client is configured — the settings
+  line names for the operator to read before a board meets it.
+- **The command line is the one home of every setting.** The service
+  reads no environment variable for one, so the unit's `ExecStart=` holds
+  them all, each read once at start; every default is a named constant
+  the usage text renders, and the crate's README's flag table is read
+  back against the usage. A setting fixed into each board at its making —
+  the image, the bridge, the suffix, the log rotation — reaches the
+  boards made after a change alone. The figures the design fixes are
+  constants, each carded where it is defined, and no flag sets them.
+  `tests/it/tidy.rs` checks that no file under `src/` reads an
+  environment variable but `PATH`.
 - **Route changes are serial.** One lock, the route lock, is held across
   a route change — a snippet's write and the reload that follows it, and
   where either fails, on across the snippet's removal and the reload that
@@ -1782,9 +1797,11 @@ Rules that hold across its files:
   connection thread holds the service while it runs.
 - **The argv is the documents'.** Every `docker` call's argv is a pure
   function the unit suite pins token by token, and reads back from
-  `scripts/docker-smoke.sh` and `README.md` where those spell the line,
-  and from the `Dockerfile` the port and the volume the image bakes; the
-  real runner builds its `Command` from that argv and nothing else.
+  `scripts/docker-smoke.sh`, `README.md` and `RUNBOOK.md` — the line an
+  operator makes a standing board's serving run again by — where those
+  spell the line, and from the `Dockerfile` the port and the volume the
+  image bakes; the real runner builds its `Command` from that argv and
+  nothing else.
   The runner and the fake write one method, `run`, and share every named
   call over it, so each suite that drives the fake drives the mapping the
   host runs.
@@ -1876,8 +1893,8 @@ a snippet directory that cannot be read or written, a port held, each
 before the sweep — or an invite not minted, exits 1 with no DATA line;
 and SIGTERM ends the process. Beside
 it, `tests/it/tidy.rs` reads the arrangement off the source and the
-manifest: the module order, the declared files, every `pub` item's doc
-and the five dependencies.
+manifest: the module order, the declared files, every `pub` item's doc,
+the five dependencies, and the one environment variable read, `PATH`.
 
 ## The name space, `skep-namespace`
 

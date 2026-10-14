@@ -658,7 +658,8 @@ usage: skep-dev <command> [flags]
                edition, and a keyless second account gets a draft the
                claimant cannot read; one JSON object on stdout; a manifest
                beside the key store makes a second run add nothing and a
-               killed run resume
+               killed run resume — the one write it had in flight made
+               again, so a mint or a shot of it may land twice
   serve        serve the shell's core to a page in a browser over loopback
                HTTP and server-sent events (the dev provider): the bridge's
                calls at POST /bridge/<call>, its events at GET
@@ -668,15 +669,21 @@ usage: skep-dev <command> [flags]
                origin admitted, with a per-run secret the page carries as
                ?provider=<secret> and echoes in the Skep-Provider header;
                the session bare as the claimant, or signed with a dev key;
-               the secret alone on stdout; stops when stdin closes
+               the secret alone on stdout; stops cleanly when stdin closes
+               (Ctrl-D at a terminal) — an interrupt skips the clean stop
 
 flags:
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
-  --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
+  --dir <path>          the key store (env SKEP_KEYSTORE): at seed, default
+                        ~/.skep; at serve no default — required under
+                        --session signed, under bare a throwaway in the
+                        system temp dir, removed at the clean stop
   --key <path>          one key file, bypassing the store's lookup (env
-                        SKEP_KEY); an anchor file is refused
-  --principal <n>       the principal (env SKEP_PRINCIPAL); may be omitted
-                        where the store holds one binding at the board
+                        SKEP_KEY): read at seed, where an anchor file is
+                        refused; refused at serve
+  --principal <n>       the principal (env SKEP_PRINCIPAL): at seed, may be
+                        omitted where the store holds one binding at the
+                        board; at serve, 1 where omitted
   --version             this program's version and the commit it was
                         built from, one line on stdout
   seed:     --repo <path>       the repository (env SKEP_SEARCH_CORPUS)

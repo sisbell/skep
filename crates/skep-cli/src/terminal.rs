@@ -118,7 +118,9 @@ pub fn answer(prompt: &str) -> io::Result<Option<String>> {
 /// module's tests.
 trait Screen {
     /// `prompt` shown, then one answer: the line without its line ending, or
-    /// the person gone — the end of input, or the input unreadable.
+    /// the person gone — the end of input, or the input unreadable, said on
+    /// stderr where it is: an answer abandoned for a byte the terminal sent
+    /// is no person who left.
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned>;
     /// One line said.
     fn talk(&mut self, line: &str);
@@ -135,8 +137,19 @@ trait Screen {
 pub struct Terminal;
 
 impl Screen for Terminal {
+    /// The end of input is the person gone, said by the walk; an answer
+    /// stdin could not read — a line that is not UTF-8 text, typed at a
+    /// terminal in another encoding or pasted — abandons the moment too, and
+    /// its cause is said here, where the walk would say only "abandoned".
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned> {
-        answer(prompt).ok().flatten().ok_or(Abandoned)
+        match answer(prompt) {
+            Ok(Some(line)) => Ok(line),
+            Ok(None) => Err(Abandoned),
+            Err(e) => {
+                talk(format!("the answer could not be read from stdin ({e}): this moment is abandoned"));
+                Err(Abandoned)
+            }
+        }
     }
 
     fn talk(&mut self, line: &str) {

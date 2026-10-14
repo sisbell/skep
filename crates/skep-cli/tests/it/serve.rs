@@ -104,10 +104,24 @@ impl Provider {
     /// every `SKEP_*` variable and `HOME` scrubbed, waited for until its
     /// port answers.
     fn start(args: &[&str]) -> Provider {
+        Provider::start_under(args, None)
+    }
+
+    /// [`Provider::start`], the process held to `fd_limit` open descriptors
+    /// where one is given — `/bin/sh`'s `ulimit -n`, then `exec`, so the
+    /// child is the provider itself.
+    fn start_under(args: &[&str], fd_limit: Option<u32>) -> Provider {
         for _ in 0..8 {
             let port = free_port();
             let listen = port.to_string();
-            let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-dev"));
+            let mut cmd = match fd_limit {
+                None => Command::new(env!("CARGO_BIN_EXE_skep-dev")),
+                Some(n) => {
+                    let mut sh = Command::new("/bin/sh");
+                    sh.args(["-c", &format!("ulimit -n {n} && exec \"$0\" \"$@\""), env!("CARGO_BIN_EXE_skep-dev")]);
+                    sh
+                }
+            };
             cmd.arg("serve").args(["--page-origin", PAGE, "--listen", &listen]).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
             for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION", "SKEP_SEARCH_CORPUS", "HOME", "USERPROFILE"] {
                 cmd.env_remove(var);
@@ -267,6 +281,34 @@ fn request_at(port: u16, method: &str, path: &str, headers: &[(String, String)],
 
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+}
+
+/// The crate's README names every fault door the provider's refusal lists
+/// after `lead` — the doors' one list, `serve/node.rs`'s `DOORS`, as the
+/// binary itself says it — so the README a developer reads them from never
+/// runs short of the build.
+fn readme_names_every_door(detail: &str, lead: &str) {
+    let (_, list) = detail.split_once(lead).unwrap_or_else(|| panic!("the refusal lists the doors after `{lead}`: {detail}"));
+    let doors: Vec<&str> = list.split(", ").map(str::trim).collect();
+    assert!(doors.len() > 1 && doors.contains(&"poison"), "the list read whole: {doors:?}");
+    let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md")).expect("the crate's README");
+    for door in doors {
+        assert!(readme.contains(&format!("`{door}`")), "README.md names the fault door `{door}`");
+    }
+}
+
+/// The provider's talk once it holds every one of `needles`, within the
+/// deadline: its stderr reader trails the answer that a line preceded.
+fn talk_holding(provider: &Provider, needles: &[&str]) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let said = provider.talk();
+        if needles.iter().all(|n| said.contains(n)) {
+            return said;
+        }
+        assert!(Instant::now() < deadline, "the provider never said all of {needles:?}:\n{said}");
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The next event named `name` meeting `pred`, within the deadline.
@@ -661,6 +703,16 @@ fn f4_the_admission_refuses_before_any_dial() {
     assert!(headers.iter().all(|(_, v)| v != "*"), "{headers:?}");
     let (status, _, _) = provider.request("OPTIONS", "/bridge/boards", &[("Origin".into(), "http://evil.example".into())], b"");
     assert_eq!(status, 403);
+    // Each refusal kind is said on the provider's stream once, the first
+    // met naming what it presented — the origin a browser hides from the
+    // page as a CORS failure, the host — and the secret never.
+    let said = talk_holding(&provider, &["is refused (origin)", "is refused (secret)", "is refused (host)"]);
+    for (kind, times) in [("is refused (origin)", 1), ("is refused (secret)", 1), ("is refused (host)", 1)] {
+        assert_eq!(said.matches(kind).count(), times, "`{kind}` said once: {said}");
+    }
+    assert!(said.contains(&format!("a request from Origin `http://evil.example` is refused (origin) — this provider admits {PAGE} alone (--page-origin)")), "{said}");
+    assert!(said.contains(&format!("a request naming Host `evil.example:80` is refused (host) — the page reaches this provider as http://127.0.0.1:{}", provider.port)), "{said}");
+    assert!(!said.contains("`0000`"), "the presented secret is never said: {said}");
     // The listener is bound to 127.0.0.1 alone: this machine's non-loopback
     // address refuses the connect.
     let host = std::process::Command::new("hostname").output().ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
@@ -731,6 +783,7 @@ fn f6_without_dev_hooks_the_fault_door_is_not_built_in() {
     let (sd, provider) = bare_provider(dir.path());
     let refused = provider.refused("fault/write_busy", json!({}));
     assert_eq!(refused["name"], "not_built_in", "{refused}");
+    readme_names_every_door(refused["detail"].as_str().unwrap(), "the doors are ");
     assert_eq!(provider.stop(), 0);
     let out = Command::new(env!("CARGO_BIN_EXE_skep-dev"))
         .args(["serve", "--page-origin", PAGE, "--own", "--data-dir", s(&dir.path().join("own")), "--session", "bare"])
@@ -786,6 +839,7 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     let refused = provider.refused("fault/no_such_door", json!({}));
     assert_eq!(refused["name"], "not_built_in");
     assert!(refused["detail"].as_str().unwrap().contains("poison"), "the refusal names the doors, `poison` among them: {refused}");
+    readme_names_every_door(refused["detail"].as_str().unwrap(), "the doors are ");
     // The poison door: the kernel's next commit poisoned, so a burst on the
     // draft minted above answers `held` with `cause: poisoned` (§3c.4), its
     // line `sent: true` (§3c.2: the frames stay in the journal and land at a
@@ -981,6 +1035,12 @@ fn the_throwaway_store_is_removed_at_the_clean_stop_and_a_named_one_kept() {
     let store = said(&talk, "; the store is ").lines().find_map(|l| l.split_once("; the store is ")).map(|(_, path)| PathBuf::from(path)).unwrap();
     let name = store.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
     assert!(store.starts_with(std::env::temp_dir()) && name.starts_with("skep-dev-serve-"), "a throwaway under the system temp dir: {}", store.display());
+    // The serving line says how the clean stop is asked, and what an
+    // interrupt, which skips it, leaves — the throwaway among it.
+    said(
+        &talk,
+        "the provider stops cleanly when stdin closes (Ctrl-D at a terminal) — an interrupt (Ctrl-C) ends it with none of the clean stop: its sessions live on at the board until it restarts, and the throwaway store stays in place",
+    );
     provider.result("keygen", json!({"label": "phone"}));
     assert!(store.is_dir(), "the throwaway stands while the provider serves");
     assert_eq!(provider.stop(), 0, "a clean stop");
@@ -989,9 +1049,12 @@ fn the_throwaway_store_is_removed_at_the_clean_stop_and_a_named_one_kept() {
     let _ = std::fs::remove_dir_all(&store);
     assert!(gone, "the throwaway store is removed at the clean stop: {}", store.display());
     said(&talk, &format!("the throwaway store {} is removed", store.display()));
+    said(&talk, "stopping (stdin closed): ");
     // `--dir`: the person's store, kept with the key made in it.
     let named = dir.path().join("named-store");
     let provider = Provider::start(&["--board", &board, "--session", "bare", "--principal", "1", "--dir", s(&named)]);
+    let talk = Arc::clone(&provider.talk);
+    assert!(!said(&talk, "an interrupt (Ctrl-C)").contains("throwaway"), "a named store is no throwaway");
     let fingerprint = provider.result("keygen", json!({"label": "phone"}))["fingerprint"].as_str().unwrap().to_string();
     assert_eq!(provider.stop(), 0, "a clean stop");
     assert!(named.is_dir(), "a store the person named is never removed");
@@ -999,15 +1062,68 @@ fn the_throwaway_store_is_removed_at_the_clean_stop_and_a_named_one_kept() {
     sd.shutdown();
 }
 
+/// AN ACCEPT THE LISTENER REFUSES IS SAID ONCE PER EDGE: under a descriptor
+/// limit the connections held open exhaust, every accept past it fails at
+/// once and again; the provider says its listener's refusal once, keeps
+/// accepting, says when it accepts again once they close, and serves on.
+#[cfg(unix)]
+#[test]
+fn a_listener_out_of_descriptors_says_so_once_and_when_it_accepts_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = origin(sd.port());
+    let provider = Provider::start_under(&["--board", &board, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store"))], Some(48));
+    let refused = "the provider's listener refused a connection: ";
+    let mut held = Vec::new();
+    while !provider.talk().contains(refused) {
+        assert!(held.len() < 100, "{} connections held, and no accept refused:\n{}", held.len(), provider.talk());
+        held.push(TcpStream::connect(("127.0.0.1", provider.port)).expect("the listener's queue takes the connect"));
+        thread::sleep(Duration::from_millis(5));
+    }
+    // Every connection past the limit meets a refused accept — on every retry
+    // while it waits, where the platform keeps it queued; the line stands
+    // once.
+    for _ in 0..20 {
+        held.push(TcpStream::connect(("127.0.0.1", provider.port)).expect("the listener's queue takes the connect"));
+        thread::sleep(Duration::from_millis(15));
+    }
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(provider.talk().matches(refused).count(), 1, "{}", provider.talk());
+    // The held connections closed, the next request is accepted and served,
+    // and the edge back is said.
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while provider.get("/bridge/log").0 != 200 {
+        assert!(Instant::now() < deadline, "the provider serves again:\n{}", provider.talk());
+        thread::sleep(Duration::from_millis(20));
+    }
+    let said = talk_holding(&provider, &["the provider's listener accepts connections again"]);
+    assert_eq!(said.matches(refused).count(), 1, "{said}");
+    assert_eq!(provider.stop(), 0);
+    sd.shutdown();
+}
+
 /// The usage refusals: an unknown flag, a missing page origin, a missing
-/// session mode, `--own` beside `--board`, a bad script — each exit 2
-/// before any socket; and `--help` lists the verb.
+/// session mode, `--own` beside `--board`, a key file the verb never reads,
+/// a missing board or board directory, a bad script — each exit 2 before
+/// anything is made, a socket or the throwaway store; and `--help` lists
+/// the verb. A halt past them — a board that does not answer — removes the
+/// throwaway it made, and says so.
 #[test]
 fn the_verbs_usage_is_judged_before_any_socket() {
+    // The child's temp dir is this test's own, so a throwaway it makes is
+    // seen here and no other run's is.
+    let temp = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(env!("CARGO_BIN_EXE_skep-dev")).args(args).stdin(Stdio::null()).output().unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-dev"));
+        cmd.args(args).stdin(Stdio::null()).env("TMPDIR", temp.path());
+        for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION", "SKEP_SEARCH_CORPUS"] {
+            cmd.env_remove(var);
+        }
+        let out = cmd.output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
     };
+    let throwaways = || std::fs::read_dir(temp.path()).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with("skep-dev-serve-")).count();
     let (code, out, _) = run(&["--help"]);
     assert_eq!(code, 0);
     assert!(out.contains("\n  serve ") && out.contains("--page-origin <origin>") && out.contains("--session bare|signed"), "{out}");
@@ -1020,11 +1136,18 @@ fn the_verbs_usage_is_judged_before_any_socket() {
         (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "signed"], "--dir (or SKEP_KEYSTORE) is required under --session signed"),
         (vec!["serve", "--page-origin", "localhost:5173", "--board", "http://127.0.0.1:1", "--session", "bare"], "--page-origin:"),
         (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--data-dir", "/tmp/x"], "belongs to `serve --own`"),
+        (
+            vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--key", "/x"],
+            "`--key` (or SKEP_KEY) names a key file, and `skep-dev serve` signs with the key its --dir store holds",
+        ),
+        (vec!["serve", "--page-origin", PAGE, "--session", "bare"], "--board (or SKEP_BOARD) is required"),
+        (vec!["serve", "--page-origin", PAGE, "--session", "bare", "--own"], "--data-dir is required with --own"),
     ] {
         let (code, out, err) = run(&args);
         assert_eq!(code, 2, "{args:?}: {err}");
         assert!(err.contains(needle), "{args:?}: {err}");
         assert!(out.is_empty(), "nothing on stdout: {out}");
+        assert_eq!(throwaways(), 0, "a usage refusal makes no throwaway: {args:?}");
     }
     let dir = tempfile::tempdir().unwrap();
     let script = dir.path().join("bad.txt");
@@ -1032,11 +1155,13 @@ fn the_verbs_usage_is_judged_before_any_socket() {
     let (code, _, err) = run(&["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--script", s(&script)]);
     assert_eq!(code, 2, "{err}");
     assert!(err.contains("script line 1"), "{err}");
-    // A board that does not answer: a halt before serving, exit 3.
+    // A board that does not answer: a halt before serving, exit 3, and the
+    // throwaway made for the run removed on the way out, said so.
     let port = free_port();
     let (code, out, err) = run(&["serve", "--page-origin", PAGE, "--board", &format!("http://127.0.0.1:{port}"), "--session", "bare"]);
     assert_eq!(code, 3, "{err}");
     assert!(err.contains("unreachable"), "{err}");
     assert!(out.is_empty());
-    let _ = PathBuf::new();
+    assert!(err.contains(&format!("the throwaway store {}", temp.path().display())) && err.contains(" is removed"), "{err}");
+    assert_eq!(throwaways(), 0, "the halt leaves no throwaway behind");
 }

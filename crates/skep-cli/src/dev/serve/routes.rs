@@ -27,11 +27,12 @@ use skep_http::{read_request, write_head, write_response, Limits, Refused, Reque
 use skep_shell::{CallOutcome, EventName};
 
 use super::http::{cors_headers, write_sse_event, write_sse_head, write_sse_keepalive, KEEPALIVE, MAX_BODY, MAX_HEAD, READ_TIMEOUT, WRITE_TIMEOUT};
-use super::{node, Provider};
+use super::{clipped, node, Provider};
 use crate::terminal::talk;
 
 /// THE CONNECTION: the timeouts, the read, the preflight or the admission,
-/// the route.
+/// the route. Every refusal the provider makes itself is said on TALK the
+/// first time its kind is met in the run, ahead of its answer.
 pub fn connection(provider: &Provider<'_>, mut stream: TcpStream) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
@@ -42,23 +43,31 @@ pub fn connection(provider: &Provider<'_>, mut stream: TcpStream) {
         Ok(Some(req)) => req,
         Ok(None) => return,
         Err(Refused::Malformed(detail)) => {
-            let _ = write_response(&mut stream, 400, &cors, Some("text/plain; charset=utf-8"), format!("refused: malformed_http: {detail}\n").as_bytes());
+            let refusal = format!("malformed_http: {detail}");
+            provider.say_refusal_once("malformed_http", || format!("a request the provider could not read is refused ({}); said once", clipped(&refusal)));
+            let _ = write_response(&mut stream, 400, &cors, Some("text/plain; charset=utf-8"), format!("refused: {refusal}\n").as_bytes());
             return;
         }
         Err(Refused::TooLarge { declared, cap }) => {
-            let _ = write_response(&mut stream, 413, &cors, Some("text/plain; charset=utf-8"), format!("refused: payload_too_large: {declared} bytes declared against a cap of {cap}\n").as_bytes());
+            let refusal = format!("payload_too_large: {declared} bytes declared against a cap of {cap}");
+            provider.say_refusal_once("payload_too_large", || format!("a request the provider could not read is refused ({refusal}); said once"));
+            let _ = write_response(&mut stream, 413, &cors, Some("text/plain; charset=utf-8"), format!("refused: {refusal}\n").as_bytes());
             return;
         }
     };
     if req.method == "OPTIONS" {
         let _ = match provider.admission.preflight(&req, peer) {
             Ok(()) => write_response(&mut stream, 204, &cors, None, b""),
-            Err(check) => write_response(&mut stream, 403, &cors, Some("text/plain; charset=utf-8"), format!("refused: {}\n", check.name()).as_bytes()),
+            Err(check) => {
+                provider.say_refusal_once(check.name(), || provider.admission.refusal_line(check, &req, peer));
+                write_response(&mut stream, 403, &cors, Some("text/plain; charset=utf-8"), format!("refused: {}\n", check.name()).as_bytes())
+            }
         };
         return;
     }
     let events_route = req.method == "GET" && req.path == "/bridge/events";
     if let Err(check) = provider.admission.admit(&req, peer, events_route) {
+        provider.say_refusal_once(check.name(), || provider.admission.refusal_line(check, &req, peer));
         let _ = write_response(&mut stream, 403, &cors, Some("text/plain; charset=utf-8"), format!("refused: {}\n", check.name()).as_bytes());
         return;
     }
@@ -146,7 +155,7 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
             let args = args_of(req).unwrap_or_else(|_| json!({}));
             let answer = match provider.node {
                 Some(n) => node::fault(n, &mut provider.doors.lock().expect("the doors' lock"), door, &args),
-                None => Err("the fault doors are the in-process daemon's: run with --own in a dev-hooks build".to_string()),
+                None => Err(format!("the fault doors are the in-process daemon's: run with --own in a dev-hooks build; the doors are {}", node::DOORS.join(", "))),
             };
             match answer {
                 Ok(v) => {

@@ -39,10 +39,12 @@
 //! `attestation_invalid:board_unavailable` — the three transient tokens —
 //! are sent again after [`WRITE_BUSY_BACKOFF_FIRST`], doubling to
 //! [`WRITE_BUSY_BACKOFF_CAP`], until answered otherwise or
-//! [`WRITE_BUSY_PATIENCE`] runs out, each counted ([`Retries`]); every
-//! other rejection stops the run as the board's own refusal (exit 1, its
-//! `code:detail` verbatim), transport as exit 4, and the death signal as a
-//! halt.
+//! [`WRITE_BUSY_PATIENCE`] runs out, each counted ([`Retries`]) and the
+//! first of each token in the run said as it is met; a write the patience
+//! ran out on halts naming its op, its envelope id, the token as the board
+//! spells it and why the board kept answering it. Every other rejection
+//! stops the run as the board's own refusal (exit 1, its `code:detail`
+//! verbatim), transport as exit 4, and the death signal as a halt.
 
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -61,6 +63,8 @@ use skep_identity::{
     entry_body_empty, entry_body_make_link, entry_body_publish, entry_frame, unit_span, BoardTerm,
     ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots, ShotBase, ShotSegmentPiece,
 };
+
+use crate::terminal::talk;
 
 /// The most bytes one `insert` frame carries: 128 KiB, the search budgets'
 /// chunk — one transaction is bounded by the kernel's `MAX_TXN_BYTES`, and a
@@ -121,6 +125,44 @@ enum Transient {
     WriteBusy,
     Durability,
     BoardUnavailable,
+}
+
+impl Transient {
+    /// The token as the board answers it (wire.md §HTTP status codes,
+    /// §Rejection codes), as the board's own operator stream names it.
+    fn token(self) -> &'static str {
+        match self {
+            Transient::WriteBusy => "write_busy",
+            Transient::Durability => "durability",
+            Transient::BoardUnavailable => "attestation_invalid:board_unavailable",
+        }
+    }
+
+    /// Why the board kept answering it, in the wire's terms.
+    fn cause(self) -> &'static str {
+        match self {
+            Transient::WriteBusy => "the board's write permit pool stayed full: other writers held every permit, and the write was refused before any lock, nothing committed",
+            Transient::Durability => {
+                "the commit's durability barrier kept failing and the write did nothing — at a full volume no retry succeeds until the operator frees room, which the board's operator stream names"
+            }
+            Transient::BoardUnavailable => {
+                "the board has no H.1 for the attest to name: on a claimed board only the one write after a refused H.1 answers so, and that write's own turn writes the head — a refusal that persists is a journal damaged below H.1"
+            }
+        }
+    }
+}
+
+impl Retries {
+    /// One retry of `transient` counted: the count it comes to.
+    fn tally(&mut self, transient: Transient) -> u64 {
+        let count = match transient {
+            Transient::WriteBusy => &mut self.write_busy,
+            Transient::Durability => &mut self.durability,
+            Transient::BoardUnavailable => &mut self.board_unavailable,
+        };
+        *count += 1;
+        *count
+    }
 }
 
 /// The claimant's one content-scoped signed session over the board, the
@@ -199,11 +241,14 @@ impl<'b> Writer<'b> {
     }
 
     /// [`Writer::write`] under `token`'s session — the bare sessions the
-    /// second account takes.
+    /// second account takes. The first refusal of each transient token in
+    /// the run is said once, as it is met: a storm of them is otherwise a
+    /// minute of silence per write, its count said only at the end.
     pub fn write_as(&mut self, token: &Token, mut frame: Value, id: &str) -> Result<Value, Halt> {
         frame["id"] = Value::String(id.to_string());
         let deadline = Instant::now() + WRITE_BUSY_PATIENCE;
         let mut backoff = WRITE_BUSY_BACKOFF_FIRST;
+        let mut refused = 0u64;
         loop {
             self.writes += 1;
             let transient = match self.board.op(Some(token), &frame) {
@@ -221,15 +266,23 @@ impl<'b> Writer<'b> {
                 }
                 Err(h) => return Err(h),
             };
-            match transient {
-                Transient::WriteBusy => self.retries.write_busy += 1,
-                Transient::Durability => self.retries.durability += 1,
-                Transient::BoardUnavailable => self.retries.board_unavailable += 1,
+            refused += 1;
+            if self.retries.tally(transient) == 1 {
+                talk(format!(
+                    "the board answered `{}`: each write is retried for up to {} s, and the retries are counted at the end",
+                    transient.token(),
+                    WRITE_BUSY_PATIENCE.as_secs()
+                ));
             }
             if Instant::now() >= deadline {
                 return Err(Halt::face(
-                    format!("the board kept refusing `{}` as {transient:?} for {WRITE_BUSY_PATIENCE:?}", frame["op"]),
-                    "a transient refusal — the write permit pool full, the durability barrier failed, or the one write after a refused H.1 — did not clear within the patience",
+                    format!(
+                        "the board refused `{}` (envelope id `{id}`) as `{}` for {} s, {refused} times",
+                        frame["op"].as_str().unwrap_or("?"),
+                        transient.token(),
+                        WRITE_BUSY_PATIENCE.as_secs()
+                    ),
+                    transient.cause(),
                     "read the board's operator stream (a full volume is named there), then run again: the manifest holds what landed",
                 ));
             }

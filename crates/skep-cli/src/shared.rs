@@ -13,9 +13,11 @@
 //! principal and a key — a key file refused where a walk takes none
 //! (`require_no_key_file`). A halt is one block on stderr: the state, its
 //! cause, the one act (AUTH-5.66; AUTH-5.67's key-file cell naming the path
-//! and the state). What the thirteen commands share among themselves alone
-//! — the person doors, the payload's read, the anchor boxes' default, the
-//! three facts, the whole-set compare — stays in `commands.rs`.
+//! and the state) — a transport halt's act, and a retry-class refusal's,
+//! named here where the library's rendering names none (`act_beside`). What
+//! the thirteen commands share among themselves alone — the person doors,
+//! the payload's read, the anchor boxes' default, the three facts, the
+//! whole-set compare — stays in `commands.rs`.
 
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -23,10 +25,12 @@ use std::path::Path;
 
 use skep_client::board::Board;
 use skep_client::derive::Mode;
-use skep_client::dial::PlainHttp;
+use skep_client::dial::{DialError, PlainHttp, CONNECT_TIMEOUT, IO_TIMEOUT};
 use skep_client::halt::Halt;
 use skep_client::sheet::render_inert;
-use skep_client::store::{arm4_face, FileStore, KeyFacts, KeySelector, Purpose, StoreError};
+use skep_client::store::{
+    arm4_face, Binding, FileStore, KeyFacts, KeySelector, Purpose, StoreError,
+};
 
 use crate::args::{CommandLine, Line, Usage};
 use crate::terminal::talk;
@@ -76,15 +80,93 @@ impl From<StoreError> for Stop {
 
 /// A command's outcome finished under `program`: a stop's one block said on
 /// stderr, opening with the program's name, the program's help beneath a
-/// usage refusal; and the exit code answered — 0, or the stop's.
+/// usage refusal, a halt's act beneath it where the library's rendering
+/// names none ([`act_beside`]); and the exit code answered — 0, or the
+/// stop's.
 pub fn finish(program: Program, outcome: Result<(), Stop>) -> i32 {
     let (block, code) = match outcome {
         Ok(()) => return 0,
         Err(Stop::Usage(u)) => (format!("{u}\n\n{}", program.help), 2),
-        Err(Stop::Halt(h)) => (h.to_string(), h.exit_code()),
+        Err(Stop::Halt(h)) => match act_beside(&h) {
+            Some(act) => (format!("{h}\n  act: {act}"), h.exit_code()),
+            None => (h.to_string(), h.exit_code()),
+        },
     };
     talk(format!("{}: {block}", program.name));
     code
+}
+
+/// The act a halt's block carries where the library's rendering of it names
+/// none — every halt one block, its state, its cause and the one act that
+/// clears it (§2.4): a transport halt's, by where its exchange broke
+/// ([`transport_act`]), and a retry-class refusal's — a `503` other than
+/// `index_failed`, the board's "retry shortly" with nothing of the request
+/// taken (wire.md §HTTP status codes). `None` where the block names its act
+/// itself (a face, a block) or a refusal's act is its token's own.
+fn act_beside(h: &Halt) -> Option<String> {
+    match h {
+        Halt::Dial(d) => Some(transport_act(d)),
+        Halt::Refused(r) if r.status == 503 && r.code != "index_failed" => Some(
+            "the board was busy and took nothing of this request (a retry-class refusal, wire.md §HTTP status codes): run the same \
+             command again in a moment — a ceremony reads what landed before it acts again (client.md §4.4)"
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+/// The board a transport halt's origin came from, named for the act: the
+/// flag, else its variable.
+const WHICH_BOARD: &str =
+    "that --board, or SKEP_BOARD where no flag is given, names the board you mean";
+
+/// A transport halt's act, by the phase its `DialError` names (§2.3's exit
+/// 4): before the request was written nothing was sent, and the act is the
+/// origin's; after it, the board may have taken the request, and the act
+/// reads back what it did before acting again; a timeout is either, and
+/// names the daemon still opening its journal — whose port takes a
+/// connection and answers nothing until it serves (`RUNBOOK.md` §3, step 5)
+/// — beside this client's own bounds, the dialer's pins.
+fn transport_act(d: &DialError) -> String {
+    match d {
+        DialError::NotHeld(_) => "dial it with a skep built with its default features, whose `tls` transport dials https".to_string(),
+        DialError::Request(_) => {
+            "nothing was sent: this client composed a request it refuses to write, which is this tool's fault — report it with the \
+             command line that met it"
+                .to_string()
+        }
+        DialError::Resolve(_) | DialError::Connect(_) => {
+            format!("nothing was sent: check that a daemon serves that origin — `skep health` against it answers — and {WHICH_BOARD}")
+        }
+        DialError::Timeout(_) => format!(
+            "a daemon still opening its journal takes a connection and answers nothing until it serves (RUNBOOK.md §3, step 5): its \
+             `open:` lines say how far it has got, and its `serving` line when it serves — this client waits {} s for a connection \
+             and {} s on a read or a write. Run this again once it serves, reading back first what a write did: a request written \
+             before the wait ran out may be taken when it serves. Where no daemon is opening, check that one serves that origin and {WHICH_BOARD}",
+            CONNECT_TIMEOUT.as_secs(),
+            IO_TIMEOUT.as_secs()
+        ),
+        DialError::Io(_) | DialError::Truncated { .. } => {
+            "the connection broke during the exchange, so the board may have taken the request: read back what it did — `skep \
+             fingerprint`, `skep verify`, or the ceremony's own reads when it runs again (client.md §4.4) — before acting again"
+                .to_string()
+        }
+        DialError::Tls(_) => {
+            "check that the origin serves https under a certificate this machine trusts; where the exchange broke after the request \
+             was written, the board may have taken it: read back what it did before acting again"
+                .to_string()
+        }
+        DialError::Response(_) | DialError::TooLarge { .. } => format!(
+            "that origin's answer was no skep board's — none at all where the connection closed first: check that skepd serves it, \
+             and {WHICH_BOARD}; the request was written, so read back what a write did before acting again"
+        ),
+        // A phase the library names later: both acts, since where it broke is
+        // not known here.
+        _ => format!(
+            "check that a daemon serves that origin and {WHICH_BOARD}; where the request was written, the board may have taken \
+             it: read back what it did before acting again"
+        ),
+    }
 }
 
 /// `--help`: the program's help on stdout, the DATA the run asked for — a
@@ -170,7 +252,13 @@ pub fn store_of<C>(c: &Line<C>) -> Result<FileStore, Usage> {
 
 /// The principal: the one `given` — `Line::principal`'s answer, its refusal
 /// already returned as exit 2 by the caller, before any read — else the
-/// board's one binding in the store (§3.5's one-binding test).
+/// board's one binding in the store (§3.5's one-binding test). Where none is
+/// chosen, the halt names the store read and the origin it was read for: a
+/// store named wrongly, and an origin spelled otherwise than its binding's
+/// (`localhost` for `127.0.0.1`), are the two causes the store alone cannot
+/// tell from a principal never bound — so the bindings it holds at other
+/// origins are named beside it — and where it holds several principals at
+/// this one, it lists them.
 pub fn principal_or_bound(
     given: Option<u64>,
     store: &FileStore,
@@ -179,11 +267,50 @@ pub fn principal_or_bound(
     if let Some(p) = given {
         return Ok(p);
     }
-    let ps = store.principals_at(board.dialed())?;
+    let origin = board.dialed();
+    let ps = store.principals_at(origin)?;
     match ps.as_slice() {
         [one] => Ok(*one),
-        [] => Err(Halt::face("no principal", "--principal (or SKEP_PRINCIPAL) is absent and the store holds no binding for this board", "pass --principal")),
-        _ => Err(Halt::face("no principal", "--principal is absent and the store holds bindings for several principals at this board", "pass --principal")),
+        [] => {
+            let mut elsewhere: Vec<String> = store
+                .all_bindings()?
+                .into_iter()
+                .filter_map(|b| match b {
+                    Binding::Enrollment { origin: o, .. } if &o != origin => Some(o.to_string()),
+                    _ => None,
+                })
+                .collect();
+            elsewhere.sort();
+            elsewhere.dedup();
+            let mut cause = format!(
+                "--principal (or SKEP_PRINCIPAL) is absent and the store at {} holds no binding at {origin}",
+                store.root().display()
+            );
+            if !elsewhere.is_empty() {
+                cause.push_str(&format!(
+                    "; it holds bindings at {}: an origin spelled another way is another board to the store",
+                    elsewhere.join(", ")
+                ));
+            }
+            Err(Halt::face(
+                format!("no principal for {origin}"),
+                cause,
+                "pass --principal <n>, or name the board as its binding does (--board), or the store that holds it (--dir, SKEP_KEYSTORE)",
+            ))
+        }
+        several => {
+            let mut several = several.to_vec();
+            several.sort_unstable();
+            let list = several.iter().map(u64::to_string).collect::<Vec<_>>().join(", ");
+            Err(Halt::face(
+                format!("no principal for {origin}"),
+                format!(
+                    "--principal (or SKEP_PRINCIPAL) is absent and the store at {} holds bindings for several principals at {origin}: {list}",
+                    store.root().display()
+                ),
+                format!("pass --principal with one of {list}"),
+            ))
+        }
     }
 }
 
@@ -266,6 +393,74 @@ mod tests {
         );
         assert_eq!(finish(PROGRAM, Err(StoreError::NotFound { select: "zz".into() }.into())), 3);
         assert_eq!(finish(PROGRAM, Err(data_refused(io::ErrorKind::BrokenPipe.into()).into())), 3);
+    }
+
+    /// Every transport halt carries an act, by where its exchange broke —
+    /// nothing sent before the request was written, the read-back after it,
+    /// the opening daemon and this client's bounds at a timeout — and a
+    /// retry-class refusal the retry; `index_failed`'s 503, a `rejected`
+    /// document and a face carry none beside their own.
+    #[test]
+    fn a_transport_halt_and_a_busy_board_name_their_act() {
+        let act =
+            |d: DialError| act_beside(&Halt::Dial(d)).expect("every transport halt carries an act");
+        for unsent in
+            [DialError::Connect("refused".into()), DialError::Resolve("no addresses".into())]
+        {
+            let a = act(unsent);
+            assert!(
+                a.starts_with("nothing was sent")
+                    && a.contains("SKEP_BOARD where no flag is given"),
+                "{a}"
+            );
+        }
+        for broke in [
+            DialError::Io("read".into()),
+            DialError::Truncated { declared: 9, got: 3 },
+            DialError::Tls("record".into()),
+            DialError::Response("not http".into()),
+            DialError::TooLarge { cap: 9 },
+        ] {
+            let a = act(broke);
+            assert!(a.contains("read back"), "{a}");
+        }
+        let a = act(DialError::Timeout("read".into()));
+        assert!(
+            a.contains("still opening its journal")
+                && a.contains("RUNBOOK.md §3, step 5")
+                && a.contains(&format!(
+                    "{} s for a connection and {} s on a read",
+                    CONNECT_TIMEOUT.as_secs(),
+                    IO_TIMEOUT.as_secs()
+                ))
+                && a.contains("reading back first"),
+            "{a}"
+        );
+        assert!(act(DialError::NotHeld("https".into())).contains("`tls`"));
+        assert!(act(DialError::Request("target".into())).starts_with("nothing was sent"));
+        let refused = |status: u16, code: &str| {
+            Halt::Refused(skep_client::Refused {
+                status,
+                code: code.into(),
+                detail: None,
+                op: None,
+                body: serde_json::Value::Null,
+            })
+        };
+        for busy in ["write_busy", "scan_busy", "history_busy", "feed_rebuilding"] {
+            assert!(
+                act_beside(&refused(503, busy))
+                    .is_some_and(|a| a.contains("took nothing of this request")),
+                "{busy}"
+            );
+        }
+        assert_eq!(act_beside(&refused(503, "index_failed")), None, "the one 503 no retry clears");
+        assert_eq!(act_beside(&refused(200, "credential_refused")), None);
+        assert_eq!(
+            act_beside(&Halt::face("state", "cause", "act")),
+            None,
+            "a face names its own act"
+        );
     }
 
     /// A DATA line carries no control a board chose: each C0 control — a

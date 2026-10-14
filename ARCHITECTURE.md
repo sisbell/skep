@@ -1454,11 +1454,14 @@ them, each naming only those above it:
   rendered by `c0_inert`, and `data_verbatim`), the stops and their exit
   codes (`Stop` — a usage refusal, or a member of the halt family — which
   `finish` renders under a `Program`, the name a stop's block opens with
-  and the help a usage refusal prints beneath it; `help`, `--help`'s
-  DATA), and the plumbing from the flags to a board (`board_of`), a store
-  (`store_of`), a principal (`principal_or_bound`, §3.5's one-binding
-  test) and a key (`select_key`, under `Purpose`) — a key file refused
-  where a walk takes none (`require_no_key_file`).
+  and the help a usage refusal prints beneath it, and a halt's act beneath
+  it where the library's rendering names none — a transport halt's, by
+  where its exchange broke, and a retry-class `503`'s (`act_beside`);
+  `help`, `--help`'s DATA), and the plumbing from the flags to a board
+  (`board_of`), a store (`store_of`), a principal (`principal_or_bound`,
+  §3.5's one-binding test, whose halt names the store and the origins its
+  bindings name) and a key (`select_key`, under `Purpose`) — a key file
+  refused where a walk takes none (`require_no_key_file`).
 - `commands.rs` what the thirteen commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
@@ -1479,7 +1482,9 @@ targets, so a flag beats its variable and a stop renders in one spelling —
 and then its own, in dependency order: `manifest.rs`, the manifest beside
 the key store (`<store>-seed/<chain>.jsonl`, keyed by `H.1`'s chain, one
 JSON line per write by its envelope id, appended after the ack, so a
-second run adds nothing and a killed run resumes); `board.rs`, the frames
+second run adds nothing and a killed run resumes — making again the one
+write it had in flight, which a new session's envelope id does not
+recognise, as the resumed run says); `board.rs`, the frames
 over the claimant's ONE content-scoped signed session — the staging
 draft's mint, the chunked per-byte insert, the attested edition mint, the
 shot naming the draft, the attested `make_link` whose V-spec from-end is
@@ -1513,11 +1518,14 @@ claim`; it never claims, and it takes none of `tls`, `search` or
 `test-hooks` through `skepd` under `dev-hooks` alone — the default build
 and the sidecar's `--no-default-features --bin skep` build carry no
 `skepd`, which `scripts/gate-full.sh`'s isolation line and
-`tests/it/serve.rs` hold; it stops when its stdin closes, the one stop
-the verb has, read by `watch_stdin`. The `[[bin]]` carries `test =
-false`: the shared modules' unit suites run once, under `skep`, and the
-dev binary's own claims are its integration fences, `tests/it/dev.rs` and
-`tests/it/serve.rs`.
+`tests/it/serve.rs` hold; it stops when its stdin closes, the one clean
+stop the verb has, read by `watch_stdin` and said with its cause — an
+interrupt ends it with none of that, as its serving line says — and each
+refusal it makes itself, the admission's or a request it cannot read, is
+said on its stderr the first time its kind is met. The `[[bin]]` carries
+`test = false`: the shared modules' unit suites run once, under `skep`,
+and the dev binary's own claims are its integration fences,
+`tests/it/dev.rs` and `tests/it/serve.rs`.
 
 Rules that hold across its files:
 
@@ -1573,7 +1581,8 @@ Rules that hold across its files:
   and nowhere else, which `tests/it/tidy.rs` checks; a session token is
   never an argv value — `session --close -` ends the token in
   `SKEP_SESSION` where it is set, stdin then unread, else the one read
-  from stdin — which `tests/it/cli.rs` checks.
+  from stdin, and says which token it ended where the variable answered —
+  which `tests/it/cli.rs` checks.
 - **A command answers `Ok` or a `Stop`.** It names every stop with `?`,
   and `main` — its dispatch one arm per `Command`, which the compiler
   holds exhaustive — exits with `finish`'s rendering of it, a command

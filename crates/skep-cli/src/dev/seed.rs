@@ -47,10 +47,14 @@
 //!
 //! Then the reads for the report — the positions before and after, the
 //! reclaim floor — and ONE JSON object on stdout, always; TALK on stderr:
-//! the mode line, the corpus, a progress line per hundred editions, the
-//! retries, the floor, the reopen warning. A second run under the same key
-//! finds every write recorded, writes nothing, and answers the same object
-//! with `already_seeded: true`.
+//! the mode line, the corpus, the manifest's line ([`manifest_line`]: a new
+//! seed, every write held, or a resume and the one write a resume cannot
+//! see), a progress line per hundred editions and at the last, one line per
+//! phase as it ends, the first refusal of each transient token the writer
+//! retries, the retries, the floor, the reopen warning. A second run under
+//! the same key finds every write recorded, writes nothing — said as it
+//! opens the manifest — and answers the same object with
+//! `already_seeded: true`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -83,6 +87,43 @@ pub const GHOST_GAP: u64 = 1 << 20;
 
 /// The versions' arms, in rotation.
 const ARMS: [&str; 3] = ["appended", "removed", "changed"];
+
+/// The id the second account's step is recorded under — the seed's LAST
+/// record, every skip arm's included, so a manifest holding it holds every
+/// write of the seed.
+const LAST_STEP: &str = "account";
+
+/// What the run found in the manifest, said as it opens it, before the
+/// session: a new seed; a seed whose every write is recorded ([`LAST_STEP`]),
+/// so the run writes nothing; or a seed to RESUME — with the one write a
+/// resume cannot see: the one the run before had in flight when it stopped,
+/// which may stand on the board unrecorded and is made again under this
+/// run's session, where its envelope id holds nothing (wire.md §Correlation
+/// and idempotency: an `id` holds on its session alone).
+fn manifest_line(manifest: &Manifest) -> String {
+    let path = manifest.path().display();
+    if manifest.is_new() {
+        format!("manifest: {path} — a new seed of this board; each write is recorded there after the board's ack")
+    } else if manifest.recorded(LAST_STEP).is_some() {
+        format!(
+            "manifest: {path} records every write of this seed ({} lines): this run writes nothing",
+            manifest.held()
+        )
+    } else {
+        format!(
+            "manifest: {path} holds {} lines of this seed: the run resumes after them. A write the run before this one had in flight \
+             when it stopped may stand on the board unrecorded; it is made again here, and a mint or a shot then lands twice — an \
+             envelope id holds within one session alone (wire.md §Correlation and idempotency). Where the board's exact shape \
+             matters, seed a fresh board instead",
+            manifest.held()
+        )
+    }
+}
+
+/// A phase's elapsed seconds, as its end line says them.
+fn phase_secs(seconds: &BTreeMap<&'static str, Duration>, phase: &str) -> f64 {
+    seconds.get(phase).copied().unwrap_or_default().as_secs_f64()
+}
 
 /// `skep-dev seed`.
 pub fn seed(c: &DevLine) -> Result<(), Stop> {
@@ -196,6 +237,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         drafts,
     };
     let manifest = Manifest::open(path_for(store.root(), &chain), header)?;
+    talk(manifest_line(&manifest));
     let before = health.log_position();
     // THE SESSION, then the shapes.
     let mut w = Writer::open(&board, signer, principal)?;
@@ -204,9 +246,13 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         // and no probe guesses what landed there (§5.1 arm (c), the one read).
         let second = format!("{account}.0.2");
         if w.registered(&second)? {
+            let file = if manifest.is_torn() { "holds no complete line" } else { "does not exist" };
             return Err(Halt::face(
                 "this board holds documents past doc 1, and no manifest records a seed",
-                format!("{second} is registered, and {} does not exist: another run, or another hand, wrote here", manifest.path().display()),
+                format!(
+                    "{second} is registered, and {} {file}: another run, or another hand, wrote here — a run of this tool stopped inside its first write leaves a board so",
+                    manifest.path().display()
+                ),
                 "seed a FRESH board (a new data directory, claimed anew), or restore the manifest beside this store; this tool never guesses what another run landed",
             )
             .into());
@@ -224,12 +270,49 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         next_ordinal: 1,
         seconds: BTreeMap::new(),
     };
+    // Each phase said as it ends — what it holds now, this run's writes and
+    // the manifest's together, and its seconds — so no phase past the
+    // editions runs silent at the 10^4 tier.
     let staging = run.staging()?;
     let editions = run.editions()?;
     let links = run.links(&editions)?;
+    talk(format!(
+        "links: {} in all, {} of them naming files outside the set (ghosts: {}) ({:.1} s)",
+        links.addresses.len(),
+        links.outside,
+        links.ghosts.len(),
+        phase_secs(&run.seconds, "links")
+    ));
     let versions = run.versions(&editions)?;
+    let window = versions.first().and_then(|v| {
+        v.window.as_deref().map(|draft| {
+            format!(", the window — {WINDOW_WIDTH} positions of {draft} — in {}", v.member)
+        })
+    });
+    talk(format!(
+        "versions: {} in all{} ({:.1} s)",
+        versions.len(),
+        window.unwrap_or_default(),
+        phase_secs(&run.seconds, "versions")
+    ));
     let draft_addrs = run.drafts()?;
+    talk(format!(
+        "drafts: {} in all ({:.1} s)",
+        draft_addrs.len(),
+        phase_secs(&run.seconds, "drafts")
+    ));
     let second = run.second_account(mode)?;
+    let account_secs = phase_secs(&run.seconds, "account");
+    match second["skipped"].as_str() {
+        Some(why) => talk(format!("second account: skipped — {why} ({account_secs:.1} s)")),
+        None => talk(format!(
+            "second account: {}, principal {}, its home {} and one draft {} ({account_secs:.1} s)",
+            second["account"].as_str().unwrap_or("?"),
+            second["principal"],
+            second["home"].as_str().unwrap_or("?"),
+            second["draft"].as_str().unwrap_or("?")
+        )),
+    }
     // THE READS FOR THE REPORT.
     let after = board.health()?.log_position();
     let floor = run.w.reclaim_floor()?;
@@ -441,7 +524,7 @@ impl Seed<'_> {
                 })?;
                 let member = s.landed_or(member, &format!("{name}:shot"))?;
                 out.push((edition, member));
-                if (i + 1) % 100 == 0 {
+                if (i + 1) % 100 == 0 || i + 1 == s.documents {
                     talk(format!(
                         "editions: {} of {} landed ({:.1} s)",
                         i + 1,
@@ -617,28 +700,26 @@ impl Seed<'_> {
     }
 
     /// THE SECOND ACCOUNT, keyless and top-level, from bare sessions on a
-    /// permissive board; skipped where the board refuses them.
+    /// permissive board; skipped where the board refuses them — the phase's
+    /// line says which, recorded now or before. Recorded under [`LAST_STEP`]
+    /// whichever arm it takes, the seed's last record.
     fn second_account(&mut self, mode: Mode) -> Result<Value, Halt> {
         self.timed("account", |s| {
-            if let Some(v) = s.manifest.recorded("account") {
+            if let Some(v) = s.manifest.recorded(LAST_STEP) {
                 let mut v = v.clone();
                 v.as_object_mut().map(|m| m.remove("id"));
                 return Ok(v);
             }
             let skipped = |why: &str| json!({"skipped": why});
             if mode == Mode::Enforcing {
-                let why = "ENFORCING: the board refuses bare sessions, and a keyless account opens no signed session";
-                talk(format!("second account: skipped — {why}"));
-                let v = skipped(why);
-                s.manifest.record("account", v.clone())?;
+                let v = skipped("ENFORCING: the board refuses bare sessions, and a keyless account opens no signed session");
+                s.manifest.record(LAST_STEP, v.clone())?;
                 s.wrote = true;
                 return Ok(v);
             }
             let Some(node) = s.w.bare(0)? else {
-                let why = "the board refused a bare session as principal 0";
-                talk(format!("second account: skipped — {why}"));
-                let v = skipped(why);
-                s.manifest.record("account", v.clone())?;
+                let v = skipped("the board refused a bare session as principal 0");
+                s.manifest.record(LAST_STEP, v.clone())?;
                 s.wrote = true;
                 return Ok(v);
             };
@@ -676,7 +757,7 @@ impl Seed<'_> {
                 Ok((None, json!({"len": bytes.len()})))
             })?;
             let v = json!({"account": account2, "principal": new_id, "home": home, "draft": draft});
-            s.manifest.record("account", v.clone())?;
+            s.manifest.record(LAST_STEP, v.clone())?;
             s.wrote = true;
             Ok(v)
         })

@@ -1,7 +1,8 @@
 //! `skep session` (`client.md` §2.2): a CONTENT-scoped signed session
 //! opened with the store's key, its token printed live; `--close -` ends
 //! the token in `SKEP_SESSION` where it is set — stdin then unread — else
-//! the one read from stdin, never one from argv (AUTH-4.53).
+//! the one read from stdin, never one from argv (AUTH-4.53), and names the
+//! token it ended where the variable answered.
 
 use std::io::{self, Read};
 
@@ -13,6 +14,18 @@ use skep_client::store::{KeySelector, KeyStore, Purpose};
 
 use super::{board_of, data, principal_or_bound, select_key, store_of, talk, Stop};
 use crate::args::{session_env, CommandLine, Usage};
+
+/// Where `--close -` took the token it ends: `SKEP_SESSION` where it is set,
+/// else stdin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    Variable,
+    Stdin,
+}
+
+/// What a token's death says, whoever ended it (the death signal rode the
+/// close's 204).
+const ALREADY_DEAD: &str = "was already dead (the death signal rode the 204): a restart, a retirement, a block, a genesis at the account, or an earlier close ended it";
 
 pub fn session(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
@@ -26,22 +39,33 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
         // stdin's bytes, judged whole — bytes that are no token, and a read
         // stdin refuses, are a state the read came to (exit 3), never a
         // usage refusal, which is the command line's shape alone (§2.3).
-        let token = match session_env()? {
-            Some(token) => token,
+        let (token, source) = match session_env()? {
+            Some(token) => (token, Source::Variable),
             None => {
                 let mut bytes = Vec::new();
                 io::stdin().read_to_end(&mut bytes).map_err(|e| Halt::face("the token could not be read from stdin", e.to_string(), "pipe the token in, or set SKEP_SESSION"))?;
-                std::str::from_utf8(&bytes).ok().and_then(Token::parse).ok_or_else(|| {
+                let token = std::str::from_utf8(&bytes).ok().and_then(Token::parse).ok_or_else(|| {
                     Halt::face(
                         "the bytes read from stdin are not a session token",
                         "a session token is 32 lowercase hex, as `skep session` printed it",
                         "pipe the token `skep session` printed, and nothing beside it",
                     )
-                })?
+                })?;
+                (token, Source::Stdin)
             }
         };
-        if board.session_close(&token)?.already_dead {
-            talk("the token was already dead (the death signal rode the 204): a restart, a retirement, a block, a genesis at the account, or an earlier close ended it");
+        let already_dead = board.session_close(&token)?.already_dead;
+        // Where the variable answered, the close says so whatever came of
+        // it: a token piped beside the variable stands unread and LIVE, and
+        // the person who piped it reads its fate in no line of this run
+        // (AUTH-4.53: a live token is the principal's content capability).
+        // Read from stdin, the token ended is the one piped, and a close
+        // that ended it says nothing.
+        match (source, already_dead) {
+            (Source::Variable, false) => talk("the token in SKEP_SESSION is ended; stdin was not read"),
+            (Source::Variable, true) => talk(format!("the token in SKEP_SESSION {ALREADY_DEAD}; stdin was not read")),
+            (Source::Stdin, true) => talk(format!("the token read from stdin {ALREADY_DEAD}")),
+            (Source::Stdin, false) => {}
         }
         return Ok(());
     }

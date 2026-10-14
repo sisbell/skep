@@ -28,7 +28,7 @@ use skep_identity::{encode_enroll, parse_enroll, Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 use skepd::Skepd;
 
-use crate::common::{origin, s, skep, skep_in, skep_os, skep_stderr_closed, skep_stdout_closed, spawn, spawn_tapped};
+use crate::common::{canned, origin, s, skep, skep_in, skep_os, skep_stderr_closed, skep_stdout_closed, spawn, spawn_tapped};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
 
@@ -124,10 +124,58 @@ fn a_non_canonical_board_exits_2_before_any_socket_and_a_dead_one_exits_4() {
     assert_eq!(r.code, 2);
     let r = skep(&["health", "--board", "http://127.0.0.1:1/"], &[("SKEP_BOARD", "http://127.0.0.1:1")], None);
     assert_eq!(r.code, 2, "the flag's bad value is judged, not the variable's good one");
-    // A canonical origin nobody answers at: transport, exit 4.
+    // A canonical origin nobody answers at: transport, exit 4, its act beside
+    // it — nothing was sent, and the board meant is the flag's or the
+    // variable's (§2.4: every halt one block, the act among it).
     let r = skep(&["health", "--board", "http://127.0.0.1:1"], &[], None);
     assert_eq!(r.code, 4, "{r:?}");
     assert!(r.err.contains("transport:"), "{}", r.err);
+    assert!(
+        r.err.contains("\n  act: nothing was sent: check that a daemon serves that origin")
+            && r.err.contains("--board, or SKEP_BOARD where no flag is given, names the board you mean"),
+        "the act beside the transport halt: {}",
+        r.err
+    );
+}
+
+/// A RETRY-CLASS REFUSAL NAMES THE RETRY AS ITS ACT (wire.md §HTTP status
+/// codes: a `503` other than `index_failed` took nothing, "retry
+/// shortly"): the board's busy answer is exit 1, its token verbatim, the act
+/// beneath it the person's own run again — never the client's retry
+/// (AUTH-5.66); `index_failed`, the one 503 no retry clears, names none.
+#[test]
+fn a_busy_board_s_refusal_names_the_retry_as_its_act() {
+    let r = skep(&["health", "--board", &canned(503, br#"{"error":"write_busy","op":"insert"}"#)], &[], None);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains("the board refused: write_busy (op insert) (HTTP 503)\n  act: the board was busy and took nothing of this request"), "{}", r.err);
+    let r = skep(&["health", "--board", &canned(503, br#"{"error":"index_failed"}"#)], &[], None);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains("the board refused: index_failed (HTTP 503)") && !r.err.contains("act:"), "{}", r.err);
+}
+
+/// NO PRINCIPAL CHOSEN NAMES THE STORE AND THE ORIGIN (§3.5's one-binding
+/// test): a store whose one binding names `http://127.0.0.1:1`, dialed as
+/// `http://localhost:1` — another board to the store — holds no binding at
+/// the origin dialed, and the halt names the store, the origin its binding
+/// does name and the three ways out, before any socket opens.
+#[test]
+fn no_principal_names_the_store_and_the_origins_its_bindings_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(store.join("bindings"), format!("http://127.0.0.1:1 1 1.0.1 {}\n", "ab".repeat(32))).unwrap();
+    let r = skep(&["session", "--board", "http://localhost:1", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 3, "a halt on the store, never transport: {r:?}");
+    assert!(r.err.contains("no principal for http://localhost:1"), "{}", r.err);
+    assert!(
+        r.err.contains(&format!(
+            "the store at {} holds no binding at http://localhost:1; it holds bindings at http://127.0.0.1:1: an origin spelled another way is another board to the store",
+            store.display()
+        )),
+        "{}",
+        r.err
+    );
+    assert!(r.err.contains("act: pass --principal <n>, or name the board as its binding does (--board)"), "{}", r.err);
 }
 
 #[test]
@@ -320,7 +368,7 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     assert!(r.err.is_empty(), "{}", r.err);
     let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(token.as_bytes()));
     assert_eq!(r.code, 0);
-    assert!(r.err.contains("already dead"), "idempotent, the death signal said: {}", r.err);
+    assert!(r.err.contains("the token read from stdin was already dead"), "idempotent, the death signal said: {}", r.err);
     // The token NEVER an argv value.
     let r = skep(&["session", "--close", &token, "--board", &board], &[], None);
     assert_eq!(r.code, 2, "{r:?}");
@@ -332,16 +380,17 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     assert_eq!(token2.len(), 32);
     let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", &token2)], None);
     assert_eq!(r.code, 0, "{r:?}");
-    assert!(r.err.is_empty());
+    assert!(r.err.contains("the token in SKEP_SESSION is ended; stdin was not read"), "the variable's token named: {}", r.err);
     // SKEP_SESSION where it is set, stdin then unread: the variable's token
     // is the one ended — closed above, so already dead — and a live token
-    // piped beside it stands, unread.
+    // piped beside it stands, unread; the line names the variable's token,
+    // so its fate is never read as the piped one's.
     let r = skep(&["session", "--board", &board, "--dir", s(&store)], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     let piped = r.out.trim().to_string();
     let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", &token2)], Some(piped.as_bytes()));
     assert_eq!(r.code, 0, "{r:?}");
-    assert!(r.err.contains("already dead"), "the variable's token is the one ended: {}", r.err);
+    assert!(r.err.contains("the token in SKEP_SESSION was already dead") && r.err.contains("; stdin was not read"), "the variable's token is the one ended, and named: {}", r.err);
     let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(piped.as_bytes()));
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.err.is_empty(), "the piped token stood live: {}", r.err);
@@ -1053,6 +1102,23 @@ fn keygen_s_box_abandoned_is_a_halt_and_generates_nothing() {
     let store = dir.path().join("store");
     let r = skep(&["keygen", "--dir", s(&store)], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("no device name was given"), "{}", r.err);
+    assert!(!r.err.contains("could not be read"), "the input ended: nothing unreadable to say: {}", r.err);
+    assert!(!store.exists(), "nothing generated");
+}
+
+/// AN ANSWER STDIN CANNOT READ IS SAID, NEVER A SILENT ABANDONMENT (the
+/// terminal's `Screen`): a name that is not UTF-8 text — `é` typed at a
+/// Latin-1 terminal — abandons the box, and the line before the halt names
+/// the read's own cause, so the person learns why retyping fails the same
+/// way; nothing is generated.
+#[test]
+fn keygen_s_box_answered_with_bytes_that_are_not_text_says_why_it_is_abandoned() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let r = skep(&["keygen", "--dir", s(&store)], &[], Some(b"caf\xe9\n"));
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains("the answer could not be read from stdin (") && r.err.contains("valid UTF-8"), "{}", r.err);
     assert!(r.err.contains("no device name was given"), "{}", r.err);
     assert!(!store.exists(), "nothing generated");
 }

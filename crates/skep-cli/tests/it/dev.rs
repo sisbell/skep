@@ -23,7 +23,7 @@
 //! yielding one binary, is the gate's and the lane's by hand; F7 the budgets
 //! suite's; F9 `tidy`'s.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -248,9 +248,9 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
     };
 }
 
-/// The built `skep-dev` run with `args`, every `SKEP_*` variable and `HOME`
-/// scrubbed, stdin closed.
-fn skep_dev(args: &[&str]) -> Run {
+/// The built `skep-dev` with `args`, every `SKEP_*` variable and `HOME`
+/// scrubbed, stdin closed, stdout and stderr piped.
+fn dev_command(args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-dev"));
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for var in [
@@ -265,12 +265,49 @@ fn skep_dev(args: &[&str]) -> Run {
     ] {
         cmd.env_remove(var);
     }
-    let out = cmd.output().expect("spawn skep-dev");
+    cmd
+}
+
+/// The built `skep-dev` run with `args` ([`dev_command`]).
+fn skep_dev(args: &[&str]) -> Run {
+    let out = dev_command(args).output().expect("spawn skep-dev");
     Run {
         code: out.status.code().unwrap_or(-1),
         out: String::from_utf8_lossy(&out.stdout).to_string(),
         err: String::from_utf8_lossy(&out.stderr).to_string(),
     }
+}
+
+/// [`skep_dev`], its stderr read as the run says it: `release` is called the
+/// moment a line holding `needle` is said — or at the run's end where none
+/// is — so a test holds the board in a state until the run is seen to meet
+/// it, and never past the run.
+fn skep_dev_releasing(args: &[&str], needle: &str, release: impl FnOnce()) -> Run {
+    let mut child = dev_command(args).spawn().expect("spawn skep-dev");
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let out = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+    let mut release = Some(release);
+    let mut reader = BufReader::new(child.stderr.take().expect("stderr piped"));
+    let (mut err, mut line) = (String::new(), String::new());
+    while let Ok(n @ 1..) = reader.read_line(&mut line) {
+        let _ = n;
+        if line.contains(needle) {
+            if let Some(release) = release.take() {
+                release();
+            }
+        }
+        err.push_str(&line);
+        line.clear();
+    }
+    if let Some(release) = release.take() {
+        release();
+    }
+    let status = child.wait().expect("wait");
+    Run { code: status.code().unwrap_or(-1), out: out.join().expect("stdout read"), err }
 }
 
 /// `seed`'s argv against `board` from `store` over `repo` at `pin`.
@@ -568,17 +605,49 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
     assert!(r.err.contains("claimed by 1.0.1; no key in this store is bound to it"), "{}", r.err);
     assert_eq!(log_position(&board), before, "nothing was written");
 
-    // THE SEED — its object printed, so a `--no-capture` run shows it whole.
+    // THE SEED — its object printed, so a `--no-capture` run shows it whole —
+    // against a board whose write permits the suite holds until the seed says
+    // its first `write_busy`: said once as it is met, retried, and counted.
     let before = log_position(&board);
-    let r = skep_dev(&args);
+    let permits: Vec<_> = std::iter::from_fn(|| sd.daemon().try_hold_write_permit()).collect();
+    assert!(!permits.is_empty(), "the suite holds the board's write permits");
+    let busy = "the board answered `write_busy`: each write is retried for up to 60 s, and the retries are counted at the end";
+    let r = skep_dev_releasing(&args, busy, || drop(permits));
     println!("skep-dev seed answered: {}", r.out.trim_end());
     let v = parse_json(&r);
     assert_expected_shape(&v, &cut);
     assert_eq!(v["already_seeded"], false);
+    assert_eq!(r.err.matches(busy).count(), 1, "the first `write_busy` said once: {}", r.err);
+    assert!(
+        v["retries"]["write_busy"].as_u64().is_some_and(|n| n >= 1),
+        "the retries counted: {v}"
+    );
     assert_eq!(v["positions"]["before"], before);
     assert!(v["positions"]["after"].as_u64().unwrap() > before);
     assert!(r.err.contains("mode CLAIMED-PERMISSIVE"), "{}", r.err);
     assert!(r.err.contains("this board now holds"), "the reopen warning: {}", r.err);
+    assert!(
+        r.err.contains(
+            "a new seed of this board; each write is recorded there after the board's ack"
+        ),
+        "the manifest's line: {}",
+        r.err
+    );
+    // Each phase said as it ends — the editions' last progress line among
+    // them, though twelve is no hundred.
+    let links_line = format!(
+        "links: {} in all, {} of them naming files outside the set (ghosts: 1)",
+        v["links"]["count"], v["links"]["outside"]["count"]
+    );
+    for phase in [
+        "editions: 12 of 12 landed",
+        links_line.as_str(),
+        "versions: 3 in all, the window — 240 positions of 1.0.1.0.15 — in 1.0.1.0.3.2",
+        "drafts: 3 in all",
+        "second account: 1.0.2, principal 2, its home 1.0.2.0.1 and one draft 1.0.2.0.2",
+    ] {
+        assert!(r.err.contains(phase), "the phase's line `{phase}`: {}", r.err);
+    }
     let manifest = v["manifest"].as_str().unwrap().to_string();
     assert!(
         manifest.ends_with(&format!(
@@ -884,11 +953,18 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
     let agent = guest(&board, &frames::doc_metadata("1.0.1.1.0.2"));
     assert_eq!(rejected(&agent), Some("doc_not_registered"), "{agent}");
 
-    // F5: a second run adds nothing and says so.
+    // F5: a second run adds nothing and says so — on stderr as it opens the
+    // manifest, and in the object.
     let before = log_position(&board);
     let r = skep_dev(&args);
     let again = parse_json(&r);
     assert_eq!(again["already_seeded"], true);
+    assert!(
+        r.err.contains("records every write of this seed (")
+            && r.err.contains("): this run writes nothing"),
+        "{}",
+        r.err
+    );
     assert_eq!(log_position(&board), before, "no write");
     assert_eq!(again["positions"]["before"], before);
     assert_eq!(again["positions"]["after"], before);
@@ -1022,6 +1098,12 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
     let r = skep_dev(&args);
     assert_eq!(r.code, 4, "transport's exit when the connection is dropped: {r:?}");
     assert!(r.out.is_empty(), "no JSON on a failed run: {}", r.out);
+    assert!(r.err.contains("a new seed of this board"), "the manifest's line: {}", r.err);
+    assert!(
+        r.err.contains("\n  act: ") && r.err.contains("read back what"),
+        "the transport halt's act: the write may stand, read it back: {}",
+        r.err
+    );
     let chain: String =
         board.board_term().unwrap().unwrap().chain.iter().map(|b| format!("{b:02x}")).collect();
     let manifest = dir.path().join("store-seed").join(format!("{chain}.jsonl"));
@@ -1049,14 +1131,24 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
     assert_eq!(v["already_seeded"], false);
     assert_expected_shape(&v, &cut);
     assert!(r.err.contains("mode CLAIMED-PERMISSIVE"), "{}", r.err);
+    // The resume says what it resumes after, and the one write it cannot see:
+    // the one the stopped run had in flight, made again under a new session.
+    assert!(
+        r.err.contains("holds 13 lines of this seed: the run resumes after them")
+            && r.err.contains("it is made again here, and a mint or a shot then lands twice"),
+        "the manifest's line at a resume: {}",
+        r.err
+    );
     for i in 0..DOCUMENTS {
         let want = &cut.documents[i].document.bytes;
         let e = format!("1.0.1.0.{}.1", i + 3);
         assert_eq!(text_of(&read_guest(&board, &e)), *want, "{e} byte-exact after the resume");
     }
     let before = log_position(&board);
-    let again = parse_json(&skep_dev(&args));
+    let r = skep_dev(&args);
+    let again = parse_json(&r);
     assert_eq!(again["already_seeded"], true);
+    assert!(r.err.contains("records every write of this seed"), "{}", r.err);
     assert_eq!(log_position(&board), before);
     assert_eq!(shape(&again), shape(&v));
 }

@@ -12,8 +12,11 @@
 //! `EventSource` can send no custom header (unverified here). The secret
 //! is named apart from a token: it admits a page to the provider and
 //! grants nothing at the board. A refusal names the failed check and no
-//! dial was made. The preflight (`OPTIONS`) is answered for the one origin
-//! alone and carries no secret: a browser sends none on it.
+//! dial was made — on its answer, which a browser hides from the page, and
+//! the first time its check fails in a run on the provider's TALK
+//! ([`Admission::refusal_line`]), naming what was presented and what is
+//! admitted. The preflight (`OPTIONS`) is answered for the one origin alone
+//! and carries no secret: a browser sends none on it.
 
 use std::net::SocketAddr;
 
@@ -56,7 +59,41 @@ impl Check {
     }
 }
 
+/// A header's value as a refusal's line names it — clipped
+/// ([`super::clipped`]), `(none)` where the request carried none; TALK
+/// renders it inert.
+fn presented(value: Option<&str>) -> String {
+    value.map_or_else(|| "(none)".to_string(), super::clipped)
+}
+
 impl Admission {
+    /// The line TALK says the first time a request fails `check` in a run:
+    /// the check, what the request presented and what this provider admits
+    /// instead — the secret never, whether presented or this run's, which
+    /// the serving line already named.
+    pub fn refusal_line(&self, check: Check, req: &Request, peer: Option<SocketAddr>) -> String {
+        match check {
+            Check::Origin => format!(
+                "admission: a request from Origin `{}` is refused (origin) — this provider admits {} alone (--page-origin); a browser shows the page this refusal as a CORS failure; said once",
+                presented(req.header("Origin")),
+                self.page_origin
+            ),
+            Check::Host => format!(
+                "admission: a request naming Host `{}` is refused (host) — the page reaches this provider as http://{} and by no other name; said once",
+                presented(req.header("Host")),
+                self.host
+            ),
+            Check::Secret => format!(
+                "admission: a request from {} without this run's secret is refused (secret) — the page carries ?{SECRET_QUERY}=<the secret> in its URL and echoes it in the {SECRET_HEADER} header, and in the event stream's URL; said once",
+                self.page_origin
+            ),
+            Check::Peer => format!(
+                "admission: a request from {}, not loopback, is refused (peer); said once",
+                peer.map_or_else(|| "an unknown peer".to_string(), |p| p.to_string())
+            ),
+        }
+    }
+
     /// The preflight: the peer and the one origin.
     pub fn preflight(&self, req: &Request, peer: Option<SocketAddr>) -> Result<(), Check> {
         self.peer(peer)?;

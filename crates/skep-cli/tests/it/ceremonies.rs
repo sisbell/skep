@@ -179,7 +179,8 @@ fn the_hop_binds_a_second_device_and_one_binding_stands_in_for_the_principal() {
     std::fs::write(store_a.join("bindings"), text).unwrap();
     let r = skep(&["session", "--board", &board, "--dir", s(&store_a)], &[], None);
     assert_eq!(r.code, 3, "{r:?}");
-    assert!(r.err.contains("bindings for several principals"), "{}", r.err);
+    assert!(r.err.contains(&format!("the store at {} holds bindings for several principals at {board}: 1, 7", store_a.display())), "{}", r.err);
+    assert!(r.err.contains("act: pass --principal with one of 1, 7"), "{}", r.err);
     let r = skep(&["session", "--board", &board, "--dir", s(&store_a), "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "named, it opens: {r:?}");
 }

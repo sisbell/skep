@@ -4,7 +4,8 @@
 //! session under the person's key, and fills the board from a git checkout
 //! of prose at a pinned commit — editions, citation links, second versions,
 //! drafts with one windowed, a keyless second account — one JSON object on
-//! stdout, a manifest beside the key store for a second run and a resume.
+//! stdout, a manifest beside the key store for a second run and a resume
+//! (which makes again the one write a stopped run had in flight).
 //! `serve` is THE DEV PROVIDER: the shell's core (`skep-shell`) served to a
 //! page in a browser over loopback HTTP and server-sent events, one page
 //! origin admitted under a per-run secret, the session bare as the
@@ -54,7 +55,7 @@ mod terminal;
 mod shared;
 // The manifest beside the key store: what a seed landed, by the envelope
 // id of each write, appended after its ack — so a second run adds nothing
-// and a killed run resumes.
+// and a killed run resumes, making again the write it had in flight.
 mod manifest;
 // The frames over the claimant's one content-scoped signed session: the
 // staging draft's mint, the chunked per-byte insert, the attested edition

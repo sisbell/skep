@@ -93,6 +93,14 @@ build "$CLI_IMAGE" "$WORK/build-cli.log" --target skep-cli
 [ "$FAILS" -eq 0 ] || { echo "a build failed; nothing to run"; exit 1; }
 label=$(docker inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE")
 [ "$label" = "$VERSION" ] && pass "the version label is the crate's ($label)" || fail "the version label is $label, the crate's version $VERSION"
+# The binaries name the commit the images were built from, as the revision
+# label does: the builder compiles REVISION's first twelve characters in as
+# SKEP_GIT_SHA, the length scripts/release-pack.sh names a release by.
+COMMIT=${REVISION:0:12}
+line=$(docker run --rm "$CLI_IMAGE" skep --version 2>&1)
+[ "$line" = "skep $VERSION ($COMMIT)" ] && pass "skep --version in $CLI_IMAGE names the commit ($line)" || fail "skep --version in $CLI_IMAGE answered '$line', not 'skep $VERSION ($COMMIT)'"
+line=$(docker run --rm "$IMAGE" --version 2>&1)
+[ "$line" = "skepd $VERSION ($COMMIT)" ] && pass "skepd --version in $IMAGE names the commit ($line)" || fail "skepd --version in $IMAGE answered '$line', not 'skepd $VERSION ($COMMIT)'"
 for img in "$IMAGE" "$DEBUG_IMAGE" "$CLI_IMAGE"; do
   note "$img: $(docker image inspect -f '{{.Size}}' "$img" | awk '{printf "%.1f MB", $1/1000000}'), user $(docker image inspect -f '{{.Config.User}}' "$img")"
 done

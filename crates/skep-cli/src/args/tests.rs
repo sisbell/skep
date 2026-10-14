@@ -343,14 +343,272 @@ fn the_dev_grammar_parses_seed_with_its_flags_and_their_defaults() {
     );
 }
 
+/// A FLAG's VALUE NAMES SOMETHING: every flag that takes one, at every
+/// command of both grammars, refuses an empty value — what a wrapper's
+/// unset variable leaves — and a value that is itself one of the grammar's
+/// flags, any command's or `--help`, the next flag read where a value was
+/// forgotten; `-`, the value that names stdin, stands, as does a value
+/// that merely opens with a dash.
+#[test]
+fn a_flag_given_an_empty_value_or_another_flag_is_refused() {
+    let mut checked = 0;
+    for row in &GRAMMAR {
+        for &flag in row.once.iter().chain(row.repeated).chain(&GLOBAL) {
+            assert_eq!(
+                refusal(&[row.command.verb(), flag, ""]),
+                format!("{flag}: an empty value names nothing"),
+                "at `{}`",
+                row.command
+            );
+            checked += 1;
+        }
+    }
+    for row in &dev::GRAMMAR {
+        for &flag in row.once.iter().chain(row.repeated).chain(&dev::GLOBAL) {
+            match dev::parse(argv(&[row.command.verb(), flag, ""])) {
+                Err(Usage(text)) => assert_eq!(
+                    text,
+                    format!("{flag}: an empty value names nothing"),
+                    "at `{}`",
+                    row.command
+                ),
+                Ok(_) => panic!("`{} {flag} ''` parsed", row.command),
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 60, "every value-taking flag of both grammars is read: {checked}");
+    assert_eq!(
+        refusal(&["claim", "--anchor-out", "/a", "--anchor-out", "--paper"]),
+        "--anchor-out needs a value, and `--paper` is a flag"
+    );
+    assert_eq!(
+        refusal(&["keygen", "--label", "--help"]),
+        "--label needs a value, and `--help` is a flag"
+    );
+    assert_eq!(
+        refusal(&["bind", "--account", "--fingerprint"]),
+        "--account needs a value, and `--fingerprint` is a flag",
+        "another command's flag is a flag too"
+    );
+    assert_eq!(
+        refusal(&["verify", "--dir", "--json"]),
+        "--dir needs a value, and `--json` is a flag"
+    );
+    match dev::parse(argv(&["serve", "--secret", "--own"])) {
+        Err(Usage(text)) => assert_eq!(text, "--secret needs a value, and `--own` is a flag"),
+        Ok(parsed) => panic!("parsed: {parsed:?}"),
+    }
+    for line in [
+        &["session", "--close", "-"][..],
+        &["claim", "--hosted", "-"],
+        &["verify", "--payload", "-"],
+        &["keygen", "--label", "-x"],
+    ] {
+        assert!(parse(argv(line)).is_ok(), "{line:?} parses");
+    }
+}
+
+/// The README's settings, as `--dir`, `--key` and the rest are tabled
+/// there: the table's lines between `### <program>` and the next heading,
+/// each row's cells trimmed — its first cell's flag where it names one.
+fn readme_settings(program: &str) -> Vec<(Option<String>, Vec<String>)> {
+    let readme =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"))
+            .expect("the crate's README");
+    let section =
+        readme.split("\n## Settings\n").nth(1).expect("the README has a Settings section");
+    let table = section
+        .split(&format!("\n### `{program}`\n"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("Settings tables `{program}`"));
+    let table = table.split("\n### ").next().unwrap_or(table);
+    table
+        .lines()
+        .filter(|l| l.starts_with("| ") && !l.starts_with("| setting"))
+        .map(|l| {
+            let cells: Vec<String> =
+                l.trim_matches('|').split(" | ").map(|c| c.trim().to_string()).collect();
+            let flag = cells[0]
+                .strip_prefix('`')
+                .and_then(|c| c.strip_suffix('`'))
+                .filter(|f| f.starts_with("--"))
+                .map(str::to_string);
+            (flag, cells)
+        })
+        .collect()
+}
+
+/// THE SETTINGS TABLE IS THE GRAMMARS': every flag the README tables for a
+/// program is one its grammar takes, every setting the grammar reads is a
+/// row — `skep`'s four and `--json`, every flag of `skep-dev`'s — and every
+/// default the table states for a flag is its constant's.
+#[test]
+fn the_readmes_settings_table_is_the_grammars() {
+    let dev_takes = |flag: &str| {
+        dev::GLOBAL.contains(&flag)
+            || dev::GRAMMAR.iter().any(|r| {
+                r.once.contains(&flag) || r.repeated.contains(&flag) || r.switches.contains(&flag)
+            })
+    };
+    let skep = readme_settings("skep");
+    let dev_rows = readme_settings("skep-dev");
+    for (flag, _) in &skep {
+        if let Some(flag) = flag {
+            assert!(
+                SKEP.names_flag(flag),
+                "the README tables `{flag}` for skep, a flag its grammar does not take"
+            );
+        }
+    }
+    for (flag, _) in &dev_rows {
+        if let Some(flag) = flag {
+            assert!(
+                dev_takes(flag),
+                "the README tables `{flag}` for skep-dev, a flag its grammar does not take"
+            );
+        }
+    }
+    let row = |rows: &[(Option<String>, Vec<String>)], flag: &str| -> Vec<String> {
+        rows.iter()
+            .find(|(f, _)| f.as_deref() == Some(flag))
+            .map(|(_, cells)| cells.clone())
+            .unwrap_or_else(|| panic!("the README tables `{flag}`"))
+    };
+    for flag in ["--board", "--dir", "--key", "--principal", "--json"] {
+        row(&skep, flag);
+    }
+    for flag in dev::GLOBAL.iter().copied().chain(
+        dev::GRAMMAR
+            .iter()
+            .flat_map(|r| r.once.iter().chain(r.repeated).chain(r.switches).copied()),
+    ) {
+        row(&dev_rows, flag);
+    }
+    let default = |rows: &[(Option<String>, Vec<String>)], flag: &str| row(rows, flag)[2].clone();
+    assert!(
+        default(&skep, "--principal").contains(&format!("at `claim`, `{CLAIM_PRINCIPAL}`")),
+        "{:?}",
+        default(&skep, "--principal")
+    );
+    for (flag, figure) in [
+        ("--pin", format!("`{}`", dev::DEFAULT_PIN)),
+        ("--documents", format!("`{}`", dev::DEFAULT_DOCUMENTS)),
+        ("--versions", format!("`{}`", dev::DEFAULT_VERSIONS)),
+        ("--drafts", format!("`{}`", dev::DEFAULT_DRAFTS)),
+        ("--listen", format!("`{}`", dev::DEFAULT_LISTEN)),
+        ("--port", format!("`{}`", dev::DEFAULT_NODE_PORT)),
+        ("--principal", format!("at `serve`, `{}`", dev::DEFAULT_PRINCIPAL)),
+    ] {
+        assert!(
+            default(&dev_rows, flag).contains(&figure),
+            "the README's `{flag}` default is {figure}: {:?}",
+            default(&dev_rows, flag)
+        );
+    }
+    assert!(
+        row(&dev_rows, "--secret")[3].contains(&format!("`{}`", dev::SECRET_ALPHABET)),
+        "the README names the secret's alphabet"
+    );
+    assert!(
+        row(&dev_rows, "--repo")[1].contains(&format!("`{}`", dev::CORPUS_VARIABLE)),
+        "the README names --repo's variable"
+    );
+}
+
+/// EVERY DEFAULT A HELP STATES IS ITS CONSTANT'S: each figure the two helps
+/// print, read with their line breaks collapsed, is the constant the
+/// readers answer with — a default moved in one place and not the other
+/// fails here.
+#[test]
+fn every_default_the_helps_state_is_its_constant() {
+    let collapsed = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (help, dev_help) = (collapsed(HELP), collapsed(dev::HELP));
+    assert!(
+        help.contains(&format!("at claim, the new account's id, {CLAIM_PRINCIPAL} where omitted")),
+        "{help}"
+    );
+    for figure in [
+        format!("(default {})", dev::DEFAULT_PIN),
+        format!("(default {}, the 10^3 tier", dev::DEFAULT_DOCUMENTS),
+        format!("(default {})", dev::DEFAULT_VERSIONS),
+        format!("(default {}; at least one)", dev::DEFAULT_DRAFTS),
+        format!("(default {})", dev::DEFAULT_LISTEN),
+        format!("(default {}; 0 picks a free port", dev::DEFAULT_NODE_PORT),
+        format!("at serve, {} where omitted", dev::DEFAULT_PRINCIPAL),
+        format!("one or more of {}", dev::SECRET_ALPHABET),
+        format!("(env {})", dev::CORPUS_VARIABLE),
+    ] {
+        assert!(dev_help.contains(&figure), "the dev help states `{figure}`: {dev_help}");
+    }
+}
+
+/// THE SECRET's ALPHABET: `serve --secret` takes one or more of RFC 3986's
+/// unreserved characters — what the page's URL query and its header both
+/// carry unchanged — and refuses anything else, a space, a `+`, an `&` or a
+/// letter past ASCII, naming the alphabet and never the value; and a port
+/// the page is pointed at is never `0`, refused saying why.
+#[test]
+fn a_secret_is_of_the_url_safe_alphabet_and_a_listen_port_is_one_a_page_names() {
+    let secret = |value: &str| {
+        let Parsed::CommandLine(c) = dev::parse(argv(&["serve", "--secret", value])).unwrap()
+        else {
+            panic!()
+        };
+        c.secret().map(|s| s.map(str::to_string))
+    };
+    assert_eq!(secret("Ab-9._~").unwrap(), Some("Ab-9._~".to_string()));
+    for bad in ["a b", "a+b", "a&b", "a%20b", "é", " ab"] {
+        let refused = secret(bad).unwrap_err().0;
+        assert!(
+            refused.starts_with(&format!(
+                "--secret: a secret is one or more of {}",
+                dev::SECRET_ALPHABET
+            )),
+            "`{bad}`: {refused}"
+        );
+        assert!(!refused.contains(bad.trim()), "the value is never echoed: {refused}");
+    }
+    let Parsed::CommandLine(c) = dev::parse(argv(&["serve"])).unwrap() else { panic!() };
+    assert_eq!(c.secret().unwrap(), None, "absent, the provider generates one");
+    let Parsed::CommandLine(c) = dev::parse(argv(&["serve", "--listen", "0"])).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        c.listen().unwrap_err().0,
+        "--listen: '0' is not a port the page can be pointed at: name one (1-65535)"
+    );
+}
+
+/// THE SEED READS THE BUDGETS' CORPUS: `--pin`'s default and `--repo`'s
+/// variable are `skep-search`'s budgets' own `PIN` and `VAR`, read off that
+/// suite's source — a pin or a variable moved in one place and not the
+/// other fails here.
+#[test]
+fn the_seeds_pin_and_variable_are_the_budgets() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../skep-search/tests/it/budgets/corpus.rs");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let literal = |name: &str| -> String {
+        let prefix = format!("pub const {name}: &str = \"");
+        let line = text
+            .lines()
+            .find(|l| l.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("{} defines {name}", path.display()));
+        line[prefix.len()..].split('"').next().expect("a string literal").to_string()
+    };
+    assert_eq!(literal("PIN"), dev::DEFAULT_PIN);
+    assert_eq!(literal("VAR"), dev::CORPUS_VARIABLE);
+}
 /// THE VERSION LINE IS AN ANSWER, as the help is: `--version`, as the
 /// first argument or as a flag of any command, parses to `Parsed::Version`
 /// carrying `<program> <crate version> (<commit>)` — `skep`'s line under
 /// its grammar, `skep-dev`'s under the dev grammar — the version
 /// `CARGO_PKG_VERSION`'s and the commit `SKEP_GIT_SHA`'s at build time,
-/// `unknown` where the build set none, which this suite's build never
-/// does; what follows the flag is unread and what precedes it is judged,
-/// as for `--help`; and both helps name the flag.
+/// `unknown` where the build set none, as a developer's own build — this
+/// suite's, unless the variable is exported for it — does; what follows
+/// the flag is unread and what precedes it is judged, as for `--help`; and
+/// both helps name the flag.
 #[test]
 fn version_is_an_answer_for_both_programs_at_both_sites() {
     let line = |program: &str| {

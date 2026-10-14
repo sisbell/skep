@@ -2,21 +2,31 @@
 //! `from_env`). A command line opens with its [`Command`], one of §2.1's
 //! thirteen, and is judged against THE GRAMMAR, one row per command beside
 //! `HELP`, the text that documents it: a flag in no row, a flag of another
-//! command's, a missing value, a second value of a flag that takes one, a
-//! flag outside the form of its command that reads it, and two forms at
-//! once are usage refusals (§2.3's exit 2 — the flag's SHAPE alone), and so
-//! is an argument that is not UTF-8 text, refused as a variable's is. Every
-//! setting is read through `Line::setting`, the one place a flag beats its
-//! environment variable, and its reader — named for what it answers, an
-//! origin, a store's directory, a key file's path, a principal — answers the
-//! refusal and the absence apart: `Ok(None)` for a setting given nowhere,
-//! `Err` for one given badly, a variable whose value is not UTF-8 text among
-//! them, so no command reads a refused value as an absent one. The
-//! environment names are §9 item 21's: `SKEP_BOARD`, `SKEP_KEYSTORE`,
-//! `SKEP_KEY`, `SKEP_PRINCIPAL`, `SKEP_SESSION` — read here and nowhere else
-//! in the crate, `SKEP_SESSION` by `session_env` alone, the one setting no
-//! flag carries (`tests/it/tidy.rs`) — and beside them the dev binary's
-//! `SKEP_SEARCH_CORPUS`, read here by the same rule ([`dev`]).
+//! command's, a missing value, a value that is empty or is itself one of the
+//! grammar's flags, a second value of a flag that takes one, a flag outside
+//! the form of its command that reads it, and two forms at once are usage
+//! refusals (§2.3's exit 2 — the flag's SHAPE alone), and so is an argument
+//! that is not UTF-8 text, refused as a variable's is. Every setting is read
+//! through `Line::setting`, the one place a flag beats its environment
+//! variable, and its reader — named for what it answers, an origin, a
+//! store's directory, a key file's path, a principal — answers the refusal
+//! and the absence apart: `Ok(None)` for a setting given nowhere, `Err` for
+//! one given badly, a variable whose value is not UTF-8 text among them, so
+//! no command reads a refused value as an absent one. A variable set empty
+//! is unset — the way a shell unsets one for a single run — while a flag
+//! given an empty value is refused: an empty value, or a flag where the
+//! value stands, is what a wrapper's unset variable leaves on its line, and
+//! read as absent it would fall to a default the line never named, read as
+//! given it would name the working directory. The environment names are §9
+//! item 21's: `SKEP_BOARD`, `SKEP_KEYSTORE`, `SKEP_KEY`, `SKEP_PRINCIPAL`,
+//! `SKEP_SESSION` — read here and nowhere else in the crate, `SKEP_SESSION`
+//! by `session_env` alone, the one setting no flag carries
+//! (`tests/it/tidy.rs`) — and beside them the dev binary's
+//! `SKEP_SEARCH_CORPUS`, read here by the same rule ([`dev`]). The crate's
+//! README tables every setting both programs read — its flag, its variable,
+//! its default, when it is checked and where it is read — and this file's
+//! unit tests hold the table's flags to the grammars and its defaults to
+//! their constants.
 //!
 //! THE DEV BINARY's grammar is the same machinery over its own rows
 //! ([`dev`]): `skep-dev`'s root declares this file as its `args` too, so a
@@ -62,10 +72,13 @@ pub enum Parsed<C = Command> {
 
 /// THE VERSION LINE (`--version`): `<program> <crate version> (<commit>)`
 /// — the version Cargo compiled in, and the commit the build named through
-/// `SKEP_GIT_SHA`, `unknown` where it named none, which a developer's own
-/// build never does. Both are read at compile time, so the run consults no
-/// file and no variable; the release scripts set the variable and hold the
-/// shipped binaries to one version and one commit.
+/// `SKEP_GIT_SHA`, `unknown` where it named none, as a developer's own
+/// `cargo build` does. Both are read at compile time, so the run consults no
+/// file and no variable. `scripts/release-pack.sh` sets the variable to the
+/// tree's commit, twelve characters, and `scripts/release-check.sh` holds
+/// the shipped binaries to one version and one commit; the Dockerfile's
+/// builder sets it from its `REVISION` build argument, cut the same way, so
+/// the sidecar's `skep --version` names the commit its image's label names.
 fn version_line(program: &str) -> String {
     format!(
         "{program} {} ({})",
@@ -300,7 +313,7 @@ usage: skep <command> [flags]
                key and the anchor pair, the record for the giver (a
                person door); --reprint re-composes the record, no write
 
-flags:
+flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
   --key <path>          one key file, bypassing the store's lookup (env
@@ -309,9 +322,12 @@ flags:
                         refused where the key signs; refused where enroll
                         and retire sign, their walks taking none yet; not
                         consulted elsewhere
-  --principal <n>       the principal (env SKEP_PRINCIPAL); may be omitted
-                        where the store holds one binding at the board; at
-                        claim, the new account's id, 1 where omitted
+  --principal <n>       the principal (env SKEP_PRINCIPAL), read at
+                        session, verify, enroll, recover, retire, rotate
+                        and handoff — where omitted, the store's one
+                        binding at the board; at bind, the reply's where
+                        omitted; at claim, the new account's id, 1 where
+                        omitted; not consulted elsewhere
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
                         fingerprint)
@@ -353,6 +369,25 @@ struct Grammar<C: 'static> {
     every: &'static [&'static str],
 }
 
+impl<C> Grammar<C> {
+    /// Whether `text` is a flag one of the grammar's rows names.
+    fn rows_name(&self, text: &str) -> bool {
+        self.rows.iter().any(|r| {
+            r.once.contains(&text) || r.repeated.contains(&text) || r.switches.contains(&text)
+        })
+    }
+
+    /// Whether `text` is one of the grammar's flags: a row's, every
+    /// command's, or `--help`, `-h` and `--version`, which it answers
+    /// wherever it meets them.
+    fn names_flag(&self, text: &str) -> bool {
+        ["--help", "-h", "--version"].contains(&text)
+            || self.global.contains(&text)
+            || self.every.contains(&text)
+            || self.rows_name(text)
+    }
+}
+
 /// The `skep` command's grammar: [`GRAMMAR`]'s rows, [`GLOBAL`]'s flags and
 /// `--json`.
 const SKEP: Grammar<Command> =
@@ -367,8 +402,10 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Parsed, Usage> 
 /// A command line after the program's name, as the platform carries it:
 /// each argument taken as UTF-8 text, or refused naming it. Judged in two
 /// passes, and where several refusals hold the first met speaks: each
-/// argument as it is read, against its command's row; then, the line read
-/// whole, the rules of the row's forms, in the row's order.
+/// argument as it is read, against its command's row — a flag's value
+/// among it, refused where it is empty or is itself one of the grammar's
+/// flags, `-` standing; then, the line read whole, the rules of the row's
+/// forms, in the row's order.
 fn parse_under<C: Copy + fmt::Display>(
     grammar: &Grammar<C>,
     argv: impl IntoIterator<Item = OsString>,
@@ -408,15 +445,19 @@ fn parse_under<C: Copy + fmt::Display>(
             let Some(value) = argv.next().transpose()? else {
                 return Err(Usage(format!("{arg} needs a value")));
             };
+            if value.is_empty() {
+                return Err(Usage(format!("{arg}: an empty value names nothing")));
+            }
+            if grammar.names_flag(&value) {
+                return Err(Usage(format!("{arg} needs a value, and `{value}` is a flag")));
+            }
             if !repeats && line.values.contains_key(&arg) {
                 return Err(Usage(format!("`{arg}` is given at most once at `{}`", row.command)));
             }
             line.values.entry(arg).or_default().push(value);
             continue;
         }
-        if grammar.rows.iter().any(|r| {
-            r.once.contains(&flag) || r.repeated.contains(&flag) || r.switches.contains(&flag)
-        }) {
+        if grammar.rows_name(flag) {
             return Err(Usage(format!("`{arg}` is not a flag of `{}`", row.command)));
         }
         return Err(Usage(format!("unknown argument `{arg}`")));
@@ -477,11 +518,15 @@ impl<C> Line<C> {
     }
 
     /// `--dir` / `SKEP_KEYSTORE`: the key store's directory, else `~/.skep`
-    /// (§6; §9 item 10).
+    /// (§6; §9 item 10) under an ABSOLUTE home — a home set empty, or to a
+    /// relative path, is none: it would root the store, and every seed it
+    /// holds, in whatever directory the run started in.
     pub fn store_dir(&self) -> Result<PathBuf, Usage> {
         match self.setting("--dir", "SKEP_KEYSTORE")? {
             Some(d) => Ok(PathBuf::from(d)),
-            None => skep_client::store::default_store_dir().ok_or_else(|| Usage("--dir (or SKEP_KEYSTORE) is required: no home directory to default ~/.skep from".into())),
+            None => skep_client::store::default_store_dir()
+                .filter(|d| d.is_absolute())
+                .ok_or_else(|| Usage("--dir (or SKEP_KEYSTORE) is required: no home directory to default ~/.skep from".into())),
         }
     }
 
@@ -509,6 +554,12 @@ impl<C> Line<C> {
 /// anyway, the anchor files a claim writes for it could never be read back,
 /// while the board showed a healthy account.
 pub const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
+
+/// The principal `skep claim` gives the account it makes where
+/// `--principal` is omitted, at both arms: `1`, §2.2's recommended default
+/// and §9 item 9's ruling — the figure `skep-client`'s notebook walk
+/// defaults to as well, which the command hands the principal whole.
+pub const CLAIM_PRINCIPAL: u64 = 1;
 
 /// The principal `text` spells — the one grammar of it, at the flag, its
 /// variable and a reply's `principal` line: a non-negative integer no
@@ -584,8 +635,15 @@ pub mod dev {
     pub type DevLine = Line<DevCommand>;
 
     /// The commit `--pin` defaults to: the search budgets' pin, the design
-    /// repository's `b17656e9`, so a seed and the budgets read one corpus.
+    /// repository's `b17656e9`, so a seed and the budgets read one corpus —
+    /// `skep-search`'s `tests/it/budgets/corpus.rs` `PIN`, which a unit
+    /// test holds this to.
     pub const DEFAULT_PIN: &str = "b17656e9";
+
+    /// The variable `--repo` beats: the search budgets' own, so one
+    /// checkout serves the budgets and a seed (RULED) — `skep-search`'s
+    /// `tests/it/budgets/corpus.rs` `VAR`, which a unit test holds this to.
+    pub const CORPUS_VARIABLE: &str = "SKEP_SEARCH_CORPUS";
 
     /// The documents `--documents` defaults to: the 10³ tier, the first
     /// thousand documents of the cut.
@@ -606,10 +664,21 @@ pub mod dev {
     /// the local record's recipe (`RUNBOOK.md` §3).
     pub const DEFAULT_NODE_PORT: u16 = 8642;
 
+    /// `serve`'s principal where `--principal` is omitted: the one `skep
+    /// claim` gives the account it makes by default
+    /// ([`super::CLAIM_PRINCIPAL`]), so a bare session binds as the claimant
+    /// of a board claimed without naming one.
+    pub const DEFAULT_PRINCIPAL: u64 = super::CLAIM_PRINCIPAL;
+
+    /// The admission secret's alphabet, as `--secret`'s refusal and the help
+    /// name it: RFC 3986's unreserved characters, the one set the page's
+    /// URL query and its `Skep-Provider` header both carry unchanged.
+    pub const SECRET_ALPHABET: &str = "A-Z a-z 0-9 - . _ ~";
+
     /// The settings every verb takes — the `skep` command's four. Not
     /// `--label`, which writes a byline this tool never writes, and not
     /// `--json`: the tool prints one JSON object always.
-    const GLOBAL: [&str; 4] = ["--board", "--dir", "--key", "--principal"];
+    pub(super) const GLOBAL: [&str; 4] = ["--board", "--dir", "--key", "--principal"];
 
     /// THE DEV GRAMMAR: `seed` and its six flags, each taking one value and
     /// each read in the one form the verb has; `serve` and its flags — the
@@ -617,7 +686,7 @@ pub mod dev {
     /// session mode, the script, and under `--own` the in-process daemon's
     /// three (`--data-dir`, `--port`, `--no-local-trust`), which belong to
     /// that form alone and stand apart from `--board`, the running board's.
-    const GRAMMAR: [Row<DevCommand>; 2] = [
+    pub(super) const GRAMMAR: [Row<DevCommand>; 2] = [
         Row {
             command: DevCommand::Seed,
             once: &["--repo", "--pin", "--from", "--documents", "--versions", "--drafts"],
@@ -659,7 +728,11 @@ usage: skep-dev <command> [flags]
                claimant cannot read; one JSON object on stdout; a manifest
                beside the key store makes a second run add nothing and a
                killed run resume — the one write it had in flight made
-               again, so a mint or a shot of it may land twice
+               again, so a mint or a shot of it may land twice; the first
+               run fixes the seed — the board, the account, the principal,
+               the pin, the cut rule, --from and the three counts — so a
+               later run naming any other is refused, naming each
+               difference, and a different seed takes a fresh board
   serve        serve the shell's core to a page in a browser over loopback
                HTTP and server-sent events (the dev provider): the bridge's
                calls at POST /bridge/<call>, its events at GET
@@ -672,7 +745,7 @@ usage: skep-dev <command> [flags]
                the secret alone on stdout; stops cleanly when stdin closes
                (Ctrl-D at a terminal) — an interrupt skips the clean stop
 
-flags:
+flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE): at seed, default
                         ~/.skep; at serve no default — required under
@@ -700,16 +773,24 @@ flags:
             --session bare|signed   the session mode (required; signed
                                 needs --dir with the principal's key)
             [--listen <port>]   the provider's loopback port (default 8742)
-            [--secret <text>]   the admission secret, else generated and
-                                printed once on stdout
+            [--secret <text>]   the admission secret, one or more of
+                                A-Z a-z 0-9 - . _ ~, the characters the
+                                page's URL and header carry unchanged: a
+                                fixed one keeps the page's URL across
+                                restarts, else one is generated anew each
+                                run and printed once on stdout — a command
+                                line is visible to every user of this
+                                machine (ps): where others use it, let the
+                                provider generate the secret
             [--script <file>]   the dev arm's answers for the SECRET and
-                                CONSENT moments, one per line; absent, the
-                                auto arm answers and says so
+                                CONSENT moments, one per line, read once,
+                                at start; absent, the auto arm answers and
+                                says so
             and the board: --board <origin>, a running daemon; or, in a
             build with the dev-hooks feature, --own  [--data-dir <dir>]
-            [--port <p>] (default 8642)  [--no-local-trust] — the daemon
-            run in-process with its test hooks, its fault doors at
-            POST /bridge/fault/<door>
+            [--port <p>] (default 8642; 0 picks a free port, named on
+            stderr)  [--no-local-trust] — the daemon run in-process with
+            its test hooks, its fault doors at POST /bridge/fault/<door>
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries one JSON object (seed) or the secret
@@ -723,11 +804,10 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
     }
 
     impl Line<DevCommand> {
-        /// `--repo` / `SKEP_SEARCH_CORPUS`, required: the repository's
-        /// path — the search budgets' own variable, so one checkout serves
-        /// the budgets and a seed (RULED).
+        /// `--repo` / `SKEP_SEARCH_CORPUS` ([`CORPUS_VARIABLE`]), required:
+        /// the repository's path.
         pub fn repo(&self) -> Result<PathBuf, Usage> {
-            self.setting("--repo", "SKEP_SEARCH_CORPUS")?
+            self.setting("--repo", CORPUS_VARIABLE)?
                 .map(PathBuf::from)
                 .ok_or_else(|| Usage("--repo (or SKEP_SEARCH_CORPUS) is required".into()))
         }
@@ -793,7 +873,7 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
         }
 
         /// `serve --port` (under `--own`), else [`DEFAULT_NODE_PORT`]; `0`
-        /// an ephemeral port, said on TALK.
+        /// a free port, which the in-process daemon's line names on TALK.
         pub fn node_port(&self) -> Result<u16, Usage> {
             match self.value("--port") {
                 None => Ok(DEFAULT_NODE_PORT),
@@ -801,16 +881,32 @@ exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
             }
         }
 
+        /// A port a page is pointed at: 1–65535, never `0`, which would bind
+        /// a port the page's URL could not name ahead of the run.
         fn port_flag(&self, flag: &str, default: u16) -> Result<u16, Usage> {
             match self.value(flag) {
                 None => Ok(default),
-                Some(v) => v.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| Usage(format!("{flag}: '{v}' is not a port"))),
+                Some(v) => v.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| Usage(format!("{flag}: '{v}' is not a port the page can be pointed at: name one (1-65535)"))),
             }
         }
 
-        /// `serve --secret`, where given.
-        pub fn secret(&self) -> Option<&str> {
-            self.value("--secret")
+        /// `serve --secret`, where given: one or more of
+        /// [`SECRET_ALPHABET`], since the page carries the secret in its
+        /// URL's `?provider=` query — which a reader decodes (`+`, `%XX`)
+        /// and cuts (`&`, `#`) — and echoes it in a header whose value is
+        /// trimmed, so a secret holding any other character admits no page.
+        /// The refusal names the alphabet and never the value: stderr
+        /// carries no secret.
+        pub fn secret(&self) -> Result<Option<&str>, Usage> {
+            let unreserved =
+                |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~');
+            match self.value("--secret") {
+                None => Ok(None),
+                Some(s) if !s.is_empty() && s.bytes().all(unreserved) => Ok(Some(s)),
+                Some(_) => Err(Usage(format!(
+                    "--secret: a secret is one or more of {SECRET_ALPHABET}, the characters the page's URL and its header carry unchanged; the value given holds another (it is not echoed)"
+                ))),
+            }
         }
 
         /// `serve --session`, required: `bare` or `signed`.

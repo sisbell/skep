@@ -54,6 +54,12 @@
 //! `SKEP_SEARCH_CORPUS` included — so no command and no verb reads a setting
 //! around the precedence a flag holds over its variable.
 //!
+//! EVERY VARIABLE READ IS TABLED. Every variable the source reads at run
+//! time — a `SKEP_*` setting, a `std::env::var("…")` or `var_os("…")`, the
+//! system temp dir's `TMPDIR` through `temp_dir()` — is a row of the
+//! crate's README §Settings, so the source reads no variable an operator
+//! cannot find there, its default and where it is read beside it.
+//!
 //! ONLY `main` ENDS THE PROCESS (§2.3). Every `exit(` and `abort(` under
 //! `src/` sits in a root's `main`, which exits with `finish`'s rendering of
 //! the command's answer — so no command picks a code of its own, nor ends
@@ -61,13 +67,15 @@
 //!
 //! Each scan asserts that it found what it allows — an edge between
 //! modules, a write in each writer, a touch in each reader, an end in each
-//! `main`, the six variables in `src/args.rs` — or, where it allows
-//! nothing, that it reads the forms it refuses, so a scan gone blind fails
-//! rather than passing a clean tree. Comments are not code, and neither is
-//! anything from an inline `mod tests {` on.
+//! `main`, the six variables in `src/args.rs`, the variables read beside
+//! them — or, where it allows nothing, that it reads the forms it refuses,
+//! so a scan gone blind fails rather than passing a clean tree. Comments
+//! are not code, and neither is anything from an inline `mod tests {` on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use crate::common::VARIABLES;
 
 /// The two roots under `src/`: the `skep` binary's and the `skep-dev`
 /// binary's, each a `[[bin]]` of the manifest.
@@ -88,17 +96,6 @@ const STDIN_READERS: &[(&str, &str)] = &[("terminal.rs", "has_terminal"), ("term
 /// The functions that may end the process: a file under `src/` and the
 /// column-0 function in it — each root's `main`.
 const EXITERS: &[(&str, &str)] = &[("main.rs", "main"), ("dev/main.rs", "main")];
-
-/// §9 item 21's variables and the dev binary's — every one `src/args.rs`
-/// reads.
-const VARIABLES: &[&str] = &[
-    "SKEP_BOARD",
-    "SKEP_KEY",
-    "SKEP_KEYSTORE",
-    "SKEP_PRINCIPAL",
-    "SKEP_SEARCH_CORPUS",
-    "SKEP_SESSION",
-];
 
 #[test]
 fn every_file_is_declared_and_every_root_declaration_says_what_it_holds() {
@@ -294,6 +291,62 @@ fn every_skep_variable_is_named_in_args_alone() {
     found.dedup();
     assert_eq!(found, VARIABLES, "src/args.rs names §9 item 21's five variables and the dev binary's one: the scan reads them as `\"SKEP_…\"` literals");
     assert!(faults.is_empty(), "the settings are src/args.rs's (§9 item 21):\n{}", faults.join("\n"));
+}
+
+#[test]
+fn every_variable_the_source_reads_is_a_row_of_the_readmes_settings() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = crate_dir.join("src");
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    let mut found: Vec<(String, String)> = Vec::new();
+    for file in &files {
+        let text = read(file);
+        let shown = file.strip_prefix(&src).expect("under src").display().to_string();
+        for (n, code) in code_lines(&text) {
+            // A compile-time read is the build's, tabled beside the table.
+            if code.contains("env!(") {
+                continue;
+            }
+            // Each form, and how far past its match the name begins: a
+            // `"SKEP_…"` literal just inside its quote, a variable a read
+            // names just past the read's opening quote.
+            for (needle, skip) in [
+                ("\"SKEP_", 1),
+                ("env::var(\"", "env::var(\"".len()),
+                ("env::var_os(\"", "env::var_os(\"".len()),
+            ] {
+                for (i, _) in code.match_indices(needle) {
+                    let name: String = code[i + skip..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                        .collect();
+                    found.push((name, format!("src/{shown}:{n}")));
+                }
+            }
+            if names(code, "temp_dir(") {
+                found.push(("TMPDIR".to_string(), format!("src/{shown}:{n}")));
+            }
+        }
+    }
+    for name in VARIABLES.iter().chain(&["COMPUTERNAME", "HOSTNAME", "TMPDIR"]) {
+        assert!(
+            found.iter().any(|(f, _)| f == name),
+            "the scan reads `{name}`: the forms it reads have moved"
+        );
+    }
+    let readme = read(&crate_dir.join("README.md"));
+    let settings =
+        readme.split("\n## Settings\n").nth(1).expect("the README has a Settings section");
+    let settings = settings.split("\n## ").next().unwrap_or(settings);
+    let rows: Vec<&str> = settings.lines().filter(|l| l.starts_with("| ")).collect();
+    assert!(rows.len() > 20, "the scan reads the README's settings tables: {} rows", rows.len());
+    let faults: Vec<String> = found
+        .iter()
+        .filter(|(name, _)| !rows.iter().any(|r| r.contains(&format!("`{name}`"))))
+        .map(|(name, at)| format!("{at}: `{name}` is read and is no row of the README's Settings"))
+        .collect();
+    assert!(faults.is_empty(), "every variable the programs read is tabled, its default and where it is read beside it:\n{}", faults.join("\n"));
 }
 
 /// Whether `code` names one of std's print macros, each a whole word: an

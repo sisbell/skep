@@ -9,18 +9,18 @@ use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::sheet::Facts;
 
 use super::{board_of, data, host_name_and_date, print_facts, read_payload, require_terminal, store_of, talk, BoxDefault, Door, Stop};
-use crate::args::CommandLine;
+use crate::args::{CommandLine, CLAIM_PRINCIPAL};
 use crate::terminal::Terminal;
 
 pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
-    let principal = c.principal()?;
+    // `--principal` is the new account's id at both arms, `CLAIM_PRINCIPAL`
+    // where omitted — §2.2's recommended default, §9 item 9's ruling.
+    let principal = c.principal()?.unwrap_or(CLAIM_PRINCIPAL);
     if let Some(payload_arg) = c.value("--hosted") {
         // THE HOSTED ARM (§4.5): no --dir, no person, nothing generated.
-        // `--principal` is the new account's id, 1 where omitted — §2.2's
-        // recommended default, §9 item 9's ruling — as at the notebook arm.
         let payload = read_payload(payload_arg)?;
-        match claim_walk::hosted(&board, &payload, principal.unwrap_or(1))? {
+        match claim_walk::hosted(&board, &payload, principal)? {
             HostedOutcome::AlreadyClaimed { claimant } => data(format!("claimed by {claimant}"))?,
             HostedOutcome::Claimed(reply) => {
                 for l in &reply.log {
@@ -54,7 +54,7 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     }
     let BoxDefault { host_name, date } = host_name_and_date();
     let opts = NotebookOptions {
-        principal,
+        principal: Some(principal),
         display_name: c.value("--name").map(str::to_owned),
         anchor_out: c.values("--anchor-out").iter().map(PathBuf::from).collect(),
         paper: c.switch("--paper"),

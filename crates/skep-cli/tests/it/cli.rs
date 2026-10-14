@@ -794,6 +794,30 @@ fn fingerprint_refuses_select_beside_a_key_file() {
     assert!(r.lines().contains(&phone.as_str()) && !r.out.contains(&laptop), "{}", r.out);
 }
 
+/// A KEY FILE THE VARIABLE NAMES NARROWS THE LISTING, SAID (§2.2
+/// `fingerprint`): with `SKEP_KEY` exported and no flag, `fingerprint` lists
+/// the one file it names and says so on stderr, naming the file and how the
+/// store's own keys are listed — never a store that seems to hold one key;
+/// named by `--key`, the person typed it, and nothing more is said.
+#[test]
+fn fingerprint_says_when_skep_key_narrows_its_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let phone = skep(&["keygen", "--label", "phone", "--dir", s(&store)], &[], None).lines()[0].to_string();
+    let laptop = skep(&["keygen", "--label", "laptop", "--dir", s(&store)], &[], None).lines()[0].to_string();
+    let laptop_file = store.join("keys").join(format!("{laptop}.key"));
+    let said = format!("listing the one key file SKEP_KEY names, {}; the store's own keys are listed with SKEP_KEY unset", laptop_file.display());
+    let r = skep(&["fingerprint", "--dir", s(&store)], &[("SKEP_KEY", s(&laptop_file))], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.lines().contains(&laptop.as_str()) && !r.out.contains(&phone), "the one file listed: {}", r.out);
+    assert!(r.err.contains(&said), "{}", r.err);
+    let r = skep(&["fingerprint", "--dir", s(&store), "--key", s(&laptop_file)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(!r.err.contains("SKEP_KEY names"), "a flag the person typed is said back to no one: {}", r.err);
+    let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
+    assert!(r.out.contains(&phone) && r.out.contains(&laptop) && !r.err.contains("SKEP_KEY names"), "{r:?}");
+}
+
 /// THE ACCOUNT'S FIRST SIGNED SESSION IS CONTENT-SCOPED (§2.2 `bind`): the
 /// one session `bind` opens as the account's principal, for the first
 /// session's acts, carries the content scope on the wire — the one place a
@@ -1066,24 +1090,31 @@ fn bind_asks_for_the_account_on_stderr_and_reads_the_answer_from_stdin() {
 }
 
 /// NO STORE NAMED AND NO HOME TO DEFAULT IT FROM IS A USAGE REFUSAL (§6; §9
-/// item 10): with neither `--dir`, `SKEP_KEYSTORE` nor a home directory,
-/// `keygen` is exit 2 naming what is required, and writes nothing — the
-/// working directory least of all.
+/// item 10): with neither `--dir`, `SKEP_KEYSTORE` nor a home directory —
+/// or a `HOME` set empty, or to a relative path, which would root the store
+/// in the working directory — `keygen` is exit 2 naming what is required,
+/// and writes nothing, the working directory least of all.
 #[test]
 fn keygen_with_no_home_and_no_store_named_is_a_usage_refusal_that_writes_nothing() {
     let cwd = tempfile::tempdir().unwrap();
-    let r = skep_in(cwd.path(), &["keygen", "--label", "k"], &[], None);
-    assert_eq!(r.code, 2, "{r:?}");
-    assert!(r.err.contains("--dir (or SKEP_KEYSTORE) is required: no home directory to default ~/.skep from"), "{}", r.err);
-    assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0, "nothing written");
+    for envs in [&[][..], &[("HOME", "")], &[("HOME", "home")]] {
+        let r = skep_in(cwd.path(), &["keygen", "--label", "k"], envs, None);
+        assert_eq!(r.code, 2, "{envs:?}: {r:?}");
+        assert!(r.err.contains("--dir (or SKEP_KEYSTORE) is required: no home directory to default ~/.skep from"), "{envs:?}: {}", r.err);
+        assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0, "nothing written: {envs:?}");
+    }
 }
 
-/// A VARIABLE SET EMPTY IS A SETTING NOT GIVEN (`args.rs`'s `env_text`):
-/// `SKEP_KEYSTORE=` leaves the default store standing — never a store at the
-/// empty path, which is the working directory — and `SKEP_BOARD=` is a
-/// board not given, never a board given badly.
+/// A VARIABLE SET EMPTY IS A SETTING NOT GIVEN, AND A FLAG GIVEN EMPTY IS
+/// REFUSED (`args.rs`'s `env_text`, its grammar): `SKEP_KEYSTORE=` leaves
+/// the default store standing — never a store at the empty path, which is
+/// the working directory — and `SKEP_BOARD=` is a board not given, never a
+/// board given badly; while `--dir ""`, and an `--anchor-out` given empty or
+/// given the next flag in its value's place — what a wrapper's unset
+/// variable leaves — are exit 2 before anything is written, a seed into the
+/// working directory least of all.
 #[test]
-fn a_variable_set_empty_is_a_setting_not_given() {
+fn a_variable_set_empty_is_a_setting_not_given_and_a_flag_given_empty_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let (home, cwd) = (dir.path().join("home"), dir.path().join("cwd"));
     std::fs::create_dir_all(&home).unwrap();
@@ -1095,6 +1126,18 @@ fn a_variable_set_empty_is_a_setting_not_given() {
     let r = skep(&["health"], &[("SKEP_BOARD", "")], None);
     assert_eq!(r.code, 2, "{r:?}");
     assert!(r.err.contains("--board (or SKEP_BOARD) is required"), "{}", r.err);
+    let dead = "http://127.0.0.1:1";
+    for (args, refusal) in [
+        (vec!["keygen", "--label", "k", "--dir", ""], "--dir: an empty value names nothing"),
+        (vec!["claim", "--board", dead, "--dir", s(&home), "--anchor-out", "/a", "--anchor-out", ""], "--anchor-out: an empty value names nothing"),
+        (vec!["claim", "--board", dead, "--dir", s(&home), "--anchor-out", "/a", "--anchor-out", "--paper"], "--anchor-out needs a value, and `--paper` is a flag"),
+    ] {
+        let r = skep_in(&cwd, &args, &[("HOME", s(&home))], None);
+        assert_eq!(r.code, 2, "{args:?}: {r:?}");
+        assert!(r.err.starts_with(&format!("skep: {refusal}\n\nusage: skep <command> [flags]\n")), "{args:?}: {}", r.err);
+        assert!(r.out.is_empty(), "{}", r.out);
+        assert_eq!(std::fs::read_dir(&cwd).unwrap().count(), 0, "nothing written in the working directory: {args:?}");
+    }
 }
 
 /// THE DEVICE-NAME BOX AT THE PROMPT (§2.2 `keygen`; §2.4): without

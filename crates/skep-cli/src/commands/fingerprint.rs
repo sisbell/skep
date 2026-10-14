@@ -9,7 +9,7 @@ use skep_client::sheet::{group_hex, render_inert};
 use skep_client::store::{Binding, KeyFacts, KeySelector, Purpose, StoreError};
 use skep_identity::{encode_enroll, Enrollment};
 
-use super::{data, record_refused, store_of, Stop, OUTSTANDING_ACT};
+use super::{data, record_refused, store_of, talk, Stop, OUTSTANDING_ACT};
 use crate::args::{CommandLine, Usage};
 
 /// The handoff recipient's clause of the outstanding-act line, its fourth
@@ -29,7 +29,15 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
         (Some(_), Some(_)) => {
             return Err(Usage("`--select` names a key in the store and `--key` (or SKEP_KEY) names a key file: give one — SKEP_KEY set empty is unset".into()).into())
         }
-        (Some(path), None) => vec![store.select(&KeySelector::Path(&path), Purpose::Read)?],
+        (Some(path), None) => {
+            // Named by the variable alone, the file narrows the listing to
+            // itself — said, since a SKEP_KEY exported for another command
+            // would otherwise hide the store's keys with no line naming why.
+            if c.value("--key").is_none() {
+                talk(format!("listing the one key file SKEP_KEY names, {}; the store's own keys are listed with SKEP_KEY unset", path.display()));
+            }
+            vec![store.select(&KeySelector::Path(&path), Purpose::Read)?]
+        }
         (None, Some(select)) => match store.select(&KeySelector::select(select), Purpose::Read) {
             Ok(k) => vec![k],
             Err(StoreError::Ambiguous { keys }) => {

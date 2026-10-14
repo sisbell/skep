@@ -1436,7 +1436,12 @@ them, each naming only those above it:
   machinery — `DevCommand`, `seed`'s row, the dev `HELP`, and `DevLine`'s
   readers of `--repo` (`SKEP_SEARCH_CORPUS`), `--pin`, `--from`,
   `--documents`, `--versions` and `--drafts` — kept in this file so every
-  `SKEP_*` variable stays its own.
+  `SKEP_*` variable stays its own. Every setting the two programs read —
+  its flag, its variable, its default, when it is checked and where it is
+  read — is tabled in the crate's README §Settings, and each default the
+  table and the helps state is a constant here (`CLAIM_PRINCIPAL`, the dev
+  `DEFAULT_*`), which `args.rs`'s unit tests hold the table and the helps
+  to.
 - `terminal.rs` `Terminal`, the `Person` over the terminal: every prompt on
   stderr, the sheet as a ruled box, the dismissal's clear, the anchor
   import's arm asked of the person and never guessed from what was typed —
@@ -1580,12 +1585,14 @@ Rules that hold across its files:
   `tests/it/cli.rs` and `tests/it/ceremonies.rs` run every door without a
   terminal, and `tests/it/ceremonies.rs` runs one under a pseudo-terminal,
   where it opens only with stdin and stderr both a terminal.
-- **The settings are `args.rs`'s.** Every `SKEP_*` variable is read there
-  and nowhere else, which `tests/it/tidy.rs` checks; a session token is
-  never an argv value — `session --close -` ends the token in
-  `SKEP_SESSION` where it is set, stdin then unread, else the one read
-  from stdin, and says which token it ended where the variable answered —
-  which `tests/it/cli.rs` checks.
+- **The settings are `args.rs`'s, and every one is tabled.** Every `SKEP_*`
+  variable is read there and nowhere else, and every variable the source
+  reads at run time — those and the host name's and the temp dir's — is a
+  row of the crate's README §Settings, both of which `tests/it/tidy.rs`
+  checks; a session token is never an argv value — `session --close -`
+  ends the token in `SKEP_SESSION` where it is set, stdin then unread, else
+  the one read from stdin, and says which token it ended where the variable
+  answered — which `tests/it/cli.rs` checks.
 - **A command answers `Ok` or a `Stop`.** It names every stop with `?`,
   and `main` — its dispatch one arm per `Command`, which the compiler
   holds exhaustive — exits with `finish`'s rendering of it, a command
@@ -1602,11 +1609,16 @@ Rules that hold across its files:
   a run whose form drops it. The flags §2.2 declares at every command
   (`GLOBAL`, `--json`) are taken at each and read where `HELP` says, as
   §2.2 has `claim` say of `--key`; `accept --reprint` takes the
-  `--account` §4c.1's synopsis requires and reads it nowhere. An argument
-  that is not UTF-8 text is refused as a variable's value is, never a
-  panic. `args.rs`'s unit tests check it, that `HELP` documents every flag
-  a row names, and that every flag `HELP` shows parses in its form;
-  `tests/it/cli.rs` runs the binary on an argument that is not text, and
+  `--account` §4c.1's synopsis requires and reads it nowhere. A flag's
+  value that is empty, or is itself one of the grammar's flags, is refused
+  — what a wrapper's unset variable leaves on its line, which read as
+  absent would fall to a default the line never named and read as given
+  would name the working directory — where a variable set empty is unset;
+  `-` stands. An argument that is not UTF-8 text is refused as a
+  variable's value is, never a panic. `args.rs`'s unit tests check it,
+  that `HELP` documents every flag a row names, and that every flag `HELP`
+  shows parses in its form; `tests/it/cli.rs` runs the binary on an
+  argument that is not text and on flags given empty, and
   `tests/it/ceremonies.rs` on flags outside their form.
 - **A setting refused is never a setting absent.**
   `CommandLine::principal`, `CommandLine::origin_given`,
@@ -1633,21 +1645,24 @@ reads every edition byte-exact, every link resolves at both ends and the
 ghost answers `doc_not_registered`, the versions differ as each arm says,
 the drafts answer the claimant and are withheld from a guest with the
 windowed run withheld to the width, a second run adds nothing, a run cut
-short resumes, the refusals halt before any write, and a `--bin skep`
-build yields one binary; `serve`, the dev provider driven as the page
-would drive it over loopback HTTP with the admission headers — every call
-of `client.md` §4b.1 in the bare mode, the events on the stream, the
-claim's PUBLIC moments answered and cancelled through the bridge, the
-admission's refusals before any dial, the signed mode's attested
-publish-class write, the fault doors under `dev-hooks`, the isolation of
-the shipped builds from `skepd`, the declarations served, and the
-conformance of the crate and the provider over one sequence; and `tidy`,
-the arrangement above over both roots, read off the source. `common` holds the spawn — alone, or behind a tap that keeps what a
-client put on the wire — a canned board that answers whatever bytes a test
-chose, and the runs, every `SKEP_*` variable and `HOME` scrubbed from them:
-piped, with stdout or stderr closed, from a chosen working directory, or
-under a pseudo-terminal; and `tree`, a directory's state, for the commands
-that write nothing.
+short resumes, the refusals halt before any write, the insert frame the
+seed shares with the search budgets is one size, and a `--bin skep` build
+yields one binary; `serve`, the dev provider driven as the page would
+drive it over loopback HTTP with the admission headers — every call of
+`client.md` §4b.1 in the bare mode, the events on the stream, the claim's
+PUBLIC moments answered and cancelled through the bridge, the admission's
+refusals before any dial, the signed mode's attested publish-class write,
+the fault doors under `dev-hooks`, the isolation of the shipped builds
+from `skepd`, the declarations served, and the conformance of the crate
+and the provider over one sequence; and `tidy`, the arrangement above
+over both roots, read off the source. `common` holds the spawn — alone,
+or behind a tap that keeps what a client put on the wire — a canned board
+that answers whatever bytes a test chose, and the runs, every setting's
+variable (`VARIABLES`, the one list `tidy` holds `src/args.rs` to) and
+`HOME` cleared from them by the one `scrub` every suite's runs share,
+`skep`'s and `skep-dev`'s alike: piped, with stdout or stderr closed, from
+a chosen working directory, or under a pseudo-terminal; and `tree`, a
+directory's state, for the commands that write nothing.
 
 ## The provisioning service, `skep-provision`
 

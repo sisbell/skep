@@ -45,7 +45,7 @@ use skep_client::Origin;
 use skep_shell::{SessionMode, Shell, ShellOptions};
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 
-use crate::common::{origin, s, spawn};
+use crate::common::{origin, s, scrub, spawn};
 
 /// The page origin every provider here is started for.
 const PAGE: &str = "http://127.0.0.1:8731";
@@ -102,8 +102,8 @@ struct Provider {
 
 impl Provider {
     /// `skep-dev serve` with `args` beside `--page-origin` and `--listen`,
-    /// every `SKEP_*` variable and `HOME` scrubbed, waited for until its
-    /// port answers.
+    /// its environment cleared of the settings a developer's shell may hold
+    /// ([`scrub`]), waited for until its port answers.
     fn start(args: &[&str]) -> Provider {
         Provider::start_under(args, None)
     }
@@ -124,9 +124,7 @@ impl Provider {
                 }
             };
             cmd.arg("serve").args(["--page-origin", PAGE, "--listen", &listen]).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-            for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION", "SKEP_SEARCH_CORPUS", "HOME", "USERPROFILE"] {
-                cmd.env_remove(var);
-            }
+            scrub(&mut cmd);
             let mut child = cmd.spawn().expect("spawn skep-dev serve");
             let stdin = child.stdin.take();
             let talk = Arc::new(Mutex::new(String::new()));
@@ -640,6 +638,13 @@ fn f3_the_person_over_the_bridge_claims_and_a_cancel_abandons() {
     assert!(kinds.contains(&"statement") && kinds.contains(&"label"), "{kinds:?}");
     assert!(moments.iter().filter(|m| m["kind"] == "label").count() >= 2, "the two anchor boxes");
     let said = provider.talk();
+    assert!(
+        said.contains(&format!(
+            "the dev arm answers the SECRET and CONSENT moments from the script {}: 4 answers read at start, in order — an edit to the file takes a restart",
+            script.display()
+        )),
+        "the script's start line names the file, its answers and when it is read:\n{said}"
+    );
     assert!(said.contains("dev arm: the sheet for fingerprint"), "the SECRET sheet went to the dev arm:\n{said}");
     assert!(said.contains(&format!("anchor 0 is placed under {}", a.display())), "the script placed the anchor:\n{said}");
     assert!(said.contains("the re-type is typed off sheet 0"), "the script answered the re-type:\n{said}");
@@ -1155,10 +1160,11 @@ fn a_listener_out_of_descriptors_says_so_once_and_when_it_accepts_again() {
 
 /// The usage refusals: an unknown flag, a missing page origin, a missing
 /// session mode, `--own` beside `--board`, a key file the verb never reads,
-/// a missing board or board directory, a bad script — each exit 2 before
-/// anything is made, a socket or the throwaway store; and `--help` lists
-/// the verb. A halt past them — a board that does not answer — removes the
-/// throwaway it made, and says so.
+/// a missing board or board directory, a secret the page's URL cannot carry
+/// (never echoed), a secret given empty, a listen port of `0`, a bad
+/// script — each exit 2 before anything is made, a socket or the throwaway
+/// store; and `--help` lists the verb. A halt past them — a board that does
+/// not answer — removes the throwaway it made, and says so.
 #[test]
 fn the_verbs_usage_is_judged_before_any_socket() {
     // The child's temp dir is this test's own, so a throwaway it makes is
@@ -1166,10 +1172,8 @@ fn the_verbs_usage_is_judged_before_any_socket() {
     let temp = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| -> (i32, String, String) {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-dev"));
-        cmd.args(args).stdin(Stdio::null()).env("TMPDIR", temp.path());
-        for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION", "SKEP_SEARCH_CORPUS"] {
-            cmd.env_remove(var);
-        }
+        cmd.args(args).stdin(Stdio::null());
+        scrub(&mut cmd).env("TMPDIR", temp.path());
         let out = cmd.output().unwrap();
         (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
     };
@@ -1192,10 +1196,14 @@ fn the_verbs_usage_is_judged_before_any_socket() {
         ),
         (vec!["serve", "--page-origin", PAGE, "--session", "bare"], "--board (or SKEP_BOARD) is required"),
         (vec!["serve", "--page-origin", PAGE, "--session", "bare", "--own"], "--data-dir is required with --own"),
+        (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--secret", "a&b"], "--secret: a secret is one or more of A-Z a-z 0-9 - . _ ~"),
+        (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--secret", ""], "--secret: an empty value names nothing"),
+        (vec!["serve", "--page-origin", PAGE, "--board", "http://127.0.0.1:1", "--session", "bare", "--listen", "0"], "--listen: '0' is not a port the page can be pointed at"),
     ] {
         let (code, out, err) = run(&args);
         assert_eq!(code, 2, "{args:?}: {err}");
         assert!(err.contains(needle), "{args:?}: {err}");
+        assert!(!err.contains("a&b"), "a secret refused is never echoed: {err}");
         assert!(out.is_empty(), "nothing on stdout: {out}");
         assert_eq!(throwaways(), 0, "a usage refusal makes no throwaway: {args:?}");
     }

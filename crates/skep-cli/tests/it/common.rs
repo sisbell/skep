@@ -2,7 +2,8 @@
 //! behind a [`Tap`] that keeps what a client put on the wire — or a
 //! [`canned`] board that answers every request with the bytes a test
 //! chose; the built `skep` binary run with its environment scrubbed of every
-//! `SKEP_*` variable and of `HOME`, stdin fed, stdout and stderr captured —
+//! setting's variable ([`VARIABLES`]) and of `HOME` ([`scrub`], which every
+//! suite's runs share), stdin fed, stdout and stderr captured —
 //! or one of them closed, its reader gone before the run writes, or all
 //! three a pseudo-terminal; and [`tree`], a directory's state, for the
 //! commands that write nothing.
@@ -268,11 +269,18 @@ fn command<A: AsRef<OsStr>>(args: &[A], envs: &[(&str, &OsStr)]) -> Command {
     cmd
 }
 
-/// `cmd` without the settings a developer's shell may hold: every `SKEP_*`
-/// variable, and `HOME` and `USERPROFILE`, whose `.skep` is the default
-/// store — a run that means `~/.skep` names its own HOME.
-fn scrub(cmd: &mut Command) -> &mut Command {
-    for var in ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_KEY", "SKEP_PRINCIPAL", "SKEP_SESSION", "HOME", "USERPROFILE"] {
+/// Every variable either program reads as a setting — §9 item 21's five and
+/// the dev binary's `SKEP_SEARCH_CORPUS`, in order — the one list `tidy`
+/// holds `src/args.rs` to and [`scrub`] clears from every run.
+pub const VARIABLES: [&str; 6] = ["SKEP_BOARD", "SKEP_KEY", "SKEP_KEYSTORE", "SKEP_PRINCIPAL", "SKEP_SEARCH_CORPUS", "SKEP_SESSION"];
+
+/// `cmd` without the settings a developer's shell may hold — every one of
+/// [`VARIABLES`], and `HOME` and `USERPROFILE`, whose `.skep` is the default
+/// store, so a run that means `~/.skep` names its own HOME — for every
+/// program a suite here runs, `skep`, `skep-dev` and the pseudo-terminal's
+/// shell alike.
+pub fn scrub(cmd: &mut Command) -> &mut Command {
+    for var in VARIABLES.iter().chain(&["HOME", "USERPROFILE"]) {
         cmd.env_remove(var);
     }
     cmd

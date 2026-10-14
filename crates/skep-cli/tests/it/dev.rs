@@ -22,7 +22,8 @@
 //! F8 an unclaimed board and a stranger's board halt before any write, and
 //! the agent space holds no document after a run. Beside them, the seed's
 //! own lines: each stall said as it is met and at most once per ten seconds
-//! after, the session's key, the frames and positions of the run. F6, the
+//! after, the session's key, the frames and positions of the run; and the
+//! insert frame the seed shares with the search budgets, one size. F6, the
 //! `--bin skep` build yielding one binary, is the gate's and the lane's by
 //! hand; F7 the budgets suite's; F9 `tidy`'s.
 
@@ -46,7 +47,7 @@ use skep_corpus::{Corpus, Cut};
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
-use crate::common::{origin, s, spawn, Run};
+use crate::common::{origin, s, scrub, spawn, Run};
 
 /// The citation type every link is typed, as the tool spells it.
 const CITATION_TYPE: &str = "1.1.0.1.0.1.0.3.13";
@@ -251,23 +252,13 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
     };
 }
 
-/// The built `skep-dev` with `args`, every `SKEP_*` variable and `HOME`
-/// scrubbed, stdin closed, stdout and stderr piped.
+/// The built `skep-dev` with `args`, its environment cleared of the
+/// settings a developer's shell may hold ([`scrub`]), stdin closed, stdout
+/// and stderr piped.
 fn dev_command(args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-dev"));
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    for var in [
-        "SKEP_BOARD",
-        "SKEP_KEYSTORE",
-        "SKEP_KEY",
-        "SKEP_PRINCIPAL",
-        "SKEP_SESSION",
-        "SKEP_SEARCH_CORPUS",
-        "HOME",
-        "USERPROFILE",
-    ] {
-        cmd.env_remove(var);
-    }
+    scrub(&mut cmd);
     cmd
 }
 
@@ -1331,4 +1322,25 @@ fn help_is_data_and_a_refused_command_line_is_exit_2_before_any_socket() {
     ]);
     assert_eq!(r.code, 3, "{r:?}");
     assert!(r.err.contains("the corpus cannot be read at abcdef0"), "{}", r.err);
+}
+
+/// THE SEED's INSERT FRAME IS THE BUDGETS': `src/dev/board.rs`'s
+/// `INSERT_CHUNK` is the search budgets' own (`skep-search`'s
+/// `tests/it/budgets/board.rs`), read off both sources — a frame size
+/// moved in one and not the other fails here, the two harnesses then
+/// sending the daemon frames of two sizes for one corpus.
+#[test]
+fn the_seeds_insert_frame_is_the_budgets() {
+    let definition = |path: &str| -> String {
+        let at = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        let text = std::fs::read_to_string(&at).unwrap_or_else(|e| panic!("{}: {e}", at.display()));
+        text.lines()
+            .find(|l| l.starts_with("pub const INSERT_CHUNK"))
+            .unwrap_or_else(|| panic!("{} defines INSERT_CHUNK", at.display()))
+            .to_string()
+    };
+    assert_eq!(
+        definition("src/dev/board.rs"),
+        definition("../skep-search/tests/it/budgets/board.rs")
+    );
 }

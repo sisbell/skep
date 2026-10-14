@@ -3,6 +3,7 @@
 //! served to a page in a browser over loopback HTTP and server-sent events.
 //! THE INPUTS: the ONE page origin admitted (`--page-origin`, required);
 //! the listen port (`--listen`); the per-run admission secret (`--secret`,
+//! of the URL-safe alphabet the page's query and header carry unchanged,
 //! else generated and printed ONCE on stdout, the one DATA line and the
 //! secret's one carrier — no TALK line names it); the
 //! session mode (`--session bare|signed`, required — both arms were ruled
@@ -11,8 +12,9 @@
 //! none is named under `bare`, removed on every way out of the verb —
 //! `~/.skep` is never consulted here, and a key file is refused: the signed
 //! arm signs with the key its store holds for the principal); the
-//! principal (`--principal`, 1 where omitted); the dev arm's script
-//! (`--script`); and the board — `--board`, a daemon already running (the
+//! principal (`--principal`, the claimant's `DEFAULT_PRINCIPAL` where
+//! omitted); the dev arm's script (`--script`, read once, at start, and
+//! said so); and the board — `--board`, a daemon already running (the
 //! local record's recipe), or `--own` with `--data-dir` and `--port`, the
 //! daemon run IN-PROCESS with its test hooks in a `dev-hooks` build. Every
 //! usage refusal is judged before anything is made. THE CHECKS before
@@ -42,7 +44,7 @@ use skep_client::sign::fresh_bytes;
 use skep_client::Origin;
 use skep_shell::{script, ArmConfig, NodeState, Refusal, SessionMode, Shell, ShellOptions};
 
-use crate::args::dev::{DevLine, SessionArm};
+use crate::args::dev::{DevLine, SessionArm, DEFAULT_PRINCIPAL};
 use crate::args::Usage;
 use crate::board::hex;
 use crate::shared::{data, Stop};
@@ -179,7 +181,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let page_origin = c.page_origin()?;
     let listen = c.listen()?;
     let arm = c.session_mode()?;
-    let principal = c.principal()?.unwrap_or(1);
+    let principal = c.principal()?.unwrap_or(DEFAULT_PRINCIPAL);
     // A key file is no input of this verb: the signed arm signs with the key
     // its `--dir` store holds for the principal, the bare arm with none — so
     // one named, by the flag or a SKEP_KEY exported for `skep`, is refused,
@@ -190,14 +192,23 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         )
         .into());
     }
-    let secret = match c.secret() {
+    let secret = match c.secret()? {
         Some(s) => s.to_string(),
         None => hex(&fresh_bytes(16)),
     };
+    // The script, read once, here: the dev arm answers from what this read
+    // found for the whole run, and its line says so.
     let script_answers = match c.script() {
         Some(path) => {
             let text = std::fs::read_to_string(&path).map_err(|e| Usage(format!("--script: {} cannot be read: {e}", path.display())))?;
-            Some(script::parse(&text).map_err(|e| Usage(format!("--script: {e}")))?)
+            let answers = script::parse(&text).map_err(|e| Usage(format!("--script: {e}")))?;
+            let said = format!(
+                "the dev arm answers the SECRET and CONSENT moments from the script {}: {} answer{} read at start, in order — an edit to the file takes a restart",
+                path.display(),
+                answers.len(),
+                if answers.len() == 1 { "" } else { "s" }
+            );
+            Some((answers, said))
         }
         None => None,
     };
@@ -237,9 +248,9 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         SessionArm::Bare => SessionMode::Bare { principal },
         SessionArm::Signed => SessionMode::Signed { principal },
     };
-    let arm_config = match script_answers {
-        Some(answers) => ArmConfig::Script(answers),
-        None => ArmConfig::Auto,
+    let (arm_config, arm_said) = match script_answers {
+        Some((answers, said)) => (ArmConfig::Script(answers), said),
+        None => (ArmConfig::Auto, "the dev arm answers the SECRET and CONSENT moments itself (the auto arm) and says each answer here".to_string()),
     };
     let talk_sink: skep_shell::Talk = Arc::new(|line: &str| talk(line));
     let mut options = ShellOptions::new(vec![board_origin.clone()], store_dir.clone(), session_mode, talk_sink);
@@ -265,11 +276,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     } else {
         talk(format!("bare: sessions bind as principal {principal} from this loopback peer; the store is {}", store_dir.display()));
     }
-    if shell.arm_is_script() {
-        talk("the dev arm answers the SECRET and CONSENT moments from the script, in order");
-    } else {
-        talk("the dev arm answers the SECRET and CONSENT moments itself (the auto arm) and says each answer here");
-    }
+    talk(arm_said);
     let listener = TcpListener::bind(("127.0.0.1", listen)).map_err(|e| Halt::face(format!("the provider's port {listen} could not be bound"), e.to_string(), "stop what holds it, or pass --listen"))?;
     let listen = listener.local_addr().map(|a| a.port()).unwrap_or(listen);
     let admission = Admission { page_origin: page_origin.as_str().to_string(), secret: secret.clone(), host: format!("127.0.0.1:{listen}") };

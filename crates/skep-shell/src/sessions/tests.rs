@@ -3,8 +3,9 @@
 //! the death — a second caller answering the first's reason, two callers at
 //! once one derivation, a caller that panics mid-end leaving the end to the
 //! next — a principal's supplement following its standing sessions, a key's
-//! diagnosis named by the list it stands in, and a session's key attesting
-//! the ten kinds with an entry frame alone.
+//! diagnosis named by the list it stands in, a session's key attesting the
+//! ten kinds with an entry frame alone, and a frame no attest is owed for
+//! borrowed as it stands, never copied.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -250,4 +251,25 @@ fn a_sessions_key_attests_the_checked_kinds_alone() {
     let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
     let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());
     assert_eq!((bare.attesting_key("insert"), bare.attesting_key("delete")), (None, None));
+}
+
+/// A FRAME NO ATTEST IS OWED FOR is borrowed as it stands, never copied: a
+/// bare session's insert, a signed session's `delete` (outside the checked
+/// set), and a signed session's insert whose attest the page supplied —
+/// each answered before any read, the board one nothing answers at, whose
+/// silence would answer `attest_not_composed` (the mutant that copies the
+/// frame on every path pays a deep copy per send for nothing; the one that
+/// reads the board's `H.1` first refuses a frame it was never to sign).
+#[test]
+fn a_frame_no_attest_is_owed_for_is_borrowed_as_it_stands() {
+    let (sessions, store) = (Sessions::new(None), FileStore::open("/nonexistent/store"));
+    let signed = sessions.register(&at("b-1", nowhere()), signed_open(1, "1.0.1", "1.0.1"), &mut Recorded::default());
+    let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
+    let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());
+    let insert = json!({"op": "insert", "doc": "1.0.1.0.1", "values": ["a"]});
+    let delete = json!({"op": "delete", "doc": "1.0.1.0.1", "p": {"subspace": "1", "ordinal": "1"}, "width": "1"});
+    let supplied = json!({"op": "insert", "doc": "1.0.1.0.1", "values": ["a"], "attest": {"alg": "x", "sig": "00"}});
+    for (session, frame) in [(&bare, &insert), (&signed, &delete), (&signed, &supplied)] {
+        assert!(matches!(session.attest(&store, frame), Ok(Cow::Borrowed(as_it_stands)) if std::ptr::eq(as_it_stands, frame)), "{frame}");
+    }
 }

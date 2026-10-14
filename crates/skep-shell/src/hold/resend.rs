@@ -31,6 +31,7 @@ use crate::held::{Done, HeldLine, Reason};
 use crate::sessions::{SessionEntry, SessionKind};
 
 /// THE OUTCOME of the resend's one read per document (§3c.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadOutcome {
     /// No row since `base` — send from the head.
     SendFromHead,
@@ -46,6 +47,7 @@ enum ReadOutcome {
 
 /// What ONE `retrieve_v` at a held burst's site says of its values (§3c.5's
 /// content confirm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Site {
     /// The values read back equal: the burst stands there.
     Equal,
@@ -61,6 +63,7 @@ enum Site {
 /// A board's drain mark (`BoardSlot`'s `draining`), held for one drain and
 /// cleared when the drain ends — however it ends, a dial that unwinds
 /// included — so no board stays marked by a drain that never finished.
+#[derive(Debug)]
 struct Draining<'h>(&'h AtomicBool);
 
 impl<'h> Draining<'h> {

@@ -45,9 +45,10 @@ fn the_trunk_is_the_document_field_cut_to_its_first_component() {
 /// THE COMPOSER reads a frame as the wire spells it: an insert's `values`
 /// the wire's forms refuse are its halt, each fault faced in its own words;
 /// a V-spec's span reads as `(from, width)`; an I-address splits at its last
-/// component; the ten kinds are the checked set, a frame of them wanting the
-/// shell's attest where none rides it; and a run `image` answers is a
-/// content extent, its width zeros but at its last component.
+/// component; the ten kinds are the checked set, each named by its own
+/// spelling, a frame of them wanting the shell's attest where none rides it;
+/// and a run `image` answers is a content extent, its width zeros but at its
+/// last component.
 #[test]
 fn the_composer_reads_a_frame_as_the_wire_spells_it() {
     let insert = |values: Value| insert_terms(&json!({"op": "insert", "doc": "1.0.1.0.1", "values": values})).map(drop).unwrap_err().to_string();
@@ -58,7 +59,8 @@ fn the_composer_reads_a_frame_as_the_wire_spells_it() {
     assert_eq!(split_i("1.0.1.0.1.0.1.4"), Some(("1.0.1.0.1.0.1", 4)));
     assert_eq!(split_i("1.0.1.0.1.0.1.x"), None);
     assert!(in_checked_set("publish") && !in_checked_set("delete"));
-    assert_eq!(CHECKED_SET.len(), 10);
+    assert_eq!(CheckedKind::ALL.map(CheckedKind::as_str), ["create_new_document", "fork", "version", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"]);
+    assert!(CheckedKind::ALL.into_iter().all(|kind| CheckedKind::named(kind.as_str()) == Some(kind)));
     assert!(wants_attest(&json!({"op": "publish"})));
     assert!(!wants_attest(&json!({"op": "publish", "attest": {"alg": "x", "sig": "00"}})), "a page-supplied attest stands as it is");
     assert!(!wants_attest(&json!({"op": "delete"})) && !wants_attest(&json!({})));

@@ -43,6 +43,7 @@
 //! resend's bookkeeping hold that board's lock alone, so no board's wait is
 //! another's.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
@@ -236,6 +237,7 @@ fn classify(outcome: DialOutcome<'_>, given: Reissues) -> Decision {
 
 /// What an `/op` under a session answers the page (§4b.1's `op` row;
 /// §3c.4).
+#[derive(Debug)]
 pub enum OpAnswer {
     /// The board's ack, the shell's `held` for a burst, or the refusal
     /// faced at the act.
@@ -355,6 +357,7 @@ impl Burst {
 }
 
 /// What ONE dial of a write answered, read once through the table.
+#[derive(Debug)]
 enum Dialed {
     /// The board's ack.
     Acked(Value),
@@ -409,12 +412,14 @@ impl From<Unattested> for Dialed {
 /// A frame as a send under a session dials it, ATTESTED WHERE AN ATTEST IS
 /// OWED: a copy carrying the attest the session's key signs where that key
 /// attests the frame's kind and no attest rides it yet
-/// (`SessionEntry::attest`, `wants_attest`), and as it stands otherwise — a
-/// bare session's frame, a read, a kind outside the checked set, an attest
-/// the page supplied. Made by [`Holds::attest_where_owed`] alone, so
-/// [`Holds::dial`] sends no frame the session's attest did not see — and
-/// never the frame a held line keeps, which carries no attest (§3c.2).
-struct AttestedWhereOwed(Value);
+/// (`SessionEntry::attest`, `wants_attest`), and the frame BORROWED as it
+/// stands otherwise — a bare session's frame, a read, a kind outside the
+/// checked set, an attest the page supplied. Made by
+/// [`Holds::attest_where_owed`] alone, so [`Holds::dial`] sends no frame the
+/// session's attest did not see — and never the frame a held line keeps,
+/// which carries no attest (§3c.2).
+#[derive(Debug)]
+struct AttestedWhereOwed<'f>(Cow<'f, Value>);
 
 /// A held line's state, and a document's as the `held` event carries it
 /// (§4b.1's `not_resolvable`; §4b.2).
@@ -962,17 +967,15 @@ impl Holds {
     /// attest composed now where one is owed — or why none could be, nothing
     /// dialed, which the send answers as `Dialed`'s `From<Unattested>` reads
     /// it.
-    fn attest_where_owed(&self, session: &SessionEntry, frame: &Value) -> Result<AttestedWhereOwed, Unattested> {
-        let mut frame = frame.clone();
-        session.attest(&self.key_store, &mut frame)?;
-        Ok(AttestedWhereOwed(frame))
+    fn attest_where_owed<'f>(&self, session: &SessionEntry, frame: &'f Value) -> Result<AttestedWhereOwed<'f>, Unattested> {
+        Ok(AttestedWhereOwed(session.attest(&self.key_store, frame)?))
     }
 
     /// ONE DIAL of an [`AttestedWhereOwed`] frame under `session` at the
     /// board it stands at, its answer read ONCE through [`classify`], `given`
     /// the reissues this write has been given. A non-200 is read by its code,
     /// so `write_busy`'s 503 meets its row.
-    fn dial(&self, session: &SessionEntry, frame: &AttestedWhereOwed, given: Reissues) -> Dialed {
+    fn dial(&self, session: &SessionEntry, frame: &AttestedWhereOwed<'_>, given: Reissues) -> Dialed {
         match session.board.op(Some(&session.token), &frame.0) {
             Ok(Answer::Closed) => Dialed::Died,
             Ok(Answer::Document(v)) => match Rejection::of(&v) {

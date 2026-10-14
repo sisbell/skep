@@ -330,11 +330,11 @@ enum Outage {
 }
 
 impl<'b> Feeder<'b> {
-    fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>, ticks: &Ticks) {
-        let entry_arc = entry;
-        let entry: &BoardEntry = &entry_arc;
+    /// A feeder over `entry`, as the feed thread starts it: no consumer open,
+    /// no feed read, no outage said.
+    fn new(entry: &'b BoardEntry, shared: Shared) -> Feeder<'b> {
         let Shared { bus, sessions, data_dir, talk, holds } = shared;
-        let mut feeder = Feeder {
+        Feeder {
             entry,
             bus,
             sessions,
@@ -348,7 +348,11 @@ impl<'b> Feeder<'b> {
             last_index_state: BTreeMap::new(),
             session_references: HashMap::new(),
             outage: Outage::Up,
-        };
+        }
+    }
+
+    fn run(entry: Arc<BoardEntry>, shared: Shared, rx: Receiver<Cmd>, ticks: &Ticks) {
+        let mut feeder = Feeder::new(&entry, shared);
         // ONE `/health` read at the thread's start: the published feed's
         // start where the board answers, the mode, and `writes.halted`.
         feeder.read_health();
@@ -602,6 +606,7 @@ impl<'b> Feeder<'b> {
 }
 
 /// Where one read to the head left its feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadTo {
     /// The position the next read starts at: the head where every page was
     /// read, or where the read stopped on an answer it cannot read past.
@@ -613,7 +618,7 @@ enum ReadTo {
 /// A `feed` update's CLASS (S-24 (b), the module doc): a row of the guest's
 /// feed, `published`, read token-free; or a row of a session's drafts
 /// supplement, `drafts`, read under its token and carrying its reference.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum UpdateClass<'s> {
     Published,
     Drafts(&'s SessionEntry),

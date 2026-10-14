@@ -26,7 +26,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use skep_client::person::{Abandoned, Confirmation, Imported, KeptOrPlaced, Retyped, Statement};
@@ -46,6 +46,14 @@ enum Kind {
     Script { answers: Mutex<VecDeque<Answer>>, sheets: Mutex<Vec<SheetFields>> },
 }
 
+/// What answers a moment: the auto arm, its anchor files' directory beside
+/// it, or the script's next answer.
+#[derive(Debug)]
+enum Answering<'a> {
+    Auto { anchors: &'a Path },
+    Script(Answer),
+}
+
 /// THE DEV ARM: its kind — a script's holding the sheets shown so far — and
 /// the TALK sink every answer is said on.
 pub struct DevArm {
@@ -53,8 +61,8 @@ pub struct DevArm {
     talk: Talk,
 }
 
-impl std::fmt::Debug for DevArm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for DevArm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DevArm({})", match &self.kind { Kind::Auto { .. } => "auto", Kind::Script { .. } => "script" })
     }
 }
@@ -80,12 +88,17 @@ impl DevArm {
         (self.talk)(&format!("dev arm: {line}"));
     }
 
-    /// The script's answer for `moment`, or `None` where no script runs (the
-    /// auto arm); `Abandon` and an exhausted script answer the abandonment.
-    fn scripted(&self, moment: &str) -> Option<Result<Answer, Abandoned>> {
-        let Kind::Script { answers, .. } = &self.kind else { return None };
+    /// What answers `moment`: the auto arm, or the script's next answer —
+    /// `Abandon` and an exhausted script answering the abandonment.
+    fn answering(&self, moment: &str) -> Result<Answering<'_>, Abandoned> {
+        let answers = match &self.kind {
+            Kind::Auto { anchors } => return Ok(Answering::Auto { anchors }),
+            Kind::Script { answers, .. } => answers,
+        };
+        // Popped in its own statement, so the lock is let go before anything
+        // is said.
         let answer = answers.lock().expect("the script's lock").pop_front();
-        Some(match answer {
+        match answer {
             None => {
                 self.say(format_args!("{moment}: the script has no answer left — the walk is abandoned"));
                 Err(Abandoned)
@@ -94,8 +107,8 @@ impl DevArm {
                 self.say(format_args!("{moment}: the script says abandon"));
                 Err(Abandoned)
             }
-            Some(a) => Ok(a),
-        })
+            Some(answer) => Ok(Answering::Script(answer)),
+        }
     }
 
     /// A script answer of another moment's kind: said, and the walk
@@ -143,12 +156,12 @@ impl DevArm {
     /// THE RE-TYPE (SECRET): the auto arm declines it; a script types it off
     /// a sheet shown, types it wrong, or declines.
     pub fn retype(&self) -> Result<Retyped, Abandoned> {
-        let Some(scripted) = self.scripted("the re-type") else {
-            self.say("the re-type is declined (the auto arm types no seed)");
-            return Ok(Retyped::Declined);
-        };
-        match scripted? {
-            Answer::RetypeSheet(n) => match self.off_sheet(n) {
+        match self.answering("the re-type")? {
+            Answering::Auto { .. } => {
+                self.say("the re-type is declined (the auto arm types no seed)");
+                Ok(Retyped::Declined)
+            }
+            Answering::Script(Answer::RetypeSheet(n)) => match self.off_sheet(n) {
                 Some((seed_hex, fingerprint_prefix)) => {
                     self.say(format_args!("the re-type is typed off sheet {n}"));
                     Ok(Retyped::Typed { seed_hex, fingerprint_prefix })
@@ -158,74 +171,64 @@ impl DevArm {
                     Err(Abandoned)
                 }
             },
-            Answer::RetypeWrong => {
+            Answering::Script(Answer::RetypeWrong) => {
                 self.say("the re-type is typed wrong, on purpose");
                 Ok(Retyped::Typed { seed_hex: "00".repeat(32), fingerprint_prefix: "00000000".into() })
             }
-            Answer::RetypeDeclined => {
+            Answering::Script(Answer::RetypeDeclined) => {
                 self.say("the re-type is declined");
                 Ok(Retyped::Declined)
             }
-            other => self.wrong_kind("the re-type", &other),
+            Answering::Script(other) => self.wrong_kind("the re-type", &other),
         }
     }
 
     /// ONE ANCHOR FILE's DESTINATION (SECRET): the auto arm places anchor
     /// `which` under its own directory; a script names a path.
     pub fn destination(&self, which: usize) -> Result<PathBuf, Abandoned> {
-        let Some(scripted) = self.scripted("the destination") else {
-            let Kind::Auto { anchors } = &self.kind else { unreachable!("the auto arm answers no script") };
-            let dir = anchors.join(format!("anchor-{which}"));
-            self.say(format_args!("anchor {which} is placed under {}", dir.display()));
-            return Ok(dir);
+        let dir = match self.answering("the destination")? {
+            Answering::Auto { anchors } => anchors.join(format!("anchor-{which}")),
+            Answering::Script(Answer::Destination(dir)) => dir,
+            Answering::Script(other) => return self.wrong_kind("the destination", &other),
         };
-        match scripted? {
-            Answer::Destination(p) => {
-                self.say(format_args!("anchor {which} is placed under {}", p.display()));
-                Ok(p)
-            }
-            other => self.wrong_kind("the destination", &other),
-        }
+        self.say(format_args!("anchor {which} is placed under {}", dir.display()));
+        Ok(dir)
     }
 
     /// A TYPED CONFIRMATION (CONSENT): the auto arm types the row asked
     /// for; a script types the row, `no`, or its own text.
     pub fn confirm(&self, confirmation: &Confirmation) -> Result<String, Abandoned> {
         let Confirmation { text, expected } = confirmation;
-        let Some(scripted) = self.scripted("the confirmation") else {
-            self.say(format_args!("the confirmation `{text}` is typed as asked ({expected})"));
-            return Ok(expected.clone());
-        };
-        match scripted? {
-            Answer::Confirm(true) => {
+        match self.answering("the confirmation")? {
+            Answering::Auto { .. } | Answering::Script(Answer::Confirm(true)) => {
                 self.say(format_args!("the confirmation `{text}` is typed as asked ({expected})"));
                 Ok(expected.clone())
             }
-            Answer::Confirm(false) => {
+            Answering::Script(Answer::Confirm(false)) => {
                 self.say(format_args!("the confirmation `{text}` is answered no"));
                 Ok("no".to_string())
             }
-            Answer::Typed(t) => {
+            Answering::Script(Answer::Typed(t)) => {
                 self.say(format_args!("the confirmation `{text}` is answered `{t}`"));
                 Ok(t)
             }
-            other => self.wrong_kind("the confirmation", &other),
+            Answering::Script(other) => self.wrong_kind("the confirmation", &other),
         }
     }
 
     /// THE ANCHOR IMPORT (SECRET): the auto arm holds neither; a script
     /// hands a file, types off a sheet, types its own, or holds neither.
     pub fn import(&self) -> Result<Imported, Abandoned> {
-        let Some(scripted) = self.scripted("the import") else {
-            self.say("the import answers neither (the auto arm holds no artifact)");
-            return Ok(Imported::Neither);
-        };
-        match scripted? {
-            Answer::ImportFile(p) => {
+        match self.answering("the import")? {
+            Answering::Auto { .. } => {
+                self.say("the import answers neither (the auto arm holds no artifact)");
+                Ok(Imported::Neither)
+            }
+            Answering::Script(Answer::ImportFile(p)) => {
                 self.say(format_args!("the import hands the file {}", p.display()));
                 Ok(Imported::File(p))
             }
-            Answer::ImportSheet(n) => match self.off_sheet(n) {
+            Answering::Script(Answer::ImportSheet(n)) => match self.off_sheet(n) {
                 Some((seed_hex, fingerprint_prefix)) => {
                     self.say(format_args!("the import is typed off sheet {n}"));
                     Ok(Imported::Typed { seed_hex, fingerprint_prefix })
@@ -235,34 +238,30 @@ impl DevArm {
                     Err(Abandoned)
                 }
             },
-            Answer::ImportTyped { seed_hex, fingerprint_prefix } => {
+            Answering::Script(Answer::ImportTyped { seed_hex, fingerprint_prefix }) => {
                 self.say("the import is typed from the script");
                 Ok(Imported::Typed { seed_hex, fingerprint_prefix })
             }
-            Answer::ImportNeither => {
+            Answering::Script(Answer::ImportNeither) => {
                 self.say("the import answers neither");
                 Ok(Imported::Neither)
             }
-            other => self.wrong_kind("the import", &other),
+            Answering::Script(other) => self.wrong_kind("the import", &other),
         }
     }
 
     /// KEPT OR PLACED (SECRET): the auto arm answers kept; a script says.
-    pub fn kept_or_placed(&self, path: &std::path::Path) -> Result<KeptOrPlaced, Abandoned> {
-        let Some(scripted) = self.scripted("kept-or-placed") else {
-            self.say(format_args!("{} is answered kept", path.display()));
-            return Ok(KeptOrPlaced::Kept);
-        };
-        match scripted? {
-            Answer::Kept => {
+    pub fn kept_or_placed(&self, path: &Path) -> Result<KeptOrPlaced, Abandoned> {
+        match self.answering("kept-or-placed")? {
+            Answering::Auto { .. } | Answering::Script(Answer::Kept) => {
                 self.say(format_args!("{} is answered kept", path.display()));
                 Ok(KeptOrPlaced::Kept)
             }
-            Answer::Placed => {
+            Answering::Script(Answer::Placed) => {
                 self.say(format_args!("{} is answered placed", path.display()));
                 Ok(KeptOrPlaced::Placed)
             }
-            other => self.wrong_kind("kept-or-placed", &other),
+            Answering::Script(other) => self.wrong_kind("kept-or-placed", &other),
         }
     }
 }

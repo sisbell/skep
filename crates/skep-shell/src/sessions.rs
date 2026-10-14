@@ -48,6 +48,7 @@
 //! opens is the RESTART arm re-opened silently, and a board that does not
 //! answer is said so. The page's own `close` is its own arm.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -134,26 +135,28 @@ impl SessionEntry {
     /// composed at the session's own board and signed by the key
     /// [`SessionEntry::attesting_key`] names for the frame's op, where it
     /// names one and [`wants_attest`] admits the frame — the one place the
-    /// composer's precondition is discharged; the frame as it stands
-    /// otherwise, and where the board has no `H.1` to sign over (the board
-    /// judges that write). Refused — nothing is then to be sent —
-    /// `attest_not_composed` where the composer, or the read of the board's
-    /// `H.1` it signs over, halted; `store_unreadable` where the session's
-    /// key file cannot be read; `no_account` where the board answered the
-    /// session no account; and with the board's refusal, or `unreachable`,
-    /// where a read it needed was refused or not answered;
-    /// [`Unattested::Died`] where a read it made met the session's death
-    /// signal, whose end is the caller's to run.
-    pub fn attest(&self, store: &FileStore, frame: &mut Value) -> Result<(), Unattested> {
-        let Some(fp) = frame["op"].as_str().and_then(|op| self.attesting_key(op)) else { return Ok(()) };
+    /// composer's precondition is discharged — and attached to a copy of the
+    /// frame, the one copy made; the frame BORROWED as it stands otherwise,
+    /// and where the board has no `H.1` to sign over (the board judges that
+    /// write). Refused — nothing is then to be sent — `attest_not_composed`
+    /// where the composer, or the read of the board's `H.1` it signs over,
+    /// halted; `store_unreadable` where the session's key file cannot be
+    /// read; `no_account` where the board answered the session no account;
+    /// and with the board's refusal, or `unreachable`, where a read it needed
+    /// was refused or not answered; [`Unattested::Died`] where a read it made
+    /// met the session's death signal, whose end is the caller's to run.
+    pub fn attest<'f>(&self, store: &FileStore, frame: &'f Value) -> Result<Cow<'f, Value>, Unattested> {
+        let Some(fp) = frame["op"].as_str().and_then(|op| self.attesting_key(op)) else { return Ok(Cow::Borrowed(frame)) };
         if !wants_attest(frame) {
-            return Ok(());
+            return Ok(Cow::Borrowed(frame));
         }
-        let Some(board_term) = self.board.board_term()? else { return Ok(()) };
+        let Some(board_term) = self.board.board_term()? else { return Ok(Cow::Borrowed(frame)) };
         let signer = signer(store, &store.key_path(fp))?;
         let account = self.facts.account.as_deref().ok_or_else(|| Refusal::shell(Name::NO_ACCOUNT, json!({})))?;
         let composer = Composer { board: &self.board, token: &self.token, signer: &*signer, account, board_term };
-        composer.attach(frame)
+        let mut attested = frame.clone();
+        composer.attach(&mut attested)?;
+        Ok(Cow::Owned(attested))
     }
 
     /// The session as the search consumer reads it: skep-client's
@@ -315,6 +318,7 @@ impl Sessions {
 
 /// A session opened: the token, its facts, and the board's log position
 /// read before the open ([`SessionEntry::opened_at`]).
+#[derive(Debug)]
 pub struct Open {
     pub token: Token,
     pub facts: Facts,
@@ -397,6 +401,7 @@ pub fn open_signed(board: &Board, store: &FileStore, principal: u64) -> Result<O
 
 /// Why a session died, and — on the restart arm under a key this store
 /// holds — the session re-opened silently in its place.
+#[derive(Debug)]
 struct Death {
     reason: Value,
     reopened: Option<Open>,

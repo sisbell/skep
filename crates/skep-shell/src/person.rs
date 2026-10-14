@@ -206,6 +206,7 @@ fn no_such_moment(id: &str) -> Refusal {
 /// pending table their answers come back through, the dev arm the SECRET
 /// and CONSENT moments go to, and the walk's name and board reference for
 /// the event.
+#[derive(Debug)]
 pub struct BridgePerson {
     bus: Arc<EventBus>,
     pending: Arc<Pending>,

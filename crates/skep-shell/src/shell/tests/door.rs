@@ -230,13 +230,19 @@ fn a_query_past_the_bound_is_refused_at_every_target() {
 /// A `search` call's `opts` are ONE value, as the bridge declares them:
 /// absent, the defaults — the library's bounds and no refresh; present, each
 /// member read into its place, the bounds the library takes and the refresh
-/// beside them (the mutant that reads `reindex` as absent searches an index
-/// the page asked to refresh first).
+/// beside them, a bound past `usize` saturating and never wrapping to a
+/// smaller one (the mutant that reads `reindex` as absent searches an index
+/// the page asked to refresh first; the one that narrows a bound with `as`
+/// wraps a 32-bit target's offset of 2^32 + 5 back to the sixth hit).
 #[test]
 fn a_searchs_opts_are_one_value_as_the_bridge_declares_them() {
     assert_eq!(search_opts(&json!({"query": "x"})).unwrap(), BridgeSearchOpts::default());
     let opts = search_opts(&json!({"query": "x", "opts": {"limit": 5, "offset": 10, "reindex": true}})).unwrap();
     assert_eq!(opts, BridgeSearchOpts { bounds: SearchOpts { limit: 5, offset: 10 }, reindex: true });
+    let wide = (1u64 << 32) + 5;
+    let opts = search_opts(&json!({"query": "x", "opts": {"limit": wide, "offset": wide}})).unwrap();
+    let kept = |bound: usize| bound == usize::MAX || u64::try_from(bound).is_ok_and(|b| b >= wide);
+    assert!(kept(opts.bounds.limit) && kept(opts.bounds.offset), "a bound past `usize` saturates, never wraps: {opts:?}");
 }
 
 /// A shell over no board, its store a throwaway directory: no feed thread,

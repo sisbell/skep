@@ -99,9 +99,10 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
 /// dispatch's calls, in the dispatch's order, each form of a row's argument
 /// object its members in their order, the forms joined as a union and a
 /// form of no member `{}` — both answers and the seven events; a field's
-/// optionality renders as `?`.
+/// optionality renders as `?`, as the field spells itself.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
+    assert_eq!([req("position", "number").to_string(), opt("warning", "string").to_string()], ["position: number", "warning?: string"], "a field spells itself as the declarations spell it");
     let text = declarations();
     for shape in SHAPES {
         assert!(text.contains(&format!("export interface {} {{", shape.name)), "{}", shape.name);

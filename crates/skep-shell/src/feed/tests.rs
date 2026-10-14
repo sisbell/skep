@@ -332,25 +332,12 @@ fn an_outage_is_said_once_and_announced_where_no_stop_stands() {
     let store = TempDir::new().unwrap();
     let bus = Arc::new(EventBus::new());
     let rx = bus.subscribe();
-    let Shared { bus, sessions, data_dir, holds, .. } = shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store);
+    let shared = shared_over(&entry, &Arc::new(Sessions::new(None)), &bus, &store);
+    let holds = Arc::clone(&shared.holds);
     let lines = Arc::new(Mutex::new(Vec::new()));
     let kept = Arc::clone(&lines);
     let talk: Talk = Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string()));
-    let mut feeder = Feeder {
-        entry: &entry,
-        bus,
-        sessions,
-        data_dir,
-        talk,
-        holds: Arc::clone(&holds),
-        consumer: None,
-        published_since: None,
-        drafts_since: HashMap::new(),
-        last_mode: None,
-        last_index_state: BTreeMap::new(),
-        session_references: HashMap::new(),
-        outage: Outage::Up,
-    };
+    let mut feeder = Feeder::new(&entry, Shared { talk, ..shared });
     let daemon = || -> Vec<String> { rx.try_iter().filter(|e| e.name == EventName::Daemon).map(|e| e.data["state"].as_str().unwrap_or("?").to_string()).collect() };
     let said = || lines.lock().unwrap().iter().filter(|l| l.contains("is not answering")).count();
     feeder.unreachable("refused");

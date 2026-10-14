@@ -223,6 +223,7 @@ pub struct HeldDir {
 }
 
 /// One line of a held file as the reader meets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Line {
     /// A whole line, its `\n` dropped.
     Complete,

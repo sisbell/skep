@@ -102,6 +102,7 @@ impl SessionMode {
 /// The dev arm a run names: the auto-answer, the default, or a script's
 /// answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ArmConfig {
     #[default]
     Auto,
@@ -288,6 +289,7 @@ pub const CALLS: [&str; Call::ALL.len()] = {
 /// A fetched blob: the head of the board's `200` — every other status is a
 /// refusal — and its body, read to close; its call is logged as the body is
 /// dropped.
+#[non_exhaustive]
 pub struct Fetched {
     pub headers: Headers,
     pub body: Box<dyn Read + Send>,
@@ -398,7 +400,9 @@ fn guest_form(args: &Value) -> Result<bool, Refusal> {
 /// A `search` call's `opts` as declared (`SearchOpts`): an object where
 /// present, each member of its form — `malformed_args` naming
 /// `opts.<member>` where one is not — and where absent the defaults: the
-/// bound limit, no offset, no reindex.
+/// bound limit, no offset, no reindex. A `limit` or an `offset` past `usize`
+/// saturates — every hit, or past every hit, what it means wherever `usize`
+/// holds it — and never wraps to a smaller bound.
 fn search_opts(args: &Value) -> Result<BridgeSearchOpts, Refusal> {
     optional(args, "opts", |v| v.is_object().then_some(()))?;
     let opts = &args["opts"];
@@ -406,13 +410,15 @@ fn search_opts(args: &Value) -> Result<BridgeSearchOpts, Refusal> {
     let limit = optional(opts, "limit", Value::as_u64).map_err(in_opts("limit"))?;
     let offset = optional(opts, "offset", Value::as_u64).map_err(in_opts("offset"))?;
     let reindex = optional(opts, "reindex", Value::as_bool).map_err(in_opts("reindex"))?;
+    let saturate = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
     let defaults = SearchOpts::default();
-    let bounds = SearchOpts { limit: limit.map_or(defaults.limit, |n| n as usize), offset: offset.map_or(defaults.offset, |n| n as usize) };
+    let bounds = SearchOpts { limit: limit.map_or(defaults.limit, saturate), offset: offset.map_or(defaults.offset, saturate) };
     Ok(BridgeSearchOpts { bounds, reindex: reindex.unwrap_or(false) })
 }
 
 /// Where a guest form reads (§4b.1): one of this shell's boards, or a
 /// canonical origin its list holds no board at — a followed link's.
+#[derive(Debug)]
 enum GuestTarget {
     Board(Arc<BoardEntry>),
     Origin(Origin),

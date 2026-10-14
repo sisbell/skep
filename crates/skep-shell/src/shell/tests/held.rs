@@ -11,9 +11,21 @@
 
 use super::*;
 
+/// The ground every hold cell stands on: the shell over a claimed board,
+/// the events seen, the board's reference, a bare session's, and a draft
+/// with one insert acked — each by its name, so no cell takes one
+/// reference for another.
+struct HeldGround {
+    shell: Shell,
+    seen: Arc<Mutex<Vec<Event>>>,
+    board: String,
+    session: String,
+    draft: String,
+}
+
 /// A claimed board, a bare shell opened over it, a session and a draft with one
-/// insert acked — the ground every hold cell stands on.
-fn held_ground(dir: &TempDir, sd: &Skepd) -> (Shell, Arc<Mutex<Vec<Event>>>, String, String, String) {
+/// insert acked.
+fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
@@ -24,7 +36,7 @@ fn held_ground(dir: &TempDir, sd: &Skepd) -> (Shell, Arc<Mutex<Vec<Event>>>, Str
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
     shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["a"]}})).unwrap();
-    (shell, seen, board, session, draft)
+    HeldGround { shell, seen, board, session, draft }
 }
 
 /// T7: a burst POISONED by the kernel (`JournalBarrier` + `JournalRepair`) is
@@ -39,7 +51,7 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let port = sd.port();
-    let (shell, seen, board, session, draft) = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft } = held_ground(&dir, &sd);
     // Stop the daemon; the next burst's dial fails `unreachable` and is held.
     sd.shutdown();
     let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
@@ -82,7 +94,7 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
 fn the_poisoned_write_path_holds_bursts_poisoned_then_halted() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let (shell, _seen, _board, session, draft) = held_ground(&dir, &sd);
+    let HeldGround { shell, session, draft, .. } = held_ground(&dir, &sd);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
     // The poisoning burst is refused `poisoned` directly and held.
@@ -130,7 +142,7 @@ fn a_poisoned_burst_lands_at_the_restart_and_is_kept() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let port = sd.port();
-    let (shell, seen, board, session, draft) = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft } = held_ground(&dir, &sd);
     let store = dir.path().join("store");
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
     sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
@@ -202,8 +214,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
     let entry = signed.sessions.get(&session).unwrap();
     let SessionKind::Signed { fingerprint: fp, .. } = entry.facts.kind.clone() else { panic!("a signed session holds a key") };
     let frame = json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["bc"]});
-    let mut attested = frame.clone();
-    entry.attest(&signed.store, &mut attested).unwrap();
+    let attested = entry.attest(&signed.store, &frame).unwrap();
     assert!(attested.get("attest").is_some(), "the shell attests every insert");
     let Answer::Document(landed) = entry.board.op(Some(&entry.token), &attested).unwrap() else { panic!("the dial closed") };
     assert!(landed["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "the burst landed by the own hand: {landed}");
@@ -249,7 +260,7 @@ fn a_signed_sessions_landed_burst_is_kept_by_the_resend() {
 fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let (shell, seen, _board, session, draft) = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, session, draft, .. } = held_ground(&dir, &sd);
     // A burst past the draft's head: `out_of_bounds`, a permanent refusal → a
     // refused run (an insert at a far ordinal the draft has no room for).
     let far = json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}});
@@ -305,7 +316,7 @@ fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     let store = dir.path().join("store");
     let draft;
     {
-        let (shell, _seen, _board, session, d) = held_ground(&dir, &sd);
+        let HeldGround { shell, session, draft: d, .. } = held_ground(&dir, &sd);
         draft = d;
         // Stop the node under the shell's feet, then a burst holds `unreachable`.
         sd.shutdown();
@@ -459,7 +470,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let store = dir.path().join("store");
     let draft;
     {
-        let (shell, _seen, _board, session, d) = held_ground(&dir, &sd);
+        let HeldGround { shell, session, draft: d, .. } = held_ground(&dir, &sd);
         draft = d;
         sd.shutdown();
         let held = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}})).unwrap();
@@ -505,7 +516,7 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
 fn the_probe_keeps_its_cadence_while_the_board_keeps_committing() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
-    let (shell, seen, board, session, draft) = held_ground(&dir, &sd);
+    let HeldGround { shell, seen, board, session, draft } = held_ground(&dir, &sd);
     let writer = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let entry = shell.sessions.get(&session).unwrap();
     let stop = AtomicBool::new(false);

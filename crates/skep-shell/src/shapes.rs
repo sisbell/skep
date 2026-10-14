@@ -16,7 +16,7 @@
 //! refuse it by name. The event names are rendered from `events::EventName`
 //! itself, the type every event carries.
 
-use std::fmt::Write;
+use std::fmt::{self, Write};
 
 use crate::events::EventName;
 
@@ -28,6 +28,15 @@ pub struct Field {
     pub name: &'static str,
     pub ty: &'static str,
     pub required: bool,
+}
+
+/// A field as the declarations spell it: `name: T`, or `name?: T` where a
+/// value may leave it out — an interface's member and a call's argument
+/// alike.
+impl fmt::Display for Field {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}: {}", self.name, if self.required { "" } else { "?" }, self.ty)
+    }
 }
 
 const fn req(name: &'static str, ty: &'static str) -> Field {
@@ -182,7 +191,7 @@ fn argument_object(form: &[Field]) -> String {
     if form.is_empty() {
         return "{}".to_string();
     }
-    let members: Vec<String> = form.iter().map(|f| format!("{}{}: {}", f.name, if f.required { "" } else { "?" }, f.ty)).collect();
+    let members: Vec<String> = form.iter().map(Field::to_string).collect();
     format!("{{ {} }}", members.join("; "))
 }
 
@@ -207,7 +216,7 @@ pub fn declarations() -> String {
         let _ = writeln!(out, "/** {} */", shape.doc);
         let _ = writeln!(out, "export interface {} {{", shape.name);
         for f in shape.fields {
-            let _ = writeln!(out, "  {}{}: {};", f.name, if f.required { "" } else { "?" }, f.ty);
+            let _ = writeln!(out, "  {f};");
         }
         if shape.open {
             out.push_str("  [member: string]: unknown;\n");

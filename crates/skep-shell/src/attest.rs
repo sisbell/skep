@@ -4,26 +4,26 @@
 //! composing every axis of that frame itself — the `board` term from its own
 //! read of the board it dials, the account from the session — and never a
 //! preimage the page supplies"): for a frame of the TEN KINDS that have an
-//! entry frame (wire.md §Credential refusals) — `create_new_document`, `fork`,
-//! `version`, `insert`, `publish`, `make_link`, `emit`, `nullify`,
-//! `assert_sup`, `edit_link` — the entry frame under `H.1`'s pair, the
-//! session's account, the frame's `doc` term and the body the kind's
-//! grammar spells, signed by the session's key, attached as the frame's
-//! `attest` member. ATTACH WHEN IN DOUBT (the wire's own rule): the publish
-//! class is the daemon's classification, and an `attest` on a write outside
-//! it is dropped unread, so every write of the ten kinds under a signed
-//! session is attested here, a draft's included. One composer: the body
-//! builders are `skep-identity`'s, as the daemon's verifier composes
-//! through them (`skepd`'s `auth/entry.rs`), the slots AS STORED — an
-//! address-form slot's unit spans, a V-spec slot's I-extents resolved
-//! through `image`, as `skep-dev seed`'s link is — and a `publish`'s copied
-//! runs by their values, READ BACK through the origin's arrangement under
-//! the session's own token, a window by its address. A frame the composer
-//! cannot make — a value it cannot read, a slot source it may not read, a
-//! term it cannot spell — halts naming what stopped it, and nothing is
-//! sent: the shell never sends a frame it could not sign. A death signal
-//! met at one of those reads is no halt of the composer's but the
-//! session's end ([`Unattested::Died`]), which its caller runs. The
+//! entry frame ([`CheckedKind`]; wire.md §Credential refusals) —
+//! `create_new_document`, `fork`, `version`, `insert`, `publish`,
+//! `make_link`, `emit`, `nullify`, `assert_sup`, `edit_link` — the entry
+//! frame under `H.1`'s pair, the session's account, the frame's `doc` term
+//! and the body the kind's grammar spells, signed by the session's key,
+//! attached as the frame's `attest` member. ATTACH WHEN IN DOUBT (the wire's
+//! own rule): the publish class is the daemon's classification, and an
+//! `attest` on a write outside it is dropped unread, so every write of the
+//! ten kinds under a signed session is attested here, a draft's included.
+//! One composer: the body builders are `skep-identity`'s, as the daemon's
+//! verifier composes through them (`skepd`'s `auth/entry.rs`), the slots AS
+//! STORED — an address-form slot's unit spans, a V-spec slot's I-extents
+//! resolved through `image`, as `skep-dev seed`'s link is — and a
+//! `publish`'s copied runs by their values, READ BACK through the origin's
+//! arrangement under the session's own token, a window by its address. A
+//! frame the composer cannot make — a value it cannot read, a slot source
+//! it may not read, a term it cannot spell — halts naming what stopped it,
+//! and nothing is sent: the shell never sends a frame it could not sign. A
+//! death signal met at one of those reads is no halt of the composer's but
+//! the session's end ([`Unattested::Died`]), which its caller runs. The
 //! wire's value forms, both ways, are `wire`'s: the composer spells a
 //! frame's `values` and reads a delivery back through them, and faces what
 //! they refuse as its own halt.
@@ -69,8 +69,60 @@ use crate::wire::{bounded_address, delivered_values, values_of, within_component
 /// `nullify` deposits, fixed by kind (`skep-links`'s `retraction_tuple`).
 const T_RETRACTION: &str = "1.1.0.1.0.1.0.1.5";
 
-/// The ten kinds, as the wire spells them.
-const CHECKED_SET: [&str; 10] = ["create_new_document", "fork", "version", "insert", "publish", "make_link", "emit", "nullify", "assert_sup", "edit_link"];
+/// One of THE TEN KINDS that have an entry frame (wire.md §Credential
+/// refusals) — the CHECKED SET, read off a frame's op by
+/// [`CheckedKind::named`] alone, so the composer's dispatch is one arm per
+/// kind, which the compiler holds exhaustive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckedKind {
+    CreateNewDocument,
+    Fork,
+    Version,
+    Insert,
+    Publish,
+    MakeLink,
+    Emit,
+    Nullify,
+    AssertSup,
+    EditLink,
+}
+
+impl CheckedKind {
+    /// The ten, in the wire's order.
+    const ALL: [CheckedKind; 10] = [
+        CheckedKind::CreateNewDocument,
+        CheckedKind::Fork,
+        CheckedKind::Version,
+        CheckedKind::Insert,
+        CheckedKind::Publish,
+        CheckedKind::MakeLink,
+        CheckedKind::Emit,
+        CheckedKind::Nullify,
+        CheckedKind::AssertSup,
+        CheckedKind::EditLink,
+    ];
+
+    /// The kind as the wire spells it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            CheckedKind::CreateNewDocument => "create_new_document",
+            CheckedKind::Fork => "fork",
+            CheckedKind::Version => "version",
+            CheckedKind::Insert => "insert",
+            CheckedKind::Publish => "publish",
+            CheckedKind::MakeLink => "make_link",
+            CheckedKind::Emit => "emit",
+            CheckedKind::Nullify => "nullify",
+            CheckedKind::AssertSup => "assert_sup",
+            CheckedKind::EditLink => "edit_link",
+        }
+    }
+
+    /// The kind the wire spells `op`, where it is one of the ten.
+    fn named(op: &str) -> Option<CheckedKind> {
+        CheckedKind::ALL.into_iter().find(|kind| kind.as_str() == op)
+    }
+}
 
 /// The most elements one wire ARRAY may carry — skepd's codec's
 /// `MAX_WIRE_LIST`, refused at the board's parse (`malformed`, the frame
@@ -102,7 +154,14 @@ const MAX_COPIED_POSITIONS: u64 = (MAX_FRAME_BYTES / 4) as u64;
 
 /// Whether `op` is one of the ten kinds that have an entry frame.
 pub fn in_checked_set(op: &str) -> bool {
-    CHECKED_SET.contains(&op)
+    CheckedKind::named(op).is_some()
+}
+
+/// The kind of `frame` the shell composes an attest for: its op one of the
+/// ten, no `attest` riding it — the one reader of the composer's
+/// precondition, which [`wants_attest`] and [`Composer::attach`] share.
+fn wanted_kind(frame: &Value) -> Option<CheckedKind> {
+    frame["op"].as_str().and_then(CheckedKind::named).filter(|_| frame.get("attest").is_none())
 }
 
 /// Whether the shell composes an attest for `frame`: its op is one of the
@@ -110,7 +169,7 @@ pub fn in_checked_set(op: &str) -> bool {
 /// left as it stands, the board's to judge, since the shell signs only what
 /// it composed.
 pub fn wants_attest(frame: &Value) -> bool {
-    frame["op"].as_str().is_some_and(in_checked_set) && frame.get("attest").is_none()
+    wanted_kind(frame).is_some()
 }
 
 /// The most bytes the attest this composer attaches adds to a frame: the
@@ -179,6 +238,7 @@ impl fmt::Display for Unattested {
 impl std::error::Error for Unattested {}
 
 /// The frame's `doc` term, owned.
+#[derive(Debug)]
 enum OwnedDocTerm {
     One(Address),
     Pair { d_s: Address, d_a: Address },
@@ -227,6 +287,7 @@ impl<'a> IRange<'a> {
 /// One run of a shot as its body takes it, in the shot's V-order: a COPIED
 /// run by the I-range whose values it brings in, and its origin — or a
 /// WINDOW onto another document's I-space.
+#[derive(Debug)]
 enum ShotPart<'f> {
     Copied { origin: &'f str, range: IRange<'f> },
     Window { start: Address, width: NonZeroU64 },
@@ -709,19 +770,18 @@ impl Composer<'_> {
         Ok(body.finish())
     }
 
-    /// The frame's `doc` term and body, its kind one of the ten
-    /// ([`Composer::attach`]'s precondition).
-    fn doc_term_and_body(&self, frame: &Value) -> Result<(OwnedDocTerm, EntryBody), Unattested> {
+    /// The frame's `doc` term and body, as its `kind` spells them.
+    fn doc_term_and_body(&self, kind: CheckedKind, frame: &Value) -> Result<(OwnedDocTerm, EntryBody), Unattested> {
         let one = |text: &str, what: &str| -> Result<OwnedDocTerm, Halt> { Ok(OwnedDocTerm::One(addr(text, what)?)) };
-        Ok(match frame["op"].as_str() {
-            Some("create_new_document") => (one(member(frame, "account")?, "account")?, entry_body_empty(ContentFreeOp::CreateNewDocument)),
-            Some("fork") => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Fork)),
-            Some("version") => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Version)),
-            Some("insert") => {
+        Ok(match kind {
+            CheckedKind::CreateNewDocument => (one(member(frame, "account")?, "account")?, entry_body_empty(ContentFreeOp::CreateNewDocument)),
+            CheckedKind::Fork => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Fork)),
+            CheckedKind::Version => (one(self.account, "account")?, entry_body_empty(ContentFreeOp::Version)),
+            CheckedKind::Insert => {
                 let (trunk, body) = insert_terms(frame)?;
                 (OwnedDocTerm::One(trunk), body)
             }
-            Some("make_link") => {
+            CheckedKind::MakeLink => {
                 let home = member(frame, "home")?;
                 let (from, to, ty) = (self.slot(&frame["from"], "from")?, self.slot(&frame["to"], "to")?, self.slot(&frame["ty"], "ty")?);
                 let slots = LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) };
@@ -731,7 +791,7 @@ impl Composer<'_> {
                 };
                 (one(home, "home")?, body)
             }
-            Some("emit") => {
+            CheckedKind::Emit => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(member(frame, "from")?, "from")?)];
                 let to_list = frame["to"].as_array().map(Vec::as_slice).unwrap_or_default();
@@ -740,34 +800,33 @@ impl Composer<'_> {
                 let ty = self.slot(&frame["ty"], "ty")?;
                 (one(home, "home")?, entry_body_emit(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
-            Some("nullify") => {
+            CheckedKind::Nullify => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(home, "home")?)];
                 let to = [unit_span(&addr(member(frame, "target")?, "target")?)];
                 let ty = [unit_span(&addr(T_RETRACTION, "retraction")?)];
                 (one(home, "home")?, entry_body_nullify(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
-            Some("assert_sup") => {
+            CheckedKind::AssertSup => {
                 let home = member(frame, "home")?;
                 let from = [unit_span(&addr(member(frame, "old")?, "old")?)];
                 let to = [unit_span(&addr(member(frame, "new")?, "new")?)];
                 let ty = [unit_span(&addr(T_SUPERSEDES, "supersedes")?)];
                 (one(home, "home")?, entry_body_assert_sup(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }))
             }
-            Some("edit_link") => {
+            CheckedKind::EditLink => {
                 let successor = &frame["successor"];
                 let (from, to, ty) = (self.slot(&successor["from"], "successor.from")?, self.slot(&successor["to"], "successor.to")?, self.slot(&successor["ty"], "successor.ty")?);
                 let original = unit_span(&addr(member(frame, "original")?, "original")?);
                 let body = entry_body_edit_link(LinkSlots { from: EntrySlot(&from), to: EntrySlot(&to), ty: EntrySlot(&ty) }, &original);
                 (OwnedDocTerm::Pair { d_s: addr(member(frame, "d_s")?, "d_s")?, d_a: addr(member(frame, "d_a")?, "d_a")? }, body)
             }
-            Some("publish") => {
+            CheckedKind::Publish => {
                 let doc = member(frame, "doc")?;
                 let trunk = trunk_text(doc).ok_or_else(|| fault(format!("the frame's `doc` has no trunk: `{doc}`"), "a publish's doc term is the document's trunk"))?;
                 let body = self.publish_body(frame, &trunk)?;
                 (one(&trunk, "doc")?, body)
             }
-            _ => unreachable!("Composer::attach's precondition: wants_attest admitted the frame, its op one of the ten kinds"),
         })
     }
 
@@ -778,8 +837,8 @@ impl Composer<'_> {
     /// riding it; a frame outside it is a bug of this crate's, and `attach`
     /// panics naming the obligation.
     pub fn attach(&self, frame: &mut Value) -> Result<(), Unattested> {
-        assert!(wants_attest(frame), "Composer::attach's precondition: wants_attest admitted the frame");
-        let (doc_term, body) = self.doc_term_and_body(frame)?;
+        let kind = wanted_kind(frame).expect("Composer::attach's precondition: wants_attest admitted the frame");
+        let (doc_term, body) = self.doc_term_and_body(kind, frame)?;
         let account = addr(self.account, "account")?;
         let alg = self.signer.public_key().alg();
         let bytes = entry_frame(alg, self.board_term, &account, doc_term.as_doc_term(), &body);

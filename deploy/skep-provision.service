@@ -31,12 +31,12 @@ SupplementaryGroups=docker
 StateDirectory=skep-provision
 StateDirectoryMode=0700
 # OWNER@EXAMPLE and noreply@skep.host are PLACEHOLDERS: put the owner's
-# mailbox, which the failure page names and the mail replies to, and the
-# mail's sending address. --mailer is the relay client's path: msmtp's
-# where the distribution installs it (UNVERIFIED HERE), or sendmail's. The
-# --mailer and --from lines are the two lines to DROP together to run
-# without mail (each line of the command but the last ends in the
-# backslash that joins it to the next). --state-dir is the directory
+# mailbox, which the failure page names and where an answer to the mail
+# goes, and the mail's sending address. --mailer is the relay client's
+# path: msmtp's where the distribution installs it (UNVERIFIED HERE), or
+# sendmail's. The --mailer and --from lines are the two lines to DROP
+# together to run without mail (each line of the command but the last ends
+# in the backslash that joins it to the next). --state-dir is the directory
 # StateDirectory= makes; --workers 3 and --connections 16 are the defaults,
 # said.
 # --listen 0.0.0.0:8842 binds every interface: Caddy runs in a container
@@ -58,8 +58,10 @@ UMask=0077
 # on a crash; not on `systemctl stop` (SIGTERM is a clean stop to systemd)
 Restart=on-failure
 RestartSec=5
-# the service handles no signal: SIGTERM ends it at once, and a board a
-# stop cuts off mid-step is removed by the sweep at the next start
+# the service handles no signal: SIGTERM ends it at once; a board a stop
+# cuts off before its snippet is written is removed by the sweep at the
+# next start, and one cut off after it stands, its invite still issued
+# (RUNBOOK §10 step 9)
 KillSignal=SIGTERM
 TimeoutStopSec=10
 # the open-file limit the daemon's units set: the sixteen connection

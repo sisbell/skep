@@ -1075,10 +1075,10 @@ of their own; the journal adds it.
 5. **Install the unit**, `deploy/skep-provision.service` in the
    repository at the release's tag. In the installed copy, put the
    owner's mailbox for `OWNER@EXAMPLE` (the failure page names it,
-   and the mail replies to it) and the mail's sending address for
-   `noreply@skep.host`; to run without mail, drop the `--mailer` and
-   `--from` lines together. Then load it, start it now and at every
-   boot, see its status, and follow its log:
+   and an answer to the mail goes to it) and the mail's sending
+   address for `noreply@skep.host`; to run without mail, drop the
+   `--mailer` and `--from` lines together. Then load it, start it now
+   and at every boot, see its status, and follow its log:
 
    ```
    sudo install -m 644 deploy/skep-provision.service /etc/systemd/system/
@@ -1121,15 +1121,15 @@ of their own; the journal adds it.
    ```
 
    `live` counts the boards whose snippets it found, `swept` the
-   half-made ones it removed, `workers` the boards it makes at once,
+   half-made ones it cleared, `workers` the boards it makes at once,
    and `connections` the requests it serves at once, a connection past
    them waiting its turn. Without the mail lines the line ends `mail
    OFF (no --mailer and --from): no follow-up mail is sent`. A refused
    start is one line on stderr and exit 1, naming its cause: a state
-   directory other users can read, a snippet directory it cannot read,
-   an address it cannot bind, a thread the machine will not give. The
-   unit retries it every five seconds, the refusal written to the
-   journal each time.
+   directory other users can read, or one it cannot make or that is no
+   directory, a snippet directory it cannot read, an address it cannot
+   bind, a thread the machine will not give. The unit retries it every
+   five seconds, the refusal written to the journal each time.
 
 7. **Admit a person.** A sign-up is one line in
    `/var/lib/skep-provision/signups`, `<address> <date>`, and sends
@@ -1156,44 +1156,54 @@ of their own; the journal adds it.
 8. **Know what it keeps, and what it never logs.** In the state
    directory, `signups` and `invites`, each born `0600`: one line per
    sign-up, and one per invite, issued or spent with its board's
-   name; beside them `invites.lock`, held over each rewrite of the
-   invite file. In the snippet directory, one `<name>.caddy` per live
-   board, from which each start rebuilds its list of live boards. On the Engine, every volume it made,
-   labelled `skep.provision=1`. The sign-up address is the one
-   personal datum it keeps; how long it is kept is the operator's to
-   decide and say. Its log names the board, the step, each call's
-   exit code and the sidecar's stderr, and never carries a record's
-   bytes, a person's address, an invite code or a status token.
+   name; beside them `invites.lock`, `0600` too, held over each
+   rewrite of the invite file. In the snippet directory, one
+   `<name>.caddy` per live board, from which each start rebuilds its
+   list of live boards. On the Engine, every volume it made, labelled
+   `skep.provision=1`. The sign-up address is the one personal datum
+   it keeps; how long it is kept is the operator's to decide and say.
+   Its log names the board, the step, each call's exit code and the
+   sidecar's stderr — which names each entry of the record by its
+   fingerprint and its label, the person's own words, already on the
+   board with the record — and never carries the record whole or a
+   key of it, a person's address, an invite code or a status token.
 
 9. **Know what a stop leaves.** The service handles no signal:
    SIGTERM, which `systemctl stop` sends, ends it at once. Every file
    it keeps is replaced whole by a rename, so a stop tears none. A
-   board a stop cuts off mid-step leaves its volume, and perhaps a
-   run, under its name with no snippet. At the next start, before it
-   listens, the service lists the volumes under its label, removes
-   each one with no snippet and any run under its name, and counts
-   them on the serving line as `swept`. After the sweep's removals, and
-   after a failed board's cleanup, the service looks at what stands
-   under the name; where something still stands — a removal that
-   itself failed — the log line says INCOMPLETE and names it, and the
-   name stays taken until the operator clears it: the snippet,
+   board a stop cuts off before its snippet is written leaves its
+   volume, and perhaps a run, under its name with no snippet. At the
+   next start, before it listens, the service lists the volumes under
+   its label, removes each one with no snippet and any run under its
+   name, and counts those it cleared on the serving line as `swept`.
+   A board a stop cuts off after its snippet is written stands, routed
+   now or at Caddy's next reload, and the next start counts it `live`
+   and leaves it. After the sweep's removals, and after a failed
+   board's cleanup, the service looks at what stands under the name;
+   where something still stands — a removal that itself failed — the
+   log line says INCOMPLETE and names it, and the name stays taken
+   until the operator clears it: the snippet,
    `sudo rm /etc/caddy/boards/<name>.caddy` and then
    `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`;
    the run, `docker rm -f <name>`; the volume,
    `docker volume rm <name>`. The queue, the status URLs, a mail not
-   yet sent and the invite codes posts in flight hold live in memory
-   and end with the process: a status URL from before a stop answers
-   404, and a live board's code whose spend could not be written —
-   the invite file still says issued — is admitted again at the next
-   start unless the operator has marked it spent.
+   yet sent and the invite codes its posts hold live in memory and end
+   with the process: a status URL from before a stop answers 404, and
+   a live board's code the invite file still says issued — its spend
+   could not be written, or the stop came between its snippet's write
+   and its spend — is admitted again at the next start unless the
+   operator has marked it spent; the log names the board
+   (`<name>: the invite could not be marked spent`, or
+   `<name>: snippet: written` with no `<name>: the invite is spent`
+   after it), never the code.
 
 10. **Know what this version does not do.** It serves no TLS of its
     own: Caddy terminates TLS for `skep.host`. It has no rate limit:
     a post must name an issued invite, four posts at most look at
-    what stands under their names at once and four at most wait for
-    a worker, a fifth told to try again later; a sign-up, which needs
-    no invite, is limited by the sign-up file's 256 KiB cap alone:
-    past it a sign-up is refused until the owner trims the file. It
+    what stands under their names at once, one per invite, and four at
+    most wait for a worker, a fifth told to try again later; a sign-up,
+    which needs no invite, is limited by the sign-up file's 256 KiB cap
+    alone: past it a sign-up is refused until the owner trims the file. It
     serves sixteen requests at once (`--connections`), each request in
     and each answer out given a minute, so a client that trickles its
     bytes is cut off; one that holds all sixteen keeps everyone else
@@ -1203,9 +1213,10 @@ of their own; the journal adds it.
 Confirm on the first VM what the unit and these steps assume, beside
 the deployment notes' TO TEST list: that the Engine's unit is
 `docker.service`; that `SupplementaryGroups=docker` gives the
-service the socket, so no `sweep: volumes:` refusal precedes the
-first serving line; that systemd makes `/var/lib/skep-provision`
-`0700` and the user's; that Caddy reaches the service at the
-bridge's gateway on port 8842, and nothing outside the VM reaches
-that port; the `useradd` and `usermod` lines on the VM's
-distribution; and a real mail landing in an inbox.
+service the socket, so the sweep's listing logs
+`sweep: volumes: exit 0`, and no refusal, before the first serving
+line; that systemd makes `/var/lib/skep-provision` `0700` and the
+user's; that Caddy reaches the service at the bridge's gateway on
+port 8842, and nothing outside the VM reaches that port; the
+`useradd` and `usermod` lines on the VM's distribution; and a real
+mail landing in an inbox.

@@ -88,6 +88,9 @@ fn a_second_crossing_with_the_flag_set_runs_inline_as_the_backstop() {
     assert_eq!(checkpoint_count(dir.path()), 2);
     assert_eq!(k.inline_checkpoints(), 2, "the two backstop runs, counted");
     assert_eq!(k.last_inline_checkpoint_failure(), None, "the last of them landed");
+    // …and RECORDED: the commit whose crossing ran it, and where it landed.
+    let last = k.last_inline_checkpoint().expect("an inline run happened");
+    assert_eq!((last.after, last.outcome), (Seq(8), Ok(Seq(8))), "run by the commit at 8");
     assert!(!k.checkpoint_due(), "an inline run clears the flag it was the backstop for");
     commit(&k, 9);
     commit(&k, 10);
@@ -108,6 +111,9 @@ fn a_second_crossing_with_the_flag_set_runs_inline_as_the_backstop() {
         "the text names the cause: {text}"
     );
     assert!(!ckpt_file(dir.path(), 12).exists(), "…and the run did fail");
+    let last = k.last_inline_checkpoint().expect("an inline run happened");
+    assert_eq!(last.after, Seq(12), "the failed run is the commit at 12's");
+    assert_eq!(last.outcome, Err(text.clone()), "…its failure the text read above");
     // A caller's own call is no inline run: it lands, and moves neither the
     // count nor the text.
     assert_eq!(k.checkpoint().unwrap(), Seq(12));
@@ -123,6 +129,43 @@ fn a_second_crossing_with_the_flag_set_runs_inline_as_the_backstop() {
     assert!(ckpt_file(dir.path(), 16).exists(), "the backstop ran inline");
     assert_eq!(k.inline_checkpoints(), 4);
     assert_eq!(k.last_inline_checkpoint_failure(), None, "the last inline run landed");
+    let last = k.last_inline_checkpoint().expect("an inline run happened");
+    assert_eq!((last.after, last.outcome), (Seq(16), Ok(Seq(16))));
+}
+
+/// AN INLINE RUN's DURATION IS ITS OWN: the time the committing thread spent
+/// in the checkpoint after its commit installed — what that commit's caller
+/// waited past its own write, and every write a caller serializes behind it.
+/// The run parks inside the world's serialize while the test holds it, so
+/// the figure recorded is at least the hold, and the run is the commit at 1's.
+#[test]
+fn an_inline_runs_record_holds_the_time_it_kept_its_commit_waiting() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 4);
+    cfg.checkpoint = CheckpointPolicy::EveryN(1); // every commit crosses, inline
+    let gate = Gate::new();
+    let k = Arc::new(Kernel::open(cfg, GatedWorld { items: vec![], gate: Some(gate.clone()) }).unwrap());
+    let writer = {
+        let k = Arc::clone(&k);
+        thread::spawn(move || {
+            k.transact(&[], |stg| {
+                stg.push(1);
+                Ok::<(), ()>(())
+            })
+            .unwrap()
+            .1
+        })
+    };
+    gate.entered.wait(); // the commit installed, its inline checkpoint parked in the serialize
+    assert_eq!(k.current_seq(), Seq(1), "the commit landed before its checkpoint ran");
+    let hold = Duration::from_millis(50);
+    thread::sleep(hold);
+    gate.release.wait();
+    assert_eq!(writer.join().unwrap(), Seq(1));
+    assert_eq!(k.inline_checkpoints(), 1);
+    let last = k.last_inline_checkpoint().expect("the inline run, recorded");
+    assert_eq!((last.after, last.outcome), (Seq(1), Ok(Seq(1))));
+    assert!(last.held >= hold, "held {:?}: less than the {hold:?} the run parked", last.held);
 }
 
 /// Under an INLINE arm every crossing's checkpoint runs on the committing
@@ -646,20 +689,32 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
 /// counting by name would keep `B` and delete `A`, the one base that
 /// loaded; a second open, `A` and `C` sound, skips nothing; and the landing
 /// after that counts as it always did. The claim with no skip is the first
-/// half, unchanged.
+/// half, unchanged. And every landing NAMES what its retention removed, by
+/// seq and length read before the removal — the skipped `B` among them, the
+/// end of the evidence the open's warning named — and a landing that removed
+/// nothing names nothing.
 #[test]
 fn retention_keeps_the_newest_n_checkpoints() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    assert!(k.last_removed_checkpoints().is_empty(), "no landing yet");
+    let mut first_len = 0;
     for x in 1..=3u64 {
         commit(&k, x);
         assert_eq!(k.checkpoint().unwrap(), Seq(x));
+        if x == 1 {
+            first_len = fs::metadata(ckpt_file(dir.path(), 1)).unwrap().len();
+        }
+        if x < 3 {
+            assert!(k.last_removed_checkpoints().is_empty(), "nothing past the two kept");
+        }
     }
-    // The third checkpoint pushes the first out (§6).
+    // The third checkpoint pushes the first out (§6), and says so.
     assert_eq!(checkpoint_count(dir.path()), 2);
     assert!(!ckpt_file(dir.path(), 1).exists());
     assert!(ckpt_file(dir.path(), 2).exists());
     assert!(ckpt_file(dir.path(), 3).exists());
+    assert_eq!(k.last_removed_checkpoints(), vec![(Seq(1), first_len)]);
     drop(k);
     // What retention keeps is a REAL fallback base: destroy the newest and
     // recovery lands on the whole world from the one below it.
@@ -683,6 +738,12 @@ fn retention_keeps_the_newest_n_checkpoints() {
     assert!(ckpt_file(dir.path(), 2).exists(), "A, the base the open loaded from, stands");
     assert!(!ckpt_file(dir.path(), 3).exists(), "B, the skipped base, is removed as excess");
     assert!(ckpt_file(dir.path(), 4).exists(), "C, the new base");
+    assert_eq!(
+        k.last_removed_checkpoints(),
+        vec![(Seq(3), len)],
+        "B named as it goes, its damaged file's length beside it"
+    );
+    let a_len = fs::metadata(ckpt_file(dir.path(), 2)).unwrap().len();
     drop(k);
     // A second open — A and C sound — skips nothing; with B gone, the damage
     // that refused it can refuse nothing.
@@ -696,6 +757,7 @@ fn retention_keeps_the_newest_n_checkpoints() {
     assert_eq!(k.checkpoint().unwrap(), Seq(5));
     assert!(!ckpt_file(dir.path(), 2).exists(), "A, now the oldest of three, goes");
     assert!(ckpt_file(dir.path(), 4).exists() && ckpt_file(dir.path(), 5).exists());
+    assert_eq!(k.last_removed_checkpoints(), vec![(Seq(2), a_len)]);
 }
 
 /// §6, the rule's reason: after an open that skipped the newest base `B` and

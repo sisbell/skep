@@ -349,7 +349,11 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
         replayed: 9,
         tail_cut: 0,
         tail_cut_intact: 0,
+        tail_cut_from: None,
+        tail_cut_claimed: None,
         began: false,
+        runs_passed_over: 0,
+        first_run_passed_over: None,
         identity_resolved_empty: false,
     };
     assert_eq!(
@@ -370,9 +374,12 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
 /// says no journal stood and what that means on a board that had one; the
 /// tail cut's two arms say opposite things of the acknowledged writes — a
 /// crash's tail under the report's own class, `open`, and a tail holding
-/// intact frames no torn write leaves under `failure`, with where the bytes
-/// still are — and an open that cut nothing, or gave no account, says
-/// neither.
+/// intact frames no torn write leaves under `failure` — each naming the file
+/// and the byte the cut began at and the position it lies past, and the
+/// failure arm WHICH write it may have taken: the position an intact marker
+/// in the cut claimed, where that lies above the head, and a position above
+/// the head where it does not or no marker was read. An open that cut
+/// nothing, or gave no account, says neither.
 #[test]
 fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words() {
     use skep_engine::Recovery;
@@ -385,37 +392,69 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
          board"
     );
 
-    let account = |tail_cut: u64, tail_cut_intact: u64| Recovery {
+    let account = |tail_cut: u64, tail_cut_intact: u64, tail_cut_claimed: Option<Seq>| Recovery {
         start_point: Seq(0),
         skipped: vec![],
         replayed: 2,
         tail_cut,
         tail_cut_intact,
+        tail_cut_from: (tail_cut > 0).then(|| ("seg-1.wal".to_string(), 218)),
+        tail_cut_claimed,
         began: false,
+        runs_passed_over: 0,
+        first_run_passed_over: None,
         identity_resolved_empty: false,
     };
-    assert!(TailCutLine::of(None).is_none(), "no account, nothing cut");
-    assert!(TailCutLine::of(Some(&account(0, 0))).is_none(), "a clean close cut nothing");
+    let head = Seq(2);
+    assert!(TailCutLine::of(None, head).is_none(), "no account, nothing cut");
+    assert!(
+        TailCutLine::of(Some(&account(0, 0, None)), head).is_none(),
+        "a clean close cut nothing"
+    );
 
-    let crash = TailCutLine::of(Some(&account(55, 0))).expect("a crash's tail");
+    let crash = TailCutLine::of(Some(&account(55, 0, None)), head).expect("a crash's tail");
     assert!(matches!(crash.class(), Class::Open), "a crash's tail is the report's own line");
     assert_eq!(
         crash.to_string(),
-        "journal tail cut (55 bytes): the un-acked tail a crash or a kill left past the last \
-         committed marker — a write caught before its commit was durable, never acknowledged — \
-         removed by the open; every acknowledged write stands"
+        "journal tail cut (55 bytes, beginning at byte 218 of seg-1.wal, past position 2): the \
+         un-acked tail a crash or a kill left past the last committed marker — a write caught \
+         before its commit was durable, never acknowledged — removed by the open; every \
+         acknowledged write stands"
     );
 
-    let rot = TailCutLine::of(Some(&account(109, 1))).expect("a tail with an intact frame");
+    let rot_at = |claimed: Option<Seq>| {
+        TailCutLine::of(Some(&account(109, 1, claimed)), head)
+            .expect("a tail with an intact frame")
+            .to_string()
+    };
+    let rot = TailCutLine::of(Some(&account(109, 1, Some(Seq(3)))), head).expect("an intact tail");
     assert!(matches!(rot.class(), Class::Failure), "an acknowledged write may be among the cut");
+    let opening = "journal tail cut (109 bytes, beginning at byte 218 of seg-1.wal, past position \
+                   2), 1 of its frames intact on disk — a commit marker whose records failed their \
+                   check, or a frame no writer of this format writes, the signature of rot in or a \
+                   rewrite of the journal's last transaction rather than of a crash: a write this \
+                   daemon acknowledged may be among the cut, ";
+    let trailer =
+        "; a copy taken before this open holds the bytes; check the volume and its device";
+    // The claimed position above the head names the write — the position its
+    // acknowledgement and the change feed named it by.
     assert_eq!(
         rot.to_string(),
-        "journal tail cut (109 bytes), 1 of its frames intact on disk — a commit marker whose \
-         records failed their check, or a frame no writer of this format writes, the signature \
-         of rot in or a rewrite of the journal's last transaction rather than of a crash: a write \
-         this daemon acknowledged may be among the cut; a copy taken before this open holds the \
-         bytes; check the volume and its device"
+        format!(
+            "{opening}at position 3, the position an intact commit marker in the cut claims\
+             {trailer}"
+        )
     );
+    // No marker read — an intact frame that does not decode — and a claim at
+    // or below the head, a position that stands: the write is placed above
+    // the head and never named by a position the journal still holds.
+    for claimed in [None, Some(Seq(2)), Some(Seq(1))] {
+        assert_eq!(
+            rot_at(claimed),
+            format!("{opening}at a position above 2{trailer}"),
+            "claimed {claimed:?}"
+        );
+    }
 }
 
 /// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
@@ -892,9 +931,12 @@ fn a_connecting_subscriber_is_told_the_announced_position_not_the_head() {
 /// checkpoint, naming it by name, why, and the start point the world was
 /// resolved from — genesis, or the checkpoint that stood in; and one line
 /// where the start point carried no identity slice and RESOLVED EMPTY,
-/// naming that checkpoint and the empty resolution. The daemon writes each
-/// through the operator stream at open, which no test can read back, so the
-/// rendering is pinned here against the report the daemon renders it from.
+/// naming that checkpoint and the empty resolution. And after them, one line
+/// where the open's scan PASSED OVER corrupt runs below its start point,
+/// naming the start point, how many, and the kernel's account of the first.
+/// The daemon writes each through the operator stream at open, which no test
+/// can read back, so the rendering is pinned here against the report the
+/// daemon renders it from.
 #[test]
 fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_empty_resolution() {
     use skep_engine::{Recovery, SkippedBase};
@@ -906,7 +948,11 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         replayed: 0,
         tail_cut: 0,
         tail_cut_intact: 0,
+        tail_cut_from: None,
+        tail_cut_claimed: None,
         began: false,
+        runs_passed_over: 0,
+        first_run_passed_over: None,
         identity_resolved_empty: false,
     };
     assert!(recovery_warnings(Some(&carried)).is_empty(), "a carried start point: nothing to say");
@@ -920,7 +966,11 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         replayed: 2048,
         tail_cut: 0,
         tail_cut_intact: 0,
+        tail_cut_from: None,
+        tail_cut_claimed: None,
         began: false,
+        runs_passed_over: 0,
+        first_run_passed_over: None,
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&stepped_back));
@@ -944,7 +994,11 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         replayed: 2048,
         tail_cut: 0,
         tail_cut_intact: 0,
+        tail_cut_from: None,
+        tail_cut_claimed: None,
         began: false,
+        runs_passed_over: 0,
+        first_run_passed_over: None,
         identity_resolved_empty: false,
     };
     let lines = recovery_warnings(Some(&two_skipped_one_stood));
@@ -966,7 +1020,11 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         replayed: 0,
         tail_cut: 0,
         tail_cut_intact: 0,
+        tail_cut_from: None,
+        tail_cut_claimed: None,
         began: false,
+        runs_passed_over: 0,
+        first_run_passed_over: None,
         identity_resolved_empty: true,
     };
     let lines = recovery_warnings(Some(&resolved_empty));
@@ -976,6 +1034,47 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
     {
         assert!(lines[0].contains(needle), "{needle:?} missing from {:?}", lines[0]);
     }
+
+    // The runs the open's scan PASSED OVER below its start point: one line,
+    // after the AUTH warnings, naming the start point and carrying the
+    // kernel's account of the first — one run, and several.
+    let account = "corrupt run in seg-1.wal from byte 0 to byte 64, holding no position above \
+                   position 3: a history read from a base below position 3, or an open that falls \
+                   back to one, meets it and refuses; the act";
+    let passed_over = |runs: u64| Recovery {
+        start_point: Seq(1024),
+        skipped: vec![SkippedBase {
+            seq: Seq(2048),
+            why: "checkpoint body failed its header checksum".into(),
+        }],
+        replayed: 0,
+        tail_cut: 0,
+        tail_cut_intact: 0,
+        tail_cut_from: None,
+        tail_cut_claimed: None,
+        began: false,
+        runs_passed_over: runs,
+        first_run_passed_over: Some(account.to_string()),
+        identity_resolved_empty: false,
+    };
+    let lines = recovery_warnings(Some(&passed_over(1)));
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("SKIPPED"), "the skipped base speaks first: {:?}", lines[0]);
+    assert_eq!(
+        lines[1],
+        format!(
+            "a corrupt run lies below the start point checkpoint.1024 and was PASSED OVER — \
+             {account}"
+        )
+    );
+    let lines = recovery_warnings(Some(&passed_over(3)));
+    assert_eq!(
+        lines[1],
+        format!(
+            "3 corrupt runs lie below the start point checkpoint.1024 and were PASSED OVER — the \
+             first: {account}"
+        )
+    );
 }
 
 /// THE CADENCE's BYTE BOUND (jw-R1): a quarter of the newest checkpoint's
@@ -1000,12 +1099,13 @@ fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_
 
 /// LINE 25's WORDS (`operations.md` §1.1 row 25), pinned at fixed figures:
 /// the position and the size, the duration in milliseconds, the journal
-/// bytes reclaimed — or "nothing reclaimed" at zero — both bounds, the
-/// volume's free space, the resident set's peak, the compaction's fence
-/// with each file that stood named, and the inline clause present only
-/// where the count moved. A header that did not answer reads "size unread";
-/// a resident set never read reads "unread"; a landing with nothing below
-/// the floor says so.
+/// bytes reclaimed — or "nothing reclaimed" at zero — each checkpoint file
+/// retention removed, by its name and its length, both bounds, the volume's
+/// free space, the resident set's peak, the compaction's fence with each
+/// file that stood named, and the inline clause present only where the
+/// count moved. A header that did not answer reads "size unread"; a resident
+/// set never read reads "unread"; a landing with nothing below the floor
+/// says so, and one that removed no checkpoint names none.
 #[test]
 fn the_landing_line_carries_row_25s_figures_in_its_words() {
     let full = LandingLine {
@@ -1013,6 +1113,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         bytes: Some(1_048_576),
         duration_ms: 17,
         reclaimed: 2_097_152,
+        removed: vec![(Seq(1024), 900_000), (Seq(2048), 950_000)],
         bytes_bound: 25_165_824,
         floor: 268_435_456,
         free_space: 9_000_000_000,
@@ -1026,7 +1127,8 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
     assert_eq!(
         full.to_string(),
         "checkpoint at position 4200 landed (1048576 bytes) in 17 ms; 2097152 journal bytes \
-         reclaimed; the cadence's byte bound 25165824, the media floor in force 268435456, the \
+         reclaimed; checkpoint.1024 removed (900000 bytes), checkpoint.2048 removed (950000 \
+         bytes); the cadence's byte bound 25165824, the media floor in force 268435456, the \
          volume's free space 9000000000; the process's resident set peaked at 123456789 bytes; \
          the change feed's files compacted below position 4096, commits.log standing as it \
          was, feed-index.log standing as it was; 2 checkpoints ran inline on a writer since \
@@ -1037,6 +1139,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         bytes: None,
         duration_ms: 0,
         reclaimed: 0,
+        removed: vec![],
         bytes_bound: 24 * 1024 * 1024,
         floor: 256 * 1024 * 1024,
         free_space: 0,
@@ -1134,25 +1237,44 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
 }
 
 /// THE BACKSTOP's LINE (m13): the runs since the position they are counted
-/// from, and whether the last of them landed or how it failed, in the
-/// kernel's rendered words.
+/// from, and of the last of them the commit that ran it, by its position,
+/// how long it held every write, and whether it landed and where or how it
+/// failed, in the kernel's rendered words; a record the line could not read
+/// is said as unread, never as a landing. The kernel's own record, which
+/// only the kernel makes, reaches the line in the integration suite
+/// (`tests/it/checkpoint.rs`), off a real backstop run.
 #[test]
 fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_last_ended() {
+    let landed = BackstopLine {
+        runs: 1,
+        since: Seq(0),
+        last: Some(LastInlineRun { after: Seq(1026), held_ms: 412, outcome: Ok(Seq(1026)) }),
+    };
     assert_eq!(
-        BackstopLine { runs: 1, since: Seq(0), last_failure: None }.to_string(),
+        landed.to_string(),
         "checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran inline on a \
-         writer since position 0, the last landed"
+         writer since position 0, the last run by the commit at position 1026, holding every \
+         write 412 ms, landed at position 1026"
     );
     let failed = BackstopLine {
         runs: 3,
         since: Seq(512),
-        last_failure: Some("checkpoint I/O failure: No space left on device".to_string()),
+        last: Some(LastInlineRun {
+            after: Seq(2050),
+            held_ms: 3,
+            outcome: Err("checkpoint I/O failure: No space left on device".to_string()),
+        }),
     };
     assert_eq!(
         failed.to_string(),
         "checkpoint: the cadence outran the checkpoint thread; 3 checkpoints ran inline on a \
-         writer since position 512, the last FAILED: checkpoint I/O failure: No space left on \
-         device"
+         writer since position 512, the last run by the commit at position 2050, holding every \
+         write 3 ms, FAILED: checkpoint I/O failure: No space left on device"
+    );
+    assert_eq!(
+        BackstopLine { runs: 1, since: Seq(0), last: None }.to_string(),
+        "checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran inline on a \
+         writer since position 0, the last unread"
     );
 }
 

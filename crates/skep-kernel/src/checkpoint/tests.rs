@@ -366,7 +366,10 @@ fn a_header_reads_without_its_body_under_the_checks_a_header_holds() {
     let listed = list(dir.path()).unwrap();
     assert_eq!(listed[0].seq, 8);
     let refused = listed[0].header().expect_err("a misnamed header");
-    assert!(refused.to_string().contains("claims seq 7"), "got {refused}");
+    assert!(
+        refused.to_string().contains("claims position 7, its name claims position 8"),
+        "got {refused}"
+    );
 }
 
 #[test]
@@ -431,6 +434,35 @@ fn a_base_that_cannot_be_read_says_so_rather_than_looking_damaged() {
     );
 }
 
+/// A refusal carried away from its file is NAMED on it — `checkpoint.{n}:
+/// …`, the refusal itself the `source` beneath the name, so a reporter
+/// walking the chain reaches the serializer's own account — save an I/O
+/// failure, which names its file and act already and travels as itself,
+/// named once.
+#[test]
+fn a_refusal_named_on_its_base_opens_on_the_file_and_keeps_its_account_beneath() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
+    fs::create_dir(checkpoint_path(dir.path(), 5)).unwrap();
+    let listed = list(dir.path()).unwrap();
+    assert_eq!((listed[0].seq, listed[1].seq), (3, 5));
+
+    let skew = listed[0].load::<bool>().expect_err("a body that is not a `bool`");
+    let account = skew.to_string();
+    let named = listed[0].named(skew);
+    assert_eq!(named.to_string(), format!("checkpoint.3: {account}"), "the file, then the account");
+    let beneath = std::error::Error::source(&*named).expect("the account beneath the name");
+    assert!(
+        beneath.downcast_ref::<bincode::ErrorKind>().is_some(),
+        "the serializer's own refusal, under the name: {beneath}"
+    );
+
+    let unreadable = listed[1].load::<Vec<u64>>().expect_err("a directory is no base");
+    let named = listed[1].named(unreadable);
+    assert!(named.downcast_ref::<io::Error>().is_some(), "the I/O failure travels as itself");
+    assert!(named.to_string().starts_with("checkpoint.5: read: "), "named once: {named}");
+}
+
 #[test]
 fn only_the_name_the_writer_emits_is_a_checkpoint() {
     // `checkpoint.07` parses as 7 under a bare `u64::from_str`, so without
@@ -461,9 +493,12 @@ fn checkpoints_list_in_seq_order_across_a_digit_boundary() {
         write(dir.path(), seq, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
     }
     assert_eq!(seqs_in(dir.path()), vec![1, 9, 10, 99, 100]);
-    // …so retention keeps the numerically newest, and names the floor
-    // from them.
-    assert_eq!(retain(dir.path(), 2, &[]).unwrap(), Some(99));
+    let len = fs::metadata(checkpoint_path(dir.path(), 1)).unwrap().len();
+    // …so retention keeps the numerically newest, names the floor from
+    // them, and answers every base it removed with its length, oldest first.
+    let retained = retain(dir.path(), 2, &[]).unwrap();
+    assert_eq!(retained.floor, Some(99));
+    assert_eq!(retained.removed, vec![(1, len), (9, len), (10, len)]);
     assert_eq!(
         seqs_in(dir.path()),
         vec![99, 100],
@@ -476,7 +511,8 @@ fn checkpoints_list_in_seq_order_across_a_digit_boundary() {
 /// every skipped one goes, whatever its age — and the floor answered is the
 /// oldest base kept. With nothing skipped the rule is the one above. A
 /// skipped name no file carries any longer matches nothing and changes
-/// nothing.
+/// nothing. Every removal is answered, skipped bases among them, by seq and
+/// length — the evidence a skipped base's warning named, said as it goes.
 #[test]
 fn retain_passes_over_the_skipped_names_and_keeps_the_newest_bases_that_load() {
     let seqs_in = |dir: &Path| -> Vec<u64> { list(dir).unwrap().iter().map(|cp| cp.seq).collect() };
@@ -484,17 +520,28 @@ fn retain_passes_over_the_skipped_names_and_keeps_the_newest_bases_that_load() {
     for seq in [1, 9, 10, 99, 100] {
         write(dir.path(), seq, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
     }
+    let len = fs::metadata(checkpoint_path(dir.path(), 1)).unwrap().len();
     // The newest, 100, and an old one, 9, were passed over by the open: of
     // the loadable {1, 10, 99} the newest two stand, and the floor is 10 —
     // where counting by name would keep {99, 100} and reclaim below 99.
-    assert_eq!(retain(dir.path(), 2, &[100, 9]).unwrap(), Some(10));
+    let retained = retain(dir.path(), 2, &[100, 9]).unwrap();
+    assert_eq!(retained.floor, Some(10));
+    assert_eq!(
+        retained.removed,
+        vec![(1, len), (9, len), (100, len)],
+        "the excess and both skipped"
+    );
     assert_eq!(seqs_in(dir.path()), vec![10, 99], "the loadable newest two, no skipped base");
     // A skipped name that stands no longer, and a window wider than the
     // bases: everything loadable stays, and the floor is the oldest of it.
-    assert_eq!(retain(dir.path(), 4, &[100]).unwrap(), Some(10));
+    let retained = retain(dir.path(), 4, &[100]).unwrap();
+    assert_eq!(retained.floor, Some(10));
+    assert_eq!(retained.removed, vec![], "nothing removed is nothing answered");
     assert_eq!(seqs_in(dir.path()), vec![10, 99]);
     // Every base skipped: nothing loadable remains, and the answer says so.
-    assert_eq!(retain(dir.path(), 2, &[10, 99]).unwrap(), None);
+    let retained = retain(dir.path(), 2, &[10, 99]).unwrap();
+    assert_eq!(retained.floor, None);
+    assert_eq!(retained.removed, vec![(10, len), (99, len)]);
     assert_eq!(seqs_in(dir.path()), Vec::<u64>::new());
 }
 

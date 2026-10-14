@@ -99,6 +99,21 @@ fn lines(sd: &Skepd) -> Vec<String> {
     sd.daemon().checkpoint_lines()
 }
 
+/// The backstop's line with the one figure no test can fix — how long the
+/// inline run held every write, whole milliseconds — read out and judged a
+/// whole number, and the rest of the line handed back for its pin with `N`
+/// in the figure's place.
+fn held_ms_read_out(line: &str) -> String {
+    let (head, tail) = line
+        .split_once("holding every write ")
+        .unwrap_or_else(|| panic!("the line says how long the run held every write: {line}"));
+    let (ms, rest) =
+        tail.split_once(" ms, ").unwrap_or_else(|| panic!("…in milliseconds: {line}"));
+    ms.parse::<u128>()
+        .unwrap_or_else(|e| panic!("{ms:?} is no whole number of milliseconds ({e}): {line}"));
+    format!("{head}holding every write N ms, {rest}")
+}
+
 /// ROW 25 — THE FIGURES ARE THE KERNEL's AND THE HOST's (and the class word
 /// is `landing`): through the thread's act, a landing after the journal
 /// rotated carries the bytes the kernel reclaimed — `last_reclaimed_bytes()`'s
@@ -211,6 +226,47 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
         "{line}"
     );
     assert!(!line.contains("ran inline"), "no inline run: no clause: {line}");
+    sd.shutdown();
+}
+
+/// ROW 25 — A CHECKPOINT RETENTION REMOVED IS NAMED: the daemon keeps two
+/// bases, so a third landing at a new head removes the oldest, and that
+/// landing's line names the file by its own name and its length on disk,
+/// read before the landing, beside the bytes reclaimed — where the two
+/// landings before it, which removed none, named none.
+#[test]
+fn a_landing_line_names_each_checkpoint_its_retention_removed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let mut landed = Vec::new();
+    for _ in 0..2 {
+        commit(port, &owner);
+        sd.daemon().service_the_checkpoint_now();
+        landed.push(sd.daemon().newest_checkpoint().expect("a landing").seq.0);
+    }
+    assert!(landed[0] < landed[1], "two landings at two heads: {landed:?}");
+    let said = lines(&sd);
+    assert!(
+        said.iter().all(|line| !line.contains(" removed (")),
+        "two kept, none removed: {said:?}"
+    );
+
+    let oldest = dir.path().join(format!("checkpoint.{}", landed[0]));
+    let oldest_len = fs::metadata(&oldest).expect("the oldest base stands").len();
+    commit(port, &owner);
+    sd.daemon().service_the_checkpoint_now();
+    let said = lines(&sd);
+    let line = said.last().expect("the third landing's line");
+    assert!(!oldest.exists(), "retention removed the oldest base");
+    assert!(
+        line.contains(&format!(
+            " reclaimed; checkpoint.{} removed ({oldest_len} bytes); the cadence's byte bound ",
+            landed[0]
+        )),
+        "the removed base by its name and its length, after the reclaimed clause: {line}"
+    );
     sd.shutdown();
 }
 
@@ -426,12 +482,14 @@ fn two_crossings_in_one_run_are_said_once_as_the_backstops_and_again_when_the_co
     wait_until("the backstop's line", || lines(&sd).len() == 1);
     let said = lines(&sd);
     assert_eq!(
-        said[0],
+        held_ms_read_out(&said[0]),
         format!(
             "landing: checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran \
-             inline on a writer since position {start_point}, the last landed"
+             inline on a writer since position {start_point}, the last run by the commit at \
+             position {second}, holding every write N ms, landed at position {second}"
         ),
-        "counted from the start point, the class word `landing`"
+        "counted from the start point, the class word `landing`, the run named by the commit \
+         that carried it"
     );
     assert_eq!(
         sd.daemon().media_floor_in_force(),
@@ -468,10 +526,11 @@ fn two_crossings_in_one_run_are_said_once_as_the_backstops_and_again_when_the_co
     wait_until("the second backstop line", || lines(&sd).len() == 2);
     let said = lines(&sd);
     assert_eq!(
-        said[1],
+        held_ms_read_out(&said[1]),
         format!(
             "landing: checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran \
-             inline on a writer since position {}, the last landed",
+             inline on a writer since position {}, the last run by the commit at position \
+             {fourth}, holding every write N ms, landed at position {fourth}",
             backstop.seq.0
         ),
         "counted from the position the thread last said a line for"

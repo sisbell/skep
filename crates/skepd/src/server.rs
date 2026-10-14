@@ -206,8 +206,8 @@ use skep_engine::{Engine, EngineError, HistoryError, Recovery, World, WORLD_FORM
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, KernelConfig, LandedStep,
-    SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
+    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, InlineCheckpoint, KernelConfig,
+    LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
 };
 use skep_media::gate::MediaGate;
 use skep_media::index;
@@ -816,9 +816,10 @@ impl Daemon {
         let open_ms = began.elapsed().as_millis();
         // THE START POINT's account (AUTH-2.86): every retained checkpoint
         // the engine's open passed over, with the start point it resolved
-        // from, and a slice-less start point that resolved to the empty
-        // table — said before anything is served, and only where there is
-        // something to say.
+        // from, a slice-less start point that resolved to the empty table,
+        // and the corrupt runs below the start point the open's scan read
+        // and passed over — said before anything is served, and only where
+        // there is something to say.
         for warning in recovery_warnings(engine.recovery()) {
             notice::emit(Class::Warning(Moment::AtOpen), warning);
         }
@@ -849,14 +850,17 @@ impl Daemon {
         }
         // THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8): the bytes the
         // kernel's open took off the journal above its last committed marker
-        // (`Recovery::tail_cut`), said here as the stray file is, and nothing
-        // where nothing was cut, which is every open after a clean close. Of
-        // two arms ([`TailCutLine`]): a crash's or a kill's tail, said under
-        // `Class::Open` through the door; and a tail holding intact frames
-        // no torn write leaves (`Recovery::tail_cut_intact`), where the cut
-        // may have taken an acknowledged write, said as the failure it is.
-        // The inventory reports the same bytes as `journal.tail_cut`.
-        if let Some(cut) = TailCutLine::of(engine.recovery()) {
+        // (`Recovery::tail_cut`), the file and the byte the cut began at, and
+        // the position it lies past — the committed head the open left,
+        // read before anything is served — said here as the stray file is,
+        // and nothing where nothing was cut, which is every open after a
+        // clean close. Of two arms ([`TailCutLine`]): a crash's or a kill's
+        // tail, said under `Class::Open` through the door; and a tail holding
+        // intact frames no torn write leaves (`Recovery::tail_cut_intact`),
+        // where the cut may have taken an acknowledged write — at the
+        // position its marker claimed — said as the failure it is. The
+        // inventory reports the same bytes as `journal.tail_cut`.
+        if let Some(cut) = TailCutLine::of(engine.recovery(), engine.kernel().current_seq()) {
             match cut.class() {
                 Class::Open => say_open_line(cut),
                 class => notice::emit(class, cut),
@@ -1693,7 +1697,9 @@ impl Daemon {
     /// the landing's re-reads taken from it ([`Daemon::re_read_after_a_landing`]),
     /// and ONE line — [`LandingLine`], the position and the size, the run's
     /// duration, the journal bytes the kernel reclaimed
-    /// (`Kernel::last_reclaimed_bytes`, read after the `Ok`), both bounds in
+    /// (`Kernel::last_reclaimed_bytes`, read after the `Ok`), the checkpoint
+    /// files its retention removed, each by name and length
+    /// (`Kernel::last_removed_checkpoints`, read after the `Ok`), both bounds in
     /// force, the volume's free space as the media floor reads it (the
     /// gate's one door, so the floor's refusal and this line never
     /// disagree), the resident set's high-water, the feed's compaction per
@@ -1732,6 +1738,7 @@ impl Daemon {
                         bytes: newest.map(|h| h.len),
                         duration_ms,
                         reclaimed: kernel.last_reclaimed_bytes().unwrap_or(0),
+                        removed: kernel.last_removed_checkpoints(),
                         bytes_bound: re_read.bytes_bound.get(),
                         floor: re_read.floor,
                         free_space: self.media.free_space(),
@@ -1769,8 +1776,9 @@ impl Daemon {
     /// it moved since the thread last looked, the landing's re-reads are
     /// taken off it — the same function the landing arm runs — and the
     /// backstop's line is said ([`BackstopLine`]): the runs since the last
-    /// line, the position they are counted from, and whether the last of
-    /// them landed or how it failed (`Kernel::last_inline_checkpoint_failure`).
+    /// line, the position they are counted from, and of the last of them the
+    /// commit that ran it, how long it held every write, and whether it
+    /// landed or how it failed (`Kernel::last_inline_checkpoint`).
     /// Said once for each movement of the count and never otherwise; a
     /// count line 25 has just carried is one that moved not. The resident
     /// set is read here too, as at a landing.
@@ -1791,7 +1799,7 @@ impl Daemon {
             let line = BackstopLine {
                 runs: runs.saturating_sub(looked.inline_said),
                 since: looked.since,
-                last_failure: kernel.last_inline_checkpoint_failure(),
+                last: kernel.last_inline_checkpoint().map(LastInlineRun::from),
             };
             looked.inline_said = runs;
             if let Some(seq) = newest_seq {
@@ -1820,6 +1828,14 @@ struct LandingLine {
     duration_ms: u128,
     /// The journal bytes the landing reclaimed; zero is "nothing reclaimed".
     reclaimed: u64,
+    /// The checkpoint files the landing's retention removed, oldest first,
+    /// each by its position and its length in bytes
+    /// (`Kernel::last_removed_checkpoints`): the oldest base past the two
+    /// kept, and any base the open passed over — the file the open's own
+    /// SKIPPED warning named, which this clause names by the same
+    /// `checkpoint.{n}`. Empty where retention removed none, and the clause
+    /// is absent.
+    removed: Vec<(Seq, u64)>,
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
     /// The media floor in force after the re-read.
@@ -1856,6 +1872,12 @@ impl fmt::Display for LandingLine {
         match self.reclaimed {
             0 => f.write_str("nothing reclaimed")?,
             reclaimed => write!(f, "{reclaimed} journal bytes reclaimed")?,
+        }
+        // Each file by its own name — never [`Base`]'s, whose `genesis` would
+        // misname a checkpoint written at position 0.
+        for (i, (seq, len)) in self.removed.iter().enumerate() {
+            f.write_str(if i == 0 { "; " } else { ", " })?;
+            write!(f, "checkpoint.{} removed ({len} bytes)", seq.0)?;
         }
         write!(
             f,
@@ -1978,18 +2000,45 @@ impl fmt::Display for VolumeWords<'_> {
 }
 
 /// THE BACKSTOP's LINE (`operations.md` §1.1 m13), rendered from the
-/// kernel's count and its last inline run's text: the checkpoints run
+/// kernel's count and its record of the last inline run: the checkpoints run
 /// inline on a writer since the position the count is counted from
 /// (`Looked::since` — the newest checkpoint's position at the thread's last
-/// line, the start point before any), and whether the last of them landed
-/// or how it failed, in the kernel's rendered words. A pure value, pinned by
-/// `to_string()`; emitted under `Class::Landing`.
+/// line, the start point before any); and of the last of them, the commit
+/// whose crossing ran it, by its position — the one the write's own
+/// acknowledgement and the change feed name it by — how long the run held
+/// every write, whole milliseconds (the write path's serial guard spans the
+/// commit that runs it, so every other writer waited it out: the one figure
+/// that tells a slow board's operator the stall was a checkpoint's), and
+/// whether it landed and where, or how it failed, in the kernel's rendered
+/// words. A pure value, pinned by `to_string()`; emitted under
+/// `Class::Landing`.
 struct BackstopLine {
     runs: u64,
     since: Seq,
-    /// `Kernel::last_inline_checkpoint_failure`: `None` where the last inline
-    /// run landed.
-    last_failure: Option<String>,
+    /// `Kernel::last_inline_checkpoint`, read after the count moved: never
+    /// `None` then, since the kernel stores a run's record before it moves the
+    /// count; rendered `unread` should the type's absence ever arise, rather
+    /// than spelled as a landing.
+    last: Option<LastInlineRun>,
+}
+
+/// The last inline run as [`BackstopLine`] says it: the kernel's record
+/// ([`InlineCheckpoint`], which only the kernel makes) carried in the
+/// figures the line renders, so the line stays a pure value the unit suite
+/// builds at fixed figures.
+struct LastInlineRun {
+    /// The commit whose crossing ran the checkpoint, by its position.
+    after: Seq,
+    /// How long the run held every write, whole milliseconds.
+    held_ms: u128,
+    /// Where it landed, or its failure in the kernel's rendered words.
+    outcome: Result<Seq, String>,
+}
+
+impl From<InlineCheckpoint> for LastInlineRun {
+    fn from(run: InlineCheckpoint) -> LastInlineRun {
+        LastInlineRun { after: run.after, held_ms: run.held.as_millis(), outcome: run.outcome }
+    }
 }
 
 impl fmt::Display for BackstopLine {
@@ -2000,9 +2049,17 @@ impl fmt::Display for BackstopLine {
              a writer since position {}, the last ",
             self.runs, self.since
         )?;
-        match &self.last_failure {
-            None => f.write_str("landed"),
-            Some(cause) => write!(f, "FAILED: {cause}"),
+        let Some(last) = &self.last else {
+            return f.write_str("unread");
+        };
+        write!(
+            f,
+            "run by the commit at position {}, holding every write {} ms, ",
+            last.after, last.held_ms
+        )?;
+        match &last.outcome {
+            Ok(landed) => write!(f, "landed at position {landed}"),
+            Err(cause) => write!(f, "FAILED: {cause}"),
         }
     }
 }
@@ -2013,10 +2070,19 @@ impl fmt::Display for BackstopLine {
 /// line where the start point itself carried no identity slice and resolved
 /// to the EMPTY table (AUTH-2.83), naming that checkpoint and the empty
 /// resolution — the operator's one tell that a build which wrote no slice
-/// ran on this board. Nothing where there is nothing to say, which is every
-/// open on a board whose checkpoints carry the slice. The downgrade window's
-/// own commits read `key: null` on `/changes` (AUTH-1.52), which needs no
-/// line here.
+/// ran on this board. And after them, one line where the open's scan read
+/// corrupt runs BELOW the start point and passed them over
+/// (`Recovery::runs_passed_over`): the start point embodies every position
+/// they hold, so the open answered around them, and no line of an open
+/// that succeeded said so — while a history read from an older base, and the
+/// open that falls back past this start point the day its checkpoint fails
+/// to load, meet the first of them and refuse. Said with how many and the
+/// kernel's account of the first (`Recovery::first_run_passed_over`): its
+/// files and bytes, the position it holds none above, and the act that
+/// clears it. Nothing where there is nothing to say, which is every open on
+/// a board whose checkpoints carry the slice and whose journal holds no run.
+/// The downgrade window's own commits read `key: null` on `/changes`
+/// (AUTH-1.52), which needs no line here.
 fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
     let Some(recovery) = recovery else { return Vec::new() };
     let start = Base(recovery.start_point);
@@ -2037,6 +2103,17 @@ fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
              RESOLVED EMPTY — no account keyed, the board unclaimed — rather than being read \
              from the checkpoint; a build that wrote no identity slice ran on this board"
         ));
+    }
+    if let Some(first) = &recovery.first_run_passed_over {
+        lines.push(match recovery.runs_passed_over {
+            1 => format!(
+                "a corrupt run lies below the start point {start} and was PASSED OVER — {first}"
+            ),
+            runs => format!(
+                "{runs} corrupt runs lie below the start point {start} and were PASSED OVER — \
+                 the first: {first}"
+            ),
+        });
     }
     lines
 }
@@ -2172,9 +2249,12 @@ impl fmt::Display for BeganLine {
 /// THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8), in the operator
 /// stream's words, rendered from the engine's account of its open: the
 /// bytes the open took off the journal above its last committed marker
-/// (`Recovery::tail_cut`) and, of the frames among them, the intact ones no
-/// torn write leaves (`Recovery::tail_cut_intact`). Two arms, since the two
-/// say opposite things of the acknowledged writes:
+/// (`Recovery::tail_cut`), the file and the byte the cut began at
+/// (`Recovery::tail_cut_from`), the position it lies past — the committed
+/// head the open left, every position at or below which stands — and, of the
+/// frames among the cut bytes, the intact ones no torn write leaves
+/// (`Recovery::tail_cut_intact`). Two arms, since the two say opposite things
+/// of the acknowledged writes:
 ///
 /// * none intact — the tail a crash or a kill left, a write caught before
 ///   its commit was durable and so never acknowledged: `Class::Open`;
@@ -2182,22 +2262,39 @@ impl fmt::Display for BeganLine {
 ///   frame no writer of this format writes: the signature of rot in, or a
 ///   rewrite of, the journal's last transaction (the kernel's damage
 ///   model), where the cut may have taken a write this daemon acknowledged
-///   — `Class::Failure`, naming where the bytes still are and the act.
+///   — `Class::Failure`, naming which: the position an intact marker in the
+///   cut claimed (`Recovery::tail_cut_claimed`), the one that write's own
+///   acknowledgement and the change feed named it by, where the claim lies
+///   above the head; else a position above the head, unnamed — and where the
+///   bytes still are, and the act.
 ///
 /// A pure value the unit suite pins by `to_string()` and [`TailCutLine::class`].
 struct TailCutLine {
     bytes: u64,
     intact: u64,
+    /// The file the cut began in, by its name, and the byte of it.
+    from: Option<(String, u64)>,
+    /// The greatest position an intact marker in the cut claimed.
+    claimed: Option<Seq>,
+    /// The committed head the open left: the cut lies past it.
+    head: Seq,
 }
 
 impl TailCutLine {
-    /// The line from the engine's account — `None` where nothing was cut,
-    /// which is every open after a clean close, and where the engine gave no
-    /// account (`Durability::InMemory`, which no daemon opens under).
-    fn of(recovery: Option<&Recovery>) -> Option<TailCutLine> {
+    /// The line from the engine's account and the head the open left — read
+    /// before anything is served, so it is the recovered committed head —
+    /// `None` where nothing was cut, which is every open after a clean close,
+    /// and where the engine gave no account (`Durability::InMemory`, which no
+    /// daemon opens under).
+    fn of(recovery: Option<&Recovery>, head: Seq) -> Option<TailCutLine> {
         let recovery = recovery?;
-        (recovery.tail_cut > 0)
-            .then_some(TailCutLine { bytes: recovery.tail_cut, intact: recovery.tail_cut_intact })
+        (recovery.tail_cut > 0).then(|| TailCutLine {
+            bytes: recovery.tail_cut,
+            intact: recovery.tail_cut_intact,
+            from: recovery.tail_cut_from.clone(),
+            claimed: recovery.tail_cut_claimed,
+            head,
+        })
     }
 
     /// The class the line is said under: the report's own, `Class::Open`,
@@ -2214,25 +2311,39 @@ impl TailCutLine {
 
 impl fmt::Display for TailCutLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let TailCutLine { bytes, intact } = self;
-        if *intact == 0 {
-            write!(
-                f,
-                "journal tail cut ({bytes} bytes): the un-acked tail a crash or a kill left past \
-                 the last committed marker — a write caught before its commit was durable, never \
-                 acknowledged — removed by the open; every acknowledged write stands"
-            )
-        } else {
-            write!(
-                f,
-                "journal tail cut ({bytes} bytes), {intact} of its frames intact on disk — a \
-                 commit marker whose records failed their check, or a frame no writer of this \
-                 format writes, the signature of rot in or a rewrite of the journal's last \
-                 transaction rather than of a crash: a write this daemon acknowledged may be \
-                 among the cut; a copy taken before this open holds the bytes; check the volume \
-                 and its device"
-            )
+        let TailCutLine { bytes, intact, from, claimed, head } = self;
+        write!(f, "journal tail cut ({bytes} bytes, ")?;
+        if let Some((segment, byte)) = from {
+            write!(f, "beginning at byte {byte} of {segment}, ")?;
         }
+        write!(f, "past position {head})")?;
+        if *intact == 0 {
+            return f.write_str(
+                ": the un-acked tail a crash or a kill left past the last committed marker — a \
+                 write caught before its commit was durable, never acknowledged — removed by the \
+                 open; every acknowledged write stands",
+            );
+        }
+        write!(
+            f,
+            ", {intact} of its frames intact on disk — a commit marker whose records failed their \
+             check, or a frame no writer of this format writes, the signature of rot in or a \
+             rewrite of the journal's last transaction rather than of a crash: a write this \
+             daemon acknowledged may be among the cut, "
+        )?;
+        // The claimed position names the write only where it lies above the
+        // head: a claim at or below it is a position that stands, and naming
+        // it would send an operator after a write the journal still holds.
+        match claimed {
+            Some(claimed) if claimed > head => write!(
+                f,
+                "at position {claimed}, the position an intact commit marker in the cut claims"
+            )?,
+            _ => write!(f, "at a position above {head}")?,
+        }
+        f.write_str(
+            "; a copy taken before this open holds the bytes; check the volume and its device",
+        )
     }
 }
 

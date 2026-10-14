@@ -186,9 +186,12 @@ fn parse_header(named_seq: u64, bytes: &[u8; HEADER_LEN]) -> Result<Header, Load
     }
     let seq = u64::from_le_bytes(field::<SEQ_AT, 8>(bytes));
     if seq != named_seq {
-        return Err(
-            format!("checkpoint header claims seq {seq}, its name claims {named_seq}").into(),
-        );
+        // Both seqs spelled as the operator's stream spells every one,
+        // `position N`: this sentence rides a skipped base's warning.
+        return Err(format!(
+            "checkpoint header claims position {seq}, its name claims position {named_seq}"
+        )
+        .into());
     }
     Ok(Header {
         crc: u32::from_le_bytes(field::<CRC_AT, 4>(bytes)),
@@ -213,6 +216,29 @@ pub(crate) struct Loaded<W> {
 /// REMEDY, at the one point where that matters: the whole fallback chain
 /// exhausted, with nothing else left to tell an operator.
 pub(crate) type LoadRefused = Cause;
+
+/// A checkpoint's refusal NAMED ON ITS FILE — `checkpoint.{seq}: {refusal}`,
+/// the shape every I/O failure on a journal file already has ([`at_file`]) —
+/// made by [`CheckpointMeta::named`] alone. The refusal is this error's
+/// `source`, so a reporter walking the chain reaches the serializer's or the
+/// seed's own account beneath the name.
+#[derive(Debug)]
+struct RefusedBase {
+    name: String,
+    refused: LoadRefused,
+}
+
+impl fmt::Display for RefusedBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.name, self.refused)
+    }
+}
+
+impl std::error::Error for RefusedBase {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.refused)
+    }
+}
 
 /// One checkpoint on disk: the coordinate its name claims, and where it is.
 ///
@@ -249,6 +275,19 @@ impl CheckpointMeta {
     /// words a refusal names it by.
     fn name(&self) -> String {
         checkpoint_name(self.seq)
+    }
+
+    /// `refused`, this checkpoint's own refusal, NAMED ON ITS FILE for a
+    /// reader that carries it away from the file it was met at — the
+    /// exhausted fallback chain's cause, which the operator reads as `the
+    /// newest refused: checkpoint.{n}: …` ([`RefusedBase`]). An I/O failure
+    /// travels as it is: [`at_file`] named it at the operation that failed,
+    /// and its kind travels with it.
+    pub(crate) fn named(&self, refused: LoadRefused) -> LoadRefused {
+        if refused.downcast_ref::<io::Error>().is_some() {
+            return refused;
+        }
+        Box::new(RefusedBase { name: self.name(), refused })
     }
 
     /// Load and validate this checkpoint, or say why it cannot stand in as a
@@ -457,9 +496,12 @@ pub(crate) fn header_at(dir: &Path, seq: u64) -> Option<CheckpointHeader> {
 }
 
 /// Keep the newest `keep` checkpoints THAT LOAD, delete the rest, and fsync
-/// the directory so the unlinks are durable. Answers the oldest kept seq —
-/// the journal-reclamation floor and the `BadCheckpoint` fallback base (§6) —
-/// or `None` when no checkpoint remains.
+/// the directory so the unlinks are durable. Answers what it kept and what it
+/// took ([`Retained`]): the oldest kept seq — the journal-reclamation floor
+/// and the `BadCheckpoint` fallback base (§6) — or `None` when no checkpoint
+/// remains, and each checkpoint it removed, by its seq and its length read
+/// before the removal, which a landing reports beside the journal bytes it
+/// reclaimed ([`crate::Kernel::last_removed_checkpoints`]).
 ///
 /// RETENTION COUNTS THE BASES THAT LOAD. `skipped` names the checkpoints the
 /// open passed over — the seqs the kernel's [`crate::Recovery`] lists as
@@ -474,12 +516,12 @@ pub(crate) fn header_at(dir: &Path, seq: u64) -> Option<CheckpointHeader> {
 /// file would offer is already in the open's report, which carries why each
 /// skipped base refused. A base that loaded is counted as it always was, so
 /// with nothing skipped this is the rule it was.
-pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Option<u64>> {
+pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Retained> {
     let checkpoints = list(dir)?;
     let loadable = checkpoints.iter().filter(|cp| !skipped.contains(&cp.seq)).count();
     let excess = loadable.saturating_sub(keep);
     let mut passed_over = 0;
-    let mut floor = None;
+    let mut retained = Retained { floor: None, removed: Vec::new() };
     // Ascending by seq, so the loadable bases met first are the oldest: the
     // first `excess` of them go, every skipped one goes, and the rest stand.
     for cp in &checkpoints {
@@ -492,13 +534,26 @@ pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Opt
             false
         };
         if remove {
+            let len = fs::metadata(&cp.path).map_err(at_file(cp.name(), "remove"))?.len();
             fs::remove_file(&cp.path).map_err(at_file(cp.name(), "remove"))?;
+            retained.removed.push((cp.seq, len));
         } else {
-            floor.get_or_insert(cp.seq);
+            retained.floor.get_or_insert(cp.seq);
         }
     }
     fsync_dir(dir)?;
-    Ok(floor)
+    Ok(retained)
+}
+
+/// What [`retain`] answers: the oldest checkpoint it kept, and every one it
+/// removed.
+pub(crate) struct Retained {
+    /// The oldest kept seq — the journal-reclamation floor — or `None` when
+    /// no checkpoint remains.
+    pub(crate) floor: Option<u64>,
+    /// Each checkpoint removed, oldest first, as its seq and its file's
+    /// length in bytes, read before the removal.
+    pub(crate) removed: Vec<(u64, u64)>,
 }
 
 /// What a checkpoint write refused. The three are different answers for the

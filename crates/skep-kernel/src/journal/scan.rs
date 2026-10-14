@@ -268,6 +268,18 @@ pub(crate) struct ScanOutcome {
     /// counted rather than cut in silence. Never bounded, for the reason the
     /// head is not.
     pub tail_intact: u64,
+    /// The greatest `last_seq` an intact commit marker after the last
+    /// committed one CLAIMS — a marker [`ScanOutcome::tail_intact`] counts,
+    /// whose group it did not close — or `None` where no such marker stands.
+    /// That claim is the position the transaction's acknowledgement named,
+    /// where it was acknowledged: rot in the last committed transaction's
+    /// records leaves its own marker intact and committing nothing, and this
+    /// is that marker's `last_seq`. An intact frame that does not decode
+    /// claims nothing, its fields unread. Reset beside the count by every
+    /// committed marker ([`ScanOutcome::collect_commit`]), so once the scan
+    /// returns it is the claim of the tail the cut removes — what a recovery
+    /// reports as [`crate::Recovery`]'s `tail_cut_claimed`.
+    pub tail_claimed: Option<u64>,
     /// The tail-truncation cut, `None` when nothing was scanned — what
     /// [`truncate_tail`] cuts. Resolved here and read there, so no caller can
     /// aim a truncation at a region other than the one this scan judged.
@@ -473,6 +485,7 @@ impl ScanOutcome {
         // Whatever intact frame of no writer's preceded this marker lies below
         // a committed one now, and so outside any tail a cut removes.
         self.tail_intact = 0;
+        self.tail_claimed = None;
         self.committed_head = self.committed_head.max(marker.last_seq);
         let Collect::Records { bound } = self.collect else {
             // The boundary mode keeps no record: the group, and every record
@@ -555,6 +568,40 @@ impl ScanOutcome {
             }
             _ => None,
         })
+    }
+
+    /// THE CORRUPT RUNS BELOW THE BASE that this scan read and passed over:
+    /// how many, and the account of the first in scan order — where its bytes
+    /// lie, the position it can hold none above, and the act that clears it
+    /// ([`passed_over_account`]). Exactly the landed runs [`fatal_run`] passes
+    /// over at every bound, whose inferred `Seq` max the base embodies — save
+    /// a run inferred to hold no position at all, junk ahead of a journal's
+    /// first frame, which no base lies below and so no derivation meets.
+    ///
+    /// The base embodies every position such a run can hold, so a recovery
+    /// answers around it; a derivation from a base BELOW the run's inferred
+    /// max does not — a history read from an older base, an open that falls
+    /// back past this one — and halts on it ([`ScanOutcome::halt_anywhere`]).
+    /// So a recovery reports them ([`crate::Recovery`]'s `runs_passed_over`)
+    /// rather than passing over in silence damage the next fallback meets.
+    ///
+    /// [`fatal_run`]: ScanOutcome::fatal_run
+    pub(crate) fn runs_passed_over(&self) -> (u64, Option<String>) {
+        let below: Vec<(u64, &RunPlace)> = self
+            .runs
+            .iter()
+            .filter_map(|run| match run.end {
+                RunEnd::Landed { inferred_max, .. }
+                    if inferred_max > 0 && inferred_max <= self.s_load =>
+                {
+                    Some((inferred_max, &run.place))
+                }
+                _ => None,
+            })
+            .collect();
+        let first =
+            below.first().map(|&(inferred_max, place)| passed_over_account(inferred_max, place));
+        (below.len() as u64, first)
     }
 
     /// Whether a fold over `(s_load, bound]` can be answered from this scan:
@@ -1007,6 +1054,7 @@ fn walk(
         nearest_below_bound: s_load,
         runs: Vec::new(),
         tail_intact: 0,
+        tail_claimed: None,
         tail: None,
         chain_head: chain_at_base,
         chain_break: None,
@@ -1093,8 +1141,11 @@ fn walk(
                                     // a crash leaves one only where the disk
                                     // wrote an append's pages out of order, so
                                     // it is counted as the tail's own tell
-                                    // (`ScanOutcome::tail_intact`).
+                                    // (`ScanOutcome::tail_intact`), and the
+                                    // position it claims kept beside the count.
                                     outcome.tail_intact += 1;
+                                    outcome.tail_claimed =
+                                        outcome.tail_claimed.max(Some(marker.last_seq));
                                     if group.clean && outcome.uncommitted_intact.is_none() {
                                         // Every frame intact, the marker intact,
                                         // and it does not close them: no writer
@@ -1114,6 +1165,8 @@ fn walk(
                                 }
                                 None => {
                                     outcome.tail_intact += 1;
+                                    outcome.tail_claimed =
+                                        outcome.tail_claimed.max(Some(marker.last_seq));
                                     if let Some(group) = pending.as_ref().filter(|group| group.clean)
                                     {
                                         // A clean group whose next intact frame
@@ -1215,13 +1268,14 @@ fn admitted_slot(sig_alg: u8, sig: Vec<u8>) -> Option<Attestation> {
 }
 
 /// The account a chain break travels with, in the callers' `cause` slot: what
-/// the marker at `at` should have carried and did not.
+/// the marker at `at` should have carried and did not — the position spelled
+/// as the operator's stream spells every one, `position N`.
 fn chain_break_cause(at: u64) -> Cause {
     format!(
-        "chain break: the commit marker closing the transaction at {at} does not carry SHA-256 \
-         over the previous committed transaction's chain value and this transaction's own record \
-         frames — the transaction was rewritten consistently with its frame CRCs, or the one it \
-         follows is not the one before it"
+        "chain break: the commit marker closing the transaction at position {at} does not carry \
+         SHA-256 over the previous committed transaction's chain value and this transaction's own \
+         record frames — the transaction was rewritten consistently with its frame CRCs, or the \
+         one it follows is not the one before it"
     )
     .into()
 }
@@ -1237,56 +1291,103 @@ fn base_mismatch_cause(at: u64) -> Cause {
     let checkpoint = format!("checkpoint.{at}");
     format!(
         "chain break at the base: {checkpoint} carries a chain_head that is not the chain the \
-         journal's own commit marker closing {at} carries — the checkpoint header was rewritten, \
-         or the marker was; nothing was recomputed, two stored values disagree. Remove or restore \
-         {checkpoint} and the open re-verifies from the base below it"
+         journal's own commit marker closing position {at} carries — the checkpoint header was \
+         rewritten, or the marker was; nothing was recomputed, two stored values disagree. Remove \
+         or restore {checkpoint} and the open re-verifies from the base below it"
     )
     .into()
 }
 
 /// The account a fatal corrupt run travels with ([`ScanOutcome::halt_on`]):
-/// where its bytes lie — the segments, the byte it begins at and the byte or
-/// the end it reaches — and the act that clears it, which turns on whether
-/// those segments are CLOSED ([`RunPlace`]): restoring them alone from a copy
-/// that holds the segment after them loses nothing, and the open verifies
-/// what was restored by the commit chain; a run in the ACTIVE segment is
-/// cleared only by a whole directory's copy, which rewinds the journal to it.
+/// where its bytes lie ([`span_words`]) and the act that clears it, which
+/// turns on whether those segments are CLOSED ([`RunPlace`]): restoring them
+/// alone from a copy that holds the segment after them loses nothing, and the
+/// open verifies what was restored by the commit chain
+/// ([`closed_segments_act`]); a run in the ACTIVE segment is cleared only by a
+/// whole directory's copy, which rewinds the journal to it.
 fn run_cause(place: &RunPlace) -> Cause {
-    let (first, last) = match place.segments.as_slice() {
-        [only] => (only, only),
-        [first, .., last] => (first, last),
+    let act = closed_segments_act(place).unwrap_or_else(|| {
+        format!(
+            "{last} is the active segment, which every commit extends, so a copy of it holds only \
+             the commits made before the copy was taken: restore the journal directory whole from \
+             one copy, which rewinds the journal to that copy",
+            last = run_ends(place).1
+        )
+    });
+    format!(
+        "corrupt run {span}: its frames fail their CRC or do not decode, and an intact frame \
+         follows it; {act}",
+        span = span_words(place)
+    )
+    .into()
+}
+
+/// The account a corrupt run BELOW the base travels with
+/// ([`ScanOutcome::runs_passed_over`]): where its bytes lie, the position it
+/// can hold none above — its inferred max, `inferred_max` — which bases meet
+/// it, and the act that clears it. A run wholly in closed segments is
+/// cleared as a fatal one is ([`closed_segments_act`]); one in the ACTIVE
+/// segment has no copy to come from while the board writes — a copy holds
+/// only the commits made before it was taken, so restoring one would rewind
+/// the journal — and leaves the journal only once its segment has closed and
+/// a landing reclaims below it. Positions are spelled as the operator's
+/// stream spells every one, `position N`.
+fn passed_over_account(inferred_max: u64, place: &RunPlace) -> String {
+    let act = closed_segments_act(place).unwrap_or_else(|| {
+        let last = run_ends(place).1;
+        format!(
+            "{last} is the active segment, which every commit extends, so a copy of it holds only \
+             the commits made before the copy was taken and restoring one would rewind the \
+             journal: the run stays in the journal until {last} has closed and a landing reclaims \
+             the journal below it"
+        )
+    });
+    format!(
+        "corrupt run {span}, holding no position above position {inferred_max}: a history read \
+         from a base below position {inferred_max}, or an open that falls back to one, meets it \
+         and refuses; {act}",
+        span = span_words(place)
+    )
+}
+
+/// The first and the last segment a run's bytes lie in — one name twice for
+/// a run in one segment.
+fn run_ends(place: &RunPlace) -> (&str, &str) {
+    match place.segments.as_slice() {
+        [only] => (only.as_str(), only.as_str()),
+        [first, .., last] => (first.as_str(), last.as_str()),
         // `RunPlace::of` slices from the segment the run began in, which
         // holds its first byte, so the list is never empty.
         [] => unreachable!("a corrupt run's bytes lie in the segment it began in"),
-    };
-    let one = place.segments.len() == 1;
-    let span = match (one, place.to) {
+    }
+}
+
+/// Where a corrupt run's bytes lie, in a sentence's words: the segment or
+/// segments, the byte it begins at, and the byte or the end it reaches.
+fn span_words(place: &RunPlace) -> String {
+    let (first, last) = run_ends(place);
+    match (place.segments.len() == 1, place.to) {
         (true, Some(to)) => format!("in {first} from byte {} to byte {to}", place.from),
         (true, None) => format!("in {first} from byte {} to its end", place.from),
         (false, Some(to)) => format!("from byte {} of {first} to byte {to} of {last}", place.from),
         (false, None) => format!("from byte {} of {first} to the end of {last}", place.from),
-    };
+    }
+}
+
+/// The act that clears a run whose segments are all CLOSED — those files
+/// alone, from a copy that holds the segment after them, since a closed
+/// segment's bytes never change — or `None` where the run reaches the
+/// ACTIVE segment, which every commit extends and no one file's copy
+/// restores.
+fn closed_segments_act(place: &RunPlace) -> Option<String> {
+    let next = place.next.as_ref()?;
     let files = names_list(&place.segments);
-    let act = match &place.next {
-        Some(next) => {
-            let (are, them) = if one { ("is", "it") } else { ("are", "them") };
-            format!(
-                "{files} {are} closed — {next} follows {them} — and a closed segment's bytes never \
-                 change: restore {files} alone from a copy that holds {next}, and reopen; the \
-                 open verifies what it restores by the commit chain, and nothing is lost"
-            )
-        }
-        None => format!(
-            "{last} is the active segment, which every commit extends, so a copy of it holds only \
-             the commits made before the copy was taken: restore the journal directory whole from \
-             one copy, which rewinds the journal to that copy"
-        ),
-    };
-    format!(
-        "corrupt run {span}: its frames fail their CRC or do not decode, and an intact frame \
-         follows it; {act}"
-    )
-    .into()
+    let (are, them) = if place.segments.len() == 1 { ("is", "it") } else { ("are", "them") };
+    Some(format!(
+        "{files} {are} closed — {next} follows {them} — and a closed segment's bytes never change: \
+         restore {files} alone from a copy that holds {next}, and reopen; the open verifies what \
+         it restores by the commit chain, and nothing is lost"
+    ))
 }
 
 /// `names` as one list in a sentence: `a`, `a and b`, `a, b and c`.
@@ -1332,11 +1433,11 @@ fn unenumerable_cause(segment: &str) -> Cause {
 /// marker fails to close an intact group, and why no writer leaves it.
 fn uncommitted_intact_cause(at: u64) -> Cause {
     format!(
-        "chain break at an edited transaction: the transaction ending at {at} is intact frame by \
-         frame but no commit marker closes it — the marker after its records disagrees with them \
-         in records_checksum or last_seq, or they are not Seq-ascending, or they exceed the \
-         transaction budget, or that marker names another transaction as its own; no writer of \
-         this journal produces that shape, so the marker was rewritten, and the transaction it \
+        "chain break at an edited transaction: the transaction ending at position {at} is intact \
+         frame by frame but no commit marker closes it — the marker after its records disagrees \
+         with them in records_checksum or last_seq, or they are not Seq-ascending, or they exceed \
+         the transaction budget, or that marker names another transaction as its own; no writer \
+         of this journal produces that shape, so the marker was rewritten, and the transaction it \
          should have closed is un-committed"
     )
     .into()
@@ -1374,7 +1475,13 @@ pub(crate) enum FirstSyncWord {
     /// numeral this build does not write — on a frame whose successor does
     /// not open with this build's stamp, or cannot be read: another format's
     /// journal.
-    Foreign([u8; 4]),
+    Foreign {
+        /// The word the segment opens with.
+        found: [u8; 4],
+        /// The segment's name in the journal directory, which the refusal
+        /// names: the file found under another format.
+        segment: String,
+    },
     /// A well-formed sync word that is not this build's, on a frame whose
     /// successor opens with this build's: ONE damaged word in a journal this
     /// build wrote. The frame CRC covers the length and the payload and not
@@ -1433,7 +1540,7 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
         return Ok(FirstSyncWord::Scan);
     }
     let Some(&len) = rest.first_chunk::<4>() else {
-        return Ok(FirstSyncWord::Foreign(word));
+        return Ok(FirstSyncWord::Foreign { found: word, segment: name });
     };
     let len = u32::from_le_bytes(len);
     let mut successor = Vec::with_capacity(MAGIC.len());
@@ -1443,7 +1550,7 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
     Ok(if successor == MAGIC {
         FirstSyncWord::Damaged { found: word, segment: name }
     } else {
-        FirstSyncWord::Foreign(word)
+        FirstSyncWord::Foreign { found: word, segment: name }
     })
 }
 
@@ -1462,17 +1569,19 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.
 ///
-/// Answers the bytes it removed — the cut segment's length above the cut,
+/// Answers what it removed ([`Truncated`]), which a journaled open reports
+/// as the tail it cut ([`crate::Recovery`]'s `tail_cut` and
+/// `tail_cut_from`): the bytes — the cut segment's length above the cut,
 /// read before the cut, plus each wholly-later segment's length, read before
-/// its removal — which a journaled open reports as the tail it cut
-/// ([`crate::Recovery`]'s `tail_cut`). `0` where the last committed marker
-/// ends the journal, and where nothing was scanned: a cut that took nothing
-/// and no cut leave the same journal, so the two are one answer. The lengths
-/// read are the lengths the scan read — recovery holds the journal's lock, so
-/// nothing appends between the scan and this cut.
-pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<u64> {
+/// its removal — and where the cut began, the first file a byte left. `0`
+/// and nowhere where the last committed marker ends the journal, and where
+/// nothing was scanned: a cut that took nothing and no cut leave the same
+/// journal, so the two are one answer. The lengths read are the lengths the
+/// scan read — recovery holds the journal's lock, so nothing appends between
+/// the scan and this cut.
+pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<Truncated> {
     let Some(tail) = &scan.tail else {
-        return Ok(0);
+        return Ok(Truncated { bytes: 0, from: None });
     };
     let truncating = at_file(file_name(&tail.segment), "truncate");
     let mut cut = 0;
@@ -1485,14 +1594,28 @@ pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<u64> {
             f.sync_data()
         })
         .map_err(truncating)?;
+    let mut from = (cut > 0).then(|| (file_name(&tail.segment), tail.offset));
     for path in &tail.discard {
         let len = fs::metadata(path)
             .and_then(|meta| fs::remove_file(path).map(|()| meta.len()))
             .map_err(at_file(file_name(path), "remove"))?;
+        if from.is_none() && len > 0 {
+            from = Some((file_name(path), 0));
+        }
         cut = cut.saturating_add(len);
     }
     fsync_dir(dir)?;
-    Ok(cut)
+    Ok(Truncated { bytes: cut, from })
+}
+
+/// What [`truncate_tail`] removed: the bytes, and where the cut began — the
+/// name in the journal directory of the first file a byte left, and the byte
+/// of it the cut began at: the cut segment at the cut's offset, or else the
+/// first wholly-later segment that held a byte, at byte `0`. `None` where
+/// nothing was cut.
+pub(crate) struct Truncated {
+    pub(crate) bytes: u64,
+    pub(crate) from: Option<(String, u64)>,
 }
 
 /// A journal file's name, by its path, as a refusal names it.

@@ -16,7 +16,7 @@ use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use parking_lot::Mutex;
@@ -42,9 +42,12 @@ use applier::ApplierLock;
 /// (AUTH-2.86) — and the two acts of the open itself: how many commits it
 /// replayed above that start point, and how many bytes of un-acked tail it
 /// cut, so the open's own landing can be said in figures rather than left to
-/// the silence between two lines — with the two facts that tell an operator
-/// what those figures do not: whether the cut tail held intact frames no
-/// torn write leaves, and whether any journal stood in the directory at all.
+/// the silence between two lines — with the facts that tell an operator what
+/// those figures do not: where the cut began and what position an intact
+/// marker in it claimed, whether the cut tail held intact frames no torn
+/// write leaves, whether any journal stood in the directory at all, and the
+/// corrupt runs below the start point the open read and passed over, which
+/// the next fallback past that start point meets.
 /// A report and never a verdict: a skipped base is no failure of the open —
 /// the derivation succeeded from an older one — and the chain's one failure,
 /// the exhausted chain, is [`OpenError::BadCheckpoint`]'s. Absent under
@@ -89,6 +92,23 @@ pub struct Recovery {
     /// before this open still holds. Counted, so that cut is said rather than
     /// taken in silence.
     pub tail_cut_intact: u64,
+    /// WHERE THE CUT BEGAN: the name in the journal directory of the first
+    /// file a byte left, `seg-{n}.wal`, and the byte of it the cut began at —
+    /// the cut segment at the last committed marker's frame end, or else the
+    /// first wholly-later segment that held a byte, at byte `0`. `None` where
+    /// [`Recovery::tail_cut`] is `0`. What an operator holding a copy taken
+    /// before this open reads the cut bytes back from.
+    pub tail_cut_from: Option<(String, u64)>,
+    /// THE POSITION THE CUT TAIL CLAIMED: the greatest `last_seq` an intact
+    /// commit marker in it carried — a marker that committed nothing, which
+    /// [`Recovery::tail_cut_intact`] counts. Rot in the journal's last
+    /// committed transaction's records leaves that transaction's own marker
+    /// intact, and this is then the position the transaction's
+    /// acknowledgement named, its writer's and the change feed's alike: the
+    /// one figure that names WHICH acknowledged write the cut may have taken.
+    /// `None` where no intact marker stood in the cut — every crash's tail,
+    /// and a tail whose intact frame does not decode, its fields unread.
+    pub tail_cut_claimed: Option<Seq>,
     /// Whether NO JOURNAL STOOD in the directory — no segment and no
     /// checkpoint when the open listed it — so the open began a journal at
     /// genesis rather than recovering one. Right on a fresh board's first
@@ -97,6 +117,20 @@ pub struct Recovery {
     /// over its mount point, a mistyped path — where every later write lands
     /// on a new journal beside the real one, out of sight of it.
     pub began: bool,
+    /// THE CORRUPT RUNS BELOW THE START POINT that the open's scan read and
+    /// passed over — runs in a segment straddling the start point, or in the
+    /// active one, whose every position the start point embodies, so the
+    /// open answered around them. Counted because a derivation from a base
+    /// BELOW a run meets it and refuses: a history read from an older base,
+    /// and the open that falls back past this start point the day its
+    /// checkpoint fails to load — damage this count names on every open
+    /// before then. `0` on a journal with none.
+    pub runs_passed_over: u64,
+    /// The account of the FIRST of [`Recovery::runs_passed_over`], in scan
+    /// order: the files and the bytes its run spans, the position it holds
+    /// none above, which bases meet it, and the act that clears it. `Some`
+    /// exactly where the count is not `0`.
+    pub first_run_passed_over: Option<String>,
 }
 
 /// One installed committed state: the root's identity IS the version
@@ -430,6 +464,12 @@ struct Journaled<W> {
     /// [`NO_LANDING`] before the first landing of this uptime. Stored by
     /// [`Kernel::checkpoint`] after its reclamation step, read lock-free.
     last_reclaimed: AtomicU64,
+    /// The checkpoints the LAST landing's retention removed
+    /// ([`Kernel::last_removed_checkpoints`]), each by its seq and its
+    /// length, read before the removal — empty before the first landing of
+    /// this uptime and after a landing that removed none. Stored beside
+    /// `last_reclaimed`, at the end of a landed call, read lock-free.
+    last_removed: ArcSwap<Vec<(Seq, u64)>>,
     /// The `open()`-held exclusive advisory lock, kept for its `Drop`: the
     /// flock releases when this file closes (Lifecycle).
     _lock: File,
@@ -451,6 +491,29 @@ struct Recovered<W> {
     lock: File,
     recovery: Recovery,
     stray_checkpoint_removed: Option<u64>,
+}
+
+/// One checkpoint [`Kernel::transact`] ran INLINE on a committing thread
+/// (§6) — the inline arms' at every crossing, the backstop's under
+/// [`CheckpointPolicy::Deferred`] — as [`Kernel::last_inline_checkpoint`]
+/// answers the last of them: which commit carried it, how long it kept that
+/// commit's caller waiting past the commit itself, and how it ended. The run
+/// takes no applier lock, so the kernel's other writers proceed beside it;
+/// a caller that serializes its own writes around `transact`, as a daemon
+/// does, holds every one of them for `held`.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineCheckpoint {
+    /// The position the committing transaction installed — the `last_seq`
+    /// its own `transact` answered — whose crossing ran the checkpoint.
+    pub after: Seq,
+    /// The run's duration on the committing thread, from the call into
+    /// [`Kernel::checkpoint`] after that commit installed to its return.
+    pub held: Duration,
+    /// How it ended: the position the checkpoint landed at
+    /// ([`Kernel::checkpoint`]'s `Ok`), or its failure rendered as text —
+    /// never the error value, which does not clone.
+    pub outcome: Result<Seq, String>,
 }
 
 /// The transactional kernel over an engine-supplied `W` (§Public interface).
@@ -494,12 +557,13 @@ pub struct Kernel<W: WorldState> {
     /// each such run returns, landed or failed; a run that unwinds moves it
     /// not, the unwind being the caller's.
     inline_checkpoints: AtomicU64,
-    /// THE LAST INLINE RUN's FAILURE, as text: `None` where that run landed
-    /// (or none has run), the error rendered where it failed — never the
-    /// error value, which does not clone. Stored before the count moves, so
-    /// a reader that sees the count move reads a text at least as new as
-    /// that run's ([`Kernel::last_inline_checkpoint_failure`]).
-    last_inline_failure: ArcSwapOption<String>,
+    /// THE LAST INLINE RUN, as [`InlineCheckpoint`] records it: the commit
+    /// whose crossing ran it, how long it held that commit's caller, and how
+    /// it ended, a failure as text — never the error value, which does not
+    /// clone — or `None` before the first. Stored before the count moves, so
+    /// a reader that sees the count move reads a record at least as new as
+    /// that run's ([`Kernel::last_inline_checkpoint`]).
+    last_inline: ArcSwapOption<InlineCheckpoint>,
     cfg: KernelConfig,
     /// The write-fault seam this kernel's two write paths hook before
     /// [their steps](crate::Step): under `test-hooks` the state the
@@ -725,6 +789,7 @@ impl<W: WorldState> Kernel<W> {
                         stray_checkpoint_removed: recovered.stray_checkpoint_removed,
                         skipped_bases: Mutex::new(skipped_bases),
                         last_reclaimed: AtomicU64::new(NO_LANDING),
+                        last_removed: ArcSwap::from_pointee(Vec::new()),
                         _lock: recovered.lock,
                     }),
                 )
@@ -808,10 +873,11 @@ impl<W: WorldState> Kernel<W> {
         // is to restore the segment, where a format's discards the journal.
         match journal::first_sync_word(&segs, base.s_load())? {
             FirstSyncWord::Scan => {}
-            FirstSyncWord::Foreign(found) => {
+            FirstSyncWord::Foreign { found, segment } => {
                 return Err(OpenError::ForeignFormat {
                     found,
                     expected: journal::MAGIC,
+                    segment,
                 });
             }
             // The probe reads a frame header and no `Seq`, so the coordinate
@@ -880,17 +946,24 @@ impl<W: WorldState> Kernel<W> {
         // found it — which is what an operator images after a halt. It is
         // also before the appender is opened over that segment, whose length
         // this cut settles and which the appender reads once. What it cut, in
-        // bytes, is the open's to report, as the commits the fold replayed
-        // are: the scan counted those as it closed their markers, and the
-        // intact frames of no writer's in the tail as it met them.
-        let tail_cut = journal::truncate_tail(dir, &scan)?;
+        // bytes and from where, is the open's to report, as the commits the
+        // fold replayed are: the scan counted those as it closed their
+        // markers, the intact frames of no writer's in the tail as it met
+        // them, with the position their markers claimed, and the corrupt runs
+        // below the start point it read and passed over.
+        let cut = journal::truncate_tail(dir, &scan)?;
+        let (runs_passed_over, first_run_passed_over) = scan.runs_passed_over();
         let recovery = Recovery {
             start_point,
             skipped,
             replayed: scan.commits_above_base,
-            tail_cut,
+            tail_cut: cut.bytes,
             tail_cut_intact: scan.tail_intact,
+            tail_cut_from: cut.from,
+            tail_cut_claimed: scan.tail_claimed.map(Seq),
             began,
+            runs_passed_over,
+            first_run_passed_over,
         };
 
         let writer =
@@ -929,7 +1002,7 @@ impl<W: WorldState> Kernel<W> {
             poison_cause: OnceLock::new(),
             checkpoint_due: AtomicBool::new(false),
             inline_checkpoints: AtomicU64::new(0),
-            last_inline_failure: ArcSwapOption::empty(),
+            last_inline: ArcSwapOption::empty(),
             cfg,
             seam,
             journaled,
@@ -1045,19 +1118,20 @@ impl<W: WorldState> Kernel<W> {
     /// failure is NOT THE TRANSACTION's: the transaction is already
     /// acknowledged, so there is no sound path for that error through
     /// [`TxnError`], and the kernel has no logging seam — but every such run
-    /// is COUNTED and the last one's failure KEPT AS TEXT
-    /// ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint_failure`]),
-    /// the two facts a caller above reads and says. Under
-    /// [`CheckpointPolicy::Deferred`] the
-    /// crossing SETS THE DUE FLAG instead ([`Kernel::checkpoint_due`]) and
-    /// this thread runs nothing — the caller's own thread runs
-    /// [`Kernel::checkpoint`] and reads the result — unless the flag is
-    /// ALREADY set, the last crossing unserviced, when the checkpoint runs
-    /// inline here after all, the backstop that keeps the window bounded,
-    /// counted as every inline run is. A caller who needs to know whether
-    /// checkpointing is succeeding calls [`Kernel::checkpoint`] itself and
-    /// reads the result, or reads the count and the text; a kernel that has
-    /// stopped checkpointing inline goes on committing.
+    /// is COUNTED and the last one RECORDED: the commit that ran it, how long
+    /// it held this thread past that commit, and how it ended, a failure KEPT
+    /// AS TEXT ([`Kernel::inline_checkpoints`],
+    /// [`Kernel::last_inline_checkpoint`]), the facts a caller above reads and
+    /// says. Under [`CheckpointPolicy::Deferred`] the crossing SETS THE DUE
+    /// FLAG instead ([`Kernel::checkpoint_due`]) and this thread runs nothing
+    /// — the caller's own thread runs [`Kernel::checkpoint`] and reads the
+    /// result — unless the flag is ALREADY set, the last crossing unserviced,
+    /// when the checkpoint runs inline here after all, the backstop that keeps
+    /// the window bounded, counted and recorded as every inline run is. A
+    /// caller who needs to know whether checkpointing is succeeding calls
+    /// [`Kernel::checkpoint`] itself and reads the result, or reads the count
+    /// and the record; a kernel that has stopped checkpointing inline goes on
+    /// committing.
     ///
     /// A panic out of `f` propagates with nothing of the transaction
     /// surviving, and needs no guard to do so: no `Seq` was drawn and nothing
@@ -1292,12 +1366,14 @@ impl<W: WorldState> Kernel<W> {
                         // §3/§6: the auto-triggered checkpoint's error never
                         // fails the already-committed txn, and the kernel has
                         // no logging seam (the design's dependency list) — so
-                        // the run is COUNTED and its failure kept as text,
-                        // for the caller above to read and say; safe by §6's
-                        // crash argument (at most a .tmp the write or the
-                        // next open removes, and an unreclaimed journal).
+                        // the run is COUNTED and recorded — the commit that
+                        // ran it, how long it held this caller, how it ended
+                        // — for the caller above to read and say; safe by
+                        // §6's crash argument (at most a .tmp the write or
+                        // the next open removes, and an unreclaimed journal).
+                        let began = Instant::now();
                         let outcome = self.checkpoint();
-                        self.note_inline_run(outcome);
+                        self.note_inline_run(Seq(last), began.elapsed(), outcome);
                     }
                 }
                 Ok((value, Seq(last))) // commit-before-acknowledge (A7, MIC-3)
@@ -1306,13 +1382,15 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// Record one checkpoint [`Kernel::transact`] ran inline on a committing
-    /// thread: the run's failure as text — `None` where it landed — stored
+    /// thread ([`InlineCheckpoint`]): the commit at `after` that ran it, the
+    /// run's duration `held`, and how it ended — its failure as text — stored
     /// FIRST, then the count moved, so a reader that sees the count move
-    /// reads a text at least as new as that run's. The error value itself
+    /// reads a record at least as new as that run's. The error value itself
     /// goes no further: it is not `Clone`, and the caller above wants the
     /// sentence.
-    fn note_inline_run(&self, outcome: Result<Seq, CheckpointError>) {
-        self.last_inline_failure.store(outcome.err().map(|e| Arc::new(e.to_string())));
+    fn note_inline_run(&self, after: Seq, held: Duration, outcome: Result<Seq, CheckpointError>) {
+        let outcome = outcome.map_err(|e| e.to_string());
+        self.last_inline.store(Some(Arc::new(InlineCheckpoint { after, held, outcome })));
         self.inline_checkpoints.fetch_add(1, Ordering::AcqRel);
     }
 
@@ -1345,22 +1423,45 @@ impl<W: WorldState> Kernel<W> {
     /// [`Durability::InMemory`], where the run is the no-op, it counts as
     /// landed. Lock-free, like [`Kernel::checkpoint_due`]: the caller above
     /// reads it once per commit beside that flag, and where it moved reads
-    /// [`Kernel::last_inline_checkpoint_failure`] and says so — the kernel
-    /// still has no logging seam; it answers a fact. The count and the text
-    /// are two loads, between which a run may land.
+    /// [`Kernel::last_inline_checkpoint`] and says so — the kernel still has
+    /// no logging seam; it answers a fact. The count and the record are two
+    /// loads, between which a run may land.
     pub fn inline_checkpoints(&self) -> u64 {
         self.inline_checkpoints.load(Ordering::Acquire)
     }
 
+    /// The LAST checkpoint [`Kernel::transact`] ran inline on a committing
+    /// thread, as [`InlineCheckpoint`] records it — the commit whose crossing
+    /// ran it, how long the run held that commit's caller, and whether it
+    /// landed and where, or how it failed — or `None` where no run has
+    /// happened this uptime. Written at each inline run, so the answer is the
+    /// last run's and not the last failure's, which is what a line saying
+    /// "the last landed" or "the last failed" needs. Read lock-free, with the
+    /// count's caveat ([`Kernel::inline_checkpoints`]).
+    pub fn last_inline_checkpoint(&self) -> Option<InlineCheckpoint> {
+        self.last_inline.load_full().map(|run| InlineCheckpoint::clone(&run))
+    }
+
     /// How the LAST checkpoint [`Kernel::transact`] ran inline FAILED, as
-    /// text — the error rendered, never the error value, which does not
-    /// clone — or `None` where that run landed, or no run has happened.
-    /// Written at each inline run, so a landing after a failure clears it:
-    /// the answer is the last run's and not the last failure's, which is what
-    /// a line saying "the last landed" or "the last failed" needs. Read
-    /// lock-free, with the count's caveat ([`Kernel::inline_checkpoints`]).
+    /// text — [`Kernel::last_inline_checkpoint`]'s outcome where it is a
+    /// failure — or `None` where that run landed, or no run has happened.
     pub fn last_inline_checkpoint_failure(&self) -> Option<String> {
-        self.last_inline_failure.load_full().map(|text| String::clone(&text))
+        self.last_inline.load_full().and_then(|run| run.outcome.as_ref().err().cloned())
+    }
+
+    /// The checkpoints the LAST landed [`Kernel::checkpoint`]'s retention
+    /// REMOVED, oldest first, each by its seq and its file's length in bytes,
+    /// read before the removal: the oldest base past the `retain_checkpoints`
+    /// kept, and every base the open passed over that still stood — whose
+    /// removal is the end of the evidence [`Kernel::recovery`]'s `skipped`
+    /// names. Empty where the landing removed none, before any landing of
+    /// this uptime, and under [`Durability::InMemory`]; a failed call stores
+    /// nothing, as [`Kernel::last_reclaimed_bytes`]'s figure is stored.
+    /// Lock-free, read after `Ok`.
+    pub fn last_removed_checkpoints(&self) -> Vec<(Seq, u64)> {
+        self.journaled.as_ref().map_or_else(Vec::new, |journaled| {
+            Vec::clone(&journaled.last_removed.load())
+        })
     }
 
     /// The journal bytes the LAST landed [`Kernel::checkpoint`] RECLAIMED:
@@ -1446,10 +1547,13 @@ impl<W: WorldState> Kernel<W> {
     /// the operator stream's word for its coordinates — and
     /// the failures' own words — each naming its segment and its act, the
     /// truncation's beside the step's it failed to repair — and what the next
-    /// open does with what stands. Kept as text, set once, before the halt is
-    /// visible, by the commit path's one poisoning door. Lock-free, like
-    /// [`Kernel::is_poisoned`], and for the operator's stream: it names files
-    /// and failures, so it is not a member to serve to every reader.
+    /// open does with what stands. A panic's words ride it only where the
+    /// panic's payload is a literal the code wrote, never a formatted one,
+    /// whose text a record's values may have made. Kept as text, set once,
+    /// before the halt is visible, by the commit path's one poisoning door.
+    /// Lock-free, like [`Kernel::is_poisoned`], and for the operator's stream:
+    /// it names files and failures, so it is not a member to serve to every
+    /// reader.
     pub fn poison_cause(&self) -> Option<&str> {
         self.poison_cause.get().map(String::as_str)
     }
@@ -1563,8 +1667,9 @@ impl<W: WorldState> Kernel<W> {
     /// fsync, retention or the journal's reclamation failed — is
     /// [`CheckpointError::Landed`], naming the step ([`LandedStep`]) and
     /// carrying the cause; a failure before it is [`CheckpointError::Io`]
-    /// and leaves no base. The journal bytes a landing reclaimed are read
-    /// after `Ok` through [`Kernel::last_reclaimed_bytes`].
+    /// and leaves no base. The journal bytes a landing reclaimed, and the
+    /// checkpoints its retention removed, are read after `Ok` through
+    /// [`Kernel::last_reclaimed_bytes`] and [`Kernel::last_removed_checkpoints`].
     ///
     /// [`current_seq`]: Kernel::current_seq
     pub fn checkpoint(&self) -> Result<Seq, CheckpointError> {
@@ -1608,24 +1713,27 @@ impl<W: WorldState> Kernel<W> {
         // acknowledged, so that is answered as the I/O failure it is, over a
         // base that landed, never as a panic in place of the commit's `Ok`.
         let landed = |step: LandedStep| move |cause| CheckpointError::Landed { step, cause };
-        let s_old = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints, &skipped)
-            .map_err(landed(LandedStep::Retention))?
-            .ok_or_else(|| {
-                landed(LandedStep::Retention)(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "the checkpoint this call wrote was gone before retention listed it: \
-                     something other than this kernel removed it from the journal directory",
-                ))
-            })?;
+        let retained = checkpoint::retain(&journaled.dir, journaled.retain_checkpoints, &skipped)
+            .map_err(landed(LandedStep::Retention))?;
+        let s_old = retained.floor.ok_or_else(|| {
+            landed(LandedStep::Retention)(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the checkpoint this call wrote was gone before retention listed it: something \
+                 other than this kernel removed it from the journal directory",
+            ))
+        })?;
         // Every file retention passed over is gone, so nothing stands to
         // pass over at the next landing.
         journaled.skipped_bases.lock().clear();
         // Reclaim the journal below the OLDEST kept checkpoint — that floor,
         // not the newest, is what keeps the BadCheckpoint fallback real (§6)
-        // — and keep what it reclaimed for the landing's reader.
+        // — and keep what it reclaimed, and the bases retention removed, for
+        // the landing's reader.
         let reclaimed = journal::reclaim_below(&journaled.dir, s_old)
             .map_err(landed(LandedStep::Reclamation))?;
         journaled.last_reclaimed.store(reclaimed.min(NO_LANDING - 1), Ordering::Release);
+        let removed = retained.removed.into_iter().map(|(seq, len)| (Seq(seq), len)).collect();
+        journaled.last_removed.store(Arc::new(removed));
         Ok(s)
     }
 
@@ -1705,13 +1813,18 @@ fn positions(first: u64, last: u64) -> String {
     }
 }
 
-/// A panic's own words, where its payload is text, as a poisoning's cause
-/// carries them — ` ({words})` — and nothing where it is not.
+/// A panic's own words, as a poisoning's cause carries them — ` ({words})` —
+/// where its payload is a `&'static str`: a literal the code wrote, which no
+/// request can have formatted. A `String` payload is a FORMATTED panic, an
+/// `expect`'s or an `assert_eq!`'s, whatever its site formatted — inside the
+/// commit region that site is a record's own `Serialize`, so the text may
+/// hold record values — and the cause carries nothing of it, as the binary's
+/// panic hook keeps such a payload off the operator's stream (`operations.md`
+/// §1, what a line NEVER carries). The same literal words ride the hook's own
+/// line for the same panic, which is what joins the two lines.
 fn panic_words(payload: &(dyn Any + Send)) -> String {
     payload
-        .downcast_ref::<&str>()
-        .map(|words| words.to_string())
-        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .downcast_ref::<&'static str>()
         .map_or_else(String::new, |words| format!(" ({words})"))
 }
 

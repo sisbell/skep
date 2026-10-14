@@ -61,12 +61,14 @@ fn service(heading: &str) -> String {
 /// and before the media limits', where the open says it, with the
 /// inventory's `journal.tail_cut` beside it, and its second arm — a tail
 /// holding intact frames, under `failure:` — after it; the beginning's line,
-/// after the recovery's landing it qualifies; and each line the binary
-/// classes that the list once quoted bare — the stray `checkpoint.tmp`'s and
-/// the media limits' under `open:`, the first head's and the cell index's
-/// landing under `landing:`, the pruner's refused thread under `failure:` —
-/// opens with the class word the door spells, read off the door's own type,
-/// so a word spelled another way here fails.
+/// after the recovery's landing it qualifies; the open's two warnings, the
+/// skipped base's and the runs passed over below the start point after it,
+/// under `warning (at open):`; and each line the binary classes that the
+/// list once quoted bare — the stray `checkpoint.tmp`'s and the media
+/// limits' under `open:`, the first head's and the cell index's landing
+/// under `landing:`, the pruner's refused thread under `failure:` — opens
+/// with the class word the door spells, read off the door's own type, so a
+/// word spelled another way here fails.
 #[test]
 fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     let list = passage(
@@ -107,6 +109,17 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     assert!(
         at("open: journal tail cut (") < at("of its frames intact on disk"),
         "the tail cut's two arms, the report's own first"
+    );
+    // The open's warnings, each under the class the binary writes it with:
+    // a skipped base, then the corrupt runs passed over below the start point.
+    {
+        use skep_util::notice::Moment;
+        classed("and was SKIPPED —", Class::Warning(Moment::AtOpen));
+        classed("and was PASSED OVER —", Class::Warning(Moment::AtOpen));
+    }
+    assert!(
+        at("and was SKIPPED —") < at("and was PASSED OVER —"),
+        "the runs passed over follow the skipped bases, as the open says them"
     );
     // The beginning, quoted with the recovery's landing it follows.
     classed("no journal stood in the data directory:", Class::Open);

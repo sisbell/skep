@@ -33,21 +33,30 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   loaded from.
 - **Read seams** — the kernel answers facts and says nothing: `Recovery`
   carries the start point, the bases passed over, the commits
-  `replayed`, the bytes of un-acked tail cut (`tail_cut`) and the
-  intact frames among them no torn write leaves (`tail_cut_intact`),
-  and whether the open `began` a journal where none stood;
-  `poison_cause` why the write paths halted, where they have;
-  `last_reclaimed_bytes` the journal bytes the last landing reclaimed;
-  `inline_checkpoints` and `last_inline_checkpoint_failure` how many
-  checkpoints `transact` ran on a writer and how the last one failed,
-  as text; `checkpoint_header` one base's header by its seq; a
-  checkpoint that fails after its base landed is
-  `CheckpointError::Landed`, naming the step (`LandedStep`); and
-  `boundaries_above` answers every committed boundary above a position
-  with its signature slot in one scan from the base below it, where
-  `attestation_at` answers one boundary per scan. Every failure on a
-  journal file names the file and the act, `{file}: {act}: {error}`,
-  its kind kept; a halt on unreadable committed data names, wherever
+  `replayed`, the bytes of un-acked tail cut (`tail_cut`), the file
+  and byte the cut began at (`tail_cut_from`), the intact frames among
+  them no torn write leaves (`tail_cut_intact`) and the position an
+  intact marker in the cut claimed (`tail_cut_claimed`), whether the
+  open `began` a journal where none stood, and the corrupt runs below
+  the start point it read and answered around (`runs_passed_over`,
+  with the account of the first); `poison_cause` why the write paths
+  halted, where they have, a panic's words only where the code wrote
+  them; `last_reclaimed_bytes` the journal bytes the last landing
+  reclaimed, and `last_removed_checkpoints` the checkpoint files its
+  retention removed, each with its length; `inline_checkpoints` and
+  `last_inline_checkpoint` how many checkpoints `transact` ran on a
+  writer and, of the last, the commit that ran it, how long it held
+  that commit's caller and how it ended; `checkpoint_header` one
+  base's header by its seq; a checkpoint that fails after its base
+  landed is `CheckpointError::Landed`, naming the step (`LandedStep`);
+  and `boundaries_above` answers every committed boundary above a
+  position with its signature slot in one scan from the base below
+  it, where `attestation_at` answers one boundary per scan. Every
+  failure on a journal file names the file and the act, `{file}:
+  {act}: {error}`, its kind kept; every refusal at the open names the
+  file it read — the segment a foreign stamp opens, the checkpoint the
+  exhausted fallback chain most wanted — and spells its coordinate as
+  `position N`; a halt on unreadable committed data names, wherever
   the damage has a place, the files it lies in and the act that
   clears it.
 - **Keyed critical sections** — every write names the `LockKey`s it

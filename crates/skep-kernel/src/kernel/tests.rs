@@ -405,16 +405,22 @@ fn a_journal_under_another_format_is_refused_by_name_and_left_untouched() {
         .expect_err("another format's journal is not this build's to open");
     assert!(
         matches!(
-            err,
+            &err,
             OpenError::ForeignFormat {
                 found: [b'S', b'K', b'J', b'2'],
                 expected: [b'S', b'K', b'J', b'4'],
-            }
+                segment,
+            } if segment == "seg-1.wal"
         ),
         "got {err:?}"
     );
     let rendered = err.to_string();
-    for named in ["`SKJ2`", "`SKJ4`", "not this build's format", "delete the data directory"] {
+    for named in [
+        "seg-1.wal opens with the stamp `SKJ2`",
+        "`SKJ4`",
+        "not this build's format",
+        "delete the data directory",
+    ] {
         assert!(rendered.contains(named), "{named} missing from: {rendered}");
     }
     assert!(std::error::Error::source(&err).is_none());
@@ -1054,9 +1060,19 @@ fn an_exhausted_fallback_chain_says_why_its_newest_base_refused() {
         panic!("the skew must travel, or an operator restores media over a rolled binary: {err:?}")
     };
     // …and reaches a reporter walking the error's source chain as well as
-    // one reading the sentence, which are two different consumers.
-    assert!(std::error::Error::source(&err).is_some());
-    assert!(err.to_string().contains("the newest refused"), "got {err}");
+    // one reading the sentence, which are two different consumers — named
+    // on the base's file in the sentence, the serializer's own refusal
+    // beneath the name in the chain.
+    let named = std::error::Error::source(&err).expect("the newest base's refusal");
+    assert!(
+        err.to_string().contains("the newest refused: checkpoint.8: "),
+        "the refusal names the base it was met at: {err}"
+    );
+    let beneath = std::error::Error::source(named).expect("the refusal beneath the name");
+    assert!(
+        beneath.downcast_ref::<bincode::ErrorKind>().is_some(),
+        "the serializer's own account: {beneath}"
+    );
 }
 
 #[test]
@@ -1152,6 +1168,21 @@ fn the_sequencer_never_commits_a_head_recovery_would_refuse() {
         .expect("a kernel reopens every journal it commits");
     assert_eq!(k.current_seq(), Seq(1));
     assert_eq!(k.snapshot().world().as_slice(), &[10]);
+}
+
+/// A PANIC's WORDS RIDE A POISONING's CAUSE ONLY WHERE THE CODE WROTE THEM:
+/// a `&'static str` payload is a literal, and rides as ` ({words})`; a
+/// `String` payload is a formatted panic — inside the commit region, a
+/// record's own `Serialize`, whose text may hold the record's values — and
+/// rides as nothing, as the binary's panic hook keeps it off the stream.
+#[test]
+fn a_panics_words_ride_a_poisoning_only_where_the_code_wrote_them() {
+    let literal: Box<dyn Any + Send> = Box::new("a literal the code wrote");
+    assert_eq!(panic_words(&*literal), " (a literal the code wrote)");
+    let formatted: Box<dyn Any + Send> = Box::new(format!("a record's value: {}", 4_207));
+    assert_eq!(panic_words(&*formatted), "", "a formatted panic's text rides nowhere");
+    let opaque: Box<dyn Any + Send> = Box::new(4_207u64);
+    assert_eq!(panic_words(&*opaque), "");
 }
 
 #[test]
@@ -1650,10 +1681,14 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
             replayed: 0,
             tail_cut: 0,
             tail_cut_intact: 0,
+            tail_cut_from: None,
+            tail_cut_claimed: None,
             began: true,
+            runs_passed_over: 0,
+            first_run_passed_over: None,
         }),
         "a fresh journal's open: genesis, nothing skipped, nothing replayed, nothing cut, \
-         and a journal begun rather than recovered"
+         a journal begun rather than recovered, and no damage passed over"
     );
     drop(k);
 

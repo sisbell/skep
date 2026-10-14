@@ -616,7 +616,11 @@ fn content_survives_durable_recovery_by_checkpoint_and_replay() {
             replayed: 1,
             tail_cut: 0,
             tail_cut_intact: 0,
+            tail_cut_from: None,
+            tail_cut_claimed: None,
             began: false,
+            runs_passed_over: 0,
+            first_run_passed_over: None,
         }),
         "the reopen did not start from the checkpoint taken after a1, passing nothing over and \
          replaying the one write above it — where M2 passed a base over, its `skipped` entry \

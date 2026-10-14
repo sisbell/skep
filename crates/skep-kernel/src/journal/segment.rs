@@ -282,15 +282,19 @@ mod tests {
                 .collect()
         };
         let probed = |s_load: u64| first_sync_word(&segs, s_load).unwrap();
+        let foreign = |stamp: &[u8; 4], segment: &str| FirstSyncWord::Foreign {
+            found: *stamp,
+            segment: segment.into(),
+        };
         // Genesis reads every segment, and the probe opens seg-1.
         assert_eq!(read_above(0), vec![(0, 1), (1, 5), (2, 9)]);
-        assert_eq!(probed(0), FirstSyncWord::Foreign(*b"SKJ2"));
+        assert_eq!(probed(0), foreign(b"SKJ2", "seg-1.wal"));
         // seg-1 reaches 4, where seg-5 begins at 5: it straddles a base at 3…
         assert_eq!(read_above(3), vec![(0, 1), (1, 5), (2, 9)], "seg-1 straddles the base");
-        assert_eq!(probed(3), FirstSyncWord::Foreign(*b"SKJ2"));
+        assert_eq!(probed(3), foreign(b"SKJ2", "seg-1.wal"));
         // …and a base at 4 embodies it, so the scan and the probe begin at seg-5.
         assert_eq!(read_above(4), vec![(1, 5), (2, 9)], "seg-1 ends at the base");
-        assert_eq!(probed(4), FirstSyncWord::Foreign(*b"SKJ3"));
+        assert_eq!(probed(4), foreign(b"SKJ3", "seg-5.wal"));
         assert_eq!(read_above(8), vec![(2, 9)], "seg-5 ends at the base");
         assert_eq!(probed(8), FirstSyncWord::Scan);
         // The active segment has no successor to bound it, so it is always read.

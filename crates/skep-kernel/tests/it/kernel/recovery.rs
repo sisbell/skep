@@ -6,7 +6,7 @@ use std::io;
 
 use super::*;
 use crate::mutilate::{append_bytes, ckpt_file, copy_dir, flip_byte, seg_file, truncate_file};
-use skep_kernel::OpenError;
+use skep_kernel::{HistoryError, OpenError};
 use tempfile::tempdir;
 
 #[test]
@@ -125,8 +125,11 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
     assert_eq!(recovery.tail_cut, spans[5].0 + 3 - spans[4].0, "the bytes cut, exactly");
     assert_eq!(recovery.replayed, 2);
     // A crash's torn tail holds an intact RECORD and a torn marker — nothing
-    // no torn write leaves — so the cut is reported as the crash's alone.
+    // no torn write leaves — so the cut is reported as the crash's alone,
+    // claiming no position, from the byte T3's record began at.
     assert_eq!(recovery.tail_cut_intact, 0, "a crash's torn tail is nothing but a crash's");
+    assert_eq!(recovery.tail_cut_claimed, None, "a torn marker claims nothing");
+    assert_eq!(recovery.tail_cut_from, Some(("seg-1.wal".to_string(), spans[4].0)));
     assert!(!recovery.began, "a journal stood: this open recovered it");
     // Under Rollback the next session reuses the discarded coordinates —
     // safe exactly because the stale tail is gone (§1/§7 Txn uniqueness).
@@ -238,6 +241,24 @@ fn corruption_below_s_load_is_harmless_including_the_boundary_frame() {
     assert_eq!(items(&k), vec![10, 20, 30, 40]);
     assert_eq!(k.snapshot().world().sum, 100);
     assert_eq!(k.current_seq(), Seq(4));
+    // …and passed over, NOT in silence: the open's report counts the run
+    // below its start point and accounts it — the bytes it spans and the
+    // position it holds none above — since a derivation from a base below
+    // it meets it: a history read from genesis halts on the damage the
+    // account names, as an open falling back past checkpoint.3 would.
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(recovery.start_point, Seq(3));
+    assert_eq!(recovery.runs_passed_over, 1, "the run below the start point, counted");
+    let account = recovery.first_run_passed_over.as_deref().expect("the run's account");
+    let span = format!("corrupt run in seg-1.wal from byte {} to byte {}", spans[4].0, spans[5].0);
+    assert!(account.starts_with(&span), "{span:?} does not open: {account}");
+    assert!(account.contains("holding no position above position 3"), "{account}");
+    match k.world_at(Seq(2)) {
+        Err(HistoryError::Corruption { at: Seq(4), .. }) => {}
+        other => {
+            panic!("a read from a base below the run meets what the open passed over: {other:?}")
+        }
+    }
 }
 
 #[test]
@@ -302,6 +323,11 @@ fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_mar
         "T3 cut whole, its marker with it"
     );
     assert_eq!(recovery.tail_cut_intact, 1, "T3's intact marker, counted as the rot's tell");
+    // …and WHICH write: the position T3's intact marker claims — the one its
+    // acknowledgement named — and the file and byte the cut began at, where
+    // a copy taken before this open still holds it.
+    assert_eq!(recovery.tail_cut_claimed, Some(Seq(3)), "the position the acked write held");
+    assert_eq!(recovery.tail_cut_from, Some(("seg-1.wal".to_string(), spans[4].0)));
 }
 
 #[test]
@@ -554,6 +580,11 @@ fn recovery_deletes_the_wholly_later_segments_the_tail_spans() {
     // its own end, contributing nothing — beside the four commits replayed.
     let recovery = k.recovery().expect("journaled");
     assert_eq!(recovery.tail_cut, spans[1].0 + 3, "seg-5's length, discarded whole");
+    assert_eq!(
+        recovery.tail_cut_from,
+        Some(("seg-5.wal".to_string(), 0)),
+        "the cut began at the first byte it took: seg-5's first, seg-1 giving none"
+    );
     assert_eq!(recovery.replayed, 4);
 
     // …which is what makes reusing the discarded coordinate safe: the next

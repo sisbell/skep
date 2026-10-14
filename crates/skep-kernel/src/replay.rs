@@ -155,8 +155,9 @@ pub(crate) struct Unreachable {
     /// the whole of what is left to tell an operator once the fallback chain
     /// is exhausted: a body that will not decode says roll the binary, a
     /// failed checksum says restore the media, and a bare refusal says
-    /// neither. `None` when no candidate was tried at all — no retained
-    /// checkpoint, or every one of them above the ceiling.
+    /// neither — named on the base's file, `checkpoint.{n}: …`
+    /// ([`CheckpointMeta::named`]). `None` when no candidate was tried at all
+    /// — no retained checkpoint, or every one of them above the ceiling.
     ///
     /// Only an exhausted fallback chain reaches a caller this way; a refusal
     /// the fallback walked past is no failure, and travels instead on the base
@@ -230,8 +231,11 @@ pub(crate) fn select_base<W: WorldState>(
         skipped.push(SkippedBase { seq: Seq(cp.seq), why: skip_account(&refused) });
         // Newest-first, so the first refusal met is the newest base's — the
         // one this derivation most wanted, and the one an operator needs if
-        // nothing below it stands in either.
-        cause.get_or_insert(refused);
+        // nothing below it stands in either. Kept NAMED ON ITS FILE, since by
+        // then it is read away from the base that refused: the line says
+        // `checkpoint.{n}: …`, where a listing's order would mislead a reader
+        // hunting "the newest" by name.
+        cause.get_or_insert_with(|| cp.named(refused));
     }
     // Genesis stands in only while the journal still reaches back to it.
     if !journal::reaches_genesis(segs) {

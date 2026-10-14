@@ -155,6 +155,9 @@ pub enum OpenError {
         found: [u8; 4],
         /// The sync word this build writes and reads.
         expected: [u8; 4],
+        /// The segment's name in the journal directory — the first one the
+        /// scan would read, `seg-{n}.wal` — the file the refusal names.
+        segment: String,
     },
     /// The configuration is not one this kernel offers; the payload names the
     /// rule broken. Not an environmental failure: no retry and no operator
@@ -206,8 +209,12 @@ pub enum OpenError {
         /// one (AUTH-2.88). A base that could not be READ at all carries the
         /// read's own I/O failure, which names the file and its own remedy —
         /// `checkpoint.{n}: read: Permission denied (os error 13)`, a
-        /// permission, a device — rather than any of the four above. `None`
-        /// when no candidate was tried at all — the journal retains no
+        /// permission, a device — rather than any of the four above. Whichever
+        /// it is, the account opens on the base's file, `checkpoint.{n}: …` —
+        /// the read's own failure named so where it failed, every other
+        /// refusal wrapped in the name and travelling beneath it as its
+        /// `source` — so the line names the one base an operator acts on.
+        /// `None` when no candidate was tried at all — the journal retains no
         /// checkpoint, and only its unreachable genesis was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
@@ -300,9 +307,9 @@ impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OpenError::InvalidConfig(msg) => write!(f, "invalid kernel configuration: {msg}"),
-            OpenError::ForeignFormat { found, expected } => write!(
+            OpenError::ForeignFormat { found, expected, segment } => write!(
                 f,
-                "journal is not this build's format: its segment opens with the stamp `{}`, this \
+                "journal is not this build's format: {segment} opens with the stamp `{}`, this \
                  build reads and writes `{}` only; {NO_MIGRATION_REMEDY}",
                 stamp_text(found),
                 stamp_text(expected)
@@ -316,13 +323,16 @@ impl fmt::Display for OpenError {
                 "no retained checkpoint loads and genesis is unreachable; the newest \
                  refused: {e}"
             ),
+            // The coordinate spelled as the operator's stream spells every
+            // one, `position N`, so a line naming the damage joins every other
+            // line about that position.
             OpenError::Corruption { at, cause: None } => write!(
                 f,
-                "durable committed data cannot be read; coordinate naming the damage: {at}"
+                "durable committed data cannot be read; position {at} names the damage"
             ),
             OpenError::Corruption { at, cause: Some(e) } => write!(
                 f,
-                "durable committed data cannot be read; coordinate naming the damage: {at}: {e}"
+                "durable committed data cannot be read; position {at} names the damage: {e}"
             ),
         }
     }
@@ -531,8 +541,10 @@ pub enum HistoryError {
         floor: Option<Seq>,
         /// Why the NEWEST base this call could have used refused, when one
         /// was tried at all. `Some` is a retained base that is itself
-        /// unusable: re-asking at `floor` refuses again, and a caller
-        /// honouring the `floor` alone retries forever. `None` means no
+        /// unusable, its account opening on that base's file,
+        /// `checkpoint.{n}: …`, as [`OpenError::BadCheckpoint`]'s does;
+        /// re-asking at `floor` refuses again, and a caller honouring the
+        /// `floor` alone retries forever. `None` means no
         /// candidate was tried — every retained base lies above the boundary
         /// (at or above it, for [`crate::Kernel::attestation_at`]), or none is
         /// retained: re-asking [`crate::Kernel::world_at`] or
@@ -583,14 +595,16 @@ pub enum HistoryError {
     },
 }
 
+/// Every coordinate spelled as the operator's stream spells one, `position
+/// N`, as [`OpenError`]'s sentence spells its own.
 impl fmt::Display for HistoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HistoryError::BeyondHead { head } => {
-                write!(f, "boundary beyond the installed head {head}")
+                write!(f, "boundary beyond the installed head, position {head}")
             }
             HistoryError::NotABoundary { nearest } => {
-                write!(f, "not a committed boundary; nearest at or below is {nearest}")
+                write!(f, "not a committed boundary; nearest at or below is position {nearest}")
             }
             // Two independent facts — which floor, and why the newest base
             // refused — so the sentence is built rather than spelled out over
@@ -599,8 +613,8 @@ impl fmt::Display for HistoryError {
                 match floor {
                     Some(floor) => write!(
                         f,
-                        "history below the oldest retained checkpoint (seq {floor}) has been \
-                         reclaimed"
+                        "history below the oldest retained checkpoint (position {floor}) has \
+                         been reclaimed"
                     )?,
                     None => write!(
                         f,
@@ -618,11 +632,11 @@ impl fmt::Display for HistoryError {
             HistoryError::Io(e) => write!(f, "history read I/O failure: {e}"),
             HistoryError::Corruption { at, cause: None } => write!(
                 f,
-                "journal corrupt at rest; coordinate naming the damage: {at}"
+                "journal corrupt at rest; position {at} names the damage"
             ),
             HistoryError::Corruption { at, cause: Some(e) } => write!(
                 f,
-                "journal corrupt at rest; coordinate naming the damage: {at}: {e}"
+                "journal corrupt at rest; position {at} names the damage: {e}"
             ),
         }
     }

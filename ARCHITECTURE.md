@@ -296,12 +296,21 @@ and the hook is a no-op without the feature.
 
 The kernel has no logging seam: it answers facts, and the daemon says them.
 A journaled open reports what it found and did as `Recovery` — the start
-point, the bases it passed over, the commits it replayed (`replayed`) and
-the un-acked tail it cut, in bytes (`tail_cut`); a landing answers the
+point, the bases it passed over, the commits it replayed (`replayed`), the
+un-acked tail it cut, in bytes (`tail_cut`), with the file and byte the cut
+began at (`tail_cut_from`), the intact frames among them no torn write
+leaves (`tail_cut_intact`) and the position an intact marker in the cut
+claimed (`tail_cut_claimed`), whether it `began` a journal where none stood,
+and the corrupt runs below the start point it read and passed over
+(`runs_passed_over`, with the account of the first); a landing answers the
 journal bytes it reclaimed (`Kernel::last_reclaimed_bytes`, `Some(0)` where
-it reclaimed nothing); the checkpoints `transact` ran inline on a committing
-thread are counted and the last one's failure kept as text
-(`Kernel::inline_checkpoints`, `Kernel::last_inline_checkpoint_failure`);
+it reclaimed nothing) and the checkpoint files its retention removed, each
+with its length (`Kernel::last_removed_checkpoints`); the checkpoints
+`transact` ran inline on a committing thread are counted and the last one
+recorded — the commit that ran it, how long it held that commit's caller,
+and how it ended (`Kernel::inline_checkpoints`,
+`Kernel::last_inline_checkpoint`); a poisoned kernel says why
+(`Kernel::poison_cause`, a panic's words only where the code wrote them);
 one checkpoint's header is read by its seq (`Kernel::checkpoint_header`, the
 start point's after an open that skipped a newer base); and a checkpoint
 that failed after its base landed names which step failed — the directory's

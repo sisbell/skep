@@ -20,17 +20,19 @@ use crate::world::World;
 /// (AUTH-2.85, AUTH-2.86): M2's own account of the open — the start point its
 /// derivation resolved from, every retained checkpoint it passed over, each
 /// with why, the commits it replayed above the start point, the un-acked
-/// tail it cut, in bytes, with the intact frames among them no torn write
-/// leaves, and whether any journal stood to recover at all — and the one
-/// fact only this assembler can add to it, whether the start point's
-/// identity slice was RESOLVED to the empty table rather than carried
-/// (AUTH-2.83). The daemon above logs them at
+/// tail it cut, in bytes and from where, with the intact frames among them no
+/// torn write leaves and the position their markers claimed, whether any
+/// journal stood to recover at all, and the corrupt runs below the start
+/// point it read and passed over — and the one fact only this assembler can
+/// add to it, whether the start point's identity slice was RESOLVED to the
+/// empty table rather than carried (AUTH-2.83). The daemon above logs them at
 /// startup: a skipped checkpoint with the start point it resolved from, a
 /// slice-less checkpoint that resolved empty — the operator's one tell of a
-/// build that wrote no slice — and the open's own landing in figures. A
-/// report and never a verdict: the open succeeded from the start point
-/// named; the chain's one failure is [`EngineError::Open`]'s. Absent under
-/// `Durability::InMemory`, which loads nothing.
+/// build that wrote no slice — the corrupt runs passed over below the start
+/// point, and the open's own landing in figures. A report and never a
+/// verdict: the open succeeded from the start point named; the chain's one
+/// failure is [`EngineError::Open`]'s. Absent under `Durability::InMemory`,
+/// which loads nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Recovery {
     /// The base the recovered world was folded from — a retained
@@ -56,11 +58,29 @@ pub struct Recovery {
     /// shutdown and nearly every crash, and otherwise the sign that the cut
     /// may have taken a write the daemon acknowledged.
     pub tail_cut_intact: u64,
+    /// Where the cut began — the segment's name in the data directory and
+    /// the byte of it — as M2 answered it (`skep_kernel::Recovery`'s
+    /// `tail_cut_from`); `None` where nothing was cut.
+    pub tail_cut_from: Option<(String, u64)>,
+    /// The greatest position an intact commit marker in the cut claimed —
+    /// where the cut may have taken an acknowledged write, the position its
+    /// acknowledgement named (`skep_kernel::Recovery`'s `tail_cut_claimed`);
+    /// `None` where no intact marker stood in the cut.
+    pub tail_cut_claimed: Option<Seq>,
     /// Whether no journal stood in the directory, so the open BEGAN one at
     /// genesis rather than recovered one (`skep_kernel::Recovery`'s
     /// `began`): right on a fresh board's first open, and on any other the
     /// tell that the directory opened is not where the journal lives.
     pub began: bool,
+    /// The corrupt runs below the start point the open read and passed over
+    /// (`skep_kernel::Recovery`'s `runs_passed_over`): harmless to this open,
+    /// which the start point carries past them, and met by any derivation
+    /// from a base below one — the fallback past the start point among them.
+    pub runs_passed_over: u64,
+    /// The first of them, in M2's words: its files and bytes, the position it
+    /// holds none above, and the act that clears it
+    /// (`skep_kernel::Recovery`'s `first_run_passed_over`).
+    pub first_run_passed_over: Option<String>,
     /// Whether the start point carried no identity slice and its link slice
     /// held no credential deposit, so its table RESOLVED empty (AUTH-2.83) —
     /// the true table, and the one case a slice-less base is a start point.
@@ -240,7 +260,11 @@ impl Engine {
             replayed: found.replayed,
             tail_cut: found.tail_cut,
             tail_cut_intact: found.tail_cut_intact,
+            tail_cut_from: found.tail_cut_from.clone(),
+            tail_cut_claimed: found.tail_cut_claimed,
             began: found.began,
+            runs_passed_over: found.runs_passed_over,
+            first_run_passed_over: found.first_run_passed_over.clone(),
             identity_resolved_empty: kernel.snapshot().world().identity_resolved,
         });
         Ok(Engine { stores: EngineStores::new(kernel), recovery })

@@ -777,11 +777,14 @@ fn every_line_of_a_served_open_carries_a_class_word_the_door_spells() {
 /// the binary and says no `journal tail cut` line; killed idle, and bytes
 /// that spell no frame appended past that marker (a copy taken mid-write's
 /// shape, the inventory suite's own fixture), the next open says ONE `open:
-/// journal tail cut ({n} bytes): …` line after the recovery's landing, `{n}`
-/// the bytes appended and the inventory's `journal.tail_cut` over a copy of
-/// the same torn directory, the segment back at its clean length; and the
-/// open after that, the tail gone, says none again. Each child killed by
-/// the test.
+/// journal tail cut ({n} bytes, beginning at byte {b} of {segment}, past
+/// position {p}): …` line after the recovery's landing, `{n}` the bytes
+/// appended and the inventory's `journal.tail_cut` over a copy of the same
+/// torn directory, `{b}` and `{segment}` the active segment's clean length and
+/// its name, where the appended bytes begin, and `{p}` the committed head the
+/// inventory's `journal.log_position` reads off that copy, the segment back
+/// at its clean length; and the open after that, the tail gone, says none
+/// again. Each child killed by the test.
 #[test]
 fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean_close() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -825,6 +828,8 @@ fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean
         inventoried, GARBAGE,
         "the inventory's count is the bytes past the last marker: {v}"
     );
+    let head = v["journal"]["log_position"].as_u64().expect("the committed head");
+    let name = segment.file_name().and_then(|n| n.to_str()).expect("the segment's name");
 
     let mut second = serve_and_read_the_open(&dir, &[]);
     await_said(&mut second.stderr, "open", "media uploads: ");
@@ -835,11 +840,12 @@ fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean
     assert_eq!(
         cut[0],
         format!(
-            "journal tail cut ({inventoried} bytes): the un-acked tail a crash or a kill left past \
-             the last committed marker — a write caught before its commit was durable, never \
-             acknowledged — removed by the open; every acknowledged write stands"
+            "journal tail cut ({inventoried} bytes, beginning at byte {clean_len} of {name}, past \
+             position {head}): the un-acked tail a crash or a kill left past the last committed \
+             marker — a write caught before its commit was durable, never acknowledged — removed \
+             by the open; every acknowledged write stands"
         ),
-        "the line names the inventory's figure"
+        "the line names the inventory's figure, the file and byte the cut began at, and the head"
     );
     let at = |prefix: &str| whole.iter().position(|l| said(l, "open", prefix));
     assert!(

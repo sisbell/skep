@@ -96,6 +96,20 @@ fn an_unwind_whose_repair_fails_poisons_the_kernel() {
     assert_eq!(panic_message(&*payload), "injected panic at JournalAppend");
     assert!(k.is_poisoned(), "the repair's failure halts the kernel");
     assert!(k.armed_steps().is_empty(), "both arms fired");
+    // …and says why, whole: the transaction by its position and the
+    // repair's failure on its segment and act. The panic was a FORMATTED
+    // one, so none of its text rides the cause — a formatted panic in the
+    // commit region is a record's own serializer's, whose text may hold the
+    // record's values — as the binary's panic hook keeps it off the stream.
+    assert_eq!(
+        k.poison_cause(),
+        Some(
+            "a panic unwound out of the commit of the transaction at position 2, and the \
+             truncation that repairs it failed (seg-1.wal: truncate: injected StorageFull at \
+             JournalRepair): its frames may stand on disk, so the next open decides whether it \
+             stands"
+        )
+    );
 
     let ran = std::cell::Cell::new(false);
     let out = k.transact::<(), ()>(&[], |stg| {

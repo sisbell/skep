@@ -26,7 +26,8 @@
 //!
 //! The §6 cadence is tested on commit under the applier lock, never by a
 //! timer. Under its inline arms the crossing commit runs the checkpoint on
-//! its own thread and discards the result; under
+//! its own thread, the result reaching no caller but as the kernel's record
+//! of the run ([`Kernel::last_inline_checkpoint`]); under
 //! [`CheckpointPolicy::Deferred`] it SETS THE DUE FLAG instead
 //! ([`Kernel::checkpoint_due`], lock-free) and the caller's own thread runs
 //! [`Kernel::checkpoint`] — which clears the flag FIRST, then runs — and
@@ -45,11 +46,15 @@
 //!
 //! The kernel has no logging seam: it answers facts, and the caller above
 //! says them. A journaled open reports what it did as [`Recovery`] — the
-//! start point, the bases it passed over, the commits it replayed and the
-//! tail it cut; a landing answers the journal bytes it reclaimed through
-//! [`Kernel::last_reclaimed_bytes`]; the checkpoints `transact` ran inline on
-//! a committing thread are counted, and the last one's failure kept as text
-//! ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint_failure`]);
+//! start point, the bases it passed over, the commits it replayed, the tail
+//! it cut with where the cut began and the position an intact marker in it
+//! claimed, and the corrupt runs below the start point it read and passed
+//! over; a landing answers the journal bytes it reclaimed and the
+//! checkpoints it removed through [`Kernel::last_reclaimed_bytes`] and
+//! [`Kernel::last_removed_checkpoints`]; the checkpoints `transact` ran
+//! inline on a committing thread are counted, and the last one recorded —
+//! the commit that ran it, how long it held that commit's caller, how it
+//! ended ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint`]);
 //! and a checkpoint that failed AFTER its base landed names which step
 //! failed — the directory's fsync, retention or the journal's reclamation —
 //! as [`CheckpointError::Landed`] carrying a [`LandedStep`]. RETENTION KEEPS
@@ -177,7 +182,7 @@ pub use error::{CheckpointError, HistoryError, LandedStep, OpenError, RebuildErr
 pub use journal::{
     Attestation, AttestationError, JOURNAL_FORMAT, MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES,
 };
-pub use kernel::{Kernel, Recovery, Snapshot, Staging};
+pub use kernel::{InlineCheckpoint, Kernel, Recovery, Snapshot, Staging};
 pub use replay::SkippedBase;
 
 use std::fmt;

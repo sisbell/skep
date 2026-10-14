@@ -387,7 +387,11 @@ fn the_load_steps_back_from_a_slice_less_checkpoint_and_replays_the_true_table()
                 replayed: 0,
                 tail_cut: 0,
                 tail_cut_intact: 0,
+                tail_cut_from: None,
+                tail_cut_claimed: None,
                 began: true,
+                runs_passed_over: 0,
+                first_run_passed_over: None,
                 identity_resolved_empty: false,
             })
         );
@@ -451,7 +455,11 @@ fn a_slice_less_checkpoint_with_no_credential_deposit_loads_as_the_empty_table_a
             replayed: 0,
             tail_cut: 0,
             tail_cut_intact: 0,
+            tail_cut_from: None,
+            tail_cut_claimed: None,
             began: false,
+            runs_passed_over: 0,
+            first_run_passed_over: None,
             identity_resolved_empty: true,
         })
     );

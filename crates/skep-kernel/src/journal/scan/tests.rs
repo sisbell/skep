@@ -496,6 +496,12 @@ fn a_foreign_stamp_is_told_from_damage() {
     // Frames: 0 = the record, 1 = its marker.
     let clean_starts = frame_starts(&seg);
     let probe = |segs: &[SegmentMeta], s_load: u64| first_sync_word(segs, s_load).unwrap();
+    // Another format's answer names the word and the segment found under it
+    // — the file the refusal names.
+    let foreign = |stamp: &[u8; 4], segment: &str| FirstSyncWord::Foreign {
+        found: *stamp,
+        segment: segment.into(),
+    };
     // The clean segment with its first bytes replaced — damage confined to
     // the opening, every later frame this build's.
     let opened_with = |word: &[u8]| {
@@ -508,7 +514,7 @@ fn a_foreign_stamp_is_told_from_damage() {
     for stamp in [b"SKJ3", b"SKJ2", b"SKJ1", b"SKJ9"] {
         fs::write(&seg, &clean).unwrap();
         restamp_every_frame(&seg, stamp);
-        assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*stamp), "every frame restamped");
+        assert_eq!(probe(&segs, 0), foreign(stamp, "seg-1.wal"), "every frame restamped");
     }
     // Every one-bit flip of this build's numeral keeps the `SKJ` prefix,
     // so by its word alone each reads as another format's stamp; the
@@ -537,11 +543,11 @@ fn a_foreign_stamp_is_told_from_damage() {
     // a header too short to say where the successor begins, and a first
     // frame with nothing after it. Scanning either would wipe it.
     fs::write(&seg, b"SKJ3\x05\x00").unwrap();
-    assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*b"SKJ3"), "a header cut short");
+    assert_eq!(probe(&segs, 0), foreign(b"SKJ3", "seg-1.wal"), "a header cut short");
     opened_with(b"SKJ3");
     let lone = fs::read(&seg).unwrap()[..clean_starts[1]].to_vec();
     fs::write(&seg, lone).unwrap();
-    assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*b"SKJ3"), "no successor to read");
+    assert_eq!(probe(&segs, 0), foreign(b"SKJ3", "seg-1.wal"), "no successor to read");
 
     // The probe looks where the scan looks: a closed segment the base
     // embodies is skipped, so a foreign stamp there is not read — and
@@ -554,10 +560,10 @@ fn a_foreign_stamp_is_told_from_damage() {
     let segs = list_segments(dir.path()).unwrap();
     assert_eq!(segs.len(), 2, "the fixture rotates");
     restamp_every_frame(&segs[0].path, b"SKJ2");
-    assert_eq!(probe(&segs, 0), FirstSyncWord::Foreign(*b"SKJ2"), "seg-1 is read from genesis");
+    assert_eq!(probe(&segs, 0), foreign(b"SKJ2", "seg-1.wal"), "seg-1 is read from genesis");
     assert_eq!(probe(&segs, 1), FirstSyncWord::Scan, "seg-1 is skipped above a base at 1");
     restamp_every_frame(&segs[1].path, b"SKJ2");
-    assert_eq!(probe(&segs, 1), FirstSyncWord::Foreign(*b"SKJ2"), "seg-2 is read");
+    assert_eq!(probe(&segs, 1), foreign(b"SKJ2", "seg-2.wal"), "seg-2 is read, and named");
 }
 
 #[test]
@@ -1077,8 +1083,10 @@ fn torn_tail_reaches_eof() {
     // The cut sits at the last committed marker's frame end.
     let prefix_end = intact_prefix_end(&segs[0].path);
     assert_tail(&out, &segs[0].path, prefix_end);
-    // A torn write leaves no intact frame of no writer's in the tail.
+    // A torn write leaves no intact frame of no writer's in the tail, and
+    // so no position claimed in it.
     assert_eq!(out.tail_intact, 0, "a crash's torn tail is nothing but torn bytes");
+    assert_eq!(out.tail_claimed, None, "a torn marker claims nothing");
 }
 
 /// A corrupt run's account names where its bytes lie — the segment or
@@ -1159,8 +1167,10 @@ fn a_corrupt_runs_account_names_its_files_and_whether_they_alone_restore_the_jou
 /// decode — is counted where no committed marker follows it, which is the
 /// tail the cut removes: rot in the last committed transaction's record
 /// leaves that transaction's marker intact and committing nothing, and is
-/// counted; the same rot one transaction earlier is followed by a commit,
-/// and is not; and a crash's torn bytes are no frame at all.
+/// counted, with the position the marker claims — the one its
+/// acknowledgement named — and the cut answers where it began, the file and
+/// the byte; the same rot one transaction earlier is followed by a commit,
+/// and is neither; and a crash's torn bytes are no frame at all.
 #[test]
 fn an_intact_frame_no_torn_write_leaves_is_counted_where_the_tail_holds_it() {
     let journal_of_three = || {
@@ -1182,6 +1192,11 @@ fn an_intact_frame_no_torn_write_leaves_is_counted_where_the_tail_holds_it() {
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.committed_head, 2, "the rotted transaction is cut as the tail");
     assert_eq!(out.tail_intact, 1, "its intact marker is counted");
+    assert_eq!(out.tail_claimed, Some(3), "…with the position T3's acknowledgement named");
+    let len = fs::metadata(&segs[0].path).unwrap().len();
+    let cut = truncate_tail(dir.path(), &out).unwrap();
+    assert_eq!(cut.bytes, len - starts[4] as u64, "T3 cut whole");
+    assert_eq!(cut.from, Some(("seg-1.wal".to_string(), starts[4] as u64)), "from T3's record");
 
     // T2's record rotted: T2's marker is as intact, and T3 commits after it,
     // so it lies in no tail.
@@ -1192,6 +1207,101 @@ fn an_intact_frame_no_torn_write_leaves_is_counted_where_the_tail_holds_it() {
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
     assert_eq!(out.committed_head, 3);
     assert_eq!(out.tail_intact, 0, "a commit after it resets the count");
+    assert_eq!(out.tail_claimed, None, "…and the claim beside it");
+    let cut = truncate_tail(dir.path(), &out).unwrap();
+    assert_eq!((cut.bytes, cut.from), (0, None), "the last committed marker ends the journal");
+}
+
+/// THE RUNS BELOW THE BASE: a corrupt run the base embodies is no halt of
+/// the scan from that base, and is PASSED OVER — counted, with the account of
+/// the first: where its bytes lie, the position it holds none above, which
+/// bases meet it, and the act that clears it, a closed segment's or the
+/// active one's. From a base BELOW the run the same run halts, and nothing
+/// is passed over; junk ahead of a journal's first frame, inferred to hold
+/// no position at all, is met by no base and is never counted.
+#[test]
+fn a_corrupt_run_below_the_base_is_passed_over_counted_and_accounted() {
+    // A closed segment straddling the base: seg-1 holds T1 and T2, seg-3
+    // holds T3. seg-1: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    write_txn(&mut writer, 2, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
+    write_txn(&mut writer, 3, vec![rec(30)]); // rotates into seg-3
+    drop(writer);
+    let segs = list_segments(dir.path()).unwrap();
+    assert_eq!(segs.len(), 2, "the fixture rotates");
+    let seg1 = frame_starts(&segs[0].path);
+    let t1_chain = chain_of_marker_at(&segs[0].path, seg1[1]);
+    flip_byte(&segs[0].path, seg1[0] + FRAME_HEADER_LEN + 1); // T1's record
+    let above = scan(&segs, 1, None, t1_chain).unwrap();
+    assert!(above.halt_to_head().is_none(), "the base embodies every position the run can hold");
+    let (count, first) = above.runs_passed_over();
+    assert_eq!(count, 1);
+    let first = first.expect("the first run's account");
+    for named in [
+        format!("corrupt run in seg-1.wal from byte {} to byte {}", seg1[0], seg1[1]),
+        "holding no position above position 1".into(),
+        "a history read from a base below position 1, or an open that falls back to one, meets \
+         it and refuses"
+            .into(),
+        "seg-1.wal is closed — seg-3.wal follows it".into(),
+        "restore seg-1.wal alone from a copy that holds seg-3.wal, and reopen".into(),
+    ] {
+        assert!(first.contains(&named), "{named:?} missing from: {first}");
+    }
+    // From genesis — a base below the run — the same run halts, at the
+    // coordinate after the marker it landed on, and is passed over by nothing.
+    let genesis = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    assert!(matches!(genesis.halt_anywhere(), Some((2, Some(_)))), "the run below meets genesis");
+    assert_eq!(genesis.runs_passed_over(), (0, None));
+
+    // In the ACTIVE segment: T2's record rotted under a base at 2. The run
+    // stays until its segment closes and a landing reclaims below it.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    for seq in 1..=3 {
+        write_txn(&mut writer, seq, vec![rec(seq * 10)]);
+    }
+    drop(writer);
+    let segs = list_segments(dir.path()).unwrap();
+    let starts = frame_starts(&segs[0].path);
+    // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
+    let t2_chain = chain_of_marker_at(&segs[0].path, starts[3]);
+    flip_byte(&segs[0].path, starts[2] + FRAME_HEADER_LEN + 1);
+    let out = scan(&segs, 2, None, t2_chain).unwrap();
+    assert!(out.halt_to_head().is_none());
+    let (count, first) = out.runs_passed_over();
+    assert_eq!(count, 1);
+    let first = first.expect("the first run's account");
+    assert!(
+        first.starts_with(&format!(
+            "corrupt run in seg-1.wal from byte {} to byte {}, holding no position above \
+             position 2",
+            starts[2], starts[3]
+        )),
+        "{first}"
+    );
+    assert!(first.contains("seg-1.wal is the active segment"), "{first}");
+    assert!(first.contains("until seg-1.wal has closed and a landing reclaims"), "{first}");
+    assert!(!first.contains("alone"), "no one file restores the active segment: {first}");
+
+    // Junk AHEAD of the journal's first frame: the run lands on T1's record,
+    // inferred to hold no position, which no base lies below.
+    let dir = tempdir().unwrap();
+    let mut writer = fresh_writer(dir.path());
+    write_txn(&mut writer, 1, vec![rec(10)]);
+    drop(writer);
+    let segs = list_segments(dir.path()).unwrap();
+    let mut prefixed = vec![0xABu8; 8];
+    prefixed.extend(fs::read(&segs[0].path).unwrap());
+    fs::write(&segs[0].path, prefixed).unwrap();
+    let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
+    assert!(
+        out.runs.iter().any(|run| run.end == RunEnd::Landed { inferred_max: 0, at: 1 }),
+        "the junk is a run"
+    );
+    assert_eq!(out.runs_passed_over(), (0, None), "…holding nothing any derivation meets");
 }
 
 #[test]
@@ -1214,6 +1324,12 @@ fn the_cut_names_the_segment_holding_the_last_committed_marker() {
     assert_eq!(tail.segment, segs[0].path);
     assert_eq!(tail.offset, fs::metadata(&segs[0].path).unwrap().len());
     assert_eq!(tail.discard, vec![segs[1].path.clone()]);
+    // …so the cut takes no byte of seg-1, and begins at seg-2's first.
+    let seg2_len = fs::metadata(&segs[1].path).unwrap().len();
+    drop(writer);
+    let cut = truncate_tail(dir.path(), &out).unwrap();
+    assert_eq!(cut.bytes, seg2_len, "seg-2 discarded whole");
+    assert_eq!(cut.from, Some(("seg-2.wal".to_string(), 0)), "from the first byte a cut took");
 }
 
 #[test]
@@ -1372,8 +1488,10 @@ fn a_slot_past_the_cap_at_rest_closes_no_boundary_and_panics_nothing() {
     assert_eq!(out.committed_head, 1, "…which commits nothing");
     assert_eq!(out.closing_marker(2).map(|_| ()), Err(1), "…and closes no boundary");
     // …and the tail the cut takes holds it, intact and of no writer's: the
-    // one frame counted, where a crash's torn bytes are counted none.
+    // one frame counted, where a crash's torn bytes are counted none — and,
+    // undecodable, its fields unread, it claims no position.
     assert_eq!(out.tail_intact, 1, "the undecodable intact frame is the tail's tell");
+    assert_eq!(out.tail_claimed, None, "an undecodable marker claims nothing");
 }
 
 #[test]

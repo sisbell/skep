@@ -14,13 +14,13 @@
 //! without the feature carries none of it, and its hook before a step is a
 //! no-op (`store.rs`).
 
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
 use super::{Step, Store, Stream};
-use crate::blobs::fsync_dir;
+use crate::blobs::{dir_builder, file_options, fsync_dir};
 
 /// The hazard seam's state: at most one failure point and one hold — the
 /// hold shared, so the hook takes it out and runs it with this state
@@ -110,27 +110,14 @@ impl Stream<'_> {
 
 /// Write `bytes` at `path` by the blob's own order: a temp file beside the
 /// target, fsynced, renamed over it, the directory fsynced — the directory
-/// born `0700` and the temp file `0600` on unix, as the finish's are.
+/// and the temp file born owner-only, as the finish's are
+/// (`blobs::dir_builder`, `blobs::file_options`).
 fn install_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().expect("a blob sits in its designation directory");
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)?;
+    dir_builder().recursive(true).create(dir)?;
     let tmp = dir.join(format!(".install-{}", std::process::id()));
     {
-        let mut opts = OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
+        let mut f = file_options().write(true).create(true).truncate(true).open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }

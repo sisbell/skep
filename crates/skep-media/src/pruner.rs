@@ -36,8 +36,10 @@
 //! at the per-file cap an unlink held every write on the board for the
 //! freeing's time); a replace's aside the deferred step did not reach is
 //! removed at the pass's end, as before. Then (d) THE LOGS' COMPACTION —
-//! each of the two logs rewritten to its current records where its lines
-//! have passed [`crate::limits::COMPACTION_TRIGGER`] times those records
+//! the lease log's leases past the horizon dropped first, as the store's
+//! open drops them, then each of the two logs rewritten to its current
+//! records where its lines have passed
+//! [`crate::limits::COMPACTION_TRIGGER`] times those records
 //! (never under [`crate::limits::COMPACTION_MIN_LINES`]), under the store's
 //! own lock on that log's appends alone and NO arm of the credential lock
 //! (P22: the honest-null arm compacted by its reclaimer); a log that has
@@ -355,7 +357,7 @@ impl Pruner {
         report.failed = self.steps(media_gate, &exclusive, &mut report).err();
         // (d) THE LOGS' COMPACTION, under no arm — on EVERY exit: the stop a
         // failed step may have met is lifted here, by this pass.
-        compact_logs(media_gate.store(), &mut report);
+        compact_logs(media_gate.store(), media_gate.now_ms(), &mut report);
         #[cfg(any(test, feature = "test-hooks"))]
         self.passes_completed.fetch_add(1, Ordering::Release);
         Some(report)
@@ -497,18 +499,20 @@ impl Pruner {
     }
 }
 
-/// (d) THE LOGS' COMPACTION: each log rewritten where it has passed the
-/// trigger — or has STOPPED, whatever its count — under the store's lock on
-/// that log's appends alone — no arm of the credential lock is held here —
-/// and the stopped logs read before and after it: a stop standing before
-/// the rewrite and gone after it is one this pass LIFTED, said as it stood.
+/// (d) THE LOGS' COMPACTION at `now_ms`, the media gate's clock: the lease
+/// log's leases past the horizon dropped first, as the store's open drops
+/// them, then each log rewritten where it has passed the trigger — or has
+/// STOPPED, whatever its count — under the store's lock on that log's
+/// appends alone — no arm of the credential lock is held here — and the
+/// stopped logs read before and after it: a stop standing before the
+/// rewrite and gone after it is one this pass LIFTED, said as it stood.
 /// Then each log's size, the line's figure. Run on EVERY exit of the pass, a
 /// failed step's included. A failure here is the report's and never the
 /// pass's: the next pass tries again, and a stopped log is rewritten then
 /// whatever its count.
-fn compact_logs(store: &Store, report: &mut PrunePass) {
+fn compact_logs(store: &Store, now_ms: u64, report: &mut PrunePass) {
     let before = store.stopped_logs();
-    match store.compact_logs_if_past(COMPACTION_TRIGGER, COMPACTION_MIN_LINES) {
+    match store.compact_logs_if_past(COMPACTION_TRIGGER, COMPACTION_MIN_LINES, now_ms) {
         Ok(compacted) => report.compacted = compacted,
         Err(e) => report.compaction_failed = Some(e.to_string()),
     }

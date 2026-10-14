@@ -15,8 +15,9 @@
 //! time, its acts serialized ([`Store`]); and no [`Store::unlink_blob`] or
 //! [`Store::remove_aside`] while a [`Stream::finish`] runs (see there); and
 //! it reads NO limits record (it answers pending bytes and the volume's free
-//! space; what bounds them is policy, the daemon's). What it promises is the
-//! ORDER of its own acts and what each leaves behind on a crash:
+//! space and capacity; what bounds them is policy, the daemon's). What it
+//! promises is the ORDER of its own acts and what each leaves behind on a
+//! crash:
 //!
 //! * THE PUT's ORDER ([`Stream::finish`]): the partial fsynced; where the
 //!   name exists, the replaced instance LINKED ASIDE (a second name no hex
@@ -66,12 +67,13 @@
 //!   open and at its caller's runtime compaction
 //!   ([`Store::compact_logs_if_past`] — the daemon's pruner, once a log has
 //!   passed a size trigger, under the store's lock on that log's appends
-//!   alone), which rewrites a stopped log whatever its count; between the
-//!   two a stopped log answers `Io` to every act that writes it ([`Store`]),
-//!   naming the stop's cause, which [`Store::stopped_logs`] answers with the
-//!   stop's age and the appends it has refused ([`LogStop`]) — a full volume
-//!   told apart from a read-only mount or a failing device. Each log's size,
-//!   the room its next rewrite needs, is answered too ([`Store::log_sizes`],
+//!   alone, a lease past the horizon dropped there as at open), which
+//!   rewrites a stopped log whatever its count; between the two a stopped
+//!   log answers `Io` to every act that writes it ([`Store`]), naming the
+//!   stop's cause, which [`Store::stopped_logs`] answers with the stop's age
+//!   and the appends it has refused ([`LogStop`]) — a full volume told apart
+//!   from a read-only mount or a failing device. Each log's size, the room
+//!   its next rewrite needs, is answered too ([`Store::log_sizes`],
 //!   [`LogSize`]), and a compaction answers the size it rewrote a log from.
 //! * EVERY FAILURE NAMES ITS FILE AND ITS ACT: an I/O error the store
 //!   answers reads `{file}: {act}: {cause}`, its kind kept — the file as it
@@ -104,8 +106,10 @@
 //!   followed or shared — a symbolic link, a special file, or a second link
 //!   to a file the store writes in place failing the open, every one it
 //!   found counted in one refusal of bounded length, up to eight clauses
-//!   naming them, with the act for each kind
-//!   (`blobs.rs`); both logs tail-checked and rewritten to
+//!   naming them, with the act for each kind (`blobs.rs`); then the volume
+//!   probed for a second name for a file, which a re-PUT of a file the
+//!   board holds takes, a volume that makes none failing the open with the
+//!   act that clears it (`blobs.rs`); both logs tail-checked and rewritten to
 //!   their current records, a line naming a designation or hex the store's
 //!   name check refuses, or an offset past its length, read as no record
 //!   (see [`Store`]), so a log restored from elsewhere names no path out of
@@ -139,9 +143,11 @@ mod error;
 // The files at `<designation>/<hex>`: where one lives, the spellings a
 // designation and a hex name must have, the aside name, the listings of the
 // designation directories, open's walk holding every entry it acts on to
-// what the store makes and its sweep of the asides, the directory fsync
-// every install order ends in, the floor's free-space read, and the name
-// every failure gives its file and its act.
+// what the store makes, its probe of the volume's hard links and its sweep
+// of the asides, the owner-only modes every directory and file is born
+// with, the directory fsync every install order ends in, the host's two
+// reads — the volume's free space and its capacity — and the name every
+// failure gives its file and its act.
 mod blobs;
 // The JSON-lines log both record logs are, `Log`: its tail check at open
 // and what each reading found (`LogRead`, `TailCut`), its append, undone

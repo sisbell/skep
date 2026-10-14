@@ -329,21 +329,26 @@ impl Store {
     /// records compacted, the root fsynced. Everything here completes before
     /// the store answers anything. An open that fails partway serves nothing
     /// and leaves on disk what its acts completed, each one the next open
-    /// makes again: the open is the store's one place of repair — its
-    /// compactions are the store's only ones, and a log a failure stopped
-    /// while an earlier store served is read here afresh, its torn tail cut
-    /// (see [`Store`]). A partial that cannot be read fails the open,
-    /// retiring nothing (`partials.rs`): an I/O failure is no absence. And
-    /// before any of it, every name the store acts on is held to what the
-    /// store makes: a symbolic link, a special file, or a second link to a
-    /// file the store writes in place fails the open as `InvalidData`, one
+    /// makes again: the open is where the store reconciles what it finds —
+    /// its compactions made again while it serves by its caller's runtime
+    /// compaction ([`Store::compact_logs_if_past`]) — and a log a failure
+    /// stopped while an earlier store served is read here afresh, its torn
+    /// tail cut (see [`Store`]). A partial that cannot be read fails the
+    /// open, retiring nothing (`partials.rs`): an I/O failure is no absence.
+    /// And before any of it, every name the store acts on is held to what
+    /// the store makes: a symbolic link, a special file, or a second link to
+    /// a file the store writes in place fails the open as `InvalidData`, one
     /// refusal of bounded length counting every one it found, naming them in
     /// at most eight clauses and the act that clears each kind, and nothing
     /// is followed or written through it (`blobs.rs`,
-    /// `refuse_links_and_special_files`). Every other failure names its file
-    /// and its act. What the open did, it answers ([`Store::opened`]), the
-    /// bytes its repairs freed among it: the store says nothing itself, and
-    /// its embedder says it.
+    /// `refuse_links_and_special_files`); then the volume is held to the one
+    /// capability the store needs that no other act of the open exercises,
+    /// a second name for a file, which a re-PUT of a file the board holds
+    /// takes: a volume that makes none fails the open, naming its lack and
+    /// the act that clears it (`blobs.rs`, `probe_hard_link`). Every other
+    /// failure names its file and its act. What the open did, it answers
+    /// ([`Store::opened`]), the bytes its repairs freed among it: the store
+    /// says nothing itself, and its embedder says it.
     ///
     /// PRECONDITION: no other `Store` is open over `root` while this one
     /// lives, in this process or another. Its open would act on the root
@@ -363,19 +368,12 @@ impl Store {
         let root = root.as_ref();
         let at_root = |act: &'static str| move |e: io::Error| named(e, dir_label(root, 1), act);
         let root_made = not_found_as_none(fs::symlink_metadata(root)).map_err(at_root("stat"))?.is_none();
-        // `blobs/` is born `0700` on unix — every directory the store makes
-        // is, and every file `0600` — the mode set at creation so the
-        // process umask cannot loosen it: the deposited bytes are the
-        // depositors' own. A root that already stands is left as found.
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(root).map_err(at_root("create"))?;
+        // `blobs/` is born owner-only, as every directory and file the store
+        // makes is (`blobs::dir_builder`); a root that already stands is left
+        // as found.
+        blobs::dir_builder().recursive(true).create(root).map_err(at_root("create"))?;
         blobs::refuse_links_and_special_files(root)?;
+        blobs::probe_hard_link(root)?;
         let (leases, leases_log, leases_past_horizon) = LeaseLog::open(root, horizon, now_ms)?;
         let (mut uploads, uploads_log) = UploadRecords::open(root)?;
         let reconciled = partials::reconcile(root, &mut uploads, now_ms)?;
@@ -552,26 +550,29 @@ impl Store {
     /// THE RUNTIME COMPACTION (the pruner's pass, after its unlink pass;
     /// `media.md` §The media stores, "the pruner's pass rewrites either store
     /// the same way once its log has passed a size trigger"): each log
-    /// rewritten to its current records as open rewrites it, where its whole
-    /// lines number at least `min_lines` and more than `trigger` times its
-    /// current records — or where it has STOPPED, whatever its count, since
-    /// only a completed compaction lifts a stop — under this store's lock on
-    /// THAT log's appends alone and no lock of the caller's. An append that
-    /// arrives during the rewrite waits on that lock and lands in the new
-    /// file once the install order has completed, so the records it answers
-    /// durable afterwards are in the file the next open reads. Both logs are
-    /// tried; the answer is `(uploads, leases)`, each the size the log was
-    /// rewritten FROM ([`LogSize`]) where a rewrite ran and `None` where the
-    /// log was left as it was — its size after, [`Store::log_sizes`] — and a
-    /// failure the first that failed: one past its rename leaves its log
-    /// stopped ([`Store::stopped_logs`]) for the next pass to rewrite.
+    /// rewritten to its current records as open rewrites it — the lease
+    /// log's leases past the horizon at `now_ms` dropped first, as open drops
+    /// them, whether or not a rewrite follows — where its whole lines number
+    /// at least `min_lines` and more than `trigger` times its current records
+    /// — or where it has STOPPED, whatever its count, since only a completed
+    /// compaction lifts a stop — under this store's lock on THAT log's
+    /// appends alone and no lock of the caller's. An append that arrives
+    /// during the rewrite waits on that lock and lands in the new file once
+    /// the install order has completed, so the records it answers durable
+    /// afterwards are in the file the next open reads. Both logs are tried;
+    /// the answer is `(uploads, leases)`, each the size the log was rewritten
+    /// FROM ([`LogSize`]) where a rewrite ran and `None` where the log was
+    /// left as it was — its size after, [`Store::log_sizes`] — and a failure
+    /// the first that failed: one past its rename leaves its log stopped
+    /// ([`Store::stopped_logs`]) for the next pass to rewrite.
     pub fn compact_logs_if_past(
         &self,
         trigger: usize,
         min_lines: usize,
+        now_ms: u64,
     ) -> io::Result<(Option<LogSize>, Option<LogSize>)> {
         let uploads = self.uploads.lock().compact_if_past(trigger, min_lines);
-        let leases = self.leases.lock().compact_if_past(trigger, min_lines);
+        let leases = self.leases.lock().compact_if_past(trigger, min_lines, now_ms);
         Ok((uploads?, leases?))
     }
 
@@ -689,25 +690,24 @@ impl Store {
                 ),
             ));
         }
-        // The root and the designation directory born `0700` and the temp
-        // file `0600` on unix, as the finish's are — the mode set at
-        // creation, the rename carrying the file's onto its hex name.
+        // The root, the designation directory and the temp file born
+        // owner-only, as the finish's are (`blobs::dir_builder`,
+        // `blobs::file_options`), the rename carrying the file's mode onto
+        // its hex name.
         make_dir(root).map_err(|e| refused(named(e, dir_label(root, 1), "create")))?;
         make_dir(&dir).map_err(|e| refused(named(e, dir_label(&dir, 2), "create")))?;
         let mut from = fs::File::open(source).map_err(|e| refused(named(e, source.display(), "open")))?;
         let temp = partials::partial_path(root, designation, &UploadId::mint().map_err(refused)?);
         let temp_name = format!("the pull's temp file in {}", dir_label(&dir, 2));
         let (hex, size) = {
-            let mut opts = fs::OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut out = opts.open(&temp).map_err(|e| refused(named(e, &temp_name, "create")))?;
+            let mut out = blobs::file_options()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&temp)
+                .map_err(|e| refused(named(e, &temp_name, "create")))?;
             let mut hasher = blake3::Hasher::new();
-            let mut buf = [0u8; 64 * 1024];
+            let mut buf = [0u8; PULL_BUFFER];
             let mut size = 0u64;
             let copied = loop {
                 let n = match io::Read::read(&mut from, &mut buf) {
@@ -1090,22 +1090,25 @@ fn size_of(path: &Path) -> io::Result<Option<u64>> {
     Ok(meta.filter(fs::Metadata::is_file).map(|m| m.len()))
 }
 
-/// MAKE `dir` where absent — owner-only, `0700` on unix, the mode set at
-/// creation — and its parent never: the pull's one way to make a directory
+/// MAKE `dir` where absent — owner-only (`blobs::dir_builder`) — and its
+/// parent never: the pull's one way to make a directory
 /// ([`Store::install_file`]), so a board's own directory that does not stand
 /// is never made under a mistyped path.
 fn make_dir(dir: &Path) -> io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    match builder.create(dir) {
+    match blobs::dir_builder().create(dir) {
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
         made => made,
     }
 }
+
+/// THE PULL's COPY BUFFER — 64 KiB, on the stack: the bytes of the pull's
+/// source are read, hashed and written through it ([`Store::install_file`]),
+/// so the tool's memory per run is this whatever the file's size. It bounds
+/// that memory alone — nothing on disk depends on it, and a build that moves
+/// it reads and writes every file an older build did — and it is no twin of
+/// the daemon's streaming chunk, `BLOB_CHUNK` (skepd's `limits.rs`), the
+/// same figure by no relation. A pin, moved by a ruling.
+const PULL_BUFFER: usize = 64 * 1024;
 
 /// AN UPLOAD OPEN FOR ONE REQUEST — "the stream" of the resumable upload's
 /// clause (5), "A STREAM CLAIMS ITS UPLOAD FIRST" — what [`Store::resume`]

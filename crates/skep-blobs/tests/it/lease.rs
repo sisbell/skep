@@ -2,11 +2,12 @@
 //! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
 //! STORES"): the three states and the horizon, read off the record alone,
 //! a principal's live leases in hex order, the latest-wins re-PUT, the
-//! compaction at open, the pending bytes — an upload expired and not yet
-//! removed counted by nothing — the pruner's read of whether any principal
-//! holds a file live, reading that hash's leases and no other's, at their
-//! cost and never every lease's, the torn tail, and a line naming a malformed
-//! designation or hex, or lacking any member, read as no lease. "A LIVE
+//! compaction at open and at the pass, a lease past the horizon dropped at
+//! both, the pending bytes — an upload expired and not yet removed counted
+//! by nothing — the pruner's read of whether any principal holds a file
+//! live, reading that hash's leases and no other's, at their cost and never
+//! every lease's, the torn tail, and a line naming a malformed designation
+//! or hex, or lacking any member, read as no lease. "A LIVE
 //! LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's
 //! rule, built on this store's `lease_state` and `blob_size`; the store's
 //! lease state answers the record and nothing of the file.
@@ -41,8 +42,8 @@ fn the_lease_log_past_its_trigger_is_compacted_to_the_latest_lease() {
     assert_eq!(lines("leases.log"), 10);
     assert_eq!(lines("uploads.log"), 20, "a creation and a retirement per PUT");
     let leases_before = bytes("leases.log");
-    assert_eq!(store.compact_logs_if_past(4, 64).unwrap(), (None, None), "under the minimum");
-    let (uploads, leases) = store.compact_logs_if_past(4, 8).unwrap();
+    assert_eq!(store.compact_logs_if_past(4, 64, 9).unwrap(), (None, None), "under the minimum");
+    let (uploads, leases) = store.compact_logs_if_past(4, 8, 9).unwrap();
     assert_eq!(uploads.map(|from| from.lines), Some(20), "the records' log rewritten from its twenty lines");
     let from = leases.expect("the lease log rewritten");
     assert_eq!((from.name.as_str(), from.lines, from.bytes), ("blobs/leases.log", 10, leases_before));
@@ -55,6 +56,27 @@ fn the_lease_log_past_its_trigger_is_compacted_to_the_latest_lease() {
     drop(store);
     let reopened = open(&root, 9);
     assert_eq!(reopened.lease_state("k", "blake3", &fin.hex, 9), LeaseState::Live { size: 14, expires: 9 + INTERVAL_MS });
+}
+
+/// THE PASS's COMPACTION DROPS A LEASE PAST THE HORIZON AS OPEN DOES
+/// (`media.md` Op inventory 1, "THE PRUNER's PASS REWRITES EITHER STORE THE
+/// SAME WAY"; `Store::compact_logs_if_past`): one store open across the
+/// horizon, no restart — the runtime compaction drops a lease lapsed past
+/// it, the trigger measured against the leases left, and rewrites its line
+/// away; and keeps a lease lapsed within it, still LAPSED.
+#[test]
+fn the_runtime_compaction_drops_a_lease_past_the_horizon_as_open_does() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = open(&root, 0);
+    let past = put_whole(&store, "k", b"lapses past the horizon", 0).hex;
+    let within = put_whole(&store, "k", b"lapses within it", HORIZON_MS).hex;
+    let now = INTERVAL_MS + HORIZON_MS; // `past` a horizon ago, `within` now
+    let (_, leases) = store.compact_logs_if_past(1, 0, now).unwrap();
+    assert_eq!(leases.map(|from| from.lines), Some(2), "rewritten from both lines");
+    assert_eq!(store.log_sizes().1.lines, 1, "the lease past the horizon gone from the log");
+    assert_eq!(store.lease_state("k", "blake3", &past, now), LeaseState::None);
+    assert_eq!(store.lease_state("k", "blake3", &within, now), LeaseState::Lapsed { expires: now });
 }
 
 /// LIVE within the interval, LAPSED past it within the HORIZON (its expiry

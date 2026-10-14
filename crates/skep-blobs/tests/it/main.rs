@@ -8,6 +8,7 @@ mod lease;
 mod modes;
 mod reopen;
 mod replace;
+mod runbook;
 mod tidy;
 mod uploads;
 

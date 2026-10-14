@@ -49,7 +49,7 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
         store.end_upload("k", &rec.id, 0).unwrap();
     }
     assert_eq!(lines("uploads.log"), 3 + 1_022);
-    assert_eq!(store.compact_logs_if_past(4, 2_000).unwrap(), (None, None), "under the minimum: left alone");
+    assert_eq!(store.compact_logs_if_past(4, 2_000, 0).unwrap(), (None, None), "under the minimum: left alone");
     assert_eq!(lines("uploads.log"), 1_025);
     let (uploads, leases) = store.log_sizes();
     assert_eq!(
@@ -59,7 +59,7 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
     assert_eq!((leases.name.as_str(), leases.lines, leases.bytes), ("blobs/leases.log", 0, 0));
     let raced: Vec<UploadId> = thread::scope(|s| {
         let appends = s.spawn(|| (0..20).map(|_| store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap().id).collect::<Vec<_>>());
-        let (uploads, leases) = store.compact_logs_if_past(4, 1_024).unwrap();
+        let (uploads, leases) = store.compact_logs_if_past(4, 1_024, 0).unwrap();
         // A raced creation that took the lock first is among the lines the
         // rewrite was made from.
         assert!(uploads.is_some_and(|from| from.lines >= 1_025), "the records' log past its trigger, rewritten");
@@ -70,7 +70,7 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
     assert_eq!(lines("uploads.log"), 3 + 20, "the current records and the raced appends, in the one file");
     let after = store.log_sizes().0;
     assert_eq!((after.lines, after.bytes), (23, bytes("uploads.log")), "the log's size is the file's");
-    assert_eq!(store.compact_logs_if_past(4, 1_024).unwrap(), (None, None), "under the minimum after");
+    assert_eq!(store.compact_logs_if_past(4, 1_024, 0).unwrap(), (None, None), "under the minimum after");
     drop(store);
     let reopened = open(&root, 0);
     let mut listed: Vec<UploadId> = reopened.uploads_of("k", 0).into_iter().map(|r| r.id).collect();
@@ -83,7 +83,7 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
         reopened.end_upload("k", id, 0).unwrap();
     }
     assert_eq!(lines("uploads.log"), 23 + 23);
-    let (uploads, leases) = reopened.compact_logs_if_past(4, 46).unwrap();
+    let (uploads, leases) = reopened.compact_logs_if_past(4, 46, 0).unwrap();
     assert_eq!((uploads.map(|from| from.lines), leases), (Some(46), None), "rewritten from its 46 lines");
     assert_eq!(lines("uploads.log"), 0);
     assert_eq!(reopened.log_sizes().0.lines, 0, "to nothing");
@@ -113,7 +113,7 @@ fn a_stopped_log_answers_its_cause_and_every_refusal_names_it() {
     fs::set_permissions(&root, fs::Permissions::from_mode(0o300)).unwrap();
     // A privileged process opens any directory: nothing to inject.
     let privileged = fs::File::open(&root).is_ok();
-    let compacted = (!privileged).then(|| store.compact_logs_if_past(4, 8));
+    let compacted = (!privileged).then(|| store.compact_logs_if_past(4, 8, 0));
     fs::set_permissions(&root, mode).unwrap();
     let Some(compacted) = compacted else { return };
     assert!(compacted.is_err(), "the rewrite fails past its rename");
@@ -131,7 +131,7 @@ fn a_stopped_log_answers_its_cause_and_every_refusal_names_it() {
     let counted = store.stopped_logs().0.expect("still stopped");
     assert_eq!((counted.cause, counted.refused), (stop.cause, 1), "the refused creation counted");
     assert!(counted.age >= stop.age, "the stop's age only grows: {:?} then {:?}", stop.age, counted.age);
-    let (uploads, leases) = store.compact_logs_if_past(4, 1_024).unwrap();
+    let (uploads, leases) = store.compact_logs_if_past(4, 1_024, 0).unwrap();
     assert!(uploads.is_some() && leases.is_none(), "a stopped log rewritten whatever its count");
     assert_eq!(store.stopped_logs(), (None, None), "and the stop lifted");
     store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).expect("a creation lands again");

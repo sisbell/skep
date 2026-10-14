@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::blobs::{dir_label, fsync_dir, label, named, not_found_as_none, Cause};
+use crate::blobs::{dir_label, file_options, fsync_dir, label, named, not_found_as_none, Cause};
 
 /// WHAT ONE READING OF A LOG FOUND — the store's open's
 /// ([`Opened`](crate::Opened)), or the inspection's
@@ -352,16 +352,10 @@ impl Log {
         let mut len = 0;
         let mut lines = 0;
         {
-            // The twin is born `0600` on unix — the mode set at creation,
-            // which the rename carries onto the log.
-            let mut opts = OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut f = opts.open(&twin).map_err(|e| at_twin(e, "create"))?;
+            // Born owner-only (`blobs::file_options`), the mode the rename
+            // carries onto the log.
+            let mut f =
+                file_options().write(true).create(true).truncate(true).open(&twin).map_err(|e| at_twin(e, "create"))?;
             for v in current {
                 let line = line_of(&v);
                 f.write_all(&line).map_err(|e| at_twin(e, "write"))?;
@@ -466,17 +460,10 @@ fn whole_lines(bytes: &[u8]) -> (Vec<Value>, usize) {
 }
 
 /// Open the log at `path` for appending, creating it where absent — born
-/// `0600` on unix, the mode set at creation and the process umask
-/// irrelevant; a log that already stands keeps its mode.
+/// owner-only (`blobs::file_options`); a log that already stands keeps its
+/// mode.
 fn open_append(path: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)
+    file_options().create(true).append(true).open(path)
 }
 
 /// One JSON object as its line, members in sorted order (serde_json's map

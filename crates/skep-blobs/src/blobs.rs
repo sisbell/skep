@@ -5,16 +5,22 @@
 //! directories that hold those names and open's sweep of the asides
 //! ([`sweep_asides`]), open's walk that holds every entry it acts on to what
 //! the store makes — no link followed, no file it writes shared, no special
-//! file read ([`refuse_links_and_special_files`]) — the removals, each
-//! answering the bytes its unlink freed ([`freed_by`]): of a name another
-//! remover may have taken first ([`remove_if_present`]) and of one that
-//! stands ([`remove_standing`]); the absence rule every read of a name
-//! keeps — not found is none, any other failure an answer
-//! ([`not_found_as_none`]) — the directory fsync every install order under
-//! the root ends in (a rename is durable only at its directory's fsync —
-//! `media.md` Op inventory 1; the register M-I5 (a)), and the floor's one
-//! read of the host, the volume's free space. The order that installs a
-//! file is the store's (`store.rs`); the logs' is `jsonl.rs`'s.
+//! file read ([`refuse_links_and_special_files`]) — and its probe of the one
+//! capability of the volume no other act of the open exercises, a second
+//! name for a file ([`probe_hard_link`]); the owner-only modes every
+//! directory and file the store makes is born with ([`dir_builder`],
+//! [`file_options`]); the removals, each answering the bytes its unlink
+//! freed ([`freed_by`]): of a name another remover may have taken first
+//! ([`remove_if_present`]) and of one that stands ([`remove_standing`]);
+//! the absence rule every read of a name keeps — not found is none, any
+//! other failure an answer ([`not_found_as_none`]) — the directory fsync
+//! every install order under the root ends in (a rename is durable only at
+//! its directory's fsync — `media.md` Op inventory 1; the register M-I5
+//! (a)), and the host's two reads at the root ([`free_space`],
+//! [`capacity`]): the volume's free space, which the floor is held against
+//! at every creation and chunk, and its capacity, which the default
+//! per-account limit is a share of, read once at the start. The order that
+//! installs a file is the store's (`store.rs`); the logs' is `jsonl.rs`'s.
 //!
 //! EVERY FAILURE NAMES ITS FILE AND ITS ACT ([`named`], [`label`],
 //! [`dir_label`]): an I/O error the store answers reads `{file}: {act}:
@@ -490,6 +496,84 @@ fn link_count(meta: &fs::Metadata) -> u64 {
     }
 }
 
+/// THE DIRECTORY THE HARD-LINK PROBE MAKES AND REMOVES under the root,
+/// `.link-probe`: its leading dot no designation spells ([`designation_ok`]),
+/// so open's walk passes over what it holds; and the open that makes it
+/// removes it before it answers, so no store that serves has one standing.
+const LINK_PROBE: &str = ".link-probe";
+
+/// OPEN's HARD-LINK PROBE: the one capability of the volume the store needs
+/// that no other act of the open exercises — a SECOND NAME for a file,
+/// which a replace gives the replaced instance before its rename (the
+/// finish's aside, `store.rs`), so every re-PUT of a file the board holds
+/// takes one. On a volume that makes none — FAT, exFAT, a share that
+/// refuses them — the store would serve every new upload and fail every
+/// re-PUT at its install, the client's `blob_io` then telling a file
+/// already here from a fresh one (`media.md` Op inventory 1, "NO ANSWER OF
+/// THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE"). So the open makes
+/// one, inside a directory of its own ([`LINK_PROBE`]), and refuses where
+/// the volume refuses it ([`makes_no_link`]), naming the volume's lack and
+/// the act that clears it, the OS's kind kept; any other failure of the
+/// probe is the act's own, its file and its cause named. A probe a kill cut
+/// short is removed first, by the same names, and the probe's own after it,
+/// so the open answers with none standing; one that cannot be removed fails
+/// the open, named — an I/O failure is no absence.
+pub(crate) fn probe_hard_link(root: &Path) -> io::Result<()> {
+    probe_hard_link_by(root, |name, second| fs::hard_link(name, second))
+}
+
+/// [`probe_hard_link`], its second name made by `link` — the act the unit
+/// suite fails in its place.
+fn probe_hard_link_by(root: &Path, link: impl FnOnce(&Path, &Path) -> io::Result<()>) -> io::Result<()> {
+    let dir = root.join(LINK_PROBE);
+    let names = [dir.join("a"), dir.join("b")];
+    clear_probe(&dir, &names)?;
+    dir_builder().create(&dir).map_err(|e| named(e, dir_label(&dir, 2), "create"))?;
+    let [name, second] = &names;
+    file_options().write(true).create_new(true).open(name).map_err(|e| named(e, label(name, 3), "create"))?;
+    let linked = link(name, second).map_err(|e| {
+        if !makes_no_link(&e) {
+            return named(e, label(second, 3), "link");
+        }
+        let at = dir_label(root, 1);
+        io::Error::new(
+            e.kind(),
+            format!(
+                "{at}: link: {}: the volume under {at} makes no second name for a file (a hard link), which a \
+                 re-PUT of a file the board holds needs; put the data directory on a filesystem that makes hard \
+                 links — APFS, HFS+, ext4, XFS, btrfs, ZFS; not FAT or exFAT, nor a share that refuses them — and \
+                 start again",
+                Cause(&e)
+            ),
+        )
+    });
+    // The probe's names go whatever the link answered: where it was refused,
+    // the refusal is the open's answer, and a name this removal could not
+    // take the next open's to remove.
+    let cleared = clear_probe(&dir, &names);
+    linked.and(cleared)
+}
+
+/// Remove the probe's two names and its directory where they stand — a
+/// kill's leftovers before the probe, the probe's own after it — any failure
+/// but absence answered, its file named.
+fn clear_probe(dir: &Path, names: &[PathBuf; 2]) -> io::Result<()> {
+    for name in names {
+        not_found_as_none(fs::remove_file(name)).map_err(|e| named(e, label(name, 3), "remove"))?;
+    }
+    not_found_as_none(fs::remove_dir(dir)).map_err(|e| named(e, dir_label(dir, 2), "remove"))?;
+    Ok(())
+}
+
+/// Whether a link's failure is the volume's refusal of hard links: `EPERM`,
+/// Linux's answer from a filesystem that makes none (FAT, exFAT); `ENOTSUP`
+/// or `EOPNOTSUPP`, macOS's and a network share's; `ENOSYS`. Every other
+/// failure — a full volume, a failing device — is the act's own.
+fn makes_no_link(e: &io::Error) -> bool {
+    use rustix::io::Errno;
+    Errno::from_io_error(e).is_some_and(|n| [Errno::PERM, Errno::NOTSUP, Errno::OPNOTSUPP, Errno::NOSYS].contains(&n))
+}
+
 /// THE ABSENCE RULE, spelled once: `Ok(Some(value))` where the name stands,
 /// `Ok(None)` where nothing does (`NotFound`), and every other failure
 /// answered — an I/O failure is no absence (the register M-I5 (c)).
@@ -536,6 +620,42 @@ fn freed_by(meta: &fs::Metadata) -> u64 {
     } else {
         meta.len()
     }
+}
+
+/// THE STORE's MODES, owner-only — a directory `0700`, a file `0600` — set
+/// at creation, so the process umask cannot loosen them: the deposited
+/// bytes are the depositors' own, owner-only from the first grain. Every
+/// directory and file the store makes is born with them, through
+/// [`dir_builder`] and [`file_options`], its one way to make either; a
+/// rename carries a file's mode onto its new name, and a directory or a file
+/// that already stands keeps the mode it has. A pin, moved by a ruling and
+/// set by no operator: the service units' umask, `077`, is a second guard
+/// beside it (`RUNBOOK.md` §9), and `tests/it/modes.rs` holds every entry
+/// the store makes to these exact bits. On a non-unix target no mode is
+/// set; v1 targets unix.
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
+
+/// A file's mode, owner-only: `DIR_MODE`'s card says why.
+#[cfg(unix)]
+const FILE_MODE: u32 = 0o600;
+
+/// A builder for a directory the store makes, born owner-only (`DIR_MODE`);
+/// the caller says whether it makes the parents too.
+pub(crate) fn dir_builder() -> fs::DirBuilder {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, DIR_MODE);
+    builder
+}
+
+/// The options a file the store makes is opened with, born owner-only
+/// (`FILE_MODE`); the caller says how it opens.
+pub(crate) fn file_options() -> fs::OpenOptions {
+    let mut opts = fs::OpenOptions::new();
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, FILE_MODE);
+    opts
 }
 
 /// Fsync a directory, so entry creations, removals and renames inside it
@@ -721,5 +841,38 @@ mod tests {
              again.",
             "one entry, one clause, no count past it"
         );
+    }
+
+    /// THE HARD-LINK PROBE (`probe_hard_link`): a link refused as a volume
+    /// that makes none refuses one — `EPERM`, `ENOTSUP`, `EOPNOTSUPP`,
+    /// `ENOSYS` — answers the volume's lack and the act that clears it, the
+    /// OS's kind kept, in the words `RUNBOOK.md` quotes after the daemon's
+    /// `skepd: blob store: `; any other failure of the link is the act's
+    /// own, its file named; either way the probe leaves no name under the
+    /// root, nor where it answers, as this volume's link does.
+    #[cfg(unix)]
+    #[test]
+    fn the_hard_link_probe_refuses_a_volume_that_makes_none_and_leaves_nothing() {
+        use rustix::io::Errno;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("blobs");
+        fs::create_dir(&root).unwrap();
+        let left = || fs::read_dir(&root).unwrap().count();
+        let runbook = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).unwrap();
+        for errno in [Errno::PERM, Errno::NOTSUP, Errno::OPNOTSUPP, Errno::NOSYS] {
+            let os = || io::Error::from_raw_os_error(errno.raw_os_error());
+            let refused = probe_hard_link_by(&root, |_, _| Err(os())).expect_err("the volume refuses a link");
+            assert_eq!(refused.kind(), os().kind(), "the kind kept");
+            let text = refused.to_string().replace(&os().to_string(), "{error}");
+            assert!(text.starts_with("blobs/: link: {error}: the volume under blobs/ makes no second name"), "{text}");
+            assert!(runbook.contains(&format!("skepd: blob store: {text}\n")), "RUNBOOK.md quotes it whole: {text}");
+            assert_eq!(left(), 0, "{errno:?}: no name of the probe's left under the root");
+        }
+        let io = || io::Error::from_raw_os_error(Errno::IO.raw_os_error());
+        let failed = probe_hard_link_by(&root, |_, _| Err(io())).expect_err("a failing device");
+        assert_eq!(failed.to_string(), format!("blobs/.link-probe/b: link: {}", io()), "the act's own failure");
+        assert_eq!(left(), 0, "no name of the probe's left under the root");
+        probe_hard_link(&root).expect("this volume makes hard links");
+        assert_eq!(left(), 0, "the probe leaves nothing");
     }
 }

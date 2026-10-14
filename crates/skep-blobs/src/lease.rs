@@ -11,10 +11,13 @@
 //! re-PUT's lease replacing the one before whatever either's expiry; a
 //! lease whose expiry has passed answers LAPSED within a HORIZON past the
 //! expiry and as NONE after it — so LAPSED is exact within the horizon, and
-//! the log, compacted at open to the latest line of each principal's lease
-//! on each hash with every lease past the horizon dropped, never grows with
-//! the board's upload history. The horizon and the interval are the
-//! daemon's constants (D1), handed in.
+//! the leases held, every lease past the horizon dropped at open and at each
+//! runtime compaction, and the log, compacted there to the latest line of
+//! each principal's lease on each hash, never grow with the board's upload
+//! history. The horizon is the daemon's pin (D1), handed in at the open; a
+//! lease's expiry is fixed at its finish from the interval handed to the
+//! finish (`Stream::finish`) — the limits record's in force, or the daemon's
+//! default where none is — and the lease log reads no interval.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -83,7 +86,8 @@ impl Lease {
     }
 
     /// Past the horizon at `now_ms`: lapsed by more than `horizon` — none,
-    /// no longer LAPSED, and dropped at open.
+    /// no longer LAPSED, and dropped at open and at each runtime compaction
+    /// ([`LeaseLog::drop_past_horizon`]).
     fn past_horizon(&self, horizon: Duration, now_ms: u64) -> bool {
         now_ms >= self.expires.saturating_add(millis(horizon))
     }
@@ -137,14 +141,23 @@ impl LeaseLog {
     /// horizon dropped.
     pub fn open(root: &Path, horizon: Duration, now_ms: u64) -> io::Result<(LeaseLog, LogRead, usize)> {
         let (log, values, mut found) = Log::open(root.join(LEASES_LOG))?;
-        let (mut leases, unread) = fold(&values);
+        let (leases, unread) = fold(&values);
         found.unread = unread;
-        let read = leases.len();
-        leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
-        let past_horizon = read - leases.len();
         let mut opened = LeaseLog { log, leases, horizon };
+        let past_horizon = opened.drop_past_horizon(now_ms);
         opened.compact()?;
         Ok((opened, found, past_horizon))
+    }
+
+    /// DROP every lease past the horizon at `now_ms` — each answers as none
+    /// at `now_ms` and after already, so no read's answer moves — and answer
+    /// how many went: open's act, and the runtime compaction's before it
+    /// judges its trigger, so the leases held, and every read that walks
+    /// them, never carry the uptime's lapsed deposits past the horizon.
+    fn drop_past_horizon(&mut self, now_ms: u64) -> usize {
+        let (horizon, held) = (self.horizon, self.leases.len());
+        self.leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
+        held - self.leases.len()
     }
 
     /// THE LOG AS FOUND, folded (`Log::read_as_found`): each principal's
@@ -236,13 +249,19 @@ impl LeaseLog {
         self.log.compact(self.leases.values().map(Lease::to_value))
     }
 
-    /// THE RUNTIME COMPACTION's TRIGGER (the pruner's pass), the upload
-    /// records' rule (`uploads::past_trigger`) over this log: rewritten
-    /// where stopped, or where its whole lines number at least `min_lines`
-    /// and more than `trigger` times the current leases. Answers the size a
-    /// rewrite rewrote the log from, `None` where none ran. The caller holds
-    /// this type's lock — the lock on this log's appends alone.
-    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<Option<LogSize>> {
+    /// THE RUNTIME COMPACTION (the pruner's pass), applied as open applies
+    /// it (`media.md` Op inventory 1, "THE PRUNER's PASS REWRITES EITHER
+    /// STORE THE SAME WAY"): every lease past the horizon at `now_ms`
+    /// dropped first ([`LeaseLog::drop_past_horizon`]), whether or not a
+    /// rewrite follows — its line stays on disk until one does, or until the
+    /// next open drops it again — then the upload records' trigger
+    /// (`uploads::past_trigger`) over this log: rewritten where stopped, or
+    /// where its whole lines number at least `min_lines` and more than
+    /// `trigger` times the leases left. Answers the size a rewrite rewrote
+    /// the log from, `None` where none ran. The caller holds this type's lock
+    /// — the lock on this log's appends alone.
+    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize, now_ms: u64) -> io::Result<Option<LogSize>> {
+        self.drop_past_horizon(now_ms);
         if !past_trigger(&self.log, self.leases.len(), trigger, min_lines) {
             return Ok(None);
         }

@@ -13,7 +13,9 @@
 //! the store writes in place — or a special file there failing the open,
 //! nothing it names touched and no open left waiting, every such entry
 //! counted in one refusal of bounded length — eight clauses named, the rest
-//! counted by kind — with the act for its kind. THE OPEN's ACCOUNT
+//! counted by kind — with the act for its kind; then the volume's hard-link
+//! probe, which leaves nothing, a probe a kill cut short cleared by the next
+//! open. THE OPEN's ACCOUNT
 //! (`Store::opened`): each repair counted and the bytes they freed, a store
 //! or a log found absent answered made, a log's cut told from a crash's by
 //! the whole lines it took; an open refused at a log naming the log and its
@@ -839,6 +841,31 @@ fn a_special_file_at_a_name_open_acts_on_fails_the_open_and_never_hangs_it() {
     let (kind, message) = opened.expect_err("a FIFO fails the open");
     assert_eq!(kind, std::io::ErrorKind::InvalidData, "{message}");
     assert!(message.contains("blobs/leases.log is a special file"), "named: {message}");
+}
+
+/// A HARD-LINK PROBE A KILL CUT SHORT IS THE NEXT OPEN's TO CLEAR
+/// (`blobs::probe_hard_link`): every open makes a second name for a file
+/// inside `.link-probe/` under the root — the one capability the store needs
+/// that no other act of the open exercises — and removes it before it
+/// answers, so an open leaves nothing; a kill between the link and its
+/// removal leaves the directory holding two names of one file, which the
+/// walk passes over, its name no designation's, and the next open removes
+/// it and serves: no store that answers has it standing, so no listing of
+/// the designation directories meets it.
+#[test]
+fn a_hard_link_probe_a_kill_cut_short_is_cleared_by_the_next_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let probe = root.join(".link-probe");
+    let hex = put_whole(&open(&root, 0), "k", b"a deposit", 1).hex;
+    assert!(!probe.exists(), "an open's probe leaves nothing");
+    fs::create_dir(&probe).unwrap();
+    fs::write(probe.join("a"), b"").unwrap();
+    fs::hard_link(probe.join("a"), probe.join("b")).unwrap();
+    let store = open(&root, 2);
+    assert!(!probe.exists(), "the probe a kill cut short, removed");
+    assert_eq!(store.designation_dirs().unwrap(), vec!["blake3".to_string()], "no listing meets it");
+    assert_eq!(store.blob_size("blake3", &hex).unwrap(), Some(9), "and the board serves as it stood");
 }
 
 /// OPEN COMPACTS EACH LOG TO ITS CURRENT RECORDS — NONE AMONG THEM — OVER

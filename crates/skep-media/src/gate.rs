@@ -152,7 +152,9 @@ const LEASE_INTERVAL_DEFAULT_MS: u64 = 7 * 24 * 3600 * 1000;
 /// THE HORIZON — thirty days past a lease's expiry, INTERIM: within it a
 /// lapsed lease answers LAPSED (the deposit is gone; re-PUT the bytes — a
 /// resume can be written against it), past it NONE, and the lease log
-/// compacts it away at open.
+/// compacts it away at open and at each pass's compaction — so a build that
+/// shortens it drops, at its first open, every lease past the new horizon,
+/// and no later build gets them back.
 const LEASE_HORIZON_MS: u64 = 30 * 24 * 3600 * 1000;
 
 /// THE DEPOSIT's FUNCTION — the store's hash function for the cell schema's

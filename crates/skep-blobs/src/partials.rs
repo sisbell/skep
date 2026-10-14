@@ -42,16 +42,22 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::blobs::{
-    dir_label, fsync_dir, named, names_in, not_found_as_none, partial_label, remove_if_present, remove_standing,
+    dir_builder, dir_label, file_options, fsync_dir, named, names_in, not_found_as_none, partial_label,
+    remove_if_present, remove_standing,
 };
 use crate::uploads::{UploadId, UploadRecords};
 
 pub use handle::HashFunction;
 pub(crate) use handle::{open_at, Handle};
 
-/// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM: the most a dropped
-/// connection re-sends, against one fsync of the partial and one of the
-/// record log per grain (sixty-four of each for a file at the per-file cap).
+/// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM (`media.md` Op inventory
+/// 1, the resumable upload (3), "fsynced at a grain the subsystem design
+/// pins"): the most a dropped connection re-sends, against one fsync of the
+/// partial and one of the record log per grain. A pin, moved by a ruling,
+/// and its two twins move with it: `docs/wire.md` §Media's list of pins and
+/// the media fixture's `pins.sync_grain`, which skepd's suite holds to this
+/// constant (`tests/it/blob_routes.rs`). No byte count on disk depends on
+/// it, so a build that moves it reads every log an older build wrote.
 pub const SYNC_GRAIN: u64 = 1024 * 1024;
 
 /// The partial's file name inside its designation directory —
@@ -79,27 +85,17 @@ pub(crate) fn partial_path(root: &Path, designation: &str, id: &UploadId) -> Pat
 /// open has made durable.
 pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Result<()> {
     let dir = root.join(designation);
-    // The designation directory is born `0700` and the partial `0600` on
-    // unix — the mode set at creation, the process umask irrelevant: the
-    // bytes received are the depositor's, owner-only from the first grain,
-    // and the finish's rename carries the file's mode onto its hex name.
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(&dir).map_err(|e| named(e, dir_label(&dir, 2), "create"))?;
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
+    // Both born owner-only (`blobs::dir_builder`, `blobs::file_options`):
+    // the bytes received are the depositor's from the first grain, and the
+    // finish's rename carries the partial's mode onto its hex name.
+    dir_builder().recursive(true).create(&dir).map_err(|e| named(e, dir_label(&dir, 2), "create"))?;
     let created = |e| named(e, partial_label(&dir), "create");
-    let f = opts.open(partial_path(root, designation, id)).map_err(created)?;
+    let f = file_options()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(partial_path(root, designation, id))
+        .map_err(created)?;
     f.sync_all().map_err(created)?;
     fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
     Ok(())

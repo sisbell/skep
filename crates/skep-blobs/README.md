@@ -35,7 +35,10 @@ free space this store answers, and what an operator is told is the
 daemon's too — the account the store's open answers of what it repaired,
 found and freed, each log's size and a stopped log's cause, age and count
 of refused appends, and every I/O failure, named by its file within the
-data directory and its act. Its modules, and its guarantees each linked to the
+data directory and its act. Its root wants a volume that makes hard links
+— a re-PUT gives the file it replaces a second name — and the store's
+open refuses one that makes none, naming the act that clears it. Its
+modules, and its guarantees each linked to the
 item that keeps it, are in its crate root (`src/lib.rs`); the rules that
 hold across its files, in the workspace's `ARCHITECTURE.md` §The blob
 store.

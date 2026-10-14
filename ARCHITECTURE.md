@@ -44,10 +44,11 @@ above it.
   the upload records and the lease log — the PUT's fsync order, REPLACE on
   a present hash, the lease's honest-null answer, the pruner's rename
   aside, the logs' runtime compaction on a trigger, the volume's capacity
-  read, the open's account of what it repaired, found and freed, the
-  logs' sizes and their stops' figures, every I/O failure named by its
-  file and its act, and the operator's two doors —
-  the read-only inspection and the pull's install by the PUT's order. It
+  read, the open's probe of the volume's hard links, the owner-only modes
+  every file is born with, the open's account of what it repaired, found
+  and freed, the logs' sizes and their stops' figures, every I/O failure
+  named by its file and its act, and the operator's two doors — the
+  read-only inspection and the pull's install by the PUT's order. It
   depends on no other skep crate, knows a principal only as an opaque
   string, holds no lock the daemon's write path takes, writes no operator
   stream, and reads no limits record. One feature, default off:
@@ -404,7 +405,9 @@ Rules that hold across its files:
 - **The logs' compaction has a trigger.** `Store::compact_logs_if_past`
   rewrites either log to its current records where its lines have passed
   a multiple of those records and a minimum — both the caller's figures,
-  the daemon's pins — under the store's lock on that log's appends alone;
+  the daemon's pins — the lease log's leases past the horizon at the
+  caller's `now_ms` dropped first, as the open drops them (`LeaseLog`),
+  under the store's lock on that log's appends alone;
   an append during the rewrite waits and lands in the new file, and a
   stopped log is rewritten whatever its count (`Store::stopped_logs` says
   which has stopped, why, how long it has stood and how many appends it
@@ -413,8 +416,9 @@ Rules that hold across its files:
   (`LogSize`).
 - **The capacity is one read with the free space** (`Store::capacity`,
   `Store::free_space`): the same `statvfs`, the total blocks and the
-  available ones; what the daemon's default per-account limit and its
-  floor are read from.
+  available ones — the capacity, what the daemon's default per-account
+  limit is a share of, read once at its start; the free space, what the
+  floor is held against at every creation and chunk.
 - **Every name passes one check**, `blobs.rs`'s spellings: a caller's at
   `Store`'s entry points, a log line's at open. No name reaches a path out
   of the root; and a creation names no designation at all, but a
@@ -448,6 +452,10 @@ Rules that hold across its files:
   `blobs::label`, `blobs::partial_label`). A full volume's cause reads
   `the volume is full ({the OS's text})`, the operator stream's own words
   (`blobs::Cause`), so one search finds every act that failed for room.
+- **Every directory and file the store makes is born owner-only**, `0700`
+  and `0600`, set at creation whatever the process umask, through one
+  builder of each (`blobs::dir_builder`, `blobs::file_options`): a pin,
+  which `tests/it/modes.rs` holds every entry the store makes to.
 - **Open reconciles and compacts before it answers anything, and answers
   what it did; the inspection does neither, and answers what it found.**
   `Store::open` runs each store's act at open — the logs' compactions,
@@ -467,8 +475,14 @@ Rules that hold across its files:
   refusal of bounded length — eight clauses named, the partials of one
   directory one clause, the rest counted by kind — with the act for each
   kind (`blobs::refuse_links_and_special_files`): nothing is followed or
-  written through. `Store::inspect` holds the same
-  names to the same rule, then reads the four stores as they stand — each
+  written through. Then the volume is probed for the one capability no
+  other act of the open exercises, a second name for a file, which a
+  re-PUT of a file the board holds takes: a volume that makes none fails
+  the open with the act that clears it (`blobs::probe_hard_link`), where
+  it would otherwise serve every new upload and fail every re-PUT, the
+  failure telling a file already here from a fresh one. `Store::inspect`
+  holds the same names to the walk's rule — and probes nothing, since it
+  writes nothing — then reads the four stores as they stand — each
   log's lines read through `Log::read_as_found`, its torn tail cut in
   memory alone, what the reading found answered (`Inspection::logs`) — and
   creates, cuts, renames and syncs nothing, so it can run over a backup or

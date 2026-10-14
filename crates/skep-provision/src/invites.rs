@@ -31,7 +31,7 @@ use std::io;
 use crate::invite_code::InviteCode;
 use crate::mail_address::MailAddress;
 use crate::name::Name;
-use crate::names::unguessable;
+use crate::names::{unguessable, NoEntropy};
 use crate::statedir::{read_or_empty, today, write_whole_with, StateDir};
 
 /// The invite file's name in the state directory.
@@ -63,7 +63,9 @@ pub enum InviteState {
 pub struct Invite {
     /// The code, opaque.
     code: String,
-    /// The address it went to.
+    /// The address it went to, as the line holds it: put there through the
+    /// address rule by the mint, and read back as the operator's hand may
+    /// have left it — never checked again.
     pub address: String,
     /// Its state.
     pub state: InviteState,
@@ -138,9 +140,15 @@ pub fn lookup(state_dir: &StateDir, code: &InviteCode) -> io::Result<Option<Invi
 pub enum MintRefused {
     /// The file already holds the code: no invite minted.
     Duplicate,
+    /// No fresh code could be drawn — the OS gave no entropy: no invite
+    /// minted, and the file not touched.
+    Entropy(NoEntropy),
     /// The file could not be locked, read or written: no invite minted —
     /// or, the error coming from the directory's sync after the rename, the
-    /// invite minted and its link unprinted; `invite` again mints another.
+    /// invite minted and its link unprinted: `invite` again mints another
+    /// under a fresh code, and under the same `--code` answers that the file
+    /// already holds it, the invite link then the one that code makes,
+    /// `https://<suffix>/claim?invite=<code>`.
     Io(io::Error),
 }
 
@@ -148,6 +156,7 @@ impl fmt::Display for MintRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MintRefused::Duplicate => f.write_str("the invite file already holds that code"),
+            MintRefused::Entropy(e) => write!(f, "a fresh code: {e}"),
             MintRefused::Io(e) => write!(f, "the invite file: {e}"),
         }
     }
@@ -163,11 +172,21 @@ impl From<io::Error> for MintRefused {
     }
 }
 
+/// A fresh code's own failure — the OS's entropy, never the file's — as `?`
+/// meets it.
+impl From<NoEntropy> for MintRefused {
+    fn from(e: NoEntropy) -> MintRefused {
+        MintRefused::Entropy(e)
+    }
+}
+
 /// THE `invite` VERB's WORK: one invite minted to `address` — under the
 /// code given, or a fresh one — appended `issued` today, the file rewritten
 /// whole; the code answered as its own value, for the one DATA line. Both
 /// values come in their own types — an address by the rule, a code in the
-/// alphabet — so nothing reaches the file that its line cannot carry.
+/// alphabet — so nothing reaches the file that its line cannot carry. A fresh
+/// code is drawn before the file is touched: where none can be, the refusal
+/// is that alone, the file as it was.
 pub fn mint(state_dir: &StateDir, address: &MailAddress, code: Option<InviteCode>) -> Result<InviteCode, MintRefused> {
     let code = match code {
         Some(code) => code,

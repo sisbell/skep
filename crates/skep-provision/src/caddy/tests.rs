@@ -139,9 +139,11 @@ fn a_removal_answers_whether_one_stood_and_a_reload_is_one_call() {
     fake.assert_done();
 }
 
-/// THE ROUTED NAMES: each `<name>.caddy` file whose stem is a name in the
-/// grammar, sorted; a temp file, another file, a directory and a stem out
-/// of the grammar passed over.
+/// THE ROUTED NAMES: each `<name>.caddy` regular file whose stem is a name
+/// in the grammar, sorted; a temp file, another file, a directory, a link
+/// and a stem out of the grammar passed over — the directory and a link to a
+/// snippet though [`stands`] finds each standing, where a link to nothing
+/// does not stand.
 #[test]
 fn only_a_snippet_file_whose_stem_is_a_name_is_routed() {
     let dir = Scratch::new();
@@ -149,5 +151,14 @@ fn only_a_snippet_file_whose_stem_is_a_name_is_routed() {
         fs::write(dir.path().join(file), b"").expect("a file");
     }
     fs::create_dir(dir.path().join("carol.caddy")).expect("a directory");
+    assert!(stands(dir.path(), &name("carol")).expect("read"), "a directory stands");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        symlink(dir.path().join("bob.caddy"), dir.path().join("dan.caddy")).expect("a link to a snippet");
+        symlink(dir.path().join("nowhere.caddy"), dir.path().join("eve.caddy")).expect("a link to nothing");
+        assert!(stands(dir.path(), &name("dan")).expect("read"), "a link to a snippet stands");
+        assert!(!stands(dir.path(), &name("eve")).expect("read"), "a link to nothing does not stand");
+    }
     assert_eq!(routed(dir.path()).expect("read"), vec![name("alice"), name("bob")]);
 }

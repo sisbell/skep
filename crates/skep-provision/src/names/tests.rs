@@ -1,12 +1,13 @@
 //! T8 — THE TRUTH ABOUT NAMES: taken iff any one of the snippet, the volume
 //! and the container stands — every one of the eight combinations, the reads
-//! made in the order fixed here and no further than the first that stands;
-//! an unguessable value's form; what took a name, as the log says it; and
-//! the labelled volumes sorted against the snippet directory — half-made,
-//! routed, or under no name of the grammar. (The status map is the book's —
-//! `flow/status_map/tests.rs`; the two posts on one name and the fifth past
-//! the queue are the desk's — `flow/tests/desk.rs`; the sweep is the start's
-//! — `flow/tests/start.rs`.)
+//! made in the order fixed here and no further than the first that stands,
+//! and a snippet directory that cannot be searched the error before any
+//! call; an unguessable value's form, and its one failure's words; what
+//! took a name, as the log says it; and the labelled volumes sorted against
+//! the snippet directory — half-made, routed, or under no name of the
+//! grammar. (The status map is the book's — `flow/status_map/tests.rs`; the
+//! two posts on one name and the fifth past the queue are the desk's —
+//! `flow/tests/desk.rs`; the sweep is the start's — `flow/tests/start.rs`.)
 
 use std::fs;
 
@@ -80,6 +81,22 @@ fn the_labelled_volumes_sort_into_half_made_routed_and_ungrammatical() {
     }
 }
 
+/// THE TRUTH's OTHER ERROR: a snippet directory that cannot be searched is
+/// the error, before any call is made — as a `docker` that cannot be run at
+/// all is.
+#[cfg(unix)]
+#[test]
+fn a_snippet_directory_that_cannot_be_searched_is_the_truths_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("a directory");
+    fs::set_permissions(&boards, fs::Permissions::from_mode(0o000)).expect("unsearchable");
+    let fake = FakeDocker::parse("").expect("a script");
+    assert!(taken(&fake, &boards, &name("alice")).is_err(), "the snippet directory's error");
+    fake.assert_done();
+}
+
 /// An unguessable value — a status token, a minted invite code: 128 bits as
 /// 32 lowercase hex digits, fresh each time.
 #[test]
@@ -88,6 +105,14 @@ fn an_unguessable_value_is_32_lowercase_hex_digits() {
     assert_eq!(a.len(), 32);
     assert!(a.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)), "{a}");
     assert_ne!(a, b);
+}
+
+/// AN UNGUESSABLE VALUE's ONE FAILURE says the OS's entropy and the OS's own
+/// words — the post's log line and the mint's refusal alike.
+#[test]
+fn an_unguessable_values_failure_says_the_os_entropy() {
+    let unsupported = getrandom::Error::UNSUPPORTED;
+    assert_eq!(NoEntropy(unsupported).to_string(), format!("OS entropy: {unsupported}"));
 }
 
 /// What took a name, as the log says it.

@@ -5,16 +5,17 @@
 //! unknown and a held code refused; the invite first, so an uninvited post
 //! learns nothing about names; a code spent while a post's reads ran, refused
 //! at its admission; a live board's code held until its spend is written,
-//! kept held where the spend could not be written, and let go of after it; no
-//! code in the log) and T10 (a sign-up, its address in no log line; one past
-//! the file's cap, refused); a record the hosted genesis can never take,
-//! refused D-5 with no docker call; a fifth post past the looks' cap, refused
-//! D-8 with no docker call, and the looks' permits given back; one code
-//! holding one look at a time, let go on every refusal and an unwind; where
-//! two of a post's faults hold, the first in its order speaking; and THE BOOK
-//! keeping its own rules — what blocks a new post, first of three, and what
-//! admitting, taking, going live, letting a code go and failing do, an
-//! admission whole or not made.
+//! kept held where the spend could not be written, and let go of after it —
+//! or where the spend finds it no longer issued, the operator's hand having
+//! marked it; no code in the log) and T10 (a sign-up, its address in no log
+//! line; one past the file's cap, refused); a record the hosted genesis can
+//! never take, refused D-5 with no docker call; a fifth post past the looks'
+//! cap, refused D-8 with no docker call, and the looks' permits given back;
+//! one code holding one look at a time, let go on every refusal and an
+//! unwind; where two of a post's faults hold, the first in its order
+//! speaking; and THE BOOK keeping its own rules — what blocks a new post,
+//! first of three, and what admitting, taking, going live, letting a code go
+//! and failing do, an admission whole or not made.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -360,6 +361,37 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     rig.fake.assert_done();
     assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with("; this process refuses it, and the operator marks it")), "{:?}", rig.log());
+}
+
+/// T9: A SPEND THAT FINDS ITS CODE NO LONGER ISSUED — the operator's hand
+/// having marked it spent while its board was made — lets the code go all
+/// the same: the board stands live, the log names the board and no spend of
+/// its own, the file keeps the operator's word, and a post naming the code is
+/// refused by the file.
+#[test]
+fn a_spend_that_finds_its_code_no_longer_issued_lets_it_go() {
+    let script = [
+        inspects("alice"),
+        inspects("alice"),
+        to_the_serving_run(),
+        line("run_serving", Some("alice"), 0, "", ""),
+        line("health", Some("alice"), 0, PAIRED, ""),
+        line("caddy_reload", None, 0, "", ""),
+    ]
+    .concat();
+    let rig = rig(&script, None);
+    let code = rig.invite();
+    let alice = rig.admitted("alice", &code);
+    assert!(crate::invites::spend(&rig.state_dir, &code, &Name::parse(b"carol").expect("a name")).expect("written"), "the operator's hand, while the post waits");
+    assert!(rig.service.run_next());
+    assert!(rig.live(&alice));
+    assert!(rig.logged("alice: the invite was not found issued at the spend; the board stands"), "{:?}", rig.log());
+    assert!(!rig.logged("alice: the invite is spent"), "{:?}", rig.log());
+    assert!(!rig.service.book().admitted.contains(&code), "the code held though the file holds it no longer issued");
+    assert!(matches!(lookup(&rig.state_dir, &code).expect("read").expect("held").state, crate::invites::InviteState::Spent { ref name, .. } if name == "carol"), "the operator's word kept");
+    assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
+    assert!(rig.logged("a post refused: its invite code is not one the file holds issued"), "{:?}", rig.log());
+    rig.fake.assert_done();
 }
 
 /// T10: A SIGN-UP through the service is kept and logged — its address in

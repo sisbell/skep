@@ -66,9 +66,12 @@ fn snippet_path(boards_dir: &Path, name: &Name) -> PathBuf {
     boards_dir.join(format!("{name}.caddy"))
 }
 
-/// WHETHER `name`'s SNIPPET STANDS: the first of the truth about names'
-/// three reads, made with no call, and the sweep's sort of the labelled
-/// volumes. The error is the directory's.
+/// WHETHER `name`'s SNIPPET STANDS: anything at its path, a link followed to
+/// what it names — the snippet file Q5 (a) names, or anything else there, a
+/// directory the write could not replace among them; a link to nothing does
+/// not stand. The first of the truth about names' three reads, made with no
+/// call, and the sweep's sort of the labelled volumes. The error is the
+/// directory's.
 pub fn stands(boards_dir: &Path, name: &Name) -> io::Result<bool> {
     snippet_path(boards_dir, name).try_exists()
 }
@@ -85,10 +88,12 @@ pub fn write(boards_dir: &Path, name: &Name, suffix: &Domain) -> io::Result<()> 
 }
 
 /// THE REMOVAL: `name`'s snippet gone — `true` where one stood, `false` where
-/// none did — and the directory synced; an error from that sync arrives after
-/// the unlink, the snippet already gone. PRECONDITION, the caller's: no other
-/// write or removal of `name`'s snippet runs at once — the route lock, under
-/// which the flow makes both, keeps it; nothing here checks it.
+/// none did — and the directory synced; an error leaves the snippet standing
+/// where the unlink failed, and arrives with it gone where the sync after it
+/// failed — so the flow reads every error as a snippet that may stand.
+/// PRECONDITION, the caller's: no other write or removal of `name`'s snippet
+/// runs at once — the route lock, under which the flow makes both, keeps it;
+/// nothing here checks it.
 pub fn remove(boards_dir: &Path, name: &Name) -> io::Result<bool> {
     whole::remove(&snippet_path(boards_dir, name))
 }
@@ -99,10 +104,12 @@ pub fn reload(docker: &dyn Docker) -> io::Result<Exit> {
     docker.caddy_reload()
 }
 
-/// THE ROUTED NAMES: each name whose snippet stands — a `<name>.caddy`
-/// file in the directory whose stem [`Name::exact`] reads — what the
-/// status map is rebuilt from at start. A file of another shape is no
-/// board's and is passed over.
+/// THE ROUTED NAMES: each name whose snippet is a regular file — a
+/// `<name>.caddy` entry, read as it is in the directory and never through a
+/// link, whose stem [`Name::exact`] reads — what the status map is rebuilt
+/// from at start. An entry of another shape — a directory, a link — is
+/// passed over here, though [`stands`] finds a directory standing, and a
+/// link to anything that stands.
 pub fn routed(boards_dir: &Path) -> io::Result<Vec<Name>> {
     let mut found = Vec::new();
     for entry in fs::read_dir(boards_dir)? {

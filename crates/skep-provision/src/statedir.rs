@@ -44,7 +44,8 @@ pub enum StateDirRefused {
         /// The mode found.
         mode: u32,
     },
-    /// It could not be made or read.
+    /// It could not be made or read, or its path names no directory —
+    /// empty, or something other than a directory standing at it.
     Io {
         /// The directory as the operator named it.
         path: PathBuf,
@@ -70,9 +71,10 @@ impl fmt::Display for StateDirRefused {
 impl std::error::Error for StateDirRefused {}
 
 impl StateDir {
-    /// THE DOOR: `path` made `0700` where it does not stand; where it
+    /// THE DOOR: `path` made `0700` where nothing stands; where a directory
     /// stands, refused if any group or other bit is set — refuse, never
-    /// repair; and an empty `path`, which names no directory, refused.
+    /// repair; and refused where `path` is empty or something other than a
+    /// directory stands at it.
     pub fn open(path: &Path) -> Result<StateDir, StateDirRefused> {
         let io_refused = |error| StateDirRefused::Io { path: path.to_path_buf(), error };
         // An empty path names no directory: none stands at it, and a

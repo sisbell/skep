@@ -68,12 +68,22 @@ pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
 /// test.
 pub type Sleep = Arc<dyn Fn(Duration) + Send + Sync>;
 
-/// ONE MAIL.
+/// ONE MAIL. Its four header fields — `to`, `from`, `reply_to`, `subject` —
+/// are each one line, the three addresses one recipient each, and its body
+/// holds no line that is a lone `.`, which `sendmail -t` without `-i` reads
+/// as the message's end (as this crate knows sendmail — UNVERIFIED HERE):
+/// the builder's obligation, which [`Message::text`] writes as held and
+/// nothing here checks. The program's one builder, the outbox, keeps it:
+/// `from` and `reply_to` addresses by the rule, the subject a strings row,
+/// the body the live reply the worker hands it — the strings table's rows,
+/// which the reply's suite holds to it; and `to` handed on as the invite
+/// file's line holds it — the mint's address by the rule, unless the
+/// operator's hand has edited the line.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Message {
     /// The board it is about — the one thing the log may name.
     pub name: Name,
-    /// The invite's address.
+    /// The invite's address, as its line holds it.
     pub to: String,
     /// `--from`.
     pub from: String,
@@ -211,9 +221,11 @@ impl Outbox {
         Outbox { delivered_by: DeliveredBy::Caller { sender, log, sleep }, from, reply_to }
     }
 
-    /// ONE FOLLOW-UP MAIL handed over: the board, the invite's address and
-    /// the live reply; `From:`, `Reply-To:` and the subject are the outbox's
-    /// own, the same for every board.
+    /// ONE FOLLOW-UP MAIL handed over: the board, the invite's address — as
+    /// the invite file's line holds it: put there through the address rule
+    /// by the mint, and read back unchecked, a hand edit of the line the
+    /// operator's own act — and the live reply; `From:`, `Reply-To:` and the
+    /// subject are the outbox's own, the same for every board.
     pub fn hand_over(&self, name: Name, to: String, body: String) {
         let message = Message { name, to, from: self.from.as_str().to_owned(), reply_to: self.reply_to.as_str().to_owned(), subject: fill(MAIL_SUBJECT, &[]), body };
         match &self.delivered_by {

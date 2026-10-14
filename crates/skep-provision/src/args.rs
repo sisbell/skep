@@ -1,9 +1,9 @@
 //! THE COMMAND LINE, parsed by hand in the daemon's style: a leading verb —
 //! `serve` or `invite` — then its flags, each `--flag <value>`, the last
 //! given winning; `--version` read as the FIRST argument alone, what
-//! follows it unread; `--help` the usage text. Every default is a named
-//! constant below, and the usage text renders each from its constant, so
-//! the program cannot describe a default it does not use. A flag the verb
+//! follows it unread; `--help`, or `-h`, the usage text. Every default is a
+//! named constant below, and the usage text renders each from its constant,
+//! so the program cannot describe a default it does not use. A flag the verb
 //! does not take, a flag without its value, a value of the wrong form, a
 //! required flag missing, `--mailer` without `--from` or the reverse — each
 //! is a usage refusal ([`parse`]'s `Err`), which `main` says with the usage
@@ -232,16 +232,16 @@ invite link printed on stdout, the one line to mail by hand.
     )
 }
 
-/// THE PARSE: a leading `--version` or `--help`, read before any other
-/// argument and what follows it unread; or a verb and its flags. Where
+/// THE PARSE: a leading `--version`, or `--help` or `-h`, read before any
+/// other argument and what follows it unread; or a verb and its flags. Where
 /// several refusals hold, the first met speaks: an argument that is not UTF-8
-/// text, where no leading `--version` or `--help` came first; then a verb
-/// unknown or missing; then the verb's words read left to right — an unknown
-/// argument, a flag without its value, a value of the wrong form, `--version`
-/// out of its place, and a `--help` met first answers the usage text; then
-/// `--mailer` and `--from` unpaired; then a required flag missing,
-/// `--state-dir` before `--reply-to` for `serve` and `--address` before
-/// `--state-dir` for `invite`.
+/// text, where no leading `--version`, `--help` or `-h` came first; then a
+/// verb unknown or missing; then the verb's words read left to right — an
+/// unknown argument, a flag without its value, a value of the wrong form,
+/// `--version` out of its place, and a `--help` or `-h` met first answers the
+/// usage text; then `--mailer` and `--from` unpaired; then a required flag
+/// missing, `--state-dir` before `--reply-to` for `serve` and `--address`
+/// before `--state-dir` for `invite`.
 pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
     let mut argv = argv.into_iter().peekable();
     match argv.peek().and_then(|first| first.to_str()) {

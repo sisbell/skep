@@ -11,16 +11,17 @@
 //! ([`CodeLook`]), one look per code; then THE TRUTH ABOUT THE NAME
 //! (`names::taken`, D-4), three reads under no lock of this service's, at
 //! most [`MAX_LOOKS`] posts' at once — past it D-8, "try again later", with
-//! no docker call; then THE ADMISSION, under the book's lock again: the look
-//! ended, and what is in flight checked again — a post for this name may
-//! have been admitted while the reads ran, though none for this code, which
-//! the look held — and the invite looked up again under the same lock — a
-//! spend written since the post's first lookup, by a board gone live on the
-//! code before the look held it, or by the operator's hand — then the
-//! status token minted, the post queued, and D-7 answered with its status
-//! URL. A refused post leaves nothing: no docker call past the truth's
-//! reads, no file, no queue entry, no code held. A POST NEVER WAITS ON A
-//! PROVISIONING: no lock it takes is held across one.
+//! no docker call; then THE STATUS TOKEN minted, the look still held — D-8
+//! where the OS gives no entropy; then THE ADMISSION, under the book's lock
+//! again: the look ended, and what is in flight checked again — a post for
+//! this name may have been admitted while the reads ran, though none for
+//! this code, which the look held — and the invite looked up again under the
+//! same lock — a spend written since the post's first lookup, by a board gone
+//! live on the code before the look held it, or by the operator's hand —
+//! then the post queued, and D-7 answered with its status URL. A refused
+//! post leaves nothing: no docker call past the truth's reads, no file, no
+//! queue entry, no code held. A POST NEVER WAITS ON A PROVISIONING: no lock
+//! it takes is held across one.
 //!
 //! THE NAME IS THE UNIT OF EXCLUSION. A name is HELD from its admission to
 //! its live or failed end (the status map's `holds`) — the owner's lock per
@@ -196,8 +197,10 @@ struct Job {
 /// refusal ([`CodeLook`]); a post admitted waits with its token in the map and
 /// its code held; a post taken is running; a post in flight, waiting or
 /// running, holds its name; a failed post lets its code go at once, and a live
-/// one keeps it held until the worker lets it go ([`Book::release`]), once the
-/// spend is written; and a new post is admitted only where none of a full
+/// one keeps it held until its spend is answered — written, or the file found
+/// holding the code no longer issued, the operator's hand having marked it —
+/// and the worker lets it go ([`Book::release`]); a spend that could not be
+/// written keeps it held; and a new post is admitted only where none of a full
 /// queue, a held code and a held name blocks it — the first of them in that
 /// order, as [`Book::blocks`] answers, asked by the admitter under the lock it
 /// admits under ([`Book::admit`]'s precondition).
@@ -206,7 +209,7 @@ struct Book {
     map: StatusMap,
     /// The codes the posts admitted hold: each from its post's admission until
     /// let go of — a failed post's at once, a live post's once its spend is
-    /// written ([`Book::release`]).
+    /// answered ([`Book::release`]).
     admitted: HashSet<InviteCode>,
     /// The codes whose posts are looking at what stands under their names:
     /// held as surely as one in `admitted`, from the post's in-flight check to
@@ -222,7 +225,7 @@ enum Blocked {
     QueueFull,
     /// The invite code is held: by a post looking at what stands under its
     /// name, by a post in flight, or by one gone live until its spend is
-    /// written.
+    /// answered.
     CodeHeld,
     /// A post in flight holds the name.
     NameHeld,
@@ -271,13 +274,14 @@ impl Book {
     }
 
     /// `token`'s post marked live: its page the live reply. Its code stays
-    /// held until its spend is written ([`Book::release`]).
+    /// held until its spend is answered ([`Book::release`]).
     fn mark_live(&mut self, token: &str) {
         self.map.set(token, PostState::Live);
     }
 
     /// `code` let go of: a new post may name it — a live post's once the
-    /// file says spent, a failed post's at once.
+    /// file holds it no longer issued, spent by this post's spend or by the
+    /// operator's hand; a failed post's at once.
     fn release(&mut self, code: &InviteCode) {
         self.admitted.remove(code);
     }
@@ -576,11 +580,12 @@ impl Service {
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
                     Err(e) => self.log(&format!("{name}: the invite could not be marked spent ({e}); this process refuses it, and the operator marks it")),
                 }
-                // The code is let go of AFTER the spend is written: a post
-                // that finds the book not holding it then finds the file
-                // holding it spent. A spend that could not be written keeps
-                // its code held for the process's life: the file still says
-                // issued.
+                // The code is let go of AFTER the spend is answered — written,
+                // or the file found holding the code no longer issued — so a
+                // post that finds the book not holding it finds the file
+                // holding it no longer issued. A spend that could not be
+                // written keeps its code held for the process's life: the file
+                // may still say issued.
                 if spend.is_ok() {
                     self.book().release(&job.code);
                 }
@@ -927,6 +932,9 @@ impl Desk for Service {
                 return Err(Refusal::Failed);
             }
         }
+        // THE STATUS TOKEN: drawn from the OS before the admission, off the
+        // book's short lock, the look still held — so a draw the OS refuses
+        // answers D-8 and lets the code go as any refusal does.
         let token = names::unguessable().map_err(|e| {
             self.log(&format!("{name}: a post could not be admitted: {e}"));
             Refusal::Failed

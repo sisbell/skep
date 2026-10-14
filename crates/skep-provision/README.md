@@ -38,10 +38,11 @@ skep-provision --version
 
 A usage refusal (an unknown flag, a missing value, a required flag
 missing, `--mailer` without `--from` or the reverse) exits 2 with the usage
-text; a start refused (a loose state directory, an unreadable snippet
-directory, an address that cannot be bound, a thread the machine will not
-give) or an `invite` that printed no invite link exits 1, as does a
-`--version` or `--help` whose text cannot be written.
+text; a start refused (a state directory that is loose, cannot be made or
+is not a directory; an unreadable snippet directory; an address that
+cannot be bound; a thread the machine will not give) or an `invite` that
+printed no invite link exits 1, as does a `--version` or `--help` whose
+text cannot be written.
 
 ## `serve`'s flags
 
@@ -90,7 +91,8 @@ fetched from elsewhere.
   alone, no control character, no whitespace, none of
   `( ) < > [ ] : ; \ , "`) is shown on the page again.
 - `GET /claim` is the claim form: the board's name, the record, and the
-  invite code, pre-filled from the `invite` query value.
+  invite code, pre-filled from the `invite` query value where the query
+  decodes and gives one.
 - `POST /claim` judges the post before any `docker` call. The invite
   code must be one the file holds issued. The name must be one label
   after lowercasing: `[a-z0-9-]`, 2 to 63 bytes, no hyphen at either

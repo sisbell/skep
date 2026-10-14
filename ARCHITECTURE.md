@@ -242,13 +242,15 @@ foundation and on the stores above it.
 - `skep-provision` — the service behind a hosted board's sign-up, one
   binary: `serve` serves the sign-up page and the claim form over the
   plain HTTP/1.1 subset (`skep-http`), judges the person's record in
-  process (`skep-identity`'s `parse_enroll` and the hosted walk's
-  preview-kind test), runs the steps that make a board — on a pool of
-  workers, different names at once, the name the unit of exclusion —
-  through the host's `docker` command, writes one proxy snippet per board
-  and reloads the proxy, the two serial across every name, shows the live
-  reply at the post's status URL and mails it once the board is live,
-  and at its start sweeps away any board a stop left half-made; `invite`
+  process (`skep-identity`'s `parse_enroll`, the hosted walk's
+  preview-kind test, and the hosted genesis's two refusals — every key's
+  halves decoding, sixteen keys at most), runs the steps that make a
+  board — on a pool of workers, different names at once, the name the
+  unit of exclusion — through the host's `docker` command, writes one
+  proxy snippet per board and reloads the proxy, the two serial across
+  every name, shows the live reply at the post's status URL and mails it
+  once the board is live, and at its start sweeps away any board a stop
+  left half-made; `invite`
   mints one invite by the owner's hand. Of the skep crates it depends on
   `skep-identity`, `skep-http` and `skep-signature` — its verify alone, no
   `sign`, for the record's all-halves decode — never `skepd` or
@@ -1767,7 +1769,10 @@ Rules that hold across its files:
   sign-up file for its field — so what keeps or carries it — a file's
   line, the snippet, a URL — is handed nothing it cannot carry and checks
   nothing again, and no other string of a code's shape, a status token
-  among them, can stand in for a code.
+  among them, can stand in for a code. The invite file's lines are read
+  back as the operator's hand may have left them: a code out of the
+  alphabet matches none taken in, and an address reaches the mail's `To:`
+  as its line holds it.
 - **What stands is the truth about names.** A name is taken iff its
   snippet, its volume or its container stands; no ledger is kept, and
   the log carries the history. A failed step's makings are undone in
@@ -1800,8 +1805,10 @@ Rules that hold across its files:
 - **Imports point down.** A module — its fakes and its suite too — names
   only the modules `src/main.rs` declares above it, and an item by its
   home module, never through the root; and the crate depends on
-  `getrandom`, `serde_json`, `skep-http` and `skep-identity` alone.
-  `tests/it/tidy.rs` checks both, and that every file is declared.
+  `getrandom`, `serde_json`, `skep-http`, `skep-identity` and
+  `skep-signature` — its verify alone, no `sign` — and nothing else.
+  `tests/it/tidy.rs` checks both, and that every file is declared;
+  `scripts/gate-full.sh` checks that the shipped build links no signer.
 - **Every `pub` item says what it is.** `#![deny(missing_docs)]` reaches
   only what a crate exports, and a binary exports nothing, so
   `tests/it/tidy.rs` holds every file under `src/` to its `//!` doc and

@@ -1,6 +1,7 @@
 //! T9 — THE INVITE FILE: a mint writes one `issued` line and answers its
-//! code; `--code` is used verbatim; a duplicate refused, and a file that
-//! cannot be reached refused as its own failure, each an error saying which;
+//! code; `--code` is used verbatim; a duplicate refused, a file that cannot
+//! be reached refused as its own failure, and a fresh code the OS gives no
+//! entropy for refused as its own, each an error saying which;
 //! a lookup before and after the spend answers issued, then spent; a spent or
 //! an unknown code is not issued; the file is rewritten whole — a failure
 //! between the write and the rename leaves it as it was — and a line of
@@ -86,6 +87,18 @@ fn a_mint_over_a_directory_gone_is_the_files_failure() {
     let refused = mint(&state_dir, &address("person@example.com"), None).expect_err("no directory to write in");
     assert!(matches!(refused, MintRefused::Io(_)), "{refused:?}");
     assert!(refused.to_string().starts_with("the invite file: "), "{refused}");
+}
+
+/// A FRESH CODE THAT CANNOT BE DRAWN refuses the mint as its own failure —
+/// the OS's entropy, which `?` carries to the refusal's `Entropy` — never as
+/// the invite file's, and says so.
+#[test]
+fn a_fresh_code_that_cannot_be_drawn_is_its_own_failure() {
+    let no_entropy = NoEntropy(getrandom::Error::UNSUPPORTED);
+    let refused = MintRefused::from(no_entropy);
+    assert!(matches!(refused, MintRefused::Entropy(_)), "{refused:?}");
+    let said: &dyn std::error::Error = &refused;
+    assert_eq!(said.to_string(), format!("a fresh code: {no_entropy}"));
 }
 
 /// T9: A LOOKUP BEFORE AND AFTER THE SPEND answers issued, then spent by

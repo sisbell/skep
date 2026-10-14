@@ -67,10 +67,10 @@
 //! `the invite is spent` after it — and never the code. Its exit codes: 0, an
 //! `invite` minted and its link printed, or the version line or the usage
 //! text printed; 2, a usage refusal; 1, a start refused — a state directory
-//! other users can read, a snippet directory that cannot be read, an address
-//! that cannot be bound, a thread the OS will not give — or an `invite` that
-//! printed no invite link, or a version line or usage text that could not be
-//! written.
+//! other users can read, or one that cannot be made or is no directory, a
+//! snippet directory that cannot be read, an address that cannot be bound, a
+//! thread the OS will not give — or an `invite` that printed no invite link,
+//! or a version line or usage text that could not be written.
 //!
 //! The modules are declared below in dependency order, each naming only
 //! those above it — `tests/it/tidy.rs` checks it — and `ARCHITECTURE.md`

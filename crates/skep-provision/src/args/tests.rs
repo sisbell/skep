@@ -6,7 +6,7 @@
 //! and a missing required flag, an empty `--state-dir` counted as none, are
 //! each a usage refusal (`main` answers it exit 2 — the binary's suite runs
 //! one), where several hold the first met speaking, and what follows a leading
-//! `--version` or `--help` unread; every flag lands in its setting, the
+//! `--version`, `--help` or `-h` unread; every flag lands in its setting, the
 //! address, the code and the suffix as their own values; `--workers`
 //! defaults to its constant and refuses zero (T21), and `--connections`
 //! likewise; a `test-hooks` build takes `--docker-fake` and `--mailer-fake`
@@ -193,8 +193,10 @@ fn mailer_and_from_come_together_or_not_at_all() {
 
 /// T1: AN UNKNOWN FLAG, a flag without its value, a value of the wrong
 /// form and a missing required flag are each a usage refusal; where several
-/// hold, the first met speaks, and what follows a leading `--version` or
-/// `--help` is unread, UTF-8 text or not.
+/// hold, the first met speaks, and what follows a leading `--version`,
+/// `--help` or `-h` is unread, UTF-8 text or not; and `--help` or `-h` answers
+/// the usage text under either verb, where a `--version` among a verb's
+/// words is refused.
 #[test]
 fn each_bad_command_line_is_a_usage_refusal() {
     assert_eq!(serve(&["--bogus"]), Err("serve: unknown argument '--bogus'".to_owned()));
@@ -232,9 +234,15 @@ fn each_bad_command_line_is_a_usage_refusal() {
         assert_eq!(parse(vec![OsString::from("provision"), not_text()]), Err("an argument is not UTF-8 text".to_owned()), "bytes that are not text before an unknown verb");
         assert_eq!(parse(vec![OsString::from("--version"), not_text()]), Ok(Command::Version), "what follows --version is unread");
         assert_eq!(parse(vec![OsString::from("--help"), not_text()]), Ok(Command::Help), "what follows --help is unread");
+        assert_eq!(parse(vec![OsString::from("-h"), not_text()]), Ok(Command::Help), "what follows -h is unread");
     }
     assert_eq!(parse(argv(&["--help"])), Ok(Command::Help));
     assert_eq!(serve(&["--help"]), Ok(Command::Help));
+    assert_eq!(parse(argv(&["-h"])), Ok(Command::Help), "-h, as the workspace's binaries take it");
+    assert_eq!(serve(&["-h"]), Ok(Command::Help));
+    assert_eq!(parse(argv(&["invite", "--help"])), Ok(Command::Help));
+    assert_eq!(parse(argv(&["invite", "-h"])), Ok(Command::Help));
+    assert_eq!(parse(argv(&["invite", "--version"])), Err("--version is read as the first argument: skep-provision --version".to_owned()));
     // Where several refusals hold, the first met speaks.
     assert_eq!(serve(&["--mailer", "m", "--bogus"]), Err("serve: unknown argument '--bogus'".to_owned()), "a word read before the pairing");
     assert_eq!(serve(&["--bogus", "--help"]), Err("serve: unknown argument '--bogus'".to_owned()), "a word read before a --help after it");

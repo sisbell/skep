@@ -4,9 +4,10 @@
 //! planted at the temp file's name is never written through; a failure
 //! between the write and the rename leaves the old file whole and no temp
 //! file, and an error from the directory's sync comes after the act — the
-//! new file in place, the removed one gone; the removal answers whether a
-//! file stood. (The owners' own modes are their suites': the snippet's
-//! `0644` in `caddy`'s, the sign-up file's `0600` in `signups`'.)
+//! new file in place, the removed one gone — where an error from the unlink
+//! leaves the file standing; the removal answers whether a file stood. (The
+//! owners' own modes are their suites': the snippet's `0644` in `caddy`'s,
+//! the sign-up file's `0600` in `signups`'.)
 
 use std::fs;
 
@@ -95,6 +96,23 @@ fn an_error_from_the_directorys_sync_comes_after_the_act() {
     assert!(!temp_of(&path).exists(), "no temp file left");
     assert!(remove(&path).is_err(), "the directory's sync was refused");
     assert!(!path.exists(), "the file gone");
+}
+
+/// AN ERROR FROM THE UNLINK LEAVES THE FILE STANDING: in a directory its
+/// owner may search but not write, the removal answers an error and the file
+/// stands as it was.
+#[cfg(unix)]
+#[test]
+fn an_error_from_the_unlink_leaves_the_file_standing() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("a directory");
+    let path = boards.join("file");
+    replace(&path, b"kept\n", 0o600, &|| Ok(())).expect("replaced");
+    fs::set_permissions(&boards, fs::Permissions::from_mode(0o500)).expect("searchable, not writable");
+    assert!(remove(&path).is_err(), "the unlink was refused");
+    assert_eq!(fs::read(&path).expect("the file stands"), b"kept\n");
 }
 
 /// THE REMOVAL answers whether a file stood: `true` once, then `false`.

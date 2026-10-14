@@ -25,7 +25,8 @@
 //! AN UNGUESSABLE VALUE ([`unguessable`]): 128 bits of OS entropy as
 //! lowercase hex — the status token the flow mints at a post, the key the
 //! book's status map holds the post by, NEVER LOGGED; and the invite code
-//! `invite` mints where none is given.
+//! `invite` mints where none is given. Its one failure is its own,
+//! [`NoEntropy`]: the OS giving none.
 
 use std::fmt;
 use std::io;
@@ -66,8 +67,9 @@ impl fmt::Display for TakenBy {
 /// cannot be reached among them: at a post the volume's own creation then
 /// fails while the Engine stays unreachable, and nothing is made; after a
 /// cleanup's or the sweep's removals the verdict reads done, and what the
-/// Engine left the next start's sweep finds. A `docker` that cannot be run
-/// at all is the error.
+/// Engine left the next start's sweep finds. The error is a `docker` that
+/// cannot be run at all, or a snippet directory that cannot be searched
+/// ([`caddy::stands`]'s).
 pub fn taken(docker: &dyn Docker, boards_dir: &Path, name: &Name) -> io::Result<Option<TakenBy>> {
     if caddy::stands(boards_dir, name)? {
         return Ok(Some(TakenBy::Snippet));
@@ -117,13 +119,30 @@ pub fn labelled(listing: &[u8], boards_dir: &Path) -> io::Result<Labelled> {
     Ok(sorted)
 }
 
+/// NO ENTROPY: the OS would not give the 128 bits an unguessable value is
+/// drawn from — a failure of its own, never a file's, so a caller answers it
+/// as its own refusal: `invites`' `MintRefused::Entropy`, which `?` reaches,
+/// and a post's D-8.
+#[derive(Debug, Clone, Copy)]
+pub struct NoEntropy(pub getrandom::Error);
+
+/// The failure as the log and a refusal say it: `OS entropy: ` and the OS's
+/// own words.
+impl fmt::Display for NoEntropy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OS entropy: {}", self.0)
+    }
+}
+
+impl std::error::Error for NoEntropy {}
+
 /// AN UNGUESSABLE VALUE: 128 bits of OS entropy as 32 lowercase hex digits
 /// — a status token, minted at the post so that the status URL is the
 /// poster's and not guessable (the provisioning record §5.2), and the invite
-/// code `invite` mints where none is given.
-pub fn unguessable() -> io::Result<String> {
+/// code `invite` mints where none is given. The error is [`NoEntropy`].
+pub fn unguessable() -> Result<String, NoEntropy> {
     let mut raw = [0u8; 16];
-    getrandom::fill(&mut raw).map_err(|e| io::Error::other(format!("OS entropy: {e}")))?;
+    getrandom::fill(&mut raw).map_err(NoEntropy)?;
     Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
 }
 

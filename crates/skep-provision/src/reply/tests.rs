@@ -4,8 +4,8 @@
 //! one nowhere; the two acts the `skep` command's own lines, read back from
 //! `skep-cli`'s `src/commands/claim.rs`, with the public origin, AUTH-5.87's
 //! sentence and the read's limit in them; the three facts; the status
-//! URL last; and the mail's text the page's text with the headers
-//! before it.
+//! URL last; the mail's text the page's text with the headers before it;
+//! and its body and subject keeping the message's precondition.
 
 use super::*;
 use crate::name::Name;
@@ -128,4 +128,17 @@ fn the_mails_text_is_the_pages_with_the_headers() {
     };
     let headers = "To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: 8bit\n";
     assert_eq!(message.text(), format!("{headers}\n{page}"));
+}
+
+/// THE MAIL's BODY AND SUBJECT KEEP THE MESSAGE's PRECONDITION, the
+/// outbox's half of it: no line of the reply, anchorless or not, is a lone
+/// `.`, which `sendmail -t` would read as the message's end, and the subject
+/// is one line.
+#[test]
+fn the_mails_body_and_subject_keep_the_messages_precondition() {
+    for anchorless in [false, true] {
+        let reply = text(ORIGIN, anchorless, STATUS);
+        assert!(!reply.lines().any(|line| line == "."), "{reply}");
+    }
+    assert_eq!(fill(crate::strings::MAIL_SUBJECT, &[]).lines().count(), 1);
 }

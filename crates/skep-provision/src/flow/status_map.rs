@@ -4,16 +4,16 @@
 //! poster and in the mail, NEVER LOGGED — with its name, its state
 //! ([`PostState`]) and what the reply needs that a name does not say, the
 //! record's anchorless fact; and THE NAMES ROUTED AT START, REBUILT from the
-//! snippet directory as Q5 (a) rules — every `<name>.caddy` — which the
-//! serving line counts as `live`. A post this process makes live is live by
-//! its own state, and no name is added to them: whether a board is live now
-//! is what stands under its name (`names::taken`), never a list kept here.
-//! The reply's three facts are kept nowhere here: they are the constants and
-//! the public origin, and the reply renders them (`reply`). The map holds
-//! NAMES across a restart and no token: a token is never written anywhere,
-//! so a status URL minted before a restart answers 404 after it, though the
-//! board it named stands, live, and its mail — if it was sent — carries the
-//! reply.
+//! snippet directory as Q5 (a) rules — every `<name>.caddy` file
+//! `caddy::routed` reads — which the serving line counts as `live`. A post
+//! this process makes live is live by its own state, and no name is added to
+//! them: whether a board is live now is what stands under its name
+//! (`names::taken`), never a list kept here. The reply's three facts are kept
+//! nowhere here: they are the constants and the public origin, and the reply
+//! renders them (`reply`). The map holds NAMES across a restart and no token:
+//! a token is never written anywhere, so a status URL minted before a restart
+//! answers 404 after it, though the board it named stands, live, and its mail
+//! — if it was sent — carries the reply.
 //!
 //! ITS ONE CLIENT is the book, `flow`'s `Book`: the map keeps each post's
 //! state and which states hold a name, and the book's rules alone move a
@@ -82,8 +82,8 @@ impl fmt::Debug for StatusMap {
 }
 
 impl StatusMap {
-    /// THE REBUILD AT START (Q5 (a)): each name whose snippet stands, routed
-    /// at start; no post, no token.
+    /// THE REBUILD AT START (Q5 (a)): each name [`caddy::routed`] reads,
+    /// routed at start; no post, no token.
     pub fn rebuild(boards_dir: &Path) -> io::Result<StatusMap> {
         Ok(StatusMap { posts: HashMap::new(), routed_at_start: caddy::routed(boards_dir)?.into_iter().collect() })
     }

@@ -15,13 +15,13 @@
 //! sync comes after the rename, so a failure there answers an error with
 //! the new file in place, not known durable — an error is "the old file, or
 //! the new one not known durable", never "the old file". THE REMOVAL
-//! ([`remove`]) removes a file and syncs its directory, an error from that
-//! sync arriving with the file gone. ONE WRITER PER PATH is the caller's:
-//! every replacement of a file shares its temp sibling — the sign-up file's
-//! mutex, the invite file's lock file and the one worker that holds a
-//! board's name each keep it. The owners name the modes: the state files
-//! `0600`, owner-only (`statedir`); the snippets `0644`, readable by the
-//! proxy (`caddy`).
+//! ([`remove`]) removes a file and syncs its directory: an error from the
+//! unlink leaves the file standing, and one from that sync arrives with it
+//! gone. ONE WRITER PER PATH is the caller's: every replacement of a file
+//! shares its temp sibling — the sign-up file's mutex, the invite file's lock
+//! file and the one worker that holds a board's name each keep it. The
+//! owners name the modes: the state files `0600`, owner-only (`statedir`);
+//! the snippets `0644`, readable by the proxy (`caddy`).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -68,8 +68,8 @@ pub fn replace(path: &Path, bytes: &[u8], mode: u32, between: &dyn Fn() -> io::R
 }
 
 /// THE REMOVAL: the file at `path` gone — `true` where one stood, `false`
-/// where none did — and its directory synced; an error from that sync
-/// arrives with the file already gone.
+/// where none did — and its directory synced; an error from the unlink
+/// leaves the file standing, and one from that sync arrives with it gone.
 pub fn remove(path: &Path) -> io::Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => sync_parent(path).map(|()| true),

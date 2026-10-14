@@ -9,12 +9,13 @@
 //!
 //! THE REQUESTS ANSWERED: `GET /`, the sign-up page; `POST /signup`, the
 //! address kept and a thanks page; `GET /claim`, the claim form, the invite
-//! field pre-filled from the `invite` query value where one is given; `POST
-//! /claim`, the post's three fields handed to the [`Desk`] — a refusal shown
-//! on the form again at 200, an admission answered with D-7 and the post's
-//! status URL, no redirect; `GET /status/<token>`, D-7 while the post waits
-//! or runs, the live reply once the board's route stands, D-8 once it
-//! failed, 404 for a token the desk does not hold; every other request 404.
+//! field pre-filled from the `invite` query value where the query decodes
+//! and gives one; `POST /claim`, the post's three fields handed to the
+//! [`Desk`] — a refusal shown on the form again at 200, an admission
+//! answered with D-7 and the post's status URL, no redirect;
+//! `GET /status/<token>`, D-7 while the post waits or runs, the live reply
+//! once the board's route stands, D-8 once it failed, 404 for a token the
+//! desk does not hold; every other request 404.
 //! A request the HTTP subset refuses — a head past [`MAX_HEAD`] or
 //! malformed, one cut off early, one that spent its [`TRANSFER_DEADLINE`] —
 //! is 400, and so is a body the form decoder refuses; a body past

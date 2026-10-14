@@ -5,7 +5,7 @@
 use skep_client::ceremony::rotate::{self as rotate_walk, RotateOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
-use super::{board_of, data, principal_or_bound, print_facts, read_payload, require_terminal, store_of, talk, Door, Stop};
+use super::{binding_said, board_of, data, principal_or_bound, print_facts, read_payload, require_terminal, store_of, talk, Door, Stop};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -23,8 +23,10 @@ pub fn rotate(c: &CommandLine) -> Result<(), Stop> {
     for w in &rotated.warnings {
         talk(w);
     }
+    // The new key's binding line, as the store reads it back: the walk
+    // carries the line whether or not its append landed (§3.7).
     if let Some(line) = &rotated.binding_line {
-        talk(format!("binding: {line}"));
+        talk(binding_said(&store, line));
     }
     print_facts(&rotated.facts)?;
     data(format!("old {}", rotated.old))?;

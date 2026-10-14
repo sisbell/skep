@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use skep_client::ceremony::recover::{self as recover_walk, RecoverOptions};
 use skep_client::dial::plaintext_non_loopback_warning;
 
-use super::{board_of, data, host_name_and_date, principal_or_bound, print_facts, require_terminal, store_of, talk, BoxDefault, Door, Stop};
+use super::{binding_said, board_of, data, host_name_and_date, principal_or_bound, print_facts, require_terminal, store_of, talk, BoxDefault, Door, Stop};
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
@@ -42,8 +42,10 @@ pub fn recover(c: &CommandLine) -> Result<(), Stop> {
     for l in &recovered.recovery_read {
         talk(format!("[recovery read] {l}"));
     }
+    // The recovered device's binding line, as the store reads it back: the
+    // walk carries the line whether or not its append landed (§3.7).
     if let Some(line) = &recovered.binding_line {
-        talk(format!("binding: {line}"));
+        talk(binding_said(&store, line));
     }
     print_facts(&recovered.facts)?;
     for fp in &recovered.enrolled {

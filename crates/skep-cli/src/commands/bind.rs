@@ -2,7 +2,8 @@
 //! handoff or a hosted signup landed on this device — confirmed against the
 //! board, the set compared whole where another hand wrote the account's
 //! first set, the account's first signed session run where one is owed,
-//! the binding line written and said — naming a key this store holds, a key
+//! the binding line written and said as the store reads it back — naming a
+//! key this store holds, a key
 //! file from outside it refused before anything is. With `keygen`, one of the
 //! two commands that sequence the library's compositions themselves rather
 //! than calling a walk.
@@ -18,7 +19,7 @@ use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
-use super::{board_of, clipped, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop};
+use super::{binding_said, board_of, clipped, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop, BY_HAND};
 use crate::args::{parse_principal, CommandLine, MAX_PRINCIPAL};
 use crate::terminal::answer;
 
@@ -335,12 +336,13 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     }
     // The binding line said whichever way the append went — as `rotate` and
     // `recover` say theirs — since it names the key every later lookup at
-    // this board answers with (§3.5 arm 2): written, it is the line itself;
-    // refused, the warning carrying it for the person to record (§3.7).
+    // this board answers with (§3.5 arm 2): appended, as the store reads it
+    // back (`binding_said`); refused, the warning carrying it for the person
+    // to record, and how (§3.7).
     let line = Binding::Enrollment { origin: origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
     match store.bind(&line) {
-        Ok(()) => talk(format!("binding: {line}")),
-        Err(w) => talk(w.to_string()),
+        Ok(()) => talk(binding_said(&store, &line.to_string())),
+        Err(w) => talk(format!("{w} — {BY_HAND}")),
     }
     print_facts(&Facts { account, principal, origin })?;
     if let Some(s) = agent_space {

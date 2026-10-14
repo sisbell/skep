@@ -670,6 +670,73 @@ fn f3_the_person_over_the_bridge_claims_and_a_cancel_abandons() {
     sd2.shutdown();
 }
 
+/// A MOMENT PENDING AT THE STOP IS CANCELLED, AND THE STOP COMPLETES: stdin
+/// closed while a `claim` waits on a moment the page has not answered — a
+/// tab closed mid-walk — the provider's clean stop cancels the moment before
+/// it joins the call's connection, so the call answers `abandoned` and the
+/// provider exits 0, its stop said from its cause to its seconds; never a
+/// stop parked behind the moment, with an interrupt, which skips the clean
+/// stop, the one way out.
+#[test]
+fn a_moment_pending_at_the_stop_is_cancelled_and_the_stop_completes() {
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let mut provider = Provider::start(&["--board", &origin(sd.port()), "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store"))]);
+    let stdin = provider.stdin.take().expect("the provider's stdin, held open");
+    let rx = provider.events();
+    let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
+    provider.result("keygen", json!({"label": "notebook"}));
+    let talk = Arc::clone(&provider.talk);
+    let provider = Arc::new(provider);
+    let p = Arc::clone(&provider);
+    let walk = thread::spawn(move || p.call("claim", json!({"board": board})));
+    next_event(&rx, "moment", |v| v["answerable"] == true);
+    drop(stdin);
+    let answer = walk.join().expect("the call answered, never left waiting on the moment");
+    assert_eq!(answer["refused"]["name"], "abandoned", "{answer}");
+    let mut provider = Arc::try_unwrap(provider).ok().expect("the one holder");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = provider.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the provider never stopped:\n{}", provider.talk());
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(status.code(), Some(0), "{}", provider.talk());
+    said_holding(&talk, &["stopping (stdin closed)", "stopped: the shell's stop took "]);
+    drop(rx);
+    sd.shutdown();
+}
+
+/// A BOARD WHOSE WRITES ARE HALTED IS SAID SO AT THE PROVIDER'S START
+/// (wire.md §Rejection codes, `poisoned`): the daemon's durability barrier
+/// and the truncation that would repair it both armed to fail, one bare
+/// write halts its kernel; a provider started over that board says on its
+/// board line that every write the page makes is refused `poisoned` until
+/// the board restarts — where the mode alone reads a claimed board serving.
+#[test]
+fn a_provider_over_a_halted_board_says_so_at_its_start() {
+    use skep_client::board::{Answer, Opened, SessionBody};
+    use skepd::Step;
+    use std::io::ErrorKind;
+
+    let dir = tempfile::tempdir().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    claim_board(&board_origin, &dir.path().join("claimant"), &dir.path().join("anchors"));
+    let board = Board::new(Origin::parse(&board_origin).unwrap(), PlainHttp::new());
+    let Opened::Token(token) = board.session_open(SessionBody::Bare { principal: 1 }).unwrap() else { panic!("a bare session on the permissive board") };
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, ErrorKind::StorageFull);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, ErrorKind::StorageFull);
+    let Answer::Document(v) = board.op(Some(&token), &json!({"op": "create_new_document", "account": "1.0.1"})).unwrap() else { panic!("an answer, not the death signal") };
+    assert_eq!(v["code"], "poisoned", "the kernel halted: {v}");
+    let provider = Provider::start(&["--board", &board_origin, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store"))]);
+    talk_holding(&provider, &[&format!("board {board_origin} (reference "), "; writes HALTED: every write is refused `poisoned` until the board restarts"]);
+    assert_eq!(provider.stop(), 0);
+    sd.shutdown();
+}
+
 // ── F4 ─────────────────────────────────────────────────────────────────────
 
 /// F4: the admission.

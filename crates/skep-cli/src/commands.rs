@@ -6,7 +6,8 @@
 //! person doors' check, whose refusal is a halt naming the [`Door`]'s own
 //! moments; a payload read to its cap ([`MAX_PAYLOAD_BYTES`]); the anchor
 //! boxes' per-run default ([`BoxDefault`]); the three facts' one spelling
-//! (`print_facts`); the outstanding-act line `keygen` and `fingerprint`
+//! (`print_facts`); a landed binding line said as the store reads it back
+//! (`binding_said`); the outstanding-act line `keygen` and `fingerprint`
 //! share (`OUTSTANDING_ACT`); and the whole-set compare, from the held set
 //! to its halt (`held_set`, `compare_genesis`). What the dev binary shares
 //! with them — the two streams, the stops and their exit codes, the
@@ -53,7 +54,7 @@ use skep_client::derive::records::{compare_whole_set, credential_records, Differ
 use skep_client::derive::Walk;
 use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
-use skep_client::store::{FileStore, KeyFacts, KeySelector, Purpose};
+use skep_client::store::{Binding, FileStore, KeyFacts, KeySelector, Purpose};
 use skep_identity::{Fingerprint, LabelError, PublicKey, MAX_RECORD_BYTES};
 
 use crate::args::HELP;
@@ -221,6 +222,39 @@ fn print_facts(f: &Facts) -> Result<(), Halt> {
     data(format!("account {}", f.account))?;
     data(format!("principal {}", f.principal))?;
     data(format!("origin {}", f.origin))
+}
+
+/// What a binding line recorded by hand needs to read back (§3.7): a line of
+/// its own, the file ending in a newline — the bindings file's reader takes a
+/// last line without one for a torn append and ignores it, and the store's
+/// next append is written straight onto it.
+const BY_HAND: &str = "on a line of its own, the file ending in a newline (a last line without one is read as a torn append and \
+     ignored, and the next append is written onto it — §3.7)";
+
+/// The line a binding a command landed is said by — `bind`'s, `rotate`'s,
+/// `recover`'s (§3.5 arm 2; §3.7): `binding: <line>` where the store reads
+/// it back as the newest line for its board and principal — the line every
+/// later lookup there answers with — and otherwise that it does not, the
+/// line beside it to record by hand ([`BY_HAND`]): an append the store
+/// refused, or one written onto a torn last line, the two then reading
+/// back as one line that is no binding while the command that wrote it
+/// passed.
+fn binding_said(store: &FileStore, line: &str) -> String {
+    let reads_back = match line.parse::<Binding>() {
+        Ok(Binding::Enrollment { origin, principal, account, fingerprint }) => {
+            matches!(store.enrollment_for(&origin, principal), Ok(Some((a, f))) if a == account && f == fingerprint)
+        }
+        _ => false,
+    };
+    if reads_back {
+        format!("binding: {line}")
+    } else {
+        format!(
+            "the binding line does not read back from {}: this store's lookups at its board will not answer it — record it yourself, \
+             {BY_HAND}: {line}",
+            store.root().join("bindings").display()
+        )
+    }
 }
 
 /// The outstanding act of a key enrolled nowhere — AUTH-5.32's pending state

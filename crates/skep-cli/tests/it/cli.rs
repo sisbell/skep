@@ -13,7 +13,10 @@
 //! one, a variable and an argument that are not text refused, a refused
 //! stdout a halt and a refused stderr dropped, the plaintext warning, the
 //! default store and its edges, the pending state beside a bound key,
-//! `bind`'s paste prompt on stderr.
+//! `bind`'s paste prompt on stderr; and the failures a board's or a
+//! volume's own state makes — a write refused `durability` or `poisoned`
+//! naming the act that clears it, a key file's write cut short naming the
+//! remnant, a binding said only where the store reads it back.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +32,8 @@ use skep_identity::{encode_enroll, parse_enroll, Enrollment, Fingerprint};
 use skep_signature::HybridSigner;
 use skepd::Skepd;
 
+#[cfg(unix)]
+use crate::common::under_a_file_size_limit;
 use crate::common::{canned, origin, s, skep, skep_in, skep_os, skep_stderr_closed, skep_stdout_closed, spawn, spawn_tapped};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
@@ -152,6 +157,68 @@ fn a_busy_board_s_refusal_names_the_retry_as_its_act() {
     let r = skep(&["health", "--board", &canned(503, br#"{"error":"index_failed"}"#)], &[], None);
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.err.contains("the board refused: index_failed (HTTP 503)") && !r.err.contains("act:"), "{}", r.err);
+}
+
+/// A WRITE REFUSED FOR THE BOARD'S OWN STATE NAMES THE ACT THAT CLEARS IT
+/// (wire.md §Rejection codes; RUNBOOK.md §1): the first commit `bind`'s
+/// first signed session makes on a hosted claim — the setup act's
+/// `delegate` of the agent space — meets the daemon's failed durability
+/// barrier. Its truncation repairing it, the write is refused `durability`,
+/// exit 1, its act the room and no restart, and the next `bind` lands it by
+/// itself. The repair failing too, the kernel halts and the write is
+/// refused `poisoned`, its act the restart with room before it; `skep
+/// health` says the halt on stderr, where the mode alone reads a healthy
+/// board; and a second `bind` meets the same refusal — it stands until a
+/// restart.
+#[test]
+fn a_write_refused_poisoned_or_durability_names_the_act_that_clears_it() {
+    use skepd::Step;
+    use std::io::ErrorKind;
+
+    // A board claimed through the hosted arm from `store`'s one key, its
+    // first signed session still owed.
+    let claimed = |dir: &Path| -> (Skepd, String, PathBuf) {
+        let sd = spawn(&dir.join("board"), false);
+        let board = origin(sd.port());
+        let store = dir.join("store");
+        let r = skep(&["keygen", "--label", "mine", "--payload", "--dir", s(&store)], &[], None);
+        assert_eq!(r.code, 0, "{r:?}");
+        let r = skep(&["claim", "--hosted", "-", "--board", &board], &[], Some(r.lines()[0].as_bytes()));
+        assert_eq!(r.code, 0, "{r:?}");
+        (sd, board, store)
+    };
+    let dir = tempfile::tempdir().unwrap();
+
+    let (sd, board, store) = claimed(&dir.path().join("durability"));
+    let bind = ["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"];
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, ErrorKind::StorageFull);
+    let r = skep(&bind, &[], None);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.err.contains("the board refused: durability") && r.err.contains("(op delegate)\n  act: the write did nothing"), "the refusal and its act: {}", r.err);
+    assert!(r.err.contains("no restart owed"), "{}", r.err);
+    assert!(!r.out.contains("agent space"), "nothing landed: {}", r.out);
+    let r = skep(&bind, &[], None);
+    assert_eq!(r.code, 0, "the refusal clears by itself, no restart owed: {r:?}");
+    assert!(r.lines().contains(&"agent space 1.0.1.1"), "{}", r.out);
+
+    let (sd, board, store) = claimed(&dir.path().join("poisoned"));
+    let bind = ["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"];
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, ErrorKind::StorageFull);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, ErrorKind::StorageFull);
+    let r = skep(&bind, &[], None);
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(
+        r.err.contains("the board refused: poisoned (op delegate)\n  act: the board refuses every write until its daemon restarts")
+            && r.err.contains("make room BEFORE the restart"),
+        "the refusal and its act: {}",
+        r.err
+    );
+    let r = skep(&["health", "--board", &board], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.err.contains(&format!("writes HALTED at {board}: every write is refused `poisoned` until the daemon restarts")), "the halt said beside the mode: {}", r.err);
+    let r = skep(&bind, &[], None);
+    assert_eq!(r.code, 1, "the halt stands until a restart: {r:?}");
+    assert!(r.err.contains("the board refused: poisoned (op delegate)"), "{}", r.err);
 }
 
 /// NO PRINCIPAL CHOSEN NAMES THE STORE AND THE ORIGIN (§3.5's one-binding
@@ -738,8 +805,37 @@ fn bind_on_a_store_it_cannot_append_warns_with_the_line_and_lands_the_facts() {
     let r = skep(&["bind", "--board", &b.board, "--dir", s(&b.store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.err.contains(&format!("record this binding line yourself: {} 1 1.0.1 {}", b.board, b.fp)), "{}", r.err);
+    assert!(r.err.contains("on a line of its own, the file ending in a newline"), "how to record it: {}", r.err);
     assert_eq!(r.lines(), ["account 1.0.1", "principal 1", format!("origin {}", b.board).as_str()]);
     assert_eq!(std::fs::read_to_string(b.store.join("bindings")).unwrap(), before, "nothing appended");
+}
+
+/// A BINDING SAID IS ONE THE STORE READS BACK (`binding_said`; §3.5 arm 2;
+/// §3.7): a bindings file whose last line was recorded by hand without its
+/// newline holds a line the reader takes for a torn append and ignores, and
+/// the next append is written onto it — the two then read back as one line
+/// that is no binding. `bind` there exits 0 with the facts landed, and says
+/// the line does NOT read back and how to record it, never `binding: <line>`;
+/// a session without `--principal` then finds no binding at the board, the
+/// cost the line names.
+#[test]
+fn a_binding_said_is_one_the_store_reads_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = hosted_and_bound(dir.path());
+    let line = format!("{} 1 1.0.1 {}", b.board, b.fp);
+    std::fs::write(b.store.join("bindings"), &line).unwrap();
+    let r = skep(&["bind", "--board", &b.board, "--dir", s(&b.store), "--account", "1.0.1", "--principal", "1"], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(
+        r.err.contains("the binding line does not read back from") && r.err.contains("on a line of its own, the file ending in a newline") && r.err.contains(&format!(": {line}")),
+        "{}",
+        r.err
+    );
+    assert!(!r.err.contains(&format!("binding: {line}")), "never said as a binding the store holds: {}", r.err);
+    assert_eq!(r.lines(), ["account 1.0.1", "principal 1", format!("origin {}", b.board).as_str()]);
+    let r = skep(&["session", "--board", &b.board, "--dir", s(&b.store)], &[], None);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.err.contains(&format!("holds no binding at {}", b.board)), "{}", r.err);
 }
 
 /// A KEY FILE OUTSIDE THE STORE BINDS NOTHING THERE (§3.5 arm 2: the line
@@ -1204,6 +1300,38 @@ fn keygen_s_box_answered_with_bytes_that_are_not_text_says_why_it_is_abandoned()
     assert!(r.err.contains("the answer could not be read from stdin (") && r.err.contains("valid UTF-8"), "{}", r.err);
     assert!(r.err.contains("no device name was given"), "{}", r.err);
     assert!(!store.exists(), "nothing generated");
+}
+
+/// A KEY FILE WHOSE WRITE WAS CUT SHORT IS NAMED AS THE REMNANT TO REMOVE
+/// (`keygen`'s `generation_refused`): under a file-size limit the key file's
+/// write fails partway — the short write a full volume makes — and `keygen`
+/// halts naming the write it could not make and the volume's room, never a
+/// "mis-pathed" key file, with the partial file it left named for removal.
+/// Left in place, that file stops every command that lists the store; once
+/// removed, the store lists again.
+#[cfg(unix)]
+#[test]
+fn a_key_file_its_write_cut_short_is_named_as_the_remnant_to_remove() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let out = under_a_file_size_limit(env!("CARGO_BIN_EXE_skep"), &["keygen", "--label", "k", "--dir", s(&store)], 1).output().expect("keygen under a file-size limit");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(out.stdout.is_empty(), "no fingerprint printed: {}", String::from_utf8_lossy(&out.stdout));
+    let remnants: Vec<PathBuf> = std::fs::read_dir(store.join("keys")).expect("the keys directory").map(|e| e.unwrap().path()).collect();
+    let [remnant] = remnants.as_slice() else { panic!("one partial key file: {remnants:?}") };
+    assert!(
+        err.contains(&format!("the key store could not write {}", remnant.display()))
+            && err.contains("free room on the volume holding")
+            && err.contains(&format!("then remove {}, the partial file this run left", remnant.display())),
+        "{err}"
+    );
+    assert!(!err.contains("mis-pathed"), "{err}");
+    let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 3, "the remnant stops every listing of the store: {r:?}");
+    std::fs::remove_file(remnant).unwrap();
+    let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "removed, the store lists again: {r:?}");
 }
 
 /// THE PENDING STATE BESIDE A BOUND KEY (AUTH-5.32; §2.2 `fingerprint`): in a

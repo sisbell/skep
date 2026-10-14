@@ -57,8 +57,9 @@
 //! seconds after, the frames sent and their retries, the floor, the commits
 //! landed since the run read its position, and the lines the manifest holds
 //! and this run recorded. A run that stops inside a write says which, and
-//! whether its frame was in flight, ahead of the halt — the write the next
-//! run's resume line names again. A second run under the same key finds
+//! whether its frame was in flight — its answer never read, or `poisoned`,
+//! which the board's restart may land — ahead of the halt: the write the
+//! next run's resume line names again. A second run under the same key finds
 //! every write recorded, writes nothing — said as it opens the manifest —
 //! and answers the same object with `already_seeded: true`.
 
@@ -75,7 +76,7 @@ use skep_client::Halt;
 use skep_corpus::{Corpus, Cut, Error as CorpusError, Sourced};
 
 use crate::args::dev::DevLine;
-use crate::board::{Placed, Run, VSpec, Writer, CITATION_TYPE};
+use crate::board::{InFlight, Placed, Run, Unsettled, VSpec, Writer, CITATION_TYPE};
 use crate::manifest::{path_for, Header, Manifest, TOOL};
 use crate::shared::{
     board_of, clipped, data, key_named, principal_or_bound, select_key, store_of, Stop,
@@ -193,7 +194,8 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         return Err(Halt::face(
             "this board has stopped accepting writes",
             "/health answers writes.halted true: the write path's halt, or the kernel's poison — every write answers `poisoned` until a restart",
-            "read the board's operator stream for the cause, restart it (RUNBOOK.md §5), then run again",
+            "read the board's operator stream for the cause; where it names a full volume, make room first — a daemon restarted at a full \
+             volume does not open (RUNBOOK.md §1, step 4) — then restart it (RUNBOOK.md §5) and run again",
         )
         .into());
     }
@@ -510,20 +512,28 @@ impl Seed<'_> {
     }
 
     /// The line a run stopped inside the write `id` says ahead of its halt:
-    /// the write, and whether its frame was IN FLIGHT — sent, its answer
-    /// never read, so the write may stand on the board with no line of the
-    /// manifest recording it, and the next run, whose resume line names it
-    /// again, makes it again — and the manifest holding every write before
-    /// it. The frame is named where it is not the write's first, an insert's
-    /// later chunk.
+    /// the write, and whether its frame was IN FLIGHT — sent, and its answer
+    /// never read, or answered `poisoned`, whose frames the board's restart
+    /// may land ([`Unsettled`]) — so the write may stand on the board with
+    /// no line of the manifest recording it, and the next run, whose resume
+    /// line names it again, makes it again — and the manifest holding every
+    /// write before it. The frame is named where it is not the write's
+    /// first, an insert's later chunk.
     fn stopped_at(&mut self, id: &str) -> String {
         let path = self.manifest.path().display().to_string();
         match self.w.take_in_flight() {
-            Some(sent) => {
+            Some(InFlight { id: sent, unsettled }) => {
                 let frame = if sent == id { String::new() } else { format!(", its frame `{sent}`") };
+                let how = match unsettled {
+                    Unsettled::Unanswered => "sent, its answer never read — so it may stand on the board unrecorded",
+                    Unsettled::Poisoned => {
+                        "sent and answered `poisoned`, whose frames the board's restart may land — so it may stand on the board once it \
+                         restarts, unrecorded"
+                    }
+                };
                 format!(
-                    "the run stopped with the write `{id}` in flight{frame} — sent, its answer never read — so it may stand on the board \
-                     unrecorded, and the next run makes it again; every write of this seed before it is recorded in {path}"
+                    "the run stopped with the write `{id}` in flight{frame} — {how}, and the next run makes it again; every write of this \
+                     seed before it is recorded in {path}"
                 )
             }
             None => format!(

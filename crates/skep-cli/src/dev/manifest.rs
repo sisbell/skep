@@ -26,9 +26,13 @@
 //! beside the key store, never inside it", `<data>/index/<chain>/` — as
 //! `<store's parent>/<store's name>-seed/<chain>.jsonl`: `~/.skep-seed/…`
 //! for the default store. A line is one `write` of the whole line with its
-//! newline; a torn final line — a run killed inside the write — is no line
-//! and is ignored, as the bindings file's reader ignores one (§3.7), so the
-//! write it would have recorded is made again on the resume.
+//! newline; a torn final line — a run killed inside the write, or a write
+//! cut short at a full volume — is no line and is ignored, as the bindings
+//! file's reader ignores one (§3.7), so the write it would have recorded is
+//! made again on the resume — whose first record cuts the fragment away
+//! before it appends ([`Manifest::record`]), so no line is ever written onto
+//! a torn one, where the two would read back as one line that is no JSON
+//! and refuse every later run.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -133,13 +137,18 @@ pub struct Manifest {
     /// Whether a file stood at the path when the run opened it — its header
     /// line complete or not.
     found: bool,
+    /// The length of the file's complete lines, where a torn final line
+    /// followed them when the run opened it: what the next record cuts the
+    /// file back to before it appends.
+    torn_at: Option<u64>,
 }
 
 impl Manifest {
     /// The manifest at `path` for `header`'s seed: read where the file
     /// stands — its header judged against `header`, any difference a halt
-    /// naming it, each complete line an item by its id — else empty, its
-    /// header written at the first record.
+    /// naming it, each complete line an item by its id, a torn final line
+    /// marked for the next record to cut away — else empty, its header
+    /// written at the first record.
     pub fn open(path: PathBuf, header: Header) -> Result<Manifest, Halt> {
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -150,6 +159,7 @@ impl Manifest {
                     items: BTreeMap::new(),
                     on_disk: false,
                     found: false,
+                    torn_at: None,
                 });
             }
             Err(e) => return Err(unreadable(&path, e.to_string())),
@@ -159,6 +169,7 @@ impl Manifest {
             Some(i) => &text[..=i],
             None => "",
         };
+        let torn_at = (complete.len() < text.len()).then_some(complete.len() as u64);
         let mut lines = complete.lines();
         let Some(first) = lines.next() else {
             return Ok(Manifest {
@@ -167,6 +178,7 @@ impl Manifest {
                 items: BTreeMap::new(),
                 on_disk: false,
                 found: true,
+                torn_at,
             });
         };
         let recorded: Value = serde_json::from_str(first)
@@ -194,7 +206,7 @@ impl Manifest {
             };
             items.insert(id.to_string(), v);
         }
-        Ok(Manifest { path, header, items, on_disk: true, found: true })
+        Ok(Manifest { path, header, items, on_disk: true, found: true, torn_at })
     }
 
     /// Where the manifest is written.
@@ -226,9 +238,12 @@ impl Manifest {
     }
 
     /// One write RECORDED, after its ack: `item`'s members under `id`,
-    /// appended as one line — the header line first where the file is new.
-    /// A write that cannot be made is a halt saying what it means: the
-    /// board holds the write and the manifest does not.
+    /// appended as one line — the header line first where the file is new,
+    /// and a torn final line the run found cut away first, so the record
+    /// lands on a line of its own. A write that cannot be made is a halt
+    /// saying what it means: the board holds the write and the manifest does
+    /// not — the lines it would have appended shown whole, for a person who
+    /// keeps the board's shape exact to add by hand.
     pub fn record(&mut self, id: &str, mut item: Value) -> Result<(), Halt> {
         item["id"] = Value::String(id.to_string());
         let mut text = String::new();
@@ -242,18 +257,30 @@ impl Manifest {
             if let Some(dir) = self.path.parent() {
                 fs::create_dir_all(dir)?;
             }
+            if let Some(complete) = self.torn_at {
+                OpenOptions::new().write(true).open(&self.path)?.set_len(complete)?;
+            }
             let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
             file.write_all(text.as_bytes())?;
             file.sync_data()
         })();
         if let Err(e) = written {
+            let lines: Vec<&str> = text.lines().collect();
             return Err(Halt::face(
                 format!("the manifest at {} could not be written", self.path.display()),
-                format!("{e}; the write `{id}` LANDED on the board and is not recorded"),
-                "free the directory, then run again: the run resumes after the last line recorded, and repeats the write this line would have held — read the board before that, or add the line by hand",
+                format!(
+                    "{e}; the write `{id}` LANDED on the board and is not recorded — the line{} this run would have appended:\n    {}",
+                    if lines.len() == 1 { "" } else { "s" },
+                    lines.join("\n    ")
+                ),
+                "clear what the error names — at a full volume, room where the manifest lives — then run again: the run cuts any partial \
+                 last line away, resumes after the whole ones and makes this write again, a mint or a shot then landing twice; to keep \
+                 the board's shape exact, first add the line(s) above to the manifest, whole and each ending in a newline, in place of \
+                 any partial last line",
             ));
         }
         self.on_disk = true;
+        self.torn_at = None;
         self.items.insert(id.to_string(), item);
         Ok(())
     }

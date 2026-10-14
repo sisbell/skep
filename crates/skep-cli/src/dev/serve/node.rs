@@ -46,12 +46,21 @@ mod built {
         pub origin: Origin,
     }
 
+    /// How long the start waits on the cell index's walk at open.
+    const INDEX_WAIT: Duration = Duration::from_secs(60);
+
     impl Node {
         /// THE START, the daemon's own (`skepd::embed`): the port bound
         /// first (a held port is refused before the journal is read), the
         /// daemon opened over `data_dir` with `local_trust` and its own
         /// origin configured, served — each step's refusal its own halt —
-        /// and the cell index's walk waited for.
+        /// and the cell index's walk waited for [`INDEX_WAIT`]. A walk that
+        /// DIED never completes, so the wait runs out over it as over one
+        /// still walking (`skepd::Skepd::wait_for_the_index`): the two are
+        /// told apart by the walk's FAILED state, each halt with its own
+        /// cause and act: a dead walk stays failed until the daemon
+        /// restarts, while a board started apart and named by `--board` is
+        /// waited on by no walk at all.
         pub fn start(data_dir: &Path, port: u16, local_trust: bool) -> Result<Node, Halt> {
             let own = |port: u16| {
                 let mut opts = AuthOptions::default();
@@ -64,7 +73,21 @@ mod built {
                 EmbedError::Open(e) => Halt::face(format!("the daemon could not open {}", data_dir.display()), e.to_string(), "check the directory; a board another daemon holds is locked"),
                 EmbedError::Serve(e) => Halt::face("the daemon could not serve", e.to_string(), "check the port"),
             })?;
-            skepd.wait_for_the_index(Duration::from_secs(60)).map_err(|e| Halt::face(e.to_string(), "the daemon's open is still walking", "check the board directory"))?;
+            skepd.wait_for_the_index(INDEX_WAIT).map_err(|e| {
+                if skepd.daemon().index_is_failed() {
+                    Halt::face(
+                        e.to_string(),
+                        "the cell index's walk DIED on its thread — the daemon's lines above name why — and stays failed until the daemon restarts",
+                        "read those lines, then run again: the next run starts the daemon, and its walk, afresh",
+                    )
+                } else {
+                    Halt::face(
+                        e.to_string(),
+                        format!("the cell index's walk at open runs past this run's {} s wait", INDEX_WAIT.as_secs()),
+                        "start the board apart (RUNBOOK.md §3) and pass --board, which waits on no walk",
+                    )
+                }
+            })?;
             let origin = Origin::parse(&format!("http://127.0.0.1:{}", skepd.port())).expect("a canonical loopback origin");
             Ok(Node { skepd, origin })
         }

@@ -230,6 +230,25 @@ pub fn on_a_terminal(inner: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// `program` with `args` under `/bin/sh`'s file-size limit of `blocks`
+/// blocks (`ulimit -f`: 512 bytes each where the shell is POSIX's, 1024 in
+/// bash's own mode) with `SIGXFSZ` ignored, so a write past the limit fails
+/// `EFBIG` — partway where it straddles the limit, the short write a full
+/// volume makes — on the regular files the run writes alone, its pipes
+/// untouched; the environment scrubbed ([`scrub`]), stdin null and the two
+/// output streams piped. `exec` keeps the limit and the ignored signal, so
+/// the program itself is the child. macOS checks the limit against the
+/// descriptor's own offset, so the first write on a freshly opened
+/// `O_APPEND` descriptor is never limited there — only a limit of `0`
+/// refuses it.
+#[cfg(unix)]
+pub fn under_a_file_size_limit<A: AsRef<OsStr>>(program: &str, args: &[A], blocks: u32) -> Command {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", &format!("trap '' XFSZ; ulimit -f {blocks} && exec \"$0\" \"$@\""), program]).args(args);
+    scrub(&mut cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd
+}
+
 /// `text` quoted as one `/bin/sh` word.
 pub fn shell_word(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))

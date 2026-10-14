@@ -18,11 +18,15 @@
 //! by the claimant, and the second account's draft is withheld from the
 //! claimant too; F5 a second run adds nothing and says so, and a run cut
 //! short at its fifth document resumes and lands what a one-shot run lands,
-//! the two runs naming the write the cut left in flight;
+//! the two runs naming the write the cut left in flight, the resume cutting
+//! away the torn last line a stop inside the manifest's own write leaves;
 //! F8 an unclaimed board and a stranger's board halt before any write, and
 //! the agent space holds no document after a run. Beside them, the seed's
 //! own lines: each stall said as it is met and at most once per ten seconds
-//! after, the session's key, the frames and positions of the run; and the
+//! after, the session's key, the frames and positions of the run; the
+//! failures a board's or a volume's state makes — the closing history read
+//! answered busy, a write answered `poisoned` named in flight, a manifest
+//! write refused showing the lines the next run needs; and the
 //! insert frame the seed shares with the search budgets, one size. F6, the
 //! `--bin skep` build yielding one binary, is the gate's and the lane's by
 //! hand; F7 the budgets suite's; F9 `tidy`'s.
@@ -47,6 +51,8 @@ use skep_corpus::{Corpus, Cut};
 use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
 use tempfile::TempDir;
 
+#[cfg(unix)]
+use crate::common::under_a_file_size_limit;
 use crate::common::{origin, s, scrub, spawn, Run};
 
 /// The citation type every link is typed, as the tool spells it.
@@ -1042,6 +1048,34 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
     assert_eq!(again["positions"]["after"], before);
     assert_eq!(shape(&again), shape(&v), "the same object");
 
+    // The closing `/chain?at=0` read answered `503 history_busy` — every
+    // reconstruction permit held — is a halt saying the board was busy and
+    // took nothing, never a wire the tool does not speak; every write
+    // recorded, the run after it writes nothing and reads the floor again.
+    let held: Vec<_> =
+        std::iter::from_fn(|| sd.daemon().try_hold_reconstruction_permit()).collect();
+    assert!(!held.is_empty(), "the suite holds the board's reconstruction permits");
+    let r = skep_dev(&args);
+    drop(held);
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(r.out.is_empty(), "no object on a halt: {}", r.out);
+    assert!(
+        r.err.contains("/chain?at=0 answered 503 history_busy")
+            && r.err.contains("the board was busy reading history")
+            && r.err.contains("act: run again: the manifest holds every write"),
+        "{}",
+        r.err
+    );
+    assert!(!r.err.contains("not speaking the wire"), "{}", r.err);
+    assert_eq!(log_position(&board), before, "no write");
+    let r = skep_dev(&args);
+    assert_eq!(
+        parse_json(&r)["already_seeded"],
+        true,
+        "the run after it reads the floor: {}",
+        r.err
+    );
+
     // Another seed of this board is refused: the manifest's key.
     let mut other = args.clone();
     assert_eq!(other[10], "12");
@@ -1143,9 +1177,13 @@ fn cutting_proxy(
 /// F5: a run cut short at its fifth document — the connection dropped at
 /// the first write naming it — stops with transport's exit, its manifest
 /// holding the four documents landed; the next run resumes at the fifth and
-/// lands what a one-shot run lands, and a third adds nothing. The board is
-/// claimed and seeded THROUGH the proxy, whose origin the daemon is
-/// configured for and the store's binding names.
+/// lands what a one-shot run lands, and a third adds nothing. Between the
+/// first two, the manifest is given the torn last line a stop inside its own
+/// write leaves — a kill mid-record, a write cut short at a full volume —
+/// which the resume cuts away before its first record, so the third run
+/// reads every line whole. The board is claimed and seeded THROUGH the
+/// proxy, whose origin the daemon is configured for and the store's binding
+/// names.
 #[test]
 fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
     let dir: TempDir = tempfile::tempdir().unwrap();
@@ -1205,12 +1243,28 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
         1 + 4 * 3,
         "the staging draft and four documents' three writes each: {ids:?}"
     );
+    // The torn last line a stop inside the manifest's own write leaves.
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&manifest)
+        .and_then(|mut file| file.write_all(b"{\"id\":\"cut-00005:dr"))
+        .expect("a torn last line appended");
 
     armed.store(false, Ordering::SeqCst);
     tripped.store(false, Ordering::SeqCst);
     let r = skep_dev(&args);
     let v = parse_json(&r);
     assert_eq!(v["already_seeded"], false);
+    let text = std::fs::read_to_string(&manifest).expect("the manifest");
+    assert!(text.ends_with('\n'), "the manifest ends on a whole line");
+    let unread: Vec<&str> =
+        text.lines().filter(|l| serde_json::from_str::<Value>(l).is_err()).collect();
+    assert!(unread.is_empty(), "the torn line cut away, never written onto: {unread:?}");
+    assert_eq!(
+        text.matches("\"id\":\"cut-00005:draft\"").count(),
+        1,
+        "the resumed write recorded on a line of its own"
+    );
     assert_expected_shape(&v, &cut);
     assert!(r.err.contains("mode CLAIMED-PERMISSIVE"), "{}", r.err);
     // The resume says what it resumes after, and the one write it cannot see:
@@ -1246,6 +1300,121 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
     assert!(r.err.contains("records every write of this seed"), "{}", r.err);
     assert_eq!(log_position(&board), before);
     assert_eq!(shape(&again), shape(&v));
+}
+
+/// A MANIFEST WRITE REFUSED SHOWS ITS LINES, AND THE RUN AFTER IT RESUMES
+/// EXACT (`Manifest::record`): under a file-size limit of nothing the
+/// manifest's own write is refused — as at a volume with no room left —
+/// after the board acked the write it records, and the run halts naming
+/// the manifest and showing the lines it would have appended, whole: the
+/// header and the staging draft's mint. Added by hand, as the halt's act
+/// says, they let the next run resume after them and land exactly what a
+/// one-shot run lands. (A limit of nothing, since macOS checks the limit
+/// against a freshly opened append descriptor's own offset; the torn line a
+/// write cut partway leaves is the cut-short run's cell.)
+#[cfg(unix)]
+#[test]
+fn a_manifest_write_refused_shows_its_lines_and_the_run_after_resumes_exact() {
+    let dir: TempDir = tempfile::tempdir().unwrap();
+    let (repo, pin, cut) = repository(dir.path());
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let board = board_at(&board_origin);
+    let store = dir.path().join("store");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    let args = seed_args(&board_origin, s(&store), s(&repo), &pin);
+    let out = under_a_file_size_limit(env!("CARGO_BIN_EXE_skep-dev"), &args, 0)
+        .output()
+        .expect("the seed under a file-size limit");
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(out.stdout.is_empty(), "no object on a halt");
+    assert!(
+        err.contains("could not be written")
+            && err.contains("the write `staging:mint` LANDED on the board and is not recorded")
+            && err.contains("the lines this run would have appended:")
+            && err.contains("the run cuts any partial last line away"),
+        "{err}"
+    );
+    let shown: Vec<&str> =
+        err.lines().filter_map(|l| l.strip_prefix("    ")).filter(|l| l.starts_with('{')).collect();
+    let parsed: Vec<Value> =
+        shown.iter().map(|l| serde_json::from_str(l).expect("a line shown whole")).collect();
+    let named: Vec<(Option<&str>, Option<&str>)> =
+        parsed.iter().map(|v| (v["kind"].as_str(), v["id"].as_str())).collect();
+    assert_eq!(
+        named,
+        [(Some("seed"), None), (None, Some("staging:mint"))],
+        "the header and the write's own line, shown whole: {err}"
+    );
+    // The act's exact path: the lines shown, in place of any partial last
+    // line.
+    let chain: String =
+        board.board_term().unwrap().unwrap().chain.iter().map(|b| format!("{b:02x}")).collect();
+    let manifest = dir.path().join("store-seed").join(format!("{chain}.jsonl"));
+    let text = std::fs::read_to_string(&manifest).unwrap_or_default();
+    let mut whole = text[..text.rfind('\n').map_or(0, |i| i + 1)].to_string();
+    for line in &shown {
+        whole.push_str(line);
+        whole.push('\n');
+    }
+    std::fs::write(&manifest, whole).unwrap();
+    let r = skep_dev(&args);
+    let v = parse_json(&r);
+    assert_eq!(v["already_seeded"], false);
+    assert_expected_shape(&v, &cut);
+    assert!(r.err.contains("the run resumes after them"), "{}", r.err);
+}
+
+/// A WRITE ANSWERED `poisoned` IS NAMED IN FLIGHT (`Unsettled::Poisoned`;
+/// wire.md §Rejection codes): the daemon's durability barrier and the
+/// truncation that would repair it both armed to fail, the seed's first
+/// write halts the kernel and is refused `poisoned` — exit 1, its act the
+/// restart with room before it — and the run names that write as in flight,
+/// its frames the restart may land: never "no frame of it in flight", which
+/// would read the resume that makes it again as a clean one.
+#[test]
+fn a_write_answered_poisoned_is_named_in_flight() {
+    use skepd::Step;
+    use std::io::ErrorKind;
+
+    let dir: TempDir = tempfile::tempdir().unwrap();
+    let (repo, pin, _) = repository(dir.path());
+    let sd = spawn(&dir.path().join("board"), true);
+    let board_origin = origin(sd.port());
+    let store = dir.path().join("store");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, ErrorKind::StorageFull);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, ErrorKind::StorageFull);
+    let r = skep_dev(&seed_args(&board_origin, s(&store), s(&repo), &pin));
+    assert_eq!(r.code, 1, "{r:?}");
+    assert!(r.out.is_empty(), "no object on a refusal: {}", r.out);
+    assert!(
+        r.err.contains(
+            "the run stopped with the write `staging:mint` in flight — sent and answered `poisoned`, whose frames the board's \
+             restart may land"
+        ),
+        "{}",
+        r.err
+    );
+    assert!(
+        r.err.contains(
+            "the board refused: poisoned (op create_new_document)\n  act: the board refuses every write until its daemon restarts"
+        ),
+        "{}",
+        r.err
+    );
+    // The run after it meets the halt at its own check, before any write,
+    // and its act puts the room ahead of the restart: a daemon restarted at
+    // a full volume does not open.
+    let r = skep_dev(&seed_args(&board_origin, s(&store), s(&repo), &pin));
+    assert_eq!(r.code, 3, "{r:?}");
+    assert!(
+        r.err.contains("this board has stopped accepting writes")
+            && r.err.contains("where it names a full volume, make room first — a daemon restarted at a full volume does not open"),
+        "{}",
+        r.err
+    );
 }
 
 /// The dev binary's grammar through argv: `--help` is DATA naming the verb,

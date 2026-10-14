@@ -5,7 +5,9 @@
 //! --reply` and `handoff` without `--payload` run without one; a usage
 //! refusal — a required flag missing, a setting given badly, a key file a
 //! walk cannot take, a flag outside its form — is judged ahead of the door,
-//! and an anchor label at its box ahead of `keygen`'s generation; THE HOP
+//! and an anchor label at its box ahead of `keygen`'s generation, which
+//! follows the door-side moment, so a moment stopped short leaves no device
+//! key in the store; THE HOP
 //! (store B's `keygen --payload`, A's enrollment, `enroll --reply` writing
 //! nothing, B's `bind` and `session`, A's whole-set compare naming B's key
 //! a later act); THE ONE-BINDING TEST after a claim; beat (a) through the
@@ -382,4 +384,37 @@ fn keygen_anchors_judges_an_anchor_label_before_the_device_key_is_generated() {
     assert!(seen.contains("an anchor label is refused at the box"), "{seen}");
     assert!(!seen.contains("requires a controlling terminal"), "past the door: {seen}");
     assert!(tree(&store).is_empty(), "nothing generated: {:?}", tree(&store).keys().collect::<Vec<_>>());
+}
+
+/// A DOOR-SIDE FORM STOPPED AT ITS MOMENT LEAVES NO DEVICE KEY BEHIND
+/// (`keygen`'s ORDER; §2.2 `keygen`; AUTH-5.57 step 2): under a
+/// pseudo-terminal, past the door, `keygen --anchors` whose destinations lie
+/// inside the key store stops at the backup moment's first destination,
+/// reading nothing — and the device key, generated after the moment, is not
+/// in the store, so the run again stands no second unbound key beside one,
+/// where §3.5 arm 3's "exactly one device key" would then select none. The
+/// stop's disposition says so.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn keygen_anchors_stopped_at_its_moment_leaves_no_device_key_behind() {
+    use crate::common::{on_a_terminal, shell_word};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let code = dir.path().join("code");
+    let keygen = format!(
+        "{} keygen --anchors --label phone --anchor-label a --anchor-label b --anchor-out {} --anchor-out {} --dir {}",
+        shell_word(env!("CARGO_BIN_EXE_skep")),
+        shell_word(s(&store.join("a"))),
+        shell_word(s(&store.join("b"))),
+        shell_word(s(&store))
+    );
+    let seen = on_a_terminal(&format!("{keygen}; echo $? > {}", shell_word(s(&code))));
+    let exit = std::fs::read_to_string(&code).unwrap_or_else(|e| panic!("the run's exit code: {e}: {seen}"));
+    assert_eq!(exit.trim(), "3", "{seen}");
+    assert!(seen.contains("lies inside the key store"), "the moment's own stop: {seen}");
+    assert!(!seen.contains("requires a controlling terminal"), "past the door: {seen}");
+    assert!(seen.contains("this form delegates nothing") && seen.contains("nothing of this form is in the key store"), "the disposition: {seen}");
+    let keys: Vec<_> = tree(&store).into_keys().filter(|p| p.extension().is_some_and(|x| x == "key")).collect();
+    assert!(keys.is_empty(), "no device key left behind: {keys:?}");
 }

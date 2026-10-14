@@ -45,9 +45,10 @@
 //! far and the run's; a write the patience ran out on halts naming its op,
 //! its envelope id, the token as the board spells it and why the board kept
 //! answering it. Every other rejection stops the run as the board's own
-//! refusal (exit 1, its `code:detail` verbatim), transport as exit 4 — the
-//! write whose request it may have carried held as the one IN FLIGHT
-//! ([`Writer::take_in_flight`]) — and the death signal as a halt. A halt
+//! refusal (exit 1, its `code:detail` verbatim) — a `poisoned` one holding
+//! its write as IN FLIGHT, since a restart may land it — transport as exit
+//! 4, the write whose request it may have carried held so too
+//! ([`Writer::take_in_flight`]), and the death signal as a halt. A halt
 //! that echoes a board's answer echoes no more of it than [`clipped`] keeps.
 
 use std::num::NonZeroU64;
@@ -57,10 +58,10 @@ use serde_json::{json, Value};
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_client::address::parse_address;
 use skep_client::board::{
-    acked_addr, frames, Answer, Board, Opened, Rejection, Scope, SessionBody, Token,
+    acked_addr, frames, Answer, Board, ChainAtAnswer, Opened, Rejection, Scope, SessionBody, Token,
 };
 use skep_client::ceremony::handshake::{handshake, Session, Site};
-use skep_client::dial::{DialError, Request};
+use skep_client::dial::DialError;
 use skep_client::sign::{sig_hex, Signer};
 use skep_client::Halt;
 use skep_identity::{
@@ -187,6 +188,31 @@ fn may_have_sent(d: &DialError) -> bool {
     !matches!(d, DialError::NotHeld(_) | DialError::Resolve(_) | DialError::Connect(_) | DialError::Request(_))
 }
 
+/// A write frame IN FLIGHT: sent, and its fate one the run cannot read off
+/// its answer — the one write a run stopped there may have landed with no
+/// line of the manifest recording it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InFlight {
+    /// The frame's envelope id.
+    pub id: String,
+    /// Why its fate is unread.
+    pub unsettled: Unsettled,
+}
+
+/// Why an [`InFlight`] frame's fate is unread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsettled {
+    /// Its answer was never read: a transport halt broke the exchange after
+    /// the request may have been written ([`may_have_sent`]).
+    Unanswered,
+    /// Answered `poisoned`: the write that halted the kernel inside its
+    /// commit may leave its frames in the journal, which the restart's open
+    /// then lands (wire.md §Rejection codes; the shell's held burst `sent:
+    /// true`, `client.md` §3c.2) — and the run cannot tell that write from
+    /// one refused at a kernel already halted.
+    Poisoned,
+}
+
 /// The claimant's one content-scoped signed session over the board, the
 /// device key that signs its attested writes, and the counts.
 pub struct Writer<'b> {
@@ -202,12 +228,12 @@ pub struct Writer<'b> {
     pub reads: u64,
     /// When a stall was last said ([`STALL_SAID_EVERY`]).
     stall_said: Option<Instant>,
-    /// The envelope id of the write frame sent whose answer was never read:
-    /// set as each write frame goes out, cleared as its answer — an ack, a
-    /// rejection, a refusal, the death signal — comes back, and held where
-    /// a transport halt broke the exchange after the request may have been
-    /// written ([`may_have_sent`]).
-    in_flight: Option<String>,
+    /// The write frame sent whose fate is unread: set as each write frame
+    /// goes out, cleared as its answer — an ack, a rejection, a refusal, the
+    /// death signal — comes back, and held where a transport halt broke the
+    /// exchange after the request may have been written ([`may_have_sent`])
+    /// or the answer was `poisoned` ([`Unsettled`]).
+    in_flight: Option<InFlight>,
 }
 
 impl<'b> Writer<'b> {
@@ -242,11 +268,12 @@ impl<'b> Writer<'b> {
         })
     }
 
-    /// The write frame sent whose answer was never read, taken: its envelope
-    /// id, where a transport halt broke its exchange after the request may
-    /// have been written — the one write a run stopped there may have landed
-    /// with no line of the manifest recording it.
-    pub fn take_in_flight(&mut self) -> Option<String> {
+    /// The write frame IN FLIGHT, taken: where a transport halt broke its
+    /// exchange after the request may have been written, or its answer was
+    /// `poisoned` — the one write a run stopped there may have landed, or
+    /// may land at the board's restart, with no line of the manifest
+    /// recording it.
+    pub fn take_in_flight(&mut self) -> Option<InFlight> {
         self.in_flight.take()
     }
 
@@ -302,7 +329,8 @@ impl<'b> Writer<'b> {
         let mut refused = 0u64;
         loop {
             self.writes += 1;
-            self.in_flight = Some(id.to_string());
+            self.in_flight =
+                Some(InFlight { id: id.to_string(), unsettled: Unsettled::Unanswered });
             let answer = self.board.op(Some(token), &frame);
             if !matches!(&answer, Err(Halt::Dial(d)) if may_have_sent(d)) {
                 self.in_flight = None;
@@ -314,7 +342,15 @@ impl<'b> Writer<'b> {
                     Some(r) if r.token() == "attestation_invalid:board_unavailable" => {
                         Transient::BoardUnavailable
                     }
-                    Some(r) => return Err(r.refused(&v)),
+                    Some(r) => {
+                        if r.key() == "poisoned" {
+                            self.in_flight = Some(InFlight {
+                                id: id.to_string(),
+                                unsettled: Unsettled::Poisoned,
+                            });
+                        }
+                        return Err(r.refused(&v));
+                    }
                 },
                 Ok(Answer::Closed) => return Err(session_closed()),
                 Err(Halt::Refused(r)) if r.status == 503 && r.code == "write_busy" => {
@@ -574,20 +610,26 @@ impl<'b> Writer<'b> {
     }
 
     /// The journal's RECLAIM FLOOR — the oldest position `/chain?at` still
-    /// answers — read off `/chain?at=0`'s `410 history_reclaimed` body; `0`
-    /// where genesis is retained.
+    /// answers — read off `/chain?at=0`'s `410 history_reclaimed` answer
+    /// (the library's `Board::chain_at`); `0` where genesis is retained. The
+    /// one retry-class answer, `503 history_busy` (every reconstruction
+    /// permit in use; wire.md §Reading history), is a halt saying so: it
+    /// comes after every write is recorded, so the run after it writes
+    /// nothing and reads the floor again.
     pub fn reclaim_floor(&mut self) -> Result<u64, Halt> {
         self.reads += 1;
-        let resp = self.board.exchange(&Request::get("/chain?at=0"))?;
-        match resp.status {
-            200 => Ok(0),
-            410 => Ok(serde_json::from_slice::<Value>(&resp.body)
-                .ok()
-                .and_then(|v| v["floor"].as_u64())
-                .unwrap_or(0)),
+        match self.board.chain_at(0)? {
+            ChainAtAnswer::Chain { .. } => Ok(0),
+            ChainAtAnswer::HistoryReclaimed { floor } => Ok(floor.unwrap_or(0)),
+            ChainAtAnswer::Busy => Err(Halt::face(
+                "/chain?at=0 answered 503 history_busy",
+                "the board was busy reading history — every reconstruction permit in use (a retry-class 503, wire.md §HTTP status \
+                 codes) — and took nothing; every write of this seed is recorded",
+                "run again: the manifest holds every write, so the next run writes nothing and reads this again",
+            )),
             other => Err(Halt::face(
-                format!("/chain?at=0 answered HTTP {other}"),
-                clipped(&String::from_utf8_lossy(&resp.body)),
+                format!("/chain?at=0 answered {}", clipped(&format!("{other:?}"))),
+                "position 0 is no position a board refuses as beyond its head or between commits",
                 "this board is not speaking the wire this tool expects",
             )),
         }

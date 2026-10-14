@@ -37,8 +37,12 @@ envelope id holds within one session alone — so a mint or a shot that
 had landed lands twice, which the resumed run says as it opens the
 manifest; where the board's exact shape matters, seed a fresh board
 instead. A run that stops inside a write names it ahead of its halt, and
-whether its frame was in flight; the resume names it again as it makes
-it, so the two runs' stderr join on its envelope id. On stderr the seed
+whether its frame was in flight — its answer never read, or `poisoned`,
+which the board's restart may land; the resume names it again as it makes
+it, so the two runs' stderr join on its envelope id. A manifest write
+that fails — at a full volume — halts showing the lines it would have
+appended, whole, and the run after it cuts a torn last line away before
+its first record. On stderr the seed
 also names the board, the session's principal, account and key — the
 fingerprint the board testifies each write by — each stall the board's
 `write_busy` puts it through (as it begins, then at most once per ten
@@ -85,15 +89,17 @@ run in-process with its test hooks and its fault doors at `POST
 `media_free_space`, `panic_checkpoint_thread`, `halt_writes`, `poison`).
 The provider stops cleanly when stdin closes — Ctrl-D at a terminal —
 saying why it stopped and what the run came to (the connections accepted,
-the refusals by kind; sessions closed, the index saved — the stop's
-seconds once it completes — the in-process daemon stopped, the throwaway
-store removed), exit 0; an interrupt (Ctrl-C) ends it with none of that:
-its sessions live at the board until it restarts, and a throwaway store
-stays in place. Exit 2 is usage, exit 3 a halt before serving. A request
-the provider refuses itself — a page from another origin, a wrong host,
-no secret — is said on its stderr the first time each kind is met, with
-the route it was met at, since a browser shows the page an origin refusal
-only as a CORS failure, and every one is counted to the stop.
+the refusals by kind; every pending moment cancelled, so a call still
+waiting on one answers `abandoned`, sessions closed, the index saved — the
+stop's seconds once it completes — the in-process daemon stopped, the
+throwaway store removed), exit 0; an interrupt (Ctrl-C) ends it with
+none of that: its sessions live at the board until it restarts, and a
+throwaway store stays in place. Exit 2 is usage, exit 3 a halt before
+serving. A request the provider refuses itself — a page from another
+origin, a wrong host, no secret — is said on its stderr the first time
+each kind is met, with the route it was met at, since a browser shows the
+page an origin refusal only as a CORS failure, and every one is counted
+to the stop.
 
 The thirteen commands stand: the dev binary is no command of `skep`, and
 the sidecar image, built `--no-default-features --bin skep`, holds none of

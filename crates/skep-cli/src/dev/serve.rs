@@ -25,10 +25,11 @@
 //! counted, and said on TALK the first time its kind is met — until stdin
 //! closes: the clean stop, its cause and the run's figures said (the
 //! connections accepted, the refusals by kind), every pending moment
-//! cancelled, every session closed, every consumer saved — the stop's
-//! seconds said as it completes — the own node stopped and said so, the
-//! throwaway removed — exit 0. An interrupt ends the process with none of
-//! it, which the serving line says.
+//! cancelled — before the connections are joined, so a call parked on a
+//! moment answers `abandoned` and its connection ends — every session
+//! closed, every consumer saved — the stop's seconds said as it completes —
+//! the own node stopped and said so, the throwaway removed — exit 0. An
+//! interrupt ends the process with none of it, which the serving line says.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read};
@@ -261,9 +262,12 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let board = shell.board_references().into_iter().next().expect("one board");
     let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
     // The board by its origin and by the reference the shell's own lines
-    // name it by (`feed b-…:`), so the two join.
+    // name it by (`feed b-…:`), so the two join; and its write path's halt
+    // where `/health` answers one, since every write the page makes is then
+    // refused `poisoned` until the board restarts (wire.md §Rejection codes).
+    let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) { "; writes HALTED: every write is refused `poisoned` until the board restarts" } else { "" };
     talk(format!(
-        "board {board_origin} (reference {board}): mode {} (claimant {}, local_trust {})",
+        "board {board_origin} (reference {board}): mode {} (claimant {}, local_trust {}){halted}",
         health["mode"].as_str().unwrap_or("?"),
         health["health"]["auth"]["claimant"].as_str().unwrap_or("null"),
         health["health"]["auth"]["local_trust"]
@@ -311,7 +315,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         // counted. An accept the listener refuses is said once per edge —
         // refused, then accepting again, with the episode's seconds and its
         // refused accepts — and paced by ACCEPT_PAUSE.
-        let accepted = thread::scope(|s| {
+        thread::scope(|s| {
             s.spawn(|| watch_stdin(&provider, listen));
             let mut accepted = 0u64;
             let mut refusing: Option<(Instant, u64)> = None;
@@ -343,22 +347,26 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
                     }
                 }
             }
-            accepted
+            // THE CLEAN STOP, inside the scope and ahead of its join: a call
+            // parked on a moment the page has not answered ends only at a
+            // cancel — and with the listener stopped no answer can reach it —
+            // so the shell's stop, whose first act cancels every pending
+            // moment, runs before the join waits on that call's connection.
+            // Its cause and the run's figures said ahead of it, and its
+            // seconds once it completes — a stop that waits on a board that
+            // does not answer is read as one, not as a hang.
+            talk(format!(
+                "stopping ({}): cancelling every pending moment, closing every session, saving every index — after {accepted} connection{} accepted",
+                provider.stop.get().map_or("asked", String::as_str),
+                if accepted == 1 { "" } else { "s" }
+            ));
+            if let Some(line) = provider.refusals_line() {
+                talk(line);
+            }
+            let stopping = Instant::now();
+            provider.shell.shutdown();
+            talk(format!("stopped: the shell's stop took {:.1} s", stopping.elapsed().as_secs_f64()));
         });
-        // THE CLEAN STOP, its cause and the run's figures said ahead of it,
-        // and its seconds once it completes — a stop that waits on a board
-        // that does not answer is read as one, not as a hang.
-        talk(format!(
-            "stopping ({}): cancelling every pending moment, closing every session, saving every index — after {accepted} connection{} accepted",
-            provider.stop.get().map_or("asked", String::as_str),
-            if accepted == 1 { "" } else { "s" }
-        ));
-        if let Some(line) = provider.refusals_line() {
-            talk(line);
-        }
-        let stopping = Instant::now();
-        provider.shell.shutdown();
-        talk(format!("stopped: the shell's stop took {:.1} s", stopping.elapsed().as_secs_f64()));
     }
     if let Some(node) = own_node {
         node.shutdown();

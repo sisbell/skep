@@ -1420,9 +1420,9 @@ terminal as its `Person` — and renders the answer, DATA on stdout and TALK
 on stderr, with §2.3's exit code. Every ceremony is a library walk; `bind`
 and `keygen` sequence the library's compositions themselves — `bind`
 landing the three facts of an enroll hop, a handoff or a hosted signup,
-`keygen` the door-side backup moment and the payload it prints — and so
-carry their own text. Its modules, in the order `src/main.rs` declares
-them, each naming only those above it:
+`keygen` the door-side backup moment ahead of the device key's generation
+and the payload it prints — and so carry their own text. Its modules, in
+the order `src/main.rs` declares them, each naming only those above it:
 
 - `args.rs` `Command`, one of the thirteen, the verb `main` dispatches
   on; the grammar — one row per command, its flags that take one value,
@@ -1461,7 +1461,9 @@ them, each naming only those above it:
   `finish` renders under a `Program`, the name a stop's block opens with
   and the help a usage refusal prints beneath it, and a halt's act beneath
   it where the library's rendering names none — a transport halt's, by
-  where its exchange broke, and a retry-class `503`'s (`act_beside`);
+  where its exchange broke, a retry-class `503`'s, and a write refused
+  `poisoned` (the restart, room before it at a full volume) or
+  `durability` (the room alone, no restart owed) (`act_beside`);
   `help`, `--help`'s DATA), and the plumbing from the flags to a board
   (`board_of`), a store (`store_of`), a principal (`principal_or_bound`,
   §3.5's one-binding test, whose halt names the store and the origins its
@@ -1472,9 +1474,11 @@ them, each naming only those above it:
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);
   the three facts' one spelling (`print_facts`, the lines `bind` reads
-  back from a reply); the outstanding-act line `keygen` and `fingerprint`
-  share; and the whole-set compare from the held set to its halt
-  (`held_set`, `compare_genesis`). Beneath it, `commands/<name>.rs`, one
+  back from a reply); a landed binding line said as the store reads it
+  back, else how to record it by hand (`binding_said`); the
+  outstanding-act line `keygen` and `fingerprint` share; and the
+  whole-set compare from the held set to its halt (`held_set`,
+  `compare_genesis`). Beneath it, `commands/<name>.rs`, one
   file per command, each the
   `pub fn <name>(&CommandLine) -> Result<(), Stop>` that `main`
   dispatches to, taking the shared names through `super::` as it always
@@ -1490,7 +1494,8 @@ JSON line per write by its envelope id, appended after the ack, so a
 second run adds nothing and a killed run resumes — making again the one
 write it had in flight, which a new session's envelope id does not
 recognise, as the stopped run and the resumed one each say, naming its
-envelope id); `board.rs`, the frames
+envelope id — and a torn last line, a stop inside the manifest's own
+write, cut away before the resume's first record); `board.rs`, the frames
 over the claimant's ONE content-scoped signed session — the staging
 draft's mint, the chunked per-byte insert, the attested edition mint, the
 shot naming the draft, the attested `make_link` whose V-spec from-end is
@@ -1526,9 +1531,11 @@ claim`; it never claims, and it takes none of `tls`, `search` or
 and the sidecar's `--no-default-features --bin skep` build carry no
 `skepd`, which `scripts/gate-full.sh`'s isolation line and
 `tests/it/serve.rs` hold; it stops when its stdin closes, the one clean
-stop the verb has, read by `watch_stdin` and said with its cause — an
-interrupt ends it with none of that, as its serving line says — and each
-refusal it makes itself, the admission's or a request it cannot read, is
+stop the verb has, read by `watch_stdin` and said with its cause, the
+shell's stop run before the connections are joined so a call parked on a
+moment is cancelled and answers — an interrupt ends it with none of that,
+as its serving line says — and each refusal it makes itself, the
+admission's or a request it cannot read, is
 counted, and said on its stderr the first time its kind is met, the stop
 saying the counts. The `[[bin]]` carries
 `test = false`: the shared modules' unit suites run once, under `skep`,

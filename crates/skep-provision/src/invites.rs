@@ -27,6 +27,7 @@
 
 use std::fmt;
 use std::io;
+use std::path::PathBuf;
 
 use crate::invite_code::InviteCode;
 use crate::mail_address::MailAddress;
@@ -133,6 +134,20 @@ fn read_lines(state_dir: &StateDir) -> io::Result<Vec<Line>> {
 /// THE LOOKUP: the invite `code` names, compared whole, as the file stands.
 pub fn lookup(state_dir: &StateDir, code: &InviteCode) -> io::Result<Option<Invite>> {
     Ok(read_invites(state_dir)?.into_iter().find(|i| i.code == code.as_str()))
+}
+
+/// THE INVITE FILE's PATH in `state_dir`, for a line to name it by: the file
+/// a failure met, and the one a refusal looked in — so the operator who
+/// minted into a file reads whether the service reads the same.
+pub fn path(state_dir: &StateDir) -> PathBuf {
+    state_dir.file(INVITES)
+}
+
+/// HOW MANY invites the file holds issued, as it stands: the figure a
+/// refusal of a code the file does not hold says beside it, read only where
+/// that line is said.
+pub fn issued_count(state_dir: &StateDir) -> io::Result<usize> {
+    Ok(read_invites(state_dir)?.iter().filter(|i| i.issued()).count())
 }
 
 /// Why `invite` answers no invite link.

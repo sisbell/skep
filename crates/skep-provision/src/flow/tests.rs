@@ -250,6 +250,19 @@ impl Rig {
         self.log().iter().any(|l| l == line)
     }
 
+    /// Whether the log holds a line that opens with `opening` — a line whose
+    /// tail carries a figure no test fixes, a time among them.
+    fn logged_opening(&self, opening: &str) -> bool {
+        self.log().iter().any(|l| l.starts_with(opening))
+    }
+
+    /// Whether the log holds a line that opens with `opening` and closes
+    /// with `closing` — a line with a figure no test fixes between the two,
+    /// a time.
+    fn logged_around(&self, opening: &str, closing: &str) -> bool {
+        self.log().iter().any(|l| l.starts_with(opening) && l.ends_with(closing))
+    }
+
     /// THE TAP set: `tap` is called with every log line once it is kept,
     /// no lock of the rig's held — the test's way to pause a worker, or
     /// change what it meets, between two steps no docker call separates.

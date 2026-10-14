@@ -1,31 +1,36 @@
 //! T13 — ONE POST PROVISIONED on the test's own thread, a worker's one turn
 //! (`Service::run_next`): (a) the whole flow, call by call, to the snippet,
 //! the live status, its page the reply, the invite spent and ONE mail sent
-//! after the status turned live, and an anchorless record's page and mail
-//! carrying the anchorless sentence, an anchored one's none; (b) THE DECISION
-//! TABLE, one case per failing step as the provisioning record §5.2 tabulates
-//! it, a failed claim run's row taking the container its `docker run` may
-//! leave — the dark claim's every refusal, a shape the read refuses among
-//! them, and the claim run's own removal refused after a claim — each
-//! reading a run's last lines before removing it, removing what was made for
-//! the name and nothing for any other, then looking at what stands and
-//! saying done, the snippet absent, the reload called where the snippet was
-//! written, the status D-8, the invite still issued and no mail; a failed
-//! run's last lines logged above its removal, which takes them with it, and
-//! the last `/health` body's pair named where the wait gave up; (c) a
-//! cleanup's removal failing — a docker
-//! call's or the snippet's — logged, and the look after the removals naming
-//! what stands, the name left taken; a refused `rm -f` of a run that never
-//! stood, and a cleanup's reload failing, each logged as itself, the look
-//! finding nothing standing; a snippet whose write failed after its rename,
-//! removed by the cleanup; step 3's second look, a name taken since its post
-//! failing before anything is made; a step or a cleanup that panics, costing
-//! its post alone and never the worker; the dark claim's retry, thirty tries
-//! two seconds apart, its last exit 4 past them the step's failure; and the
-//! `/health` wait given up, logged by its bound, its last try's exit and its
-//! stderr.
-//! Beside them, T12's flow half: no send before live, an outage with the
-//! status live throughout, and no mail where none is configured.
+//! after the status turned live, its lines carrying their figures — the
+//! invite's issue date, the time waited and the posts behind, the `/health`
+//! wait's bound, the time the steps took, the mails ahead of the hand-over —
+//! and an anchorless record's page and mail carrying the anchorless
+//! sentence, an anchored one's none; (b) THE DECISION TABLE, one case per
+//! failing step as the provisioning record §5.2 tabulates it, a failed claim
+//! run's row taking the container its `docker run` may leave — the dark
+//! claim's every refusal, a shape the read refuses among them, and the claim
+//! run's own removal refused after a claim — each reading a run's last lines
+//! before removing it, removing what was made for the name and nothing for
+//! any other, then looking at what stands and saying done, the snippet
+//! absent, the reload called where the snippet was written, the status D-8,
+//! the invite still issued and no mail; a failed run's last lines logged
+//! above its removal, which takes them with it, the last `/health` body's
+//! pair named where the wait gave up, and the wait never a minute unsaid —
+//! its bound as it begins, its progress every fifteenth try; (c) a
+//! cleanup's removal failing — a docker call's or the snippet's — logged,
+//! and the look after the removals naming what stands, the name left taken;
+//! a refused `rm -f` of a run that never stood, and a cleanup's reload
+//! failing, each logged as itself, the look finding nothing standing; a
+//! snippet whose write failed after its rename, removed by the cleanup, the
+//! write's failure naming it by its path; step 3's second look, a name
+//! taken since its post failing before anything is made; a step or a
+//! cleanup that panics, costing its post alone and never the worker; the
+//! dark claim's retry, thirty tries two seconds apart, its last exit 4 past
+//! them the step's failure; the `/health` wait given up, logged by its
+//! bound, the time into it, its last try's exit and its stderr; and every
+//! failure said with the time its steps took. Beside them, T12's flow half:
+//! no send before live, an outage with the status live throughout, and no
+//! mail where none is configured.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -40,7 +45,12 @@ use crate::sender::fake::messages;
 /// `caddy_reload`, in that order and no other call; the snippet on disk;
 /// the status live, its page the reply; the invite spent; ONE mail sent, to
 /// the invite's address, after the status turned live, its body the page's
-/// text; and no record byte, address, code or token in the log.
+/// text; the log saying the post's admission with its invite's issue date,
+/// its taking with the time it waited and the posts behind it, the `/health`
+/// wait's bound and the try that paired, its end with the time its steps
+/// took, and the mail's hand-over with the mails ahead of it, between the
+/// live line and the mail's first try; and no record byte, address, code or
+/// token in the log.
 #[test]
 fn the_whole_flow_runs_every_step_in_order() {
     let script = [
@@ -92,18 +102,32 @@ fn the_whole_flow_runs_every_step_in_order() {
     assert_eq!(mail.len(), 1);
     assert!(mail[0].starts_with("To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\n"));
     assert!(mail[0].ends_with(&format!("\n\n{page}")), "the mail's body is the page's text");
-    let log = rig.log().join("\n");
     for logged in [
-        "alice: admitted; 1 waiting",
-        "alice: taken by a worker",
         "alice: sidecar: payload entry: 9f86d081884c7d65 anchor=true label=(none)",
         "alice: sidecar: the genesis stands: committed",
-        "alice: LIVE at https://alice.skep.host",
+        "alice: health: waiting for the pair, at most 60 tries 1000 ms apart",
         "alice: the invite is spent",
+        "alice: mail: handed to the sender, 0 ahead of it",
         "alice: mail: sent at try 1 of 7",
     ] {
-        assert!(log.contains(logged), "{logged}: {log}");
+        assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
     }
+    // The lines that carry a time: each by its fixed parts, the time between.
+    for (opening, closing) in [
+        ("alice: admitted; 1 waiting; its invite issued ", ""),
+        ("alice: taken by a worker ", " ms after its admission; 0 still waiting"),
+        ("alice: health: the pair answered at try 2 of 60, ", " ms into the wait"),
+        ("alice: LIVE at https://alice.skep.host, ", " ms after a worker took the post"),
+    ] {
+        assert!(rig.logged_around(opening, closing), "{opening}…{closing}: {:?}", rig.log());
+    }
+    let log = rig.log();
+    let at = |opening: &str| log.iter().position(|l| l.starts_with(opening)).unwrap_or_else(|| panic!("{opening}: {log:?}"));
+    assert!(
+        at("alice: LIVE at ") < at("alice: mail: handed to the sender") && at("alice: mail: handed to the sender") < at("alice: mail: sent at"),
+        "the hand-over said after live and before the mail's first try: {log:?}"
+    );
+    let log = log.join("\n");
     for never in [code.as_str(), token.as_str(), "person@example.com", "9f9f9f9f", "skep-enroll"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
     }
@@ -511,9 +535,12 @@ fn a_snippet_whose_write_failed_after_its_rename_is_removed_by_the_cleanup() {
     assert!(!rig.snippet("alice").exists(), "the snippet stands");
     assert_eq!(rig.service.status(&token), Some(Shown::Failed));
     assert!(rig.issued(&code));
-    for logged in ["alice: FAILED at the snippet's write", "alice: cleanup: snippet: removed", "alice: cleanup: caddy_reload: exit 0", "alice: cleanup: done — nothing stands under the name"] {
+    for logged in ["alice: cleanup: snippet: removed", "alice: cleanup: caddy_reload: exit 0", "alice: cleanup: done — nothing stands under the name"] {
         assert!(rig.logged(logged), "{logged}: {:?}", rig.log());
     }
+    assert!(rig.logged_around("alice: FAILED at the snippet's write, ", " ms after a worker took the post"), "{:?}", rig.log());
+    let failed = rig.log().into_iter().find(|l| l.starts_with("alice: snippet: the write failed: ")).expect("the write's failure");
+    assert!(failed.ends_with(&format!(" — {}", rig.snippet("alice").display())), "the write's failure names the snippet by its path: {failed}");
 }
 
 /// THE DARK CLAIM's RETRY: exit 4 — the claim run's daemon not yet
@@ -548,14 +575,14 @@ fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
     assert_eq!(past.service.status(&token), Some(Shown::Failed));
     assert_eq!(*slept.lock().unwrap(), vec![SIDECAR_WAIT.interval; tries - 1], "a sleep before each try but the first");
     assert_eq!(past.log().iter().filter(|l| *l == "alice: sidecar_claim: exit 4 (transport)").count(), 1, "{:?}", past.log());
-    assert!(past.logged("alice: FAILED at the dark claim"), "{:?}", past.log());
+    assert!(past.logged_around("alice: FAILED at the dark claim, ", " ms after a worker took the post"), "{:?}", past.log());
     past.fake.assert_done();
 }
 
 /// THE `/health` WAIT GIVEN UP: the bound's tries with no pair, the last a
-/// failed run, fail the step — logged once with the bound and the last
-/// try's exit, as the runner spells an exit, and the last try's stderr
-/// whole; a failed run's stdout no body, so no pair is named.
+/// failed run, fail the step — logged once with the bound, the time into the
+/// wait and the last try's exit, as the runner spells an exit, and the last
+/// try's stderr whole; a failed run's stdout no body, so no pair is named.
 #[test]
 fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
     let tries = HEALTH_WAIT.tries.get() as usize;
@@ -571,10 +598,11 @@ fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
     let token = rig.admitted("alice", &rig.invite());
     assert!(rig.service.run_next());
     assert_eq!(rig.service.status(&token), Some(Shown::Failed));
-    assert_eq!(rig.log().iter().filter(|l| *l == "alice: health: no pair after 60 tries (the last exit 4)").count(), 1, "{:?}", rig.log());
+    let gave_up = |l: &&String| l.starts_with("alice: health: no pair after 60 tries, ") && l.ends_with(" ms into the wait (the last exit 4)");
+    assert_eq!(rig.log().iter().filter(gave_up).count(), 1, "{:?}", rig.log());
     assert!(rig.logged("alice: health: the board did not answer"), "the last try's stderr: {:?}", rig.log());
     assert!(!rig.log().iter().any(|l| l.starts_with("alice: health: the last body's pair")), "a pair read off a failed run: {:?}", rig.log());
-    assert!(rig.logged("alice: FAILED at the /health wait"), "{:?}", rig.log());
+    assert!(rig.logged_around("alice: FAILED at the /health wait, ", " ms after a worker took the post"), "{:?}", rig.log());
     rig.fake.assert_done();
 }
 
@@ -584,6 +612,11 @@ fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
 /// failure, and logs each above the run's removal, which takes them with
 /// it; and the wait's give-up names the last body's pair as the board
 /// answered it, a claim not on the volume read apart from local trust on.
+/// THE WAIT IS NEVER A MINUTE UNSAID: it says its bound as it begins, and
+/// at its fifteenth, thirtieth and forty-fifth tries without the pair what
+/// each saw, with the time into the wait — and no progress line at its last
+/// try, whose give-up says it — so a long wait reads apart from a `docker`
+/// call that has not returned.
 #[test]
 fn a_failed_runs_last_lines_are_logged_before_it_is_removed() {
     let tries = HEALTH_WAIT.tries.get() as usize;
@@ -607,6 +640,13 @@ fn a_failed_runs_last_lines_are_logged_before_it_is_removed() {
     assert!(at(&format!("alice: cleanup: the run said: {refused}")) < at("alice: cleanup: rm_force: exit 0"), "the run's lines read after its removal: {log:?}");
     assert!(rig.logged("alice: health: the last body's pair: claimant null, local_trust false"), "{log:?}");
     assert!(!rig.logged("alice: cleanup: the run said nothing"), "{log:?}");
+    assert!(rig.logged("alice: health: waiting for the pair, at most 60 tries 1000 ms apart"), "{log:?}");
+    let progress: Vec<&String> = log.iter().filter(|l| l.starts_with("alice: health: no pair yet at try ")).collect();
+    assert_eq!(progress.len(), 3, "every fifteenth try but the last: {progress:?}");
+    for (line, at) in progress.iter().zip([15, 30, 45]) {
+        assert!(line.starts_with(&format!("alice: health: no pair yet at try {at} of 60, ")) && line.ends_with(" ms into the wait: claimant null, local_trust false"), "{line}");
+    }
+    assert!(at("alice: health: waiting for the pair, at most 60 tries 1000 ms apart") < log.iter().position(|l| l == progress[0]).expect("the first progress line"), "the bound said first: {log:?}");
 }
 
 /// STEP 3's SECOND LOOK: a name taken since its post — its snippet written,
@@ -634,9 +674,8 @@ fn a_name_taken_since_its_post_fails_before_anything_is_made() {
         assert_eq!(rig.fake.said(), said(&[&["volume_inspect alice", "container_inspect alice"][..], &looked[..]].concat()), "{by}");
         assert_eq!(rig.service.status(&token), Some(Shown::Failed), "{by}");
         assert!(rig.issued(&code), "{by}: the invite was spent");
-        for logged in [format!("alice: taken since the post: {by}"), "alice: FAILED at the second look at the name".to_owned()] {
-            assert!(rig.logged(&logged), "{logged}: {:?}", rig.log());
-        }
+        assert!(rig.logged(&format!("alice: taken since the post: {by}")), "{by}: {:?}", rig.log());
+        assert!(rig.logged_around("alice: FAILED at the second look at the name, ", " ms after a worker took the post"), "{by}: {:?}", rig.log());
         assert!(!rig.log().iter().any(|l| l.contains("cleanup")), "{by}: a cleanup of what this post never made: {:?}", rig.log());
         if written {
             assert_eq!(fs::read(rig.snippet("alice")).expect("the snippet stands"), b"a snippet written by hand");
@@ -693,9 +732,8 @@ fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
             "alice: cleanup: done — nothing stands under the name"
         };
         let log = lines.lock().unwrap().clone();
-        for logged in ["alice: FAILED at a step that panicked", cleaned] {
-            assert!(log.iter().any(|l| l == logged), "{logged}: {log:?}");
-        }
+        assert!(log.iter().any(|l| l == cleaned), "{cleaned}: {log:?}");
+        assert!(log.iter().any(|l| l.starts_with("alice: FAILED at a step that panicked, ") && l.ends_with(" ms after a worker took the post")), "{log:?}");
         assert!(log.iter().any(|l| l == "alice: cleanup: rm_force: exit 1"), "the claim run, recorded from its first act, not removed: {log:?}");
         assert!(service.admit(&post).is_ok(), "{volume_rm_panics}: the code, or the name, held past the post's end");
     }

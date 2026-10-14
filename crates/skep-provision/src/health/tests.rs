@@ -3,12 +3,13 @@
 //! local trust and a body that is not JSON do not; an eighth member changes
 //! nothing; the pair said as a body answered it, each case apart, for the
 //! log where the wait gave up; the wait answers at the first pair — a failed
-//! run's stdout never one, whatever it carries — and gives up after its
+//! run's stdout never one, whatever it carries, each try without it handed
+//! on as it comes, for its progress to be said — and gives up after its
 //! bound of one or more tries, the fake called exactly the bound's times and
 //! the last try's answer kept; and a `docker` that cannot be run at all ends
 //! the wait at once, the error.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::*;
@@ -60,17 +61,21 @@ fn the_pair_is_said_as_the_body_answered_it() {
 }
 
 /// T6: THE WAIT ANSWERS AT THE FIRST PAIR: a failed run — its stdout the
-/// pair all the same — and an unclaimed body are "not yet", the third try
-/// pairs, two sleeps between.
+/// pair all the same — and an unclaimed body are "not yet", each handed on
+/// with its try's number and its answer as it comes, the third try pairs,
+/// two sleeps between.
 #[test]
 fn the_wait_answers_at_the_first_pair() {
     let unclaimed = PAIRED.replace(r#""claimant":"1.0.1""#, r#""claimant":null"#);
     let script = [line("health", Some("alice"), 4, PAIRED, "the board did not answer\n"), line("health", Some("alice"), 0, &unclaimed, ""), line("health", Some("alice"), 0, PAIRED, "")].concat();
     let fake = FakeDocker::parse(&script).expect("a script");
     let sleeps = Cell::new(0);
-    let waited = wait(&fake, &alice(), Wait { tries: tries(5), interval: Duration::from_secs(1) }, &|_| sleeps.set(sleeps.get() + 1)).expect("docker ran");
+    let unpaired = RefCell::new(Vec::new());
+    let waited = wait(&fake, &alice(), Wait { tries: tries(5), interval: Duration::from_secs(1) }, &|_| sleeps.set(sleeps.get() + 1), &|at, exit| unpaired.borrow_mut().push((at, exit.code)))
+        .expect("docker ran");
     assert_eq!(waited, Waited::Paired { at: 3 });
     assert_eq!(sleeps.get(), 2);
+    assert_eq!(*unpaired.borrow(), [(1, Some(4)), (2, Some(0))], "the two tries without the pair, as they came");
     fake.assert_done();
 }
 
@@ -85,10 +90,16 @@ fn the_wait_gives_up_after_its_bound() {
         let script = (1..bound.tries.get()).map(|_| line("health", Some("alice"), 0, &unclaimed, "")).collect::<String>() + &line("health", Some("alice"), 4, "", "the board did not answer\n");
         let fake = FakeDocker::parse(&script).expect("a script");
         let sleeps = Cell::new(0);
-        let waited = wait(&fake, &alice(), bound, &|d| {
-            assert_eq!(d, bound.interval);
-            sleeps.set(sleeps.get() + 1)
-        })
+        let waited = wait(
+            &fake,
+            &alice(),
+            bound,
+            &|d| {
+                assert_eq!(d, bound.interval);
+                sleeps.set(sleeps.get() + 1)
+            },
+            &|_, _| {},
+        )
         .expect("docker ran");
         assert_eq!(waited, Waited::GaveUp { last: Exit { code: Some(4), stdout: Vec::new(), stderr: b"the board did not answer\n".to_vec() } });
         assert_eq!(fake.calls().len(), bound.tries.get() as usize, "the fake's call count is the bound");
@@ -112,6 +123,6 @@ fn a_docker_that_cannot_run_ends_the_wait_at_once() {
     }
     let docker = NoDocker(AtomicU32::new(0));
     let sleeps = Cell::new(0);
-    assert!(wait(&docker, &alice(), HEALTH_WAIT, &|_| sleeps.set(sleeps.get() + 1)).is_err());
+    assert!(wait(&docker, &alice(), HEALTH_WAIT, &|_| sleeps.set(sleeps.get() + 1), &|_, _| {}).is_err());
     assert_eq!((docker.0.load(Ordering::SeqCst), sleeps.get()), (1, 0), "the calls and the sleeps");
 }

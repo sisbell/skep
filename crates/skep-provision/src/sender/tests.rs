@@ -8,10 +8,12 @@
 //! same, and one that cannot be run at all said at start, saying why; the
 //! sender's thread delivers what the worker hands it, the message made with
 //! the outbox's own `From:`, `Reply-To:` and subject, a hand-over never
-//! waits on a send stuck in its try, and a send that panics costs its own
-//! mail alone, never the thread. (No send before the status is live, and
-//! the status live throughout an outage, are the flow's —
-//! `flow/tests/provision.rs`.)
+//! waits on a send stuck in its try and says the mails ahead of it, and a
+//! send that panics costs its own mail alone, never the thread; a relay's
+//! exit is named by `sysexits.h`; and the panic hook's line names the board
+//! a thread works on, which stands for that work alone. (No send before the
+//! status is live, and the status live throughout an outage, are the
+//! flow's — `flow/tests/provision.rs`.)
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -103,7 +105,7 @@ fn a_refused_send_is_retried_to_its_bound_then_given_up() {
     assert_eq!(sleeps.lock().unwrap().as_slice(), vec![MAIL_WAIT.interval; MAIL_WAIT.tries.get() as usize - 1].as_slice());
     let lines = lines.lock().unwrap().clone();
     assert_eq!(lines.len(), MAIL_WAIT.tries.get() as usize + 1);
-    assert_eq!(lines[0], format!("alice: mail: try 1 of {} refused, exit 75", MAIL_WAIT.tries));
+    assert_eq!(lines[0], format!("alice: mail: try 1 of {} refused, exit 75 (EX_TEMPFAIL)", MAIL_WAIT.tries));
     assert!(lines.last().expect("a line").contains("given up after 7 tries; the board stands live"));
     assert!(
         lines.last().expect("a line").ends_with("write to the person by hand: their address is on the invite file's line spent under alice (RUNBOOK §10 step 11)"),
@@ -126,7 +128,8 @@ fn a_send_accepted_after_refusals_is_sent() {
 
 /// A RELAY's REFUSAL NAMES THE RECIPIENT AND IS NEVER LOGGED: tries refused
 /// with the address on the mailer's stderr — as a relay's 550 carries it —
-/// are logged by their exit code alone, and no line carries the address.
+/// are logged by their exit code alone, and the name `sysexits.h` gives it,
+/// and no line carries the address.
 #[test]
 fn a_relays_refusal_is_logged_by_its_exit_code_alone() {
     /// A relay that refuses every try, naming the recipient on its stderr.
@@ -142,11 +145,23 @@ fn a_relays_refusal_is_logged_by_its_exit_code_alone() {
     assert_eq!(
         *lines.lock().unwrap(),
         [
-            "alice: mail: try 1 of 2 refused, exit 75",
-            "alice: mail: try 2 of 2 refused, exit 75",
+            "alice: mail: try 1 of 2 refused, exit 75 (EX_TEMPFAIL)",
+            "alice: mail: try 2 of 2 refused, exit 75 (EX_TEMPFAIL)",
             "alice: mail: given up after 2 tries; the board stands live and its reply on its status page until the process ends — write to the person by hand: their address is on the invite file's line spent under alice (RUNBOOK §10 step 11)"
         ]
     );
+}
+
+/// A RELAY's EXIT IS NAMED BY `sysexits.h`: each of the fifteen codes from
+/// 64 to 78 by its name — the relay unreachable or deferring, its
+/// credentials refused, its configuration wrong among them — and a code
+/// outside them, and an end by signal, as the runner spells them alone.
+#[test]
+fn a_relays_exit_is_named_by_sysexits() {
+    let said = |code: Option<i32>| relay_exit_said(&Exit { code, stdout: Vec::new(), stderr: Vec::new() });
+    assert_eq!([said(Some(75)), said(Some(77)), said(Some(78))], ["75 (EX_TEMPFAIL)", "77 (EX_NOPERM)", "78 (EX_CONFIG)"]);
+    assert_eq!((64..=78).filter_map(sysexits_name).count(), 15, "every code from 64 to 78 named");
+    assert_eq!([said(Some(63)), said(Some(79)), said(Some(1)), said(None)], ["63", "79", "1", "signal"]);
 }
 
 /// A MAILER THAT CANNOT RUN IS RETRIED like a refusal — each try logged by
@@ -195,10 +210,12 @@ fn the_senders_thread_delivers_what_it_is_handed() {
     assert_eq!(messages(&mail_log).expect("the mail log"), vec![handed.text()]);
 }
 
-/// THE HAND-OVER NEVER WAITS ON A SEND: the sender's thread stuck inside a
-/// try that does not end — a relay that hangs — three mails handed over
-/// each return at once, so the worker goes on to its next post; once the
-/// stuck try ends, every one is delivered, in the order handed over.
+/// THE HAND-OVER NEVER WAITS ON A SEND, AND SAYS WHAT IS AHEAD OF IT: the
+/// sender's thread stuck inside a try that does not end — a relay that hangs
+/// — three mails handed over each return at once, so the worker goes on to
+/// its next post, each said with the mails ahead of it, the count climbing
+/// behind the stuck try; once the stuck try ends, every one is delivered, in
+/// the order handed over, and a mail handed over then has none ahead.
 #[test]
 fn a_hand_over_never_waits_on_a_send() {
     /// A sender whose every try waits for the test's word.
@@ -215,18 +232,22 @@ fn a_hand_over_never_waits_on_a_send() {
     }
     let (word, heard) = mpsc::channel();
     let sent = Arc::new(Mutex::new(Vec::new()));
-    let (log, _) = kept();
+    let (log, lines) = kept();
     let address = |text: &str| MailAddress::parse(text).expect("an address");
     let waits = Waits { word: Mutex::new(heard), sent: Arc::clone(&sent) };
     let outbox = Outbox::spawn(Box::new(waits), address("noreply@skep.host"), address("owner@skep.host"), log, Arc::new(|_| {})).expect("the thread");
+    let outbox = Arc::new(outbox);
     let (handed, all_handed) = mpsc::channel();
+    let handing = Arc::clone(&outbox);
     thread::spawn(move || {
         for to in ["first@example.com", "second@example.com", "third@example.com"] {
-            outbox.hand_over(Name::parse(b"alice").expect("a name"), to.to_owned(), "Your board is live.\n".to_owned());
+            handing.hand_over(Name::parse(b"alice").expect("a name"), to.to_owned(), "Your board is live.\n".to_owned());
         }
         let _ = handed.send(());
     });
     all_handed.recv_timeout(Duration::from_secs(5)).expect("a hand-over waited on a send stuck in its try");
+    let said = |n: usize| format!("alice: mail: handed to the sender, {n} ahead of it");
+    assert_eq!(*lines.lock().unwrap(), [said(0), said(1), said(2)], "the count climbing behind the stuck try");
     for _ in 0..3 {
         word.send(()).expect("the sender waits for its word");
     }
@@ -236,6 +257,18 @@ fn a_hand_over_never_waits_on_a_send() {
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(*sent.lock().unwrap(), ["first@example.com", "second@example.com", "third@example.com"]);
+    let pending = || match &outbox.delivered_by {
+        DeliveredBy::Thread { pending, .. } => pending.load(Ordering::Acquire),
+        DeliveredBy::Caller { .. } => unreachable!("the outbox spawned its thread"),
+    };
+    while pending() > 0 {
+        assert!(std::time::Instant::now() < deadline, "a mail delivered still counted ahead: {}", pending());
+        thread::sleep(Duration::from_millis(10));
+    }
+    word.send(()).expect("the sender waits for its word");
+    outbox.hand_over(Name::parse(b"bob").expect("a name"), "fourth@example.com".to_owned(), "Your board is live.\n".to_owned());
+    let lines = lines.lock().unwrap().clone();
+    assert!(lines.contains(&"bob: mail: handed to the sender, 0 ahead of it".to_owned()), "a mail delivered still counted ahead: {lines:?}");
 }
 
 /// A SEND THAT PANICS COSTS ITS OWN MAIL ALONE: the sender's thread, the
@@ -267,18 +300,66 @@ fn a_send_that_panics_costs_its_own_mail_alone() {
     outbox.hand_over(Name::parse(b"alice").expect("a name"), "first@example.com".to_owned(), "Your board is live.\n".to_owned());
     outbox.hand_over(Name::parse(b"bob").expect("a name"), "second@example.com".to_owned(), "Your board is live.\n".to_owned());
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while !lines.lock().unwrap().iter().any(|l| l.starts_with("bob: mail: ")) {
+    while !lines.lock().unwrap().iter().any(|l| l == "bob: mail: sent at try 1 of 7") {
         assert!(std::time::Instant::now() < deadline, "the mail after the panic was never delivered");
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(*sent.lock().unwrap(), ["second@example.com"]);
+    let lines = lines.lock().unwrap().clone();
+    let (handed, delivered): (Vec<&String>, Vec<&String>) = lines.iter().partition(|l| l.contains(": mail: handed to the sender, "));
+    assert_eq!(handed[0], "alice: mail: handed to the sender, 0 ahead of it");
+    assert!(handed[1].starts_with("bob: mail: handed to the sender, "), "{lines:?}");
     assert_eq!(
-        *lines.lock().unwrap(),
+        delivered,
         [
             "alice: mail: given up, a try having panicked; the board stands live and its reply on its status page until the process ends — write to the person by hand: their address is on the invite file's line spent under alice (RUNBOOK §10 step 11)",
             "bob: mail: sent at try 1 of 7"
         ]
     );
+}
+
+/// THE PANIC HOOK's LINE, its four forms: the board where the thread works
+/// on one, the thread by its name or as unnamed, the location as std spells
+/// it or as unknown, and the payload only where the hook found a literal —
+/// never a formatted one, which the hook hands it as none.
+#[test]
+fn the_panic_hooks_line_names_the_board_the_thread_and_the_site() {
+    let at = Location::caller();
+    assert_eq!(panic_line(Some("alice"), Some("worker"), Some(at), Some("a literal")), format!("alice: the worker thread panicked at {at}: a literal"));
+    assert_eq!(panic_line(None, Some("connection"), Some(at), None), format!("the connection thread panicked at {at}"));
+    assert_eq!(panic_line(Some("bob"), Some("sender"), Some(at), None), format!("bob: the sender thread panicked at {at}"));
+    assert_eq!(panic_line(None, None, None, Some("a literal")), "an unnamed thread panicked at an unknown location: a literal");
+}
+
+/// A THREAD's BOARD stands for its work and no longer: none before it, the
+/// board inside it — where the panic hook, called inside an unwind before
+/// any catch, reads it — and none after it, on its return and on its unwind
+/// alike, the unwind caught.
+#[test]
+fn a_threads_board_stands_for_its_work_alone() {
+    /// What the unwind meets inside the work: the board, read as the work's
+    /// frame unwinds, before the guard that clears it drops.
+    struct ReadInTheUnwind(Arc<Mutex<Option<String>>>);
+    impl Drop for ReadInTheUnwind {
+        fn drop(&mut self) {
+            *self.0.lock().unwrap() = board_of_this_thread();
+        }
+    }
+    let alice = Name::parse(b"alice").expect("a name");
+    assert_eq!(board_of_this_thread(), None, "before the work");
+    assert_eq!(on_board(&alice, board_of_this_thread), Some("alice".to_owned()), "inside the work");
+    assert_eq!(board_of_this_thread(), None, "after the work's return");
+    let read = Arc::new(Mutex::new(None));
+    let into = Arc::clone(&read);
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        on_board(&alice, move || {
+            let _read = ReadInTheUnwind(into);
+            panic!("a step that panics");
+        })
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(*read.lock().unwrap(), Some("alice".to_owned()), "the board gone before the unwind left the work");
+    assert_eq!(board_of_this_thread(), None, "after the work's unwind");
 }
 
 /// A RELAY CLIENT THAT CANNOT BE RUN IS SAID AT START: a path at which no

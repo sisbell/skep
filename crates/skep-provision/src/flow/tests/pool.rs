@@ -42,7 +42,7 @@ fn a_failed_route_change_keeps_the_route_lock_across_its_undo() {
     });
     let pause = Arc::clone(&between);
     rig.on_log(move |line| {
-        if line == "alice: FAILED at caddy_reload" {
+        if line.starts_with("alice: FAILED at caddy_reload, ") {
             pause.pause();
         }
     });
@@ -126,7 +126,7 @@ fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(rig.service.status(&bob), Some(Shown::BeingMade));
     assert_eq!(rig.service.status(&alice), Some(Shown::BeingMade), "alice still paused");
-    assert!(rig.logged("bob: admitted; 1 waiting"), "{:?}", rig.log());
+    assert!(rig.logged_opening("bob: admitted; 1 waiting; its invite issued "), "{:?}", rig.log());
     gate.open();
     until("both live", || (rig.live(&alice) && rig.live(&bob)).then_some(()));
     rig.fake.assert_done();

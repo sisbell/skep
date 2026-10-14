@@ -5,7 +5,8 @@
 //! written keeps nothing, and a sign-up past the file's cap keeps nothing,
 //! each refusal an error saying which; the stretch at the cap counted, its
 //! first refusal told it opens it and the next sign-up kept how many it
-//! ends; the file's fill, for the start to say; and where two refusals
+//! ends; the file's fill, for the start and every sign-up kept to say; and
+//! where two refusals
 //! hold, the field's speaks first, then the file's in the order met. (The
 //! address rule is `mail_address`'s suite, and the state directory's door
 //! and the writer beneath the file are `statedir`'s; the page's DRAFT
@@ -143,21 +144,24 @@ fn a_sign_up_past_the_cap_is_refused_and_keeps_nothing() {
 /// THE STRETCH AT THE CAP, COUNTED under the file's own lock: its first
 /// refusal opens it — none refused before — each later one counts the
 /// refusals before it, the first sign-up kept once the file is trimmed says
-/// how many the stretch refused, and the next kept says none.
+/// how many the stretch refused, and the next kept says none; and every
+/// sign-up kept says the bytes the file then holds.
 #[test]
 fn the_stretch_at_the_cap_is_counted_and_its_end_said_once() {
     let dir = Scratch::new();
     let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
     let signups = SignUps::new(&state_dir);
-    assert_eq!(signups.append(b"person@example.com").expect("kept"), Kept { refused_at_cap: 0 }, "below the cap throughout");
+    let line_bytes = format!("person@example.com {}\n", today()).len() as u64;
+    assert_eq!(signups.append(b"person@example.com").expect("kept"), Kept { refused_at_cap: 0, held: line_bytes }, "below the cap throughout");
     fs::write(state_dir.file(SIGNUPS), format!("{}\n", "#".repeat(MAX_SIGNUPS_BYTES - 1))).expect("a file at its cap");
     for before in 0..3 {
         assert!(matches!(signups.append(b"a@b"), Err(SignUpRefused::Full { refused_before }) if refused_before == before), "refusal {before}");
     }
     assert!(matches!(signups.append(b"not an address"), Err(SignUpRefused::NotAnAddress)), "a field refused is none of the stretch's");
     fs::write(state_dir.file(SIGNUPS), "").expect("the owner's trim");
-    assert_eq!(signups.append(b"person@example.com").expect("kept after the trim"), Kept { refused_at_cap: 3 });
-    assert_eq!(signups.append(b"person@example.com").expect("kept"), Kept { refused_at_cap: 0 }, "the stretch's end said once");
+    assert_eq!(signups.append(b"person@example.com").expect("kept after the trim"), Kept { refused_at_cap: 3, held: line_bytes });
+    assert_eq!(signups.append(b"person@example.com").expect("kept"), Kept { refused_at_cap: 0, held: 2 * line_bytes }, "the stretch's end said once");
+    assert_eq!(held_bytes(&state_dir).expect("read"), 2 * line_bytes, "the fill a sign-up says is the file's");
 }
 
 /// THE FILE's FILL, for the start to say against its cap: nothing where the

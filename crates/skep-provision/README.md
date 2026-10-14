@@ -86,10 +86,26 @@ start, serves them, a connection past the pool waiting in the listener's
 queue; the request in and the answer out have a minute each, so a client
 that trickles its bytes is cut off rather than holding a thread. A panic
 answering one request costs that connection alone, closed unanswered,
-never its thread. An `accept` that fails — the descriptor limit met — is
-said once, `connections: accept failed (…)`, and its recovery once, with
-the count. Every page is plain HTML with no script and nothing fetched
-from elsewhere.
+never its thread, and is said in one line by the binary's own hook —
+`skep-provision: [<name>: ]the <thread> thread panicked at <file:line>`,
+the board the thread was on where it was on one, and the panic's message
+only where it is a literal the code wrote. An `accept` that fails — the
+descriptor limit met — is said once, `connections: accept failed (…)`,
+and its recovery once, with the count and the span; the pool standing
+full is said the same way, `connections: all <n> threads serving …` once
+as it fills and once a thread has stood free for fifteen seconds. Every
+page is plain HTML with no script and nothing fetched from elsewhere.
+
+The log is bounded against a stranger's requests, which come at a
+request's rate and would otherwise drown the lines an operator reads —
+past journald's limit on a unit's lines every line is dropped for the
+rest of its interval, and below it the flood rotates the journal: a
+refusal no invite bounds (a post with no code of the code's form, a code
+the invite file does not hold or holds spent, a sign-up with no address)
+is said at most once a minute, with the count of like ones since; a
+failure met at every request (the invite file unread, the sign-up file
+unkept, a look at a name not made) is said once as it starts, naming the
+file and what it refuses, and once, with the count, as it ends.
 
 - `GET /` is the sign-up page: one field, an email address.
 - `POST /signup` keeps the address and answers a thanks page. An address
@@ -110,8 +126,11 @@ from elsewhere.
   what the hosted claim's genesis admits. Then the name must be free: not
   taken — no snippet, no volume and no container stands under it — and
   not held by a post in flight. A refused post is shown on the form
-  again, and leaves no file and no queue entry. An admitted post is
-  queued and answered with D-7 and its status URL.
+  again, and leaves no file and no queue entry; its log line names what
+  refused it — the board whose post or live board holds a held invite,
+  the posts that fill a full queue or the looks' cap, the board a spent
+  invite was spent under. An admitted post is queued and answered with
+  D-7 and its status URL, its log line naming its invite's issue date.
 - `GET /status/<token>` shows D-7 while the post waits or runs, the live
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
@@ -141,9 +160,10 @@ per invite, and up to four wait in the queue; a fifth past either is
 answered D-8, "try again later", the first with no `docker` call.
 
 A worker runs the deployment notes' §4 steps 3 to 5 for each post, in
-order, saying `<name>: taken by a worker` as it takes it — so a board
-taken with no `LIVE` or `FAILED` after it is one being made, and never one
-still queued:
+order, saying `<name>: taken by a worker` as it takes it, with how long
+the post waited and how many still wait — so a board taken with no `LIVE`
+or `FAILED` after it is one being made, and never one still queued — and
+saying its end, live or failed, with how long its steps took:
 
 - **Step 3, the claim run.** Look again: no snippet, volume or container
   stands under the name. Then the volume,
@@ -157,7 +177,11 @@ still queued:
   any other answer is a failure. Then `docker rm -f` the claim run.
 - **Step 5, the serving run and the route.** The serving run on the
   bridge, then the sidecar's `skep health` until the board answers a
-  claimant with local trust off. Then the snippet written to
+  claimant with local trust off — sixty tries a second apart, the wait
+  saying its bound as it begins and what it sees at every fifteenth try,
+  so no stretch of a board's steps goes a minute unsaid, and a silence
+  that long is a `docker` call that has not returned. Then the snippet
+  written to
   `<boards-dir>/<name>.caddy`, then the proxy reloaded. These two are a
   route change: one lock, the route lock, is held across a snippet's write
   and its reload, whichever name a worker is on, so route changes are
@@ -168,11 +192,14 @@ still queued:
   nowhere else.
 
 Then the status turns live, the invite is spent, and the mail goes to the
-sender's own thread. That thread retries a refused send (seven tries, ten
+sender's own thread, its hand-over said with the mails ahead of it. That
+thread sends one mail at a time, retries a refused send (seven tries, ten
 minutes apart) and never holds up the next post; a send that panics gives
-up its own mail, and no other. A mail given up says the operator's act:
-the person written to by hand, at the address the invite file's line spent
-under the board holds (RUNBOOK.md §10 step 11).
+up its own mail, and no other. A refused try is said by the relay client's
+exit code and its `sysexits.h` name, `exit 75 (EX_TEMPFAIL)`, never by the
+relay's words, which name the recipient. A mail given up says the
+operator's act: the person written to by hand, at the address the invite
+file's line spent under the board holds (RUNBOOK.md §10 step 11).
 
 When a step fails, what the steps made is undone in reverse order: the
 snippet removed and the proxy reloaded where it may stand — a write's
@@ -214,10 +241,15 @@ and then looks at what stands: where something still stands, the log names
 it and the name stays taken, for the operator. A volume whose snippet
 stands is left alone — it is a live board, or a stopped one that Docker's
 `--restart` brings back — and so is a listed volume whose name is not one
-of the grammar, which the log names. If the listing itself fails, the log
-says so, the sweep is skipped, and the service still serves; a half-made
-board then stays taken until a start whose listing answers. The serving
-line carries the count of boards cleared, `swept <n>`.
+of the grammar, which the log names; and a snippet that stands with no
+labelled volume — a route to no board, its name taken for good, or a
+board made by hand outside the label — is named and left. If the listing
+itself fails, the log says so, the sweep is skipped, and the service
+still serves; a half-made board then stays taken until a start whose
+listing answers. A sweep that listed ends on a line of its own: the
+volumes listed, the half-made among them, those cleared, the names left
+INCOMPLETE, and the time it took. The serving line carries the count of
+boards cleared, `swept <n>`.
 
 **The snippet directory is the list of boards the sweep spares.** A
 labelled volume whose snippet is gone is half-made to it, however long it
@@ -286,7 +318,8 @@ because a board with local trust on fails the `/health` step.
   second `serve` over the same state directory is refused at its start.
 - `<boards-dir>/<name>.caddy` is one board's proxy snippet, mode `0644`.
   The status map is rebuilt from these files at start: each snippet is a
-  live name.
+  name routed at start, which the serving line counts as `live`. A snippet
+  with no volume under the label behind it is said at the sweep.
 - Every volume it creates carries the label `skep.provision=1` on the
   host's Docker, the one mark by which the sweep at start tells its
   volumes from every volume of another making; every `serve` marks its
@@ -301,9 +334,11 @@ at the directory's door, naming both owners, before any state file is
 written: a file root made there would be one the service could not read.
 The door tells the owner by a probe file it makes and removes at once.
 
-The start says the sign-up file's fill against its cap, and the cap, once
-met, is said once — every sign-up refused until the owner trims the file
-— and its end once, with the count refused.
+The start says the sign-up file's fill against its cap, and so does every
+sign-up kept, `a sign-up kept; the file holds <n> of its 262144 bytes`;
+the cap, once met, is said once — every sign-up refused until the owner
+trims the file — and its end once, with the count refused. A file a
+failure meets is named by its path in the line that says it.
 
 ## What it never logs
 
@@ -313,9 +348,11 @@ names each entry of the record by its fingerprint and its label, the
 person's own words, already on the board with the record. It never
 carries the record whole or a key of it, a person's address, an invite
 code or a status token: where the operator must find an invite's line by
-hand, it names the line's issue date, and where a mail is given up, the
-board whose spent line holds the address. The one line on stdout is the
-serving line.
+hand, it names the line's issue date — at the post's admission, and again
+where its spend could not be written — and where a mail is given up, the
+board whose spent line holds the address. A panic's line carries its
+message only where it is a literal the code wrote, never one formatted
+from a request. The one line on stdout is the serving line.
 
 ## What it holds, and how it ships
 

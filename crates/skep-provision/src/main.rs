@@ -40,7 +40,11 @@
 //! code and the sidecar's stderr whole — its TALK, which names each entry of
 //! the record by its fingerprint and its label, the person's own words,
 //! already on the board with the record; its one stdout line is the serving
-//! line, and `invite`'s is the invite link.
+//! line, and `invite`'s is the invite link. A panic's line, the binary's
+//! hook's, carries its payload only where it is a literal the code wrote, so
+//! nothing a request formatted rides it; and a line a stranger can drive — a
+//! refusal no invite bounds, a failure met at every request — is said at a
+//! rate (`rates`), never once a request.
 //!
 //! THE ANSWERS it writes carry statuses `skep-http`'s reason table holds,
 //! and no other — 200 for every page and every refusal shown on a page, 404
@@ -102,6 +106,9 @@ mod process;
 // A bounded wait: this many tries, this far apart, a pause before each try
 // but the first.
 mod wait;
+// The rates a line is said at: a condition that recurs at its edges, an
+// event a stranger drives once a stretch, each with its count.
+mod rates;
 // A domain, as `--suffix` takes one: the grammar a suffix is held to, its
 // alphabet in words, and the one value a suffix is taken in as.
 mod domain;
@@ -141,11 +148,12 @@ mod invites;
 // Every sentence a person reads: one table, each row naming its id.
 mod strings;
 // The pages' HTML and the requests they answer over `skep-http`, the desk
-// they ask, the two URLs the service hands out, and the accept pair the
-// connection threads share.
+// they ask, the two URLs the service hands out, and the accept pair and the
+// pool pair the connection threads share.
 mod pages;
 // The mail: the trait, the mailer, the sender's thread, and the log and the
-// sleep every thread is handed; the fake under `test-hooks`.
+// sleep every thread is handed, the board a thread works on and the panic
+// hook's line; the fake under `test-hooks`.
 mod sender;
 // The live reply, for the page and the mail alike.
 mod reply;
@@ -167,7 +175,7 @@ use std::time::{Duration, Instant};
 use args::{Command, MailArgs, Mailer};
 use docker::{Docker, HostDocker};
 use flow::{Config, Service};
-use pages::{Accepts, Site};
+use pages::{Accepts, Serving, Site};
 use sender::{Log, Outbox, Sender, Sleep};
 use statedir::StateDir;
 
@@ -186,6 +194,7 @@ const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(10);
 const SERVE_LOCK: &str = "serve.lock";
 
 fn main() {
+    install_the_panic_hook();
     let exit_code = match args::parse(std::env::args_os().skip(1)) {
         Ok(Command::Version) => say_out(&args::version_line()).map_or(1, |()| 0),
         Ok(Command::Help) => say_out(&args::usage()).map_or(1, |()| 0),
@@ -217,6 +226,21 @@ fn say_err(line: &str) {
 /// The log every thread writes through: `skep-provision: <line>` on stderr.
 fn log() -> Log {
     Arc::new(|line: &str| say_err(&format!("skep-provision: {line}")))
+}
+
+/// THE PANIC HOOK, installed first, before the command line is read, so no
+/// thread of this process's panics outside it: one line on stderr, prefixed
+/// as every line of the log is, for any thread's panic, before any catch —
+/// the board the thread works on where it works on one, the thread, the
+/// location, and the payload only where it is a literal the code wrote
+/// (`sender::panic_line`), so Rust's own unprefixed text, which carries
+/// whatever its site formatted, never reaches the stream.
+fn install_the_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let thread = thread::current();
+        let payload = info.payload().downcast_ref::<&'static str>().copied();
+        say_err(&format!("skep-provision: {}", sender::panic_line(sender::board_of_this_thread().as_deref(), thread.name(), info.location(), payload)));
+    }));
 }
 
 /// `serve`: the version said, the state directory's door and its serve lock,
@@ -305,7 +329,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
     log(&flags.settings_said());
     match signups::held_bytes(&state_dir) {
         Ok(bytes) => log(&format!("the sign-up file holds {bytes} of its {} bytes", signups::MAX_SIGNUPS_BYTES)),
-        Err(e) => log(&format!("the sign-up file could not be read: {e}; a sign-up is refused until it can be")),
+        Err(e) => log(&format!("the sign-up file could not be read: {e} — {}; a sign-up is refused until it can be", state_dir.file(signups::SIGNUPS).display())),
     }
     // THE BIND, BEFORE THE SWEEP, as skepd binds first: a port another
     // process holds — a second service by the same flags — is refused here,
@@ -339,7 +363,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
         flags.connections
     ));
     let site = Site { suffix: flags.settings.suffix.clone(), owner_address: flags.reply_to.as_str().to_owned() };
-    let accepts = Accepts::default();
+    let (accepts, serving) = (Accepts::default(), Serving::new(flags.connections.get()));
     // THE SERVE: the pool of workers and the pool of connection threads,
     // each of the latter taking the next connection off the listener — one
     // past them waits in the listener's queue — both pools made here, and
@@ -350,7 +374,7 @@ fn serve(flags: args::ServeArgs) -> i32 {
             made_or_exit(thread::Builder::new().name("worker".into()).spawn_scoped(s, || service.work()), "worker");
         }
         for _ in 0..flags.connections.get() {
-            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || serve_connections(&listener, &site, &service, &accepts, log.as_ref())), "connection");
+            made_or_exit(thread::Builder::new().name("connection".into()).spawn_scoped(s, || serve_connections(&listener, &site, &service, &accepts, &serving, log.as_ref())), "connection");
         }
     });
     drop(serve_lock);
@@ -372,17 +396,22 @@ fn made_or_exit<T>(spawned: io::Result<T>, which: &str) {
 
 /// ONE CONNECTION THREAD, for the process's life: the next connection off the
 /// listener served, then the next; an `accept` that fails waits
-/// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin, and is said
-/// through the accept pair the threads share ([`Accepts`]) — once as its
-/// episode opens, once as the episode closes, never a line per try.
-fn serve_connections(listener: &TcpListener, site: &Site, service: &Service, accepts: &Accepts, log: &(dyn Fn(&str) + Send + Sync)) -> ! {
+/// [`ACCEPT_RETRY_PAUSE`] before it asks again, never a spin. Both pairs the
+/// threads share are said through here, each once as its episode opens and
+/// once as it closes, never a line per try: an `accept` that fails
+/// ([`Accepts`]), and the pool standing full ([`Serving`]), every connection
+/// counted in as it is taken and out once `pages::connection`, which a panic
+/// never escapes, has served it.
+fn serve_connections(listener: &TcpListener, site: &Site, service: &Service, accepts: &Accepts, serving: &Serving, log: &(dyn Fn(&str) + Send + Sync)) -> ! {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Some(line) = accepts.accepted(Instant::now()) {
+                let now = Instant::now();
+                for line in [accepts.accepted(now), serving.began(now)].into_iter().flatten() {
                     log(&line);
                 }
                 pages::connection(stream, site, service);
+                serving.ended();
             }
             Err(e) => {
                 if let Some(line) = accepts.failed(&e, Instant::now()) {

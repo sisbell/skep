@@ -8,16 +8,20 @@
 //! kept held where the spend could not be written, and let go of after it —
 //! or where the spend finds it no longer issued, the operator's hand having
 //! marked it; no code in the log, the line to mark named by its issue date)
-//! and T10 (a sign-up, its address in no log line; one past the file's cap,
-//! refused, the cap said once for its stretch and its end once with the
-//! count); a record the hosted genesis can
-//! never take, refused D-5 with no docker call; a fifth post past the looks'
-//! cap, refused D-8 with no docker call, and the looks' permits given back;
-//! one code holding one look at a time, let go on every refusal and an
-//! unwind; where two of a post's faults hold, the first in its order
-//! speaking; and THE BOOK keeping its own rules — what blocks a new post,
-//! first of three, and what admitting, taking, going live, letting a code go
-//! and failing do, an admission whole or not made.
+//! and T10 (a sign-up, its address in no log line, said with the file's
+//! fill; one past the file's cap, refused, the cap said once for its stretch
+//! and its end once with the count); a record the hosted genesis can never
+//! take, refused D-5 with no docker call; a fifth post past the looks' cap,
+//! refused D-8 with no docker call, the posts at their looks named, and the
+//! looks' permits given back; one code holding one look at a time, let go on
+//! every refusal and an unwind; where two of a post's faults hold, the first
+//! in its order speaking; a refusal for a held code naming what holds it,
+//! and one for a full queue the posts in it; a stranger's refusals said once
+//! a stretch with their count, and the invite file and the sign-up file
+//! unread each said as it starts and once, with its count, as it ends; and
+//! THE BOOK keeping its own rules — what blocks a new post, first of three,
+//! what holds a code, and what admitting, taking, going live, letting a code
+//! go and failing do, an admission whole or not made.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -58,17 +62,17 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
     let book = rig.service.book();
     assert_eq!(book.queue.len(), QUEUE_DEPTH);
     assert_eq!(book.admitted.len(), QUEUE_DEPTH);
-    assert!(!book.admitted.contains(&fifth));
+    assert!(!book.admitted.contains_key(&fifth));
     assert!(!book.map.holds(&Name::parse(b"erin").expect("a name")));
     drop(book);
-    assert!(rig.log().join("\n").contains("erin: a post refused: 4 posts already wait"));
+    assert!(rig.logged("erin: a post refused: 4 posts already wait: alice, bob, carol, dave"), "the posts that fill the queue, in order: {:?}", rig.log());
 }
 
 /// THE LOOKS' CAP: four posts paused inside their looks at what stands, a
 /// fifth meets D-8, "try again later", at once and with no docker call, its
-/// invite still issued; the four, let go, meet D-4 off the volumes standing
-/// under their names, and their permits are given back — a sixth post looks
-/// and is admitted.
+/// invite still issued, the refusal naming the four posts at their looks;
+/// the four, let go, meet D-4 off the volumes standing under their names,
+/// and their permits are given back — a sixth post looks and is admitted.
 #[test]
 fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
     let names = ["alice", "bob", "carol", "dave"];
@@ -96,7 +100,7 @@ fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
     gate.entered(4);
     let fifth = rig.invite();
     assert_eq!(rig.post("erin", &record(true), fifth.as_str()), Err(Refusal::Busy));
-    assert!(rig.logged("erin: a post refused: 4 posts already look at what stands"), "{:?}", rig.log());
+    assert!(rig.logged("erin: a post refused: 4 posts already look at what stands: alice, bob, carol, dave"), "{:?}", rig.log());
     assert!(rig.issued(&fifth));
     gate.open();
     for answered in answers {
@@ -122,12 +126,13 @@ fn a_permit_is_given_back_when_dropped() {
 }
 
 /// THE BOOK KEEPS ITS OWN RULES. A code whose post is looking at what
-/// stands is held. Admitted, a post waits with its code and its name held,
-/// its page D-7. What blocks a new post is the first of a full queue, a held
-/// code and a held name: four waiting block a fifth even on a free name and
-/// code, and a post on a held code and a held name meets the code. Taken,
-/// the oldest post runs, still holding both. Gone live, it holds its name no
-/// more, and its code stays held until it is let go of. Failed, it lets its
+/// stands is held, by that post. Admitted, a post waits with its code and its
+/// name held, its page D-7. What blocks a new post is the first of a full
+/// queue, a held code and a held name: four waiting block a fifth even on a
+/// free name and code, and a post on a held code and a held name meets the
+/// code, held by the post in flight. Taken, the oldest post runs, still
+/// holding both. Gone live, it holds its name no more, and its code stays
+/// held — by the live board — until it is let go of. Failed, it lets its
 /// code go at once and holds its name no more.
 #[test]
 fn the_book_keeps_its_own_rules() {
@@ -140,12 +145,14 @@ fn the_book_keeps_its_own_rules() {
         code: invite_code(code),
         address: "person@example.com".to_owned(),
         issued: "2026-10-12".to_owned(),
+        admitted_at: Instant::now(),
     };
+    let held = |by: &str, how: Held| Some(Blocked::CodeHeld { by: name(by), how });
     let state = |book: &Book, n: &str| book.map.post(&format!("token-{n}")).map(|p| p.state);
     let mut book = Book::new(StatusMap::default());
     assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), None, "nothing in flight");
-    book.looking.insert(invite_code("c9"));
-    assert_eq!(book.blocks(&name("zed"), &invite_code("c9")), Some(Blocked::CodeHeld), "a code whose post is looking");
+    book.looking.insert(invite_code("c9"), name("zed"));
+    assert_eq!(book.blocks(&name("yan"), &invite_code("c9")), held("zed", Held::Looking), "a code whose post is looking");
     book.looking.clear();
     for (at, (n, code)) in [("alice", "c1"), ("bob", "c2"), ("carol", "c3"), ("dave", "c4")].into_iter().enumerate() {
         assert_eq!(book.admit(job(n, code)), at + 1, "the posts now waiting");
@@ -157,12 +164,13 @@ fn the_book_keeps_its_own_rules() {
     assert_eq!(alice.name, name("alice"), "the oldest post first");
     assert_eq!(state(&book, "alice"), Some(PostState::Running));
     assert_eq!(book.blocks(&name("erin"), &invite_code("c5")), None, "three waiting");
-    assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), Some(Blocked::CodeHeld), "the code before the name");
+    assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), held("alice", Held::InFlight), "the code before the name");
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c2")), held("bob", Held::InFlight), "a waiting post's code, held by it");
     assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), Some(Blocked::NameHeld));
     book.mark_live(&alice.token);
     assert_eq!(state(&book, "alice"), Some(PostState::Live));
     assert_eq!(book.blocks(&name("alice"), &invite_code("c5")), None, "a live name's truth is its snippet's");
-    assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), Some(Blocked::CodeHeld), "held until its spend is written");
+    assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), held("alice", Held::Live), "held by the live board until its spend is written");
     book.release(&alice.code);
     assert_eq!(book.blocks(&name("erin"), &invite_code("c1")), None);
     let bob = book.take().expect("a waiting post");
@@ -188,12 +196,13 @@ fn an_admission_on_a_token_admitted_before_changes_nothing() {
         code: invite_code(code),
         address: "person@example.com".to_owned(),
         issued: "2026-10-12".to_owned(),
+        admitted_at: Instant::now(),
     };
     let mut book = Book::new(StatusMap::default());
     assert_eq!(book.admit(job("alice", "c1")), 1);
     let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| book.admit(job("bob", "c2"))));
     assert!(again.is_err(), "a second admission under one token");
-    assert!(!book.admitted.contains(&invite_code("c2")), "the refused admission's code held");
+    assert!(!book.admitted.contains_key(&invite_code("c2")), "the refused admission's code held");
     assert_eq!(book.queue.len(), 1, "the refused admission queued");
     assert_eq!(book.map.post("t0k3n").map(|p| (p.name.clone(), p.state)), Some((name("alice"), PostState::Queued)));
     assert!(!book.map.holds(&name("bob")));
@@ -240,7 +249,8 @@ fn the_posts_refusals_come_before_any_docker_call() {
     for refused in [NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone] {
         assert!(log.contains(&format!("a post refused: {refused}")), "{refused:?}: {log}");
     }
-    for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f", "b_b"] {
+    assert!(rig.logged("bob: a post refused: its invite is held by the post for alice, in flight"), "what holds the code, named: {log}");
+    for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f9f9f", "b_b"] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
     }
 }
@@ -249,7 +259,11 @@ fn the_posts_refusals_come_before_any_docker_call() {
 /// code the file does not hold answers the invite's refusal alike for a free
 /// name, a name a post in flight holds, a name its snippet takes, a name out
 /// of the grammar and a record that is none; no docker call, and no log line
-/// naming any of them.
+/// naming any of them. A STRANGER's REFUSALS, BOUNDED: the five are one line
+/// — the file the code was looked for in by its path, and the invites it
+/// holds issued — the four after it counted; a minute on, the next said with
+/// their count; and a code of no code's form is a kind of its own, said
+/// apart.
 #[test]
 fn an_uninvited_post_learns_nothing_about_names() {
     let rig = rig(&inspects("alice"), None);
@@ -265,8 +279,16 @@ fn an_uninvited_post_learns_nothing_about_names() {
         assert_eq!(rig.post(name, &field, "0123456789abcdef0123456789abcdef"), Err(Refusal::Invite), "{what}");
     }
     rig.fake.assert_done();
-    let after: Vec<String> = rig.log().into_iter().skip_while(|l| l != "alice: admitted; 1 waiting").skip(1).collect();
-    assert_eq!(after, vec!["a post refused: its invite code is not one the file holds issued"; 5]);
+    let after = |opening: &str| -> Vec<String> { rig.log().into_iter().skip_while(|l| !l.starts_with(opening)).skip(1).collect() };
+    let not_in = format!("a post refused: its invite code is not in {}, which holds 1 invite issued", crate::invites::path(&rig.state_dir).display());
+    assert_eq!(after("alice: admitted; 1 waiting; its invite issued "), [format!("{not_in} — like ones are said at most once a minute, with their count")]);
+    rig.service.rated.advance(crate::rates::STRETCH);
+    assert_eq!(rig.post("bob", &record(true), "0123456789abcdef0123456789abcdef"), Err(Refusal::Invite));
+    assert_eq!(rig.post("bob", &record(true), "not a code"), Err(Refusal::Invite));
+    assert_eq!(
+        after(&not_in),
+        [format!("{not_in} — 4 more since the last said"), "a post refused: no invite code of the code's form — like ones are said at most once a minute, with their count".to_owned()]
+    );
 }
 
 /// WHERE TWO OF A POST's FAULTS HOLD, THE FIRST IN ITS ORDER SPEAKS — the
@@ -307,9 +329,9 @@ fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
     let code = rig.invite();
     rig.admitted("alice", &code);
     assert!(rig.service.run_next());
-    assert!(!rig.service.book().admitted.contains(&code), "the code held past its spend");
+    assert!(!rig.service.book().admitted.contains_key(&code), "the code held past its spend");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
-    assert!(rig.logged("a post refused: its invite code is not one the file holds issued"), "{:?}", rig.log());
+    assert!(rig.logged_opening("a post refused: its invite was spent under alice on "), "the board it was spent under, named: {:?}", rig.log());
     rig.fake.assert_done();
 }
 
@@ -334,15 +356,21 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     rig.spawn_workers(1);
     until("alice live", || rig.live(&alice).then_some(()));
     thread::sleep(Duration::from_millis(300));
-    assert!(rig.service.book().admitted.contains(&code), "the code let go of before its spend was written");
+    assert!(rig.service.book().admitted.contains_key(&code), "the code let go of before its spend was written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
-    assert!(rig.logged("bob: a post refused: its invite is held by another post"), "{:?}", rig.log());
+    assert!(
+        rig.logged(
+            "bob: a post refused: its invite is held by alice's board, live, until its spend is answered — where the log says it could not be marked spent, mark it by hand (RUNBOOK §10 step 11)"
+        ),
+        "{:?}",
+        rig.log()
+    );
     assert!(rig.issued(&code), "a spend written past the lock");
     assert!(rig.snippet("alice").exists(), "the snippet stands while the file says issued: what a stop here leaves");
     assert!(rig.logged("alice: snippet: written") && !rig.logged("alice: the invite is spent"), "the log names the board, its spend not yet written: {:?}", rig.log());
     drop(lock);
     until("the spend", || (!rig.issued(&code)).then_some(()));
-    until("the code let go of", || (!rig.service.book().admitted.contains(&code)).then_some(()));
+    until("the code let go of", || (!rig.service.book().admitted.contains_key(&code)).then_some(()));
     rig.fake.assert_done();
 }
 
@@ -350,7 +378,9 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
 /// process's life: the file still says issued, so a post naming the code
 /// meets the invite's refusal — never a second board on one invite — while
 /// the board stands live and the log names the operator's act and the line
-/// to mark by its issue date, never its code or its address.
+/// to mark by its issue date and its file's path, never its code or its
+/// address; and the later post's refusal names the board that holds the code
+/// and the act, so a person's report hours later joins the spend's line.
 #[cfg(unix)]
 #[test]
 fn a_spend_that_could_not_be_written_keeps_its_code_held() {
@@ -366,11 +396,21 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     fs::set_permissions(rig.dir.path().join("state"), fs::Permissions::from_mode(0o500)).expect("read-only");
     assert!(rig.service.run_next());
     assert!(rig.live(&alice) && rig.issued(&code), "live, the file still saying issued");
-    assert!(rig.service.book().admitted.contains(&code), "the code let go of though its spend was never written");
+    assert!(rig.service.book().admitted.contains_key(&code), "the code let go of though its spend was never written");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
     rig.fake.assert_done();
-    let act = format!("; this process refuses it until it ends — mark it spent by hand: the invite file's line issued {issued_on} to the person who asked for alice (RUNBOOK §10 step 11)");
+    let act = format!(
+        "; this process refuses it until it ends — mark it spent by hand: the line issued {issued_on} in {} to the person who asked for alice (RUNBOOK §10 step 11)",
+        crate::invites::path(&rig.state_dir).display()
+    );
     assert!(rig.log().iter().any(|l| l.starts_with("alice: the invite could not be marked spent (") && l.ends_with(&act)), "{act}: {:?}", rig.log());
+    assert!(
+        rig.logged(
+            "bob: a post refused: its invite is held by alice's board, live, until its spend is answered — where the log says it could not be marked spent, mark it by hand (RUNBOOK §10 step 11)"
+        ),
+        "the refusal joins the spend's line by its board: {:?}",
+        rig.log()
+    );
     assert!(!rig.log().join("\n").contains(code.as_str()) && !rig.log().join("\n").contains("person@example.com"), "{:?}", rig.log());
 }
 
@@ -398,25 +438,91 @@ fn a_spend_that_finds_its_code_no_longer_issued_lets_it_go() {
     assert!(rig.live(&alice));
     assert!(rig.logged("alice: the invite was not found issued at the spend; the board stands"), "{:?}", rig.log());
     assert!(!rig.logged("alice: the invite is spent"), "{:?}", rig.log());
-    assert!(!rig.service.book().admitted.contains(&code), "the code held though the file holds it no longer issued");
+    assert!(!rig.service.book().admitted.contains_key(&code), "the code held though the file holds it no longer issued");
     assert!(matches!(lookup(&rig.state_dir, &code).expect("read").expect("held").state, crate::invites::InviteState::Spent { ref name, .. } if name == "carol"), "the operator's word kept");
     assert_eq!(rig.post("bob", &record(true), code.as_str()), Err(Refusal::Invite));
-    assert!(rig.logged("a post refused: its invite code is not one the file holds issued"), "{:?}", rig.log());
+    assert!(rig.logged_opening("a post refused: its invite was spent under carol on "), "the file's word, by the board it names: {:?}", rig.log());
     rig.fake.assert_done();
 }
 
-/// T10: A SIGN-UP through the service is kept and logged — its address in
-/// no log line; a malformed one refused, nothing kept.
+/// T10: A SIGN-UP through the service is kept and logged with the file's
+/// fill against its cap — its address in no log line; a malformed one
+/// refused, nothing kept, the refusal — a stranger's to make at a request's
+/// rate — said once a stretch: a second within the minute counted, unsaid.
 #[test]
 fn a_sign_up_is_kept_and_its_address_is_in_no_log_line() {
     let rig = rig("", None);
     assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));
     assert_eq!(rig.service.sign_up(b"no address"), Err(SignUpRefusal::NotAnAddress));
+    assert_eq!(rig.service.sign_up(b"no address either"), Err(SignUpRefusal::NotAnAddress));
     let kept = fs::read_to_string(rig.state_dir.file(crate::signups::SIGNUPS)).expect("the file");
     assert_eq!(kept.lines().count(), 1);
     assert!(kept.starts_with("someone@example.org "));
-    let log = rig.log().join("\n");
-    assert_eq!(log, "a sign-up kept\na sign-up refused: no address");
+    assert_eq!(
+        rig.log(),
+        [format!("a sign-up kept; the file holds {} of its 262144 bytes", kept.len()), "a sign-up refused: no address — like ones are said at most once a minute, with their count".to_owned()]
+    );
+}
+
+/// THE SIGN-UP FILE UNKEPT IS SAID AT ITS EDGES: a file that cannot be read
+/// refuses every sign-up, said once as it starts — the file by its path, the
+/// cause, what it refuses — each after counted unsaid; and the first sign-up
+/// kept a hold-down after the last refused says the end, with the sign-ups
+/// it refused, once.
+#[cfg(unix)]
+#[test]
+fn the_sign_up_file_unkept_is_said_as_it_starts_and_as_it_ends() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = rig("", None);
+    let file = rig.state_dir.file(crate::signups::SIGNUPS);
+    fs::write(&file, "").expect("the sign-up file");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).expect("unreadable");
+    for _ in 0..3 {
+        assert_eq!(rig.service.sign_up(b"someone@example.org"), Err(SignUpRefusal::Failed));
+    }
+    let opened = format!("a sign-up could not be kept: the sign-up file {}: ", file.display());
+    assert_eq!(rig.log().len(), 1, "said once for three: {:?}", rig.log());
+    assert!(
+        rig.log()[0].starts_with(&opened) && rig.log()[0].ends_with("; every sign-up is refused until the file reads and writes as the service's user — said once, and again once one is kept"),
+        "{:?}",
+        rig.log()
+    );
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("readable again");
+    rig.service.rated.advance(crate::rates::HOLD_DOWN);
+    assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));
+    let ended = format!("the sign-up file {} keeps sign-ups again: 3 sign-ups could not be kept while it did not, across ", file.display());
+    assert!(rig.log()[1].starts_with(&ended) && rig.log()[1].ends_with(" ms"), "{:?}", rig.log());
+    assert!(rig.log()[2].starts_with("a sign-up kept; the file holds "), "{:?}", rig.log());
+    assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));
+    assert_eq!(rig.log().len(), 4, "the end said once: {:?}", rig.log());
+}
+
+/// THE INVITE FILE UNREAD IS SAID AT ITS EDGES: a file that cannot be read
+/// refuses every post D-8, said once as it starts — the file by its path,
+/// the cause, what it refuses — each after counted unsaid, no docker call
+/// made; and the first post judged a hold-down after the last refused says
+/// the end, with the posts it refused, once — and is admitted.
+#[cfg(unix)]
+#[test]
+fn the_invite_file_unread_is_said_as_it_starts_and_as_it_ends() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = rig(&inspects("alice"), None);
+    let code = rig.invite();
+    let file = crate::invites::path(&rig.state_dir);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).expect("unreadable");
+    for _ in 0..3 {
+        assert_eq!(rig.post("alice", &record(true), code.as_str()), Err(Refusal::Failed));
+    }
+    let opened = format!("a post could not be judged: the invite file {}: ", file.display());
+    assert_eq!(rig.log().len(), 1, "said once for three: {:?}", rig.log());
+    assert!(rig.log()[0].starts_with(&opened) && rig.log()[0].ends_with("; every post is refused until it reads again — said once, and again once it does"), "{:?}", rig.log());
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).expect("readable again");
+    rig.service.rated.advance(crate::rates::HOLD_DOWN);
+    rig.admitted("alice", &code);
+    let ended = format!("the invite file {} reads again: 3 posts could not be judged while it did not, across ", file.display());
+    assert!(rig.log()[1].starts_with(&ended) && rig.log()[1].ends_with(" ms"), "{:?}", rig.log());
+    assert_eq!(rig.log().iter().filter(|l| l.starts_with("the invite file ")).count(), 1, "the end said once, though the admission read the file twice: {:?}", rig.log());
+    rig.fake.assert_done();
 }
 
 /// T10: A SIGN-UP PAST THE FILE's CAP — the file at its 256 KiB — is
@@ -438,7 +544,8 @@ fn a_sign_up_past_the_files_cap_is_refused_and_logged_once() {
     assert_eq!(rig.log(), [at_cap], "a second refusal at the cap said again");
     fs::write(rig.state_dir.file(crate::signups::SIGNUPS), "").expect("the owner's trim");
     assert_eq!(rig.service.sign_up(b"someone@example.org"), Ok(()));
-    assert_eq!(rig.log(), [at_cap, "the sign-up file takes sign-ups again: 2 refused while it stood at its cap", "a sign-up kept"]);
+    let kept = format!("a sign-up kept; the file holds {} of its 262144 bytes", fs::metadata(rig.state_dir.file(crate::signups::SIGNUPS)).expect("the file").len());
+    assert_eq!(rig.log(), [at_cap, "the sign-up file takes sign-ups again: 2 refused while it stood at its cap", kept.as_str()]);
     assert_eq!(rig.service.sign_up(b"other@example.org"), Ok(()));
     assert_eq!(rig.log().len(), 4, "the stretch's end said again: {:?}", rig.log());
     assert!(!rig.log().join("\n").contains("example.org"), "{:?}", rig.log());
@@ -474,7 +581,7 @@ fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
     rig.fake.assert_done();
     let book = rig.service.book();
     assert_eq!(book.queue.len(), 1);
-    assert!(book.admitted.contains(&other) && !book.admitted.contains(&paused));
+    assert!(book.admitted.contains_key(&other) && !book.admitted.contains_key(&paused));
     drop(book);
     assert!(rig.issued(&paused));
     assert_eq!(rig.service.status(&token), Some(Shown::BeingMade));
@@ -511,8 +618,8 @@ fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
     assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Invite), "a second board on one invite");
     rig.fake.assert_done();
     assert!(rig.service.book().queue.is_empty());
-    assert!(rig.logged("alice: a post refused: its invite is held by another post"), "{:?}", rig.log());
-    assert!(rig.logged("bob: a post refused: its invite was spent while the post was judged"), "{:?}", rig.log());
+    assert!(rig.logged("alice: a post refused: its invite is held by the post for bob, looking at what stands under its name"), "{:?}", rig.log());
+    assert!(rig.logged("bob: a post refused: its invite was spent under carol while the post was judged"), "{:?}", rig.log());
 }
 
 /// ONE CODE, ONE LOOK: a post paused inside its look holds its code — a
@@ -539,7 +646,7 @@ fn one_code_holds_one_look_at_a_time() {
     });
     gate.entered(1);
     assert_eq!(rig.post("dave", &record(true), code.as_str()), Err(Refusal::Invite), "a second look on one code");
-    assert!(rig.logged("dave: a post refused: its invite is held by another post"), "{:?}", rig.log());
+    assert!(rig.logged("dave: a post refused: its invite is held by the post for alice, looking at what stands under its name"), "{:?}", rig.log());
     rig.admitted("bob", &rig.invite());
     gate.open();
     assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Name));

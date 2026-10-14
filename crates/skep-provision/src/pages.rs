@@ -33,17 +33,21 @@
 //! invitation carries ([`invite_link`]), which opens the claim form with the
 //! code it carries pre-filled.
 //!
-//! THE ACCEPT PAIR ([`Accepts`]) is the connection threads' one say on the
-//! listener they share: an `accept` that fails opens an episode, said once,
+//! THE ACCEPT PAIR ([`Accepts`]) and THE POOL PAIR ([`Serving`]) are the
+//! connection threads' say on the listener they share, each an edge pair
+//! (`rates`' `Edge`): an `accept` that fails opens an episode, said once,
 //! and the first that succeeds a hold-down after its last closes it, said
-//! once with the count.
+//! once with the count; and the last free thread taking a connection opens
+//! one — every thread serving, a connection past them waiting in the
+//! listener's queue — said once, and a connection taken with a thread to
+//! spare a hold-down after the pool last stood full closes it, said once
+//! with how often it stood full.
 
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use skep_http::{read_request, write_response, Limits, Refused, Request};
@@ -51,6 +55,7 @@ use skep_identity::MAX_RECORD_BYTES;
 
 use crate::domain::Domain;
 use crate::invite_code::InviteCode;
+use crate::rates::Edge;
 use crate::strings::{
     fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
     RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_URL, THANKS, TOO_LARGE,
@@ -311,8 +316,9 @@ impl<S: Write> Write for Deadlined<S> {
 /// THE CONNECTION: the timeouts, the one read under the caps and its
 /// deadline, the answer under a deadline of its own, the close. A panic
 /// anywhere in it costs this connection alone — closed unanswered, the
-/// panic said on stderr by the hook — never the thread, which the pool made
-/// at start and never makes again.
+/// panic said in one line by the binary's hook, its payload only where the
+/// code wrote it as a literal — never the thread, which the pool made at
+/// start and never makes again.
 pub fn connection(stream: TcpStream, site: &Site, desk: &dyn Desk) {
     // AssertUnwindSafe, and sound: a desk keeps nothing an answer can leave
     // half-changed, `Desk`'s own obligation. The service's keeps it so: its
@@ -338,34 +344,20 @@ fn connection_within(mut stream: TcpStream, site: &Site, desk: &dyn Desk, deadli
     let _ = write_response(&mut Deadlined { stream: &mut stream, until: Instant::now() + deadline }, answer.status, &headers(), Some("text/html; charset=utf-8"), answer.body.as_bytes());
 }
 
-/// THE ACCEPT PAIR's HOLD-DOWN: fifteen seconds, `skepd`'s `EDGE_HOLD_DOWN`
-/// — a descriptor wall that a connection's close lifts and the next accept
-/// meets again is one episode and two lines.
-const ACCEPT_HOLD_DOWN: Duration = Duration::from_secs(15);
-
 /// THE ACCEPT PAIR, `skepd`'s (its `operations.md` §1.1 m12), for the
 /// connection threads that take connections off one listener: one EPISODE
-/// across them — the first `accept` that fails, on any thread, opens it and
-/// is said once; every thread's failures count into it; the first that
-/// succeeds a hold-down past its last failure closes it, said once with the
-/// count. Between, nothing: a descriptor wall met every ten milliseconds is
-/// two lines, never a line per try, and an `accept` that fails is never
-/// silent — the cause is the OS's own words, the unit's `LimitNOFILE=` the
-/// act.
+/// across them (an [`Edge`]) — the first `accept` that fails, on any thread,
+/// opens it and is said once; every thread's failures count into it; the
+/// first that succeeds a hold-down (`rates::HOLD_DOWN`) past its last
+/// failure closes it, said once with the count and the span the failures
+/// came across. Between, nothing: a descriptor wall met every ten
+/// milliseconds is two lines, never a line per try, and an `accept` that
+/// fails is never silent — the cause is the OS's own words, the unit's
+/// `LimitNOFILE=` the act.
 #[derive(Debug, Default)]
 pub struct Accepts {
-    /// Whether an episode stands: the threads' one load per connection
-    /// accepted where none does.
-    failing: AtomicBool,
-    /// The episode standing, where one does.
-    episode: Mutex<Option<Episode>>,
-}
-
-/// One episode of failed `accept`s: how many, and when the last was met.
-#[derive(Debug)]
-struct Episode {
-    failures: u64,
-    last: Instant,
+    /// The episode of failed `accept`s, across the threads.
+    failing: Edge,
 }
 
 impl Accepts {
@@ -374,30 +366,66 @@ impl Accepts {
     /// connections wait in the listener's queue` — and `None` where one does,
     /// the failure counted into it.
     pub fn failed(&self, e: &io::Error, now: Instant) -> Option<String> {
-        let mut episode = self.episode.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(standing) = episode.as_mut() {
-            standing.failures += 1;
-            standing.last = now;
-            return None;
-        }
-        *episode = Some(Episode { failures: 1, last: now });
-        self.failing.store(true, Ordering::Release);
-        Some(format!("connections: accept failed ({e}); new connections wait in the listener's queue"))
+        self.failing.met(now).then(|| format!("connections: accept failed ({e}); new connections wait in the listener's queue"))
     }
 
     /// An `accept` that succeeded at `now`: the line closing the episode
     /// where one stands and its last failure is a hold-down past —
-    /// `connections: accept recovered after <n> failures` — and `None`
-    /// otherwise.
+    /// `connections: accept recovered after <n> failures, across <d> ms` —
+    /// and `None` otherwise.
     pub fn accepted(&self, now: Instant) -> Option<String> {
-        if !self.failing.load(Ordering::Acquire) {
-            return None;
+        let ended = self.failing.passed(now)?;
+        Some(format!("connections: accept recovered after {}{}", ended.count("failure", "failures"), ended.across()))
+    }
+}
+
+/// THE POOL PAIR, for the connection threads a pool of `pool` serves with:
+/// how many serve a connection now, and the EPISODE the pool stands full in
+/// (an [`Edge`]) — the last free thread taking a connection opens it, said
+/// once, a connection past them then waiting in the listener's queue; every
+/// time the pool fills again counts into it; the first connection taken with
+/// a thread to spare a hold-down (`rates::HOLD_DOWN`) after the pool last
+/// stood full closes it, said once with how often it stood full and the span
+/// across which it did. So a pool every thread of which a slow client holds
+/// — the exposure RUNBOOK §10 step 10 names — is said, never read off the
+/// proxy's timeouts alone.
+#[derive(Debug)]
+pub struct Serving {
+    /// The connection threads, every one of them.
+    pool: usize,
+    /// The threads serving a connection now.
+    busy: AtomicUsize,
+    /// The episode the pool stands full in.
+    full: Edge,
+}
+
+impl Serving {
+    /// The pair over a pool of `pool` connection threads, none serving.
+    pub fn new(pool: usize) -> Serving {
+        Serving { pool, busy: AtomicUsize::new(0), full: Edge::default() }
+    }
+
+    /// A connection taken by a thread at `now`: the line opening the episode
+    /// where this one fills the pool — `connections: all <pool> threads
+    /// serving; a connection past them waits in the listener's queue` — the
+    /// line closing it where a thread is still free and the pool last stood
+    /// full a hold-down ago — `connections: a thread free again after all
+    /// <pool> stood serving <k> times, across <d> ms` — and `None`
+    /// otherwise. Every connection [`Serving::began`] is [`Serving::ended`]
+    /// once served.
+    pub fn began(&self, now: Instant) -> Option<String> {
+        let busy = self.busy.fetch_add(1, Ordering::AcqRel) + 1;
+        if busy >= self.pool {
+            let pool = self.pool;
+            return self.full.met(now).then(|| format!("connections: all {pool} threads serving; a connection past them waits in the listener's queue"));
         }
-        let mut episode = self.episode.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let failures = episode.as_ref().filter(|standing| now.saturating_duration_since(standing.last) >= ACCEPT_HOLD_DOWN)?.failures;
-        *episode = None;
-        self.failing.store(false, Ordering::Release);
-        Some(format!("connections: accept recovered after {failures} failures"))
+        let ended = self.full.passed(now)?;
+        Some(format!("connections: a thread free again after all {} stood serving {}{}", self.pool, ended.count("time", "times"), ended.across()))
+    }
+
+    /// The connection [`Serving::began`] took, served: its thread free again.
+    pub fn ended(&self) {
+        self.busy.fetch_sub(1, Ordering::AcqRel);
     }
 }
 

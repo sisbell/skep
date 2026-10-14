@@ -15,8 +15,9 @@
 //! more. THE SWEEP (T22): started over a script whose `labelled_volumes`
 //! lists one half-made name, the binary removes it before its serving line,
 //! which carries the count. THE SERVING LINE: the RUNBOOK's, field for
-//! field, with mail and without; above it the version, first, and the
-//! settings every board is made with, the RUNBOOK's too. A CALL's STDIN: the
+//! field, with mail and without; above it the version, first, the settings
+//! every board is made with and the sweep's summary, the RUNBOOK's too. A
+//! CALL's STDIN: the
 //! sweep's listing, run by the host's runner through a `docker` on `PATH`,
 //! reads nothing of the service's own. A START REFUSED — a snippet directory
 //! that cannot be read or written, a `--mailer` that cannot be run, an
@@ -631,25 +632,33 @@ fn the_serving_line_is_the_runbooks_with_mail_and_without() {
 /// THE START SAYS WHAT IT RUNS: its version first, above anything else it
 /// says — a refusal among it — then, before the serving line, the settings
 /// every board is made with, the RUNBOOK's quoted line clause for clause up
-/// to its mail, and the sign-up file's fill against its cap.
+/// to its mail, the sign-up file's fill against its cap, and the sweep's
+/// summary after its listing, the RUNBOOK's quoted line with the time the
+/// sweep took in its place.
 #[test]
 fn the_start_says_its_version_and_its_settings_above_the_serving_line() {
     let runbook = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md")).expect("the RUNBOOK");
     let quoted = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: boards made from image ")).expect("the RUNBOOK's settings line").to_owned();
     let (boards_made, _) = quoted.split_once("; mail through ").expect("the RUNBOOK's mail clause");
+    let quoted_sweep = runbook.lines().map(str::trim).find(|l| l.starts_with("skep-provision: sweep: 0 volumes under the label")).expect("the RUNBOOK's sweep summary").to_owned();
+    let (sweep_opening, sweep_closing) = quoted_sweep.split_once("<d>").expect("the summary's time");
     let dir = Scratch::new();
     std::fs::create_dir(dir.path().join("boards")).expect("the snippet directory");
     let script = dir.path().join("docker.script");
     std::fs::write(&script, script_line("labelled_volumes", "-", 0, "")).expect("the script");
     let mail_log = dir.path().join("mail.log");
     let service = Service::start(dir.path(), &script, &mail_log, &[]);
-    let log = until("the start's lines", || Some(service.log()).filter(|l| l.contains("sweep: volumes: exit 0")));
+    let log = until("the start's lines", || Some(service.log()).filter(|l| l.lines().any(|l| l.starts_with(sweep_opening))));
     let first = log.lines().next().expect("a first line");
     assert!(first.starts_with(&format!("skep-provision: version {} (", env!("CARGO_PKG_VERSION"))) && first.ends_with(')'), "the version first: {log}");
     let settings = format!("{boards_made}; mail into the mail fake {} from noreply@skep.host; the failure page names owner@skep.host", mail_log.display());
     let at = |line: &str| log.lines().position(|l| l == line).unwrap_or_else(|| panic!("{line}: {log}"));
     assert!(at(&settings) < at("skep-provision: sweep: volumes: exit 0"), "the settings said after the sweep: {log}");
     assert!(log.lines().any(|l| l == "skep-provision: the sign-up file holds 0 of its 262144 bytes"), "{log}");
+    let summary = log.lines().find(|l| l.starts_with(sweep_opening)).expect("the sweep's summary");
+    let took = summary.strip_prefix(sweep_opening).and_then(|rest| rest.strip_suffix(sweep_closing));
+    assert!(took.is_some_and(|ms| ms.parse::<u64>().is_ok()), "the sweep's summary as the RUNBOOK quotes it, a time in its place: {summary}");
+    assert!(at("skep-provision: sweep: volumes: exit 0") < at(summary), "the summary said after the listing: {log}");
     service.terminate();
 }
 

@@ -1610,6 +1610,11 @@ each naming only those above it:
 - `wait.rs` a bounded wait: `Wait`, this many tries this far apart, and
   the tries paced by it — a sleep before each but the first, never after
   the last — the `/health` read's, the dark claim's and the mail's.
+- `rates.rs` the rates a line is said at, `skepd`'s shapes: `Edge`, a
+  condition that recurs said once as it starts and once, with its count
+  and its span, a hold-down after its last meeting; and `Stretch`, an
+  event a stranger drives said at most once a minute, the count of like
+  ones riding the next one said.
 - `domain.rs` a domain, as `--suffix` takes one — lowercase letters,
   digits, dots and hyphens, its labels non-empty and none beginning or
   ending with a hyphen — its alphabet in words for a refusal to name, and
@@ -1666,15 +1671,18 @@ each naming only those above it:
   and path, over `skep-http`, the request in and the answer out each under
   a deadline of its own, each page asking a `Desk`; the two URLs the
   service hands out, the invite link and a post's status URL; and
-  `Accepts`, the accept pair the connection threads share.
+  `Accepts` and `Serving`, the accept pair and the pool pair the
+  connection threads share, each an `Edge`.
 - `sender.rs` the `Sender` trait, `RelaySender` — the relay client
   `--mailer` names, shelled out to, and whether it can be run, asked at
   start — the message, and the outbox: the
-  sender's own thread with its retry, a `Wait`, and the follow-up mail's
-  `From:`, `Reply-To:` and subject, held for every board; `Log` and
-  `Sleep`, the log and the sleep every thread of the service is handed,
-  kept here as the first module that takes them; under `test-hooks`
-  `sender/fake.rs`.
+  sender's own thread with its retry, a `Wait`, the hand-over said with
+  the mails ahead of it, and the follow-up mail's `From:`, `Reply-To:`
+  and subject, held for every board; a refused try said by its exit code
+  and that code's `sysexits.h` name; `Log` and `Sleep`, the log and the
+  sleep every thread of the service is handed, and the board a thread
+  works on, which the panic hook's one line names — kept here as the
+  first module that takes them; under `test-hooks` `sender/fake.rs`.
 - `reply.rs` the live reply, one function for the page and the mail.
 - `flow.rs` the `Service` — the `Desk` the pages ask: a sign-up kept, a
   post admitted, a status read; the `Book` of what is in flight and of
@@ -1722,18 +1730,25 @@ Rules that hold across its files:
   further one waiting in the listener's queue; both pools are made at
   start, no thread is made per connection, and one the OS will not give
   ends the start, exit 1. An `accept` that fails is said once per episode
-  across the threads, and its recovery once, `skepd`'s accept pair. A
-  request in and its answer out each have a minute, checked between
-  socket calls, so a client that trickles its bytes is cut off rather
-  than holding a thread. A panic answering one request costs that
+  across the threads, and its recovery once, `skepd`'s accept pair; the
+  pool standing full is said the same way, once as every thread serves
+  and once a thread has stood free a hold-down after, with how often it
+  filled. A request in and its answer out each have a minute, checked
+  between socket calls, so a client that trickles its bytes is cut off
+  rather than holding a thread. A panic answering one request costs that
   connection alone, a step or a cleanup that panics fails its post, and a
   send that panics gives up its own mail: no thread either pool or the
-  sender made is ever lost to one.
+  sender made is ever lost to one; and each is said in one line by the
+  binary's own hook, the board the thread was on named.
 - **A stranger's bytes buy a bounded bill.** A decoded form holds at most
-  three fields, so it never holds more bytes than were sent; and the
-  sign-up file holds at most 256 KiB, past which a sign-up, which needs
-  no invite, is refused with no write — the cap said once for its stretch,
-  and its end once with the count.
+  three fields, so it never holds more bytes than were sent; the sign-up
+  file holds at most 256 KiB, past which a sign-up, which needs no
+  invite, is refused with no write — the cap said once for its stretch,
+  and its end once with the count; and the log is bounded too, through
+  `rates`: a refusal no invite bounds is said at most once a minute with
+  its count, and a failure met at every request once as it starts and
+  once as it ends, so no stranger's flood drops or rotates away the lines
+  a board's failure is read from.
 - **A start says what it runs, and refuses what would fail later.** Its
   first line is its version; above the serving line it says the settings
   every board is made with and the sign-up file's fill. A state directory
@@ -1751,8 +1766,11 @@ Rules that hold across its files:
   its `serve.lock` held, and before it serves — every labelled volume under
   a name of the grammar with no snippet — half-made — is removed by the
   cleanup table's last two rows, the truth asked what stands after; a name
-  whose snippet stands is left, and a listing that fails skips the sweep,
-  says what the skip leaves taken, and never stops the service. The
+  whose snippet stands is left, a snippet with no labelled volume behind
+  it is named and left, and a listing that fails skips the sweep, says
+  what the skip leaves taken, and never stops the service; a sweep that
+  listed ends on one line of what it listed, cleared and left INCOMPLETE,
+  and the time it took. The
   snippet directory is the list the sweep spares: a start over an emptier
   one removes every labelled board it lacks. Its precondition is the
   operator's: one `serve` per Docker host, for the label is the same on
@@ -1810,7 +1828,9 @@ Rules that hold across its files:
   post, a decoded form, the status map, a status page's reply, a page —
   shows none of them. The sidecar's stderr, which the log keeps whole,
   names each entry of the record by its fingerprint and its label, the
-  person's own words, already on the board with the record.
+  person's own words, already on the board with the record; and a panic's
+  line carries its message only where it is a literal the code wrote,
+  never one a request could have formatted.
 - **Every person-facing sentence is in one table**, `strings.rs`, each
   row naming its id, and the live reply is one function, its inputs
   gathered in one place, so the page and the mail cannot say two things.
@@ -1847,8 +1867,9 @@ a connection past the pool waits in the listener's queue until a thread
 frees, and one within it is answered beside a held one; the boards
 `--workers 2` names are made at once, and no more; the serving line is
 the RUNBOOK's, field for field, with mail and without, and above it the
-version, first, and the settings every board is made with, the RUNBOOK's
-too; the sweep's listing, run by the host's runner through a `docker` on
+version, first, the settings every board is made with and the sweep's
+summary, the RUNBOOK's too; the sweep's listing, run by the host's runner
+through a `docker` on
 `PATH`, reads nothing of the service's own stdin; a start refused — a
 second `serve` over one state directory, a `--mailer` that cannot be run,
 a snippet directory that cannot be read or written, a port held, each

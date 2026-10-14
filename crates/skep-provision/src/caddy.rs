@@ -75,8 +75,9 @@ pub fn snippet(name: &Name, suffix: &Domain) -> String {
     )
 }
 
-/// Where `name`'s snippet lives: `<boards-dir>/<name>.caddy`.
-fn snippet_path(boards_dir: &Path, name: &Name) -> PathBuf {
+/// Where `name`'s snippet lives: `<boards-dir>/<name>.caddy` — the path a
+/// line about a write or a removal that failed names it by.
+pub fn snippet_path(boards_dir: &Path, name: &Name) -> PathBuf {
     boards_dir.join(format!("{name}.caddy"))
 }
 

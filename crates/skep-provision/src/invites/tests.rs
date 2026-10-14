@@ -3,7 +3,8 @@
 //! be reached refused as its own failure, and a fresh code the OS gives no
 //! entropy for refused as its own, each an error saying which;
 //! a lookup before and after the spend answers issued, then spent; a spent or
-//! an unknown code is not issued; the file is rewritten whole — a failure
+//! an unknown code is not issued; the file's path, and its count of invites
+//! still issued, for a refusal to say; the file is rewritten whole — a failure
 //! between the write and the rename leaves it as it was — and a line of
 //! another shape survives; and changes made at once, mints beside spends,
 //! lose none of each other under the lock file. (The code's alphabet is
@@ -139,6 +140,23 @@ fn a_failure_before_the_rename_leaves_the_file_as_it_was() {
     assert_eq!(fs::read(state_dir.file(INVITES)).expect("the file"), before);
     assert!(!crate::whole::temp_of(&state_dir.file(INVITES)).exists());
     assert!(lookup(&state_dir, &code).expect("read").expect("held").issued());
+}
+
+/// THE FILE's ISSUED COUNT, for a refusal to say beside the file's path:
+/// none where the file does not stand, one per invite issued, a spend taking
+/// its invite off it, and a line of another shape none of it.
+#[test]
+fn the_files_issued_count_is_its_invites_still_issued() {
+    let dir = Scratch::new();
+    let state_dir = state_dir(&dir);
+    assert_eq!(path(&state_dir), state_dir.file(INVITES));
+    assert_eq!(issued_count(&state_dir).expect("read"), 0, "no file yet");
+    let codes: Vec<InviteCode> = (0..3).map(|_| mint(&state_dir, &address("person@example.com"), None).expect("minted")).collect();
+    assert_eq!(issued_count(&state_dir).expect("read"), 3);
+    spend(&state_dir, &codes[1], &alice()).expect("spent");
+    let text = fs::read_to_string(path(&state_dir)).expect("the file");
+    fs::write(path(&state_dir), format!("{text}# the owner's note\n")).expect("a hand edit");
+    assert_eq!(issued_count(&state_dir).expect("read"), 2, "a spend, and a line of another shape");
 }
 
 /// A line of another shape — a hand edit's — is passed over by the lookup

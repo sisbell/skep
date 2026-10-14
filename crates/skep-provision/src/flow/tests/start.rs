@@ -3,10 +3,11 @@
 //! half-made board removed — its run's last lines unread, a stop's leavings
 //! no failure's — the routed and the ungrammatical left, a listing that
 //! fails and a snippet directory it cannot search each skipped on a line of
-//! its own naming what the skip leaves taken and the act); a `docker` that
-//! cannot be run at all — the sweep skipped, a post refused D-8; and a
-//! `docker` that lists and then cannot run — the half-made board left
-//! INCOMPLETE, never cleared.
+//! its own naming what the skip leaves taken and the act, a snippet with no
+//! volume under the label said and left, and a sweep that listed ending on
+//! its summary); a `docker` that cannot be run at all — the sweep skipped, a
+//! post refused D-8; and a `docker` that lists and then cannot run — the
+//! half-made board left INCOMPLETE, never cleared.
 
 use super::*;
 use crate::docker::Call;
@@ -105,10 +106,12 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
 /// grammar), the count 1, the log naming the name and each step; a
 /// `labelled_volumes` exit 1 — logged with its stderr as every call's is,
 /// the skip on a line of its own, the count 0, the service standing and
-/// taking a post; a `volume_rm` failure — logged, and the look naming the
-/// volume that stands, the name left, not counted; an `rm_force` failure
-/// (no container) logged as itself, the volume still removed and the look
-/// finding nothing.
+/// taking a post, no summary said; a `volume_rm` failure — logged, and the
+/// look naming the volume that stands, the name left, not counted; an
+/// `rm_force` failure (no container) logged as itself, the volume still
+/// removed and the look finding nothing. A sweep that listed ends on its
+/// summary: the volumes listed, the half-made, the cleared, the names left
+/// INCOMPLETE, the time it took.
 #[test]
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "") + &inspects("bob");
@@ -129,14 +132,17 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     }
     assert!(!rig.log().iter().any(|l| l.starts_with("alice")), "{:?}", rig.log());
     assert!(rig.snippet("alice").exists());
+    assert!(rig.logged_around("sweep: 3 volumes under the label, 1 of them half-made and 1 cleared; in ", " ms"), "the sweep's summary: {:?}", rig.log());
+    assert_eq!(rig.log().last().map(|l| l.starts_with("sweep: 3 volumes under the label, ")), Some(true), "the summary the sweep's last line: {:?}", rig.log());
 
-    // The listing fails: the sweep skipped, and the service still takes a
-    // post.
+    // The listing fails: the sweep skipped, no summary said, and the service
+    // still takes a post.
     let mut unlisted = rig_with(&(line("labelled_volumes", None, 1, "", "Cannot connect to the Docker daemon\n") + &inspects("erin")), None, Arc::new(|_| {}));
     assert_eq!(unlisted.sweep(), 0);
     for logged in ["sweep: volumes: exit 1", "sweep: volumes: Cannot connect to the Docker daemon", SKIPPED] {
         assert!(unlisted.logged(logged), "{logged}: {:?}", unlisted.log());
     }
+    assert!(!unlisted.log().iter().any(|l| l.contains(" under the label, ")), "a summary of a sweep skipped: {:?}", unlisted.log());
     unlisted.admitted("erin", &unlisted.invite());
     unlisted.fake.assert_done();
 
@@ -165,11 +171,40 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     ] {
         assert!(partly.logged(logged), "{logged}: {:?}", partly.log());
     }
+    assert!(partly.logged_around("sweep: 2 volumes under the label, 2 of them half-made and 1 cleared; left INCOMPLETE: bob; in ", " ms"), "the summary naming what it left: {:?}", partly.log());
+}
+
+/// A SNIPPET WITH NO VOLUME UNDER THE LABEL is said at the sweep and left —
+/// a route to no board, its name taken for good, or a board made by hand,
+/// the operator's to tell, with the inspect that tells it — beside a
+/// snippet whose volume the listing holds, which says nothing; nothing is
+/// removed for either, and the summary counts what the listing held.
+#[test]
+fn a_snippet_with_no_volume_under_the_label_is_said_and_left() {
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("the snippet directory");
+    for name in ["alice", "dave"] {
+        fs::write(boards.join(format!("{name}.caddy")), b"").expect("a snippet");
+    }
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let into = Arc::clone(&lines);
+    let log: Log = Arc::new(move |line: &str| into.lock().unwrap().push(line.to_owned()));
+    let fake = Arc::new(FakeDocker::parse(&line("labelled_volumes", None, 0, "alice\n", "")).expect("a script"));
+    let config = Config { boards_dir: boards, suffix: suffix() };
+    let mut service = Service::new(config, state_dir, Box::new(Arc::clone(&fake)), None, log, Arc::new(|_| {})).expect("the service");
+    assert_eq!(service.sweep(), 0);
+    fake.assert_done();
+    let log = lines.lock().unwrap().clone();
+    assert!(log.iter().any(|l| l == "dave: its snippet stands with no volume under the label — a route to no board, or a board made by hand: `docker volume inspect dave` tells which"), "{log:?}");
+    assert!(!log.iter().any(|l| l.starts_with("alice")), "a snippet the listing holds a volume for, said: {log:?}");
+    assert!(log.iter().any(|l| l.starts_with("sweep: 1 volume under the label, 0 of them half-made and 0 cleared; in ") && l.ends_with(" ms")), "{log:?}");
 }
 
 /// A SNIPPET DIRECTORY THE SWEEP CANNOT SEARCH skips it on a line of its own
-/// naming what the skip leaves taken and the act — the listing made, nothing
-/// removed, the count 0.
+/// naming the directory by its path, what the skip leaves taken and the act
+/// — the listing made, nothing removed, the count 0.
 #[cfg(unix)]
 #[test]
 fn a_snippet_directory_the_sweep_cannot_search_skips_it_and_says_what_that_leaves() {
@@ -180,6 +215,6 @@ fn a_snippet_directory_the_sweep_cannot_search_skips_it_and_says_what_that_leave
     fs::set_permissions(&rig.boards, fs::Permissions::from_mode(0o700)).expect("searchable again");
     assert_eq!(swept, 0);
     rig.fake.assert_done();
-    let skipped = "; the sweep is skipped — a board a stop left half-made stays taken until a start that reads it: restart once it reads as the service's user";
-    assert!(rig.log().iter().any(|l| l.starts_with("sweep: the snippet directory could not be read: ") && l.ends_with(skipped)), "{:?}", rig.log());
+    let skipped = format!(" — {}; the sweep is skipped — a board a stop left half-made stays taken until a start that reads it: restart once it reads as the service's user", rig.boards.display());
+    assert!(rig.log().iter().any(|l| l.starts_with("sweep: the snippet directory could not be read: ") && l.ends_with(&skipped)), "the directory named by its path: {:?}", rig.log());
 }

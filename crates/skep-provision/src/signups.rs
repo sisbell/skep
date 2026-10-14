@@ -75,12 +75,17 @@ impl From<io::Error> for SignUpRefused {
     }
 }
 
-/// A SIGN-UP KEPT, and the stretch at the file's cap it ends.
+/// A SIGN-UP KEPT: the stretch at the file's cap it ends, and the file's
+/// fill it leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Kept {
     /// The sign-ups refused at the file's cap since the last one kept: none
     /// where the file stood below its cap throughout.
     pub refused_at_cap: u64,
+    /// The bytes the file holds with this sign-up written, for the line that
+    /// says it kept to say against [`MAX_SIGNUPS_BYTES`] — so the file is
+    /// read filling at every sign-up, never at a start alone.
+    pub held: u64,
 }
 
 /// THE SIGN-UP FILE, one writer at a time: its path, and the refusals at its
@@ -115,12 +120,13 @@ impl SignUps {
 
     /// ONE SIGN-UP KEPT: the field's bytes, an address by the rule, appended
     /// as `<address> <date>` — the file read, the line added, the whole
-    /// written back — and answered with the stretch at the cap it ends; a
-    /// refused field, or a line that would carry the file past
-    /// [`MAX_SIGNUPS_BYTES`], leaves the file as it was, a refusal at the cap
-    /// counted into its stretch. Where two refusals hold, the field's speaks
-    /// first — no address by the rule, the file untouched — then the file's,
-    /// in the order met: a read that fails, the cap, a rewrite that fails.
+    /// written back — and answered with the stretch at the cap it ends and
+    /// the bytes the file then holds; a refused field, or a line that would
+    /// carry the file past [`MAX_SIGNUPS_BYTES`], leaves the file as it was,
+    /// a refusal at the cap counted into its stretch. Where two refusals
+    /// hold, the field's speaks first — no address by the rule, the file
+    /// untouched — then the file's, in the order met: a read that fails, the
+    /// cap, a rewrite that fails.
     pub fn append(&self, field: &[u8]) -> Result<Kept, SignUpRefused> {
         let address = std::str::from_utf8(field).ok().and_then(MailAddress::parse).ok_or(SignUpRefused::NotAnAddress)?;
         let line = format!("{} {}\n", address.as_str(), today());
@@ -136,7 +142,7 @@ impl SignUps {
         }
         text.push_str(&line);
         write_whole(&file.path, text.as_bytes())?;
-        Ok(Kept { refused_at_cap: std::mem::take(&mut file.refused_at_cap) })
+        Ok(Kept { refused_at_cap: std::mem::take(&mut file.refused_at_cap), held: text.len() as u64 })
     }
 }
 

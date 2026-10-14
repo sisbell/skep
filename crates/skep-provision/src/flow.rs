@@ -123,17 +123,30 @@
 //! step and each call's exit code, and the sidecar's stderr whole, which
 //! names each record entry by its fingerprint and its label — NEVER the
 //! record whole or a key of it, a person's address, an invite code or a
-//! status token (the provisioning record §4).
+//! status token (the provisioning record §4). A post is said as a worker
+//! takes it, with how long it waited and the posts still waiting, and at its
+//! end, live or failed, with how long its steps took; the `/health` wait as
+//! it begins and at every fifteenth try without the pair, so no stretch of a
+//! board's steps goes a minute unsaid — a silence that long is a `docker`
+//! call that has not returned. A refusal for a held invite names what holds
+//! it, and one for a full queue, or for the looks' cap, the posts that fill
+//! it. A line a stranger can drive is said at a rate (`rates`): a refusal no
+//! invite bounds at most once a minute, with the count of like ones since;
+//! a failure met at every request — the invite file unread, the sign-up file
+//! unkept, a look at a name not made — once as it starts and once as it
+//! ends, with its count. A file a failure meets is named by its path.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::num::NonZeroU32;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::caddy;
 use crate::docker::Docker;
@@ -145,11 +158,12 @@ use crate::name::Name;
 use crate::names;
 use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
 use crate::process::Exit;
+use crate::rates::{counted, Edge, Stretch};
 use crate::record::{self, Record, RecordRefused};
 use crate::reply;
-use crate::sender::{Log, Outbox, Sleep};
+use crate::sender::{self, Log, Outbox, Sleep};
 use crate::sidecar::{self, Answer, Failure};
-use crate::signups::{SignUpRefused, SignUps};
+use crate::signups::{SignUpRefused, SignUps, MAX_SIGNUPS_BYTES, SIGNUPS};
 use crate::statedir::StateDir;
 use crate::wait::Wait;
 
@@ -163,6 +177,13 @@ const QUEUE_DEPTH: usize = 4;
 /// THE DARK CLAIM's RETRY: thirty tries two seconds apart while the
 /// sidecar answers exit 4 — the claim run's daemon not yet listening.
 const SIDECAR_WAIT: Wait = Wait { tries: NonZeroU32::new(30).expect("thirty is not zero"), interval: Duration::from_secs(2) };
+
+/// THE `/health` WAIT's PROGRESS: a line at every fifteenth try without the
+/// pair, some half a minute apart — each try a `docker run --rm` of the
+/// sidecar and a second's pause — so no stretch of a board's steps goes a
+/// minute without a line: RUNBOOK §10 step 12 reads a minute's silence from a
+/// board taken by a worker as a `docker` call that has not returned.
+const HEALTH_PROGRESS: u32 = 15;
 
 /// THE LOOKS' CAP: four posts' looks at what stands under their names at
 /// once — [`QUEUE_DEPTH`], the posts that can wait at once. A look is up to
@@ -194,16 +215,21 @@ struct Job {
     code: InviteCode,
     address: String,
     /// The day its invite was issued, as the invite file's line holds it:
-    /// the operator's locator for that line where the post's spend cannot be
-    /// written — never its code or its address, which no log line carries.
+    /// the operator's locator for that line — said as the post is admitted,
+    /// and again where its spend cannot be written — never its code or its
+    /// address, which no log line carries.
     issued: String,
+    /// When it was admitted: the line a worker takes it with says how long
+    /// it waited.
+    admitted_at: Instant,
 }
 
 /// THE BOOK, which the pages and the workers share under its own short lock:
 /// WHAT IS IN FLIGHT — the posts waiting for a worker, and the invite codes
 /// held, each by a post admitted (`admitted`) or by a post looking at what
-/// stands under its name (`looking`) — and every post this process admitted,
-/// by token, in flight or ended (the status map); and THE RULES THAT TIE THEM:
+/// stands under its name (`looking`), each code with what holds it, for a
+/// refusal to name — and every post this process admitted, by token, in
+/// flight or ended (the status map); and THE RULES THAT TIE THEM:
 /// a post looking at what stands holds its code until its admission or its
 /// refusal ([`CodeLook`]); a post admitted waits with its token in the map and
 /// its code held; a post taken is running; a post in flight, waiting or
@@ -218,48 +244,70 @@ struct Job {
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
-    /// The codes the posts admitted hold: each from its post's admission until
-    /// let go of — a failed post's at once, a live post's once its spend is
-    /// answered ([`Book::release`]).
-    admitted: HashSet<InviteCode>,
-    /// The codes whose posts are looking at what stands under their names:
-    /// held as surely as one in `admitted`, from the post's in-flight check to
-    /// its admission or its refusal, so the posts on one code hold one of the
-    /// looks' permits at most.
-    looking: HashSet<InviteCode>,
+    /// The codes the posts admitted hold, each with its post's token — the
+    /// key the status map holds the post by, so what holds a code is read
+    /// off the post itself: each from its post's admission until let go of —
+    /// a failed post's at once, a live post's once its spend is answered
+    /// ([`Book::release`]).
+    admitted: HashMap<InviteCode, String>,
+    /// The codes whose posts are looking at what stands under their names,
+    /// each with its post's name: held as surely as one in `admitted`, from
+    /// the post's in-flight check to its admission or its refusal, so the
+    /// posts on one code hold one of the looks' permits at most.
+    looking: HashMap<InviteCode, Name>,
 }
 
 /// What in flight refuses a new post.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Blocked {
     /// [`QUEUE_DEPTH`] posts already wait.
     QueueFull,
-    /// The invite code is held: by a post looking at what stands under its
-    /// name, by a post in flight, or by one gone live until its spend is
-    /// answered.
-    CodeHeld,
+    /// The invite code is held, by the post for `by`, as `how` says.
+    CodeHeld {
+        /// The board the post that holds it is for.
+        by: Name,
+        /// How it holds it.
+        how: Held,
+    },
     /// A post in flight holds the name.
     NameHeld,
+}
+
+/// HOW A CODE IS HELD, as its refusal says it: the operator reads a code held
+/// for good — a live board's whose spend could not be written — apart from
+/// one held for the moments a post is judged or made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// By a post looking at what stands under its name ([`CodeLook`]).
+    Looking,
+    /// By a post in flight, waiting or running.
+    InFlight,
+    /// By a board gone live, until its spend is answered — for the
+    /// process's life, where the spend could not be written.
+    Live,
 }
 
 impl Book {
     /// The book at start: nothing in flight, the status map as rebuilt.
     fn new(map: StatusMap) -> Book {
-        Book { queue: VecDeque::new(), map, admitted: HashSet::new(), looking: HashSet::new() }
+        Book { queue: VecDeque::new(), map, admitted: HashMap::new(), looking: HashMap::new() }
     }
 
     /// What refuses a new post for `name` under `code`: the first of a full
     /// queue, a held code and a held name — `None` where none does.
     fn blocks(&self, name: &Name, code: &InviteCode) -> Option<Blocked> {
         if self.queue.len() >= QUEUE_DEPTH {
-            Some(Blocked::QueueFull)
-        } else if self.admitted.contains(code) || self.looking.contains(code) {
-            Some(Blocked::CodeHeld)
-        } else if self.map.holds(name) {
-            Some(Blocked::NameHeld)
-        } else {
-            None
+            return Some(Blocked::QueueFull);
         }
+        if let Some(token) = self.admitted.get(code) {
+            let post = self.map.post(token).expect("`Book::admit` puts a post in the map before its code in `admitted`, and no post leaves the map");
+            let how = if post.state == PostState::Live { Held::Live } else { Held::InFlight };
+            return Some(Blocked::CodeHeld { by: post.name.clone(), how });
+        }
+        if let Some(by) = self.looking.get(code) {
+            return Some(Blocked::CodeHeld { by: by.clone(), how: Held::Looking });
+        }
+        self.map.holds(name).then_some(Blocked::NameHeld)
     }
 
     /// A post admitted: its token in the map, its code held, the post queued
@@ -272,7 +320,7 @@ impl Book {
     /// panics before the book changes: an admission is whole or not made.
     fn admit(&mut self, job: Job) -> usize {
         self.map.admit(job.token.clone(), job.name.clone(), job.record.anchorless());
-        self.admitted.insert(job.code.clone());
+        self.admitted.insert(job.code.clone(), job.token.clone());
         self.queue.push_back(job);
         self.queue.len()
     }
@@ -339,10 +387,11 @@ struct CodeLook<'s> {
 impl<'s> CodeLook<'s> {
     /// The look begun, under the book's lock the caller holds — `book` the
     /// content of `lock` — once the in-flight check made under it has found
-    /// nothing blocking the post: the code held in `looking`, and the hold
-    /// handed to the guard that lets it go.
-    fn begin(lock: &'s Mutex<Book>, book: &mut Book, code: InviteCode) -> CodeLook<'s> {
-        book.looking.insert(code.clone());
+    /// nothing blocking the post for `name`: the code held in `looking`, the
+    /// name beside it for a refusal to name, and the hold handed to the guard
+    /// that lets it go.
+    fn begin(lock: &'s Mutex<Book>, book: &mut Book, code: InviteCode, name: Name) -> CodeLook<'s> {
+        book.looking.insert(code.clone(), name);
         CodeLook { book: lock, code: Some(code) }
     }
 
@@ -411,6 +460,51 @@ impl fmt::Display for CleanupOn {
     }
 }
 
+/// THE LINES SAID AT A RATE (`rates`), the ones a stranger can drive: the
+/// edges of a failure met at every request while it stands — said once as it
+/// starts, once as it ends, with its count — and the stretches of a refusal
+/// no invite bounds — said at most once a minute, with the count of like
+/// ones since.
+#[derive(Debug, Default)]
+struct Rated {
+    /// The invite file unread at a post's lookup.
+    invite_file: Edge,
+    /// The sign-up file unkept: read or written, refused.
+    signup_file: Edge,
+    /// A post's look at the name not made.
+    look: Edge,
+    /// A post with no invite code of the code's form.
+    unformed: Stretch,
+    /// A post naming a code the invite file does not hold.
+    unknown: Stretch,
+    /// A post naming a code the invite file holds spent.
+    spent: Stretch,
+    /// A sign-up with no address by the rule.
+    unaddressed: Stretch,
+    /// A unit suite's clock: what it has moved the instant every rate here is
+    /// judged at on by, so a hold-down or a stretch passes with no wait.
+    #[cfg(test)]
+    advanced_ms: AtomicU64,
+}
+
+impl Rated {
+    /// The instant every rate here is judged at: the monotonic clock — and,
+    /// in a unit suite, what the suite has moved it on by.
+    fn now(&self) -> Instant {
+        let now = Instant::now();
+        #[cfg(test)]
+        let now = now + Duration::from_millis(self.advanced_ms.load(Ordering::Relaxed));
+        now
+    }
+
+    /// A unit suite's clock moved on by `by`: a hold-down or a stretch passed
+    /// with no wait.
+    #[cfg(test)]
+    fn advance(&self, by: Duration) {
+        self.advanced_ms.fetch_add(u64::try_from(by.as_millis()).expect("a suite's step fits in u64 milliseconds"), Ordering::Relaxed);
+    }
+}
+
 /// THE SERVICE: the desk the pages ask, and the workers' shared state.
 pub struct Service {
     config: Config,
@@ -437,6 +531,8 @@ pub struct Service {
     /// How many posts are looking at what stands under their names, at most
     /// [`MAX_LOOKS`].
     looks: AtomicUsize,
+    /// The lines a stranger can drive, each said at its rate.
+    rated: Rated,
 }
 
 impl Service {
@@ -447,7 +543,20 @@ impl Service {
     pub fn new(config: Config, state_dir: StateDir, docker: Box<dyn Docker>, outbox: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state_dir);
-        Ok(Service { config, state_dir, signups, docker, outbox, log, sleep, route_lock: Mutex::new(()), book: Mutex::new(Book::new(map)), queued: Condvar::new(), looks: AtomicUsize::new(0) })
+        Ok(Service {
+            config,
+            state_dir,
+            signups,
+            docker,
+            outbox,
+            log,
+            sleep,
+            route_lock: Mutex::new(()),
+            book: Mutex::new(Book::new(map)),
+            queued: Condvar::new(),
+            looks: AtomicUsize::new(0),
+            rated: Rated::default(),
+        })
     }
 
     /// HOW MANY boards stood routed at start — the names the status map was
@@ -472,10 +581,14 @@ impl Service {
     /// The listing's answer is logged as every call's is
     /// ([`Service::judged`]); one that fails skips the sweep, said on a line
     /// of its own with what the skip leaves taken: a listing failure must not
-    /// take the sign-up down. Answers the boards cleared, for the serving
-    /// line. The snippet directory is thus the list of boards it spares: a
-    /// labelled volume whose snippet is gone is half-made to it, however long
-    /// it has stood.
+    /// take the sign-up down. A name whose snippet stands with no volume
+    /// under the label — a route to no board, or a board made by hand — is
+    /// said and left; and the sweep ends on a line of its own — the volumes
+    /// listed, the half-made among them, the boards cleared, the names left
+    /// INCOMPLETE, the time it took — the start's figures in one place.
+    /// Answers the boards cleared, for the serving line. The snippet
+    /// directory is thus the list of boards it spares: a labelled volume
+    /// whose snippet is gone is half-made to it, however long it has stood.
     ///
     /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
     /// label marks every volume any `serve` on the host made, and a volume
@@ -495,6 +608,7 @@ impl Service {
     /// connection thread holds the service while it runs — `serve` sweeps
     /// before it shares the service with either.
     pub fn sweep(&mut self) -> usize {
+        let began = Instant::now();
         let Some(listing) = self.judged("sweep: volumes", self.docker.labelled_volumes()) else {
             self.log(
                 "sweep: the volumes under the label could not be listed; the sweep is skipped — a board a stop left half-made stays taken until a start whose listing answers: restart once `docker volume ls` answers as the service's user",
@@ -505,7 +619,8 @@ impl Service {
             Ok(labelled) => labelled,
             Err(e) => {
                 self.log(&format!(
-                    "sweep: the snippet directory could not be read: {e}; the sweep is skipped — a board a stop left half-made stays taken until a start that reads it: restart once it reads as the service's user"
+                    "sweep: the snippet directory could not be read: {e} — {}; the sweep is skipped — a board a stop left half-made stays taken until a start that reads it: restart once it reads as the service's user",
+                    self.config.boards_dir.display()
                 ));
                 return 0;
             }
@@ -513,7 +628,15 @@ impl Service {
         for listed in &labelled.ungrammatical {
             self.log(&format!("sweep: a volume under the label is under no name of the grammar, left: {listed}"));
         }
-        let mut swept = 0;
+        // A SNIPPET WITH NO VOLUME UNDER THE LABEL: a name the rebuild found
+        // routed that the listing holds no volume for — a route to no board,
+        // its name taken for good, or a board made by hand, outside the label
+        // — said, for the operator to tell which; the sweep leaves it.
+        let unbacked: Vec<Name> = self.book().map.routed_at_start().iter().filter(|name| !labelled.routed.contains(name)).cloned().collect();
+        for name in &unbacked {
+            self.log(&format!("{name}: its snippet stands with no volume under the label — a route to no board, or a board made by hand: `docker volume inspect {name}` tells which"));
+        }
+        let (mut swept, mut incomplete) = (0, Vec::new());
         for name in &labelled.half_made {
             self.log(&format!("{name}: half-made at start (a volume, no snippet) — removing"));
             // What a stop mid-board leaves — the volume, and a run that may
@@ -521,8 +644,18 @@ impl Service {
             // two rows, then the truth asked what stands.
             if self.cleanup(name, Made { volume: true, run: true, snippet: None }, CleanupOn::Start) {
                 swept += 1;
+            } else {
+                incomplete.push(name.to_string());
             }
         }
+        let listed = labelled.half_made.len() + labelled.routed.len() + labelled.ungrammatical.len();
+        let left = if incomplete.is_empty() { String::new() } else { format!("; left INCOMPLETE: {}", incomplete.join(", ")) };
+        self.log(&format!(
+            "sweep: {} under the label, {} of them half-made and {swept} cleared{left}; in {} ms",
+            counted(listed as u64, "volume", "volumes"),
+            labelled.half_made.len(),
+            began.elapsed().as_millis()
+        ));
         swept
     }
 
@@ -575,13 +708,23 @@ impl Service {
     /// undone and a making whose record the panic cut off left standing, as
     /// a stop mid-board leaves one; a cleanup that panics leaves what it had
     /// not undone standing, logged INCOMPLETE; and the post fails either
-    /// way, its code let go of.
+    /// way, its code let go of. The post's board is the worker thread's for
+    /// its length ([`sender::on_board`]), so a panic's one line names it.
     fn provision(&self, job: Job) {
+        let name = job.name.clone();
+        sender::on_board(&name, || self.provision_on_board(job));
+    }
+
+    /// [`Service::provision`]'s work, its board the thread's.
+    fn provision_on_board(&self, job: Job) {
         let name = &job.name;
-        // The post's start, said: a board `taken by a worker` with no `LIVE`
-        // or `FAILED` after it is one being made — or one whose `docker` call
-        // has not returned — and never one still queued.
-        self.log(&format!("{name}: taken by a worker"));
+        // The post's start, said with how long it waited and how many wait
+        // behind it: a board `taken by a worker` with no `LIVE` or `FAILED`
+        // after it is one being made — or one whose `docker` call has not
+        // returned — and never one still queued.
+        let taken_at = Instant::now();
+        let waiting = self.book().queue.len();
+        self.log(&format!("{name}: taken by a worker {} ms after its admission; {waiting} still waiting", taken_at.saturating_duration_since(job.admitted_at).as_millis()));
         let mut made = Made::default();
         // `made` stands outside the catch, with the route lock it may hold,
         // so a panicking step's makings are undone under that lock as after
@@ -597,14 +740,15 @@ impl Service {
                 // spend and the mail, which change no route.
                 drop(made);
                 self.book().mark_live(&job.token);
-                self.log(&format!("{name}: LIVE at {}", name.origin(&self.config.suffix)));
+                self.log(&format!("{name}: LIVE at {}, {} ms after a worker took the post", name.origin(&self.config.suffix), taken_at.elapsed().as_millis()));
                 let spend = invites::spend(&self.state_dir, &job.code, name);
                 match &spend {
                     Ok(true) => self.log(&format!("{name}: the invite is spent")),
                     Ok(false) => self.log(&format!("{name}: the invite was not found issued at the spend; the board stands")),
                     Err(e) => self.log(&format!(
-                        "{name}: the invite could not be marked spent ({e}); this process refuses it until it ends — mark it spent by hand: the invite file's line issued {} to the person who asked for {name} (RUNBOOK §10 step 11)",
-                        job.issued
+                        "{name}: the invite could not be marked spent ({e}); this process refuses it until it ends — mark it spent by hand: the line issued {} in {} to the person who asked for {name} (RUNBOOK §10 step 11)",
+                        job.issued,
+                        invites::path(&self.state_dir).display()
                     )),
                 }
                 // The code is let go of AFTER the spend is answered — written,
@@ -620,7 +764,7 @@ impl Service {
                 self.hand_over_mail(job);
             }
             Err(step) => {
-                self.log(&format!("{name}: FAILED at {step}"));
+                self.log(&format!("{name}: FAILED at {step}, {} ms after a worker took the post", taken_at.elapsed().as_millis()));
                 if catch_unwind(AssertUnwindSafe(|| self.cleanup(name, made, CleanupOn::Failure))).is_err() {
                     self.log(&format!("{name}: cleanup: INCOMPLETE — the cleanup panicked, and what it had not undone stands until the operator clears it"));
                 }
@@ -666,10 +810,23 @@ impl Service {
         // `docker run` too can fail with its container made (the table's row:
         // the serving run and the volume).
         self.done(name, "run_serving", docker.run_serving(name))?;
-        match health::wait(docker, name, HEALTH_WAIT, self.sleep.as_ref()) {
-            Ok(Waited::Paired { at }) => self.log(&format!("{name}: health: the pair answered at try {at} of {}", HEALTH_WAIT.tries)),
+        // THE `/health` WAIT, said as it begins with its bound, at every
+        // [`HEALTH_PROGRESS`]th try without the pair with what that try saw,
+        // and at its end, each with the time into it: the wait is the steps'
+        // longest, and a board taken by a worker is never a minute unsaid in
+        // it.
+        let waiting_from = Instant::now();
+        self.log(&format!("{name}: health: waiting for the pair, at most {} tries {} ms apart", HEALTH_WAIT.tries, HEALTH_WAIT.interval.as_millis()));
+        let progress = |at: u32, exit: &Exit| {
+            if at.is_multiple_of(HEALTH_PROGRESS) && at < HEALTH_WAIT.tries.get() {
+                let seen = if exit.success() { health::pair_said(&exit.stdout) } else { format!("exit {}", exit.said()) };
+                self.log(&format!("{name}: health: no pair yet at try {at} of {}, {} ms into the wait: {seen}", HEALTH_WAIT.tries, waiting_from.elapsed().as_millis()));
+            }
+        };
+        match health::wait(docker, name, HEALTH_WAIT, self.sleep.as_ref(), &progress) {
+            Ok(Waited::Paired { at }) => self.log(&format!("{name}: health: the pair answered at try {at} of {}, {} ms into the wait", HEALTH_WAIT.tries, waiting_from.elapsed().as_millis())),
             Ok(Waited::GaveUp { last }) => {
-                self.log(&format!("{name}: health: no pair after {} tries (the last exit {})", HEALTH_WAIT.tries, last.said()));
+                self.log(&format!("{name}: health: no pair after {} tries, {} ms into the wait (the last exit {})", HEALTH_WAIT.tries, waiting_from.elapsed().as_millis(), last.said()));
                 // What the last try saw: the pair as the board answered it,
                 // where it answered, and the sidecar's stderr whole — a claim
                 // not on the volume reads apart from local trust on, and an
@@ -695,7 +852,7 @@ impl Service {
         // under the same lock.
         made.snippet = Some(self.route_lock());
         if let Err(e) = caddy::write(&self.config.boards_dir, name, &self.config.suffix) {
-            self.log(&format!("{name}: snippet: the write failed: {e}"));
+            self.log(&format!("{name}: snippet: the write failed: {e} — {}", caddy::snippet_path(&self.config.boards_dir, name).display()));
             return Err("the snippet's write");
         }
         self.log(&format!("{name}: snippet: written"));
@@ -803,7 +960,7 @@ impl Service {
                     false
                 }
                 Err(e) => {
-                    self.log(&format!("{name}: {on}: snippet: not removed: {e}"));
+                    self.log(&format!("{name}: {on}: snippet: not removed: {e} — {}", caddy::snippet_path(&self.config.boards_dir, name).display()));
                     true
                 }
             };
@@ -908,31 +1065,94 @@ impl Service {
     /// WHAT IS IN FLIGHT, under the book's lock the caller holds: what the
     /// book says blocks the post — the queue full (D-8, "try again later"),
     /// the code held (the invite's refusal), the name held by a post in
-    /// flight (D-4) — logged and refused, no docker call made.
+    /// flight (D-4) — logged and refused, no docker call made. The line names
+    /// what fills the queue, its posts in order, and what holds the code: a
+    /// post looking at what stands, a post in flight, or a board gone live
+    /// until its spend is answered — held for good where that spend could
+    /// not be written, the operator's act then named.
     fn in_flight(&self, book: &Book, name: &Name, code: &InviteCode) -> Result<(), Refusal> {
         let Some(blocked) = book.blocks(name, code) else { return Ok(()) };
         let (why, refusal) = match blocked {
-            Blocked::QueueFull => (format!("{QUEUE_DEPTH} posts already wait"), Refusal::Busy),
-            Blocked::CodeHeld => ("its invite is held by another post".to_owned(), Refusal::Invite),
+            Blocked::QueueFull => {
+                let waiting: Vec<String> = book.queue.iter().map(|job| job.name.to_string()).collect();
+                (format!("{QUEUE_DEPTH} posts already wait: {}", waiting.join(", ")), Refusal::Busy)
+            }
+            Blocked::CodeHeld { by, how: Held::Looking } => (format!("its invite is held by the post for {by}, looking at what stands under its name"), Refusal::Invite),
+            Blocked::CodeHeld { by, how: Held::InFlight } => (format!("its invite is held by the post for {by}, in flight"), Refusal::Invite),
+            Blocked::CodeHeld { by, how: Held::Live } => (
+                format!("its invite is held by {by}'s board, live, until its spend is answered — where the log says it could not be marked spent, mark it by hand (RUNBOOK §10 step 11)"),
+                Refusal::Invite,
+            ),
             Blocked::NameHeld => ("a post in flight holds the name".to_owned(), Refusal::Name),
         };
         self.log(&format!("{name}: a post refused: {why}"));
         Err(refusal)
     }
+
+    /// A REFUSAL NO INVITE BOUNDS, said through its stretch ([`Stretch`]):
+    /// at most once a minute, with the count of like ones since — `line`
+    /// built only where it is said.
+    fn say_once_a_stretch(&self, stretch: &Stretch, line: impl FnOnce() -> String) {
+        if let Some(line) = stretch.said(self.rated.now(), line) {
+            self.log(&line);
+        }
+    }
+
+    /// A REFUSAL OF A CODE THE INVITE FILE DOES NOT HOLD, its line: the file
+    /// by its path and how many invites it holds issued, so the operator who
+    /// minted into one file reads whether the service reads the same — the
+    /// count read here, only where the line is said.
+    fn not_in_the_file(&self) -> String {
+        let path = invites::path(&self.state_dir);
+        match invites::issued_count(&self.state_dir) {
+            Ok(issued) => format!("a post refused: its invite code is not in {}, which holds {} issued", path.display(), counted(issued as u64, "invite", "invites")),
+            Err(e) => format!("a post refused: its invite code is not in {}, whose invites could not be counted: {e}", path.display()),
+        }
+    }
+
+    /// THE INVITE FILE UNREAD at a post's lookup — `prefix` the post's
+    /// `<name>: ` where the post has one — said at the failure's edge
+    /// ([`Edge`]): once as it starts, with the file's path, the cause and
+    /// what it refuses; every post it refuses after counted.
+    fn invite_file_unread(&self, prefix: &str, e: &io::Error) {
+        if self.rated.invite_file.met(self.rated.now()) {
+            self.log(&format!(
+                "{prefix}a post could not be judged: the invite file {}: {e}; every post is refused until it reads again — said once, and again once it does",
+                invites::path(&self.state_dir).display()
+            ));
+        }
+    }
+
+    /// THE INVITE FILE READ at a post's lookup: its failure's end said, where
+    /// one stood and its last post refused is a hold-down past, with the
+    /// posts it refused.
+    fn invite_file_reads(&self) {
+        if let Some(ended) = self.rated.invite_file.passed(self.rated.now()) {
+            self.log(&format!("the invite file {} reads again: {} could not be judged while it did not{}", invites::path(&self.state_dir).display(), ended.count("post", "posts"), ended.across()));
+        }
+    }
 }
 
 impl Desk for Service {
     fn sign_up(&self, address: &[u8]) -> Result<(), SignUpRefusal> {
+        let path = self.state_dir.file(SIGNUPS);
         match self.signups.append(address) {
             Ok(kept) => {
                 if kept.refused_at_cap > 0 {
                     self.log(&format!("the sign-up file takes sign-ups again: {} refused while it stood at its cap", kept.refused_at_cap));
                 }
-                self.log("a sign-up kept");
+                if let Some(ended) = self.rated.signup_file.passed(self.rated.now()) {
+                    self.log(&format!("the sign-up file {} keeps sign-ups again: {} could not be kept while it did not{}", path.display(), ended.count("sign-up", "sign-ups"), ended.across()));
+                }
+                // The file's fill, said at every sign-up kept: it is read
+                // filling before a sign-up meets its cap.
+                self.log(&format!("a sign-up kept; the file holds {} of its {MAX_SIGNUPS_BYTES} bytes", kept.held));
                 Ok(())
             }
+            // A REFUSAL NO INVITE BOUNDS: a stranger's to make at a
+            // request's rate, so said once a stretch with its count.
             Err(SignUpRefused::NotAnAddress) => {
-                self.log("a sign-up refused: no address");
+                self.say_once_a_stretch(&self.rated.unaddressed, || "a sign-up refused: no address".to_owned());
                 Err(SignUpRefusal::NotAnAddress)
             }
             // THE CAP, said once for its stretch — at its first refusal — and
@@ -943,8 +1163,16 @@ impl Desk for Service {
                 Err(SignUpRefusal::Failed)
             }
             Err(SignUpRefused::Full { .. }) => Err(SignUpRefusal::Failed),
+            // THE FILE UNKEPT, met at every sign-up while it stands: said at
+            // its edge, once as it starts and once, with its count, as it
+            // ends.
             Err(SignUpRefused::Io(e)) => {
-                self.log(&format!("a sign-up could not be kept: {e}"));
+                if self.rated.signup_file.met(self.rated.now()) {
+                    self.log(&format!(
+                        "a sign-up could not be kept: the sign-up file {}: {e}; every sign-up is refused until the file reads and writes as the service's user — said once, and again once one is kept",
+                        path.display()
+                    ));
+                }
                 Err(SignUpRefusal::Failed)
             }
         }
@@ -952,18 +1180,29 @@ impl Desk for Service {
 
     fn admit(&self, post: &Post<'_>) -> Result<String, Refusal> {
         // The invite, first: an uninvited post learns nothing about names.
+        // Its refusals are a stranger's to make at a request's rate, so each
+        // kind is said once a stretch with its count; the file unread, met
+        // at every post while it stands, at its edges.
         let Some(code) = std::str::from_utf8(post.invite).ok().and_then(InviteCode::parse) else {
-            self.log("a post refused: no invite code of the code's form");
+            self.say_once_a_stretch(&self.rated.unformed, || "a post refused: no invite code of the code's form".to_owned());
             return Err(Refusal::Invite);
         };
-        let (address, issued) = match invites::lookup(&self.state_dir, &code) {
+        let looked_up = invites::lookup(&self.state_dir, &code);
+        if looked_up.is_ok() {
+            self.invite_file_reads();
+        }
+        let (address, issued) = match looked_up {
             Ok(Some(Invite { address, state: InviteState::Issued { date }, .. })) => (address, date),
-            Ok(_) => {
-                self.log("a post refused: its invite code is not one the file holds issued");
+            Ok(Some(Invite { state: InviteState::Spent { name: spent, date }, .. })) => {
+                self.say_once_a_stretch(&self.rated.spent, || format!("a post refused: its invite was spent under {spent} on {date}"));
+                return Err(Refusal::Invite);
+            }
+            Ok(None) => {
+                self.say_once_a_stretch(&self.rated.unknown, || self.not_in_the_file());
                 return Err(Refusal::Invite);
             }
             Err(e) => {
-                self.log(&format!("a post could not be judged: the invite file: {e}"));
+                self.invite_file_unread("", &e);
                 return Err(Refusal::Failed);
             }
         };
@@ -985,26 +1224,41 @@ impl Desk for Service {
         let look = {
             let mut book = self.book();
             self.in_flight(&book, &name, &code)?;
-            CodeLook::begin(&self.book, &mut book, code.clone())
+            CodeLook::begin(&self.book, &mut book, code.clone(), name.clone())
         };
         // THE TRUTH ABOUT THE NAME: three reads under no lock of this
         // service's — a post waits on no provisioning — under one of the
-        // looks' permits, given back as the reads end.
+        // looks' permits, given back as the reads end. Past the cap, the
+        // refusal names the posts whose invites a look holds — the four with
+        // a permit, and any between its look and its admission — this one's
+        // own left out.
         let taken = {
             let Some(_permit) = Permit::take(&self.looks, MAX_LOOKS) else {
-                self.log(&format!("{name}: a post refused: {MAX_LOOKS} posts already look at what stands"));
+                let mut looking: Vec<String> = self.book().looking.iter().filter(|(held, _)| *held != &code).map(|(_, by)| by.to_string()).collect();
+                looking.sort();
+                self.log(&format!("{name}: a post refused: {MAX_LOOKS} posts already look at what stands: {}", looking.join(", ")));
                 return Err(Refusal::Busy);
             };
             names::taken(self.docker.as_ref(), &self.config.boards_dir, &name)
         };
+        // A look not made is met at every post while its cause stands — a
+        // `docker` that cannot be run, a snippet directory that cannot be
+        // searched — so it is said at its edges: once as it starts, and once,
+        // with the posts it refused, as a look is made again.
         match taken {
-            Ok(None) => {}
-            Ok(Some(by)) => {
-                self.log(&format!("{name}: a post refused: taken — {by}"));
-                return Err(Refusal::Name);
+            Ok(found) => {
+                if let Some(ended) = self.rated.look.passed(self.rated.now()) {
+                    self.log(&format!("a look at a name is made again: {} could not be judged while none was{}", ended.count("post", "posts"), ended.across()));
+                }
+                if let Some(by) = found {
+                    self.log(&format!("{name}: a post refused: taken — {by}"));
+                    return Err(Refusal::Name);
+                }
             }
             Err(e) => {
-                self.log(&format!("{name}: a post could not be judged: the look at the name: {e}"));
+                if self.rated.look.met(self.rated.now()) {
+                    self.log(&format!("{name}: a post could not be judged: the look at the name: {e}; every post is refused until a look is made — said once, and again once one is"));
+                }
                 return Err(Refusal::Failed);
             }
         }
@@ -1024,25 +1278,37 @@ impl Desk for Service {
         // code the book does not hold and the file holds issued is one no
         // board has spent; and the name is held from here, so no second post
         // for it is admitted while this one is in flight.
-        let waiting = {
+        let (waiting, issued_on) = {
             let mut book = self.book();
             look.end(&mut book);
             self.in_flight(&book, &name, &code)?;
-            match invites::lookup(&self.state_dir, &code) {
-                Ok(Some(again)) if again.issued() => {}
-                Ok(_) => {
-                    self.log(&format!("{name}: a post refused: its invite was spent while the post was judged"));
+            let again = invites::lookup(&self.state_dir, &code);
+            if again.is_ok() {
+                self.invite_file_reads();
+            }
+            match again {
+                Ok(Some(Invite { state: InviteState::Issued { .. }, .. })) => {}
+                Ok(Some(Invite { state: InviteState::Spent { name: spent, .. }, .. })) => {
+                    self.log(&format!("{name}: a post refused: its invite was spent under {spent} while the post was judged"));
+                    return Err(Refusal::Invite);
+                }
+                Ok(None) => {
+                    self.log(&format!("{name}: a post refused: its invite left the invite file while the post was judged"));
                     return Err(Refusal::Invite);
                 }
                 Err(e) => {
-                    self.log(&format!("{name}: a post could not be judged: the invite file: {e}"));
+                    self.invite_file_unread(&format!("{name}: "), &e);
                     return Err(Refusal::Failed);
                 }
             }
-            book.admit(Job { token: token.clone(), name: name.clone(), record, code, address, issued })
+            let issued_on = issued.clone();
+            (book.admit(Job { token: token.clone(), name: name.clone(), record, code, address, issued, admitted_at: Instant::now() }), issued_on)
         };
         self.queued.notify_one();
-        self.log(&format!("{name}: admitted; {waiting} waiting"));
+        // The admission, said with the posts now waiting and its invite's
+        // issue date — the invite file's line it will spend, by the one
+        // figure of it a log line may carry.
+        self.log(&format!("{name}: admitted; {waiting} waiting; its invite issued {issued_on}"));
         Ok(token)
     }
 

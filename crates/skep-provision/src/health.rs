@@ -23,10 +23,11 @@
 //!
 //! THE WAIT ([`wait`]): the reads made over a [`Wait`] — [`HEALTH_WAIT`],
 //! the smoke's sixty seconds — a non-zero exit of the sidecar counted as
-//! "not yet"; it answers at the first pair, and gives up after the bound
-//! with what the last try answered — whose pair the log then names as the
-//! body answered it ([`pair_said`]), so a claim not on the volume reads
-//! apart from local trust on.
+//! "not yet", each such try handed to the caller as it is answered, for the
+//! wait's progress to be said while it runs; it answers at the first pair,
+//! and gives up after the bound with what the last try answered — whose
+//! pair the log then names as the body answered it ([`pair_said`]), so a
+//! claim not on the volume reads apart from local trust on.
 
 use std::io;
 use std::num::NonZeroU32;
@@ -89,16 +90,18 @@ pub enum Waited {
 
 /// THE WAIT FOR THE PAIR: `name`'s `/health` read over `wait`'s tries,
 /// paced by `sleep` ([`Wait::paced`]); an exit other than 0, or a body
-/// without the pair, is "not yet". Given up, it answers what the last try
+/// without the pair, is "not yet", handed to `unpaired` with its try's
+/// number as it is answered. Given up, it answers what the last try
 /// answered. A `docker` that cannot be run at all is the error, at once —
 /// no try can answer.
-pub fn wait(docker: &dyn Docker, name: &Name, wait: Wait, sleep: &dyn Fn(Duration)) -> io::Result<Waited> {
+pub fn wait(docker: &dyn Docker, name: &Name, wait: Wait, sleep: &dyn Fn(Duration), unpaired: &dyn Fn(u32, &Exit)) -> io::Result<Waited> {
     let mut last = None;
     for at in wait.paced(sleep) {
         let exit = docker.health(name)?;
         if exit.success() && paired(&exit.stdout) {
             return Ok(Waited::Paired { at });
         }
+        unpaired(at, &exit);
         last = Some(exit);
     }
     // `Wait::tries` is one or more, so a wait that gives up has made a try,

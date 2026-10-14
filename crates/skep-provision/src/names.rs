@@ -90,8 +90,10 @@ pub struct Labelled {
     /// it, and the sweep removes it.
     pub half_made: Vec<Name>,
     /// Under a name whose snippet stands: a board routed — live, or stopped
-    /// and Docker's `--restart` to bring back — and left.
-    routed: Vec<Name>,
+    /// and Docker's `--restart` to bring back — and left; and what the sweep
+    /// holds the names routed at start against, a snippet with no volume
+    /// here a route to no board.
+    pub routed: Vec<Name>,
     /// Under no name of the grammar — none [`Name::exact`] reads — as
     /// listed; logged and left.
     pub ungrammatical: Vec<String>,

@@ -9,7 +9,8 @@
 //! timeouts set before it reads, thirty seconds each, so a silent peer is
 //! let go, a request trickled past its deadline answered 400 in the
 //! answer's own, and a trickle cut at its deadline both ways; an `accept`
-//! that fails said once per episode and its recovery once; a panic
+//! that fails said once per episode and its recovery once, and the pool
+//! standing full likewise, each end with its count and its span; a panic
 //! answering one request costing that connection alone, never the thread;
 //! the invite link opening the claim form with its code; plain HTML with no
 //! script and nothing fetched from elsewhere, every header that says so
@@ -336,11 +337,11 @@ fn a_connection_answers_with_its_headers_and_refuses_a_body_past_the_cap() {
 /// nothing; the first that fails opens one, said once with the OS's words
 /// and what waits; a second failure, and a success inside the hold-down, say
 /// nothing; the first success a hold-down past the last failure closes it,
-/// said once with every failure counted; and a failure after it opens the
-/// next, said again.
+/// said once with every failure counted and the span they came across; and
+/// a failure after it opens the next, said again.
 #[test]
 fn the_accept_pair_is_said_once_per_episode() {
-    assert_eq!(ACCEPT_HOLD_DOWN, Duration::from_secs(15), "skepd's EDGE_HOLD_DOWN");
+    let hold_down = crate::rates::HOLD_DOWN;
     let accepts = Accepts::default();
     let wall = std::io::Error::other("Too many open files (os error 24)");
     let t0 = Instant::now();
@@ -349,9 +350,36 @@ fn the_accept_pair_is_said_once_per_episode() {
     assert_eq!(accepts.failed(&wall, t0).as_deref(), Some("connections: accept failed (Too many open files (os error 24)); new connections wait in the listener's queue"));
     assert_eq!(accepts.failed(&wall, t0 + ms(10)), None, "a second failure counted, said never");
     assert_eq!(accepts.accepted(t0 + ms(20)), None, "inside the hold-down");
-    assert_eq!(accepts.accepted(t0 + ms(10) + ACCEPT_HOLD_DOWN).as_deref(), Some("connections: accept recovered after 2 failures"));
-    assert_eq!(accepts.accepted(t0 + ms(20) + ACCEPT_HOLD_DOWN), None, "closed: said once");
-    assert!(accepts.failed(&wall, t0 + ms(30) + ACCEPT_HOLD_DOWN).is_some(), "the next episode opens, said again");
+    assert_eq!(accepts.accepted(t0 + ms(10) + hold_down).as_deref(), Some("connections: accept recovered after 2 failures, across 10 ms"));
+    assert_eq!(accepts.accepted(t0 + ms(20) + hold_down), None, "closed: said once");
+    assert!(accepts.failed(&wall, t0 + ms(30) + hold_down).is_some(), "the next episode opens, said again");
+}
+
+/// THE POOL PAIR, ONCE PER EPISODE: a connection taken with a thread to
+/// spare says nothing; the one that takes the last free thread opens the
+/// episode, said once — every thread serving, the next connection waiting in
+/// the listener's queue; the pool filling again inside it is counted, said
+/// never; a connection taken with a thread to spare inside the hold-down
+/// after the pool last stood full says nothing, and the first a hold-down
+/// past it closes the episode, said once with how often the pool stood full
+/// and the span across which it did; after it, nothing more.
+#[test]
+fn the_pool_pair_is_said_once_per_episode() {
+    let hold_down = crate::rates::HOLD_DOWN;
+    let serving = Serving::new(2);
+    let t0 = Instant::now();
+    let ms = Duration::from_millis;
+    assert_eq!(serving.began(t0), None, "one of two serving");
+    assert_eq!(serving.began(t0 + ms(1)).as_deref(), Some("connections: all 2 threads serving; a connection past them waits in the listener's queue"));
+    serving.ended();
+    assert_eq!(serving.began(t0 + ms(4)), None, "full again, counted");
+    serving.ended();
+    serving.ended();
+    assert_eq!(serving.began(t0 + ms(3) + hold_down), None, "a thread to spare, inside the hold-down");
+    serving.ended();
+    assert_eq!(serving.began(t0 + ms(4) + hold_down).as_deref(), Some("connections: a thread free again after all 2 stood serving 2 times, across 3 ms"));
+    serving.ended();
+    assert_eq!(serving.began(t0 + ms(5) + hold_down), None, "closed: said once");
 }
 
 /// A PANIC COSTS ITS CONNECTION ALONE: a desk that panics answering one

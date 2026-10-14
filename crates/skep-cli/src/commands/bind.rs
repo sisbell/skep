@@ -2,8 +2,8 @@
 //! handoff or a hosted signup landed on this device — confirmed against the
 //! board, the set compared whole where another hand wrote the account's
 //! first set, the account's first signed session run where one is owed,
-//! the binding line written — naming a key this store holds, a key file
-//! from outside it refused before anything is. With `keygen`, one of the
+//! the binding line written and said — naming a key this store holds, a key
+//! file from outside it refused before anything is. With `keygen`, one of the
 //! two commands that sequence the library's compositions themselves rather
 //! than calling a walk.
 
@@ -18,7 +18,7 @@ use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
-use super::{board_of, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop};
+use super::{board_of, clipped, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop};
 use crate::args::{parse_principal, CommandLine, MAX_PRINCIPAL};
 use crate::terminal::answer;
 
@@ -43,20 +43,22 @@ const REPLY_SENDER: &str = "whoever printed the reply — the enrolling device, 
 /// `CommandLine::principal`'s answer, and a fact the reply names against it,
 /// or against `--account`, halts as a second line would; a reply's
 /// principal line that is no principal halts, never standing as one not
-/// given.
+/// given. A halt names a reply's line by its number and echoes no more of
+/// it, nor of a value, than [`clipped`] keeps: the reply's writer sizes its
+/// lines, and a halt is one block the person reads.
 fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts, Halt> {
     let mut account = c.value("--account").map(str::to_owned);
     let mut principal = given;
     if let Some(arg) = c.value("--payload") {
         let bytes = read_payload(arg)?;
-        for line in String::from_utf8_lossy(&bytes).lines() {
-            let Some((fact, value)) = fact_line(line)? else { continue };
+        for (n, line) in String::from_utf8_lossy(&bytes).lines().enumerate() {
+            let Some((fact, value)) = fact_line(n + 1, line)? else { continue };
             match fact {
                 Fact::Account => account = Some(agree("account", account.take(), value.to_string())?),
                 Fact::Principal => {
                     let n = parse_principal(value).ok_or_else(|| {
                         Halt::face(
-                            format!("the reply's principal line `{value}` is not a principal"),
+                            format!("the reply's principal line `{}` is not a principal", clipped(value)),
                             format!("a principal is a non-negative integer no greater than {MAX_PRINCIPAL} (AUTH-6.36), as the reply prints it"),
                             format!("re-take the three facts from {REPLY_SENDER}"),
                         )
@@ -65,7 +67,11 @@ fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts,
                 }
                 Fact::Origin => {
                     if value != board.dialed().as_str() {
-                        return Err(Halt::face(format!("the reply names origin {value} and this command dials {}", board.dialed()), "the reply came from another board", "dial the board the reply names"));
+                        return Err(Halt::face(
+                            format!("the reply names origin {} and this command dials {}", clipped(value), board.dialed()),
+                            "the reply came from another board",
+                            "dial the board the reply names",
+                        ));
                     }
                 }
             }
@@ -81,7 +87,7 @@ fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts,
     };
     let principal = principal.ok_or_else(|| Halt::face("no principal", "--principal (or SKEP_PRINCIPAL), or a `principal` line in the reply, is required", "pass --principal <n>"))?;
     if account.is_empty() || !skep_client::address::is_address_text(&account) {
-        return Err(Halt::face(format!("`{account}` is not an account address"), "an address is dotted decimal", "pass --account <address>"));
+        return Err(Halt::face(format!("`{}` is not an account address", clipped(&account)), "an address is dotted decimal", "pass --account <address>"));
     }
     Ok(Facts { account, principal, origin: board.dialed().clone() })
 }
@@ -109,11 +115,12 @@ impl Fact {
 /// The fact a reply's line names, and its value: `None` for a line that
 /// names none — the hosted reply's claimant and its two acts among them —
 /// and a halt for a line that shows other than it reads, or that opens with
-/// a fact's name and is not exactly that name and one value.
-fn fact_line(line: &str) -> Result<Option<(Fact, &str)>, Halt> {
+/// a fact's name and is not exactly that name and one value, the halt naming
+/// the line by `number`, from 1, and its text clipped.
+fn fact_line(number: usize, line: &str) -> Result<Option<(Fact, &str)>, Halt> {
     if !shows_as_it_reads(line) {
         return Err(Halt::face(
-            format!("the reply's line `{line}` holds a character a screen does not show as it reads"),
+            format!("the reply's line {number}, `{}`, holds a character a screen does not show as it reads", clipped(line)),
             "a control character or a bidi control moves the cursor, erases or reorders a line, so a screen can show a reply other than the one `bind` reads: the reply is refused whole",
             format!("re-take the three facts from {REPLY_SENDER}"),
         ));
@@ -123,7 +130,7 @@ fn fact_line(line: &str) -> Result<Option<(Fact, &str)>, Halt> {
     match (words.next(), words.next()) {
         (Some(value), None) => Ok(Some((fact, value))),
         _ => Err(Halt::face(
-            format!("the reply's line `{line}` is not one fact"),
+            format!("the reply's line {number}, `{}`, is not one fact", clipped(line)),
             "a line that opens with a fact's name — `account`, `principal`, `origin` — names that fact and one value, as the reply prints it",
             format!("re-take the three facts from {REPLY_SENDER}"),
         )),
@@ -144,7 +151,11 @@ fn shows_as_it_reads(line: &str) -> bool {
 fn agree<T: PartialEq + fmt::Display>(word: &str, named: Option<T>, read: T) -> Result<T, Halt> {
     match named {
         Some(named) if named != read => Err(Halt::face(
-            format!("the reply names {word} {read}, and {word} {named} is already named — by its flag or an earlier line"),
+            format!(
+                "the reply names {word} {}, and {word} {} is already named — by its flag or an earlier line",
+                clipped(&read.to_string()),
+                clipped(&named.to_string())
+            ),
             "a fact is named once: two values for it are two replies, and `bind` lands neither",
             format!("re-take the three facts from {REPLY_SENDER}"),
         )),
@@ -220,12 +231,15 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     // `principal_prefix(n)` against the pasted account; the key-set compare.
     let health = board.health()?;
     origin_arm(board.signed(), &health)?;
+    // The pasted account as a halt echoes it: address text, of any length
+    // the reply's writer chose.
+    let pasted = clipped(&account);
     match principal_of(&board, &account)? {
         Some(p) if p == principal => {}
         other => {
             return Err(Halt::face(
-                format!("the pasted principal {principal} is not the principal seated at {account}"),
-                format!("`effective_owner({account})` where `prefix == {account}` answers {} — the reply came from another board or another principal, which is exactly what an out-of-band channel gets wrong", other.map(|p| p.to_string()).unwrap_or_else(|| "no seat".into())),
+                format!("the pasted principal {principal} is not the principal seated at {pasted}"),
+                format!("`effective_owner({pasted})` where `prefix == {pasted}` answers {} — the reply came from another board or another principal, which is exactly what an out-of-band channel gets wrong", other.map(|p| p.to_string()).unwrap_or_else(|| "no seat".into())),
                 format!("re-take the three facts from {REPLY_SENDER}"),
             )
             .into())
@@ -235,8 +249,8 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
         Some(a) if a == account => {}
         other => {
             return Err(Halt::face(
-                format!("the pasted account {account} is not `principal_prefix({principal})`"),
-                format!("the board answers {} for that principal", other.unwrap_or_else(|| "null".into())),
+                format!("the pasted account {pasted} is not `principal_prefix({principal})`"),
+                format!("the board answers {} for that principal", other.map_or_else(|| "null".into(), |a| clipped(&a))),
                 format!("re-take the three facts from {REPLY_SENDER}"),
             )
             .into())
@@ -319,9 +333,14 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     } else {
         talk("nothing is owed at this account's first signed session: no session is opened and no record is written");
     }
+    // The binding line said whichever way the append went — as `rotate` and
+    // `recover` say theirs — since it names the key every later lookup at
+    // this board answers with (§3.5 arm 2): written, it is the line itself;
+    // refused, the warning carrying it for the person to record (§3.7).
     let line = Binding::Enrollment { origin: origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
-    if let Err(w) = store.bind(&line) {
-        talk(w.to_string());
+    match store.bind(&line) {
+        Ok(()) => talk(format!("binding: {line}")),
+        Err(w) => talk(w.to_string()),
     }
     print_facts(&Facts { account, principal, origin })?;
     if let Some(s) = agent_space {

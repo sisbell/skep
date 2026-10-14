@@ -2,7 +2,7 @@
 //! device's payload enrolled from a session this command opens, a person
 //! door; `--reply` re-derives the three facts with no write (AUTH-5.32).
 
-use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions};
+use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions, Enrolled};
 use skep_client::dial::plaintext_non_loopback_warning;
 
 use super::{board_of, principal_or_bound, print_facts, read_payload, require_no_key_file, require_terminal, store_of, talk, Door, Stop};
@@ -35,10 +35,44 @@ pub fn enroll(c: &CommandLine) -> Result<(), Stop> {
     let enrolled = enroll_walk::enroll(&board, &store, &mut Terminal, &EnrollOptions { principal, payload })?;
     // The walk said what it found, a reconciliation among it (AUTH-5.17),
     // through the person; the warnings are what it leaves for the command
-    // to say.
+    // to say, and the landing's own line beside the three facts on stdout.
     for w in &enrolled.warnings {
         talk(w);
     }
+    talk(enrolled_line(&enrolled));
     print_facts(&enrolled.facts)?;
     Ok(())
+}
+
+/// The line the hop's landing says on stderr beside the three facts it
+/// prints: the account, and every key the act enrolled there by its
+/// fingerprint — what joins this run to the enrollment record the board now
+/// holds, and to the device whose payload it carried, which `skep bind`
+/// then lands.
+fn enrolled_line(enrolled: &Enrolled) -> String {
+    let fingerprints: Vec<String> = enrolled.fingerprints.iter().map(ToString::to_string).collect();
+    format!("enrolled at {}: {}", enrolled.facts.account, fingerprints.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_client::sheet::Facts;
+    use skep_client::Origin;
+    use skep_identity::Fingerprint;
+
+    use super::*;
+
+    /// The landing names the account and every key the act enrolled there,
+    /// each by its fingerprint, in the payload's order.
+    #[test]
+    fn the_landing_names_the_account_and_every_key_enrolled_there() {
+        let (a, b) = ("ab".repeat(32), "cd".repeat(32));
+        let enrolled = Enrolled {
+            facts: Facts { account: "1.0.1".into(), principal: 1, origin: Origin::parse("http://127.0.0.1:8642").unwrap() },
+            fingerprints: vec![Fingerprint::parse_hex(&a).unwrap(), Fingerprint::parse_hex(&b).unwrap()],
+            reconciled: false,
+            warnings: Vec::new(),
+        };
+        assert_eq!(enrolled_line(&enrolled), format!("enrolled at 1.0.1: {a}, {b}"));
+    }
 }

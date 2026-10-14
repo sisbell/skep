@@ -17,11 +17,14 @@
 //! withheld from a guest, the windowed run is withheld to the width and read
 //! by the claimant, and the second account's draft is withheld from the
 //! claimant too; F5 a second run adds nothing and says so, and a run cut
-//! short at its fifth document resumes and lands what a one-shot run lands;
+//! short at its fifth document resumes and lands what a one-shot run lands,
+//! the two runs naming the write the cut left in flight;
 //! F8 an unclaimed board and a stranger's board halt before any write, and
-//! the agent space holds no document after a run. F6, the `--bin skep` build
-//! yielding one binary, is the gate's and the lane's by hand; F7 the budgets
-//! suite's; F9 `tidy`'s.
+//! the agent space holds no document after a run. Beside them, the seed's
+//! own lines: each stall said as it is met and at most once per ten seconds
+//! after, the session's key, the frames and positions of the run. F6, the
+//! `--bin skep` build yielding one binary, is the gate's and the lane's by
+//! hand; F7 the budgets suite's; F9 `tidy`'s.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -278,11 +281,10 @@ fn skep_dev(args: &[&str]) -> Run {
     }
 }
 
-/// [`skep_dev`], its stderr read as the run says it: `release` is called the
-/// moment a line holding `needle` is said — or at the run's end where none
-/// is — so a test holds the board in a state until the run is seen to meet
-/// it, and never past the run.
-fn skep_dev_releasing(args: &[&str], needle: &str, release: impl FnOnce()) -> Run {
+/// [`skep_dev`], its stderr read as the run says it: each line handed to
+/// `on_line` the moment it is said — so a test holds the board in a state
+/// until the run is seen to meet it, and lets it go there.
+fn skep_dev_watching(args: &[&str], mut on_line: impl FnMut(&str)) -> Run {
     let mut child = dev_command(args).spawn().expect("spawn skep-dev");
     let mut stdout = child.stdout.take().expect("stdout piped");
     let out = std::thread::spawn(move || {
@@ -290,21 +292,13 @@ fn skep_dev_releasing(args: &[&str], needle: &str, release: impl FnOnce()) -> Ru
         let _ = stdout.read_to_string(&mut text);
         text
     });
-    let mut release = Some(release);
     let mut reader = BufReader::new(child.stderr.take().expect("stderr piped"));
     let (mut err, mut line) = (String::new(), String::new());
     while let Ok(n @ 1..) = reader.read_line(&mut line) {
         let _ = n;
-        if line.contains(needle) {
-            if let Some(release) = release.take() {
-                release();
-            }
-        }
+        on_line(&line);
         err.push_str(&line);
         line.clear();
-    }
-    if let Some(release) = release.take() {
-        release();
     }
     let status = child.wait().expect("wait");
     Run { code: status.code().unwrap_or(-1), out: out.join().expect("stdout read"), err }
@@ -607,25 +601,105 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
 
     // THE SEED — its object printed, so a `--no-capture` run shows it whole —
     // against a board whose write permits the suite holds until the seed says
-    // its first `write_busy`: said once as it is met, retried, and counted.
+    // its first stall, and holds again once the editions have landed until
+    // it says the next: each stall said as it is met and at most once per ten
+    // seconds after, naming its write, and the retries counted.
     let before = log_position(&board);
-    let permits: Vec<_> = std::iter::from_fn(|| sd.daemon().try_hold_write_permit()).collect();
-    assert!(!permits.is_empty(), "the suite holds the board's write permits");
-    let busy = "the board answered `write_busy`: each write is retried for up to 60 s, and the retries are counted at the end";
-    let r = skep_dev_releasing(&args, busy, || drop(permits));
+    let mut held: Vec<_> = std::iter::from_fn(|| sd.daemon().try_hold_write_permit()).collect();
+    let width = held.len();
+    assert!(width > 0, "the suite holds the board's write permits");
+    let stall = "the board answered `write_busy` to `";
+    let mut stage = 0;
+    let r = skep_dev_watching(&args, |line| match stage {
+        0 if line.contains(stall) => {
+            held.clear();
+            stage = 1;
+        }
+        1 if line.contains("editions: 12 of 12 landed") => {
+            // Every permit again, the one a write in progress holds among
+            // them once its commit lets it go: the seed's next write meets
+            // the pool full.
+            while held.len() < width {
+                match sd.daemon().try_hold_write_permit() {
+                    Some(permit) => held.push(permit),
+                    None => std::thread::yield_now(),
+                }
+            }
+            stage = 2;
+        }
+        2 if line.contains(stall) => {
+            held.clear();
+            stage = 3;
+        }
+        _ => {}
+    });
+    drop(held);
     println!("skep-dev seed answered: {}", r.out.trim_end());
+    assert_eq!(stage, 3, "both stalls met and let go: {}", r.err);
     let v = parse_json(&r);
     assert_expected_shape(&v, &cut);
     assert_eq!(v["already_seeded"], false);
-    assert_eq!(r.err.matches(busy).count(), 1, "the first `write_busy` said once: {}", r.err);
+    let stalls: Vec<&str> = r.err.lines().filter(|l| l.contains(stall)).collect();
+    assert_eq!(stalls.len(), 2, "each stall said as it is met, at most once per ten seconds: {}", r.err);
     assert!(
-        v["retries"]["write_busy"].as_u64().is_some_and(|n| n >= 1),
+        stalls[0].starts_with(
+            "the board answered `write_busy` to `create_new_document` (envelope id `staging:mint`), "
+        ),
+        "the first stall names the seed's first write: {}",
+        stalls[0]
+    );
+    let so_far = |line: &str| -> u64 {
+        line.split("retries so far: write_busy ")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("the run's retries so far: {line}"))
+    };
+    assert!(
+        so_far(stalls[1]) > so_far(stalls[0]),
+        "the stall met again later in the run is said again, its count the run's: {stalls:?}"
+    );
+    assert!(
+        v["retries"]["write_busy"].as_u64().is_some_and(|n| n >= so_far(stalls[1])),
         "the retries counted: {v}"
     );
     assert_eq!(v["positions"]["before"], before);
     assert!(v["positions"]["after"].as_u64().unwrap() > before);
-    assert!(r.err.contains("mode CLAIMED-PERMISSIVE"), "{}", r.err);
-    assert!(r.err.contains("this board now holds"), "the reopen warning: {}", r.err);
+    assert!(r.err.contains(&format!("mode CLAIMED-PERMISSIVE at {board_origin} (")), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("landed since this run read position {before} — its writes and any other writer's; its next open replays them")),
+        "the reopen warning, joined to the run's position: {}",
+        r.err
+    );
+    let retried: u64 = ["write_busy", "durability", "board_unavailable"]
+        .iter()
+        .map(|token| v["retries"][token].as_u64().unwrap())
+        .sum();
+    assert!(
+        r.err.contains(&format!(
+            "frames: {} writes sent, {retried} of them retries",
+            v["frames"]["writes"]
+        )),
+        "the frames sent and their retries: {}",
+        r.err
+    );
+    assert_eq!(v["frames"]["writes"].as_u64().map(|n| n > 0), Some(true), "{v}");
+    // The session's line names the key whose fingerprint the board testifies
+    // every write of the seed by (AUTH-4.48): the claimant's device key.
+    let claimant_key = FileStore::open(&store)
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|k| !k.anchor)
+        .expect("the claimant's device key")
+        .fingerprint;
+    assert!(
+        r.err.contains(&format!(
+            "session: CONTENT scope for principal 1 at account 1.0.1, opened by key {claimant_key} (label notebook)"
+        )),
+        "the session's line: {}",
+        r.err
+    );
     assert!(
         r.err.contains(
             "a new seed of this board; each write is recorded there after the board's ack"
@@ -965,6 +1039,13 @@ fn the_seed_lands_every_shape_and_a_guest_reads_them() {
         "{}",
         r.err
     );
+    assert!(
+        r.err.contains("lines, 0 of them recorded by this run")
+            && r.err.contains("frames: 0 writes sent, 0 of them retries")
+            && r.err.contains(&format!("0 of them landed since this run read position {before}")),
+        "the run's figures say it wrote nothing: {}",
+        r.err
+    );
     assert_eq!(log_position(&board), before, "no write");
     assert_eq!(again["positions"]["before"], before);
     assert_eq!(again["positions"]["after"], before);
@@ -1104,6 +1185,16 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
         "the transport halt's act: the write may stand, read it back: {}",
         r.err
     );
+    // The write the dropped connection carried, named ahead of the halt —
+    // the envelope id the resume's line names again.
+    assert!(
+        r.err.contains(
+            "the run stopped with the write `cut-00005:draft` in flight — sent, its answer never read — so it may stand on the board \
+             unrecorded, and the next run makes it again"
+        ),
+        "the write in flight named: {}",
+        r.err
+    );
     let chain: String =
         board.board_term().unwrap().unwrap().chain.iter().map(|b| format!("{b:02x}")).collect();
     let manifest = dir.path().join("store-seed").join(format!("{chain}.jsonl"));
@@ -1137,6 +1228,19 @@ fn a_run_cut_short_resumes_and_lands_what_a_one_shot_run_lands() {
         r.err.contains("holds 13 lines of this seed: the run resumes after them")
             && r.err.contains("it is made again here, and a mint or a shot then lands twice"),
         "the manifest's line at a resume: {}",
+        r.err
+    );
+    assert_eq!(
+        r.err.matches("resuming at `").count(),
+        1,
+        "the first write the manifest does not hold, named once: {}",
+        r.err
+    );
+    assert!(
+        r.err.contains(
+            "resuming at `cut-00005:draft`, the first write of this seed the manifest does not hold"
+        ),
+        "the resume names the write the stopped run had in flight: {}",
         r.err
     );
     for i in 0..DOCUMENTS {

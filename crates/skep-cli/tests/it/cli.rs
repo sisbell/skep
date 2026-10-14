@@ -3,11 +3,12 @@
 //! before any socket for a non-canonical board, the person doors' terminal
 //! check, THE LOOP over the hosted arm (keygen → claim --hosted → bind →
 //! session → verify → health → fingerprint), the hosted reply as printed
-//! landing at `bind`, the token's custody, its two sources in order and its
-//! CONTENT scope, the whole-set compare, `bind`'s landing question, its
-//! refusal of a reply from another board and of a key file its store does
-//! not hold, its warning where the store cannot be appended and its first
-//! session's scope on the wire, `fingerprint`'s refusal of two keys named,
+//! landing at `bind`, the token's custody, its two sources in order, the
+//! board a close names and its CONTENT scope, the whole-set compare,
+//! `bind`'s landing question, its refusal of a reply from another board and
+//! of a key file its store does not hold, its warning where the store
+//! cannot be appended and its first session's scope on the wire,
+//! `fingerprint`'s refusal of two keys named,
 //! `keygen`'s box at the prompt, a refused setting never read as an absent
 //! one, a variable and an argument that are not text refused, a refused
 //! stdout a halt and a refused stderr dropped, the plaintext warning, the
@@ -303,7 +304,7 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     let body: Value = serde_json::from_str(&r.out).expect("one JSON document");
     assert_eq!(body["auth"]["claimant"].as_str(), Some("1.0.1"));
     assert!(body.get("mode").is_none(), "no mode field added (AUTH-5.86)");
-    assert!(r.err.contains("mode ENFORCING") && r.err.contains("signed arm") && r.err.contains(&board), "{}", r.err);
+    assert!(r.err.contains(&format!("mode ENFORCING at {board} (claimant 1.0.1")) && r.err.contains("signed arm"), "the mode named with the board that answered: {}", r.err);
     let mut verbatim = Board::new(Origin::parse(&board).unwrap(), PlainHttp::new()).health().unwrap().raw;
     if !verbatim.ends_with(b"\n") {
         verbatim.push(b'\n');
@@ -312,12 +313,14 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
 
     // bind: the three facts confirmed, the first signed session's setup act.
     // No `--anchor` says which landing this is and the input has ended:
-    // nobody answers, nothing is compared, and the line says so.
+    // nobody answers, nothing is compared, and the line says so; the binding
+    // line written is said — the key every later lookup here answers with.
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.lines().contains(&"agent space 1.0.1.1"), "{}", r.out);
     assert!(r.lines().contains(&"account 1.0.1") && r.lines().contains(&"principal 1"));
     assert!(r.err.contains("which landing is this?") && r.err.contains("no landing was answered before the input ended"), "{}", r.err);
+    assert!(r.err.contains(&format!("binding: {board} 1 1.0.1 {fp}")), "the binding line said: {}", r.err);
     // The second arm: nothing owed, no session.
     let r = skep(&["bind", "--board", &board, "--dir", s(&store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
@@ -360,6 +363,11 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     assert_eq!(token.len(), 32);
     assert!(token.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
     assert!(r.err.contains("content") && r.err.contains("AUTH-4.53"), "{}", r.err);
+    assert!(
+        r.err.contains(&format!("the token is a CONTENT session for principal 1 at account 1.0.1, opened at {board} by key {fp} (label customer notebook)")),
+        "the token joined to what the board records its writes under: {}",
+        r.err
+    );
     // The token is a live CONTENT session, which
     // `the_token_session_prints_is_content_scoped_and_deposits_no_credential`
     // holds it to; --close takes `-` and reads stdin.
@@ -368,7 +376,7 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     assert!(r.err.is_empty(), "{}", r.err);
     let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(token.as_bytes()));
     assert_eq!(r.code, 0);
-    assert!(r.err.contains("the token read from stdin was already dead"), "idempotent, the death signal said: {}", r.err);
+    assert!(r.err.contains(&format!("the token read from stdin was already dead at {board}")), "idempotent, the death signal said with the board asked: {}", r.err);
     // The token NEVER an argv value.
     let r = skep(&["session", "--close", &token, "--board", &board], &[], None);
     assert_eq!(r.code, 2, "{r:?}");
@@ -380,7 +388,7 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     assert_eq!(token2.len(), 32);
     let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", &token2)], None);
     assert_eq!(r.code, 0, "{r:?}");
-    assert!(r.err.contains("the token in SKEP_SESSION is ended; stdin was not read"), "the variable's token named: {}", r.err);
+    assert!(r.err.contains(&format!("the token in SKEP_SESSION is ended at {board}; stdin was not read")), "the variable's token named, and the board: {}", r.err);
     // SKEP_SESSION where it is set, stdin then unread: the variable's token
     // is the one ended — closed above, so already dead — and a live token
     // piped beside it stands, unread; the line names the variable's token,
@@ -390,7 +398,7 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     let piped = r.out.trim().to_string();
     let r = skep(&["session", "--close", "-", "--board", &board], &[("SKEP_SESSION", &token2)], Some(piped.as_bytes()));
     assert_eq!(r.code, 0, "{r:?}");
-    assert!(r.err.contains("the token in SKEP_SESSION was already dead") && r.err.contains("; stdin was not read"), "the variable's token is the one ended, and named: {}", r.err);
+    assert!(r.err.contains(&format!("the token in SKEP_SESSION was already dead at {board}")) && r.err.contains("; stdin was not read"), "the variable's token is the one ended, and named: {}", r.err);
     let r = skep(&["session", "--close", "-", "--board", &board], &[], Some(piped.as_bytes()));
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.err.is_empty(), "the piped token stood live: {}", r.err);
@@ -414,6 +422,11 @@ fn the_hosted_loop_runs_its_seven_commands_through_the_binary() {
     assert!(r.lines().contains(&"account 1.0.1"), "{}", r.out);
     assert!(!r.err.contains("later act"));
     assert!(r.err.contains("block is invisible"), "the limit stated: {}", r.err);
+    assert!(
+        r.err.contains(&format!("key {fp} (label customer notebook) passed origin, key_set, payload for principal 1 at {board}")),
+        "what passed, joined to the board's record: {}",
+        r.err
+    );
     let r = skep(&["verify", "--board", &board, "--dir", s(&store), "--principal", "1", "--payload", "-", "--json"], &[], Some(payload.as_bytes()));
     assert_eq!(r.code, 0, "{r:?}");
     let v: Value = serde_json::from_str(&r.out).unwrap();
@@ -498,6 +511,33 @@ fn the_token_session_prints_is_content_scoped_and_deposits_no_credential() {
     let KeySetAnswer::Set(set) = board.key_set("1.0.1").unwrap() else { panic!("1.0.1 is an account") };
     assert_eq!(set.enrolled.len(), 1, "the key set stands as it was");
     assert_eq!(skep(&["session", "--close", "-", "--board", &b.board], &[], Some(token.as_str().as_bytes())).code, 0);
+}
+
+/// A CLOSE NAMES THE BOARD IT ASKED (`session --close -`): a board that never
+/// issued the token answers its close as one that ended it — the unknown
+/// token resolves a guest's, and the idempotent 204 carries the death signal
+/// (AUTH-4.47) — so the line names the board asked and says it may never
+/// have issued the token; the token stands LIVE at the board that did, and
+/// a close there ends it, saying nothing.
+#[test]
+fn a_close_at_a_board_that_never_issued_the_token_names_that_board() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = hosted_and_bound(dir.path());
+    let other_sd = spawn(&dir.path().join("other"), false);
+    let other = origin(other_sd.port());
+    let r = skep(&["session", "--board", &b.board, "--dir", s(&b.store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    let token = r.out.trim().to_string();
+    let r = skep(&["session", "--close", "-", "--board", &other], &[], Some(token.as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(
+        r.err.contains(&format!("the token read from stdin was already dead at {other}")) && r.err.contains(&format!("or {other} never issued it")),
+        "the board asked named: {}",
+        r.err
+    );
+    let r = skep(&["session", "--close", "-", "--board", &b.board], &[], Some(token.as_bytes()));
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(r.err.is_empty(), "the token stood live at the board that issued it, and the close there ended it: {}", r.err);
 }
 
 /// THE HOSTED REPLY AS PRINTED LANDS AT `bind` (§4.5 H6; `print_facts`, the

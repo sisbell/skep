@@ -3,7 +3,8 @@
 //! served to a page in a browser over loopback HTTP and server-sent events.
 //! THE INPUTS: the ONE page origin admitted (`--page-origin`, required);
 //! the listen port (`--listen`); the per-run admission secret (`--secret`,
-//! else generated and printed ONCE on stdout, the one DATA line); the
+//! else generated and printed ONCE on stdout, the one DATA line and the
+//! secret's one carrier — no TALK line names it); the
 //! session mode (`--session bare|signed`, required — both arms were ruled
 //! selectable, so a run names one); the dev key store (`--dir`, required
 //! under `signed`, a throwaway directory under the system temp dir where
@@ -19,19 +20,21 @@
 //! store must hold the principal's key under `signed`; the port must bind.
 //! THE SERVE: one thread per connection over a loopback listener, the
 //! routes `serve/routes.rs` spells — each refusal the provider makes itself
-//! said on TALK the first time its kind is met — until stdin closes: the
-//! clean stop, its cause said, every pending moment cancelled, every
-//! session closed, every consumer saved, the own node stopped, the
+//! counted, and said on TALK the first time its kind is met — until stdin
+//! closes: the clean stop, its cause and the run's figures said (the
+//! connections accepted, the refusals by kind), every pending moment
+//! cancelled, every session closed, every consumer saved — the stop's
+//! seconds said as it completes — the own node stopped and said so, the
 //! throwaway removed — exit 0. An interrupt ends the process with none of
 //! it, which the serving line says.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use skep_client::halt::Halt;
@@ -71,8 +74,8 @@ pub struct Provider<'d> {
     pub node: Option<&'d node::Node>,
     /// The permits the fault route holds.
     pub doors: Mutex<node::Doors<'d>>,
-    /// The kinds of refusal this provider made itself that TALK has said.
-    refusals_said: Mutex<HashSet<&'static str>>,
+    /// The refusals this provider made itself, counted by kind.
+    refusals: Mutex<BTreeMap<&'static str, u64>>,
 }
 
 impl Provider<'_> {
@@ -82,16 +85,40 @@ impl Provider<'_> {
     }
 
     /// A refusal the provider makes itself — the admission's, or a request
-    /// it cannot read — said on TALK the first time its `kind` is met in this
-    /// run, and never again: a page retrying a refused stream every few
-    /// seconds, or a process probing the port, says one line. The kinds are
-    /// the admission's four checks and the reader's two refusals, so the
-    /// lines are at most six; a browser hides a refused answer from the page
-    /// as a CORS failure, and this line is where the developer reads why.
-    fn say_refusal_once(&self, kind: &'static str, line: impl FnOnce() -> String) {
-        if self.refusals_said.lock().expect("the refusals' lock").insert(kind) {
+    /// it cannot read — counted by its `kind`, and said on TALK the first
+    /// time the kind is met in this run, never again: a page retrying a
+    /// refused stream every few seconds, or a process probing the port, says
+    /// one line, and the stop says how many each kind came to
+    /// ([`Provider::refusals_line`]). The kinds are the admission's four
+    /// checks and the reader's two refusals, so the lines are at most six; a
+    /// browser hides a refused answer from the page as a CORS failure, and
+    /// this line is where the developer reads why.
+    fn refused(&self, kind: &'static str, line: impl FnOnce() -> String) {
+        let first = {
+            let mut counts = self.refusals.lock().expect("the refusals' lock");
+            let count = counts.entry(kind).or_insert(0);
+            *count += 1;
+            *count == 1
+        };
+        if first {
             talk(line());
         }
+    }
+
+    /// The refusals the provider made over the run, by kind — a page refused
+    /// a thousand times read apart from one refused once — or `None` where
+    /// it made none.
+    fn refusals_line(&self) -> Option<String> {
+        let counts = self.refusals.lock().expect("the refusals' lock");
+        let total: u64 = counts.values().sum();
+        let kinds: Vec<String> = counts.iter().map(|(kind, n)| format!("{kind} {n}")).collect();
+        (total > 0).then(|| {
+            format!(
+                "the provider refused {total} request{} over the run: {}",
+                if total == 1 { "" } else { "s" },
+                kinds.join(", ")
+            )
+        })
     }
 }
 
@@ -121,19 +148,6 @@ impl Drop for Throwaway {
             Ok(()) => talk(format!("the throwaway store {} is removed", self.0.display())),
             Err(e) => talk(format!("the throwaway store {} could not be removed: {e}", self.0.display())),
         }
-    }
-}
-
-/// The most characters of a requester's text — a header's value, a
-/// malformed line — a refusal's TALK line names: the requester sizes it.
-const CLIPPED_CHARS: usize = 120;
-
-/// `text` clipped to [`CLIPPED_CHARS`] characters, an ellipsis where it ran
-/// longer.
-fn clipped(text: &str) -> String {
-    match text.char_indices().nth(CLIPPED_CHARS) {
-        Some((at, _)) => format!("{}…", &text[..at]),
-        None => text.to_string(),
     }
 }
 
@@ -235,7 +249,14 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     // THE CHECKS: the board answers; the key under `signed`; the port binds.
     let board = shell.board_references().into_iter().next().expect("one board");
     let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
-    talk(format!("board {board_origin}: mode {} (claimant {}, local_trust {})", health["mode"].as_str().unwrap_or("?"), health["health"]["auth"]["claimant"].as_str().unwrap_or("null"), health["health"]["auth"]["local_trust"]));
+    // The board by its origin and by the reference the shell's own lines
+    // name it by (`feed b-…:`), so the two join.
+    talk(format!(
+        "board {board_origin} (reference {board}): mode {} (claimant {}, local_trust {})",
+        health["mode"].as_str().unwrap_or("?"),
+        health["health"]["auth"]["claimant"].as_str().unwrap_or("null"),
+        health["health"]["auth"]["local_trust"]
+    ));
     if let SessionMode::Signed { .. } = session_mode {
         let keys = shell.check_signed_key().map_err(halt_of)?;
         for k in keys {
@@ -252,7 +273,8 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let listener = TcpListener::bind(("127.0.0.1", listen)).map_err(|e| Halt::face(format!("the provider's port {listen} could not be bound"), e.to_string(), "stop what holds it, or pass --listen"))?;
     let listen = listener.local_addr().map(|a| a.port()).unwrap_or(listen);
     let admission = Admission { page_origin: page_origin.as_str().to_string(), secret: secret.clone(), host: format!("127.0.0.1:{listen}") };
-    // THE ONE DATA LINE: the secret.
+    // THE ONE DATA LINE: the secret — its one carrier, so a log that keeps
+    // the provider's TALK keeps no copy of what admits a page to its session.
     data(&secret)?;
     // What an interrupt leaves, said beside the clean stop: the process
     // handles no signal, so Ctrl-C ends it where it stands.
@@ -261,7 +283,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         left.push("the throwaway store stays in place");
     }
     talk(format!(
-        "serving the bridge for {page_origin} at http://127.0.0.1:{listen}: the page carries ?{SECRET_QUERY}={secret} in its URL and echoes it in the {SECRET_HEADER} header on every call, and on the event stream's URL; the provider stops cleanly when stdin closes (Ctrl-D at a terminal) — an interrupt (Ctrl-C) ends it with none of the clean stop: {}",
+        "serving the bridge for {page_origin} at http://127.0.0.1:{listen}: the page carries ?{SECRET_QUERY}=<the secret, this run's one line on stdout> in its URL and echoes it in the {SECRET_HEADER} header on every call, and on the event stream's URL; the provider stops cleanly when stdin closes (Ctrl-D at a terminal) — an interrupt (Ctrl-C) ends it with none of the clean stop: {}",
         left.join(", and ")
     ));
     if own {
@@ -275,41 +297,65 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
             canned: Mutex::new(HashMap::new()),
             node: own_node.as_ref(),
             doors: Mutex::new(node::Doors::default()),
-            refusals_said: Mutex::new(HashSet::new()),
+            refusals: Mutex::new(BTreeMap::new()),
         };
         // THE SERVE: a thread per connection, the stdin watcher beside them,
-        // every thread joined at the scope's end. An accept the listener
-        // refuses is said once per edge — refused, then accepting again — and
-        // paced by ACCEPT_PAUSE.
-        thread::scope(|s| {
+        // every thread joined at the scope's end; the connections accepted
+        // counted. An accept the listener refuses is said once per edge —
+        // refused, then accepting again, with the episode's seconds and its
+        // refused accepts — and paced by ACCEPT_PAUSE.
+        let accepted = thread::scope(|s| {
             s.spawn(|| watch_stdin(&provider, listen));
-            let mut refusing = false;
+            let mut accepted = 0u64;
+            let mut refusing: Option<(Instant, u64)> = None;
             for conn in listener.incoming() {
                 if provider.stopped() {
                     break;
                 }
                 match conn {
                     Ok(stream) => {
-                        if std::mem::take(&mut refusing) {
-                            talk("the provider's listener accepts connections again");
+                        if let Some((since, refused)) = refusing.take() {
+                            talk(format!(
+                                "the provider's listener accepts connections again, after {:.1} s and {refused} refused accept{}",
+                                since.elapsed().as_secs_f64(),
+                                if refused == 1 { "" } else { "s" }
+                            ));
                         }
+                        accepted += 1;
                         s.spawn(|| routes::connection(&provider, stream));
                     }
                     Err(e) => {
-                        if !std::mem::replace(&mut refusing, true) {
-                            talk(format!("the provider's listener refused a connection: {e}; it keeps accepting, and says when it accepts again"));
+                        match &mut refusing {
+                            Some((_, refused)) => *refused += 1,
+                            None => {
+                                talk(format!("the provider's listener refused a connection: {e}; it keeps accepting, and says when it accepts again"));
+                                refusing = Some((Instant::now(), 1));
+                            }
                         }
                         thread::sleep(ACCEPT_PAUSE);
                     }
                 }
             }
+            accepted
         });
-        // THE CLEAN STOP, its cause said.
-        talk(format!("stopping ({}): every pending moment cancelled, every session closed, every index saved", provider.stop.get().map_or("asked", String::as_str)));
+        // THE CLEAN STOP, its cause and the run's figures said ahead of it,
+        // and its seconds once it completes — a stop that waits on a board
+        // that does not answer is read as one, not as a hang.
+        talk(format!(
+            "stopping ({}): cancelling every pending moment, closing every session, saving every index — after {accepted} connection{} accepted",
+            provider.stop.get().map_or("asked", String::as_str),
+            if accepted == 1 { "" } else { "s" }
+        ));
+        if let Some(line) = provider.refusals_line() {
+            talk(line);
+        }
+        let stopping = Instant::now();
         provider.shell.shutdown();
+        talk(format!("stopped: the shell's stop took {:.1} s", stopping.elapsed().as_secs_f64()));
     }
     if let Some(node) = own_node {
         node.shutdown();
+        talk(format!("the in-process daemon at {board_origin} is stopped"));
     }
     // THE THROWAWAY STORE, removed as its guard drops, once nothing writes it.
     drop(throwaway);

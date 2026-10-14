@@ -47,14 +47,20 @@
 //!
 //! Then the reads for the report — the positions before and after, the
 //! reclaim floor — and ONE JSON object on stdout, always; TALK on stderr:
-//! the mode line, the corpus, the manifest's line ([`manifest_line`]: a new
-//! seed, every write held, or a resume and the one write a resume cannot
-//! see), a progress line per hundred editions and at the last, one line per
-//! phase as it ends, the first refusal of each transient token the writer
-//! retries, the retries, the floor, the reopen warning. A second run under
-//! the same key finds every write recorded, writes nothing — said as it
-//! opens the manifest — and answers the same object with
-//! `already_seeded: true`.
+//! the mode line naming the board, the corpus, the manifest's line
+//! ([`manifest_line`]: a new seed, every write held, or a resume and the one
+//! write a resume cannot see), the session's line — the principal, the
+//! account and the key whose fingerprint the board testifies each write by
+//! (AUTH-4.48) — on a resume the first write it makes again, a progress line
+//! per hundred editions and at the last, one line per phase as it ends, each
+//! stall the writer retries through as it begins and at most once per ten
+//! seconds after, the frames sent and their retries, the floor, the commits
+//! landed since the run read its position, and the lines the manifest holds
+//! and this run recorded. A run that stops inside a write says which, and
+//! whether its frame was in flight, ahead of the halt — the write the next
+//! run's resume line names again. A second run under the same key finds
+//! every write recorded, writes nothing — said as it opens the manifest —
+//! and answers the same object with `already_seeded: true`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -71,7 +77,9 @@ use skep_corpus::{Corpus, Cut, Error as CorpusError, Sourced};
 use crate::args::dev::DevLine;
 use crate::board::{Placed, Run, VSpec, Writer, CITATION_TYPE};
 use crate::manifest::{path_for, Header, Manifest, TOOL};
-use crate::shared::{board_of, data, principal_or_bound, select_key, store_of, Stop};
+use crate::shared::{
+    board_of, clipped, data, key_named, principal_or_bound, select_key, store_of, Stop,
+};
 use crate::terminal::talk;
 
 /// The window's width: B1-S7's "240 positions".
@@ -99,7 +107,9 @@ const LAST_STEP: &str = "account";
 /// resume cannot see: the one the run before had in flight when it stopped,
 /// which may stand on the board unrecorded and is made again under this
 /// run's session, where its envelope id holds nothing (wire.md §Correlation
-/// and idempotency: an `id` holds on its session alone).
+/// and idempotency: an `id` holds on its session alone). The two lines that
+/// name that write, the stopped run's and this one's, are named here, so
+/// the two runs' streams join on its envelope id.
 fn manifest_line(manifest: &Manifest) -> String {
     let path = manifest.path().display();
     if manifest.is_new() {
@@ -112,12 +122,18 @@ fn manifest_line(manifest: &Manifest) -> String {
     } else {
         format!(
             "manifest: {path} holds {} lines of this seed: the run resumes after them. A write the run before this one had in flight \
-             when it stopped may stand on the board unrecorded; it is made again here, and a mint or a shot then lands twice — an \
-             envelope id holds within one session alone (wire.md §Correlation and idempotency). Where the board's exact shape \
-             matters, seed a fresh board instead",
+             when it stopped — named there by `the run stopped with the write`, and below by `resuming at` — may stand on the board \
+             unrecorded; it is made again here, and a mint or a shot then lands twice — an envelope id holds within one session \
+             alone (wire.md §Correlation and idempotency). Where the board's exact shape matters, seed a fresh board instead",
             manifest.held()
         )
     }
+}
+
+/// Whether a run that opens `manifest` resumes a seed: its header stands
+/// and the seed's last record does not.
+fn resumes(manifest: &Manifest) -> bool {
+    !manifest.is_new() && manifest.recorded(LAST_STEP).is_none()
 }
 
 /// A phase's elapsed seconds, as its end line says them.
@@ -159,8 +175,9 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     let health = board.health()?;
     let mode = Mode::of(&health);
     talk(format!(
-        "mode {} (claimant {}, local_trust {}) — derived from the pair, no mode field (AUTH-5.86)",
+        "mode {} at {} (claimant {}, local_trust {}) — derived from the pair, no mode field (AUTH-5.86)",
         mode.name(),
+        board.dialed(),
         health.claimant().unwrap_or("null"),
         health.local_trust()
     ));
@@ -238,9 +255,16 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     };
     let manifest = Manifest::open(path_for(store.root(), &chain), header)?;
     talk(manifest_line(&manifest));
+    let held_at_open = manifest.held();
     let before = health.log_position();
-    // THE SESSION, then the shapes.
+    // THE SESSION, then the shapes — the session's line naming what the
+    // board's record joins this seed's writes to.
     let mut w = Writer::open(&board, signer, principal)?;
+    talk(format!(
+        "session: CONTENT scope for principal {principal} at account {account}, opened by key {} — the board testifies each write \
+         of this seed by that fingerprint (AUTH-4.48), and the second account's, from bare sessions, as `bare`",
+        key_named(&key)
+    ));
     if manifest.is_new() {
         // No manifest: a board holding documents past doc 1 is not fresh,
         // and no probe guesses what landed there (§5.1 arm (c), the one read).
@@ -260,6 +284,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     }
     let mut run = Seed {
         w,
+        resuming: resumes(&manifest),
         manifest,
         account: account.clone(),
         cut,
@@ -313,17 +338,34 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
             second["draft"].as_str().unwrap_or("?")
         )),
     }
-    // THE READS FOR THE REPORT.
+    // THE READS FOR THE REPORT, and the run's figures: the frames it sent,
+    // the commits since the position it read — its own and any other
+    // writer's, so the two tell a board another hand wrote to apart — and
+    // the manifest's lines, this run's among them.
     let after = board.health()?.log_position();
     let floor = run.w.reclaim_floor()?;
-    let retries = run.w.retries;
+    let (retries, writes, reads) = (run.w.retries, run.w.writes, run.w.reads);
     talk(format!(
-        "retries: write_busy {}, durability {}, board_unavailable {}",
-        retries.write_busy, retries.durability, retries.board_unavailable
+        "frames: {writes} writes sent, {} of them retries (write_busy {}, durability {}, board_unavailable {}), and {reads} reads under \
+         the session or as a guest",
+        retries.total(),
+        retries.write_busy,
+        retries.durability,
+        retries.board_unavailable
     ));
     talk(format!("floor: /chain?at=0 answers {floor} (the journal's reclaim floor; 0 while genesis is retained)"));
-    talk(format!("this board now holds {after} commits; its next open replays them"));
+    talk(format!(
+        "this board now holds {after} commits, {} of them landed since this run read position {before} — its writes and any other \
+         writer's; its next open replays them",
+        after.saturating_sub(before)
+    ));
     let Seed { w, manifest, wrote, seconds, .. } = run;
+    talk(format!(
+        "manifest: {} now holds {} lines, {} of them recorded by this run",
+        manifest.path().display(),
+        manifest.held(),
+        manifest.held().saturating_sub(held_at_open)
+    ));
     w.close()?;
     let total = started.elapsed();
     let secs = |d: Duration| (d.as_secs_f64() * 1000.0).round() / 1000.0;
@@ -355,6 +397,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         "second_account": second,
         "positions": {"before": before, "after": after},
         "floor": floor,
+        "frames": {"writes": writes, "reads": reads},
         "retries": {"write_busy": retries.write_busy, "durability": retries.durability, "board_unavailable": retries.board_unavailable},
         "seconds": {
             "editions": secs(seconds.get("editions").copied().unwrap_or_default()),
@@ -415,6 +458,9 @@ struct Version {
 /// write was made.
 struct Seed<'b> {
     w: Writer<'b>,
+    /// Whether this run resumes a seed and has yet to meet the first write
+    /// its manifest does not hold — the one it names as it makes it again.
+    resuming: bool,
     manifest: Manifest,
     account: String,
     cut: Cut,
@@ -430,7 +476,10 @@ struct Seed<'b> {
 
 impl Seed<'_> {
     /// The write recorded under `id`, or made by `perform` and recorded with
-    /// `item` — the address under `addr` where the write mints one.
+    /// `item` — the address under `addr` where the write mints one. On a
+    /// resume, the first write the manifest does not hold is named as it is
+    /// made again; a write `perform` stops inside is named ahead of its halt
+    /// ([`Seed::stopped_at`]).
     fn step(
         &mut self,
         id: &str,
@@ -439,13 +488,49 @@ impl Seed<'_> {
         if let Some(v) = self.manifest.recorded(id) {
             return Ok(v["addr"].as_str().map(str::to_string));
         }
-        let (addr, mut item) = perform(&mut self.w)?;
+        if std::mem::take(&mut self.resuming) {
+            talk(format!(
+                "resuming at `{id}`, the first write of this seed the manifest does not hold: where the run before stopped at it, it \
+                 may stand on the board already, and it is made again now"
+            ));
+        }
+        let (addr, mut item) = match perform(&mut self.w) {
+            Ok(made) => made,
+            Err(h) => {
+                talk(self.stopped_at(id));
+                return Err(h);
+            }
+        };
         if let Some(a) = &addr {
             item["addr"] = Value::String(a.clone());
         }
         self.manifest.record(id, item)?;
         self.wrote = true;
         Ok(addr)
+    }
+
+    /// The line a run stopped inside the write `id` says ahead of its halt:
+    /// the write, and whether its frame was IN FLIGHT — sent, its answer
+    /// never read, so the write may stand on the board with no line of the
+    /// manifest recording it, and the next run, whose resume line names it
+    /// again, makes it again — and the manifest holding every write before
+    /// it. The frame is named where it is not the write's first, an insert's
+    /// later chunk.
+    fn stopped_at(&mut self, id: &str) -> String {
+        let path = self.manifest.path().display().to_string();
+        match self.w.take_in_flight() {
+            Some(sent) => {
+                let frame = if sent == id { String::new() } else { format!(", its frame `{sent}`") };
+                format!(
+                    "the run stopped with the write `{id}` in flight{frame} — sent, its answer never read — so it may stand on the board \
+                     unrecorded, and the next run makes it again; every write of this seed before it is recorded in {path}"
+                )
+            }
+            None => format!(
+                "the run stopped at the write `{id}`, no frame of it in flight: the block below says how; every write of this seed \
+                 before it is recorded in {path}"
+            ),
+        }
     }
 
     /// The address a step recorded, which a later phase leans on.
@@ -727,9 +812,9 @@ impl Seed<'_> {
             let (prefix, new_id) = match s.manifest.recorded("account:delegate") {
                 Some(v) => (v["addr"].as_str().unwrap_or_default().to_string(), v["principal"].as_u64().unwrap_or(2)),
                 None => {
-                    let prefix = s.w.board().next_account_prefix(&parent)?.ok_or_else(|| Halt::face(format!("next_account_prefix({parent}) answers null"), "the node admits no further top-level account", "this board cannot hold the second account; nothing more was written"))?;
+                    let prefix = s.w.next_account_prefix(&parent)?.ok_or_else(|| Halt::face(format!("next_account_prefix({parent}) answers null"), "the node admits no further top-level account", "this board cannot hold the second account; nothing more was written"))?;
                     let mut new_id = 2u64;
-                    while s.w.board().principal_prefix(new_id)?.is_some() {
+                    while s.w.principal_prefix(new_id)?.is_some() {
                         new_id += 1;
                         if new_id > 1_000 {
                             return Err(Halt::face("no free principal id under 1000", "every id probed is registered", "this board is not a fresh dev board; seed another"));
@@ -741,7 +826,7 @@ impl Seed<'_> {
             let (p, t) = (prefix.clone(), node.clone());
             let delegated = s.step("account:delegate", |w| {
                 let v = w.write_as(&t, frames::delegate(&p, new_id, None), "account:delegate")?;
-                let addr = skep_client::board::acked_addr(&v).map(str::to_string).ok_or_else(|| Halt::face("delegate answered no address", v.to_string(), "this board is not speaking the wire this tool expects"))?;
+                let addr = skep_client::board::acked_addr(&v).map(str::to_string).ok_or_else(|| Halt::face("delegate answered no address", clipped(&v.to_string()), "this board is not speaking the wire this tool expects"))?;
                 Ok((Some(addr), json!({"principal": new_id})))
             })?;
             let account2 = s.landed_or(delegated, "account:delegate")?;
@@ -771,7 +856,7 @@ impl Seed<'_> {
             let addr = skep_client::board::acked_addr(&v).map(str::to_string).ok_or_else(|| {
                 Halt::face(
                     "the mint answered no address",
-                    v.to_string(),
+                    clipped(&v.to_string()),
                     "this board is not speaking the wire this tool expects",
                 )
             })?;

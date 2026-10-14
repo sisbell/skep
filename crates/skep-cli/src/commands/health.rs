@@ -1,5 +1,7 @@
 //! `skep health` (`client.md` §2.2): `GET /health`'s body verbatim on
-//! stdout, and on stderr the mode derived from its pair (AUTH-5.86).
+//! stdout, and on stderr the mode derived from its pair (AUTH-5.86), named
+//! with the board that answered — the flag's, or `SKEP_BOARD`'s where no
+//! flag names one.
 
 use skep_client::derive::Mode;
 
@@ -13,7 +15,13 @@ pub fn health(c: &CommandLine) -> Result<(), Stop> {
     // `mode` field (AUTH-5.86's negative pin).
     data_verbatim(&health.raw)?;
     let mode = Mode::of(&health);
-    talk(format!("mode {} (claimant {}, local_trust {}) — derived from the pair, no mode field (AUTH-5.86)", mode.name(), health.claimant().unwrap_or("null"), health.local_trust()));
+    talk(format!(
+        "mode {} at {} (claimant {}, local_trust {}) — derived from the pair, no mode field (AUTH-5.86)",
+        mode.name(),
+        board.dialed(),
+        health.claimant().unwrap_or("null"),
+        health.local_trust()
+    ));
     talk(format!("bare arm (origins): [{}]", health.origins().join(", ")));
     talk(format!("signed arm (signed_origins): [{}]", health.signed_origins().join(", ")));
     Ok(())

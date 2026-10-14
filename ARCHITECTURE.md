@@ -1484,13 +1484,15 @@ the key store (`<store>-seed/<chain>.jsonl`, keyed by `H.1`'s chain, one
 JSON line per write by its envelope id, appended after the ack, so a
 second run adds nothing and a killed run resumes — making again the one
 write it had in flight, which a new session's envelope id does not
-recognise, as the resumed run says); `board.rs`, the frames
+recognise, as the stopped run and the resumed one each say, naming its
+envelope id); `board.rs`, the frames
 over the claimant's ONE content-scoped signed session — the staging
 draft's mint, the chunked per-byte insert, the attested edition mint, the
 shot naming the draft, the attested `make_link` whose V-spec from-end is
 resolved through `image` into the spans the daemon stores, the reads, and
 the retry of `write_busy`, `durability` and
-`attestation_invalid:board_unavailable`; and `seed.rs`, the run — the
+`attestation_invalid:board_unavailable`, each stall said as it begins and
+at most once per ten seconds after; and `seed.rs`, the run — the
 inputs as the command finds them, the checks before any write (an
 unclaimed board, `writes.halted`, a stranger's claim), the cut through
 `skep-corpus`, and the shapes in order: editions, citation links with
@@ -1522,7 +1524,8 @@ and the sidecar's `--no-default-features --bin skep` build carry no
 stop the verb has, read by `watch_stdin` and said with its cause — an
 interrupt ends it with none of that, as its serving line says — and each
 refusal it makes itself, the admission's or a request it cannot read, is
-said on its stderr the first time its kind is met. The `[[bin]]` carries
+counted, and said on its stderr the first time its kind is met, the stop
+saying the counts. The `[[bin]]` carries
 `test = false`: the shared modules' unit suites run once, under `skep`,
 and the dev binary's own claims are its integration fences,
 `tests/it/dev.rs` and `tests/it/serve.rs`.

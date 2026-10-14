@@ -14,15 +14,16 @@
 //! by `/bridge/answer`, the board claimed, and a second run cancelled at
 //! the first moment answering the abandonment with the board unclaimed;
 //! F4 the admission — a foreign origin, no secret, a wrong host, each 403
-//! naming the check with no dial made, the preflight for the one origin
-//! and never `*`, the listener on 127.0.0.1 alone; F5 the signed mode — a
-//! content-scoped session, a publish-class write acked under the attest
-//! the provider composed, the same write refused under bare; F6 the fault
-//! doors under `dev-hooks` with `--own`, and `not_built_in` without; F7
-//! the isolation, `cargo tree` naming no `skepd` without the feature and
-//! one with it; F8 the declarations served equal to the crate's; F9 the
-//! conformance — one sequence on the crate and through the provider,
-//! deep-equal results and the same events in order.
+//! naming the check with no dial made, each kind said once with its route
+//! and counted to the stop, the secret on no line, the preflight for the
+//! one origin and never `*`, the listener on 127.0.0.1 alone; F5 the signed
+//! mode — a content-scoped session, a publish-class write acked under the
+//! attest the provider composed, the same write refused under bare; F6
+//! the fault doors under `dev-hooks` with `--own`, and `not_built_in`
+//! without; F7 the isolation, `cargo tree` naming no `skepd` without the
+//! feature and one with it; F8 the declarations served equal to the
+//! crate's; F9 the conformance — one sequence on the crate and through the
+//! provider, deep-equal results and the same events in order.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
@@ -300,9 +301,15 @@ fn readme_names_every_door(detail: &str, lead: &str) {
 /// The provider's talk once it holds every one of `needles`, within the
 /// deadline: its stderr reader trails the answer that a line preceded.
 fn talk_holding(provider: &Provider, needles: &[&str]) -> String {
+    said_holding(&provider.talk, needles)
+}
+
+/// [`talk_holding`] over the talk a provider kept — read on past its stop,
+/// whose last lines its stderr reader trails.
+fn said_holding(talk: &Arc<Mutex<String>>, needles: &[&str]) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let said = provider.talk();
+        let said = talk.lock().unwrap().clone();
         if needles.iter().all(|n| said.contains(n)) {
             return said;
         }
@@ -405,6 +412,9 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     let board = boards[0]["board"].as_str().unwrap().to_string();
     assert!(board.starts_with("b-"));
     assert_eq!(boards[0]["origin"], origin(sd.port()));
+    // The board's line names it by its origin and by the reference the
+    // shell's own lines name it by, so the two join.
+    talk_holding(&provider, &[&format!("board {} (reference {board}): mode CLAIMED-PERMISSIVE (claimant 1.0.1", origin(sd.port()))]);
     let health = keep(provider.result("health", json!({"board": board})));
     assert_eq!(health["mode"], "CLAIMED-PERMISSIVE");
     let probe = keep(provider.result("probe", json!({})));
@@ -705,14 +715,17 @@ fn f4_the_admission_refuses_before_any_dial() {
     assert_eq!(status, 403);
     // Each refusal kind is said on the provider's stream once, the first
     // met naming what it presented — the origin a browser hides from the
-    // page as a CORS failure, the host — and the secret never.
+    // page as a CORS failure, the host — and the route it was met at; and the
+    // secret never, presented or this run's.
     let said = talk_holding(&provider, &["is refused (origin)", "is refused (secret)", "is refused (host)"]);
     for (kind, times) in [("is refused (origin)", 1), ("is refused (secret)", 1), ("is refused (host)", 1)] {
         assert_eq!(said.matches(kind).count(), times, "`{kind}` said once: {said}");
     }
     assert!(said.contains(&format!("a request from Origin `http://evil.example` is refused (origin) — this provider admits {PAGE} alone (--page-origin)")), "{said}");
     assert!(said.contains(&format!("a request naming Host `evil.example:80` is refused (host) — the page reaches this provider as http://127.0.0.1:{}", provider.port)), "{said}");
+    assert!(said.contains("CORS failure; first met at POST /bridge/boards; said once, every one counted at the stop"), "the route the first was met at: {said}");
     assert!(!said.contains("`0000`"), "the presented secret is never said: {said}");
+    assert!(!said.contains(&provider.secret), "this run's secret is never said: its one carrier is stdout: {said}");
     // The listener is bound to 127.0.0.1 alone: this machine's non-loopback
     // address refuses the connect.
     let host = std::process::Command::new("hostname").output().ok().and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
@@ -723,7 +736,16 @@ fn f4_the_admission_refuses_before_any_dial() {
     // The admitted request, for contrast, answers.
     let (status, _, _) = provider.request("POST", "/bridge/boards", &provider.headers(), b"{}");
     assert_eq!(status, 200);
+    // The stop says how many each kind of refusal came to — the page
+    // refused three times by its origin read apart from the host refused
+    // once — the connections the run accepted, and when its stop completed.
+    let (talk, secret) = (Arc::clone(&provider.talk), provider.secret.clone());
     assert_eq!(provider.stop(), 0);
+    let said = said_holding(
+        &talk,
+        &["the provider refused 7 requests over the run: host 1, origin 3, secret 3", "connections accepted", "stopped: the shell's stop took "],
+    );
+    assert!(!said.contains(&secret), "this run's secret is never said: {said}");
     sd.shutdown();
 }
 
@@ -850,8 +872,11 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     let rows = provider.result("held", json!({"session": session}));
     assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists the burst: {rows}");
     assert_eq!((rows[0]["cause"].as_str(), rows[0]["sent"].as_bool()), (Some("poisoned"), Some(true)), "{rows}");
-    let said = provider.talk();
+    let (said, talk) = (provider.talk(), Arc::clone(&provider.talk));
     assert_eq!(provider.stop(), 0, "{said}");
+    // The in-process daemon's orderly shutdown said once it completes, the
+    // board named: its own stream marks no stop.
+    said_holding(&talk, &[&format!("the in-process daemon at {board_origin} is stopped")]);
 }
 
 // ── THE HELD-BURST STORE through the provider ────────────────────────────────
@@ -1036,11 +1061,15 @@ fn the_throwaway_store_is_removed_at_the_clean_stop_and_a_named_one_kept() {
     let name = store.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
     assert!(store.starts_with(std::env::temp_dir()) && name.starts_with("skep-dev-serve-"), "a throwaway under the system temp dir: {}", store.display());
     // The serving line says how the clean stop is asked, and what an
-    // interrupt, which skips it, leaves — the throwaway among it.
-    said(
+    // interrupt, which skips it, leaves — the throwaway among it; and how
+    // the page carries the secret, never the secret itself, whose one
+    // carrier is the run's one line on stdout.
+    let serving = said(
         &talk,
         "the provider stops cleanly when stdin closes (Ctrl-D at a terminal) — an interrupt (Ctrl-C) ends it with none of the clean stop: its sessions live on at the board until it restarts, and the throwaway store stays in place",
     );
+    assert!(serving.contains(&format!("?{SECRET_QUERY}=<the secret, this run's one line on stdout>")), "{serving}");
+    assert!(!serving.contains(&provider.secret), "the secret is never said: {serving}");
     provider.result("keygen", json!({"label": "phone"}));
     assert!(store.is_dir(), "the throwaway stands while the provider serves");
     assert_eq!(provider.stop(), 0, "a clean stop");
@@ -1049,7 +1078,17 @@ fn the_throwaway_store_is_removed_at_the_clean_stop_and_a_named_one_kept() {
     let _ = std::fs::remove_dir_all(&store);
     assert!(gone, "the throwaway store is removed at the clean stop: {}", store.display());
     said(&talk, &format!("the throwaway store {} is removed", store.display()));
-    said(&talk, "stopping (stdin closed): ");
+    // The stop's cause and the connections the run accepted said ahead of
+    // it, its seconds once it completes, and before the throwaway goes.
+    let stopped = said(&talk, "stopped: the shell's stop took ");
+    let at = |needle: &str| stopped.find(needle).unwrap_or_else(|| panic!("`{needle}` said: {stopped}"));
+    let removed = format!("the throwaway store {} is removed", store.display());
+    assert!(
+        at("stopping (stdin closed): cancelling every pending moment, closing every session, saving every index — after ")
+            < at("stopped: the shell's stop took ")
+            && at("stopped: the shell's stop took ") < at(&removed),
+        "{stopped}"
+    );
     // `--dir`: the person's store, kept with the key made in it.
     let named = dir.path().join("named-store");
     let provider = Provider::start(&["--board", &board, "--session", "bare", "--principal", "1", "--dir", s(&named)]);
@@ -1099,6 +1138,17 @@ fn a_listener_out_of_descriptors_says_so_once_and_when_it_accepts_again() {
     }
     let said = talk_holding(&provider, &["the provider's listener accepts connections again"]);
     assert_eq!(said.matches(refused).count(), 1, "{said}");
+    // The edge back carries the episode's size: its seconds, and the
+    // accepts refused across it — the one the first line said and those the
+    // twenty connections past it met, said on no line of their own.
+    let back = said.lines().find(|l| l.contains("the provider's listener accepts connections again")).unwrap();
+    let refusals: u64 = back
+        .split(" s and ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("the episode's refused accepts: {back}"));
+    assert!(back.contains("accepts connections again, after ") && back.contains(" refused accepts") && refusals > 1, "{back}");
     assert_eq!(provider.stop(), 0);
     sd.shutdown();
 }

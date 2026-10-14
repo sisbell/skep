@@ -11,9 +11,10 @@
 //! to its halt (`held_set`, `compare_genesis`). What the dev binary shares
 //! with them — the two streams, the stops and their exit codes, the
 //! plumbing from the flags to a board, a store, a principal and a key —
-//! is `shared.rs`'s, taken here and handed down to the command files under
-//! the names they always had; `finish` and `help` are the `skep`
-//! [`Program`]'s own.
+//! is `shared.rs`'s, taken here and handed down to the command files — the
+//! one spelling of a key on an operator's line (`key_named`) and the one
+//! bound on a third party's text a halt echoes (`clipped`) among it;
+//! `finish` and `help` are the `skep` [`Program`]'s own.
 
 mod accept;
 mod bind;
@@ -57,8 +58,8 @@ use skep_identity::{Fingerprint, LabelError, PublicKey, MAX_RECORD_BYTES};
 
 use crate::args::HELP;
 use crate::shared::{
-    self, board_of, data, data_verbatim, principal_or_bound, require_no_key_file, select_key,
-    store_of, Program, Stop,
+    self, board_of, clipped, data, data_verbatim, key_named, principal_or_bound,
+    require_no_key_file, select_key, store_of, Program, Stop,
 };
 use crate::terminal::{has_terminal, talk};
 

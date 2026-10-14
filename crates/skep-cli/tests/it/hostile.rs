@@ -3,10 +3,10 @@
 //! exists to catch, or anyone on a plaintext path — reaching the terminal
 //! inert on stderr, and on stdout with every C0 control rendered; a reply a
 //! third party printed, landed by `bind` only as the person's screen shows
-//! it; a payload read to its cap and no further; and a principal past the
-//! range a JSON number carries. Every board here is a [`canned`] one or a
-//! dead origin, so each refusal is seen before, or instead of, any daemon's
-//! answer.
+//! it, and echoed by a halt to its bound alone; a payload read to its cap
+//! and no further; and a principal past the range a JSON number carries.
+//! Every board here is a [`canned`] one or a dead origin, so each refusal is
+//! seen before, or instead of, any daemon's answer.
 
 use crate::common::{canned, s, skep, Run};
 
@@ -106,6 +106,35 @@ fn a_reply_that_says_two_things_is_refused_never_read_as_the_last_one() {
     assert!(!store.exists(), "nothing written");
     let r = bind(&["--account", "1.0.1.2", "--principal", "7"], &[("SKEP_PRINCIPAL", "7")], b"account 1.0.1.2\naccount 1.0.1.2\nprincipal 7\n");
     assert_eq!(r.code, 4, "one value named three times stands, and the board is dialed: {r:?}");
+}
+
+/// A HALT ECHOES A REPLY'S TEXT TO ITS BOUND, NEVER WHOLE (`bind`'s
+/// `fact_line`, `facts_of`; `shared::clipped`): a reply's line the size of
+/// a payload — refused for an escape at its end, or naming an account that
+/// is no address — halts naming the line by its number and echoing its
+/// first characters alone, so the one block the person reads, and an
+/// operator's log, stays a few lines whatever the reply's writer sent.
+#[test]
+fn a_halt_echoes_a_replys_text_to_its_bound_never_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let bind = |flags: &[&str], reply: &[u8]| {
+        let mut args = vec!["bind", "--board", DEAD, "--dir", s(&store), "--payload", "-"];
+        args.extend_from_slice(flags);
+        skep(&args, &[], Some(reply))
+    };
+    // A failing run's stderr, its opening alone.
+    let head = |r: &Run| r.err.chars().take(400).collect::<String>();
+    let long = "a".repeat(100_000);
+    let r = bind(&[], format!("account 1.0.1\n{long}\x1b\n").as_bytes());
+    assert_eq!(r.code, 3, "{}", head(&r));
+    assert!(r.err.contains(&format!("the reply's line 2, `{}…`, holds a character", &long[..120])), "{}", head(&r));
+    assert!(r.err.len() < 4096 && !raw_control(&r), "the halt is a few lines, not the reply: {} bytes", r.err.len());
+    let r = bind(&["--principal", "1"], format!("account {long}\n").as_bytes());
+    assert_eq!(r.code, 3, "{}", head(&r));
+    assert!(r.err.contains(&format!("`{}…` is not an account address", &long[..120])), "{}", head(&r));
+    assert!(r.err.len() < 4096, "the halt is a few lines, not the reply: {} bytes", r.err.len());
+    assert!(!store.exists(), "nothing written");
 }
 
 /// A PAYLOAD IS READ TO ITS CAP AND NO FURTHER (`read_payload`; AUTH-1.18):

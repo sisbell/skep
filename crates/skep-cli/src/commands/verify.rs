@@ -7,7 +7,7 @@ use skep_client::ceremony::handshake::{key_face, Site};
 use skep_client::derive::{origin_arm, precheck};
 use skep_client::store::Purpose;
 
-use super::{board_of, compare_genesis, data, held_set, principal_or_bound, select_key, store_of, talk, Stop};
+use super::{board_of, compare_genesis, data, held_set, key_named, principal_or_bound, select_key, store_of, talk, Stop};
 use crate::args::CommandLine;
 
 pub fn verify(c: &CommandLine) -> Result<(), Stop> {
@@ -39,7 +39,16 @@ pub fn verify(c: &CommandLine) -> Result<(), Stop> {
         }
         None => talk("the key arm is the one-key read — this key's membership and never the set's: pass --payload or --anchor to compare the genesis record whole"),
     }
-    talk("a block is invisible to both reads: a verify that passes can still meet 403 prefix_blocked at the next handshake");
+    // What passed, joined to the board's record: the key the lookup chose,
+    // by the fingerprint its writes are testified by (AUTH-4.48), the
+    // principal the one-binding test chose, and the board read.
+    talk(format!(
+        "key {} passed {} for principal {principal} at {}; a block is invisible to both reads: a verify that passes can still meet 403 \
+         prefix_blocked at the next handshake",
+        key_named(&key),
+        checks.join(", "),
+        board.dialed()
+    ));
     if json {
         data(serde_json::json!({
             "checks": checks,

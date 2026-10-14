@@ -39,12 +39,16 @@
 //! `attestation_invalid:board_unavailable` — the three transient tokens —
 //! are sent again after [`WRITE_BUSY_BACKOFF_FIRST`], doubling to
 //! [`WRITE_BUSY_BACKOFF_CAP`], until answered otherwise or
-//! [`WRITE_BUSY_PATIENCE`] runs out, each counted ([`Retries`]) and the
-//! first of each token in the run said as it is met; a write the patience
-//! ran out on halts naming its op, its envelope id, the token as the board
-//! spells it and why the board kept answering it. Every other rejection
-//! stops the run as the board's own refusal (exit 1, its `code:detail`
-//! verbatim), transport as exit 4, and the death signal as a halt.
+//! [`WRITE_BUSY_PATIENCE`] runs out, each counted ([`Retries`]); a stall is
+//! said as it begins and at most once per [`STALL_SAID_EVERY`] after, each
+//! line naming the token, the write's op and envelope id, its refusals so
+//! far and the run's; a write the patience ran out on halts naming its op,
+//! its envelope id, the token as the board spells it and why the board kept
+//! answering it. Every other rejection stops the run as the board's own
+//! refusal (exit 1, its `code:detail` verbatim), transport as exit 4 — the
+//! write whose request it may have carried held as the one IN FLIGHT
+//! ([`Writer::take_in_flight`]) — and the death signal as a halt. A halt
+//! that echoes a board's answer echoes no more of it than [`clipped`] keeps.
 
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -56,7 +60,7 @@ use skep_client::board::{
     acked_addr, frames, Answer, Board, Opened, Rejection, Scope, SessionBody, Token,
 };
 use skep_client::ceremony::handshake::{handshake, Session, Site};
-use skep_client::dial::Request;
+use skep_client::dial::{DialError, Request};
 use skep_client::sign::{sig_hex, Signer};
 use skep_client::Halt;
 use skep_identity::{
@@ -64,6 +68,7 @@ use skep_identity::{
     ContentFreeOp, DocTerm, EntryBody, EntrySlot, LinkSlots, ShotBase, ShotSegmentPiece,
 };
 
+use crate::shared::clipped;
 use crate::terminal::talk;
 
 /// The most bytes one `insert` frame carries: 128 KiB, the search budgets'
@@ -79,6 +84,12 @@ pub const WRITE_BUSY_BACKOFF_CAP: Duration = Duration::from_millis(64);
 
 /// How long one write is retried before the run stops.
 pub const WRITE_BUSY_PATIENCE: Duration = Duration::from_secs(60);
+
+/// The least time between two lines a stall says: a stall is said as it
+/// begins, then at most once per this span while refusals keep coming — a
+/// storm says one line per ten seconds, never one per write, and a stall
+/// met again later in the run is said again.
+pub const STALL_SAID_EVERY: Duration = Duration::from_secs(10);
 
 /// THE CITATION TYPE: the commons' `3.13 citation` under the registry
 /// document's subspace 3, as the wire spells its pinned classes
@@ -153,16 +164,27 @@ impl Transient {
 }
 
 impl Retries {
-    /// One retry of `transient` counted: the count it comes to.
-    fn tally(&mut self, transient: Transient) -> u64 {
-        let count = match transient {
-            Transient::WriteBusy => &mut self.write_busy,
-            Transient::Durability => &mut self.durability,
-            Transient::BoardUnavailable => &mut self.board_unavailable,
-        };
-        *count += 1;
-        *count
+    /// One retry of `transient` counted.
+    fn tally(&mut self, transient: Transient) {
+        match transient {
+            Transient::WriteBusy => self.write_busy += 1,
+            Transient::Durability => self.durability += 1,
+            Transient::BoardUnavailable => self.board_unavailable += 1,
+        }
     }
+
+    /// The retries of every token.
+    pub fn total(&self) -> u64 {
+        self.write_busy + self.durability + self.board_unavailable
+    }
+}
+
+/// Whether a transport halt's exchange may have carried its request to the
+/// board: every phase but the four that end before a byte of it is written —
+/// a scheme no transport holds, a host unresolved, a connection refused, a
+/// request this client refuses to write.
+fn may_have_sent(d: &DialError) -> bool {
+    !matches!(d, DialError::NotHeld(_) | DialError::Resolve(_) | DialError::Connect(_) | DialError::Request(_))
 }
 
 /// The claimant's one content-scoped signed session over the board, the
@@ -178,6 +200,14 @@ pub struct Writer<'b> {
     pub writes: u64,
     /// The read frames sent, under the session or as a guest.
     pub reads: u64,
+    /// When a stall was last said ([`STALL_SAID_EVERY`]).
+    stall_said: Option<Instant>,
+    /// The envelope id of the write frame sent whose answer was never read:
+    /// set as each write frame goes out, cleared as its answer — an ack, a
+    /// rejection, a refusal, the death signal — comes back, and held where
+    /// a transport halt broke the exchange after the request may have been
+    /// written ([`may_have_sent`]).
+    in_flight: Option<String>,
 }
 
 impl<'b> Writer<'b> {
@@ -207,13 +237,29 @@ impl<'b> Writer<'b> {
             retries: Retries::default(),
             writes: 0,
             reads: 0,
+            stall_said: None,
+            in_flight: None,
         })
     }
 
-    /// The board, for the namespace reads the library spells
-    /// (`next_account_prefix`, `principal_prefix`).
-    pub fn board(&self) -> &'b Board {
-        self.board
+    /// The write frame sent whose answer was never read, taken: its envelope
+    /// id, where a transport halt broke its exchange after the request may
+    /// have been written — the one write a run stopped there may have landed
+    /// with no line of the manifest recording it.
+    pub fn take_in_flight(&mut self) -> Option<String> {
+        self.in_flight.take()
+    }
+
+    /// `next_account_prefix(parent)`, the library's namespace read, counted.
+    pub fn next_account_prefix(&mut self, parent: &str) -> Result<Option<String>, Halt> {
+        self.reads += 1;
+        self.board.next_account_prefix(parent)
+    }
+
+    /// `principal_prefix(principal)`, the library's namespace read, counted.
+    pub fn principal_prefix(&mut self, principal: u64) -> Result<Option<String>, Halt> {
+        self.reads += 1;
+        self.board.principal_prefix(principal)
     }
 
     /// The session's ordinary end.
@@ -241,17 +287,27 @@ impl<'b> Writer<'b> {
     }
 
     /// [`Writer::write`] under `token`'s session — the bare sessions the
-    /// second account takes. The first refusal of each transient token in
-    /// the run is said once, as it is met: a storm of them is otherwise a
-    /// minute of silence per write, its count said only at the end.
+    /// second account takes. Each frame is held IN FLIGHT from its sending
+    /// to its answer ([`Writer::take_in_flight`]). A stall is said as its
+    /// first refusal is met and at most once per [`STALL_SAID_EVERY`] while
+    /// it lasts, a recurrence later in the run said again — naming the
+    /// token, the write's op and envelope id, its refusals and seconds so
+    /// far, and the run's retries by token: a storm is otherwise a minute of
+    /// silence per write, its count said only at the end.
     pub fn write_as(&mut self, token: &Token, mut frame: Value, id: &str) -> Result<Value, Halt> {
         frame["id"] = Value::String(id.to_string());
-        let deadline = Instant::now() + WRITE_BUSY_PATIENCE;
+        let began = Instant::now();
+        let deadline = began + WRITE_BUSY_PATIENCE;
         let mut backoff = WRITE_BUSY_BACKOFF_FIRST;
         let mut refused = 0u64;
         loop {
             self.writes += 1;
-            let transient = match self.board.op(Some(token), &frame) {
+            self.in_flight = Some(id.to_string());
+            let answer = self.board.op(Some(token), &frame);
+            if !matches!(&answer, Err(Halt::Dial(d)) if may_have_sent(d)) {
+                self.in_flight = None;
+            }
+            let transient = match answer {
                 Ok(Answer::Document(v)) => match Rejection::of(&v) {
                     None => return Ok(v),
                     Some(r) if r.key() == "durability" => Transient::Durability,
@@ -267,10 +323,19 @@ impl<'b> Writer<'b> {
                 Err(h) => return Err(h),
             };
             refused += 1;
-            if self.retries.tally(transient) == 1 {
+            self.retries.tally(transient);
+            if self.stall_said.is_none_or(|at| at.elapsed() >= STALL_SAID_EVERY) {
+                self.stall_said = Some(Instant::now());
                 talk(format!(
-                    "the board answered `{}`: each write is retried for up to {} s, and the retries are counted at the end",
+                    "the board answered `{}` to `{}` (envelope id `{id}`), {refused} time{} over {:.1} s for this write; this run's \
+                     retries so far: write_busy {}, durability {}, board_unavailable {} — a write is retried for up to {} s",
                     transient.token(),
+                    frame["op"].as_str().unwrap_or("?"),
+                    if refused == 1 { "" } else { "s" },
+                    began.elapsed().as_secs_f64(),
+                    self.retries.write_busy,
+                    self.retries.durability,
+                    self.retries.board_unavailable,
                     WRITE_BUSY_PATIENCE.as_secs()
                 ));
             }
@@ -465,7 +530,7 @@ impl<'b> Writer<'b> {
             .ok_or_else(|| {
                 Halt::face(
                     "a run `image` answered is no content extent",
-                    format!("{runs:?}"),
+                    clipped(&format!("{runs:?}")),
                     "this is a board fault; nothing was written",
                 )
             })?;
@@ -522,7 +587,7 @@ impl<'b> Writer<'b> {
                 .unwrap_or(0)),
             other => Err(Halt::face(
                 format!("/chain?at=0 answered HTTP {other}"),
-                String::from_utf8_lossy(&resp.body).into_owned(),
+                clipped(&String::from_utf8_lossy(&resp.body)),
                 "this board is not speaking the wire this tool expects",
             )),
         }
@@ -539,11 +604,12 @@ fn session_closed() -> Halt {
     )
 }
 
-/// An answer without the member the frame's `resp` promises.
+/// An answer without the member the frame's `resp` promises, its opening
+/// echoed.
 fn unexpected(op: &str, v: &Value) -> Halt {
     Halt::face(
         format!("`{op}` answered a document this tool cannot read"),
-        v.to_string(),
+        clipped(&v.to_string()),
         "this board is not speaking the wire this tool expects; nothing more was written",
     )
 }

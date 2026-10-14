@@ -14,10 +14,12 @@
 //! (`require_no_key_file`). A halt is one block on stderr: the state, its
 //! cause, the one act (AUTH-5.66; AUTH-5.67's key-file cell naming the path
 //! and the state) — a transport halt's act, and a retry-class refusal's,
-//! named here where the library's rendering names none (`act_beside`). What
-//! the thirteen commands share among themselves alone — the person doors,
-//! the payload's read, the anchor boxes' default, the three facts, the
-//! whole-set compare — stays in `commands.rs`.
+//! named here where the library's rendering names none (`act_beside`). The
+//! operator's lines of both programs name a key one way (`key_named`) and
+//! echo a third party's text to one bound (`clipped`). What the thirteen
+//! commands share among themselves alone — the person doors, the payload's
+//! read, the anchor boxes' default, the three facts, the whole-set compare —
+//! stays in `commands.rs`.
 
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -235,6 +237,32 @@ pub fn data_refused(e: io::Error) -> Halt {
         e.to_string(),
         "run it again with stdout at a terminal or a file; where it acted on the board or in the store before this write, that act \
          stands — read it back (`skep fingerprint`, `skep verify`) rather than acting twice",
+    )
+}
+
+/// The most characters of a third party's text — a reply's line, a board's
+/// answer, a header's value — an operator's line or a halt echoes: the
+/// party that wrote the text sizes it, and the line is the operator's.
+pub const CLIPPED_CHARS: usize = 120;
+
+/// `text` clipped to [`CLIPPED_CHARS`] characters, an ellipsis where it ran
+/// longer — counted in characters, so no cut splits one.
+pub fn clipped(text: &str) -> String {
+    match text.char_indices().nth(CLIPPED_CHARS) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_string(),
+    }
+}
+
+/// A key as the operator's lines name it: its fingerprint — what the board
+/// testifies each write under the key's session by (AUTH-4.48), and so what
+/// joins a line here to the board's record — and its label beside it,
+/// `(none)` where it has none.
+pub fn key_named(key: &KeyFacts) -> String {
+    format!(
+        "{} (label {})",
+        key.fingerprint,
+        key.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into())
     )
 }
 
@@ -493,5 +521,42 @@ mod tests {
             "{record}"
         );
         assert!(matches!(c0_inert(&record), Cow::Borrowed(text) if text == record));
+    }
+
+    /// A third party's text a line echoes is clipped to [`CLIPPED_CHARS`]
+    /// characters — counted in chars, so a cut never splits one — an
+    /// ellipsis marking the cut; text at or under the bound stands whole.
+    #[test]
+    fn a_third_partys_text_is_clipped_to_its_bound_in_chars() {
+        assert_eq!(clipped("1.0.1"), "1.0.1");
+        let at = "é".repeat(CLIPPED_CHARS);
+        assert_eq!(clipped(&at), at, "at the bound, whole");
+        assert_eq!(clipped(&format!("{at}é")), format!("{at}…"), "past it, cut at a character");
+        assert_eq!(clipped(&"a".repeat(100_000)).chars().count(), CLIPPED_CHARS + 1);
+    }
+
+    /// A key is named by its fingerprint and its label, `(none)` where it has
+    /// none, the label rendered inert.
+    #[test]
+    fn a_key_is_named_by_its_fingerprint_and_its_label() {
+        let file = |label: Option<&str>| {
+            let file = skep_client::sheet::KeyFile::new(
+                skep_client::sheet::Seed::new([7; 32]),
+                false,
+                label.map(|l| skep_client::sheet::Label::new(l).unwrap()),
+                None,
+            );
+            KeyFacts {
+                fingerprint: file.fingerprint,
+                public: file.public.clone(),
+                anchor: false,
+                label: label.map(str::to_string),
+                path: "/s/keys/k.key".into(),
+            }
+        };
+        let phone = file(Some("phone\u{202e}"));
+        assert_eq!(key_named(&phone), format!("{} (label phone<U+202E>)", phone.fingerprint));
+        let bare = file(None);
+        assert_eq!(key_named(&bare), format!("{} (label (none))", bare.fingerprint));
     }
 }

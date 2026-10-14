@@ -38,7 +38,10 @@
 //!   and their removal ([`Store::expired_uploads`],
 //!   [`Store::expire_upload`]), and the unlink of one file or one aside
 //!   ([`Store::unlink_blob`], [`Store::remove_aside`]) — each one act, so
-//!   the daemon's pass holds its own lock around exactly one.
+//!   the daemon's pass holds its own lock around exactly one, and each
+//!   removal the pass makes answering the bytes its unlink freed, nothing
+//!   where another name still holds the file, so the pass's line says what
+//!   it reclaimed.
 //! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Stream::settle`], and the record's offset and
 //!   expiry are written after each sync, the expiry re-fixed from the
@@ -65,15 +68,19 @@
 //!   passed a size trigger, under the store's lock on that log's appends
 //!   alone), which rewrites a stopped log whatever its count; between the
 //!   two a stopped log answers `Io` to every act that writes it ([`Store`]),
-//!   naming the stop's cause, which [`Store::stopped_logs`] answers — a full
-//!   volume told apart from a read-only mount or a failing device.
+//!   naming the stop's cause, which [`Store::stopped_logs`] answers with the
+//!   stop's age and the appends it has refused ([`LogStop`]) — a full volume
+//!   told apart from a read-only mount or a failing device. Each log's size,
+//!   the room its next rewrite needs, is answered too ([`Store::log_sizes`],
+//!   [`LogSize`]), and a compaction answers the size it rewrote a log from.
 //! * EVERY FAILURE NAMES ITS FILE AND ITS ACT: an I/O error the store
 //!   answers reads `{file}: {act}: {cause}`, its kind kept — the file as it
 //!   stands within the data directory, `blobs/leases.log`, never by an
-//!   absolute path, and a partial by its directory alone (`blobs.rs`) — so
-//!   the daemon's refused start, its pruner's line, the pull's refusal and
-//!   a client's `blob_io` detail each say which file and which act; save
-//!   the deferred unlink's, which [`Store::next_aside`] names beside it.
+//!   absolute path, and a partial by its directory alone, a full volume's
+//!   cause reading `the volume is full ({the OS's text})` (`blobs.rs`) — so
+//!   the daemon's refused start, its pruner's line, the deferred unlink's
+//!   line, the pull's refusal and a client's `blob_io` detail each say which
+//!   file and which act, the error alone carrying both.
 //! * THE OPERATOR's TWO DOORS OPEN THE STORE AS THE DAEMON DOES NOT
 //!   (`media.md` §Recovery): [`Store::inspect`] reads the four stores as
 //!   they stand — the logs' torn tails cut in memory alone, nothing
@@ -90,13 +97,14 @@
 //!   arm is never held across the freeing of a file's blocks.
 //! * OPEN RECONCILES AND COMPACTS, AND ANSWERS WHAT IT DID
 //!   ([`Store::opened`], [`Opened`]): the store writes no operator stream,
-//!   so every repair below — and what it found of the logs, a cut that took
-//!   whole lines past its first untrusted one ([`TailCut`]), lines read as
-//!   nothing, a store or a log found absent — is the account its embedder
-//!   says. First, nothing at a name it acts on
+//!   so every repair below, and the bytes the repairs freed — and what it
+//!   found of the logs, a cut that took whole lines past its first untrusted
+//!   one ([`TailCut`]), lines read as nothing, a store or a log found absent
+//!   — is the account its embedder says. First, nothing at a name it acts on
 //!   followed or shared — a symbolic link, a special file, or a second link
 //!   to a file the store writes in place failing the open, every one it
-//!   found named in one refusal with the act for its kind
+//!   found counted in one refusal of bounded length, up to eight clauses
+//!   naming them, with the act for each kind
 //!   (`blobs.rs`); both logs tail-checked and rewritten to
 //!   their current records, a line naming a designation or hex the store's
 //!   name check refuses, or an offset past its length, read as no record
@@ -137,7 +145,8 @@ mod error;
 mod blobs;
 // The JSON-lines log both record logs are, `Log`: its tail check at open
 // and what each reading found (`LogRead`, `TailCut`), its append, undone
-// where it fails, the stop and its cause, and its compaction by the install
+// where it fails, its size (`LogSize`), the stop with its cause, its age and
+// the appends it refused (`LogStop`), and its compaction by the install
 // order.
 mod jsonl;
 // The upload records, `uploads.log`: the records' log, which answers by the
@@ -160,7 +169,7 @@ mod partials;
 mod store;
 
 pub use error::BlobError;
-pub use jsonl::{LogRead, TailCut};
+pub use jsonl::{LogRead, LogSize, LogStop, TailCut};
 pub use lease::{Lease, LeaseState};
 pub use partials::{HashFunction, SYNC_GRAIN};
 pub use store::{Finished, Inspection, Opened, Step, Store, Stream};
@@ -192,6 +201,8 @@ const _: fn() = || {
     kept::<Lease>();
     kept::<LeaseState>();
     kept::<LogRead>();
+    kept::<LogSize>();
+    kept::<LogStop>();
     kept::<Opened>();
     kept::<Step>();
     kept::<TailCut>();

@@ -18,8 +18,15 @@
 //! that fails past its rename stops it too: the rewrite then stands at the
 //! log's name, and the file an append would write is the one it replaced,
 //! which no open reads. [`Log`] owns the file, the length and the count of
-//! its whole lines, and the stop with its cause; what a line means is its
-//! store's (`uploads.rs`, `lease.rs`).
+//! its whole lines, and the stop with its cause, its start and the appends
+//! it has refused since; what a line means is its store's (`uploads.rs`,
+//! `lease.rs`).
+//!
+//! THE LOG ANSWERS WHAT ITS EMBEDDER SAYS OF IT, as figures and never as a
+//! line of its own (the store writes no stream): its size ([`LogSize`]) —
+//! the room its next rewrite needs, and what a compaction rewrote it from —
+//! and its stop ([`LogStop`]): the cause, how long it has stood, and the
+//! appends refused while it stood, the uploads it cost.
 //!
 //! THE LOG IS READ TWO WAYS: [`Log::open`] cuts the torn tail off the file
 //! and opens it for appending — the store's open; [`Log::read_as_found`]
@@ -34,10 +41,11 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::blobs::{dir_label, fsync_dir, label, named, not_found_as_none};
+use crate::blobs::{dir_label, fsync_dir, label, named, not_found_as_none, Cause};
 
 /// WHAT ONE READING OF A LOG FOUND — the store's open's
 /// ([`Opened`](crate::Opened)), or the inspection's
@@ -106,9 +114,59 @@ impl TailCut {
     }
 }
 
+/// THE SIZE OF ONE LOG ([`Store::log_sizes`](crate::Store::log_sizes)), and
+/// what a compaction rewrote one from
+/// ([`Store::compact_logs_if_past`](crate::Store::compact_logs_if_past)):
+/// its name, its whole lines and their bytes, as the log counts them — the
+/// file at its name, a torn tail a failed append left past them not among
+/// them. A rewrite needs room for a second copy of the file it rewrites,
+/// which is this.
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct LogSize {
+    /// The log as a line names it, within the data directory:
+    /// `blobs/uploads.log`, `blobs/leases.log`.
+    pub name: String,
+    /// Its whole lines.
+    pub lines: usize,
+    /// Their bytes.
+    pub bytes: u64,
+}
+
+/// A LOG's STOP as its embedder reads it
+/// ([`Store::stopped_logs`](crate::Store::stopped_logs)): the cause in the
+/// operator's words, how long the stop has stood, and the appends the log
+/// has refused while it stood — on the records' log a creation, a byte
+/// received or a retirement each, on the leases' a finish's lease each: the
+/// uploads it cost, every one answered `Io`. The refusal a caller meets
+/// names the cause alone; the age and the count are the operator's.
+///
+/// `#[non_exhaustive]`: emitted, never constructed by a caller — field
+/// reads are unaffected, and a further field is an addition rather than a
+/// broken build.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct LogStop {
+    /// The cause, the act that failed and the OS's cause last: `its append
+    /// failed ({cause}) and the cut back to its last whole line failed too
+    /// ({cause})`, or `its rewrite failed past its rename ({file}: {act}:
+    /// {cause}): the rewrite stands at its name` — a full volume's cause
+    /// reading `the volume is full ({the OS's text})` in each.
+    pub cause: String,
+    /// How long the stop has stood when it was read: a monotonic span from
+    /// the act that stopped the log, which no clock step moves.
+    pub age: Duration,
+    /// The appends the log has refused since it stopped.
+    pub refused: u64,
+}
+
 /// One JSON-lines log: its path and its name, its append-mode file, the
-/// byte length and the count of the whole lines the file holds, and the
-/// stop's cause where it has stopped. The length is what a failed append is
+/// byte length and the count of the whole lines the file at its name holds,
+/// and the stop where it has stopped. The length is what a failed append is
 /// cut back to and the count the one figure the compaction reads; this
 /// type's own appends and rewrites alone move them.
 pub(crate) struct Log {
@@ -119,16 +177,26 @@ pub(crate) struct Log {
     file: File,
     len: u64,
     lines: usize,
-    /// THE STOP, with its cause in the operator's words: an append failed
-    /// and its cut-back failed too — the file may end in a torn line, and a
-    /// line appended after it would be cut with it at the next open — or a
-    /// compaction failed past its rename, where the rewrite stands at the
-    /// path and the open file, the length and the count are still the
-    /// replaced file's, so an append would answer durable over a line no
-    /// open reads. A stopped log takes no append, its refusal naming the
-    /// cause; a compaction that completes, which writes the file whole,
-    /// lifts the stop.
-    stopped: Option<String>,
+    /// THE STOP: an append failed and its cut-back failed too — the file may
+    /// end in a torn line, and a line appended after it would be cut with it
+    /// at the next open — or a compaction failed past its rename, where the
+    /// rewrite stands at the path while the open file is still the one it
+    /// replaced, so an append would answer durable over a line no open
+    /// reads. A stopped log takes no append, its refusal naming the cause; a
+    /// compaction that completes, which writes the file whole, lifts the
+    /// stop.
+    stopped: Option<Stop>,
+}
+
+/// The stop a [`Log`] holds: its cause in the operator's words, the instant
+/// it began, and the appends refused since. A second act that stops a log
+/// already stopped — a stopped log's compaction failing past its rename —
+/// gives it the new cause and keeps its start and its count, the log having
+/// refused every append since the first.
+struct Stop {
+    cause: String,
+    since: Instant,
+    refused: u64,
 }
 
 impl Log {
@@ -170,7 +238,23 @@ impl Log {
     /// failed, or a compaction failed past its rename; it takes no append
     /// until a compaction completes. `None` is a log that takes appends.
     pub fn stopped(&self) -> Option<&str> {
-        self.stopped.as_deref()
+        self.stopped.as_ref().map(|stop| stop.cause.as_str())
+    }
+
+    /// THE STOP AS ITS EMBEDDER READS IT, where the log has stopped: its
+    /// cause, its age at this read, and the appends refused since
+    /// ([`LogStop`]).
+    pub fn stop(&self) -> Option<LogStop> {
+        self.stopped.as_ref().map(|stop| LogStop {
+            cause: stop.cause.clone(),
+            age: stop.since.elapsed(),
+            refused: stop.refused,
+        })
+    }
+
+    /// THE LOG's SIZE: its whole lines and their bytes ([`LogSize`]).
+    pub fn size(&self) -> LogSize {
+        LogSize { name: self.name.clone(), lines: self.lines, bytes: self.len }
     }
 
     /// Append `v` as the log's next line and fsync it — what a figure that
@@ -200,13 +284,14 @@ impl Log {
     /// operator's words ([`Log::stopped`]), and the append answers its own
     /// failure with the stop said after it, so the act that stopped the log
     /// says so at the moment it does; a stopped log refuses every later
-    /// append, naming the cause. The unit suite drives it with a write that
-    /// fails partway.
+    /// append, naming the cause, and counts it ([`Log::stop`]). The unit
+    /// suite drives it with a write that fails partway.
     fn append_by(&mut self, v: &Value, write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>) -> io::Result<()> {
-        if let Some(cause) = &self.stopped {
+        if let Some(stop) = &mut self.stopped {
+            stop.refused += 1;
             return Err(io::Error::other(format!(
-                "{} takes no append until a compaction completes: {cause}",
-                self.name
+                "{} takes no append until a compaction completes: {}",
+                self.name, stop.cause
             )));
         }
         let line = line_of(v);
@@ -214,13 +299,16 @@ impl Log {
             return Err(match self.file.set_len(self.len).and_then(|()| self.file.sync_all()) {
                 Ok(()) => named(e, &self.name, "append"),
                 Err(cut) => {
-                    let cause =
-                        format!("its append failed ({e}) and the cut back to its last whole line failed too ({cut})");
+                    let cause = format!(
+                        "its append failed ({}) and the cut back to its last whole line failed too ({})",
+                        Cause(&e),
+                        Cause(&cut)
+                    );
                     let stopped = io::Error::new(
                         e.kind(),
                         format!("{}: append: {cause}, so it takes no append until a compaction completes", self.name),
                     );
-                    self.stopped = Some(cause);
+                    self.stop_by(cause);
                     stopped
                 }
             });
@@ -238,7 +326,9 @@ impl Log {
     /// directory fsynced — the same install order a blob takes; it writes
     /// the file whole, so once it completes it lifts a stop. One that fails
     /// before its rename leaves the log as it was; one that fails past it
-    /// stops the log until a compaction completes.
+    /// stops the log until a compaction completes, its size the rewrite's,
+    /// which stands at the name. Answers the size it rewrote the log from
+    /// ([`LogSize`]), `None` where it left the log as it was.
     ///
     /// PRECONDITION: `current` is what the log's store folds the log's lines
     /// to — each value one a line the log holds reads as, none twice — as
@@ -251,10 +341,11 @@ impl Log {
     /// which is what makes the count it reads and the records it writes one
     /// state: an append that arrives during the rewrite waits on that lock
     /// and lands in the new file once the install order has completed.
-    pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<()> {
+    pub fn compact(&mut self, current: impl ExactSizeIterator<Item = Value>) -> io::Result<Option<LogSize>> {
         if self.stopped.is_none() && current.len() == self.lines {
-            return Ok(());
+            return Ok(None);
         }
+        let from = self.size();
         let dir = self.path.parent().expect("a log sits in a directory");
         let twin = self.path.with_extension("compact");
         let at_twin = |e: io::Error, act: &str| named(e, label(&twin, 2), act);
@@ -280,26 +371,34 @@ impl Log {
             f.sync_all().map_err(|e| at_twin(e, "sync"))?;
         }
         fs::rename(&twin, &self.path).map_err(|e| named(e, &self.name, "rename its rewrite over it"))?;
-        // Past the rename the rewrite stands at the path, and the open file,
-        // the length and the count are the replaced file's: stopped, the
-        // cause kept, until the install order completes and they are the
-        // rewrite's.
+        // Past the rename the rewrite stands at the path, its length and its
+        // count the log's, while the open file is still the one it replaced:
+        // stopped, the cause kept, until the install order completes and the
+        // open file is the rewrite's too.
+        self.len = len;
+        self.lines = lines;
         let installed = fsync_dir(dir)
             .map_err(|e| named(e, dir_label(dir, 1), "fsync"))
             .and_then(|()| open_append(&self.path).map_err(|e| named(e, &self.name, "open")));
         match installed {
             Ok(file) => {
                 self.file = file;
-                self.len = len;
-                self.lines = lines;
                 self.stopped = None;
-                Ok(())
+                Ok(Some(from))
             }
             Err(e) => {
-                self.stopped =
-                    Some(format!("its rewrite failed past its rename ({e}): the rewrite stands at its name"));
+                self.stop_by(format!("its rewrite failed past its rename ({e}): the rewrite stands at its name"));
                 Err(e)
             }
+        }
+    }
+
+    /// STOP the log for `cause`: a log already stopped takes the new cause
+    /// and keeps its start and its count of refused appends ([`Stop`]).
+    fn stop_by(&mut self, cause: String) {
+        match &mut self.stopped {
+            Some(stop) => stop.cause = cause,
+            None => self.stopped = Some(Stop { cause, since: Instant::now(), refused: 0 }),
         }
     }
 }

@@ -30,12 +30,15 @@ use crate::{every_deposit_unplaced, hex_of, open, standing, INTERVAL, INTERVAL_M
 /// waiting on the store's own lock and landing in the new file, so the
 /// reopen lists all twenty-three; a log under the minimum is left alone
 /// whatever its ratio, and a log at the minimum over nothing is rewritten
-/// to nothing; no log has stopped.
+/// to nothing; no log has stopped. The compaction answers the size it
+/// rewrote each log from, and the store each log's size after — its lines
+/// and the file's bytes (`Store::log_sizes`).
 #[test]
 fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_the_new_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
     let lines = |name: &str| fs::read_to_string(root.join(name)).unwrap().lines().count();
+    let bytes = |name: &str| fs::metadata(root.join(name)).unwrap().len();
     let store = open(&root, 0);
     let mut standing_ids = Vec::new();
     for _ in 0..3 {
@@ -46,17 +49,28 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
         store.end_upload("k", &rec.id, 0).unwrap();
     }
     assert_eq!(lines("uploads.log"), 3 + 1_022);
-    assert_eq!(store.compact_logs_if_past(4, 2_000).unwrap(), (false, false), "under the minimum: left alone");
+    assert_eq!(store.compact_logs_if_past(4, 2_000).unwrap(), (None, None), "under the minimum: left alone");
     assert_eq!(lines("uploads.log"), 1_025);
+    let (uploads, leases) = store.log_sizes();
+    assert_eq!(
+        (uploads.name.as_str(), uploads.lines, uploads.bytes),
+        ("blobs/uploads.log", 1_025, bytes("uploads.log"))
+    );
+    assert_eq!((leases.name.as_str(), leases.lines, leases.bytes), ("blobs/leases.log", 0, 0));
     let raced: Vec<UploadId> = thread::scope(|s| {
         let appends = s.spawn(|| (0..20).map(|_| store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap().id).collect::<Vec<_>>());
-        let compacted = store.compact_logs_if_past(4, 1_024).unwrap();
-        assert_eq!(compacted, (true, false), "the records' log past its trigger, the lease log empty");
+        let (uploads, leases) = store.compact_logs_if_past(4, 1_024).unwrap();
+        // A raced creation that took the lock first is among the lines the
+        // rewrite was made from.
+        assert!(uploads.is_some_and(|from| from.lines >= 1_025), "the records' log past its trigger, rewritten");
+        assert_eq!(leases, None, "the lease log empty, left alone");
         appends.join().expect("the appending thread")
     });
     assert_eq!(store.stopped_logs(), (None, None));
     assert_eq!(lines("uploads.log"), 3 + 20, "the current records and the raced appends, in the one file");
-    assert_eq!(store.compact_logs_if_past(4, 1_024).unwrap(), (false, false), "under the minimum after");
+    let after = store.log_sizes().0;
+    assert_eq!((after.lines, after.bytes), (23, bytes("uploads.log")), "the log's size is the file's");
+    assert_eq!(store.compact_logs_if_past(4, 1_024).unwrap(), (None, None), "under the minimum after");
     drop(store);
     let reopened = open(&root, 0);
     let mut listed: Vec<UploadId> = reopened.uploads_of("k", 0).into_iter().map(|r| r.id).collect();
@@ -69,8 +83,10 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
         reopened.end_upload("k", id, 0).unwrap();
     }
     assert_eq!(lines("uploads.log"), 23 + 23);
-    assert_eq!(reopened.compact_logs_if_past(4, 46).unwrap(), (true, false));
+    let (uploads, leases) = reopened.compact_logs_if_past(4, 46).unwrap();
+    assert_eq!((uploads.map(|from| from.lines), leases), (Some(46), None), "rewritten from its 46 lines");
     assert_eq!(lines("uploads.log"), 0);
+    assert_eq!(reopened.log_sizes().0.lines, 0, "to nothing");
 }
 
 /// A STOPPED LOG ANSWERS ITS CAUSE, AND EVERY REFUSAL NAMES IT
@@ -78,7 +94,8 @@ fn a_log_past_its_trigger_is_compacted_and_appends_during_the_rewrite_land_in_th
 /// with `blobs/` written and searched but not read, so the rewrite is
 /// renamed over the log and the root's fsync refused — the log STOPS, and
 /// the store answers why, the act that failed past the rename and the OS's
-/// cause; a creation then is refused naming the log and that cause; and the
+/// cause; a creation then is refused naming the log and that cause alone,
+/// and the stop counts it, the operator's figure and no caller's; and the
 /// next compaction, the root readable, rewrites the log whatever its count
 /// and lifts the stop.
 #[cfg(unix)]
@@ -100,21 +117,22 @@ fn a_stopped_log_answers_its_cause_and_every_refusal_names_it() {
     fs::set_permissions(&root, mode).unwrap();
     let Some(compacted) = compacted else { return };
     assert!(compacted.is_err(), "the rewrite fails past its rename");
-    let (cause, leases) = store.stopped_logs();
-    let cause = cause.expect("the records' log stopped");
+    let (stop, leases) = store.stopped_logs();
+    let stop = stop.expect("the records' log stopped");
     assert_eq!(leases, None, "the lease log takes appends");
-    assert!(cause.starts_with("its rewrite failed past its rename (blobs/: fsync: "), "{cause}");
+    assert!(stop.cause.starts_with("its rewrite failed past its rename (blobs/: fsync: "), "{stop:?}");
+    assert_eq!(stop.refused, 0, "nothing refused yet");
     let refused = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).expect_err("a stopped log");
     assert_eq!(
         refused.to_string(),
-        format!("blobs/uploads.log takes no append until a compaction completes: {cause}"),
-        "the refusal names the log and the stop's cause"
+        format!("blobs/uploads.log takes no append until a compaction completes: {}", stop.cause),
+        "the refusal names the log and the stop's cause, and nothing of the operator's figures"
     );
-    assert_eq!(
-        store.compact_logs_if_past(4, 1_024).unwrap(),
-        (true, false),
-        "a stopped log rewritten whatever its count"
-    );
+    let counted = store.stopped_logs().0.expect("still stopped");
+    assert_eq!((counted.cause, counted.refused), (stop.cause, 1), "the refused creation counted");
+    assert!(counted.age >= stop.age, "the stop's age only grows: {:?} then {:?}", stop.age, counted.age);
+    let (uploads, leases) = store.compact_logs_if_past(4, 1_024).unwrap();
+    assert!(uploads.is_some() && leases.is_none(), "a stopped log rewritten whatever its count");
     assert_eq!(store.stopped_logs(), (None, None), "and the stop lifted");
     store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).expect("a creation lands again");
 }
@@ -464,9 +482,9 @@ fn no_handle_outlives_the_request_that_opened_it() {
 /// (4) REMOVED ON EXPIRY, while the store serves — the pruner's act:
 /// [`Store::expired_uploads`] lists every record past its expiry, whatever
 /// principal minted it, reading no reference; [`Store::expire_upload`]
-/// removes the partial and retires the record, and leaves a standing upload
-/// as it is, so a clock that moved between the read and the act costs
-/// nothing.
+/// removes the partial and retires the record, answering the bytes the
+/// partial's unlink freed, and leaves a standing upload as it is, so a clock
+/// that moved between the read and the act costs nothing.
 ///
 /// [`Store::expired_uploads`]: skep_blobs::Store::expired_uploads
 /// [`Store::expire_upload`]: skep_blobs::Store::expire_upload
@@ -482,12 +500,12 @@ fn the_expired_uploads_are_listed_and_removed_while_the_store_serves() {
     let now = early.expires;
     let expired: Vec<UploadId> = store.expired_uploads(now).into_iter().map(|r| r.id).collect();
     assert_eq!(expired, vec![early.id], "the one past its expiry, whoever minted it");
-    assert!(!store.expire_upload(&late.id, now).unwrap(), "a standing upload is left as it is");
+    assert_eq!(store.expire_upload(&late.id, now).unwrap(), None, "a standing upload is left as it is");
     assert!(partial(&late.id).is_file());
-    assert!(store.expire_upload(&early.id, now).unwrap());
+    assert_eq!(store.expire_upload(&early.id, now).unwrap(), Some(5), "removed, its partial's 5 bytes freed");
     assert!(!partial(&early.id).exists(), "its partial removed");
     assert!(store.upload("a", &early.id, 1).is_none(), "its record retired, at any clock");
-    assert!(!store.expire_upload(&early.id, now).unwrap(), "retired once");
+    assert_eq!(store.expire_upload(&early.id, now).unwrap(), None, "retired once");
     assert_eq!(store.pending_bytes("a", 1, every_deposit_unplaced), 0);
     assert_eq!(store.pending_bytes("b", now, every_deposit_unplaced), 4, "the standing one counts");
 }
@@ -506,9 +524,9 @@ fn an_expired_uploads_stream_appends_and_finishes_nothing() {
     let rec = store.create_upload("k", HashFunction::Blake3, 10, INTERVAL, 0).unwrap();
     let mut stream = store.resume("k", &rec.id, 0, 1).unwrap();
     stream.append(b"abc", 1).unwrap();
-    assert!(!store.expire_upload(&rec.id, rec.expires - 1).unwrap(), "a standing upload is left as it is");
+    assert_eq!(store.expire_upload(&rec.id, rec.expires - 1).unwrap(), None, "a standing upload is left as it is");
     assert_eq!(stream.append(b"def", 1).unwrap(), 6, "and its stream with it");
-    assert!(store.expire_upload(&rec.id, rec.expires).unwrap());
+    assert!(store.expire_upload(&rec.id, rec.expires).unwrap().is_some(), "removed");
     assert!(matches!(stream.append(b"ghi", rec.expires), Err(BlobError::NoUpload)), "it appends nothing");
     assert!(matches!(stream.finish(INTERVAL, rec.expires), Err(BlobError::NoUpload)), "and finishes nothing");
 }

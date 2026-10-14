@@ -595,21 +595,23 @@ impl Daemon {
     /// re-queues a failed aside at the queue's head, so every later request
     /// of the family meets the same fault; the once-flag
     /// (`Daemon::aside_fault_said`) says it at the first and not again,
-    /// naming THE ASIDE — the queue's head, `Store::next_aside`, as the
-    /// file's name within `blobs/`, `{designation}/{aside}`, never an
-    /// absolute path — the OS's cause, and the act that clears it. A later
-    /// call that answers `Ok` with the flag set — the queue drained here,
-    /// or swept by the pruner's pass first — says the clearing line once
-    /// and clears the flag; the common case, `Ok` with the flag clear,
-    /// writes nothing. Through the write path's classed door, so the pair
-    /// stands in the one record beside the daemon's other lines.
+    /// naming THE ASIDE as the store's error names it — `{file}: remove:
+    /// {cause}`, the file by its name under the data directory as every
+    /// blob-store line names it, never an absolute path, and the OS's cause
+    /// — and the act that clears it. The error is this call's own, so the
+    /// line names the aside this call met whatever another worker's call has
+    /// taken from the queue since. A later call that answers `Ok` with the
+    /// flag set — the queue drained here, or swept by the pruner's pass
+    /// first — says the clearing line once and clears the flag; the common
+    /// case, `Ok` with the flag clear, writes nothing. Through the write
+    /// path's classed door, so the pair stands in the one record beside the
+    /// daemon's other lines.
     pub(super) fn retire_asides(&self) {
         // THE FAULT (test seam): a panic inside the deferred step, which the
         // transport's catch around this call contains.
         #[cfg(any(test, feature = "test-hooks"))]
         self.fire_the_unlinks_fault();
-        let store = self.media.store();
-        match store.unlink_asides() {
+        match self.media.store().unlink_asides() {
             Ok(_) => {
                 if self.aside_fault_said.swap(false, Ordering::AcqRel) {
                     self.writes.lines().say(Class::Landing, "blob store: the asides unlink again");
@@ -619,23 +621,11 @@ impl Daemon {
                 if self.aside_fault_said.swap(true, Ordering::AcqRel) {
                     return;
                 }
-                // The failed aside, back at the head: its last two path
-                // components are the designation directory and the aside's
-                // own name, the file's name within `blobs/`.
-                let name = store.next_aside().map_or_else(
-                    || "an aside".to_string(),
-                    |aside| {
-                        let mut within: Vec<&str> =
-                            aside.iter().rev().take(2).filter_map(|c| c.to_str()).collect();
-                        within.reverse();
-                        within.join("/")
-                    },
-                );
                 self.writes.lines().say(
                     Class::Failure,
                     format_args!(
-                        "blob store: the aside {name} could not be unlinked: {e}; it stands for \
-                         the pass or the next open"
+                        "blob store: the deferred unlink failed: {e}; the aside stands for the \
+                         pass or the next open"
                     ),
                 );
             }
@@ -655,11 +645,13 @@ impl Daemon {
     /// step failed, the report's own `Display` (its figures, the halt, the
     /// compaction half); ROW 35 under `Class::Failure` where one did —
     /// `pruner: the pass failed: {e}`, the step and the cause — then the SAME
-    /// compaction half (`PrunePass::compaction`: `{log} compacted`, `{log}'s
-    /// stop lifted, rewritten whole after {cause}`, `a compaction FAILED`,
-    /// `STOPPED: {log} takes no append until a compaction completes —
-    /// {cause}`), so the line names the failure AND whether the stop it may
-    /// have met is lifted or stands, and why it stood. Nothing where the
+    /// compaction half (`PrunePass::compaction`: each log's size, `{log}
+    /// {n} lines ({b} bytes)`, and what a compaction rewrote it from;
+    /// `{log}'s stop lifted, rewritten whole after {stop}`; `a compaction
+    /// FAILED`; `STOPPED: {log} takes no append until a compaction completes
+    /// — {stop}`, a stop its cause, its age and the appends it refused), so
+    /// the line names the failure AND whether the stop it may have met is
+    /// lifted or stands, why it stood and what it cost. Nothing where the
     /// pass did not start (`None`: the index not ready). The cadence's loop
     /// and the test seam's pass say it alike.
     pub(super) fn say_the_pass(&self, pass: &Option<PrunePass>) {

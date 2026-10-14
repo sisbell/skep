@@ -103,14 +103,15 @@ fn a_pass_unlinks_the_lapsed_unreferenced_files_alone() {
     assert_eq!(pass.kept, 2, "{pass:?}");
     assert_eq!(pass.halted, None, "{pass:?}");
     assert_eq!(pass.asides, 0, "the pass's own aside is unlinked after the arm, counted as the file's unlink: {pass:?}");
-    assert!(pass.to_string().starts_with("pruner: 0 expired partials removed, 1 files unlinked, 2 kept, 0 asides removed"), "{pass}");
+    assert_eq!(pass.freed, 4_000, "the unlinked file's bytes, what the pass reclaimed: {pass:?}");
+    assert!(pass.to_string().starts_with("pruner: 0 expired partials removed, 1 files unlinked, 2 kept, 0 asides removed, 4000 bytes freed"), "{pass}");
     let blobs = blobs_dir(dir.path());
     assert!(blobs.join(blob_hex(&referenced)).is_file(), "named by a cell: kept past its lease");
     assert!(!blobs.join(blob_hex(&unreferenced)).exists(), "lapsed and unreferenced: gone");
     assert!(!fs::read_dir(&blobs).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".retired-")), "renamed aside under the arm, unlinked after it: no aside stands");
     assert!(blobs.join(blob_hex(&live)).is_file(), "held by a live lease: kept");
     let again = sd.daemon().prune_now().expect("the index is ready");
-    assert_eq!((again.unlinked, again.kept), (0, 2), "{again:?}");
+    assert_eq!((again.unlinked, again.kept, again.freed), (0, 2, 0), "{again:?}");
     assert_eq!(usage_of(port, &token), (3_000, 5_000), "the scopes read the record, never the directory");
     // The owner's cell over the kept file is admitted still — the index
     // arm, the lease long lapsed.
@@ -141,6 +142,7 @@ fn a_pass_removes_the_expired_partials_and_keeps_the_standing_ones() {
     assert!(blobs.join(format!(".upload-{expiring}")).is_file(), "stands until a pass");
     let pass = sd.daemon().prune_now().expect("the index is ready");
     assert_eq!(pass.expired_partials, 1, "{pass:?}");
+    assert_eq!(pass.freed, 5, "the expired partial's five bytes freed, the line's figure: {pass:?}");
     assert_eq!(pass.unlinked, 0);
     assert!(!blobs.join(format!(".upload-{expiring}")).exists(), "the expired partial is gone");
     assert!(blobs.join(format!(".upload-{standing}")).is_file(), "the standing one survives");
@@ -317,6 +319,7 @@ fn a_pass_sweeps_an_aside_the_deferred_step_did_not_reach() {
     assert!(aside_stands());
     let pass = sd.daemon().prune_now().expect("ready");
     assert_eq!(pass.asides, 1, "{pass:?}");
+    assert_eq!(pass.freed, 36, "the aside's 36 bytes freed, the line's figure: {pass:?}");
     assert_eq!(pass.unlinked, 0, "the leased file stands: {pass:?}");
     assert!(!aside_stands(), "swept by the pass");
     assert_eq!(fs::read(blobs.join(&hex)).unwrap(), right);
@@ -331,15 +334,19 @@ fn a_pass_sweeps_an_aside_the_deferred_step_did_not_reach() {
 /// the last) and a records' log of 2,063 lines over 3 standing uploads
 /// (each PUT a creation and a retirement) — both past 1,024 and past four
 /// times their records — and the next pass rewrites each to its current
-/// records, under no arm, its line naming both; a record appended after
-/// the rewrite lands in the new file, so the reopen lists every standing
-/// upload; a log under the minimum is left alone by the pass after,
-/// whatever its ratio; and no log has stopped.
+/// records, under no arm, its line naming both by their names under the
+/// data directory, each log's size after and the size it was rewritten
+/// from, every figure the file's own; a record appended after the rewrite
+/// lands in the new file, so the reopen lists every standing upload; a log
+/// under the minimum is left alone by the pass after, whatever its ratio,
+/// its line saying the logs' sizes and no compaction; and no log has
+/// stopped.
 #[test]
 fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     let logs = dir.path().join("blobs");
     let lines = |name: &str| fs::read_to_string(logs.join(name)).unwrap().lines().count();
+    let log_bytes = |name: &str| fs::metadata(logs.join(name)).unwrap().len();
     let standing: Vec<String> = {
         let sd = spawn(dir.path());
         let port = sd.port();
@@ -359,21 +366,43 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
         }
         assert_eq!(lines("uploads.log"), 3 + 2 * 1_030, "the records' log before the pass");
         assert_eq!(lines("leases.log"), 1_030, "the lease log before the pass");
+        let (uploads_before, leases_before) = (log_bytes("uploads.log"), log_bytes("leases.log"));
         let pass = sd.daemon().prune_now().expect("ready");
-        assert!(pass.compacted_uploads && pass.compacted_leases, "{pass:?}");
+        let from = |s: &Option<skep_blobs::LogSize>| s.as_ref().map(|s| (s.lines, s.bytes));
+        assert_eq!(from(&pass.compacted.0), Some((2_063, uploads_before)), "rewritten from the file: {pass:?}");
+        assert_eq!(from(&pass.compacted.1), Some((1_030, leases_before)), "rewritten from the file: {pass:?}");
         assert_eq!(pass.compaction_failed, None, "{pass:?}");
         assert_eq!(pass.stopped, (None, None), "{pass:?}");
-        assert!(pass.to_string().ends_with("; uploads.log and leases.log compacted"), "{pass}");
         assert_eq!(lines("uploads.log"), 3, "rewritten to the standing records");
         assert_eq!(lines("leases.log"), 1, "rewritten to the one lease");
+        let size = |s: &skep_blobs::LogSize| (s.name.clone(), s.lines, s.bytes);
+        assert_eq!(size(&pass.logs.0), ("blobs/uploads.log".into(), 3, log_bytes("uploads.log")), "{pass:?}");
+        assert_eq!(size(&pass.logs.1), ("blobs/leases.log".into(), 1, log_bytes("leases.log")), "{pass:?}");
+        assert!(
+            pass.to_string().ends_with(&format!(
+                "; blobs/uploads.log 3 lines ({} bytes) — compacted from 2063 lines ({uploads_before} bytes); \
+                 blobs/leases.log 1 lines ({} bytes) — compacted from 1030 lines ({leases_before} bytes)",
+                log_bytes("uploads.log"),
+                log_bytes("leases.log")
+            )),
+            "the line names each log, its size and the size it was rewritten from: {pass}"
+        );
         // An append after the rewrite lands in the new file.
         let (st, _, resp) = blob_create(port, Some(&token), 10, b"");
         assert_eq!(st, 200);
         standing.push(json(&resp)["upload"].as_str().unwrap().to_string());
         assert_eq!(lines("uploads.log"), 4);
         let again = sd.daemon().prune_now().expect("ready");
-        assert!(!again.compacted_uploads && !again.compacted_leases, "under the minimum, left alone: {again:?}");
+        assert_eq!(again.compacted, (None, None), "under the minimum, left alone: {again:?}");
         assert!(!again.to_string().contains("compacted"), "{again}");
+        assert!(
+            again.to_string().ends_with(&format!(
+                "; blobs/uploads.log 4 lines ({} bytes); blobs/leases.log 1 lines ({} bytes)",
+                log_bytes("uploads.log"),
+                log_bytes("leases.log")
+            )),
+            "every pass says the logs' sizes: {again}"
+        );
         assert_eq!(deposits_of(port, &token).len(), 1);
         sd.shutdown();
         standing
@@ -439,21 +468,23 @@ impl Drop for Unreadable<'_> {
 /// run with `blobs/` unreadable: that pass's first failure is step (b)'s
 /// read of the designation directories, its (d) runs regardless and the
 /// compaction fails PAST its rename, so `uploads.log` STOPS — and its line
-/// 35 names the failure AND the stop with its cause, the rewrite's failed
-/// fsync. THE STANDING EXPIRED UPLOAD: created
-/// before the stop on a ten-minute interval, lapsed by the clock after it,
-/// so step (a)'s retirement is an append the stopped log refuses — the `?`
-/// that once ended the pass there left the stop standing for the uptime,
-/// creations answering `500 blob_io` and a restart the one cure. NOW: the
-/// next pass fails at (a), the step named, and its (d) rewrites the stopped
-/// log whatever its count: the stop LIFTS — the report's members agree
-/// (`failed` step (a), `compacted_uploads`, `stopped` clear, `lifted` the
-/// stop's cause), its line 35 names the failure AND `uploads.log compacted`
-/// AND the stop it lifted, by that cause — a creation resumes, and
-/// the pass after owes nothing, under line 34: the store's retirement had
-/// dropped the record in this process before the append the stopped log
-/// refused (its partial removed first), so the compaction wrote the log to
-/// the records as they stand.
+/// 35 names the failure, each log's size — the records' log the rewrite's,
+/// the file at its name — AND the stop with its cause, the rewrite's failed
+/// fsync, its age and no append refused yet. THE STANDING EXPIRED UPLOAD:
+/// created before the stop on a ten-minute interval, lapsed by the clock
+/// after it, so step (a)'s retirement is an append the stopped log refuses —
+/// the `?` that once ended the pass there left the stop standing for the
+/// uptime, creations answering `500 blob_io` and a restart the one cure.
+/// NOW: the next pass fails at (a), the step named, and its (d) rewrites the
+/// stopped log whatever its count: the stop LIFTS — the report's members
+/// agree (`failed` step (a), `compacted` the size the log was rewritten
+/// from, `stopped` clear, `lifted` the stop as it stood, its cause and the
+/// two appends it refused, the creation and the retirement), its line 35
+/// names the failure AND the compaction AND the stop it lifted, with its
+/// figures — a creation resumes, and the pass after owes nothing, under line
+/// 34: the store's retirement had dropped the record in this process before
+/// the append the stopped log refused (its partial removed first), so the
+/// compaction wrote the log to the records as they stand.
 #[cfg(unix)]
 #[test]
 fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
@@ -465,6 +496,7 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     let token = open_session(port, CLAIMANT_PRINCIPAL);
     let logs = dir.path().join("blobs");
     let lines = |name: &str| fs::read_to_string(logs.join(name)).unwrap().lines().count();
+    let bytes = |name: &str| fs::metadata(logs.join(name)).unwrap().len();
     // The upload that will stand expired under the stop.
     sd.daemon().install_media_limits(None, None, Some(600_000), None, None).expect("installs");
     let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
@@ -503,23 +535,33 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         stopping.compaction_failed.is_some(),
         "FINDING (§4 row 5): the failed step skipped the compaction — no stop was met: {stopping:?}"
     );
-    let cause = stopping.stopped.0.clone().expect("the records' log stopped past its rename");
+    let stop = stopping.stopped.0.clone().expect("the records' log stopped past its rename");
     assert_eq!(stopping.stopped.1, None, "the lease log takes appends: {stopping:?}");
+    let cause = stop.cause.clone();
     assert!(
         cause.starts_with("its rewrite failed past its rename (blobs/: fsync: "),
         "the stop's cause names the act that failed past the rename: {cause}"
     );
-    assert!(!stopping.compacted_uploads, "{stopping:?}");
+    assert_eq!(stop.refused, 0, "no append refused yet: {stop:?}");
+    assert_eq!(stopping.compacted, (None, None), "{stopping:?}");
+    let rewrite = bytes("uploads.log");
+    assert_eq!(
+        (stopping.logs.0.lines, stopping.logs.0.bytes),
+        (1, rewrite),
+        "the records' log's size the rewrite's, the file at its name: {stopping:?}"
+    );
     let said = pass_failures(&sd);
     assert_eq!(said.len(), 1, "{said:?}");
     assert_eq!(
         said[0],
         format!(
-            "failure: pruner: the pass failed: {failed}; a compaction FAILED: {}; STOPPED: \
-             uploads.log takes no append until a compaction completes — {cause}",
-            stopping.compaction_failed.as_ref().unwrap()
+            "failure: pruner: the pass failed: {failed}; blobs/uploads.log 1 lines ({rewrite} bytes); \
+             blobs/leases.log 0 lines (0 bytes); a compaction FAILED: {}; STOPPED: blobs/uploads.log takes \
+             no append until a compaction completes — {cause}; stopped {} ms, 0 appends refused",
+            stopping.compaction_failed.as_ref().unwrap(),
+            stop.age.as_millis()
         ),
-        "line 35 names the failure AND the stopped log, by its cause"
+        "line 35 names the failure, the logs' sizes AND the stopped log, by its cause, its age and its count"
     );
     assert!(said[0].contains("step (b), the halts' read: "), "the step named: {}", said[0]);
     // THE STOP IN FORCE: a creation's record is an append the log refuses.
@@ -532,22 +574,39 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     let lifting = sd.daemon().prune_now().expect("ready");
     let failed = lifting.failed.clone().expect("step (a)'s retirement is refused by the stopped log");
     assert_eq!(failed.step, PassStep::ExpiredPartials, "{lifting:?}");
-    assert!(failed.cause.contains("uploads.log takes no append until a compaction completes"), "{failed}");
-    assert!(failed.cause.contains(&cause), "the refused append names the stop's cause: {failed}");
+    assert!(failed.cause.contains("blobs/uploads.log takes no append until a compaction completes"), "{failed}");
+    assert!(
+        failed.cause.ends_with(&format!(": {cause}")),
+        "the refused append names the stop's cause alone, no figure of the operator's: {failed}"
+    );
     assert_eq!(lifting.expired_partials, 0, "{lifting:?}");
-    assert!(lifting.compacted_uploads, "FINDING (§4 row 5): the failed step skipped the compaction: {lifting:?}");
+    let from = lifting.compacted.0.clone();
+    assert_eq!(
+        from.map(|from| (from.lines, from.bytes)),
+        Some((1, rewrite)),
+        "FINDING (§4 row 5): the failed step skipped the compaction — or it says no size it rewrote from: \
+         {lifting:?}"
+    );
     assert_eq!(lifting.compaction_failed, None, "{lifting:?}");
     assert_eq!(lifting.stopped, (None, None), "the stop lifted by this pass: {lifting:?}");
-    assert_eq!(lifting.lifted, (Some(cause.clone()), None), "and said lifted, by its cause: {lifting:?}");
+    let lifted = lifting.lifted.0.clone().expect("said lifted");
+    assert_eq!(lifting.lifted.1, None, "{lifting:?}");
+    assert_eq!(
+        (lifted.cause.as_str(), lifted.refused),
+        (cause.as_str(), 2),
+        "lifted as it stood: its cause, and the creation and the retirement it refused"
+    );
     let said = pass_failures(&sd);
     assert_eq!(said.len(), 2, "{said:?}");
     assert_eq!(
         said[1],
         format!(
-            "failure: pruner: the pass failed: {failed}; uploads.log compacted; uploads.log's stop lifted, \
-             rewritten whole after {cause}"
+            "failure: pruner: the pass failed: {failed}; blobs/uploads.log 0 lines (0 bytes) — compacted from \
+             1 lines ({rewrite} bytes); blobs/leases.log 0 lines (0 bytes); blobs/uploads.log's stop lifted, \
+             rewritten whole after {cause}; stopped {} ms, 2 appends refused",
+            lifted.age.as_millis()
         ),
-        "line 35 names the failure AND the compaction that lifted the stop, by the stop's cause"
+        "line 35 names the failure AND the compaction that lifted the stop, with the stop's figures"
     );
     // The store's retirement drops the record from its map BEFORE the
     // append the stopped log refused, its partial removed before that
@@ -614,9 +673,9 @@ fn the_halt_is_said_in_one_line_on_the_stream() {
     let said = after_the_head(&first, "landing").unwrap_or_else(|| panic!("row 34 is a landing: {first}"));
     assert!(
         said.starts_with(
-            "pruner: 0 expired partials removed, 0 files unlinked, 0 kept, 0 asides removed — the \
-             unlink pass halted: a designation directory blobs/sha256-tree/ is outside the set this \
-             build pins (blake3): a sidecar of another build's schema"
+            "pruner: 0 expired partials removed, 0 files unlinked, 0 kept, 0 asides removed, 0 bytes \
+             freed — the unlink pass halted: a designation directory blobs/sha256-tree/ is outside the \
+             set this build pins (blake3): a sidecar of another build's schema"
         ),
         "line 34 carries the halt and its reason: {said}"
     );

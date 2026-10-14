@@ -77,7 +77,7 @@ use crate::blobs::{
     partial_label,
 };
 use crate::error::BlobError;
-use crate::jsonl::LogRead;
+use crate::jsonl::{LogRead, LogSize, LogStop};
 use crate::lease::{Lease, LeaseLog, LeaseState};
 use crate::partials::{self, Handle, HashFunction, SYNC_GRAIN};
 use crate::uploads::{expiry, UploadId, UploadRecord, UploadRecords};
@@ -191,6 +191,11 @@ pub struct Opened {
     /// Asides removed — a replace's second names its deferred unlink never
     /// took, and the pruner's own.
     pub asides: usize,
+    /// The bytes those repairs freed: the expired uploads', the orphans' and
+    /// the asides' files removed — each its length where its unlink took the
+    /// file's last name, nothing where another name still holds it — and
+    /// the bytes cut off the partials cut back.
+    pub bytes_freed: u64,
 }
 
 /// The store: one root and the four stores under it. Every method takes
@@ -248,15 +253,16 @@ pub struct Opened {
 /// past its rename (what that leaves: [`Stream::finish`]). The stop keeps
 /// its cause in the operator's words — the act that failed and the OS's
 /// cause, a full volume told apart from a read-only mount or a failing
-/// device — which every refused append names and [`Store::stopped_logs`]
-/// answers. The next open reads the log afresh, its tail check cutting the
-/// torn line the failed cut left ([`Store::open`]).
+/// device — which every refused append names; and it counts the appends it
+/// refuses, which [`Store::stopped_logs`] answers beside the cause and the
+/// stop's age, the uploads it cost the operator's figure and no caller's.
+/// The next open reads the log afresh, its tail check cutting the torn line
+/// the failed cut left ([`Store::open`]).
 ///
 /// EVERY FAILURE NAMES ITS FILE AND ITS ACT — `{file}: {act}: {cause}`, the
 /// kind kept, the file named within the data directory and a partial by its
-/// directory alone (`blobs.rs`) — save the deferred unlink's
-/// ([`Store::unlink_asides`]), whose one embedder names the aside itself
-/// ([`Store::next_aside`]).
+/// directory alone, a full volume's cause reading `the volume is full`
+/// (`blobs.rs`).
 pub struct Store {
     root: PathBuf,
     uploads: Mutex<UploadRecords>,
@@ -330,12 +336,14 @@ impl Store {
     /// retiring nothing (`partials.rs`): an I/O failure is no absence. And
     /// before any of it, every name the store acts on is held to what the
     /// store makes: a symbolic link, a special file, or a second link to a
-    /// file the store writes in place fails the open as `InvalidData`,
-    /// naming every one it found and the act that clears each kind, and
-    /// nothing is followed or written through it (`blobs.rs`,
+    /// file the store writes in place fails the open as `InvalidData`, one
+    /// refusal of bounded length counting every one it found, naming them in
+    /// at most eight clauses and the act that clears each kind, and nothing
+    /// is followed or written through it (`blobs.rs`,
     /// `refuse_links_and_special_files`). Every other failure names its file
-    /// and its act. What the open did, it answers ([`Store::opened`]): the
-    /// store says nothing itself, and its embedder says it.
+    /// and its act. What the open did, it answers ([`Store::opened`]), the
+    /// bytes its repairs freed among it: the store says nothing itself, and
+    /// its embedder says it.
     ///
     /// PRECONDITION: no other `Store` is open over `root` while this one
     /// lives, in this process or another. Its open would act on the root
@@ -371,7 +379,7 @@ impl Store {
         let (leases, leases_log, leases_past_horizon) = LeaseLog::open(root, horizon, now_ms)?;
         let (mut uploads, uploads_log) = UploadRecords::open(root)?;
         let reconciled = partials::reconcile(root, &mut uploads, now_ms)?;
-        let asides = blobs::sweep_asides(root)?;
+        let (asides, asides_freed) = blobs::sweep_asides(root)?;
         uploads.compact()?;
         // Listed before the root's fsync, so every directory in the set is
         // one that fsync makes durable.
@@ -390,6 +398,7 @@ impl Store {
             records_set_back: reconciled.set_back,
             orphan_partials: reconciled.orphans,
             asides,
+            bytes_freed: reconciled.bytes_freed + asides_freed,
         };
         Ok(Store {
             root: root.to_path_buf(),
@@ -447,8 +456,10 @@ impl Store {
     /// in two acts instead — [`Store::rename_aside`] under its arm, the aside
     /// removed after it — so the arm is never held across the freeing.
     pub fn unlink_blob(&self, designation: &str, hex: &str) -> io::Result<bool> {
-        self.blob_path(designation, hex)
-            .map_or(Ok(false), |path| blobs::remove_if_present(&path).map_err(|e| named(e, label(&path, 3), "remove")))
+        self.blob_path(designation, hex).map_or(Ok(false), |path| {
+            let removed = blobs::remove_if_present(&path).map_err(|e| named(e, label(&path, 3), "remove"))?;
+            Ok(removed.is_some())
+        })
     }
 
     /// RENAME ASIDE the file at `<designation>/<hex>` — the pruner's one act
@@ -486,14 +497,20 @@ impl Store {
         }
     }
 
-    /// Remove one aside by name — the pruner's housekeeping where the
-    /// deferred unlink did not run. `Ok(false)` where none stood, and for a
+    /// Remove one aside by name — the pruner's unlink after its rename aside,
+    /// and its housekeeping where the deferred unlink did not run.
+    /// `Ok(Some(freed))` where one went, the bytes its unlink freed — its
+    /// length where it took the file's last name, nothing where another name
+    /// still holds it (an aside whose replace failed between its link and
+    /// its rename, still the hash's file; a hard-link copy's second name) —
+    /// the figure the pruner's line says, so a pass that unlinked files and
+    /// freed nothing says that too; `Ok(None)` where none stood, and for a
     /// name no aside has. Under the same exclusion from [`Stream::finish`]
     /// as [`Store::unlink_blob`]: an aside stands from its finish's link,
     /// before the rename.
-    pub fn remove_aside(&self, designation: &str, name: &str) -> io::Result<bool> {
+    pub fn remove_aside(&self, designation: &str, name: &str) -> io::Result<Option<u64>> {
         if !designation_ok(designation) || !is_aside_name(name) {
-            return Ok(false);
+            return Ok(None);
         }
         let aside = self.root.join(designation).join(name);
         blobs::remove_if_present(&aside).map_err(|e| named(e, label(&aside, 3), "remove"))
@@ -543,26 +560,41 @@ impl Store {
     /// arrives during the rewrite waits on that lock and lands in the new
     /// file once the install order has completed, so the records it answers
     /// durable afterwards are in the file the next open reads. Both logs are
-    /// tried; the answer is `(uploads, leases)`, whether each was rewritten,
-    /// and a failure the first that failed: one past its rename leaves its
-    /// log stopped ([`Store::stopped_logs`]) for the next pass to rewrite.
-    pub fn compact_logs_if_past(&self, trigger: usize, min_lines: usize) -> io::Result<(bool, bool)> {
+    /// tried; the answer is `(uploads, leases)`, each the size the log was
+    /// rewritten FROM ([`LogSize`]) where a rewrite ran and `None` where the
+    /// log was left as it was — its size after, [`Store::log_sizes`] — and a
+    /// failure the first that failed: one past its rename leaves its log
+    /// stopped ([`Store::stopped_logs`]) for the next pass to rewrite.
+    pub fn compact_logs_if_past(
+        &self,
+        trigger: usize,
+        min_lines: usize,
+    ) -> io::Result<(Option<LogSize>, Option<LogSize>)> {
         let uploads = self.uploads.lock().compact_if_past(trigger, min_lines);
         let leases = self.leases.lock().compact_if_past(trigger, min_lines);
         Ok((uploads?, leases?))
     }
 
-    /// Which logs have STOPPED, each by its cause — `(uploads, leases)`, the
-    /// cause in the operator's words where the log has stopped and `None`
-    /// where it takes appends: an append failed and its cut-back failed
-    /// too, or a compaction failed past its rename — each with the OS's
-    /// cause, a full volume told apart from a read-only mount or a failing
-    /// device, so the act that clears it can be named. The log takes no
-    /// append until a compaction completes; the pass's line names the stop
-    /// and its cause, and a pass that lifts it reads it here before its
-    /// rewrite.
-    pub fn stopped_logs(&self) -> (Option<String>, Option<String>) {
+    /// Which logs have STOPPED — `(uploads, leases)`, each its stop
+    /// ([`LogStop`]) where the log has stopped and `None` where it takes
+    /// appends: the cause in the operator's words — an append failed and its
+    /// cut-back failed too, or a compaction failed past its rename — each
+    /// with the OS's cause, a full volume told apart from a read-only mount
+    /// or a failing device, so the act that clears it can be named; how long
+    /// the stop has stood; and the appends it has refused, the uploads it
+    /// cost. The log takes no append until a compaction completes; the
+    /// pass's line names the stop with its figures, and a pass that lifts it
+    /// reads it here before its rewrite.
+    pub fn stopped_logs(&self) -> (Option<LogStop>, Option<LogStop>) {
         (self.uploads.lock().log_stopped(), self.leases.lock().log_stopped())
+    }
+
+    /// THE LOGS' SIZES — `(uploads, leases)`, each its whole lines and their
+    /// bytes ([`LogSize`]): what the pruner's line says of each at every
+    /// pass, the room a rewrite of each needs — the open's compaction, the
+    /// pass's own — being a second copy of it.
+    pub fn log_sizes(&self) -> (LogSize, LogSize) {
+        (self.uploads.lock().log_size(), self.leases.lock().log_size())
     }
 
     /// THE INSPECTION — the operator's inventory's open (`media.md`
@@ -581,10 +613,11 @@ impl Store {
     /// `refuse_links_and_special_files`): a symbolic link or a special file
     /// at a log's name — a FIFO, whose read never ends — or a second link to
     /// a file the store writes in place — a hard-link copy of a live board,
-    /// which is no copy — is refused as `InvalidData`, naming each, and
-    /// never followed or read. It takes no lock and needs no exclusion: it
-    /// can stand beside a serving daemon's store, each of its readings one
-    /// moment's of one file. A `root` that is no directory is `NotFound`.
+    /// which is no copy — is refused as `InvalidData` as the open refuses
+    /// it, one refusal counting every one, and never followed or read. It
+    /// takes no lock and needs no exclusion: it can stand beside a serving
+    /// daemon's store, each of its readings one moment's of one file. A
+    /// `root` that is no directory is `NotFound`.
     pub fn inspect(root: impl AsRef<Path>) -> io::Result<Inspection> {
         let root = root.as_ref();
         if !root.is_dir() {
@@ -827,15 +860,18 @@ impl Store {
     /// before its finish answers. Answers the count unlinked, an aside
     /// already gone counted with them. A failure leaves that aside and the
     /// rest queued for the next call, and open removes any aside a crash
-    /// leaves. Its failure is the OS's alone, the one store failure that
-    /// names no file: the aside it met stands at the queue's head, and
-    /// [`Store::next_aside`] names it — the daemon's line names it so, once.
+    /// leaves. Its failure names the aside it met, as every failure names its
+    /// file — `blobs/blake3/.retired-<hex>-<n>: remove: {cause}`, the kind
+    /// kept — in the error itself, so the line its embedder says of it names
+    /// the file whatever another thread's call has taken from the queue
+    /// since.
     pub fn unlink_asides(&self) -> io::Result<usize> {
         let mut queued = std::mem::take(&mut *self.aside_queue.lock()).into_iter();
         let mut done = 0;
         for aside in queued.by_ref() {
             // Already gone counts as done: the pruner's pass or open took it.
             if let Err(e) = self.before(Step::UnlinkAside).and_then(|()| blobs::remove_if_present(&aside)) {
+                let e = named(e, label(&aside, 3), "remove");
                 // It, and every one after it, back at the queue's head in order.
                 self.aside_queue.lock().splice(0..0, std::iter::once(aside).chain(queued));
                 return Err(e);
@@ -843,16 +879,6 @@ impl Store {
             done += 1;
         }
         Ok(done)
-    }
-
-    /// THE ASIDE AT THE QUEUE's HEAD — the next one [`Store::unlink_asides`]
-    /// will take, which is the one a failed unlink re-queued there: the
-    /// daemon's line names it by this read, the error it answered being the
-    /// OS's and naming no file. `None` while nothing is queued — before any
-    /// replace is answered, and once a call has drained the queue. The path
-    /// as queued, under the root.
-    pub fn next_aside(&self) -> Option<PathBuf> {
-        self.aside_queue.lock().first().cloned()
     }
 
     // ── the expired uploads, as the pruner removes them ──────────────────
@@ -867,25 +893,27 @@ impl Store {
 
     /// Remove an EXPIRED upload: its partial removed, its record retired —
     /// the pruner's act, whatever principal minted it, after the daemon has
-    /// found no stream holding it; `Ok(true)` where one went. `Ok(false)`
-    /// where no record is held by that identifier — an end, a finish or an
-    /// earlier pass took it — or where it stands at `now_ms`, left as it is,
-    /// so a clock moved between the read and the act costs a standing upload
-    /// nothing. An `Io` removing the partial leaves the record standing,
-    /// expired, for the next pass to take again; one writing the retirement
-    /// leaves it retired in this process, its record's line on disk until the
-    /// next open's reconciliation retires it.
-    pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<bool> {
+    /// found no stream holding it; `Ok(Some(freed))` where one went, the
+    /// bytes its partial's unlink freed — none where a finish's rename had
+    /// already taken the partial. `Ok(None)` where no record is held by that
+    /// identifier — an end, a finish or an earlier pass took it — or where it
+    /// stands at `now_ms`, left as it is, so a clock moved between the read
+    /// and the act costs a standing upload nothing. An `Io` removing the
+    /// partial leaves the record standing, expired, for the next pass to take
+    /// again; one writing the retirement leaves it retired in this process,
+    /// its record's line on disk until the next open's reconciliation retires
+    /// it.
+    pub fn expire_upload(&self, id: &UploadId, now_ms: u64) -> io::Result<Option<u64>> {
         let designation = {
             let uploads = self.uploads.lock();
             match uploads.of_any_principal(id) {
                 Some(r) if !r.stands(now_ms) => r.designation.clone(),
-                _ => return Ok(false),
+                _ => return Ok(None),
             }
         };
-        partials::remove(&self.root, &designation, id)?;
+        let freed = partials::remove(&self.root, &designation, id)?;
         self.uploads.lock().retire(id)?;
-        Ok(true)
+        Ok(Some(freed))
     }
 
     // ── the leases ───────────────────────────────────────────────────────

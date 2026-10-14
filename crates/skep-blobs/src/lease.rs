@@ -24,7 +24,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::blobs::{designation_ok, hex_ok};
-use crate::jsonl::{Log, LogRead};
+use crate::jsonl::{Log, LogRead, LogSize, LogStop};
 use crate::uploads::{millis, past_trigger};
 
 /// The log's file name under the root.
@@ -230,28 +230,33 @@ impl LeaseLog {
     }
 
     /// Rewrite the log to the current leases, in the map's order, where any
-    /// line on disk is not one.
-    fn compact(&mut self) -> io::Result<()> {
+    /// line on disk is not one. Answers the size it rewrote the log from,
+    /// `None` where it left the log as it was (`Log::compact`).
+    fn compact(&mut self) -> io::Result<Option<LogSize>> {
         self.log.compact(self.leases.values().map(Lease::to_value))
     }
 
     /// THE RUNTIME COMPACTION's TRIGGER (the pruner's pass), the upload
     /// records' rule (`uploads::past_trigger`) over this log: rewritten
     /// where stopped, or where its whole lines number at least `min_lines`
-    /// and more than `trigger` times the current leases. Answers whether a
-    /// rewrite ran. The caller holds this type's lock — the lock on this
-    /// log's appends alone.
-    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<bool> {
+    /// and more than `trigger` times the current leases. Answers the size a
+    /// rewrite rewrote the log from, `None` where none ran. The caller holds
+    /// this type's lock — the lock on this log's appends alone.
+    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<Option<LogSize>> {
         if !past_trigger(&self.log, self.leases.len(), trigger, min_lines) {
-            return Ok(false);
+            return Ok(None);
         }
-        self.compact()?;
-        Ok(true)
+        self.compact()
     }
 
-    /// The log's stop's cause, where it has stopped (`Log::stopped`).
-    pub fn log_stopped(&self) -> Option<String> {
-        self.log.stopped().map(str::to_string)
+    /// The log's stop, where it has stopped (`Log::stop`).
+    pub fn log_stopped(&self) -> Option<LogStop> {
+        self.log.stop()
+    }
+
+    /// The log's size (`Log::size`).
+    pub fn log_size(&self) -> LogSize {
+        self.log.size()
     }
 }
 

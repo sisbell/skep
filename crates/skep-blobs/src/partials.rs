@@ -41,7 +41,9 @@ use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::blobs::{dir_label, fsync_dir, named, names_in, not_found_as_none, partial_label, remove_if_present};
+use crate::blobs::{
+    dir_label, fsync_dir, named, names_in, not_found_as_none, partial_label, remove_if_present, remove_standing,
+};
 use crate::uploads::{UploadId, UploadRecords};
 
 pub use handle::HashFunction;
@@ -104,12 +106,16 @@ pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Resul
 }
 
 /// Remove a partial, its directory fsynced where one went; absent is fine.
-pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Result<()> {
+/// Answers the bytes its unlink freed — none where no partial stood.
+pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Result<u64> {
     let dir = root.join(designation);
-    if remove_if_present(&partial_path(root, designation, id)).map_err(|e| named(e, partial_label(&dir), "remove"))? {
-        fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
-    }
-    Ok(())
+    let removed =
+        remove_if_present(&partial_path(root, designation, id)).map_err(|e| named(e, partial_label(&dir), "remove"))?;
+    let Some(freed) = removed else {
+        return Ok(0);
+    };
+    fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;
+    Ok(freed)
 }
 
 /// What the reconciliation did, by act — the open's account's figures
@@ -126,6 +132,9 @@ pub(crate) struct Reconciled {
     pub set_back: usize,
     /// Orphan partials removed — partials no record names.
     pub orphans: usize,
+    /// The bytes those acts freed: the expired uploads' and the orphans'
+    /// partials removed, and the bytes cut off the partials cut back.
+    pub bytes_freed: u64,
 }
 
 /// THE RECONCILIATION AT OPEN, both ways: every standing record held to its
@@ -140,7 +149,7 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
     let all: Vec<_> = records.all().cloned().collect();
     for r in &all {
         if !r.stands(now_ms) {
-            remove(root, &r.designation, &r.id)?;
+            did.bytes_freed += remove(root, &r.designation, &r.id)?;
             records.retire(&r.id)?;
             did.expired += 1;
             continue;
@@ -162,6 +171,7 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
             f.set_len(r.offset).map_err(cut)?;
             f.sync_all().map_err(cut)?;
             did.cut_back += 1;
+            did.bytes_freed += len - r.offset;
         } else if len < r.offset {
             records.set_back(&r.id, len)?;
             did.set_back += 1;
@@ -180,7 +190,7 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         })?;
         let dir = root.join(designation);
         for name in &orphans {
-            fs::remove_file(dir.join(name)).map_err(|e| named(e, partial_label(&dir), "remove"))?;
+            did.bytes_freed += remove_standing(&dir.join(name)).map_err(|e| named(e, partial_label(&dir), "remove"))?;
         }
         if !orphans.is_empty() {
             fsync_dir(&dir).map_err(|e| named(e, dir_label(&dir, 2), "fsync"))?;

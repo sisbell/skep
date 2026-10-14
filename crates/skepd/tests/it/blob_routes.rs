@@ -690,8 +690,10 @@ fn wait_until(what: &str, holds: impl Fn() -> bool) {
 /// deposit of the same bytes is a REPLACE, which queues the replaced
 /// instance's aside for the deferred unlink the transport runs after the
 /// reply; with the store's seam failing that step, the stream carries
-/// EXACTLY ONE `failure:` line naming the aside as its name within
-/// `blobs/`, the cause and the act that clears it, and three more requests
+/// EXACTLY ONE `failure:` line naming the aside by its name under the data
+/// directory, `blobs/blake3/{aside}`, as the store's error names it — the
+/// error the call itself answered, which no other worker's call can change
+/// — the cause and the act that clears it, and three more requests
 /// of the family while the fault stands — a deposit read, a second replace,
 /// a deposit read — write NO further line of any kind (the D9 discipline:
 /// the family's requests write nothing), the asides standing on disk. A2 —
@@ -719,11 +721,11 @@ fn a_failed_aside_unlink_is_said_once_naming_the_aside_and_cleared_once_when_the
     assert_eq!(
         blob_store_lines(&sd),
         [format!(
-            "failure: blob store: the aside blake3/{} could not be unlinked: injected failure at \
-             UnlinkAside; it stands for the pass or the next open",
+            "failure: blob store: the deferred unlink failed: blobs/blake3/{}: remove: injected \
+             failure at UnlinkAside; the aside stands for the pass or the next open",
             asides[0]
         )],
-        "said once, naming the aside within blobs/, the cause and the act"
+        "said once, naming the aside under the data directory, the cause and the act"
     );
 
     // THE ONCE: three more requests of the family while the fault stands,

@@ -165,12 +165,55 @@ fn a_failed_append_leaves_the_file_as_it_found_it_whatever_opened_or_rewrote_it(
     }
 }
 
+/// A FULL VOLUME's FAILURE READS IN THE STREAM's WORDS (`blobs::Cause`;
+/// `operations.md` §1): an append the OS refuses for room answers `{log}:
+/// append: the volume is full ({the OS's text})`, its kind kept, the line
+/// cut back off the file; and where the cut-back fails too, the stop's cause
+/// keeps those words for the append's half, and the append that stopped the
+/// log says them.
+#[cfg(unix)]
+#[test]
+fn a_full_volumes_append_and_stop_read_the_volume_is_full() {
+    let enospc = || io::Error::from_raw_os_error(28);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("x.log");
+    let (mut log, _, _) = Log::open(path.clone()).unwrap();
+    log.append_synced(&json!({"n": 1})).unwrap();
+    let full = log
+        .append_by(&json!({"n": 2}), |file, line| {
+            file.write_all(&line[..4])?;
+            Err(enospc())
+        })
+        .expect_err("the volume full");
+    assert_eq!(full.kind(), io::ErrorKind::StorageFull, "the kind kept");
+    assert_eq!(full.to_string(), format!("{}: append: the volume is full ({})", label(&path, 2), enospc()));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n", "cut back off the file");
+    // The cut back refused too: a read-only file, as in the stop's own test.
+    log.file = File::open(&path).unwrap();
+    let mut other = open_append(&path).unwrap();
+    let stopping = log
+        .append_by(&json!({"n": 3}), |_, line| {
+            other.write_all(&line[..4])?;
+            Err(enospc())
+        })
+        .expect_err("the volume full, the cut back refused");
+    let cause = log.stopped().expect("the log stopped").to_string();
+    assert!(
+        cause.starts_with(&format!("its append failed (the volume is full ({})) and the cut back", enospc())),
+        "{cause}"
+    );
+    assert!(stopping.to_string().contains(&cause), "the append that stops the log says its cause: {stopping}");
+}
+
 /// AN APPEND WHOSE CUT-BACK FAILS TOO stops the log: every later append
 /// is refused, so the torn line stays the file's tail, the one place
 /// open's tail check cuts without taking a whole line with it. The stop
 /// keeps its cause — the append's failure and the cut's, each the OS's —
 /// which the append that stopped the log says at once and every refusal
-/// after it names. A compaction writes the file whole and lifts the stop.
+/// after it names, the refusal its cause alone; the stop counts each
+/// refused append, the operator's figure (`Log::stop`). A compaction writes
+/// the file whole from its whole lines, the torn tail not among them, and
+/// lifts the stop.
 #[test]
 fn a_failed_cut_back_stops_the_log_until_a_compaction() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -197,15 +240,19 @@ fn a_failed_cut_back_stops_the_log_until_a_compaction() {
             && cause.contains(") and the cut back to its last whole line failed too ("),
         "the stop keeps both causes: {cause}"
     );
+    assert_eq!(log.stop().map(|s| s.refused), Some(0), "no append refused yet");
     log.file = open_append(&path).unwrap();
     let refused = log.append_synced(&json!({"n": 3})).expect_err("a stopped log takes no append");
     assert_eq!(
         refused.to_string(),
         format!("{} takes no append until a compaction completes: {cause}", label(&path, 2)),
-        "its refusal names the log and the stop's cause"
+        "its refusal names the log and the stop's cause, and no figure of the operator's"
     );
+    let stop = log.stop().expect("still stopped");
+    assert_eq!((stop.cause.as_str(), stop.refused), (cause.as_str(), 1), "the refused append counted");
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":1}\n{\"n\"", "the torn line stays the tail");
-    log.compact(vec![json!({"n": 1})].into_iter()).unwrap();
+    let from = log.compact(vec![json!({"n": 1})].into_iter()).unwrap().expect("a stopped log is rewritten");
+    assert_eq!((from.lines, from.bytes), (1, 8), "rewritten from its whole lines, the torn tail not among them");
     assert_eq!(log.stopped(), None, "a completed compaction lifts the stop");
     log.append_synced(&json!({"n": 4})).unwrap();
     drop(log);
@@ -217,9 +264,12 @@ fn a_failed_cut_back_stops_the_log_until_a_compaction() {
 /// stands at the log's name while the log's open file is the one it
 /// replaced, so an append would answer durable over a line no open reads —
 /// refused instead, until a compaction completes and the file is the
-/// rewrite's. Injected by the directory itself: written and searched but not
-/// read, the twin is created and renamed over the log, and the directory's
-/// own open for its fsync fails.
+/// rewrite's. The log's size is the rewrite's, the file at its name; a
+/// second such failure gives the stop its new cause and keeps its count of
+/// refused appends, the log having refused every one since the first.
+/// Injected by the directory itself: written and searched but not read, the
+/// twin is created and renamed over the log, and the directory's own open
+/// for its fsync fails.
 #[cfg(unix)]
 #[test]
 fn a_compaction_that_fails_past_its_rename_stops_the_log() {
@@ -233,6 +283,7 @@ fn a_compaction_that_fails_past_its_rename_stops_the_log() {
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o300)).unwrap();
     let compacted = log.compact(vec![json!({"n": 2})].into_iter());
     let appended = log.append_synced(&json!({"n": 3}));
+    let again = log.compact(vec![json!({"n": 2})].into_iter());
     fs::set_permissions(dir.path(), mode).unwrap();
     if compacted.is_ok() {
         return; // a privileged process reads any directory: nothing to inject
@@ -243,8 +294,13 @@ fn a_compaction_that_fails_past_its_rename_stops_the_log() {
         "the stop's cause names the act that failed past the rename: {cause}"
     );
     assert!(appended.is_err(), "a log whose compaction failed past its rename takes no append");
+    assert!(again.is_err(), "and its next compaction, the directory still unreadable, fails past its rename too");
+    assert_eq!(log.stop().map(|s| s.refused), Some(1), "the second stop keeps the first's count");
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"n\":2}\n", "the rewrite stands at the name");
-    log.compact(vec![json!({"n": 2})].into_iter()).unwrap();
+    let size = log.size();
+    assert_eq!((size.lines, size.bytes), (1, 8), "the log's size is the rewrite's, the file at its name");
+    let from = log.compact(vec![json!({"n": 2})].into_iter()).unwrap().expect("a stopped log is rewritten");
+    assert_eq!((from.lines, from.bytes), (1, 8), "rewritten from the file at its name");
     log.append_synced(&json!({"n": 4})).unwrap();
     drop(log);
     let (_, values, _) = Log::open(path).unwrap();
@@ -277,9 +333,10 @@ fn a_compaction_that_fails_before_its_rename_leaves_the_log_as_it_was() {
 
 /// THE COMPACTION reads the log's own count of its lines: a log holding
 /// exactly as many lines as its current records is left as it is (on
-/// unix, the same inode); one holding more is rewritten to exactly the
-/// current records, and the appends after it land in the rewritten file
-/// and count from there.
+/// unix, the same inode), the compaction answering none; one holding more
+/// is rewritten to exactly the current records, the compaction answering
+/// the size it rewrote the log from and the log's size the rewrite's, and
+/// the appends after it land in the rewritten file and count from there.
 #[test]
 fn the_line_count_decides_the_compaction() {
     #[cfg(unix)]
@@ -292,13 +349,17 @@ fn the_line_count_decides_the_compaction() {
     // Two lines, two current records: nothing to drop, no rewrite.
     #[cfg(unix)]
     let before = inode(&path);
-    log.compact(vec![json!({"k": "a", "v": 1}), json!({"k": "b", "v": 1})].into_iter()).unwrap();
+    let left = log.compact(vec![json!({"k": "a", "v": 1}), json!({"k": "b", "v": 1})].into_iter()).unwrap();
+    assert_eq!(left, None, "left as it is");
     #[cfg(unix)]
     assert_eq!(inode(&path), before, "a log holding only its current records is not rewritten");
     // A third line replacing `a`'s: three lines, two records — rewritten.
     log.append_synced(&json!({"k": "a", "v": 2})).unwrap();
-    log.compact(vec![json!({"k": "a", "v": 2}), json!({"k": "b", "v": 1})].into_iter()).unwrap();
+    let from = log.compact(vec![json!({"k": "a", "v": 2}), json!({"k": "b", "v": 1})].into_iter()).unwrap();
+    assert_eq!(from.map(|s| (s.name, s.lines, s.bytes)), Some((label(&path, 2), 3, 48)), "rewritten from three lines");
     assert_eq!(fs::read_to_string(&path).unwrap(), "{\"k\":\"a\",\"v\":2}\n{\"k\":\"b\",\"v\":1}\n");
+    let size = log.size();
+    assert_eq!((size.lines, size.bytes), (2, 32), "the log's size is the rewrite's");
     assert!(!path.with_extension("compact").exists(), "the twin is renamed over the log");
     // The next append lands in the rewritten file, and the count runs
     // on from the rewrite's two lines: three lines, three records, no

@@ -11,12 +11,14 @@
 //! log — a twin never read in place of its log; and before any of it, a
 //! link at a name open acts on — symbolic, or a second hard link to a file
 //! the store writes in place — or a special file there failing the open,
-//! nothing it names touched and no open left waiting, every such entry named
-//! in one refusal with the act for its kind. THE OPEN's ACCOUNT
-//! (`Store::opened`): each repair counted, a store or a log found absent
-//! answered made, a log's cut told from a crash's by the whole lines it
-//! took; an open refused at a log naming the log and its act, the kind kept;
-//! and the inspection refusing what the open refuses, never hanging.
+//! nothing it names touched and no open left waiting, every such entry
+//! counted in one refusal of bounded length — eight clauses named, the rest
+//! counted by kind — with the act for its kind. THE OPEN's ACCOUNT
+//! (`Store::opened`): each repair counted and the bytes they freed, a store
+//! or a log found absent answered made, a log's cut told from a crash's by
+//! the whole lines it took; an open refused at a log naming the log and its
+//! act, the kind kept; and the inspection refusing what the open refuses,
+//! never hanging.
 
 use std::fs::{self, OpenOptions};
 use std::path::Path;
@@ -384,7 +386,8 @@ fn a_record_line_whose_offset_passes_its_length_is_no_record() {
 /// compacted to the current records. Beside them, every aside a crash left
 /// is removed — and a name that only begins as an aside's is none, and is
 /// left. The open's account (`Store::opened`) counts each act, one apiece,
-/// the foreign directory's orphan and the name no aside has among none.
+/// the foreign directory's orphan and the name no aside has among none, and
+/// the bytes those acts freed, each file's length and the cut-back's tail.
 #[test]
 fn open_reconciles_the_partials_and_the_records_both_ways() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -424,6 +427,11 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
         "the open's account, act by act: {opened:?}"
     );
     assert_eq!((opened.orphan_partials, opened.asides), (1, 1), "this build's orphan and the aside alone: {opened:?}");
+    assert_eq!(
+        opened.bytes_freed,
+        12 + 7 + 6 + 3,
+        "the bytes the repairs freed: the cut-back's tail, the expired partial, the orphan and the aside: {opened:?}"
+    );
     assert_eq!((opened.uploads, opened.leases, opened.root_made), (3, 0, false), "{opened:?}");
     assert_eq!((opened.uploads_log.cut, opened.uploads_log.unread), (None, 0), "a whole log, every line read");
     let r = store.upload("k", &kept.id, now).expect("kept stands");
@@ -446,7 +454,7 @@ fn open_reconciles_the_partials_and_the_records_both_ways() {
     );
     assert!(store.asides_of("blake3").unwrap().is_empty(), "an aside is removed at open");
     assert!(root.join("blake3").join(".retired-x").is_file(), "a name no aside has is left");
-    assert!(!store.remove_aside("blake3", ".retired-x").unwrap(), "and is no aside to remove");
+    assert_eq!(store.remove_aside("blake3", ".retired-x").unwrap(), None, "and is no aside to remove");
     assert_eq!(
         store.designation_dirs().unwrap(),
         vec!["blake3".to_string(), "sha256-tree".to_string()],
@@ -589,9 +597,11 @@ fn a_link_at_a_name_open_acts_on_fails_the_open_and_touches_nothing() {
 /// (`blobs::refuse_links_and_special_files`): a hard-link copy taken of a
 /// live board gives every log and partial a second link at once, so the
 /// open refuses once — not once per entry over as many starts — naming
-/// each: the log, the partial by its directory alone (its file name an
-/// upload's identifier), and a symbolic link beside them; and it says what
-/// makes each kind and the act that clears it.
+/// each of a few: the log, the partial by its directory alone (its file
+/// name an upload's identifier), and a symbolic link beside them; and it
+/// says what makes each kind and the act that clears it. (Past eight
+/// clauses the rest are counted by kind:
+/// `a_refusal_over_a_tree_of_links_names_eight_clauses_and_counts_the_rest`.)
 #[cfg(unix)]
 #[test]
 fn one_refusal_names_every_planted_entry_and_the_act_for_each_kind() {
@@ -624,6 +634,54 @@ fn one_refusal_names_every_planted_entry_and_the_act_for_each_kind() {
     }
     assert!(!message.contains(&rec.id.to_hex()), "a partial never named by its identifier: {message}");
     assert!(!message.contains(&dir.path().display().to_string()), "never an absolute path: {message}");
+}
+
+/// ONE REFUSAL STAYS ONE LINE A LOG COLLECTOR KEEPS WHOLE
+/// (`blobs::refuse_links_and_special_files`, its `PLANTED_NAMED`): a tree
+/// linked back from another disk — a symbolic link at every hex name —
+/// beside a hard-link copy's partials refuses once, counting every entry,
+/// naming eight clauses — the three partials one clause, their directory
+/// alone — and counting the rest by kind, the act for each kind at its end,
+/// the whole under 4 KiB, where a clause per entry over ten thousand passes
+/// the 16 KiB a container's log driver splits a line at.
+#[cfg(unix)]
+#[test]
+fn a_refusal_over_a_tree_of_links_names_eight_clauses_and_counts_the_rest() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    drop(open(&root, 0));
+    let designation_dir = root.join("blake3");
+    fs::create_dir(&designation_dir).unwrap();
+    let elsewhere = dir.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    for i in 0u8..3 {
+        let partial = designation_dir.join(format!(".upload-{}", &hex_of(&[i])[..32]));
+        fs::write(&partial, b"bytes received").unwrap();
+        fs::hard_link(&partial, elsewhere.join(format!("partial-{i}"))).unwrap();
+    }
+    for i in 0u32..200 {
+        let hex = hex_of(&i.to_be_bytes());
+        let moved = elsewhere.join(&hex);
+        fs::write(&moved, b"a deposit moved to another disk").unwrap();
+        symlink(&moved, designation_dir.join(&hex)).unwrap();
+    }
+    let refused = Store::open(&root, HORIZON, 1).map(drop).expect_err("the open is refused");
+    assert_eq!(refused.kind(), std::io::ErrorKind::InvalidData, "{refused}");
+    let message = refused.to_string();
+    assert!(
+        message.starts_with("blobs/ holds 203 entries the blob store never makes"),
+        "every entry counted: {message}"
+    );
+    assert!(
+        message.contains("written through them: 3 partials in blobs/blake3/ have 2 links; blobs/blake3/"),
+        "the partials one clause, before the names: {message}"
+    );
+    assert_eq!(message.matches(" is a symbolic link").count(), 7, "eight clauses named in all: {message}");
+    assert!(message.contains("; and 193 more symbolic links."), "the rest counted by kind: {message}");
+    assert!(message.contains("(cp -al, ln)") && message.contains("(Restore)"), "the act for each kind: {message}");
+    assert!(message.ends_with(" Then try again."), "its act ends it: {message}");
+    assert!(message.len() < 4096, "{} bytes: {message}", message.len());
 }
 
 /// AN OPEN REFUSED AT A LOG NAMES IT, ITS ACT AND ITS CAUSE, THE KIND KEPT

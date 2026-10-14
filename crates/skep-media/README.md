@@ -55,11 +55,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `index_failed`.
 - **The pruner**, `pruner` — `Pruner` (`new`), one per daemon beside its
   gate, whose `pass(&gate, exclusive)` answers a `PrunePass` — or nothing
-  where the index is not ready: its figures, the halt, the compaction half
-  of its line (`compaction`) and, where a step failed, the first failure
-  beside them (`PassFailure`, naming its `PassStep` and the cause), step
-  (d) — the compaction — having run on every exit; `Cadence` (`new`,
-  `wait`, `stop`) and `Wake`, the transport's thread's clock and stop.
+  where the index is not ready: its figures and the bytes they freed, the
+  halt, each log's size, the compaction half of its line (`compaction`)
+  and, where a step failed, the first failure beside them (`PassFailure`,
+  naming its `PassStep` and the cause), step (d) — the compaction — having
+  run on every exit; `Cadence` (`new`, `wait`, `stop`) and `Wake`, the
+  transport's thread's clock and stop.
 - **The pools**, `pools` — `FetchPool` (`new`), whose permit a fetch's
   answer holds, and its twin `UploadPool` (`new`, `admit`), whose permit a
   creation or a resume holds for the body's whole stream; each says its

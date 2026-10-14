@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 
 use crate::blobs::designation_ok;
 use crate::error::BlobError;
-use crate::jsonl::{Log, LogRead};
+use crate::jsonl::{Log, LogRead, LogSize, LogStop};
 
 pub use id::{NotAnUploadId, UploadId, IDENTIFIER_BYTES};
 
@@ -386,7 +386,9 @@ impl UploadRecords {
 
     /// Rewrite the log to the current records where any line on disk is
     /// not one — so the log never grows with the board's upload history.
-    pub fn compact(&mut self) -> io::Result<()> {
+    /// Answers the size it rewrote the log from, `None` where it left the
+    /// log as it was (`Log::compact`).
+    pub fn compact(&mut self) -> io::Result<Option<LogSize>> {
         let mut ids: Vec<&UploadId> = self.records.keys().collect();
         ids.sort();
         self.log.compact(ids.into_iter().map(|id| self.records[id].to_value()))
@@ -396,20 +398,25 @@ impl UploadRecords {
     /// as [`UploadRecords::compact`] does where it has STOPPED, or where its
     /// whole lines number at least `min_lines` and more than `trigger` times
     /// the current records — so a small log is never rewritten per pass, and
-    /// a log past its trigger is. Answers whether a rewrite ran. The caller
-    /// holds this type's lock, which is the lock on this log's appends alone.
-    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<bool> {
+    /// a log past its trigger is. Answers the size a rewrite rewrote the log
+    /// from, `None` where none ran. The caller holds this type's lock, which
+    /// is the lock on this log's appends alone.
+    pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<Option<LogSize>> {
         if !past_trigger(&self.log, self.records.len(), trigger, min_lines) {
-            return Ok(false);
+            return Ok(None);
         }
-        self.compact()?;
-        Ok(true)
+        self.compact()
     }
 
-    /// The log's stop's cause, where it has stopped (`Log::stopped`): it
-    /// takes no append until a compaction completes.
-    pub fn log_stopped(&self) -> Option<String> {
-        self.log.stopped().map(str::to_string)
+    /// The log's stop, where it has stopped (`Log::stop`): it takes no
+    /// append until a compaction completes.
+    pub fn log_stopped(&self) -> Option<LogStop> {
+        self.log.stop()
+    }
+
+    /// The log's size (`Log::size`).
+    pub fn log_size(&self) -> LogSize {
+        self.log.size()
     }
 }
 

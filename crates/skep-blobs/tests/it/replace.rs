@@ -6,7 +6,9 @@
 //! among the answers, naming the hash's file and never an aside; an aside
 //! name of its own for every replace, and the deferred unlink's queue — an
 //! aside queued only at its finish's answer, one already gone counted
-//! unlinked, a failure leaving it and every one after it queued.
+//! unlinked, a failure naming the aside it met and leaving it and every one
+//! after it queued — and the pass's removal of an aside answering the bytes
+//! it freed.
 
 use std::fs;
 use std::sync::{Arc, Barrier};
@@ -260,7 +262,11 @@ fn an_aside_the_pass_took_first_is_done_for_the_deferred_unlink() {
     store.install("blake3", &hex_of(&right), b"garbage under the right name").unwrap();
     put_whole(&store, "k", &right, 1);
     let aside = store.asides_of("blake3").unwrap().pop().expect("the replace's aside");
-    assert!(store.remove_aside("blake3", &aside).unwrap(), "the pass's act takes it first");
+    assert_eq!(
+        store.remove_aside("blake3", &aside).unwrap(),
+        Some(28),
+        "the pass's act takes it first, freeing the replaced instance's 28 bytes"
+    );
     assert_eq!(store.unlink_asides().map_err(|e| e.kind()), Ok(1), "the deferred unlink counts it unlinked");
     assert_eq!(store.asides_queued(), 0, "and leaves nothing queued");
 }
@@ -288,7 +294,13 @@ fn a_failed_unlink_leaves_that_aside_and_every_one_after_it_queued() {
     }
     fs::remove_file(&asides[1]).unwrap();
     fs::create_dir(&asides[1]).unwrap();
-    assert!(store.unlink_asides().is_err(), "the deferred unlink fails at the second");
+    let failed = store.unlink_asides().expect_err("the deferred unlink fails at the second");
+    let second = asides[1].file_name().and_then(|n| n.to_str()).expect("an aside's name");
+    assert!(
+        failed.to_string().starts_with(&format!("blobs/blake3/{second}: remove: ")),
+        "the failure names the aside it met, the OS's cause after it: {failed}"
+    );
+    assert_ne!(failed.kind(), std::io::ErrorKind::NotFound, "a failure, never an absence: {failed}");
     assert_eq!(store.asides_queued(), 2, "that aside and the one after it stay queued");
     assert!(!asides[0].exists(), "the first, before the failure, is unlinked");
     assert!(asides[2].is_file(), "the third waits behind the second");
@@ -301,34 +313,33 @@ fn a_failed_unlink_leaves_that_aside_and_every_one_after_it_queued() {
     assert!(store.asides_of("blake3").unwrap().is_empty());
 }
 
-/// THE ASIDE AT THE QUEUE's HEAD (`Store::next_aside`): nothing before a
-/// replace is answered; the answered replace's aside once it is; after a
-/// failed deferred unlink the SAME aside, re-queued at the head — the one
-/// the daemon's line names, since the OS's error names no file; and `None`
-/// again once a call has drained the queue.
+/// THE DEFERRED UNLINK's FAILURE NAMES ITS ASIDE (`Store::unlink_asides`:
+/// "Its failure names the aside it met, as every failure names its file"):
+/// an answered replace's aside, the deferred unlink failed at it, answers
+/// `blobs/blake3/{aside}: remove: {cause}`, the kind kept, the aside the
+/// one the directory holds and never an absolute path — in the error
+/// itself, which no other thread's call can change, so the line its
+/// embedder says names the file; the aside stays queued, and the next call
+/// takes it.
 #[test]
-fn next_aside_names_the_failed_aside_and_none_once_the_queue_is_drained() {
+fn the_deferred_unlinks_failure_names_its_aside_and_the_next_call_takes_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = open(&dir.path().join("blobs"), 0);
-    assert_eq!(store.next_aside(), None, "nothing queued before any replace");
     let right = b"the picture's bytes".to_vec();
     let hex = hex_of(&right);
     store.install("blake3", &hex, b"garbage under the right name").unwrap();
     store.fail_at(Some(Step::UnlinkAside));
     put_whole(&store, "k", &right, 1);
-    let queued = store.next_aside().expect("the answered replace's aside is queued");
     let on_disk = store.asides_of("blake3").unwrap();
-    assert_eq!(
-        queued.file_name().and_then(|n| n.to_str()),
-        Some(on_disk[0].as_str()),
-        "the queued path names the aside the directory holds"
-    );
-    assert!(queued.starts_with(dir.path().join("blobs").join("blake3")), "{}", queued.display());
-    assert!(store.unlink_asides().is_err(), "the injected failure at the deferred unlink");
-    assert_eq!(store.next_aside(), Some(queued), "the failed aside, re-queued at the head");
+    assert_eq!(on_disk.len(), 1, "the answered replace's aside: {on_disk:?}");
+    let failed = store.unlink_asides().expect_err("the injected failure at the deferred unlink");
+    assert_eq!(failed.kind(), std::io::ErrorKind::Other, "the kind kept: {failed}");
+    assert_eq!(failed.to_string(), format!("blobs/blake3/{}: remove: injected failure at UnlinkAside", on_disk[0]));
+    assert!(!failed.to_string().contains(&dir.path().display().to_string()), "never an absolute path: {failed}");
+    assert_eq!(store.asides_queued(), 1, "the failed aside stays queued");
     store.fail_at(None);
     assert_eq!(store.unlink_asides().unwrap(), 1, "the next deferred unlink takes it");
-    assert_eq!(store.next_aside(), None, "drained: nothing at the head");
+    assert!(store.asides_of("blake3").unwrap().is_empty(), "drained: no aside stands");
 }
 
 /// REPLACE, NOT NO-OP (Op inventory 1): a file holding the WRONG bytes

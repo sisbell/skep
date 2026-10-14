@@ -23,12 +23,15 @@ use crate::{every_deposit_unplaced, hex_of, open, put_whole, HORIZON_MS, INTERVA
 /// of four at a minimum of eight — rewritten to the one line, the lease
 /// standing as it was, its latest expiry kept; under the minimum the log
 /// is left alone; the records' log, twenty lines over no record, is
-/// rewritten beside it to nothing.
+/// rewritten beside it to nothing. The compaction answers the size it
+/// rewrote each log from — the lease log's ten lines and the file's bytes —
+/// and the store each log's size after.
 #[test]
 fn the_lease_log_past_its_trigger_is_compacted_to_the_latest_lease() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
     let lines = |name: &str| fs::read_to_string(root.join(name)).unwrap().lines().count();
+    let bytes = |name: &str| fs::metadata(root.join(name)).unwrap().len();
     let store = open(&root, 0);
     let mut fin = None;
     for i in 0..10u64 {
@@ -37,10 +40,16 @@ fn the_lease_log_past_its_trigger_is_compacted_to_the_latest_lease() {
     let fin = fin.unwrap();
     assert_eq!(lines("leases.log"), 10);
     assert_eq!(lines("uploads.log"), 20, "a creation and a retirement per PUT");
-    assert_eq!(store.compact_logs_if_past(4, 64).unwrap(), (false, false), "under the minimum");
-    assert_eq!(store.compact_logs_if_past(4, 8).unwrap(), (true, true));
+    let leases_before = bytes("leases.log");
+    assert_eq!(store.compact_logs_if_past(4, 64).unwrap(), (None, None), "under the minimum");
+    let (uploads, leases) = store.compact_logs_if_past(4, 8).unwrap();
+    assert_eq!(uploads.map(|from| from.lines), Some(20), "the records' log rewritten from its twenty lines");
+    let from = leases.expect("the lease log rewritten");
+    assert_eq!((from.name.as_str(), from.lines, from.bytes), ("blobs/leases.log", 10, leases_before));
     assert_eq!(lines("leases.log"), 1, "the latest line alone");
     assert_eq!(lines("uploads.log"), 0, "no record stands");
+    let (uploads, leases) = store.log_sizes();
+    assert_eq!((uploads.lines, uploads.bytes, leases.lines, leases.bytes), (0, 0, 1, bytes("leases.log")));
     assert_eq!(store.lease_state("k", "blake3", &fin.hex, 9), LeaseState::Live { size: 14, expires: 9 + INTERVAL_MS }, "the latest expiry");
     assert_eq!(store.stopped_logs(), (None, None));
     drop(store);

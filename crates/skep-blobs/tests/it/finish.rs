@@ -389,8 +389,8 @@ fn a_finish_that_failed_past_its_rename_leaves_no_handle_on_the_hashs_file() {
 /// expiry; the third outliving its expiry to the next open, as a crash
 /// leaves a retirement line the OS never wrote beside a partial already
 /// gone. Each exit answers as it would over a partial — the end `Ok`, the
-/// expiry `true`, the open whole — and leaves no record, every file a rename
-/// named standing.
+/// expiry `Some`, freeing nothing, its partial already the hash's file, the
+/// open whole — and leaves no record, every file a rename named standing.
 #[test]
 fn a_record_over_the_partial_a_failed_finish_took_leaves_by_every_exit() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -415,7 +415,7 @@ fn a_record_over_the_partial_a_failed_finish_took_leaves_by_every_exit() {
     store.end_upload("k", &ended.id, 2).expect("the end answers over no partial");
     assert_eq!(store.upload("k", &ended.id, 2), None, "ended: retired");
     let removed = store.expire_upload(&expired.id, expired.expires).expect("the pruner's act answers over no partial");
-    assert!(removed, "expired: removed");
+    assert_eq!(removed, Some(0), "expired: removed, nothing freed — the rename took its partial");
     assert!(store.expired_uploads(expired.expires).iter().all(|r| r.id != expired.id), "expired: retired");
     drop(store);
     // The third exit's check is the open itself: the helper panics where it fails.

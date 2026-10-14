@@ -57,10 +57,12 @@ fn the_directory_listings_name_each_class_alone_in_name_order() {
 /// file renamed to an aside name of its own, the REPLACE's own name and
 /// serial"): a leased file renamed aside stands under `.retired-<hex>-<n>`
 /// and no longer at its hex — absent to the size check, listed among the
-/// asides — and is removed after by the pass's own act; a second rename
-/// aside of the absent name is `None`, as is one of a malformed name; the
-/// renames and a replace's link draw on one rising serial — a rename of an
-/// absent name spends one too — so no two asides ever share a name.
+/// asides — and is removed after by the pass's own act, which answers the
+/// bytes it freed (`Store::remove_aside`), the pass's line's figure; a
+/// second rename aside of the absent name is `None`, as is one of a
+/// malformed name; the renames and a replace's link draw on one rising
+/// serial — a rename of an absent name spends one too — so no two asides
+/// ever share a name.
 #[test]
 fn rename_aside_takes_the_name_under_the_replaces_serial_and_the_aside_is_removed_after() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -79,9 +81,10 @@ fn rename_aside_takes_the_name_under_the_replaces_serial_and_the_aside_is_remove
     let other = store.rename_aside("blake3", &second.hex).unwrap().expect("the second file went aside");
     assert_ne!(aside, other, "two serials");
     assert_eq!(store.blobs_of("blake3").unwrap(), Vec::<String>::new(), "both gone from their names");
-    // The unlink after, under no arm: the pass's own act.
-    assert!(store.remove_aside("blake3", &aside).unwrap());
-    assert!(store.remove_aside("blake3", &other).unwrap());
+    // The unlink after, under no arm: the pass's own act, answering what it
+    // freed — each file's length, its aside its last name.
+    assert_eq!(store.remove_aside("blake3", &aside).unwrap(), Some(14), "the first file's 14 bytes freed");
+    assert_eq!(store.remove_aside("blake3", &other).unwrap(), Some(15), "the second file's 15 bytes freed");
     assert!(store.asides_of("blake3").unwrap().is_empty());
     // A replace's aside draws on the same serial, past every rename's.
     let third = put_whole(&store, "k", b"the third file", 2);
@@ -328,7 +331,7 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
         assert!(matches!(store.blobs_of(&d).as_deref(), Ok([])), "{d:?}: listed");
         assert!(matches!(store.asides_of(&d).as_deref(), Ok([])), "{d:?}: listed");
         assert!(matches!(store.unlink_blob(&d, &blob), Ok(false)), "{d:?}: unlinked");
-        assert!(matches!(store.remove_aside(&d, &aside), Ok(false)), "{d:?}: removed");
+        assert!(matches!(store.remove_aside(&d, &aside), Ok(None)), "{d:?}: removed");
     }
     let hexes = ["", "a", "abc", "gg", "..", "../leases.log", "../uploads.log"].map(String::from).into_iter().chain([
         blob.to_uppercase(),
@@ -353,7 +356,7 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
         format!(".retired-{}-0", replaced.to_uppercase()),
     ];
     for name in near_asides {
-        assert!(matches!(store.remove_aside("blake3", &name), Ok(false)), "{name:?}: removed");
+        assert!(matches!(store.remove_aside("blake3", &name), Ok(None)), "{name:?}: removed");
     }
     assert_eq!(tree(dir.path()), before, "no malformed name touched a file, under the root or beside it");
     for (d, h) in [("a".repeat(32), "ab".to_string()), ("-".to_string(), "a".repeat(128))] {
@@ -363,7 +366,7 @@ fn every_entry_point_answers_a_malformed_name_as_absent_and_touches_nothing() {
 
 /// A WELL-FORMED NAME WITH NOTHING BEHIND IT IS ABSENT TO EVERY READ AND ACT
 /// (`Store::blobs_of`: "An absent directory holds none"; `Store::remove_aside`:
-/// "`Ok(false)` where none stood"; `Store::blob_size`: `Ok(None)` for "no
+/// "`Ok(None)` where none stood"; `Store::blob_size`: `Ok(None)` for "no
 /// entry, an entry that is no file"; `blobs::remove_if_present`: "a name
 /// another remover took first … leaves nothing to do"): on a fresh store,
 /// whose designation directory no upload has made — the pruner's pass reads
@@ -383,12 +386,12 @@ fn a_well_formed_name_with_nothing_behind_it_is_absent_to_every_read_and_act() {
     assert_eq!(store.asides_of("blake3").unwrap(), Vec::<String>::new(), "no directory: no aside");
     assert_eq!(store.blob_size("blake3", &hex).unwrap(), None, "no directory: no size");
     assert!(!store.unlink_blob("blake3", &hex).unwrap(), "no directory: nothing to unlink");
-    assert!(!store.remove_aside("blake3", &format!(".retired-{hex}-0")).unwrap(), "no directory: no aside");
+    assert_eq!(store.remove_aside("blake3", &format!(".retired-{hex}-0")).unwrap(), None, "no directory: no aside");
     store.install("blake3", &hex, b"garbage under the right name").unwrap();
     put_whole(&store, "k", bytes, 1);
     let aside = store.asides_of("blake3").unwrap().pop().expect("the replace's aside");
     assert_eq!(store.unlink_asides().unwrap(), 1, "the deferred unlink takes it first");
-    assert!(!store.remove_aside("blake3", &aside).unwrap(), "the pass's removal finds none, and says so");
+    assert_eq!(store.remove_aside("blake3", &aside).unwrap(), None, "the pass's removal finds none, and says so");
     let not_a_file = hex_of(b"a directory at a hex name");
     fs::create_dir(root.join("blake3").join(&not_a_file)).unwrap();
     assert_eq!(store.blob_size("blake3", &not_a_file).unwrap(), None, "an entry that is no file is no blob");

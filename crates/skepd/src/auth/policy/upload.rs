@@ -1,10 +1,11 @@
-//! The UPLOAD FAMILY's admission at the session layer (D12; PUB-6.35's I10;
-//! the media register's M-I6 (b); sweep-5 media-leak
-//! `upload-admitted-where-no-op-would-be`): who may take bytes into the
-//! board's blob store at all, asked by every method of `/blob/upload` before
-//! the media resource is consulted. The family commits nothing to the
-//! journal, so it is no write sequence; it is gated by the session layer as
-//! one is, its refusals riding `403 upload_refused` (wire.md §Media).
+//! The upload family's admission at the session layer.
+//!
+//! It decides (D12; PUB-6.35's I10; the media register's M-I6 (b)) who may
+//! take bytes into the board's blob store at all, asked by every method of
+//! `/blob/upload` before the media resource is consulted. The family commits
+//! nothing to the journal, so it is no write sequence; it is gated by the
+//! session layer as one is, its refusals riding `403 upload_refused`
+//! (wire.md §Media).
 
 use skep_address::Level;
 use skep_identity::HasIdentity;
@@ -14,26 +15,33 @@ use super::CredentialRefusal;
 use crate::auth::session::Actor;
 use crate::World;
 
-/// Why the session layer refuses an act of the upload family — the `detail`
-/// of `403 upload_refused`, in the order [`upload_admission`] asks.
+/// Why the session layer refuses an act of the upload family.
+///
+/// It is the `detail` of `403 upload_refused`, in the order
+/// [`upload_admission`] asks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UploadRefusal {
     /// No live session: the guest, at every act of the family.
     Unauthenticated,
-    /// The board is unclaimed: the upload is admitted on a claimed board
-    /// alone (M-I6 (b), PUB-6.35's I10 cited) — every method of the family,
-    /// the deposit read included.
+    /// The board is unclaimed.
+    ///
+    /// The upload is admitted on a claimed board alone (M-I6 (b), PUB-6.35's
+    /// I10 cited) — every method of the family, the deposit read included.
     ClaimFirst,
-    /// A NODE-TIER principal — principal 0 of this node or of a sub-node,
-    /// which owns no documents — refused before any body byte, so no deposit
-    /// stands that no account's scope counts.
+    /// A principal not at the account tier, which owns no documents.
+    ///
+    /// It is a node-tier principal — principal 0 of this node or of a
+    /// sub-node — or a principal the board does not know, refused before any
+    /// body byte, so no deposit stands that no account's scope counts.
     NodeTier,
 }
 
 impl UploadRefusal {
-    /// The `detail` token. `claim_first` is the pre-claim gate's own, spelled
-    /// through the credential family as the registry family spells the tokens
-    /// it shares (`RegistryRefusal::token`).
+    /// Returns the `detail` token.
+    ///
+    /// `claim_first` is the pre-claim gate's own, spelled through the
+    /// credential family as the registry family spells the tokens it shares
+    /// (`RegistryRefusal::token`).
     pub(crate) fn token(self) -> String {
         match self {
             UploadRefusal::Unauthenticated => "unauthenticated".into(),
@@ -43,10 +51,17 @@ impl UploadRefusal {
     }
 }
 
-/// THE ADMISSION, in its order — a guest, then an unclaimed board, then a
-/// node-tier principal — off `world`, the head snapshot the route took, whose
-/// identity slice and principal registry are one committed state. `Ok` is
-/// the principal every later step keys its records to.
+/// Runs the upload family's admission off `world`.
+///
+/// `world` is the head snapshot the route took, its identity slice and
+/// principal registry one committed state. `Ok` is the principal every later
+/// step keys its records to.
+///
+/// # Errors
+///
+/// In its order: a guest, [`UploadRefusal::Unauthenticated`]; then an
+/// unclaimed board, [`UploadRefusal::ClaimFirst`]; then a principal not at
+/// the account tier, [`UploadRefusal::NodeTier`].
 pub(crate) fn upload_admission(
     world: &World,
     actor: &Actor,
@@ -76,13 +91,15 @@ mod tests {
     use super::*;
     use crate::auth::session::{GuestReason, Scope, SessionBinding};
 
-    /// THE ADMISSION'S ORDER AND ITS TOKENS, over the genesis world — an
-    /// unclaimed board on which principal 0 sits at the node `1`: the guest is
-    /// refused `unauthenticated` ahead of the board's state, and principal 0 —
-    /// node-tier, so refused `node_tier` on a claimed board (the wire
-    /// fixture's `the_session_layer_gate`) — is refused `claim_first` here,
-    /// the claim asked ahead of the tier. The tokens are the wire's (wire.md
-    /// §Media), `claim_first` the credential family's own.
+    /// Checks the admission's order and its tokens, over the genesis world.
+    ///
+    /// The genesis world is an unclaimed board on which principal 0 sits at
+    /// the node `1`: the guest is refused `unauthenticated` ahead of the
+    /// board's state, and principal 0 — node-tier, so refused `node_tier` on
+    /// a claimed board (the wire fixture's `the_session_layer_gate`) — is
+    /// refused `claim_first` here, the claim asked ahead of the tier. The
+    /// tokens are the wire's (wire.md §Media), `claim_first` the credential
+    /// family's own.
     #[test]
     fn the_admission_asks_the_actor_then_the_claim_then_the_tier() {
         let engine = skep_engine::Engine::open(KernelConfig {

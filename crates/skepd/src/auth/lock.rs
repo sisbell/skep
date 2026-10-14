@@ -1,13 +1,17 @@
-//! The credential write lock (AUTH-3.1–3.3), and the guards that let a
-//! function say in its signature which half of it the function runs under.
+//! The credential write lock (AUTH-3.1–3.3), and its guards.
+//!
+//! The guards let a function say in its signature which half of the lock
+//! it runs under.
 
 // ── the credential write lock (AUTH-3.1–3.3) ─────────────────────────────
 
-/// The credential write lock: serializes credential-changing writes against
-/// every other session-authenticated write. Writer-preferring by
-/// requirement (AUTH-3.2); `parking_lot::RwLock` satisfies it (task-fair: a
-/// waiting writer blocks new readers), which is the existence proof
-/// AUTH-7.18 records — the REQUIREMENT binds, not the crate.
+/// The credential write lock.
+///
+/// It serializes credential-changing writes against every other
+/// session-authenticated write. Writer-preferring by requirement
+/// (AUTH-3.2); `parking_lot::RwLock` satisfies it (task-fair: a waiting
+/// writer blocks new readers), which is the existence proof AUTH-7.18
+/// records — the *requirement* binds, not the crate.
 ///
 /// `auth/` has exactly one lock whose guards travel as arguments — each of
 /// its other locks guards one structure's own state and is never named in a
@@ -15,22 +19,25 @@
 /// `auth/` and meets the write-serialization guard (`server/op.rs`), the
 /// binding carries the qualifier: `credential_lock`.
 ///
-/// What the lock SCOPES is a different thing and wears a different word:
-/// the refusal rules it serializes are the GATES (`board_state_admission`'s
+/// What the lock *scopes* is a different thing and wears a different word:
+/// the refusal rules it serializes are the gates (`board_state_admission`'s
 /// two — the RES-26 gate once claimed, `pre_claim_gate` before — the
 /// write-path check behind the first, and the precheck's ordered slots),
 /// which is wire.md's term for a rule that refuses a write.
 pub(crate) struct CredentialLock(parking_lot::RwLock<()>);
 
-/// The read guard, newtyped so a function whose contract is "under the read
-/// lock" names it in its arguments (AUTH-3.3). `#[must_use]`, as `lock_api`'s
-/// own guard is — an attribute the newtype does not inherit: a guard taken
-/// and dropped in one statement is a lock released before the next line.
+/// The credential lock's read guard (AUTH-3.3).
+///
+/// It is newtyped so a function whose contract is "under the read lock"
+/// names it in its arguments. `#[must_use]`, as `lock_api`'s own guard is —
+/// an attribute the newtype does not inherit: a guard taken and dropped in
+/// one statement is a lock released before the next line.
 #[must_use = "if unused the credential lock will immediately unlock"]
 pub(crate) struct LockRead<'a>(#[allow(dead_code)] parking_lot::RwLockReadGuard<'a, ()>);
 
-/// The write guard — the credential path's; `#[must_use]` for the read
-/// guard's reason.
+/// The credential lock's write guard — the credential path's.
+///
+/// `#[must_use]` for the read guard's reason.
 #[must_use = "if unused the credential lock will immediately unlock"]
 pub(crate) struct LockWrite<'a>(#[allow(dead_code)] parking_lot::RwLockWriteGuard<'a, ()>);
 

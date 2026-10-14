@@ -1,14 +1,17 @@
-//! The crate's one source of randomness — the OS, fail-stop — for session
-//! tokens and nonces.
+//! The crate's one source of randomness, for session tokens and nonces.
+//!
+//! The source is the OS, fail-stop.
 
 use rand_core::{CryptoRng, RngCore};
 
 // ── OS entropy (AUTH-4.13) ───────────────────────────────────────────────
 
-/// The crate's one OS RNG: every draw comes from the OS (`getrandom`), so a
-/// token or a nonce is never a function of process state. Implements
-/// `rand_core` 0.9's traits, which the declared signatures on the auth
-/// surface carry (AUTH-4.19, AUTH-4.23).
+/// The crate's one OS RNG.
+///
+/// Every draw comes from the OS (`getrandom`), so a token or a nonce is
+/// never a function of process state. It implements `rand_core` 0.9's
+/// traits, which the declared signatures on the auth surface carry
+/// (AUTH-4.19, AUTH-4.23).
 pub(crate) struct OsEntropy;
 
 impl RngCore for OsEntropy {

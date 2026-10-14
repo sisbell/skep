@@ -1,79 +1,79 @@
-//! THE ENTRY FRAME AS THE DAEMON COMPOSES IT (signed ops; the seam
-//! placement investigation §3.2): the verifier's side of
-//! [`skep_identity::entry_frame`] — every member rebuilt from the op and the
-//! locked snapshot the write's gates read, which under the serialization
-//! guard IS the transaction's base. Nothing here is served or derived from
-//! the daemon's own state beyond what the design record §2.5 names:
+//! The entry frame as the daemon composes it.
+//!
+//! It is the verifier's side of [`skep_identity::entry_frame`] (signed ops;
+//! the seam placement investigation §3.2) — every member rebuilt from the op
+//! and the locked snapshot the write's gates read, which under the
+//! serialization guard *is* the transaction's base. Nothing here is served
+//! or derived from the daemon's own state beyond what the design record
+//! §2.5 names:
 //!
 //! * `alg` — the `attest.alg` token as the request carried it — the one
 //!   member the snapshot does not supply, so it is applied last
 //!   ([`EntryFrame::to_bytes`]);
-//! * `board` — the BOARD TERM ([`BoardTerm`]), `H.1`'s committed pair (D13,
-//!   RULED), read off the snapshot by [`crate::write_path::board_term`] — by
-//!   the check, ahead of the member, and handed to [`compose`]; by
-//!   [`compose_record`] itself;
+//! * `board` — the board term ([`BoardTerm`]), `H.1`'s committed pair
+//!   (signed-ops D13), read off the snapshot by
+//!   [`crate::write_path::board_term`] — by the check, ahead of the member,
+//!   and handed to [`compose`]; by [`compose_record`] itself;
 //! * `account` — the act's principal's account in the board's local form,
 //!   M3's `principal_prefix`;
-//! * `doc` — per op cell ([`DocTerm`]): the TRUNK of the op's `doc` for
+//! * `doc` — per op cell ([`DocTerm`]): the trunk of the op's `doc` for
 //!   `insert` and `publish` (M5's one truncation, PUB-2.15); the op's `home`
-//!   for `make_link`, `emit`, `nullify` and `assert_sup`; the PAIR of homes
-//!   `(d_s, d_a)` for `edit_link`; the PARENT ACCOUNT the minted document
+//!   for `make_link`, `emit`, `nullify` and `assert_sup`; the pair of homes
+//!   `(d_s, d_a)` for `edit_link`; the parent account the minted document
 //!   lands in for the three mints — the request's `account` at
 //!   `create_new_document`, the principal's own at `fork` and at `version`
-//!   (d24-3: never the trunk of `d_src`, which would put ω(`doc`) off
-//!   `account` at a cross-owner version);
+//!   (never the trunk of `d_src`, which would put ω(`doc`) off `account` at
+//!   a cross-owner version);
 //! * `op` — the op-kind token as the wire spells it, which the body's
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
 //!   holds it to the codec's own `op_name`) — and, at a credential deposit's
-//!   `make_link`, the RECORD grade's `record` ([`compose_record`]:
+//!   `make_link`, the record grade's `record` ([`compose_record`]:
 //!   skep-identity's [`RecordFrame`] over the fold's own reading of the
 //!   link's address — its home, and the home's account by ω);
-//! * `body` — per op cell: EMPTY for the three mints; the declared type and
-//!   the values for `insert`; for the LINK WRITES the stored link's slots AS
-//!   THE TRANSACTION WILL DEPOSIT THEM (the design record §2.5's slot row as
-//!   ruled, ap6-3 and d24-2): a `make_link`'s three slots resolved through
-//!   M7's own [`slot_endset`] over this snapshot — an address-form slot's
-//!   unit spans, a V-spec slot's I-extents — with its `replaces` member,
-//!   absent or the address it names; an `emit`'s, a `nullify`'s and an
-//!   `assert_sup`'s tuple as M7's own [`emit_tuple`], [`retraction_tuple`]
-//!   and [`supersession_claim`] build it; an `edit_link`'s successor as
-//!   M10's own [`successor_link`] builds it over this snapshot, then
-//!   `original`'s unit span — the composer and the dispatch building through
-//!   ONE function each, under the daemon's serialization lock, over the base
-//!   the transaction opens on, so the signed row and the stored endset agree
-//!   by construction; and for `publish` THE COUNT, THE RUNS THE CLIENT PLACED
-//!   IN THE ADDRESS FORM AND THE BASE (the design record §2.5's cell as
-//!   ruled — V, l6-A4, D25; the base MEMBER in the group since round 7,
-//!   bu7-E2 ARM (a)): the runs as the commit will place them, M5's own
-//!   classing (`Shot::address_form`) — a run the commit COPIES IN (the
-//!   trunk's own I-space, the staging draft's) by its values, read off the
-//!   snapshot by M4's `value_at` in run order; a WINDOW onto another
-//!   document by its address and width, read from nowhere — within
-//!   [`MAX_SHOT_BODY_BYTES`]; the base the shot's own, `Shot::base`'s member
-//!   and extent as the request named them, EMPTY in the birth shape — the
-//!   member's address read off the request and never minted here, so the
-//!   frame stays position-free.
+//! * `body` — per op cell: empty for the three mints; the declared type and
+//!   the values for `insert`; for the link writes the stored link's slots as
+//!   the transaction will deposit them (the design record §2.5's slot row):
+//!   a `make_link`'s three slots resolved through M7's own [`slot_endset`]
+//!   over this snapshot — an address-form slot's unit spans, a V-spec slot's
+//!   I-extents — with its `replaces` member, absent or the address it names;
+//!   an `emit`'s, a `nullify`'s and an `assert_sup`'s tuple as M7's own
+//!   [`emit_tuple`], [`retraction_tuple`] and [`supersession_claim`] build
+//!   it; an `edit_link`'s successor as M10's own [`successor_link`] builds it
+//!   over this snapshot, then `original`'s unit span — the composer and the
+//!   dispatch building through one function each, under the daemon's
+//!   serialization lock, over the base the transaction opens on, so the
+//!   signed row and the stored endset agree by construction; and for
+//!   `publish` the count, the runs the client placed in the address form and
+//!   the base (the design record §2.5's cell; signed-ops D25): the runs as
+//!   the commit will place them, M5's own classing (`Shot::address_form`) —
+//!   a run the commit copies in (the trunk's own I-space, the staging
+//!   draft's) by its values, read off the snapshot by M4's `value_at` in run
+//!   order; a window onto another document by its address and width, read
+//!   from nowhere — within [`MAX_SHOT_BODY_BYTES`]; the base the shot's own,
+//!   `Shot::base`'s member and extent as the request named them, empty in
+//!   the birth shape — the member's address read off the request and never
+//!   minted here, so the frame stays position-free.
 //!
 //! Eight bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
-//! then OWED — passed through to the store's or the door's own refusal, or
+//! then owed — passed through to the store's or the door's own refusal, or
 //! refused as its own cause — is the check's to decide, and is stated there
 //! alone (`policy/attestation.rs`'s `attestation_check`, its doc item 6).
 //!
 //! * a `publish` body whose values it does not hold — a copied run naming an
 //!   address M4 has no value at ([`ComposeFault::MissingValue`]). (A window's
 //!   addresses are never walked here: the body spells them.)
-//! * a `publish` body over a value the principal may NOT READ — a COPIED run
+//! * a `publish` body over a value the principal may not read — a copied run
 //!   onto a staging draft the read predicate withholds from it
 //!   ([`ComposeFault::UnreadableCopiedRunOrigin`]). Those values are never read
-//!   here: a verdict composed over them answers BY them —
+//!   here: a verdict composed over them answers *by* them —
 //!   `attestation_required` telling that an address holds a value,
 //!   `signature` whether a guessed value is the one it holds — where the
 //!   store's source gate promises `withheld` before any existence answer
-//!   (PUB-8.4). A WINDOW is no such case since the address form (l6-A4): it
-//!   is signed by its address, which its author holds whatever it may read,
-//!   so it is composed unread — and an author whose grant lapsed re-signs a
-//!   re-shoot that keeps a window (fam2-Q's (c), closed by arm A).
+//!   (PUB-8.4). A window is no such case in the address form: it is signed
+//!   by its address, which its author holds whatever it may read, so it is
+//!   composed unread — and an author whose grant lapsed re-signs a re-shoot
+//!   that keeps a window.
 //! * a `publish` body past [`MAX_SHOT_BODY_BYTES`]
 //!   ([`ComposeFault::PastBodyBudget`]), answered before it is built past the
 //!   budget.
@@ -81,17 +81,17 @@
 //!   — a width, an extent or a placed count past 2^64 − 1
 //!   ([`ComposeFault::Unspellable`]): a shot naming positions or a base
 //!   extent no store holds.
-//! * a `publish` body whose STAGING-DRAFT runs re-insert more values than
+//! * a `publish` body whose staging-draft runs re-insert more values than
 //!   the store's own re-insert budget ([`ComposeFault::PastReinsertBudget`]),
 //!   answered off the runs' widths before a value is read.
-//! * a link write's slot over either of M7's per-slot budgets — the spans a
-//!   slot keeps, the run-list steps its resolution walks
-//!   ([`ComposeFault::SlotTooLarge`]): the same two budgets M7 charges
+//! * a `make_link`'s or an `emit`'s slot over either of M7's per-slot
+//!   budgets — the spans a slot keeps, the run-list steps its resolution
+//!   walks ([`ComposeFault::SlotTooLarge`]): the same two budgets M7 charges
 //!   inside the write, charged here as there, so the composer walks no
 //!   further than the transaction would (SO-I9); a slot past either is a
 //!   slot M7 refuses `slot_too_large`.
 //! * a `make_link`'s or an `edit_link`'s V-spec naming a source the
-//!   principal may NOT READ ([`ComposeFault::UnreadableSlotSource`]): no
+//!   principal may not read ([`ComposeFault::UnreadableSlotSource`]): no
 //!   arrangement the read predicate withholds is resolved here, since a
 //!   verdict composed over its I-extents would answer by them — `signature`
 //!   whether a guess at a private draft's I-space is right — where the write
@@ -123,12 +123,17 @@ use skep_namespace::{HasM3, PrincipalId};
 use crate::write_path::board_term;
 use crate::World;
 
-/// The most bytes a `publish`'s entry-frame BODY may reach — PARITY with the
-/// request-body cap, [`crate::limits::MAX_REQUEST_BODY`]. The other two ops
-/// of the checked set compose their bodies out of the request itself —
-/// `insert`'s values and `make_link`'s slots ride in the frame — so the
-/// transport's cap bounds them already. A shot's body is read off the
-/// STORE, one value per position its COPIED runs name (a window costs its
+/// The most bytes a `publish`'s entry-frame body may reach.
+///
+/// It is parity with the request-body cap,
+/// [`crate::limits::MAX_REQUEST_BODY`]. The checked set's other ops compose
+/// their bodies out of the request: the three mints' are empty, `insert`'s
+/// values and the link writes' slot arguments ride in the frame, so the
+/// transport's cap bounds them already, and the slots a `make_link`, an
+/// `emit` and an `edit_link` build from them are held to the per-slot
+/// budgets ([`ComposeFault::SlotTooLarge`],
+/// [`ComposeFault::SuccessorRefused`]). A shot's body is read off the
+/// store, one value per position its copied runs name (a window costs its
 /// address row alone, whatever its width), and a run may name one stored
 /// value as often as the wire's run list admits, at a width no codec cap
 /// sees. Parity makes the largest body the check reads, frames and verifies
@@ -140,68 +145,80 @@ use crate::World;
 /// past the budget, and the walk over the copied runs' Σ width stops at it:
 /// every value costs at least its four-byte length prefix, so the walk
 /// visits at most a quarter of the budget in positions, whatever the values
-/// hold. Over the STAGING DRAFT's runs the store's own re-insert budget stops
+/// hold. Over the staging draft's runs the store's own re-insert budget stops
 /// the walk first ([`ComposeFault::PastReinsertBudget`]): a quarter of this
 /// budget is sixteen times the most the store ever re-inserts.
 const MAX_SHOT_BODY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
-/// Why the daemon could not compose the entry frame for a write —
-/// [`compose`]'s reasons alone, the record frame's one refusal being
-/// [`compose_record`]'s `None`; what the write is owed is the check's to
-/// answer (`policy/attestation.rs`).
+/// Why the daemon could not compose the entry frame for a write.
+///
+/// These are [`compose`]'s reasons alone, the record frame's one refusal
+/// being [`compose_record`]'s `None`; what the write is owed is the check's
+/// to answer (`policy/attestation.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ComposeFault {
     /// The principal has no account prefix — no `account` term.
     NoAccount,
-    /// A `publish`'s COPIED run names an address the snapshot holds no value
-    /// at — a shot the store's own existence walk refuses `dangling_source`.
+    /// A `publish`'s copied run names an address with no value in the snapshot.
+    ///
+    /// It is a shot the store's own existence walk refuses `dangling_source`.
     MissingValue,
-    /// A `publish`'s COPIED run — a staging draft's, re-inserted by value —
-    /// names an origin document the principal may not read, so no value of
-    /// the shot is read: a verdict composed over such a value would answer BY
-    /// it. What the write is OWED is not the composer's to know: the check
-    /// asks M5's own admission of the shot (`policy/attestation.rs`'s
+    /// A `publish` copies a run from a document the principal may not read.
+    ///
+    /// The run is a staging draft's, re-inserted by value, and no value of
+    /// the shot is read: a verdict composed over such a value would answer
+    /// *by* it. What the write is owed is not the composer's to know: the
+    /// check asks M5's own admission of the shot (`policy/attestation.rs`'s
     /// `refused_at_or_before_the_source_gate`). A window raises this never:
     /// it is spelled by address and read from nowhere.
     UnreadableCopiedRunOrigin,
     /// A `publish`'s body would pass [`MAX_SHOT_BODY_BYTES`].
     PastBodyBudget,
-    /// A `publish` term the frame's fixed-width rows cannot spell — a run's
-    /// width, the base extent or the placed count past 2^64 − 1 — naming
-    /// positions or a base extent no store holds: a shot the store refuses
-    /// (`base_extent_too_large`, `too_many_values`, `dangling_source`).
+    /// A `publish` term the frame's fixed-width rows cannot spell.
+    ///
+    /// It is a run's width, the base extent or the placed count past
+    /// 2^64 − 1 — naming positions or a base extent no store holds: a shot
+    /// the store refuses (`base_extent_too_large`, `too_many_values`,
+    /// `dangling_source`).
     Unspellable,
-    /// A `publish` whose STAGING-DRAFT runs — re-inserted by the commit value
-    /// by value — name more values than M5's re-insert budget
+    /// A `publish` whose staging-draft runs pass M5's re-insert budget.
+    ///
+    /// The commit re-inserts those runs value by value
     /// (`Shot::reinserted_values` past
     /// `skep_arrangement::MAX_REINSERTED_VALUES`): a shot the store refuses
     /// `too_many_values` by request arithmetic before it probes an address,
     /// so one whose values this composer never walks.
     PastReinsertBudget,
-    /// A link write's slot over either of M7's per-slot budgets —
-    /// `MAX_SLOT_SPANS` spans in whichever form, or a V-spec slot commanding
-    /// more than `MAX_SLOT_RESOLVE_STEPS` run-list steps — charged here as
-    /// M7 charges them inside the write, by M7's own `slot_endset` for a
-    /// `make_link`, by M10's own `successor_link` for an `edit_link`, and by
-    /// M7's own `emit_tuple` for an `emit`: a slot the store refuses
-    /// `slot_too_large`.
+    /// A `make_link`'s or `emit`'s slot over either of M7's per-slot budgets.
+    ///
+    /// The budgets are `MAX_SLOT_SPANS` spans in whichever form, or a V-spec
+    /// slot commanding more than `MAX_SLOT_RESOLVE_STEPS` run-list steps —
+    /// charged here as M7 charges them inside the write, by M7's own
+    /// `slot_endset` for a `make_link` and by M7's own `emit_tuple` for an
+    /// `emit`: a slot the store refuses `slot_too_large`. An `edit_link`'s
+    /// slot past a budget is M10's own build refusing it,
+    /// [`ComposeFault::SuccessorRefused`].
     SlotTooLarge,
-    /// A `make_link`'s or an `edit_link`'s V-spec names a source document
-    /// the principal may not read, so no slot is resolved: the write door
-    /// refuses it `withheld` naming the source, ahead of the store
-    /// (`consult_write`'s source consult, which judges every write that
-    /// reaches here).
+    /// A V-spec names a source document the principal may not read.
+    ///
+    /// The V-spec is a `make_link`'s or an `edit_link`'s, and no slot is
+    /// resolved: the write door refuses it `withheld` naming the source,
+    /// ahead of the store (`consult_write`'s source consult, which judges
+    /// every write that reaches here).
     UnreadableSlotSource,
-    /// An `edit_link` whose successor M10's own build refuses — an ill-formed
-    /// spec, an unregistered source — so no frame is composed: the dispatch
-    /// refuses the same request by the same function, before any driver.
+    /// An `edit_link` whose successor M10's own build refuses.
+    ///
+    /// The build refuses an ill-formed spec, an unregistered source, a slot
+    /// past a budget — so no frame is composed: the dispatch refuses the same
+    /// request by the same function, before any driver.
     SuccessorRefused,
 }
 
-/// The entry frame's `doc` TERM (the design record §2.5) as the composer
-/// holds it, owned: one document, or an `edit_link`'s pair of homes —
-/// [`DocTerm`]'s owning twin, spelled by [`EntryFrame::to_bytes`] through
-/// [`skep_identity::entry_frame`].
+/// The entry frame's `doc` term, owned, as the composer holds it.
+///
+/// It is the design record §2.5's term: one document, or an `edit_link`'s
+/// pair of homes — [`DocTerm`]'s owning twin, spelled by
+/// [`EntryFrame::to_bytes`] through [`skep_identity::entry_frame`].
 enum FrameDocTerm {
     One(Address),
     Pair { d_s: Address, d_a: Address },
@@ -216,20 +233,26 @@ impl FrameDocTerm {
     }
 }
 
-/// A stored link's three slots, BY NAME, as M7 holds them — its own
-/// endsets, borrowed where they lie: what an entry body's [`LinkSlots`]
-/// walks, so no span is copied out of the link to be framed.
+/// Returns a stored link's three slots, by name, as M7 holds them.
+///
+/// They are its own endsets, borrowed where they lie: what an entry body's
+/// [`LinkSlots`] walks, so no span is copied out of the link to be framed.
 fn link_slots(link: &Link) -> LinkSlots<&Endset> {
     LinkSlots { from: link.from_slot(), to: link.to_slot(), ty: link.type_slot() }
 }
 
-/// ONE `make_link` slot AS THE TRANSACTION WILL STORE IT: M7's own
-/// [`slot_endset`] over this snapshot's M5 — an address-form slot's unit
-/// spans, a V-spec slot's I-extents — under M7's two per-slot budgets
-/// ([`ComposeFault::SlotTooLarge`] past either); a V-spec naming a source the
-/// principal may not read is never resolved
-/// ([`ComposeFault::UnreadableSlotSource`]): the door withholds the write
-/// before the store sees it, and a verdict composed over the source's
+/// Returns one `make_link` slot as the transaction will store it.
+///
+/// It is M7's own [`slot_endset`] over this snapshot's M5 — an address-form
+/// slot's unit spans, a V-spec slot's I-extents — under M7's two per-slot
+/// budgets.
+///
+/// # Errors
+///
+/// [`ComposeFault::SlotTooLarge`] past either budget, and
+/// [`ComposeFault::UnreadableSlotSource`] for a V-spec naming a source the
+/// principal may not read, which is never resolved: the door withholds the
+/// write before the store sees it, and a verdict composed over the source's
 /// I-extents would answer by them.
 fn stored_slot(
     world: &World,
@@ -245,27 +268,41 @@ fn stored_slot(
     slot_endset(world.m5(), arg).ok_or(ComposeFault::SlotTooLarge)
 }
 
-/// THE ENTRY FRAME for `op` by `principal` on `world`, over the board term
-/// `board` the check read — every member the op and the snapshot supply,
-/// composed once — or why it cannot be composed. `alg` is not among them: it
-/// is the presented attestation's own, applied last ([`EntryFrame::to_bytes`]).
-/// The check asks this for a write that PRESENTS a member alone — the board
-/// term and (1)'s missing-member refusal stand ahead of the composition (the
-/// design record §4.5's ratified order) — so no unsigned write pays the walk
-/// a shot's body costs.
+/// Composes the entry frame for `op` by `principal` on `world`.
 ///
-/// PRECONDITION: `op` is of the checked set ([`crate::codec::in_checked_set`]),
-/// and every op of that set has an arm below. The first half is
-/// `policy/attestation.rs`'s `attestation_check`'s to discharge — its step 1,
-/// the one membership check, which this function does not repeat; the
-/// second half is this function's own. Either broken — an op outside the
-/// set, or the set widened without its arm — is never answered as a fault:
-/// once the account is read it STOPS LOUDLY in every build, because no
-/// refusal the check can give is true of a build whose two tables disagree,
-/// and passing the write through would commit it with its marker slot empty
-/// — the silent drop the checked set's card rules out. The check runs before
-/// the transaction, under locks that do not poison, so under [`crate::serve`]
-/// the stop is a `500 internal_panic` that commits nothing.
+/// It is composed over the board term `board` the check read — every member
+/// the op and the snapshot supply, composed once. `alg` is not among them:
+/// it is the presented attestation's own, applied last
+/// ([`EntryFrame::to_bytes`]). The check asks this for a write that
+/// *presents* a member alone — the board term and (1)'s missing-member
+/// refusal stand ahead of the composition (the design record §4.5's order)
+/// — so no unsigned write pays the walk a shot's body costs.
+///
+/// # Errors
+///
+/// Why the frame cannot be composed: [`ComposeFault::NoAccount`] where the
+/// principal has no account prefix, read first; then a `make_link`'s slot
+/// faults ([`stored_slot`]), an `emit`'s [`ComposeFault::SlotTooLarge`], an
+/// `edit_link`'s [`ComposeFault::UnreadableSlotSource`] or
+/// [`ComposeFault::SuccessorRefused`], and a `publish`'s
+/// [`ComposeFault::UnreadableCopiedRunOrigin`] or its body's faults
+/// ([`publish_body`]).
+///
+/// # Panics
+///
+/// Panics where the precondition fails: `op` is of the checked set
+/// ([`crate::codec::in_checked_set`]), and every op of that set has an arm
+/// below. The first half is `policy/attestation.rs`'s `attestation_check`'s
+/// to discharge — its step 1, the one membership check, which this function
+/// does not repeat; the second half is this function's own. Either broken —
+/// an op outside the set, or the set widened without its arm — is never
+/// answered as a fault: once the account is read it stops loudly in every
+/// build, because no refusal the check can give is true of a build whose
+/// two tables disagree, and passing the write through would commit it with
+/// its marker slot empty — the silent drop the checked set's card rules
+/// out. The check runs before the transaction, under locks that do not
+/// poison, so under [`crate::serve`] the stop is a `500 internal_panic` that
+/// commits nothing.
 pub(super) fn compose(
     world: &World,
     op: &Op,
@@ -274,9 +311,9 @@ pub(super) fn compose(
 ) -> Result<EntryFrame, ComposeFault> {
     let account = world.m3().principal_prefix(principal).ok_or(ComposeFault::NoAccount)?.clone();
     let (doc, body) = match op {
-        // THE THREE MINTS (D24's cells (1)–(3)): the EMPTY body over the
-        // parent account — the request's at `create_new_document`, the
-        // principal's own at `fork` and `version` (d24-3). No minted address
+        // The three mints (signed-ops D24's cells (1)–(3)): the empty body
+        // over the parent account — the request's at `create_new_document`,
+        // the principal's own at `fork` and `version`. No minted address
         // enters: the frame stays position-free.
         Op::CreateNewDocument { account: parent, .. } => (
             FrameDocTerm::One(parent.clone()),
@@ -297,7 +334,7 @@ pub(super) fn compose(
             (FrameDocTerm::One(trunk_of(doc)), entry_body_insert(declared, values))
         }
         Op::MakeLink { home, from, to, ty, replaces } => {
-            // Every slot AS STORED: M7's own resolution over this snapshot,
+            // Every slot as stored: M7's own resolution over this snapshot,
             // which under the serialization lock is the transaction's base.
             let (from, to, ty) = (
                 stored_slot(world, principal, from)?,
@@ -306,7 +343,7 @@ pub(super) fn compose(
             );
             let slots = LinkSlots { from: &from, to: &to, ty: &ty };
             // The `replaces` member rides the signed body (PUB-5.15): the
-            // EMPTY group where the op carries none, else the state named —
+            // empty group where the op carries none, else the state named —
             // so a copy of the request carries the one state its signer named.
             let body = match replaces {
                 None => entry_body_make_link(slots),
@@ -314,10 +351,10 @@ pub(super) fn compose(
             };
             (FrameDocTerm::One(home.clone()), body)
         }
-        // THE OTHER LINK WRITES (D24's cells (4)–(6)): the stored tuple's
-        // rows, as M7's own `emit_tuple`, `retraction_tuple` and
-        // `supersession_claim` build the tuple each op deposits — so, as a
-        // `make_link`'s slots through `slot_endset`, the signed row and the
+        // The other link writes (signed-ops D24's cells (4)–(6)): the
+        // stored tuple's rows, as M7's own `emit_tuple`, `retraction_tuple`
+        // and `supersession_claim` build the tuple each op deposits — so, as
+        // a `make_link`'s slots through `slot_endset`, the signed row and the
         // stored link agree by construction.
         Op::Emit { home, ty, from, to } => {
             // `None` is M7's own budget on the two caller-sized slots.
@@ -332,11 +369,11 @@ pub(super) fn compose(
             let tuple = supersession_claim(old, new);
             (FrameDocTerm::One(home.clone()), entry_body_assert_sup(link_slots(&tuple)))
         }
-        // THE EDIT (D24's cell (7)): the successor as M10's own build makes
-        // it over this snapshot — the door judges every write that reaches
-        // here, so `Judged`, which answers a spec's faults as the dispatch
-        // will — then the claim's `from`, `original`'s unit span; the pair
-        // of homes as the frame's `doc`.
+        // The edit (signed-ops D24's cell (7)): the successor as M10's own
+        // build makes it over this snapshot — the door judges every write
+        // that reaches here, so `Judged`, which answers a spec's faults as
+        // the dispatch will — then the claim's `from`, `original`'s unit
+        // span; the pair of homes as the frame's `doc`.
         Op::EditLink { original, successor, d_s, d_a } => {
             let reader = world.reader_class(Some(principal));
             let resolve_ty = match &successor.ty {
@@ -356,8 +393,8 @@ pub(super) fn compose(
         Op::Publish { doc, shot } => {
             let trunk = trunk_of(doc);
             // The runs as the commit will place them — M5's classing, the
-            // one place a run's family is decided (l6-A4), asked with the
-            // address the shot names, as `publish` is.
+            // one place a run's family is decided, asked with the address
+            // the shot names, as `publish` is.
             let segments = shot.address_form(doc);
             // No value the principal may not read is ever read here: a
             // copied run's origin must be readable to it; a window is spelled
@@ -376,14 +413,16 @@ pub(super) fn compose(
     Ok(EntryFrame { board, account, doc, body })
 }
 
-/// Whether the principal may read every value the shot COPIES IN — each
-/// copied segment's ORIGIN DOCUMENT, the trunk of the document its start was
-/// minted under (`document_of`, then `trunk_of`: the derivation M5's source
-/// gate asks about, PUB-2.15), being `trunk`, the shot document's own
-/// I-space, which the gate never consults, or one the read predicate admits
-/// at the principal's class, which is what M10 lends the gate, on the
-/// premise `policy/attestation.rs`'s `refused_at_or_before_the_source_gate`
-/// states. A window's origin is not asked about: no value of it is read.
+/// Returns whether the principal may read every value the shot copies in.
+///
+/// That is each copied segment's origin document — the trunk of the
+/// document its start was minted under (`document_of`, then `trunk_of`: the
+/// derivation M5's source gate asks about, PUB-2.15) — being `trunk`, the
+/// shot document's own I-space, which the gate never consults, or one the
+/// read predicate admits at the principal's class, which is what M10 lends
+/// the gate, on the premise `policy/attestation.rs`'s
+/// `refused_at_or_before_the_source_gate` states. A window's origin is not
+/// asked about: no value of it is read.
 fn every_copied_run_origin_readable(
     world: &World,
     trunk: &Address,
@@ -399,20 +438,33 @@ fn every_copied_run_origin_readable(
     })
 }
 
-/// A shot's body — its segments in placement order, a copied run's values
-/// pushed one by one and a window pushed as its address and width, onto a
-/// [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over the shot's base —
-/// the member and the extent the request named, `Shot::base`, which the
-/// signer composed from the same request (V; bu7-E2) — or why it cannot be
-/// built: an address M4 holds no value at, a base group or a segment that
-/// would carry the body past the budget, a term the frame's fixed-width rows
-/// cannot spell, or staging-draft runs re-inserting more values than the
-/// store will. The budget is measured in the body's own layout as each value
-/// is read, so nothing is collected ahead of the build and no body is held
-/// past it; a refused push takes the builder with it, so the shot is refused
-/// whole and no body is finished over the segments before the refusal — the
-/// preimage of a shorter publish. PRECONDITION: the principal may read every
-/// value the shot copies in ([`every_copied_run_origin_readable`]).
+/// Builds a shot's body, its segments in placement order.
+///
+/// A copied run's values are pushed one by one and a window as its address
+/// and width, onto a [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over
+/// the shot's base — the member and the extent the request named,
+/// `Shot::base`, which the signer composed from the same request. The
+/// budget is measured in the body's own layout as each value is read, so
+/// nothing is collected ahead of the build and no body is held past it; a
+/// refused push takes the builder with it, so the shot is refused whole and
+/// no body is finished over the segments before the refusal — the preimage
+/// of a shorter publish.
+///
+/// **Precondition.** The principal may read every value the shot copies in
+/// ([`every_copied_run_origin_readable`]).
+///
+/// # Errors
+///
+/// Why the body cannot be built: an address M4 holds no value at
+/// ([`ComposeFault::MissingValue`]), a base group or a segment that would
+/// carry the body past the budget ([`ComposeFault::PastBodyBudget`]), a
+/// term the frame's fixed-width rows cannot spell
+/// ([`ComposeFault::Unspellable`]), or staging-draft runs re-inserting more
+/// values than the store will ([`ComposeFault::PastReinsertBudget`]).
+///
+/// # Panics
+///
+/// Panics where a window's width is zero, which a `Run`'s never is.
 fn publish_body(
     world: &World,
     shot: &Shot,
@@ -420,7 +472,7 @@ fn publish_body(
 ) -> Result<EntryBody, ComposeFault> {
     let content = world.content();
     let spelled = |n: &Nat| u64::try_from(n).map_err(|_| ComposeFault::Unspellable);
-    // THE BASE, both members (V; bu7-E2): the member the request named — a
+    // The base, both members: the member the request named — a
     // client-named address, never one minted here — and the extent spelled
     // into its eight bytes.
     let base = shot
@@ -435,13 +487,13 @@ fn publish_body(
     segments.iter().try_fold(0u64, |placed, segment| {
         placed.checked_add(spelled(segment.run().width())?).ok_or(ComposeFault::Unspellable)
     })?;
-    // THE STORE'S RE-INSERT BUDGET, asked of the store's own count before a
+    // The store's re-insert budget, asked of the store's own count before a
     // value is read. The staging draft's runs are re-inserted value by value,
     // and M5 refuses a shot re-inserting more than `MAX_REINSERTED_VALUES` by
     // request arithmetic before it probes an address: walked here past it,
     // they would cost the check up to the body budget's worth of positions
     // under the serialization lock, for a shot nothing commits. The check
-    // passes this answer through UNATTESTED, which is safe only because every
+    // passes this answer through unattested, which is safe only because every
     // shot refused here is one the store refuses too — and it is: the count
     // is M5's own (`Shot::reinserted_values`, the one `publish` holds to the
     // same constant with the same `>`).
@@ -460,7 +512,7 @@ fn publish_body(
             SegmentRun::Window(run) => {
                 // A window here is a `Run`, whose width is at least one
                 // (`RunError::ZeroWidth`): a zero is a broken premise, and
-                // STOPS LOUDLY, as `compose`'s precondition does.
+                // stops loudly, as `compose`'s precondition does.
                 let width = NonZeroU64::new(spelled(run.width())?).expect(
                     "publish_body's premise: a window here is a Run, whose width is at least one",
                 );
@@ -471,9 +523,11 @@ fn publish_body(
     Ok(body.finish())
 }
 
-/// The composer's answer for what [`PublishBody`] refused — the shot's base at
-/// its mint, a segment after it — by the cause the builder names: past its
-/// budget, [`ComposeFault::PastBodyBudget`]; a count past `be64`,
+/// Returns the composer's answer for what [`PublishBody`] refused.
+///
+/// The refusal is the shot's base at its mint or a segment after it, and
+/// the answer goes by the cause the builder names: past its budget,
+/// [`ComposeFault::PastBodyBudget`]; a count past `be64`,
 /// [`ComposeFault::Unspellable`] (which the up-front sum has already answered
 /// for every shot that reaches the walk).
 fn refused(refusal: PublishRefusal) -> ComposeFault {
@@ -483,24 +537,26 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
     }
 }
 
-/// THE RECORD FRAME for a credential deposit's `make_link` (signed ops, the
-/// record grade, 2a; the frame merge, fm-I) — skep-identity's
-/// [`RecordFrame`], every member but `alg`, which is each candidate key's own
-/// ([`RecordFrame::to_bytes`]), read here:
+/// Composes the record frame for a credential deposit's `make_link`.
 ///
-/// * `board` — the board term, `H.1`'s pair (D13), off the snapshot;
-/// * `account` — `home_account`, the HOME's account: the fold's own H, ω
+/// It is skep-identity's [`RecordFrame`] (signed ops, the record grade, 2a;
+/// the frame merge), every member but `alg`, which is each candidate key's
+/// own ([`RecordFrame::to_bytes`]), read here:
+///
+/// * `board` — the board term, `H.1`'s pair (signed-ops D13), off the
+///   snapshot;
+/// * `account` — `home_account`, the home's account: the fold's own H, ω
 ///   over the link's home (AUTH-2.35), which the caller has read — the
-///   DELEGATOR's for a genesis, the subject's for a holder act (the design
+///   delegator's for a genesis, the subject's for a holder act (the design
 ///   record §4.5's clause (a)); never the acting principal's, which is the
 ///   entry grade's member and enters no record frame;
 /// * `doc` — `home`, the link's home: the account's doc 1 (AUTH-2.127);
 /// * the body's five rows — `ty`, the link's type address; `to`, the link's
 ///   target address where the kind names one (none at a targetless kind);
-///   the `replaces` row EMPTY (BW-04: a credential deposit carries no member,
-///   `op_shape_refusal` refuses one); the LINEAGE row EMPTY (D2, l6-A5: at 2a
-///   no lineage has forked, so every kind writes the empty group); and
-///   `canonical`, the SIG-LESS CANONICAL RECORD
+///   the `replaces` row empty (a credential deposit carries no member,
+///   `op_shape_refusal` refuses one); the lineage row empty (signed-ops D2:
+///   at 2a no lineage has forked, so every kind writes the empty group); and
+///   `canonical`, the sig-less canonical record
 ///   (`canonical_record(entries, None)`) the caller projected off the atom.
 ///
 /// Every member is a value the link's address, the atom's bytes and `H.1`
@@ -530,10 +586,11 @@ pub(super) fn compose_record<'a>(
     Some(RecordFrame { board, home_account, home, rows })
 }
 
-/// An ENTRY frame composed but for its `alg` member — [`compose`]'s answer —
-/// every other member as the value [`skep_identity::entry_frame`] spells: the
-/// board term, the account, the document term, and the body with its
-/// grammar's token.
+/// An entry frame composed but for its `alg` member — [`compose`]'s answer.
+///
+/// Every other member is held as the value [`skep_identity::entry_frame`]
+/// spells: the board term, the account, the document term, and the body
+/// with its grammar's token.
 pub(super) struct EntryFrame {
     board: BoardTerm,
     account: Address,
@@ -542,12 +599,14 @@ pub(super) struct EntryFrame {
 }
 
 impl EntryFrame {
-    /// The entry frame's bytes under `alg`, the token the presented
-    /// attestation's MARKER tag names — [`skep_identity::entry_frame`]'s
-    /// layout, `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`,
-    /// `ENTRY_TAG` its framing tag. `to_` as C-CONV spells a rendering from a
-    /// borrow, as `write_path/head.rs`'s `HeadRecord::to_bytes` is; the free
-    /// borrow is `EntryBody::as_bytes`.
+    /// Returns the entry frame's bytes under `alg`.
+    ///
+    /// `alg` is the token the presented attestation's marker tag names; the
+    /// layout is [`skep_identity::entry_frame`]'s,
+    /// `framed(ENTRY_TAG, [alg, board, account, doc, op, body])`, `ENTRY_TAG`
+    /// its framing tag. `to_` as C-CONV spells a rendering from a borrow, as
+    /// `write_path/head.rs`'s `HeadRecord::to_bytes` is; the free borrow is
+    /// `EntryBody::as_bytes`.
     pub(super) fn to_bytes(&self, alg: &str) -> Vec<u8> {
         entry_frame(alg, self.board, &self.account, self.doc.term(), &self.body)
     }
@@ -564,20 +623,22 @@ mod tests {
     use crate::codec::op_name;
     use crate::JsonCodec;
 
-    /// An endset's spans, owned, in stored order — what the unit-span pins
-    /// below compare against.
+    /// Returns an endset's spans, owned, in stored order.
+    ///
+    /// They are what the unit-span pins below compare against.
     fn spans_of(endset: &Endset) -> Vec<Span> {
         endset.spans().cloned().collect()
     }
 
-    /// The frame's `op` member is the op-kind token AS THE WIRE SPELLS IT
-    /// (the design record §2.5): each entry-grade body `skep_identity` builds
-    /// — one per kind of the checked set — carries the codec's own name for
-    /// its op, so a wire rename meets this test before it can move a signed
-    /// preimage. ONE EXCEPTION, the frame merge's (fm-I, 2026-09-29):
-    /// `record` names the record grade's body and no wire op — the codec
-    /// parses no such op, and the body's token says which grammar a `sig`
-    /// was made over.
+    /// Checks that each body's `op` member is its op's wire name.
+    ///
+    /// The frame's `op` member (the design record §2.5) is the op-kind token
+    /// as the wire spells it: each entry-grade body `skep_identity` builds —
+    /// one per kind of the checked set — carries the codec's own name for its
+    /// op, so a wire rename meets this test before it can move a signed
+    /// preimage. One exception, the frame merge's: `record` names the record
+    /// grade's body and no wire op — the codec parses no such op, and the
+    /// body's token says which grammar a `sig` was made over.
     #[test]
     fn each_body_carries_the_wire_name_of_its_op() {
         let empty = EntrySlot(&[]);
@@ -621,13 +682,15 @@ mod tests {
         );
     }
 
-    /// THE UNIT SPAN IS M7's OWN SPELLING: the span the frame's `unit_span`
-    /// gives an address — the start the address, the width the unit at its
-    /// length — is the span M7's `enc` stores for a slot that names it, at
-    /// every depth an address takes, and over a list the two agree span for
-    /// span and in order. So a slot row composed from addresses alone — a
-    /// `nullify`'s, an `assert_sup`'s, an `emit`'s, the `edit_link` claim's
-    /// `from` — is the row a verifier composes from `read_link`.
+    /// Checks that the unit span is M7's own spelling.
+    ///
+    /// The span the frame's `unit_span` gives an address — the start the
+    /// address, the width the unit at its length — is the span M7's `enc`
+    /// stores for a slot that names it, at every depth an address takes, and
+    /// over a list the two agree span for span and in order. So a slot row
+    /// composed from addresses alone — a `nullify`'s, an `assert_sup`'s, an
+    /// `emit`'s, the `edit_link` claim's `from` — is the row a verifier
+    /// composes from `read_link`.
     #[test]
     fn the_unit_span_is_the_span_enc_stores() {
         let addr = |comps: &[u32]| {
@@ -664,12 +727,14 @@ mod tests {
         );
     }
 
-    /// COMPOSE'S PRECONDITION IS NEVER ANSWERED AS A FAULT: for a principal
-    /// with a prefix — the account term read ahead of the op — an op outside
-    /// the checked set STOPS LOUDLY. A fault here would be one the check
-    /// passes through, committing the write with its marker slot empty — the
-    /// silent drop the checked set's card rules out — and no refusal the check
-    /// could give is true of a build whose two tables disagree.
+    /// Checks that compose's precondition is never answered as a fault.
+    ///
+    /// For a principal with a prefix — the account term read ahead of the op
+    /// — an op outside the checked set stops loudly. A fault here would be
+    /// one the check passes through, committing the write with its marker
+    /// slot empty — the silent drop the checked set's card rules out — and no
+    /// refusal the check could give is true of a build whose two tables
+    /// disagree.
     #[test]
     #[should_panic(expected = "compose's precondition")]
     fn an_op_outside_the_checked_set_stops_compose_loudly() {

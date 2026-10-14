@@ -11,21 +11,23 @@ use skep_namespace::prefix_contains;
 use super::prefix::NodePrefix;
 use crate::codec::{check_keys, wire_address};
 
-/// The most bytes one ISSUE of the blocked-prefix list may carry
-/// ([`BlockedSupply`]), refused before the read rather than after it.
+/// The byte cap on one issue of the blocked-prefix list ([`BlockedSupply`]).
 ///
-/// The cap bounds the FAILURE case and not the legitimate one: an entry is
+/// A read that stops one byte past the cap refuses a longer file, rather
+/// than reading it whole first.
+///
+/// The cap bounds the failure case and not the legitimate one: an entry is
 /// two addresses in the registry's global form under a small JSON wrapper,
 /// under a hundred bytes, so this admits order 90,000 standing takedown
 /// records — four orders of magnitude above a board's plausible list. What
-/// it removes is the unbounded one, which is a path that is NOT a list: a
+/// it removes is the unbounded one, which is a path that is *not* a list: a
 /// read-to-end followed by a whole `serde_json::Value` over those bytes, at
 /// the ~20× transient heap this crate prices on
 /// [`crate::limits::MAX_REQUEST_BODY`]. It is paid at
-/// [`super::AuthState::open`] before the listener binds, where the open
-/// promises a named refusal rather than a hang; and at every reissue with
-/// the supply's `seen` HELD at the head of routing, so every in-flight
-/// request waits on it, `/health` and `/session` included.
+/// [`super::AuthState::open`] before the daemon serves a request, where the
+/// open promises a named refusal rather than a hang; and at every reissue
+/// with the supply's `seen` held at the head of routing, so every request
+/// that arrives meanwhile waits on it, `/health` and `/session` included.
 ///
 /// The number is the frame routes' body cap,
 /// [`crate::limits::MAX_REQUEST_BODY`], cited rather than re-derived: this
@@ -35,124 +37,147 @@ const MAX_BLOCKED_SUPPLY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 // ── the blocked-prefix list (AUTH-1.44, AUTH-4.36 step 4b, AUTH-4.70) ────
 
-/// One entry of the BLOCKED-PREFIX LIST (AUTH-4.36 step 4b): a prefix, and
-/// the version address of the takedown record the entry cites — the ONE
-/// public datum the handshake's 403 carries (AUTH-6.5). The daemon reads no
-/// record and knows no takedown: `record` is echoed and never dereferenced,
-/// which is why it is held as the address it was issued as and nothing
-/// more.
+/// One entry of the blocked-prefix list (AUTH-4.36 step 4b).
+///
+/// It is a prefix, and the version address of the takedown record the entry
+/// cites — the one public datum the handshake's 403 carries (AUTH-6.5). The
+/// daemon reads no record and knows no takedown: `record` is echoed and
+/// never dereferenced, which is why it is held as the address it was issued
+/// as and nothing more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct BlockedEntry {
     pub prefix: Address,
     pub record: Address,
 }
 
-/// The list's two-field HEADER (AUTH-4.36 step 4b; AUTH-4.70 "the header
-/// two values on it"). Read from config and from nowhere else: the daemon
-/// derives neither field and reads no record for one.
+/// The list's two-field header (AUTH-4.36 step 4b).
+///
+/// It is AUTH-4.70's "the header two values on it", read from config and
+/// from nowhere else: the daemon derives neither field and reads no record
+/// for one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BlockedHeader {
-    /// The CONFIGURED OPERATOR ACCOUNT. `None` where the header names none,
-    /// and the claimant is then taken in its place.
+    /// The configured operator account.
+    ///
+    /// `None` where the header names none, and the claimant is then taken in
+    /// its place.
     pub operator: Option<Address>,
-    /// The board's BINDING-WRITING ACCOUNT — the claimant on an unforked
-    /// lineage, the SEAT on a forked one, never the superseded claimant
-    /// (REG-3.52). `None` where the header omits it, and the claimant is
-    /// then taken in its place. Its SECOND reader is AUTH-3.21's seat carve
-    /// at slot (6), which reads it beside the claimant and compares it
-    /// (RES-175), through [`BlockedPrefixes::header`].
+    /// The board's binding-writing account.
+    ///
+    /// It is the claimant on an unforked lineage, the seat on a forked one,
+    /// never the superseded claimant (REG-3.52). `None` where the header
+    /// omits it, and the claimant is then taken in its place. Its second
+    /// reader is AUTH-3.21's seat carve at slot (6), which reads it beside
+    /// the claimant and compares it (RES-175), through
+    /// [`BlockedPrefixes::header`].
     pub binding_writer: Option<Address>,
 }
 
-/// One ISSUE of the list, as the operator supplies it: the header and
-/// every entry, in supply order, before the install's comparison.
+/// One issue of the list, as the operator supplies it.
+///
+/// It holds the header and every entry, in supply order, before the
+/// install's comparison.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct BlockedIssue {
     pub header: BlockedHeader,
     pub entries: Vec<BlockedEntry>,
 }
 
-/// Which of the install's two INERT comparands an entry covers (AUTH-4.36
-/// step 4b; REG-4.198: the block never reaches the hand that lifts it and
-/// never takes a board from the party that writes its bindings).
+/// Which inert comparand an entry covers (AUTH-4.36 step 4b).
+///
+/// The install has two, and the two carry REG-4.198: the block never
+/// reaches the hand that lifts it and never takes a board from the party
+/// that writes its bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Comparand {
     /// (a) the configured operator account.
     Operator,
-    /// (b) the board's binding-writing account — a comparand only where the
-    /// operator account is NOT an account of this board.
+    /// (b) the board's binding-writing account.
+    ///
+    /// It is a comparand only where the operator account is not an account
+    /// of this board.
     BindingWriter,
 }
 
-/// The list IN FORCE: one issue, with the install's verdict on each entry
-/// beside it. An entry covering a comparand is INERT — ignored at install
-/// and said so in the log — and every other entry blocks.
+/// The list in force: one issue, with the install's verdict on each entry.
 ///
-/// The issue is kept WHOLE, inert entries included, because the comparison
+/// An entry covering a comparand is inert — ignored at install and said so
+/// in the log — and every other entry blocks.
+///
+/// The issue is kept whole, inert entries included, because the comparison
 /// is run twice over one issue: at the install, and again at the claim
 /// flip, where the claimant the header defers to first exists.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct BlockedPrefixes {
-    /// The issue as supplied, WHOLE — private, and read outside this file
-    /// through [`BlockedPrefixes::issue()`] alone, so an entry and its
-    /// verdict in `inert` are built together and move together:
-    /// [`BlockedPrefixes::judged`] states the invariant, and the fail-open a
-    /// write here from any other file would buy.
+    /// The issue as supplied, whole.
+    ///
+    /// It is private, and code outside this file reads it only through this
+    /// type's methods — whole through [`BlockedPrefixes::issue()`], read-only
+    /// — so an entry and its verdict in `inert` are built together and move
+    /// together: [`BlockedPrefixes::judged`] states the invariant, and the
+    /// fail-open a write here from any other file would buy.
     issue: BlockedIssue,
-    /// Per entry of `issue.entries`: the comparand it covers, or `None` for
-    /// an entry in force.
+    /// Per entry of `issue.entries`, the comparand it covers.
+    ///
+    /// It is `None` for an entry in force.
     inert: Vec<Option<Comparand>>,
-    /// Comparand (a) as this install resolved it: the header's operator,
-    /// else the claimant, else none (an unclaimed board naming none).
+    /// Comparand (a) as this install resolved it.
+    ///
+    /// It is the header's operator, else the claimant, else none (an
+    /// unclaimed board naming none).
     operator: Option<Address>,
-    /// Comparand (b) as this install resolved it — `Some` only where it is
-    /// LIVE, which is where the operator account is off-board.
+    /// Comparand (b) as this install resolved it.
+    ///
+    /// It is `Some` only where it is live, which is where the operator
+    /// account is off-board.
     binding_writer: Option<Address>,
-    /// The node prefix the off-board test ran against (REG-1.69), or `None`
-    /// where the daemon was told none and the test was off — kept beside
-    /// the verdicts so the log can say which.
+    /// The node prefix the off-board test ran against (REG-1.69).
+    ///
+    /// `None` where the daemon was told none and the test was off — kept
+    /// beside the verdicts so the log can say which.
     node_prefix: Option<NodePrefix>,
 }
 
 impl BlockedPrefixes {
-    /// THE INSTALL'S COMPARISON (AUTH-4.36 step 4b, in its own words): an
-    /// entry covering (a) the CONFIGURED OPERATOR ACCOUNT — the claimant
-    /// where the header names none — or (b), where that account is NOT an
-    /// account of this board, the board's BINDING-WRITING ACCOUNT — the
-    /// claimant where the header omits it — is INERT.
+    /// Returns `issue` judged by the install's comparison (AUTH-4.36 step 4b).
     ///
-    /// "NOT an account of this board" is THE OFF-BOARD TEST, and as ruled
-    /// (2026-09-18, W2a's escalation 3) it reads the header's operator
-    /// account against the board's NODE PREFIX (REG-1.69):
-    /// `!prefix_contains(node_prefix, operator)`. NEVER against the local
+    /// It is the list in force. In the rule's own words: an entry covering (a)
+    /// the configured operator account — the claimant where the header names
+    /// none — or (b), where that account is not an account of this board, the
+    /// board's binding-writing account — the claimant where the header omits
+    /// it — is inert.
+    ///
+    /// "Not an account of this board" is the off-board test, and it reads the
+    /// header's operator account against the board's node prefix (REG-1.69):
+    /// `!prefix_contains(node_prefix, operator)`. *Never* against the local
     /// root `1` (REG-1.66), which the rule's sealed wording names and which
     /// this build does not keep beside it: every address in the registry's
-    /// GLOBAL form begins with `1`, so under that test a host's `1.3.0.7`
-    /// read as on-board, (b) went silent, and the hosted board's claimant
-    /// became blockable — the cell REG-4.198 rules out. Two arms beside the
+    /// global form begins with `1`, so under that test a host's `1.3.0.7`
+    /// reads as on-board, (b) goes silent, and the hosted board's claimant
+    /// becomes blockable — the cell REG-4.198 rules out. Two arms beside the
     /// test: the claimant taken in the header's place is an account of this
-    /// board BY CONSTRUCTION ((a) and (b) are one account where the header
-    /// names none), so only a NAMED operator is tested — the fold's claimant
-    /// is in the local form, which no `1.N` contains; and with NO node
-    /// prefix supplied the daemon CANNOT tell, so every operator reads as
-    /// on-board — (b) silent — and the log says so once. The named operator
-    /// is read AS SPELLED, against the prefix and against the entries alike:
-    /// the header is the operator's to spell in the registry's global
-    /// form, the form the boundary speaks (REG-1.66).
+    /// board by construction ((a) and (b) are one account where the header
+    /// names none), so only a *named* operator is tested — the fold's
+    /// claimant is in the local form, which no `1.N` contains; and with no
+    /// node prefix supplied the daemon cannot tell, so every operator reads
+    /// as on-board — (b) silent — and the log says so once. The named
+    /// operator is read as spelled, against the prefix and against the
+    /// entries alike: the header is the operator's to spell in the
+    /// registry's global form, the form the boundary speaks (REG-1.66).
     ///
     /// So (a) and (b) are one account where the header names none and at
-    /// the root; (b) is SILENT on a fork the community itself serves, whose
+    /// the root; (b) is silent on a fork the community itself serves, whose
     /// seat is an account of the copy, so the old claimant stays blockable
-    /// (RES-66); and (b) is LIVE where the host is off-board — at a hosted
+    /// (RES-66); and (b) is live where the host is off-board — at a hosted
     /// tier, exempting the served board's claimant, and on a fork a third
-    /// party serves, exempting the SEAT the field names and never the old
-    /// claimant (RES-67, RES-68). On an UNCLAIMED board whose header names
+    /// party serves, exempting the seat the field names and never the old
+    /// claimant (RES-67, RES-68). On an unclaimed board whose header names
     /// none there is no comparand and every entry stands as issued (RES-65
     /// item 4's named residue) — until the claim flip re-runs this.
     ///
-    /// COVER, never descent (AUTH-4.70): the test is
-    /// `prefix_contains(entry.prefix, comparand)`, so an entry BELOW a
-    /// comparand — the agent space, a delegated subtree — blocks as before.
+    /// **Cover, never descent** (AUTH-4.70): the test is
+    /// `prefix_contains(entry.prefix, comparand)`, so an entry below a
+    /// comparand — the agent space, a delegated subtree — blocks.
     pub(super) fn installed_under(
         issue: BlockedIssue,
         claimant: Option<&Address>,
@@ -187,17 +212,18 @@ impl BlockedPrefixes {
         BlockedPrefixes { issue, inert, operator, binding_writer, node_prefix: node_prefix.cloned() }
     }
 
-    /// AUTH-4.36 step 4b's one predicate: `Some` iff some entry IN FORCE
-    /// contains `account` — M3's containment, [`prefix_contains`] — and the
-    /// address carried is the LONGEST covering prefix's record, the nearest
-    /// ground. A party under more than one entry is admitted only when
-    /// every one is lifted, which falls out: each lift leaves the next
-    /// longest covering it. Two entries over ONE prefix tie, and the first
-    /// in supply order answers — the operator's own order, so the
-    /// datum is a function of the issue alone.
+    /// Answers AUTH-4.36 step 4b's one predicate for `account`.
+    ///
+    /// `Some` iff some entry in force contains `account` — M3's containment,
+    /// [`prefix_contains`] — and the address carried is the longest covering
+    /// prefix's record, the nearest ground. A party under more than one
+    /// entry is admitted only when every one is lifted, which falls out:
+    /// each lift leaves the next longest covering it. Two entries over one
+    /// prefix tie, and the first in supply order answers — the operator's own
+    /// order, so the datum is a function of the issue alone.
     ///
     /// A scan of the list per consult, and a list is as long as a board's
-    /// STANDING takedown records.
+    /// standing takedown records.
     pub fn covers(&self, account: &Address) -> Option<&Address> {
         let mut longest: Option<&BlockedEntry> = None;
         for (entry, inert) in self.judged() {
@@ -212,19 +238,24 @@ impl BlockedPrefixes {
         longest.map(|entry| &entry.record)
     }
 
-    /// Each entry of the issue beside the install's verdict on it — THE one
-    /// pairing, so the two vectors meet at one site rather than at three
-    /// `zip`s. A `zip` truncates silently, and the direction that truncates
-    /// is the one that fails OPEN: an `inert` shorter than `entries` makes
-    /// every entry past its end invisible to [`BlockedPrefixes::covers`],
-    /// which is a standing block that stops blocking with nothing to say so.
+    /// Pairs each entry of the issue with the install's verdict on it.
     ///
-    /// INVARIANT: the two have equal length, established by
+    /// This is the one pairing, so the two vectors meet at one site rather
+    /// than at four `zip`s. A `zip` truncates silently, and the direction
+    /// that truncates is the one that fails *open*: an `inert` shorter than
+    /// `entries` makes every entry past its end invisible to
+    /// [`BlockedPrefixes::covers`], which is a standing block that stops
+    /// blocking with nothing to say so.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build where the invariant fails. The invariant: the
+    /// two have equal length, established by
     /// [`BlockedPrefixes::installed_under`], which maps one from the other,
-    /// and by `Default`, which leaves both empty — and KEPT by there being no
+    /// and by `Default`, which leaves both empty — and kept by there being no
     /// other writer: both fields are private to this file, and
     /// [`BlockedPrefixes::issue()`] hands the issue out read-only. A lift is a
-    /// fresh ISSUE and a fresh install.
+    /// fresh issue and a fresh install.
     fn judged(&self) -> impl Iterator<Item = (&BlockedEntry, Option<Comparand>)> {
         debug_assert_eq!(
             self.issue.entries.len(),
@@ -234,43 +265,54 @@ impl BlockedPrefixes {
         self.issue.entries.iter().zip(self.inert.iter().copied())
     }
 
-    /// The header as issued — what the log names, and the seat carve's read
-    /// (AUTH-3.21, RES-175).
+    /// Returns the header as issued.
+    ///
+    /// It is what the log names, and the seat carve's read (AUTH-3.21,
+    /// RES-175).
     pub fn header(&self) -> &BlockedHeader {
         &self.issue.header
     }
 
-    /// The issue as supplied, whole and READ-ONLY — what the claim flip
-    /// re-judges against the claimant it first seats
-    /// ([`super::AuthState::reinstall_blocked_at_claim`]). Read-only is what
-    /// [`BlockedPrefixes::judged`]'s invariant rests on: no file but this one
-    /// can move an entry without its verdict.
+    /// Returns the issue as supplied, whole and read-only.
+    ///
+    /// It is what the claim flip re-judges against the claimant it first
+    /// seats ([`super::AuthState::reinstall_blocked_at_claim`]). Read-only is
+    /// what [`BlockedPrefixes::judged`]'s invariant rests on: no file but this
+    /// one can move an entry without its verdict.
     pub(super) fn issue(&self) -> &BlockedIssue {
         &self.issue
     }
 
-    /// The entries in force — every entry of the issue but the inert ones.
+    /// Counts the issue's entries in force — all but the inert ones.
     fn in_force(&self) -> usize {
         self.judged().filter(|(_, inert)| inert.is_none()).count()
     }
 
-    /// Whether the issue carries NO entries — the question the claim flip's
-    /// log asks, and about the ISSUE rather than the entries in force: the
-    /// flip's news is exactly that an entry became INERT, so an inert entry
-    /// is something to say and an absent one is not.
+    /// Returns whether the issue carries no entries.
+    ///
+    /// It is the question the claim flip's log asks, and about the issue
+    /// rather than the entries in force: the flip's news is exactly that an
+    /// entry became inert, so an inert entry is something to say and an
+    /// absent one is not.
     pub fn issue_is_empty(&self) -> bool {
         self.issue.entries.is_empty()
     }
 
-    /// THE LOG (AUTH-4.70 "the startup log names the list in force";
-    /// AUTH-4.36 step 4b "ignored at install and said so in the log"): one
-    /// line naming the count, the header as resolved and the node prefix
-    /// the off-board test ran against — or, where none was supplied, that
-    /// the test was off, said once per install and not per entry — then one
-    /// line per INERT entry, by name, with the comparand it covers. Entries
-    /// in force are counted and not listed: the file is theirs to be read
-    /// from, and a line per standing takedown at every reissue is a log
-    /// nobody reads.
+    /// Returns the list in force's log lines (AUTH-4.70; AUTH-4.36 step 4b).
+    ///
+    /// The rules' words are "the startup log names the list in force" and
+    /// "ignored at install and said so in the log". The lines are one naming
+    /// the count, the header as resolved and the node prefix the off-board
+    /// test ran against — or, where none was supplied, that the test was
+    /// off, said once per install and not per entry — then one per inert
+    /// entry, by name, with the comparand it covers. Entries in force are
+    /// counted and not listed: the file is theirs to be read from, and a line
+    /// per standing takedown at every reissue is a log nobody reads.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build where an inert entry's comparand is `None`,
+    /// which [`BlockedPrefixes::installed_under`] never builds.
     pub fn log_lines(&self) -> Vec<String> {
         let named = |field: &Option<Address>, resolved: &Option<Address>, absent: &str| {
             match (field, resolved) {
@@ -318,13 +360,13 @@ impl BlockedPrefixes {
                     ("the board's binding-writing account", &self.binding_writer)
                 }
             };
-            // Unreachable by construction — [`BlockedPrefixes::installed_under`]
-            // judges an entry against a comparand only inside `covers`, which
-            // requires that comparand `Some` — and ANSWERED rather than
-            // asserted, for the reason the arm above gives. The cell is
-            // sharper here than there: this renders from
-            // `credential_sequence` under the credential write lock and the
-            // serialization lock AFTER the claim has committed
+            // Unreachable by construction —
+            // [`BlockedPrefixes::installed_under`] judges an entry against a
+            // comparand only inside `covers`, which requires that comparand
+            // `Some` — and answered rather than asserted, for the reason the
+            // arm above gives. The cell is sharper here than there: this
+            // renders from `credential_sequence` under the credential write
+            // lock and the serialization lock after the claim has committed
             // ([`skep_util::notice`]), so a panic is `500 internal_panic` for a
             // one-time-only write that landed and whose retry meets
             // `already_claimed`. The debug assert is what makes the premise
@@ -342,62 +384,70 @@ impl BlockedPrefixes {
     }
 }
 
-/// What one look at a moved supply file came to — the reissue's two
-/// outcomes, for the log [`crate::Daemon`] writes.
+/// What one look at a moved supply file came to.
+///
+/// These are the reissue's two outcomes, for the log [`crate::Daemon`]
+/// writes.
 #[derive(Debug)]
 pub(crate) enum Reissue {
     /// The new issue is the list in force.
     Installed,
-    /// The file could not be read, is not a list, or is past the byte cap:
-    /// nothing was installed and the list in force stands.
+    /// The file could not be read, is not a list, or is past the byte cap.
+    ///
+    /// Nothing was installed and the list in force stands.
     Refused(io::Error),
 }
 
-/// THE CHANNEL (AUTH-4.70: "its channel the build's"; RES-65 item 4's
-/// recommendation, "a file the flag `--blocked-prefixes <path>` names"): a
-/// file the operator owns, read at every start and RE-READ WHEN IT
-/// MOVES — its identity checked at the head of every request
+/// The blocked-prefix list's supply channel (AUTH-4.70; RES-65 item 4).
+///
+/// The list's channel is the build's, and this is the recommended one, "a
+/// file the flag `--blocked-prefixes <path>` names": a file the operator
+/// owns, read at every start and re-read when it moves — its identity
+/// checked at the head of every request
 /// ([`super::AuthState::reissue_blocked_prefixes`]), one `stat`.
 ///
-/// Not the conventional reload SIGNAL, deliberately. This daemon has no
+/// Not the conventional reload signal, deliberately. This daemon has no
 /// signal handling at all (`main.rs`: crash-stop is the shutdown story), a
-/// signal is the PROCESS's and a [`crate::Daemon`] is a value — several
+/// signal is the process's and a [`crate::Daemon`] is a value — several
 /// live in one process wherever the library is embedded, this crate's own
 /// suites included — and a signal says only "look again", which the file's
 /// identity already says without a second channel to keep in step with the
-/// first. What the check buys beside that: the install happens BEFORE the
+/// first. What the check buys beside that: the install happens *before* the
 /// request that noticed it resolves its actor, so a reissue is in force at
 /// the first presentation after it, with no window a sleeping watcher
 /// thread would leave.
 ///
-/// THE FILE is one JSON object, strict keys, nothing else admitted:
+/// **The file** is one JSON object, strict keys, nothing else admitted:
 ///
 /// ```json
 /// {"operator": "<address>", "binding_writer": "<address>",
 ///  "entries": [{"prefix": "<address>", "record": "<address>"}, …]}
 /// ```
 ///
-/// `operator` and `binding_writer` are the two-field HEADER, each OPTIONAL
+/// `operator` and `binding_writer` are the two-field header, each optional
 /// — absent is "the header names none", and there is no other spelling;
-/// `entries` is REQUIRED, and an empty array is the explicit empty list (a
-/// lift of everything is an ISSUE, never an absent file). Every address is
+/// `entries` is required, and an empty array is the explicit empty list (a
+/// lift of everything is an issue, never an absent file). Every address is
 /// dotted decimal under the codec's own tumbler caps, T4-valid. JSON
 /// because a truncated object does not parse: a reader racing a writer
-/// that did not replace the file atomically REFUSES the torn issue and
+/// that did not replace the file atomically refuses the torn issue and
 /// keeps the list in force, where a line format would install the half it
-/// saw. The operator still owes the ATOMIC REPLACE (write beside,
-/// rename over) — it is also what gives every issue a fresh identity.
+/// saw. The operator still owes the atomic replace (write beside, rename
+/// over) — it is also what gives every issue a fresh identity.
 #[derive(Debug)]
 pub(super) struct BlockedSupply {
     pub(super) path: PathBuf,
-    /// The file's identity as last looked at — `None` for a file that was
-    /// not there. A FAILED look is remembered too, so a bad issue is
-    /// refused and logged once rather than at every request until it moves.
+    /// The file's identity as last looked at.
+    ///
+    /// `None` for a file that was not there. A failed look is remembered
+    /// too, so a bad issue is refused and logged once rather than at every
+    /// request until it moves.
     seen: parking_lot::Mutex<Option<FileStamp>>,
 }
 
-/// A file's identity, cheaply: what moves when the operator replaces
-/// it. The inode is what makes two issues written inside one timestamp tick
+/// A file's identity, cheaply: what moves when the operator replaces it.
+///
+/// The inode is what makes two issues written inside one timestamp tick
 /// distinct (a rename-over is always a new file); where there is none, the
 /// modification time and the length carry it alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -420,15 +470,21 @@ impl FileStamp {
         }
     }
 
-    /// The identity of whatever is at `path` now; `None` where nothing can
-    /// be stat'ed there.
+    /// Returns the identity of whatever is at `path` now.
+    ///
+    /// `None` where nothing can be stat'ed there.
     fn at(path: &Path) -> Option<FileStamp> {
         std::fs::metadata(path).ok().as_ref().map(FileStamp::of)
     }
 }
 
 impl BlockedSupply {
-    /// The START-UP SUPPLY (RES-115): read the named file, or fail the open.
+    /// Reads the start-up supply from `path`, or fails the open (RES-115).
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`BlockedSupply::read`] does: the file cannot be read, is
+    /// not a list, or is past [`MAX_BLOCKED_SUPPLY_BYTES`].
     pub(super) fn open(path: &Path) -> io::Result<(BlockedSupply, BlockedIssue)> {
         let supply = BlockedSupply { path: path.to_path_buf(), seen: parking_lot::Mutex::new(None) };
         let (stamp, issue) = supply.read()?;
@@ -436,12 +492,18 @@ impl BlockedSupply {
         Ok((supply, issue))
     }
 
-    /// One read of the file, whole: its identity off the OPEN handle — so
-    /// the stamp names the bytes read, and a replace landing between this
-    /// and the next look is seen as one — then the byte cap, then the
-    /// parse. Every failure is an `io::Error` naming the path; a file that
-    /// is not a list, and one past [`MAX_BLOCKED_SUPPLY_BYTES`], are both
-    /// `InvalidData`, so the channel's two refusals travel as one kind.
+    /// Reads the file once, at most a byte past the cap, with its identity.
+    ///
+    /// The identity comes off the open handle — so the stamp names the bytes
+    /// read, and a replace landing between this and the next look is seen as
+    /// one — then the byte cap, then the parse.
+    ///
+    /// # Errors
+    ///
+    /// Every failure is an `io::Error` naming the path: an open, a stat or a
+    /// read that fails keeps its own kind; a file that is not a list, and one
+    /// past [`MAX_BLOCKED_SUPPLY_BYTES`], are both `InvalidData`, so the
+    /// channel's two refusals travel as one kind.
     fn read(&self) -> io::Result<(FileStamp, BlockedIssue)> {
         use std::io::Read;
         let with_path =
@@ -449,7 +511,7 @@ impl BlockedSupply {
         let file = std::fs::File::open(&self.path).map_err(with_path)?;
         let stamp = FileStamp::of(&file.metadata().map_err(with_path)?);
         let mut bytes = Vec::new();
-        // ONE PAST the cap, so a file that exactly fills it is told apart
+        // One past the cap, so a file that exactly fills it is told apart
         // from one that exceeds it — and `take` rather than a length test
         // off the stamp, which a file being appended to concurrently
         // outruns.
@@ -465,20 +527,21 @@ impl BlockedSupply {
         Ok((stamp, issue))
     }
 
-    /// One look at the file, and the install where it MOVED — the channel's
-    /// whole operation, here because the identity it turns on is this type's
-    /// own. `None` is the ordinary request's answer: nothing moved, at the
-    /// cost of one `stat`.
+    /// Looks at the file once, and installs its issue where it moved.
     ///
-    /// `install` is the CALLER's, because the list is replaced under a lock
-    /// this type knows nothing about. It runs with `seen` HELD, so a request
+    /// This is the channel's whole operation, here because the identity it
+    /// turns on is this type's own. `None` is the ordinary request's answer:
+    /// nothing moved, at the cost of one `stat`.
+    ///
+    /// `install` is the caller's, because the list is replaced under a lock
+    /// this type knows nothing about. It runs with `seen` held, so a request
     /// arriving mid-install waits for it rather than resolving under a list an
     /// earlier request has already seen superseded. Lock order is therefore
     /// `seen` → whatever `install` takes, and nothing holding that lock
     /// touches `seen`.
     ///
-    /// A re-read that FAILS calls `install` not at all — the list is replaced
-    /// WHOLE or not — and the failed look is REMEMBERED, so the refusal is
+    /// A re-read that fails calls `install` not at all — the list is replaced
+    /// whole or not — and the failed look is remembered, so the refusal is
     /// answered once rather than at every request until the file moves again.
     pub(super) fn reissue(&self, install: impl FnOnce(BlockedIssue)) -> Option<Reissue> {
         let current = FileStamp::at(&self.path);
@@ -500,9 +563,18 @@ impl BlockedSupply {
     }
 }
 
-/// Parse one issue of the list — [`BlockedSupply`] states the format. The
-/// never-silent device throughout ([`check_keys`]): a field this daemon does
-/// not read is a named refusal, never a header quietly ignored.
+/// Parses one issue of the list; [`BlockedSupply`] states the format.
+///
+/// The never-silent device throughout ([`check_keys`]): a field this daemon
+/// does not read is a named refusal, never a header quietly ignored.
+///
+/// # Errors
+///
+/// `Err(detail)`, the detail naming the fault, for JSON that does not
+/// parse, a list that is not an object, a member this daemon does not read,
+/// a missing or non-array `entries`, an entry that is not an object or
+/// lacks `prefix` or `record`, and an address member [`address_field`]
+/// refuses.
 fn parse_issue(bytes: &[u8]) -> Result<BlockedIssue, String> {
     let v: Value = serde_json::from_slice(bytes).map_err(|e| format!("invalid JSON: {e}"))?;
     let Value::Object(m) = v else {
@@ -536,10 +608,16 @@ fn parse_issue(bytes: &[u8]) -> Result<BlockedIssue, String> {
     Ok(BlockedIssue { header, entries })
 }
 
-/// One address member: absent ⇒ `None`; present ⇒ a dotted-decimal string
-/// through [`crate::codec::wire_address`], the wire's one capped-and-T4
-/// address door — or a named refusal, this file's own grammar supplying the
-/// field name and that door the fault.
+/// Reads one address member: absent ⇒ `None`; present ⇒ its address.
+///
+/// A present member is a dotted-decimal string through
+/// [`crate::codec::wire_address`], the wire's one capped-and-T4 address door.
+///
+/// # Errors
+///
+/// A named refusal where the member is not a string or the door refuses
+/// it, this file's own grammar supplying the field name and that door the
+/// fault.
 fn address_field(m: &Map<String, Value>, k: &str) -> Result<Option<Address>, String> {
     let Some(v) = m.get(k) else { return Ok(None) };
     let s = v.as_str().ok_or_else(|| format!("field '{k}' must be a dotted-decimal string"))?;

@@ -22,7 +22,8 @@
 //!
 //! THE EDGES. The crate depends on [`DEPENDENCIES`] alone — never `skepd`,
 //! `skep-client` or a signer: the sidecar it runs dials the board, and it
-//! dials nothing.
+//! dials nothing; `skep-signature` is linked for its verify-only decode,
+//! with no feature.
 //!
 //! Each scan asserts that it found what it allows — a file held to its
 //! parent, an edge between modules, a documented item, the manifest's
@@ -36,9 +37,10 @@ use std::path::{Path, PathBuf};
 /// module of the crate.
 const ROOT: &str = "src/main.rs";
 
-/// The crate's dependencies: the two skep crates — the record's parse and
-/// the HTTP subset — `/health`'s body read, and OS entropy.
-const DEPENDENCIES: [&str; 4] = ["getrandom", "serde_json", "skep-http", "skep-identity"];
+/// The crate's dependencies: the three skep crates — the record's parse, its
+/// keys' decode (`skep-signature`'s verify alone, no `sign`) and the HTTP
+/// subset — `/health`'s body read, and OS entropy.
+const DEPENDENCIES: [&str; 5] = ["getrandom", "serde_json", "skep-http", "skep-identity", "skep-signature"];
 
 #[test]
 fn every_file_is_declared_and_every_root_declaration_says_what_it_holds() {
@@ -123,16 +125,17 @@ fn every_file_and_every_pub_item_says_what_it_is() {
 }
 
 /// THE EDGES (`ARCHITECTURE.md`'s code map: of the skep crates
-/// `skep-identity` and `skep-http` alone, never `skepd` or `skep-client`).
-/// The compiler holds none of it: a dependency added to the manifest
-/// builds, and every other test of the workspace stays green. Read off the
-/// manifest's own text, as skep-registry's
+/// `skep-identity`, `skep-http` and `skep-signature`'s verify alone, never
+/// `skepd` or `skep-client`). The compiler holds none of it: a dependency
+/// added to the manifest builds, and every other test of the workspace
+/// stays green. Read off the manifest's own text, as skep-registry's
 /// `the_dependencies_are_skep_address_and_serde_json` reads its own: no
 /// dependency table but `[dependencies]` and `[dev-dependencies]`, so none
 /// arrives under a target or build table, and `[dependencies]` names the
-/// four.
+/// five. That `skep-signature` links no signer is the full gate's to show
+/// (`scripts/gate-full.sh`), off the shipped build's own feature resolution.
 #[test]
-fn the_dependencies_are_the_four() {
+fn the_dependencies_are_the_five() {
     let manifest = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"));
     let (mut table, mut dependency_tables, mut dependencies) = ("", BTreeSet::new(), BTreeSet::new());
     for line in manifest.lines() {
@@ -148,7 +151,7 @@ fn the_dependencies_are_the_four() {
     }
     let allowed = BTreeSet::from(["[dependencies]", "[dev-dependencies]"]);
     assert!(dependency_tables.contains("[dependencies]") && dependency_tables.is_subset(&allowed), "Cargo.toml's dependency tables: {dependency_tables:?}");
-    assert_eq!(dependencies, BTreeSet::from(DEPENDENCIES), "the crate's four");
+    assert_eq!(dependencies, BTreeSet::from(DEPENDENCIES), "the crate's five");
 }
 
 /// The dependency a manifest line names, where it names one: the key ahead

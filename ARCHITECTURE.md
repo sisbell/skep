@@ -249,9 +249,11 @@ foundation and on the stores above it.
   and reloads the proxy, the two serial across every name, shows the live
   reply at the post's status URL and mails it once the board is live,
   and at its start sweeps away any board a stop left half-made; `invite`
-  mints one invite by the owner's hand. Of the skep crates it depends on `skep-identity`
-  and `skep-http` alone — never `skepd` or `skep-client`: the sidecar it
-  runs dials the board, and it dials nothing. It holds no key. One
+  mints one invite by the owner's hand. Of the skep crates it depends on
+  `skep-identity`, `skep-http` and `skep-signature` — its verify alone, no
+  `sign`, for the record's all-halves decode — never `skepd` or
+  `skep-client`: the sidecar it runs dials the board, and it dials
+  nothing. It holds no key. One
   feature, default off: `test-hooks` compiles in its two fakes — the
   scripted Docker runner and the mailer that appends to a file — and the
   two flags that select them, which the crate's self dev-dependency turns
@@ -1617,8 +1619,10 @@ each naming only those above it:
   `Name::exact`, a name read back as this service wrote it — a snippet's
   stem, a labelled volume — never lowercased.
 - `record.rs` the record's admission: the hosted walk's trim,
-  `parse_enroll`, the walk's preview-kind test copied, the anchorless
-  fact.
+  `parse_enroll`, the walk's preview-kind test copied, the hosted
+  genesis's two refusals copied from skepd's credential precheck — every
+  key's halves decoding (`skep-signature`'s `key_decodes`), sixteen entries
+  at most — and the anchorless fact.
 - `mail_address.rs` a mail address by the rule — one `@` with a side each
   way, at most 254 bytes, ASCII alone, none of RFC 5322's specials but `@`
   and `.` — its words for a refusal to name, and `MailAddress`, the one
@@ -1667,8 +1671,9 @@ each naming only those above it:
   post admitted, a status read; the `Book` of what is in flight and of
   every post's state, keeping its own rules: the queue, its status map
   (`flow/status_map.rs`) — rebuilt at start from the snippets — and the
-  held codes, what blocks a new post, what admitting, taking, going live
-  and failing do; the name as the unit of exclusion, the workers' steps,
+  held codes — a post's own among them while it looks at what stands, one
+  look per code — what blocks a new post, what admitting, taking, going
+  live and failing do; the name as the unit of exclusion, the workers' steps,
   the route lock, the cleanup table and the truth asked what stands after
   it, the sweep at start, and the live reply's inputs gathered in one
   place for the status page and the mail.
@@ -1679,7 +1684,8 @@ Rules that hold across its files:
 
 - **It holds no key.** The record it takes is the person's public line,
   parsed by `skep-identity`, whose types cannot carry a private key (I1,
-  AUTH-2.89), and the sidecar it runs signs nothing. What it does hold is
+  AUTH-2.89), its keys' halves decoded by `skep-signature`'s verify-only
+  build, which holds no signer; and the sidecar it runs signs nothing. What it does hold is
   the Docker socket's reach, through the host's `docker` command; the
   sign-up addresses; and the invite file — the last two in its state
   directory, owner-only and refused at start where other users can read
@@ -1698,8 +1704,9 @@ Rules that hold across its files:
   map, the queue and the held codes — the admission checking what is in
   flight again, and the invite again, under that lock — and its three
   reads of what stands under its name take no lock at all, four posts' at
-  most at once, a fifth answered D-8 with no `docker` call; none waits
-  behind a board being made, and a status page waits on nothing either.
+  most at once and one per invite code, a fifth answered D-8 with no
+  `docker` call; none waits behind a board being made, and a status page
+  waits on nothing either.
 - **Connections are a pool, and slowness ends.** `--connections` threads,
   sixteen by default, each take the next connection off the listener, a
   further one waiting in the listener's queue; both pools are made at
@@ -1815,7 +1822,7 @@ nothing of the service's own stdin; a start refused, or an invite not
 minted, exits 1 with no DATA line; and SIGTERM ends the process. Beside
 it, `tests/it/tidy.rs` reads the arrangement off the source and the
 manifest: the module order, the declared files, every `pub` item's doc
-and the four dependencies.
+and the five dependencies.
 
 ## The name space, `skep-namespace`
 
@@ -2762,7 +2769,7 @@ imports it.
 | `observe` | on | `GET /dump`, the engine's world dump | every build; OFF in `scripts/gate-full.sh`'s `--no-default-features` checks |
 | `client` | off | `GET /`, the embedded GUEST READER (read-only), so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
 | `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, three seams in other crates: `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call), `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) and `skep-kernel`'s (the write-fault seam: the next checkpoint write, journal append, barrier or repair failing with a named `io::ErrorKind`, or a panic in the checkpoint write, through the kernel's own `#[doc(hidden)]` doors) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
-| `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every workspace build (skep-client's default `acting`) and every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it |
+| `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer, and skep-provision likewise for the record's decode | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every workspace build (skep-client's default `acting`) and every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it, and that skep-provision's shipped build resolves it off |
 | `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks — every item whose doc opens `TEST HOOK`, hidden from the docs, named together in the crate's `src/hooks.rs` | every test build (its self dev-dependency, and skepd's and skep-mcp's dev-dependencies on it) |
 
 ## Rules that hold across files

@@ -7,17 +7,20 @@
 //! each in process, before any docker call; then WHAT IS IN FLIGHT, under
 //! the book's short lock — the queue's depth ([`QUEUE_DEPTH`]; past it D-8,
 //! "try again later"), the codes held and the names the posts in flight hold —
-//! refused with no docker call; then THE TRUTH ABOUT THE NAME
+//! refused with no docker call, and the post's code then held for its look
+//! ([`CodeLook`]), one look per code; then THE TRUTH ABOUT THE NAME
 //! (`names::taken`, D-4), three reads under no lock of this service's, at
 //! most [`MAX_LOOKS`] posts' at once — past it D-8, "try again later", with
-//! no docker call; then THE ADMISSION, under the book's lock again: what is
-//! in flight checked again — a post for this name or this code may have
-//! been admitted while the reads ran — and the invite looked up again under
-//! the same lock — a board gone live meanwhile may have spent it — then the
+//! no docker call; then THE ADMISSION, under the book's lock again: the look
+//! ended, and what is in flight checked again — a post for this name may
+//! have been admitted while the reads ran, though none for this code, which
+//! the look held — and the invite looked up again under the same lock — a
+//! spend written since the post's first lookup, by a board gone live on the
+//! code before the look held it, or by the operator's hand — then the
 //! status token minted, the post queued, and D-7 answered with its status
 //! URL. A refused post leaves nothing: no docker call past the truth's
-//! reads, no file, no queue entry. A POST NEVER WAITS ON A PROVISIONING: no
-//! lock it takes is held across one.
+//! reads, no file, no queue entry, no code held. A POST NEVER WAITS ON A
+//! PROVISIONING: no lock it takes is held across one.
 //!
 //! THE NAME IS THE UNIT OF EXCLUSION. A name is HELD from its admission to
 //! its live or failed end (the status map's `holds`) — the owner's lock per
@@ -159,8 +162,11 @@ const SIDECAR_WAIT: Wait = Wait { tries: NonZeroU32::new(30).expect("thirty is n
 /// refused D-4 off a container — the proxy's own, `caddy`, stands under its
 /// name — leaves its code issued and unheld, so uncapped one issued code
 /// would have the service run two for every connection open at once, for as
-/// long as its holder looped. A post past it meets D-8, "try again later",
-/// with no docker call.
+/// long as its holder looped. One code holds one of them at most — its
+/// post's code held for the look ([`CodeLook`]) — or one holder's
+/// concurrent posts would take all four, and every other person's post
+/// would meet this cap. A post past it meets D-8, "try again later", with no
+/// docker call.
 const MAX_LOOKS: usize = QUEUE_DEPTH;
 
 /// What the service is configured with.
@@ -183,19 +189,27 @@ struct Job {
 
 /// THE BOOK, which the pages and the workers share under its own short lock:
 /// WHAT IS IN FLIGHT — the posts waiting for a worker and the invite codes
-/// held — and every post this process admitted, by token, in flight or ended
-/// (the status map); and THE RULES THAT TIE THEM: a post admitted waits with
-/// its token in the map and its code held; a post taken is running; a post
-/// in flight, waiting or running, holds its name; a failed post lets its
-/// code go at once, and a live one keeps it held until the worker lets it go
-/// ([`Book::release`]), once the spend is written; and a new post is admitted
-/// only where none of a full queue, a held code and a held name blocks it —
-/// the first of them in that order, as [`Book::blocks`] answers, asked by the
-/// admitter under the lock it admits under ([`Book::admit`]'s precondition).
+/// held, the codes whose posts look at what stands under their names among
+/// them — and every post this process admitted, by token, in flight or ended
+/// (the status map); and THE RULES THAT TIE THEM: a post looking at what
+/// stands holds its code until its admission or its refusal ([`CodeLook`]);
+/// a post admitted waits with its token in the map and its code held; a post
+/// taken is running; a post in flight, waiting or running, holds its name; a
+/// failed post lets its code go at once, and a live one keeps it held until
+/// the worker lets it go ([`Book::release`]), once the spend is written; and
+/// a new post is admitted only where none of a full queue, a held code and a
+/// held name blocks it — the first of them in that order, as
+/// [`Book::blocks`] answers, asked by the admitter under the lock it admits
+/// under ([`Book::admit`]'s precondition).
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
     codes: HashSet<InviteCode>,
+    /// The codes whose posts are looking at what stands under their names:
+    /// held as surely as one in `codes`, from the post's in-flight check to
+    /// its admission or its refusal, so the posts on one code hold one of
+    /// the looks' permits at most.
+    looking: HashSet<InviteCode>,
 }
 
 /// What in flight refuses a new post.
@@ -203,8 +217,9 @@ struct Book {
 enum Blocked {
     /// [`QUEUE_DEPTH`] posts already wait.
     QueueFull,
-    /// The invite code is held: by a post in flight, or by one gone live
-    /// until its spend is written.
+    /// The invite code is held: by a post looking at what stands under its
+    /// name, by a post in flight, or by one gone live until its spend is
+    /// written.
     CodeHeld,
     /// A post in flight holds the name.
     NameHeld,
@@ -213,7 +228,7 @@ enum Blocked {
 impl Book {
     /// The book at start: nothing in flight, the status map as rebuilt.
     fn new(map: StatusMap) -> Book {
-        Book { queue: VecDeque::new(), map, codes: HashSet::new() }
+        Book { queue: VecDeque::new(), map, codes: HashSet::new(), looking: HashSet::new() }
     }
 
     /// What refuses a new post for `name` under `code`: the first of a full
@@ -221,7 +236,7 @@ impl Book {
     fn blocks(&self, name: &Name, code: &InviteCode) -> Option<Blocked> {
         if self.queue.len() >= QUEUE_DEPTH {
             Some(Blocked::QueueFull)
-        } else if self.codes.contains(code) {
+        } else if self.codes.contains(code) || self.looking.contains(code) {
             Some(Blocked::CodeHeld)
         } else if self.map.holds(name) {
             Some(Blocked::NameHeld)
@@ -273,7 +288,7 @@ impl Book {
 }
 
 /// A PERMIT UNDER A CAP — the workspace's word for it, `skep-util`'s
-/// `Permit`, which this crate's four dependencies leave out: taken where
+/// `Permit`, which this crate's five dependencies leave out: taken where
 /// fewer than the cap are held, and given back when dropped — on every
 /// return and every unwind alike, so no permit is ever kept by a look that
 /// ended.
@@ -290,6 +305,47 @@ impl<'a> Permit<'a> {
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// A CODE's LOOK: the post's code in the book's `looking` while its post
+/// reads what stands under its name — so one invite takes one of the looks'
+/// permits at most, never all of them — let go of when dropped, on every
+/// return and every unwind alike, unless the admission ended it first, under
+/// the lock it admits under.
+struct CodeLook<'s> {
+    book: &'s Mutex<Book>,
+    code: Option<InviteCode>,
+}
+
+impl<'s> CodeLook<'s> {
+    /// The look begun, under the book's lock the caller holds — `book` the
+    /// content of `lock` — once the in-flight check made under it has found
+    /// nothing blocking the post: the code held in `looking`, and the hold
+    /// handed to the guard that lets it go.
+    fn begin(lock: &'s Mutex<Book>, book: &mut Book, code: InviteCode) -> CodeLook<'s> {
+        book.looking.insert(code.clone());
+        CodeLook { book: lock, code: Some(code) }
+    }
+
+    /// The look ended at the admission, under the book's lock the caller
+    /// holds: the code out of `looking`, so the in-flight check made again
+    /// there does not meet this post's own look; and taken from the guard,
+    /// so its drop — after the lock is let go, by when a worker may have run
+    /// this post and let its code go, and a later post's look may hold it —
+    /// takes nothing back.
+    fn end(mut self, book: &mut Book) {
+        if let Some(code) = self.code.take() {
+            book.looking.remove(&code);
+        }
+    }
+}
+
+impl Drop for CodeLook<'_> {
+    fn drop(&mut self) {
+        if let Some(code) = self.code.take() {
+            self.book.lock().unwrap_or_else(|e| e.into_inner()).looking.remove(&code);
+        }
     }
 }
 
@@ -834,13 +890,19 @@ impl Desk for Service {
         let record = record::admit(post.record).map_err(|refused| {
             self.log(&format!("{name}: a post refused: the record, {refused}"));
             match refused {
-                RecordRefused::NotARecord(_) => Refusal::Record,
+                RecordRefused::NotARecord(_) | RecordRefused::UndecodableKey | RecordRefused::TooManyKeys => Refusal::Record,
                 RecordRefused::PreviewKey { .. } => Refusal::Preview,
             }
         })?;
         // WHAT IS IN FLIGHT, under the book's short lock: a refusal here
-        // costs no docker call.
-        self.in_flight(&self.book(), &name, &code)?;
+        // costs no docker call. Passed, the post's code is held for its look
+        // — one look per code — until the admission or the refusal lets it
+        // go.
+        let look = {
+            let mut book = self.book();
+            self.in_flight(&book, &name, &code)?;
+            CodeLook::begin(&self.book, &mut book, code.clone())
+        };
         // THE TRUTH ABOUT THE NAME: three reads under no lock of this
         // service's — a post waits on no provisioning — under one of the
         // looks' permits, given back as the reads end.
@@ -866,16 +928,18 @@ impl Desk for Service {
             self.log(&format!("{name}: a post could not be admitted: {e}"));
             Refusal::Failed
         })?;
-        // THE ADMISSION, under the book's lock: what is in flight checked
-        // again, `Book::admit`'s precondition discharged under the lock it
-        // admits under — a post for this name or this code may have been
-        // admitted while the reads ran — and the invite looked up again under
-        // the same lock. A worker spends a code and then lets go of it, in
-        // that order, so a code the book does not hold and the file holds
-        // issued is one no board has spent; and the name is held from here,
-        // so no second post for it is admitted while this one is in flight.
+        // THE ADMISSION, under the book's lock: the look ended, then what is
+        // in flight checked again, `Book::admit`'s precondition discharged
+        // under the lock it admits under — a post for this name may have
+        // been admitted while the reads ran, though none for this code, which
+        // the look held — and the invite looked up again under the same lock.
+        // A worker spends a code and then lets go of it, in that order, so a
+        // code the book does not hold and the file holds issued is one no
+        // board has spent; and the name is held from here, so no second post
+        // for it is admitted while this one is in flight.
         let waiting = {
             let mut book = self.book();
+            look.end(&mut book);
             self.in_flight(&book, &name, &code)?;
             match invites::lookup(&self.state_dir, &code) {
                 Ok(Some(again)) if again.issued() => {}

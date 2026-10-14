@@ -30,6 +30,11 @@ test-hooks = []
 # public keys alone, no field of which can carry a private key (I1,
 # AUTH-2.89).
 skep-identity = { path = "../skep-identity" }
+# The record's all-halves decode, `key_decodes` — the one skepd's credential
+# precheck runs on a hosted claim's genesis keys — from the VERIFY-ONLY
+# build, no feature: no KDF, no keygen, no signer, as skepd links it
+# (AUTH-2.89, I1), so this binary still holds no key.
+skep-signature = { path = "../skep-signature" }
 # THE HTTP/1.1 SUBSET the pages are served over: one request per
 # connection, read under this crate's two caps; std alone.
 skep-http = { path = "../skep-http" }

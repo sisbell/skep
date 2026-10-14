@@ -311,8 +311,8 @@ pub fn connection(stream: TcpStream, site: &Site, desk: &dyn Desk) {
     // book changes under its lock alone, an admission's one check before the
     // book's three inserts and none of those can unwind; every mutex is taken
     // poison-recovering; the invite file's lock is let go of as its file
-    // closes; and a look's permit is given back by its `Drop` as the frame
-    // unwinds.
+    // closes; and a look's permit and its code's hold are given back by
+    // their `Drop`s as the frame unwinds.
     let _ = catch_unwind(AssertUnwindSafe(|| connection_within(stream, site, desk, TRANSFER_DEADLINE)));
 }
 

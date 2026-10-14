@@ -14,11 +14,11 @@
 
 use std::path::Path;
 
-use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN};
+use skep_identity::{encode_enroll, Enrollment};
 
 use super::fake::{line, FakeDocker, UNEXPECTED};
 use super::*;
-use crate::record::admit;
+use crate::record::{admit, decodable_key};
 use crate::scratch::Scratch;
 
 /// The alpha's settings: the README's tags, the notes' bridge and proxy,
@@ -49,11 +49,10 @@ fn alice() -> Name {
     Name::parse(b"alice").expect("a name")
 }
 
-/// An admitted record, the one input a call carries: one production key,
-/// as the person's device prints it.
+/// An admitted record, the one input a call carries: one production key
+/// whose halves decode, as the person's device prints it.
 fn record() -> Record {
-    let key = PublicKey::parse(ALG_MLDSA65_ED25519, &"9f".repeat(MLDSA65_ED25519_KEY_LEN)).expect("a key");
-    admit(encode_enroll(&[Enrollment::new(key, true, None).expect("no label")]).as_bytes()).expect("an admitted record")
+    admit(encode_enroll(&[Enrollment::new(decodable_key(0x9f), true, None).expect("no label")]).as_bytes()).expect("an admitted record")
 }
 
 /// A run line as the documents write it, split into its words.

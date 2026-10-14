@@ -97,8 +97,9 @@ fetched from elsewhere.
   end — never hex digits alone, which a container command reads as the
   prefix of a container's ID, nor `localhost` or one of the `ip6-` names
   every container's hosts file answers. The record goes to
-  `skep_identity::parse_enroll`, trimmed of its trailing line breaks, and
-  every key must be the production kind. Then the name must be free: not
+  `skep_identity::parse_enroll`, trimmed of its trailing line breaks;
+  every key must be the production kind and decode, sixteen at most —
+  what the hosted claim's genesis admits. Then the name must be free: not
   taken — no snippet, no volume and no container stands under it — and
   not held by a post in flight. A refused post is shown on the form
   again, and leaves no file and no queue entry. An admitted post is
@@ -127,9 +128,9 @@ form (D-4), and so no two workers ever run the steps for one name. A post
 waits on no board being made: its checks run under a short lock on the
 queue and the status map, and its three reads of what stands under its
 name take no lock at all and never wait behind a provisioning, so every
-post is answered at once. Up to four posts make those reads at once, and
-up to four wait in the queue; a fifth past either is answered D-8, "try
-again later", the first with no `docker` call.
+post is answered at once. Up to four posts make those reads at once, one
+per invite, and up to four wait in the queue; a fifth past either is
+answered D-8, "try again later", the first with no `docker` call.
 
 A worker runs the deployment notes' §4 steps 3 to 5 for each post, in
 order:

@@ -3,11 +3,13 @@
 //! line breaks, and nothing else — and its two spellings read back from
 //! `skep-client`; ONE VECTOR PER `PayloadError` VARIANT `parse_enroll`
 //! raises over a form's bytes, each D-5 naming its token, and the cap first
-//! over a body that is also not text; and D-6, a preview key that PARSES and
-//! is refused by the alg test alone. (The name's grammar, the post's other
-//! field, is `name`'s suite.)
+//! over a body that is also not text; D-6, a preview key that PARSES and is
+//! refused by the alg test alone; and the hosted genesis's own two
+//! refusals, each D-5 — a half that does not decode, more entries than its
+//! cap — in the daemon's order, read back from `skepd`. (The name's grammar,
+//! the post's other field, is `name`'s suite.)
 
-use skep_identity::{encode_enroll, parse_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, MAX_RECORD_BYTES, MLDSA65_ED25519_KEY_LEN};
+use skep_identity::{encode_enroll, parse_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, MAX_RECORD_BYTES};
 
 use super::*;
 
@@ -17,14 +19,9 @@ fn key(alg: &str, raw_len: usize, byte: u8) -> PublicKey {
     PublicKey::parse(alg, &format!("{byte:02x}").repeat(raw_len)).expect("a key of the row's length")
 }
 
-/// A production-kind key.
-fn production(byte: u8) -> PublicKey {
-    key(ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN, byte)
-}
-
 /// A canonical one-key record over a production key, `anchor` its flag.
 fn one_key(anchor: bool) -> String {
-    encode_enroll(&[Enrollment::new(production(0xab), anchor, None).expect("no label")])
+    encode_enroll(&[Enrollment::new(decodable_key(0xab), anchor, None).expect("no label")])
 }
 
 /// The refusal's token, or a panic naming the admission.
@@ -47,9 +44,9 @@ fn a_canonical_record_is_admitted_with_its_anchorless_fact() {
     let bare = one_key(false);
     assert!(admit(bare.as_bytes()).expect("a canonical record").anchorless());
     let three = encode_enroll(&[
-        Enrollment::new(production(1), false, Some("laptop".into())).expect("a label"),
-        Enrollment::new(production(2), true, None).expect("no label"),
-        Enrollment::new(production(3), true, None).expect("no label"),
+        Enrollment::new(decodable_key(1), false, Some("laptop".into())).expect("a label"),
+        Enrollment::new(decodable_key(2), true, None).expect("no label"),
+        Enrollment::new(decodable_key(3), true, None).expect("no label"),
     ]);
     assert!(!admit(three.as_bytes()).expect("the --anchors record's shape").anchorless(), "one anchor-flagged entry is enough");
 }
@@ -106,10 +103,10 @@ fn the_admission_copies_the_hosted_walks_h2_as_it_stands() {
 #[test]
 fn each_reachable_payload_fault_is_refused_naming_its_token() {
     let canonical = one_key(true);
-    let hex = production(0xab).to_hex();
+    let hex = decodable_key(0xab).to_hex();
     let entry = format!(r#"{{"alg":"{ALG_MLDSA65_ED25519}","key":"{hex}","anchor":true}}"#);
     assert_eq!(canonical, format!(r#"{{"type":"skep-enroll","keys":[{entry}]}}"#), "the canonical spelling the vectors spoil");
-    let twice = Enrollment::new(production(0xab), true, None).expect("no label");
+    let twice = Enrollment::new(decodable_key(0xab), true, None).expect("no label");
     let mut not_utf8 = canonical.clone().into_bytes();
     not_utf8.insert(10, 0xff);
     let vectors: Vec<(&str, Vec<u8>, &str)> = vec![
@@ -146,10 +143,51 @@ fn a_preview_key_parses_and_is_refused_by_the_alg_test_alone() {
     assert_eq!(refusal.token(), "preview_key");
     assert_eq!(refusal.to_string(), "preview_key");
     let mixed = encode_enroll(&[
-        Enrollment::new(production(1), true, None).expect("no label"),
+        Enrollment::new(decodable_key(1), true, None).expect("no label"),
         Enrollment::new(key(ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, 2), false, None).expect("no label"),
     ]);
     assert!(matches!(refused(mixed.as_bytes()), RecordRefused::PreviewKey { .. }));
+}
+
+/// A RECORD THE GENESIS CAN NEVER TAKE IS REFUSED, D-5, before any docker
+/// run — the daemon's two refusals of a hosted claim's genesis, in its
+/// order: a half that does not decode; sixteen decodable entries admitted
+/// and a seventeenth refused; an undecodable third of seventeen answering
+/// `undecodable_key`, the decode first; and an undecodable eighteenth
+/// answering `too_many_enrolled`, decoded no further than one past the cap.
+#[test]
+fn a_record_the_genesis_can_never_take_is_refused() {
+    let record_of = |keys: Vec<PublicKey>| encode_enroll(&keys.into_iter().map(|k| Enrollment::new(k, false, None).expect("no label")).collect::<Vec<_>>());
+    let decodable = |n: u8| (0..n).map(decodable_key).collect::<Vec<_>>();
+    assert!(key_decodes(&decodable_key(0x9f)) && !key_decodes(&undecodable_key()), "the two fixtures are what they say");
+    assert_eq!(refused(record_of(vec![undecodable_key()]).as_bytes()), RecordRefused::UndecodableKey);
+    assert!(admit(record_of(decodable(16)).as_bytes()).is_ok(), "sixteen, the cap");
+    assert_eq!(refused(record_of(decodable(17)).as_bytes()), RecordRefused::TooManyKeys);
+    let mut third = decodable(17);
+    third[2] = undecodable_key();
+    assert_eq!(refused(record_of(third).as_bytes()).token(), "undecodable_key", "the decode before the count");
+    let mut eighteenth = decodable(18);
+    eighteenth[17] = undecodable_key();
+    assert_eq!(refused(record_of(eighteenth).as_bytes()).token(), "too_many_enrolled", "decoded no further than one past the cap");
+    for (refusal, token) in [(RecordRefused::UndecodableKey, "undecodable_key"), (RecordRefused::TooManyKeys, "too_many_enrolled")] {
+        assert_eq!(refusal.to_string(), token, "Display is the daemon's own word");
+    }
+}
+
+/// THE GENESIS's REFUSALS ARE THE DAEMON's, READ BACK at test time from
+/// skepd's `src/auth/policy/credential.rs`: the cap [`MAX_GENESIS_KEYS`]
+/// restates, and the decode over one entry past it ahead of the count — so
+/// an edit to either there is a red test here until the copy follows it.
+#[test]
+fn the_genesis_refusals_copy_the_daemons_precheck_as_it_stands() {
+    let precheck = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skepd/src/auth/policy/credential.rs")).expect("skepd's credential precheck");
+    let at = |spelling: &str| precheck.find(spelling).unwrap_or_else(|| panic!("skepd's precheck no longer spells the genesis's refusals as `record::admit` copies them: `{spelling}`"));
+    at(&format!("const MAX_ENROLLED_KEYS: usize = {MAX_GENESIS_KEYS};"));
+    at("const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;");
+    at("const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;");
+    let decode = at("enrolling.iter().take(MAX_DECODED_KEYS).all(|e| skep_signature::key_decodes(&e.key))");
+    let count = at("keys.len() > MAX_GENESIS_KEYS");
+    assert!(decode < count, "skepd's precheck counts a genesis's keys before it decodes them");
 }
 
 /// The record's `Debug` carries its length and its fact, and nothing of

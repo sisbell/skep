@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN, MLDSA65_ED25519_KEY_LEN};
+use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_FNDSA512_PREVIEW_ED25519, ALG_MLDSA65_ED25519, ED25519_KEY_LEN, FNDSA512_PREVIEW_KEY_LEN, MLDSA65_KEY_LEN};
 
 /// The binary under test, built with `test-hooks`.
 const BIN: &str = env!("CARGO_BIN_EXE_skep-provision");
@@ -93,9 +93,14 @@ impl Drop for Scratch {
     }
 }
 
-/// A record as a person's device prints it: one key of `alg`.
-fn record(alg: &str, raw_len: usize) -> String {
-    let key = PublicKey::parse(alg, &"9f".repeat(raw_len)).expect("a key");
+/// A record as a person's device prints it: one key of `alg`, its
+/// post-quantum half `pq_len` bytes of `9f` beside the Ed25519 base point's
+/// encoding (RFC 8032: `58`, then thirty-one `66`) — a point by
+/// construction, so the halves decode as the hosted genesis asks.
+fn record(alg: &str, pq_len: usize) -> String {
+    let mut ed25519 = [0x66; ED25519_KEY_LEN];
+    ed25519[0] = 0x58;
+    let key = PublicKey::from_halves(alg, &vec![0x9f; pq_len], &ed25519).expect("the row's widths");
     encode_enroll(&[Enrollment::new(key, true, None).expect("no label")])
 }
 
@@ -298,7 +303,7 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     assert!(signups.starts_with("someone@example.org ") && signups.lines().count() == 1, "{signups}");
 
     // THE POST: D-7 and the status URL, then the live reply there.
-    let record = record(ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN);
+    let record = record(ALG_MLDSA65_ED25519, MLDSA65_KEY_LEN);
     let body = format!("name=alice&record={}%0D%0A&invite={code}", form_encode(record.as_bytes()));
     let (status, made) = service.request("POST", "/claim", &body);
     assert_eq!(status, 200, "{made}");
@@ -382,7 +387,7 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
 
 /// A record of the preview kind.
 fn record_preview() -> String {
-    record(ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN)
+    record(ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_KEY_LEN)
 }
 
 /// T22: THE SWEEP AT START — the built binary, over a script whose
@@ -503,7 +508,7 @@ fn serve_makes_the_workers_the_flag_names() {
     std::fs::write(&script, script_line("labelled_volumes", "-", 0, "") + &names.map(flow).concat() + &script_line("caddy_reload", "-", 0, "").repeat(names.len())).expect("the script");
     let service = Service::start(dir.path(), &script, &dir.path().join("mail.log"), &["--workers", "2"]);
     assert!(service.serving.contains(" workers 2 "), "{}", service.serving);
-    let record = record(ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN);
+    let record = record(ALG_MLDSA65_ED25519, MLDSA65_KEY_LEN);
     let tokens: Vec<String> = names
         .iter()
         .zip(&codes)

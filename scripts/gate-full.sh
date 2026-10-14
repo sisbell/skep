@@ -202,6 +202,17 @@ for flag in --docker-fake --mailer-fake; do
 done
 usage=$(cargo run -q -p skep-provision -- --help) || exit $?
 if [[ $usage == *fake* ]]; then echo "gate-full: skep-provision's shipped usage names a fake flag"; exit 1; fi
+# …and THE NO-SIGNER PROOF beside it: that build's own feature resolution
+# links skep-signature with no feature — its verify alone, for the record's
+# all-halves decode — so the binary holds no signer (AUTH-2.89, I1). Each
+# package's line carries its resolved features after the `|`; the tree is
+# held, then read line by line.
+tree=$(cargo tree -p skep-provision -e normal --prefix none -f '{p}|{f}') || exit $?
+while IFS= read -r line; do
+    case $line in
+        'skep-signature v'*'|'?*) echo "gate-full: skep-provision's shipped build links skep-signature with features ${line##*|}"; exit 1 ;;
+    esac
+done <<< "$tree"
 
 # skep-provision, a binary alone, cannot join a `--lib` line; its module
 # docs link across its modules through `main.rs`'s `mod` tree.

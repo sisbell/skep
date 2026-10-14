@@ -22,7 +22,8 @@ fn the_service_counts_the_snippets_standing_at_start() {
 /// A `docker` THAT CANNOT BE RUN AT ALL: the sweep's listing cannot be made,
 /// so the sweep is skipped and the service stands; and a post whose look at
 /// the name cannot be made meets D-8 — never D-4's "taken" — and leaves
-/// nothing: no post waiting, no code held, the invite still issued.
+/// nothing: no post waiting, no code held — its look's hold let go — the
+/// invite still issued.
 #[test]
 fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     /// A runner whose `docker` cannot be run: every call the error.
@@ -46,7 +47,7 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     let record = record(true);
     assert_eq!(service.admit(&Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() }), Err(Refusal::Failed));
     let book = service.book();
-    assert!(book.queue.is_empty() && book.codes.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
+    assert!(book.queue.is_empty() && book.codes.is_empty() && book.looking.is_empty() && !book.map.holds(&Name::parse(b"alice").expect("a name")));
     drop(book);
     assert!(lookup(&state_dir, &code).expect("read").expect("held").issued());
     let log = lines.lock().unwrap().clone();

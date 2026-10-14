@@ -19,7 +19,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use skep_identity::{encode_enroll, Enrollment, PublicKey, ALG_MLDSA65_ED25519, MLDSA65_ED25519_KEY_LEN};
+use skep_identity::{encode_enroll, Enrollment, PublicKey};
 
 use super::*;
 use crate::docker::fake::{line, FakeDocker};
@@ -47,10 +47,11 @@ const PAIRED: &str = r#"{"auth":{"claimant":"1.0.1","local_trust":false,"origins
 /// An unclaimed board's.
 const UNPAIRED: &str = r#"{"auth":{"claimant":null,"local_trust":false,"origins":[],"signed_origins":[]},"ok":true}"#;
 
-/// A record as the person's device printed it: one production key, its
-/// anchor flag as given, and the textarea's CRLF after it.
+/// A record as the person's device printed it: one production key whose
+/// halves decode, its anchor flag as given, and the textarea's CRLF after
+/// it.
 fn record(anchor: bool) -> String {
-    let key = PublicKey::parse(ALG_MLDSA65_ED25519, &"9f".repeat(MLDSA65_ED25519_KEY_LEN)).expect("a key");
+    let key = crate::record::decodable_key(0x9f);
     format!("{}\r\n", encode_enroll(&[Enrollment::new(key, anchor, None).expect("no label")]))
 }
 

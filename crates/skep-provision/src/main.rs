@@ -102,7 +102,8 @@ mod domain;
 // A board's name: one lowercase label, and the board's host and public
 // origin under the suffix.
 mod name;
-// The record's trim and parse, the preview-kind test, the anchorless fact.
+// The record's trim and parse, the preview-kind test, the hosted genesis's
+// decode and cap, the anchorless fact.
 mod record;
 // A mail address by the rule — one `@`, ASCII alone, none of the specials —
 // its words for a refusal, and the one value an address is taken in as.

@@ -7,10 +7,12 @@
 //! at its admission; a live board's code held until its spend is written,
 //! kept held where the spend could not be written, and let go of after it; no
 //! code in the log) and T10 (a sign-up, its address in no log line; one past
-//! the file's cap, refused); a fifth post past the looks' cap, refused D-8
-//! with no docker call, and the looks' permits given back; where two of a
-//! post's faults hold, the first in its order speaking; and THE BOOK keeping
-//! its own rules — what blocks a new post, first of three, and what
+//! the file's cap, refused); a record the hosted genesis can never take,
+//! refused D-5 with no docker call; a fifth post past the looks' cap, refused
+//! D-8 with no docker call, and the looks' permits given back; one code
+//! holding one look at a time, let go on every refusal and an unwind; where
+//! two of a post's faults hold, the first in its order speaking; and THE BOOK
+//! keeping its own rules — what blocks a new post, first of three, and what
 //! admitting, taking, going live, letting a code go and failing do, an
 //! admission whole or not made.
 
@@ -20,7 +22,9 @@ use std::sync::mpsc;
 use skep_identity::{ALG_FNDSA512_PREVIEW_ED25519, FNDSA512_PREVIEW_ED25519_KEY_LEN};
 
 use super::*;
+use crate::docker::Call;
 use crate::name::NameRefused;
+use crate::record::{decodable_key, undecodable_key};
 
 /// T8: TWO POSTS ON ONE NAME — the second meets D-4 at the post, held by
 /// the first in flight, with no docker call made for it.
@@ -114,13 +118,14 @@ fn a_permit_is_given_back_when_dropped() {
     assert_eq!(held.load(Ordering::SeqCst), 0);
 }
 
-/// THE BOOK KEEPS ITS OWN RULES. Admitted, a post waits with its code and
-/// its name held, its page D-7. What blocks a new post is the first of a
-/// full queue, a held code and a held name: four waiting block a fifth even
-/// on a free name and code, and a post on a held code and a held name meets
-/// the code. Taken, the oldest post runs, still holding both. Gone live, it
-/// holds its name no more, and its code stays held until it is let go of.
-/// Failed, it lets its code go at once and holds its name no more.
+/// THE BOOK KEEPS ITS OWN RULES. A code whose post is looking at what
+/// stands is held. Admitted, a post waits with its code and its name held,
+/// its page D-7. What blocks a new post is the first of a full queue, a held
+/// code and a held name: four waiting block a fifth even on a free name and
+/// code, and a post on a held code and a held name meets the code. Taken,
+/// the oldest post runs, still holding both. Gone live, it holds its name no
+/// more, and its code stays held until it is let go of. Failed, it lets its
+/// code go at once and holds its name no more.
 #[test]
 fn the_book_keeps_its_own_rules() {
     let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
@@ -135,6 +140,9 @@ fn the_book_keeps_its_own_rules() {
     let state = |book: &Book, n: &str| book.map.post(&format!("token-{n}")).map(|p| p.state);
     let mut book = Book::new(StatusMap::default());
     assert_eq!(book.blocks(&name("alice"), &invite_code("c1")), None, "nothing in flight");
+    book.looking.insert(invite_code("c9"));
+    assert_eq!(book.blocks(&name("zed"), &invite_code("c9")), Some(Blocked::CodeHeld), "a code whose post is looking");
+    book.looking.clear();
     for (at, (n, code)) in [("alice", "c1"), ("bob", "c2"), ("carol", "c3"), ("dave", "c4")].into_iter().enumerate() {
         assert_eq!(book.admit(job(n, code)), at + 1, "the posts now waiting");
         assert_eq!(state(&book, n), Some(PostState::Queued));
@@ -188,11 +196,13 @@ fn an_admission_on_a_token_admitted_before_changes_nothing() {
 
 /// T9: A SPENT CODE, AN UNKNOWN CODE, A CODE OF ANOTHER FORM and A CODE A
 /// POST IN FLIGHT HOLDS are refused at the post, no docker call made; D-5
-/// and D-6 refuse a record before any — the log naming the fault's token,
-/// never the record; and D-4 a name Docker cannot take as a name alone —
-/// one byte, a hosts-file name, hex digits alone — its code still issued,
-/// never let go of by a post that fails at `docker volume create` or the
-/// health wait to be posted again.
+/// and D-6 refuse a record before any — among D-5's a record the hosted
+/// genesis can never take, a key's half that does not decode or more
+/// entries than its cap, which would fail at the dark claim — the log
+/// naming the fault's token, never the record; and D-4 a name Docker cannot
+/// take as a name alone — one byte, a hosts-file name, hex digits alone —
+/// its code still issued, never let go of by a post that fails at `docker
+/// volume create` or the health wait to be posted again.
 #[test]
 fn the_posts_refusals_come_before_any_docker_call() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
@@ -208,6 +218,10 @@ fn the_posts_refusals_come_before_any_docker_call() {
     assert_eq!(rig.post("bob", "{\"type\":\"skep-enroll\"}", fresh.as_str()), Err(Refusal::Record));
     let preview = encode_enroll(&[Enrollment::new(PublicKey::parse(ALG_FNDSA512_PREVIEW_ED25519, &"9f".repeat(FNDSA512_PREVIEW_ED25519_KEY_LEN)).expect("a key"), true, None).expect("no label")]);
     assert_eq!(rig.post("bob", &preview, fresh.as_str()), Err(Refusal::Preview));
+    let undecodable = encode_enroll(&[Enrollment::new(undecodable_key(), true, None).expect("no label")]);
+    assert_eq!(rig.post("bob", &undecodable, fresh.as_str()), Err(Refusal::Record), "a half that does not decode");
+    let seventeen = encode_enroll(&(0..17u8).map(|n| Enrollment::new(decodable_key(n), false, None).expect("no label")).collect::<Vec<_>>());
+    assert_eq!(rig.post("bob", &seventeen, fresh.as_str()), Err(Refusal::Record), "past the genesis's cap");
     assert_eq!(rig.post("b_b", &record(true), fresh.as_str()), Err(Refusal::Name));
     for never in ["x", "localhost", "ab"] {
         assert_eq!(rig.post(never, &record(true), fresh.as_str()), Err(Refusal::Name), "{never}");
@@ -215,7 +229,9 @@ fn the_posts_refusals_come_before_any_docker_call() {
     rig.fake.assert_done();
     assert!(rig.issued(&fresh));
     let log = rig.log().join("\n");
-    assert!(log.contains("bob: a post refused: the record, bad_record") && log.contains("bob: a post refused: the record, preview_key"), "{log}");
+    for token in ["bad_record", "preview_key", "undecodable_key", "too_many_enrolled"] {
+        assert!(log.contains(&format!("bob: a post refused: the record, {token}")), "{token}: {log}");
+    }
     for refused in [NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone] {
         assert!(log.contains(&format!("a post refused: {refused}")), "{refused:?}: {log}");
     }
@@ -411,14 +427,16 @@ fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
 }
 
 /// T9: THE ADMISSION LOOKS AGAIN AT THE INVITE — a post paused inside its
-/// reads while the code it names goes live under another name, spent and
-/// let go of, meets the invite's refusal at its own admission: never a
-/// second board on one invite.
+/// reads holds its code, so a post of this service's on the code is refused
+/// as held; and where the code is marked spent meanwhile — a spend written
+/// between the post's first lookup and its in-flight check, or the
+/// operator's by hand — the paused post meets the invite's refusal at its
+/// own admission: never a second board on one invite.
 #[test]
 fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
     let gate = Gate::new();
     let pause = Arc::clone(&gate);
-    let rig = rig(&(inspects("bob") + &flow_of("alice", false) + &reloads(1)), None);
+    let rig = rig(&inspects("bob"), None);
     rig.fake.pause(move |method, name| {
         if method == "container_inspect" && name == Some("bob") {
             pause.pause();
@@ -432,12 +450,76 @@ fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
         let _ = tx.send(service.admit(&Post { name: b"bob", record: record.as_bytes(), invite: posted.as_str().as_bytes() }));
     });
     gate.entered(1);
-    let alice = rig.admitted("alice", &code);
-    assert!(rig.service.run_next());
-    assert!(rig.live(&alice) && !rig.issued(&code), "alice live on the code, the code spent");
+    assert_eq!(rig.post("alice", &record(true), code.as_str()), Err(Refusal::Invite), "the paused post's look holds its code");
+    assert!(crate::invites::spend(&rig.state_dir, &code, &Name::parse(b"carol").expect("a name")).expect("written"), "issued until now");
     gate.open();
     assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Invite), "a second board on one invite");
     rig.fake.assert_done();
     assert!(rig.service.book().queue.is_empty());
+    assert!(rig.logged("alice: a post refused: its invite is held by another post"), "{:?}", rig.log());
     assert!(rig.logged("bob: a post refused: its invite was spent while the post was judged"), "{:?}", rig.log());
+}
+
+/// ONE CODE, ONE LOOK: a post paused inside its look holds its code — a
+/// second post on the same code, under another name, is refused as held
+/// with no docker call, so one invite never takes more than one of the
+/// looks' permits — while a post on another code looks beside it; let go,
+/// the first post's D-4 lets the code go, and the code looks again.
+#[test]
+fn one_code_holds_one_look_at_a_time() {
+    let gate = Gate::new();
+    let pause = Arc::clone(&gate);
+    let rig = rig(&(line("volume_inspect", Some("alice"), 0, "", "") + &inspects("bob") + &inspects("carol")), None);
+    rig.fake.pause(move |method, name| {
+        if method == "volume_inspect" && name == Some("alice") {
+            pause.pause();
+        }
+    });
+    let code = rig.invite();
+    let (service, held) = (Arc::clone(&rig.service), code.clone());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let record = record(true);
+        let _ = tx.send(service.admit(&Post { name: b"alice", record: record.as_bytes(), invite: held.as_str().as_bytes() }));
+    });
+    gate.entered(1);
+    assert_eq!(rig.post("dave", &record(true), code.as_str()), Err(Refusal::Invite), "a second look on one code");
+    assert!(rig.logged("dave: a post refused: its invite is held by another post"), "{:?}", rig.log());
+    rig.admitted("bob", &rig.invite());
+    gate.open();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(30)).expect("the paused post answered"), Err(Refusal::Name));
+    rig.admitted("carol", &code);
+    rig.fake.assert_done();
+    assert!(rig.service.book().looking.is_empty(), "a look's hold outlived its post");
+}
+
+/// A LOOK THAT UNWINDS LETS ITS CODE GO: a post whose look panics — a
+/// `docker` call that panics, caught where the pages catch an answer's
+/// panic — leaves its code unheld, and the same code's next post looks and
+/// is admitted.
+#[test]
+fn a_look_that_unwinds_lets_its_code_go() {
+    /// A runner whose first volume inspect panics, every other call
+    /// answering "not standing".
+    struct PanicsOnce(AtomicBool);
+    impl Docker for PanicsOnce {
+        fn run(&self, call: Call<'_>) -> io::Result<Exit> {
+            if matches!(call, Call::VolumeInspect(_)) && !self.0.swap(true, Ordering::SeqCst) {
+                panic!("a look's call that panics");
+            }
+            Ok(Exit { code: Some(1), stdout: Vec::new(), stderr: Vec::new() })
+        }
+    }
+    let dir = Scratch::new();
+    let boards = dir.path().join("boards");
+    fs::create_dir(&boards).expect("the snippet directory");
+    let state_dir = StateDir::open(&dir.path().join("state")).expect("the state directory");
+    let config = Config { boards_dir: boards, suffix: suffix() };
+    let service = Service::new(config, state_dir.clone(), Box::new(PanicsOnce(AtomicBool::new(false))), None, Arc::new(|_: &str| {}), Arc::new(|_| {})).expect("the service");
+    let code = mint(&state_dir, &MailAddress::parse("person@example.com").expect("an address"), None).expect("minted");
+    let record = record(true);
+    let post = Post { name: b"alice", record: record.as_bytes(), invite: code.as_str().as_bytes() };
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| service.admit(&post))).is_err(), "the look panicked");
+    assert!(service.book().looking.is_empty(), "the code held past a look that unwound");
+    assert!(service.admit(&post).is_ok(), "the code's next post refused");
 }

@@ -1504,6 +1504,7 @@ dependencies = [
  "skep-http",
  "skep-identity",
  "skep-provision",
+ "skep-signature",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ members = [
     "crates/skep-blobs",
     "crates/skep-util",
     "crates/skep-media",
+    "crates/skep-core",
     "crates/skep-registry",
     "crates/skep-search",
     "crates/skep-corpus",

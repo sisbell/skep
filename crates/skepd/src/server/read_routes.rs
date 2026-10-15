@@ -16,10 +16,10 @@ use super::reply::{
 };
 use super::request::{at_most_once, query_pairs, sole_param};
 use super::Daemon;
-use crate::auth::key_set_of;
-use crate::codec::{check_keys, key_set_reply, DaemonOp};
+use skep_core::auth::key_set_of;
+use skep_core::codec::{check_keys, key_set_reply, DaemonOp};
 use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
-use crate::write_path::{ChangesAnswer, ChangesQuery, FeedClass};
+use skep_core::commits::{ChangesAnswer, ChangesQuery, FeedClass};
 
 impl Daemon {
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -82,7 +82,7 @@ impl Daemon {
             }
             DaemonOp::Febe { request: frame, .. } => {
                 // The partition is M10's own, asked directly: this daemon
-                // holds no second reading of it, and `write_path`'s
+                // holds no second reading of it, and `skep_core::commits`'s
                 // `write_meta` records what a drift on the other side costs.
                 if !frame.op.is_read() {
                     // The ruling-fixed body, exactly: {"error": "write_at_history"}.
@@ -136,7 +136,7 @@ impl Daemon {
         // rendered as 64 lowercase hex and never recomputed here; a fresh
         // world answers the genesis seed — sixty-four `0`s — never null.
         let head_time =
-            self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
+            self.commits.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         // The auth object (AUTH-6.13), rendered where its state lives — the
         // claimant, the flag and the two origin sets, with the wire's own
         // negative pin stated there too. Read BEFORE that pair, which is the
@@ -149,7 +149,7 @@ impl Daemon {
         // two atomic loads, so the member and the operator stream's two
         // halt lines agree on one fact; a `true` is terminal for the uptime
         // and so actionable without a race, a `false` one moment's reading.
-        let halted = self.writes.halted_at().is_some() || self.engine.kernel().is_poisoned();
+        let halted = self.commits.halted_at().is_some() || self.engine.kernel().is_poisoned();
         // The media object (wire.md §Media, THE UPLOAD SETTING): the upload
         // switch echoed where its state lives (`MediaGate::health_object`),
         // a boundary setting read once by the client before any face that
@@ -231,7 +231,7 @@ impl Daemon {
         // stand on the same committed state.
         let head = self.engine.kernel().snapshot();
         let class = FeedClass::of(head.world(), resolved.principal());
-        match self.writes.changes(&class, &changes_query) {
+        match self.commits.changes(&class, &changes_query) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             // The page byte budget (bu7-2; SO-I9): refused whole, with the
             // budget and the largest `limit` that fits from this fence.
@@ -333,7 +333,7 @@ fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
                 // that agree today: the depth and digit caps and the
                 // dotted-decimal grammar are all `wire_tumbler`'s, applied
                 // before any component is converted.
-                under = Some(crate::codec::wire_tumbler(v).map_err(|e| format!("under: {e}"))?);
+                under = Some(skep_core::codec::wire_tumbler(v).map_err(|e| format!("under: {e}"))?);
             }
             "drafts" => {
                 at_most_once(&drafts, "parameter", "drafts")?;

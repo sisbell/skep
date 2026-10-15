@@ -22,7 +22,7 @@ position in the journal.
 
 ## Code map
 
-The workspace is twenty-eight crates under `crates/`. Dependencies point
+The workspace is twenty-nine crates under `crates/`. Dependencies point
 downward in the list below: a crate may depend only on crates listed
 above it.
 
@@ -166,14 +166,34 @@ foundation and on the stores above it.
 - `skep-engine` — the one assembler. It defines `World` from the stores'
   slices and the identity slice, genesis, recovery and reads at a past
   position. Nothing depends
-  on it except `skepd`, the conformance harness and — as a dev-dependency,
-  for the fixture its hazard, golden and chain suites share —
-  `skep-kernel`.
+  on it except the daemon's two crates, `skep-core` and `skepd`, the
+  conformance harness and — as dev-dependencies — `skep-kernel`, for the
+  fixture its hazard, golden and chain suites share, and `skep-media`,
+  whose door's and index's unit suites judge generic code against the
+  concrete `World`; the as-built list is kept once, in the engine's crate
+  doc, and every other place points at it.
+
+**The daemon's core**
+- `skep-core` — the daemon's core: the session layer (who may act: the
+  origin sets, the handshake, the sessions store, the credential write lock
+  and the refusal producers it scopes, the signed-ops check, the readers of
+  the World's identity slice), the commits (the one door every write rides
+  — commit, record, announce, under one guard — the change feed and its
+  five files, the attest store, the published head writer), the wire codec,
+  the six bounds it reads and the serialization lock, each `pub` where the
+  daemon reads it. It transports nothing: the routes, the replies, the
+  history service and the operator's tools are `skepd`'s. It depends on
+  the engine — the daemon's two crates are what the Engine Composition
+  Contract permits — and on `skep-media` for the cell index the commits
+  enter, and so stands here, after the assembler. One feature, default
+  off: `test-hooks` compiles in its test seam, every item `#[doc(hidden)]`,
+  forwarding nothing; `scripts/gate-full.sh` builds the library and its
+  docs without it. Its modules and rules: §The daemon's core.
 
 **The programs**
-- `skepd` — the daemon (below), and the operator's two tools over a board
-  directory — the inventory and the pull — two subcommands of the one
-  binary, run with no server.
+- `skepd` — the daemon (below), over its core, `skep-core`, and the
+  operator's two tools over a board directory — the inventory and the pull
+  — two subcommands of the one binary, run with no server.
 - `skep-mcp` — a stdio adapter for agent harnesses.
 - `skep-resolve` — the verifying registry resolver, a LIBRARY a client
   embeds (the frontend, the `skep` command, a node's federation
@@ -2605,11 +2625,157 @@ are `skepd`'s (`tests/it`: `blob_routes`, `blob_fetch`, `media`, `pruner`,
 `deposit_class`, and `hazard`'s media share), which spawn the daemon they
 drive; its own `tests/it/` is `tidy` alone.
 
+## The daemon's core, `skep-core`
+
+`skep-core` holds what the daemon decides about a request between the
+socket and the engine, in a crate of its own below `skepd`: who may act on
+a board (the session layer), what every write rides and leaves behind (the
+commits: the one door, the record, the feed, the published head) and the
+wire's JSON grammar (the codec) — the collaborators the daemon composes
+behind its router. It transports nothing: the routes, the replies, the
+history service, the operator's tools and the process are `skepd`'s. It
+depends on the engine — the daemon's two crates are what the Engine
+Composition Contract permits, the as-built list kept once in
+`skep-engine`'s crate doc — reading the one concrete `World` (its identity
+slice, the read class of a principal, the publication bit, the genesis
+floor) and driving the kernel and the stores through `Engine`; and on
+`skep-media` for the cell index the commits enter at every commit that
+mints a cell. Its modules are declared in `src/lib.rs`, each with a line
+saying what it holds; its public surface is its `README.md`'s list, which
+`tests/it/tidy.rs` holds every `pub` item to.
+
+Its modules form three layers. A module names only modules in its own
+layer or below it, never above; `crates/skep-core/tests/it/tidy.rs` checks
+it:
+
+1. **The session layer** — `auth.rs` and the modules under `auth/`.
+   Sessions and the signed handshake (`auth/session.rs`), the policy checks
+   on every write (`auth/policy/`: the plain sequence's admission, the
+   credential sequence's precheck with the record grade, the registry
+   sequence's admission — `auth/policy/registry.rs`, the record grade for
+   registry records, whose trial is the credential grade's own, and the
+   seeding check the daemon's open runs ahead of every genesis — and the
+   write-path check — the entry signature (`auth/policy/attestation.rs`,
+   over the frame `auth/entry.rs` composes), whose one exempt `insert` is
+   a signed credential or registry record into a doc 1; and beside them
+   `auth/policy/upload.rs`, the session layer's gate on who may take bytes
+   into the blob store at all), the readers of the World's identity slice
+   (the key table is the engine's, read off the head snapshot each route
+   already holds; the daemon holds no fold of its own), signature
+   verification — `skep-signature` is the one crate that links the
+   signature libraries; the core calls its verify — and the
+   configuration: the options and the mode (`auth/options.rs`), the two
+   origin sets (`auth/origin.rs`), the node prefix (`auth/prefix.rs`), the
+   blocked-prefix list (`auth/blocked.rs`), the credential write lock
+   (`auth/lock.rs`), the credential memo (`auth/memo.rs`) and the entropy
+   the handshake mints from (`auth/entropy.rs`). It names the commits for
+   one thing: the board term, `H.1`'s pair, read off the published head.
+2. **The commits** — `commits.rs`. The single point every write passes
+   through, one at a time — each execute under a catch of the door's own,
+   so a write that panics after the kernel committed it is recorded on the
+   feed as a classified bare entry with its signature's line, and
+   announced, before the panic re-raises to the daemon's handler catch: no
+   hole in the feed, nothing halted — and the head writer
+   (`commits/head.rs`, which commits through the commits' own door — a
+   refused head said ONCE PER CAUSE with the position its head would have
+   named and the refusal as the wire renders a rejection, the code and the
+   detail through M10's own lowering and never a type name, a memo under
+   the writer's state lock holding the last cause said, and cleared by one
+   `landing:` line naming the landed position and the first refused one
+   when a head next lands). Beneath it, and reachable only from it:
+   - `commits/feed.rs` — the change feed, and the one compaction of its
+     five files to the journal's reclaim floor, run at open and by the
+     daemon's checkpoint thread after any landing, its own or a backstop's,
+     its answer naming each file that stood; beneath it,
+     `commits/feed/derived.rs` keeps the feed's derived index files — a
+     torn tail is cut at open and said with the last trusted position, the
+     bytes and that the cut part is re-derived — `commits.log`'s own cut
+     part by a walk BEHIND THE LISTENER on a thread of the commits' own,
+     reads served and writes admitted meanwhile, `/changes` refusing pages
+     into the uncovered region `feed_rebuilding` until ONE rewrite lands
+     it; malformed names and unreadable slots are said once per open with
+     a count and the first position; a rewrite that fails past its rename
+     stops its file for the uptime, said once per uptime — and
+     `commits/feed/attest.rs` the attest store, the marker slot mirrored
+     per attested commit, never compacted, its missing tail rebuilt at open
+     in one scan of the kernel's markers above the store's fence;
+   - `commits/sidecar.rs` — `commits.log`, the daemon's record of what it
+     committed, for whom, and whether the entry was signed — and, on a
+     bare line, the journal's answer for the row's op and terms;
+   - `commits/classify.rs` — which documents a commit touched, and which
+     of its op's terms the journal can name for a bare position — the one
+     place the feed asks the world anything.
+
+   The cell index is `skep-media`'s (§The media resource), entered by
+   `commits.rs`'s `record` at every commit that mints a cell — a sideways
+   step at this layer into the crate below.
+3. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
+   format: parse, and marshal — its key-sorting `obj` and the lowercase
+   hex pair are `skep-util`'s, taken as every other file takes them),
+   `serial.rs` (the write-serialization lock and its guard) and
+   `limits.rs` (the six bounds the core reads: the request-body cap and
+   the edge pairs' hold-down, which the daemon reads too, the standing
+   line's cadence, the feed walk's progress cadence and the feed's page
+   byte budget; the daemon's own seven are `skepd`'s `limits.rs`, the
+   media resource's numbers `skep_media::limits`'s, each `pub` for its
+   reader). None of these knows anything of the session layer or the
+   commits; a leaf imports only leaves — and a leaf in another crate is a
+   leaf: `skep-util`'s `permits`, `notice` and `json`.
+
+Rules that hold across its files:
+
+- **One door for commits.** Every write to the world goes through
+  `commits`, one at a time. Only the commits record to the feed and to
+  `commits.log`.
+- **The key table is the World's.** The identity slice — every account's
+  key set and the board's claim — lives in `World`, stepped by the engine
+  at each credential deposit's commit and checkpointed with the world
+  (AUTH-2.79–2.88). Nothing rebuilds it from the deposits: the fold's
+  verdicts depend on the order the deposits committed in, and the journal
+  is the one record of that order. A checkpoint written before the slice
+  that holds credential deposits is not a start point; the open steps back
+  to one that is, or to genesis while the journal reaches it, and replays.
+  So at its FIRST OPEN under a build that writes the slice, a board whose
+  journal still reaches genesis replays from genesis — correct, once,
+  slower — and a board past genesis-reachability (two retained
+  checkpoints of 1,024 commits) refuses to serve until regenerated or
+  restored: dev boards regenerate, a served board is the owner's call. A
+  slice-less checkpoint with no credential deposit loads as the empty
+  table, which is the true one.
+- **The guard names the lock.** A function whose contract is "under the
+  serialization lock" takes the guard, `SerialGuard`, in its arguments
+  (`serial.rs`): the commits' door and the head writer's turn hold it by
+  type, as `LockWrite` names the credential lock's exclusive arm — so a
+  caller that lacks the lock cannot spell the call.
+- **The surface is the daemon's need.** Every `pub` item is one the
+  daemon takes, listed in `README.md`, or a hook, `#[doc(hidden)]` under
+  `test-hooks`; the producers, the feed's files and the head writer stay
+  the crate's own. `tests/it/tidy.rs` checks it.
+- **The test seam is a feature.** `test-hooks` (default off) compiles in
+  the feed walk's hold, its notice and its panic arm, the walk's pending
+  region and progress cadence, the head writer's clock and its one
+  refusal, the feed's and the attest store's failure arms and the attest
+  store's sync mark, the lines said and the checkpoint signal's tick, and
+  forwards nothing; the daemon's hooks (`server/hooks.rs`) are the doors a
+  suite reaches them through, and `scripts/gate-full.sh` builds the
+  library and its docs without it.
+
+Its unit suites sit beside their code: `auth/blocked/tests.rs`,
+`auth/session/tests.rs` (which opens a real engine), the inline suites of
+`auth/policy/*`, `commits/tests.rs` (which opens one too),
+`commits/sidecar/tests.rs`, `commits/feed/derived/tests.rs` and
+`codec/tests.rs`. Its integration suites — the session layer, the commits
+and the head over a served daemon — are `skepd`'s (`tests/it`), which spawn
+the daemon they drive; its own `tests/it/` is `codec_roundtrip`, the wire
+grammar's round trips, and `tidy`.
+
 ## The daemon, `skepd`
 
-`skepd` owns three decisions of its own: the session layer's gates (who
-may act, and what a credential write may do), the cadence of the published
-head, and the media door (`skep-media`'s step, which the daemon's plain
+`skepd` owns three decisions of its own, two of them its core's code
+(`skep-core`'s session layer and head writer, run by this daemon): the
+session layer's gates (who may act, and what a credential write may do),
+the cadence of the published head, and the media door (`skep-media`'s
+step, which the daemon's plain
 write sequence runs: whether a value a write carries is a media cell —
 a picture's reference cell or a blind document's — by one classification,
 the cap bounding the parse and never the classification, and what a write
@@ -2628,9 +2794,10 @@ through its gate, `skep-blobs`. Its listener binds the address `--bind`
 the hosted image — and the peer rule reads the socket, never the bind, so
 the flag widens who can connect and nothing of who may act.
 
-Its modules form six layers. A module names only modules in its own layer
-or below it, never above; `crates/skepd/tests/it/tidy.rs` checks it. A
-write passes down through them in this order:
+Its modules form four layers, and below them its core's three (§The
+daemon's core). A module names only modules in its own layer or below it,
+never above; `crates/skepd/tests/it/tidy.rs` checks it. A write passes
+down through them in this order:
 
 ```
   HTTP request
@@ -2679,30 +2846,26 @@ write passes down through them in this order:
 │                    its streaming body · the class-scan  │
 │                    pool                                 │
 ├─────────────────────────────────────────────────────────┤
-│ 4 SESSION LAYER    auth.rs · auth/                      │
-│                    sessions · policy · slice readers ·  │
-│                    signature check                      │
-├─────────────────────────────────────────────────────────┤
-│ 5 WRITE PATH       write_path.rs  (one write at a time) │
-│                    ├── head.rs      the head writer     │
-│                    ├── feed.rs      change feed, indexes│
-│                    │                the attest store    │
-│                    ├── sidecar.rs   commits.log         │
-│                    └── classify.rs  a commit's documents│
+│ 4 LEAVES           history · limits (the daemon's seven)│
+│   SKEP-CORE        the daemon's core, a crate of its    │
+│                    own below: the session layer · the   │
+│                    commits (the door, the feed, the     │
+│                    head) · the codec · the bounds · the │
+│                    lock (§The daemon's core)            │
 │   SKEP-MEDIA       the media resource, a crate of its   │
-│                    own beside the write path: the media │
+│                    own beside the commits: the media    │
 │                    door · the gate over skep-blobs ·    │
 │                    the cell index · the pruner's pass · │
 │                    the fetch's composed order · the     │
 │                    upload setting and the upload pool   │
 │                    (§The media resource)                │
-├─────────────────────────────────────────────────────────┤
-│ 6 LEAVES           codec · history · serial · limits    │
 │   SKEP-UTIL        permits · notice · json — the support│
-│                    crate below, shared with skep-media  │
+│                    crate below, shared with both        │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
+  skep-core    →  the session layer, the commits, the codec
+                  →  skep-engine, skep-media
   skep-engine  →  the stores  →  skep-kernel (journal)
   skep-media   →  the door, the gate, the index, the pruner, the fetch
                   →  skep-blobs, and the stores through the world it is handed
@@ -2861,98 +3024,62 @@ the store's install — nothing above their own layer.
    body's source and the slot it rides in, and the rules the request's
    headers and query obey), `server/scan.rs` (the class-scan pool): what
    the routes and the transport both speak.
-4. **The session layer** — `auth.rs` and the modules under `auth/`.
-   Sessions and the signed handshake, the policy checks on every write
-   (`auth/policy/`: the plain sequence's admission, the credential
-   sequence's precheck with the record grade, the registry sequence's
-   admission — `auth/policy/registry.rs`, the record grade for registry
-   records, whose trial is the credential grade's own, and the seeding
-   check the open runs ahead of every genesis — and the write-path check
-   — the entry signature, whose one exempt `insert` is a signed
-   credential or registry record into a doc 1; and beside them
-   `auth/policy/upload.rs`, the session layer's gate on who may take bytes
-   into the blob store at all), the readers of the World's
-   identity slice (the key table is the engine's, read off the head
-   snapshot each route already holds; the daemon holds no fold of its own),
-   signature verification — `skep-signature` is the one crate that links
-   the signature libraries; skepd calls its verify.
-5. **The write path** — `write_path.rs`. The single point every write
-   passes through, one at a time — each execute under a catch of the
-   door's own, so a write that panics after the kernel committed it is
-   recorded on the feed as a classified bare entry with its signature's
-   line, and announced, before the panic re-raises to the handler's
-   catch: no hole in the feed, nothing halted — and the head writer
-   (`write_path/head.rs`, which commits through the write path's own
-   door — a refused head said ONCE PER CAUSE with the position its head
-   would have named and the refusal as the wire renders a rejection, the
-   code and the detail through M10's own lowering and never a type name,
-   a memo under the writer's state lock holding the last cause said, and
-   cleared by one `landing:` line naming the landed position and the
-   first refused one when a head next lands). Beneath it, and reachable
-   only from it:
-   - `write_path/feed.rs` — the change feed, and the one compaction of its
-     five files to the journal's reclaim floor, run at open and by the
-     checkpoint thread after any landing, its own or a backstop's, its
-     answer naming each file that stood; beneath it,
-     `write_path/feed/derived.rs` keeps the feed's derived index files —
-     a torn tail is cut at open and said with the last trusted position,
-     the bytes and that the cut part is re-derived — `commits.log`'s own
-     cut part by a walk BEHIND THE LISTENER on a thread of the write
-     path's, reads served and writes admitted meanwhile, `/changes`
-     refusing pages into the uncovered region `feed_rebuilding` until ONE
-     rewrite lands it; malformed names and
-     unreadable slots are said once per open with a count and the first
-     position; a rewrite that fails past its rename stops its file for the
-     uptime, said once per uptime — and `write_path/feed/attest.rs` the
-     attest store, the marker slot mirrored per attested commit, never
-     compacted, its missing tail rebuilt at open in one scan of the
-     kernel's markers above the store's fence;
-   - `write_path/sidecar.rs` — `commits.log`, the daemon's record of what
-     it committed, for whom, and whether the entry was signed — and, on a
-     bare line, the journal's answer for the row's op and terms;
-   - `write_path/classify.rs` — which documents a commit touched, and
-     which of its op's terms the journal can name for a bare position —
-     the one place the feed asks the world anything.
+4. **The leaves** — `history.rs` (reading the world at an earlier
+   position) and `limits.rs` (the daemon's seven bounds: the small-body
+   cap, the change feed's two page-size bounds, and the blob route's
+   bounds — the streaming arm's chunk, its two deadlines, the pruner's
+   cadence; the six the core reads are `skep_core::limits`'s, two of them
+   — the request-body cap and the edge pairs' hold-down — read here too,
+   and the media resource's own numbers, the two pools' counts among them,
+   are `skep-media`'s `limits`, the daemon taking the ones it reads from
+   there, each `pub` for it). Neither knows anything about the daemon; a
+   leaf imports only leaves — and a leaf in another crate is a leaf: the
+   counting permit the five bounded pools use and the operator's log line
+   are `skep-util`'s `permits` and `notice`, the support crate below this
+   one (§The support crate); the codec and the serialization lock, once
+   leaves here, are `skep-core`'s, and the two cells `skep-media`'s.
 
-   Beside the write path, at the same layer, THE MEDIA RESOURCE is
-   `skep-media`'s (§The media resource): the media door, the one step the
-   plain write sequence takes between its admission and the commit for a
-   value naming a media kind, which reads the index, the lease and the
-   file through the gate — why it is a step of its own and never a
-   producer of the session layer's admission; the gate the PUT's routes
-   reach as `op.rs` reaches the write path; the cell index, entered by
-   `write_path.rs`'s `record` at every commit that mints a cell — a
-   sideways step at this layer — and read by the resource; the pruner's
-   pass, run from the routes under the credential lock's write arm; and
-   the fetch's composed order, which `server/blob_routes.rs` runs for
-   `GET /blob?i=` and the transport streams. The daemon instantiates the
-   crate at its `World` and composes with it: `MediaOptions`, the upload
-   setting with the source it was set from (`skep-util`'s `Source` — the
-   default, the flag, the variable, as the binary's parse recorded it),
-   rides `Daemon::open_configured`; the setting is echoed on `/health` and
-   the open's report names it with its source;
-   the deposit read is a route helper of `server/blob_routes.rs` over the
-   gate's reads; the floor is sized at the open off the start point's
-   header — the base the open loaded, never a skipped header's claim —
-   and re-read by the checkpoint thread after any landing, its own or a
-   backstop's; and the upload and fetch pools are counted into the
-   worker minimum beside the three pools of the daemon's own — the
-   reconstruction budget, the class-scan pool and the write pool.
-6. **The leaves** — `codec.rs` with `codec/marshal.rs` (the JSON wire
-   format: parse, and marshal — its key-sorting `obj` and the lowercase
-   hex pair are `skep-util`'s, taken as every other file takes them),
-   `history.rs` (reading the world at an earlier position), `serial.rs`
-   (the write-serialization lock and its guard) and `limits.rs` (request
-   body caps, the change feed's page bounds, and the blob route's bounds
-   that are the daemon's — the streaming arm's chunk, its two deadlines,
-   the pruner's cadence; the media resource's own numbers, the two pools'
-   counts among them, are `skep-media`'s `limits`, the daemon taking the
-   ones it reads from there, each `pub` for it). None of these knows
-   anything about the daemon; a leaf imports only leaves — and a leaf in
-   another crate is a leaf: the counting permit the five bounded pools use
-   and the operator's log line are `skep-util`'s `permits` and `notice`,
-   the support crate below this one (§The support crate), and the two
-   cells, once leaves here, are `skep-media`'s (§The media resource).
+Below the daemon's four layers, its core and its media resource, two
+crates the daemon composes with:
+
+- **The session layer** is `skep-core`'s `auth` (§The daemon's core):
+  sessions and the signed handshake, the policy checks on every write —
+  the plain sequence's admission, the credential sequence's precheck, the
+  registry sequence's admission and the seeding check the open runs ahead
+  of every genesis, the write-path check, the upload gate — the readers of
+  the World's identity slice and the signature verification. `AuthState`
+  is a field of `Daemon`, opened by `server.rs` over the recovered world;
+  the routes resolve the caller through it and run its checks.
+- **The write path** is `skep-core`'s `commits` (§The daemon's core): the
+  one door every write passes through, one at a time, the head writer
+  behind it, the change feed and its five files, the attest store.
+  `Commits` is a field of `Daemon`, opened by `server.rs` ahead of the
+  routes and driven by `op.rs` — resolve, check, commit, record, then the
+  head writer's turn — under the guard `serial_lock` answers; its
+  checkpoint signal is what the transport's checkpoint thread waits on.
+- **The media resource** is `skep-media`'s (§The media resource), beside
+  the commits: the media door, the one step the plain write sequence
+  takes between its admission and the commit for a value naming a media
+  kind, which reads the index, the lease and the file through the gate —
+  why it is a step of its own and never a producer of the session layer's
+  admission; the gate the PUT's routes reach as `op.rs` reaches the
+  commits; the cell index, entered by the commits' `record` at every
+  commit that mints a cell and read by the resource; the pruner's pass,
+  run from the routes under the credential lock's write arm; and the
+  fetch's composed order, which `server/blob_routes.rs` runs for `GET
+  /blob?i=` and the transport streams. The daemon instantiates the crate
+  at its `World` and composes with it: `MediaOptions`, the upload setting
+  with the source it was set from (`skep-util`'s `Source` — the default,
+  the flag, the variable, as the binary's parse recorded it), rides
+  `Daemon::open_configured`; the setting is echoed on `/health` and the
+  open's report names it with its source; the deposit read is a route
+  helper of `server/blob_routes.rs` over the gate's reads; the floor is
+  sized at the open off the start point's header — the base the open
+  loaded, never a skipped header's claim — and re-read by the checkpoint
+  thread after any landing, its own or a backstop's; and the upload and
+  fetch pools are counted into the worker minimum beside the three pools
+  of the daemon's own — the reconstruction budget, the class-scan pool and
+  the write pool.
 
 `lib.rs` declares the daemon's modules in layer order, then the fuzz
 harness and the crate's public surface; `main.rs` is the binary — the
@@ -2974,7 +3101,7 @@ imports it.
 |---|---|---|---|
 | `observe` | on | `GET /dump`, the engine's world dump | every build; OFF in `scripts/gate-full.sh`'s `--no-default-features` checks |
 | `client` | off | `GET /`, the embedded GUEST READER (read-only), so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
-| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, three seams in other crates: `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call), `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) and `skep-kernel`'s (the write-fault seam: the next checkpoint write, journal append, barrier or repair failing with a named `io::ErrorKind`, or a panic in the checkpoint write, through the kernel's own `#[doc(hidden)]` doors) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
+| `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, four seams in other crates: `skep-core`'s `test-hooks` (the feed walk's hold, notice and panic arm, the head writer's clock and refusal, the feed's and the attest store's failure arms, the lines said, the checkpoint signal's tick — the surface the daemon's hooks on its core call; it forwards nothing), `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call), `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) and `skep-kernel`'s (the write-fault seam: the next checkpoint write, journal append, barrier or repair failing with a named `io::ErrorKind`, or a panic in the checkpoint write, through the kernel's own `#[doc(hidden)]` doors) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
 | `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer, and skep-provision likewise for the record's decode | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every workspace build (skep-client's default `acting`) and every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it, and that skep-provision's shipped build resolves it off |
 | `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks — every item whose doc opens `TEST HOOK`, hidden from the docs, named together in the crate's `src/hooks.rs` | every test build (its self dev-dependency, and skepd's and skep-mcp's dev-dependencies on it) |
 
@@ -3015,11 +3142,9 @@ imports it.
   leaves, `skep-util`'s among them. Code names an in-crate item by its
   home module, never through
   the crate root's re-exports. `crates/skepd/tests/it/tidy.rs` checks all
-  of it, and `crates/skep-media/tests/it/tidy.rs` the media crate's two
-  layers the same way.
-- **One write path.** Every write to the world goes through
-  `write_path`, one at a time. Only the write path records to the feed and
-  to `commits.log`.
+  of it, `crates/skep-core/tests/it/tidy.rs` the core's three layers and
+  `crates/skep-media/tests/it/tidy.rs` the media crate's two layers the
+  same way.
 - **The PUT takes no `Serial`.** A blob upload commits nothing to the
   journal, so the write-serialization lock has nothing to order for it:
   `skep-media` and `server/blob_routes.rs` never name `serial`. What the
@@ -3041,7 +3166,9 @@ imports it.
   naming the directory, the mode found and the `chmod 700` that fixes it,
   repairing nothing. The journal and checkpoints
   are the kernel's — its `checkpoint.tmp` included, which the kernel
-  removes at open. The daemon's own files are `commits.log` — its
+  removes at open. The daemon's own files — written by its core's code,
+  `skep-core`'s `commits`, and the daemon's files all the same, under the
+  daemon's data directory and lifetime — are `commits.log` — its
   testimony about what it committed, for whom, and whether the entry was
   signed — the feed's derived index files, projections of that testimony
   and the journal, rebuilt from them on loss, `commits.log`'s own
@@ -3068,21 +3195,6 @@ imports it.
   lost lease as no lease, cured by a re-PUT), backed up with the board
   directory, the journal copied first. It never writes anything about
   the world outside the kernel.
-- **The key table is the World's.** The identity slice — every account's
-  key set and the board's claim — lives in `World`, stepped by the engine
-  at each credential deposit's commit and checkpointed with the world
-  (AUTH-2.79–2.88). Nothing rebuilds it from the deposits: the fold's
-  verdicts depend on the order the deposits committed in, and the journal
-  is the one record of that order. A checkpoint written before the slice
-  that holds credential deposits is not a start point; the open steps back
-  to one that is, or to genesis while the journal reaches it, and replays.
-  So at its FIRST OPEN under a build that writes the slice, a board whose
-  journal still reaches genesis replays from genesis — correct, once,
-  slower — and a board past genesis-reachability (two retained
-  checkpoints of 1,024 commits) refuses to serve until regenerated or
-  restored: dev boards regenerate, a served board is the owner's call. A
-  slice-less checkpoint with no credential deposit loads as the empty
-  table, which is the true one.
 - **Nothing is overwritten.** Content, links and journal entries are
   append-only. A removal is a new record, not a deletion.
 - **The wire is a contract.** `docs/wire.md` is what clients build

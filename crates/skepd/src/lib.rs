@@ -1,39 +1,43 @@
 //! # skepd — the skep daemon
 //!
-//! The one thing permitted to depend on the engine (Engine Composition
-//! Contract): a long-running process owning ONE `World`, serving the full
-//! M10 operation surface over HTTP/JSON to multiple concurrent local
-//! clients. **skepd owns no semantics** — every decision worth making was
-//! made in a store, save three the spec gives the daemon: the session layer's
-//! gates, the PUBLISHED HEAD's cadence (PUB-6.65) — when the board's own
-//! daemon writes the head document `H`, the one write it makes on its own
-//! initiative — and the MEDIA DOOR (media lane A; `skep-media`'s, run by
-//! this daemon's plain write sequence): whether a value a write carries is
-//! a picture's reference cell, parsed by the one parser, and what a write
-//! that would mint one is answered. This crate is the wire codec, the
-//! session layer, the head writer, the media door's one caller, the
-//! process, and the kernel's configuration:
+//! The daemon — this crate over its core, `skep-core` — is what is permitted
+//! to depend on the engine (Engine Composition Contract; the as-built list
+//! of the engine's dependents is `skep-engine`'s crate doc): one
+//! long-running process owning ONE `World`, serving the full M10 operation
+//! surface over HTTP/JSON to multiple concurrent local clients. **skepd
+//! owns no semantics** — every decision worth making was made in a store,
+//! save three the spec gives the daemon, two of them its core's: the
+//! session layer's gates, the PUBLISHED HEAD's cadence (PUB-6.65) — when
+//! the board's own daemon writes the head document `H`, the one write it
+//! makes on its own initiative — and the MEDIA DOOR (media lane A;
+//! `skep-media`'s, run by this daemon's plain write sequence): whether a
+//! value a write carries is a picture's reference cell, parsed by the one
+//! parser, and what a write that would mint one is answered. This crate is
+//! the router and the transport over its core, the media door's one
+//! caller, the process, and the kernel's configuration:
 //!
-//! * [`JsonCodec`] — the one concrete `Codec` (M10's seam): JSON frames in,
-//!   deterministic JSON responses out. The byte conventions are the
-//!   cross-client contract in `skep/docs/wire.md`, whose examples the tests
-//!   assert.
-//! * `auth/` — the AUTH session layer (wire v7): the two origin sets, the
-//!   challenge/response handshake, the sessions store and per-request
-//!   resolution, the credential write lock and the ordered refusal
-//!   producers it scopes, the signed-ops write-path check and the ENTRY
-//!   frame it verifies a presented `attest` over (the hybrid signature's
-//!   rules are `skep-signature`'s, the one crate that links the signature
-//!   libraries; skepd calls its verify), and the readers of the World's
-//!   identity slice — the key table the engine folds at each credential
-//!   commit and checkpoints with the world (AUTH-2.79), which the daemon
-//!   reads off the snapshot it holds and never rebuilds.
-//! * `write_path/` — the ONE ordering every write rides (commit, record,
+//! * [`JsonCodec`] — the one concrete `Codec` (M10's seam), `skep-core`'s,
+//!   re-exported here: JSON frames in, deterministic JSON responses out.
+//!   The byte conventions are the cross-client contract in
+//!   `skep/docs/wire.md`, whose examples the core's tests assert.
+//! * `skep-core` — the daemon's core, the crate below this one, which this
+//!   crate composes behind its router: the AUTH session layer (wire v7) —
+//!   the two origin sets, the challenge/response handshake, the sessions
+//!   store and per-request resolution, the credential write lock and the
+//!   ordered refusal producers it scopes, the signed-ops write-path check
+//!   and the ENTRY frame it verifies a presented `attest` over (the hybrid
+//!   signature's rules are `skep-signature`'s, the one crate that links the
+//!   signature libraries; the core calls its verify), and the readers of
+//!   the World's identity slice — the key table the engine folds at each
+//!   credential commit and checkpoints with the world (AUTH-2.79), which
+//!   the daemon reads off the snapshot it holds and never rebuilds — and
+//!   the commits: the ONE ordering every write rides (commit, record,
 //!   announce, under one serialization guard) and, behind it, the
 //!   PUBLISHED HEAD writer: `H` = `1.1.0.1.0.2` written as a new published
 //!   version on the write path's own cadence, as the system account's
 //!   principal with no session, its commits testifying `"system"` on
-//!   `/changes` (wire.md §The other endpoints).
+//!   `/changes` (wire.md §The other endpoints). Its `README.md` lists the
+//!   surface this crate takes.
 //! * `skep-media` — the MEDIA DOOR (lane A) and, beside the write path, the
 //!   daemon's media resource (lane B), a crate of its own this daemon
 //!   instantiates at its `World`: the blob store `skep-blobs` opened under
@@ -88,8 +92,9 @@
 //! whichever first, DEFERRED to the daemon's own checkpoint thread, which
 //! runs them off the write path's guard, says a failure once, and compacts
 //! the change feed's files after each landing; two retained): genesis on a
-//! fresh data dir, recovery on an existing one. The only files this crate
-//! writes itself are the change feed's: `commits.log` — the wire-v6
+//! fresh data dir, recovery on an existing one. The only files the daemon
+//! writes itself — its core's code writes them, and they are the daemon's
+//! files — are the change feed's: `commits.log` — the wire-v6
 //! commit-metadata sidecar — its four derived sidecars (`feed-index.log`,
 //! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; wire v7.8,
 //! PUB-7.19), the attest store `feed-attest.log` (wire v7.11; signed ops),
@@ -103,7 +108,7 @@
 //! marker slot — the entry signature the feed serves as `attest` — and
 //! below the journal's reclaim floor, where the checkpoint holds no marker,
 //! it is that signature's only copy at the origin, kept and never compacted
-//! (`write_path/feed/attest.rs` states the class).
+//! (`skep-core`'s `commits/feed/attest.rs` states the class).
 
 #![forbid(unsafe_code)]
 
@@ -120,25 +125,20 @@ mod server;
 // themselves.
 pub mod tools;
 
-// The session layer.
-mod auth;
-
-// The write path: every commit, one at a time, and the published head.
-// Beside it, at its layer, THE MEDIA RESOURCE is `skep-media`'s — the media
-// door, the one step the plain write sequence takes for a value naming the
-// picture cell's kind; the gate the door and the PUT's routes read the blob
-// store through; the index, the pruner and the fetch; and, leaves beneath
-// them, the two cells — a crate below this one, generic over the world.
-mod write_path;
-
-// The leaves: none knows anything of the daemon. Two more leaves — the
-// permit pool the five bounded pools are built on and the operator's notice
-// line — and the codec's determinism helpers are `skep-util`'s, the support
-// crate below this one, shared with the media crate.
-mod codec;
+// The leaves: none knows anything of the daemon. Below them, crates: THE
+// DAEMON's CORE is `skep-core`'s — the session layer, the commits (every
+// commit, one at a time, and the published head), the wire codec, the six
+// bounds the core reads and the serialization lock, once layers of this
+// crate; beside the commits THE MEDIA RESOURCE is `skep-media`'s — the
+// media door, the one step the plain write sequence takes for a value
+// naming the picture cell's kind; the gate the door and the PUT's routes
+// read the blob store through; the index, the pruner and the fetch; and,
+// leaves beneath them, the two cells — generic over the world; and two more
+// leaves — the permit pool the five bounded pools are built on and the
+// operator's notice line — and the codec's determinism helpers are
+// `skep-util`'s, the support crate below all three.
 mod history;
 mod limits;
-mod serial;
 
 /// The shared fuzzing harness (hardening H2): the pure oracle and mutation
 /// logic the tier-1 `#[test]`s and the nightly libFuzzer targets both drive.
@@ -151,8 +151,20 @@ mod serial;
 #[doc(hidden)]
 pub mod fuzz_support;
 
-pub use auth::{AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound};
-pub use codec::JsonCodec;
+/// The session layer's options and the names its surface carries —
+/// [`AuthOptions`], the value [`Daemon::open_with`] takes, and
+/// [`PortAlreadyBound`], [`Origin`] and [`NotCanonical`], [`NodePrefix`] and
+/// [`NotANodePrefix`] — `skep-core`'s own types, re-exported so the daemon's
+/// callers keep the path they had when the session layer was a module of
+/// this crate: the binary's `main.rs`, the suites and the client crates name
+/// `skepd::Origin` and `skepd::AuthOptions` and depend on no core crate for
+/// them. [`Peer`], the session layer's too, rides the `server` line below.
+pub use skep_core::auth::{
+    AuthOptions, NodePrefix, NotANodePrefix, NotCanonical, Origin, PortAlreadyBound,
+};
+/// The wire codec, `skep-core`'s, re-exported for the same reason: the fuzz
+/// targets and the suites name `skepd::JsonCodec`.
+pub use skep_core::codec::JsonCodec;
 pub use server::{
     bind, body_cap, embed, serve, serve_bound, Body, Daemon, DaemonError, EmbedError, Fetch,
     HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, DEFAULT_WORKERS, MIN_WORKERS,
@@ -179,12 +191,12 @@ pub use skep_kernel::Step;
 /// [`Daemon::world_at`] answers with, why it refused, the failure
 /// [`Daemon::open`] reports, and the kernel refusal that failure carries —
 /// the `OpenError` [`DaemonError::Engine`]'s contract tells a retrying
-/// caller to match. Re-exported because skepd is the one thing permitted to
-/// depend on the engine (Engine Composition Contract) — a caller that must
-/// name any of the four would otherwise have to take that dependency itself,
-/// the one dependency this crate exists to hold alone; and one that took it
-/// at another version would hold a DIFFERENT `OpenError` from the one inside
-/// [`EngineError`], and its match would not compile.
+/// caller to match. Re-exported because the daemon's two crates are what is
+/// permitted to depend on the engine (Engine Composition Contract) — a
+/// caller that must name any of the four would otherwise have to take that
+/// dependency itself, which this crate holds on the daemon's behalf; and
+/// one that took it at another version would hold a DIFFERENT `OpenError`
+/// from the one inside [`EngineError`], and its match would not compile.
 ///
 /// M10's operation vocabulary is deliberately NOT re-exported: `Request`,
 /// `Response`, `Op` and the `Codec` trait belong to `skep-febe`, which any
@@ -222,7 +234,7 @@ pub use skep_media::limits::{DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE};
 /// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the
 /// reason the four above are and only where that method exists. Without
 /// it the method's return type is nameable only by depending on
-/// `skep-engine` — the dependency this crate holds alone — and only where
+/// `skep-engine` — the dependency the daemon's two crates hold — and only where
 /// feature unification happens to have turned that crate's `dump` feature
 /// on, which is what this crate's `observe` does.
 #[cfg(feature = "observe")]
@@ -259,12 +271,14 @@ pub use skep_util::permits::Permit;
 /// states it — so a private field that is not `Send` would revoke it with no
 /// public name changing. This is where that fails to compile instead.
 ///
-/// Every type this crate DEFINES and exports is listed. The ones it
-/// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`],
-/// [`OpenError`], [`SeedingRefusal`], and (under `observe`) the world dump —
-/// are not: those
-/// promises are upstream's to keep, and `Daemon: Send + Sync` already pins
-/// the ones this crate transitively rests on.
+/// Every type this crate DEFINES and exports is listed, and so are the
+/// core's types it keeps on the daemon's surface ([`JsonCodec`], the session
+/// layer's six, [`Peer`]): the daemon still promises them. The ones it
+/// re-exports from below the daemon — [`World`], [`Seq`], [`EngineError`],
+/// [`HistoryError`], [`OpenError`], [`SeedingRefusal`], and (under
+/// `observe`) the world dump — are not: those promises are upstream's to
+/// keep, and `Daemon: Send + Sync` already pins the ones this crate
+/// transitively rests on.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Skepd>();

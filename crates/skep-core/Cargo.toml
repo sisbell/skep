@@ -1,0 +1,106 @@
+[package]
+name = "skep-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The daemon's core: who may act on a board (the session layer), what every write rides and leaves behind (the commits: the one door, the record, the feed, the published head) and the wire's JSON grammar (the codec) — the collaborators skepd composes behind its router, and nothing of the transport."
+readme = "README.md"
+
+[features]
+# `test-hooks` compiles in the test seam: the feed walk's hold, its notice
+# and its panic arm, the head writer's clock and its one refusal, the feed's
+# and the attest store's failure arms and the attest store's sync mark, the
+# walk's pending region and its progress cadence, the lines said, the
+# checkpoint signal's tick — each `#[doc(hidden)]`, the surface the daemon's
+# own hooks (`skepd`'s `server/hooks.rs`) call — and turns on NOTHING in
+# another crate: nothing it gates names a kernel, blob-store or media hook
+# (the kernel's write-fault seam the daemon's hooks reach through the
+# engine's kernel, the media seam through the daemon's media hooks).
+# DEFAULT-OFF and never enabled by a shipped build: this crate's own tests
+# turn it on through the self dev-dependency below, and skepd's tests
+# through skepd's own `test-hooks`, which forwards it; `scripts/gate-full.sh`
+# checks the library and its docs without it, and `tests/it/tidy.rs` holds
+# every hook to the gate.
+test-hooks = []
+
+[dependencies]
+# The assembled engine, taken as the daemon takes it: the one concrete
+# `World` the session layer reads — its identity slice, the read class of a
+# principal, the publication bit, the genesis floor — and `Engine`,
+# `EngineStores` and the bounded replay `world_at` the commits drive the
+# kernel and the stores through; and the commons type pins
+# (`skep_engine::types`), VALUES the admission and the classifier refuse
+# at. `default-features = false`: the dump surface is the daemon's
+# (`observe`), never read here.
+skep-engine = { path = "../skep-engine", default-features = false }
+# M10 — the operation surface the commits execute: OperationSurface,
+# Op/Response, the Codec seam the wire codec fills, and the typed Rejection
+# model.
+skep-febe = { path = "../skep-febe" }
+# M2 — Seq, Snapshot, Kernel, and Attestation, the attested commit's marker
+# slot the attest store mirrors.
+skep-kernel = { path = "../skep-kernel" }
+# The wire value types the codec round-trips, each from its owning crate.
+skep-address = { path = "../skep-address" }
+skep-namespace = { path = "../skep-namespace" }
+skep-content = { path = "../skep-content" }
+skep-arrangement = { path = "../skep-arrangement" }
+skep-retrieval = { path = "../skep-retrieval" }
+skep-links = { path = "../skep-links" }
+skep-discovery = { path = "../skep-discovery" }
+# The AUTH identity vocabulary: the credential data model, key sets, the
+# classify oracle and the entry frame's rows. The fold itself is the
+# engine's — the World's identity slice (AUTH-2.79) — which the session
+# layer reads.
+skep-identity = { path = "../skep-identity" }
+# THE REGISTRY'S CORE AS VALUES: the twelve commons rows, the binding and
+# endpoint bodies under one canonical rule, and the seeding check — read
+# by the registry sequence's parse (`auth/policy/registry.rs`) and run by
+# the daemon's open ahead of every genesis.
+skep-registry = { path = "../skep-registry" }
+# THE MEDIA RESOURCE (media lanes A and B), the crate beside the commits:
+# the cell index the commits enter at every commit that mints a cell, and
+# the picture cell's cheap prefix test ahead of it.
+skep-media = { path = "../skep-media" }
+# THE SUPPORT CRATE below this one and the daemon — the three utilities
+# both take and neither owns: the edge tracker the challenge store holds
+# (the counting permit pool's companion), the operator's notice line, and
+# the codec's determinism helpers — the key-sorting `obj` every JSON object
+# goes through, lowercase hex and its exact inverse. It depends on nothing
+# of skep.
+skep-util = { path = "../skep-util" }
+# THE HYBRID ENTRY SIGNATURE's frozen rules (signed ops): `skep-signature` is
+# the one crate that links the signature libraries; the session layer calls
+# its verify (AUTH-2.2) — the session verify, the write-path check — and its
+# all-halves decode, the enrollment courtesy's. NO feature: its `sign` half
+# (the KDF, keygen, signing) stays out of the daemon's build, which holds no
+# signer (AUTH-2.89); the tests' line below turns it on for test builds
+# alone.
+skep-signature = { path = "../skep-signature" }
+# OS entropy for nonces and session tokens (AUTH-4.13: at least 128 bits per
+# token from a CryptoRng, never a per-process prefix plus a counter), and
+# the `CryptoRng` bound the auth surface's declared signatures carry.
+getrandom = "0.3"
+rand_core = "0.9"
+# JSON frames. The codec builds Values through `skep-util`'s key-sorting
+# `obj`, so marshal determinism never depends on serde_json's map backend.
+serde_json.workspace = true
+# Non-poisoning locks, used for EVERY lock this crate holds, for the reason
+# skepd's manifest gives: a panic under one releases it with the data as it
+# stands.
+parking_lot.workspace = true
+
+[dev-dependencies]
+# This crate with its seam on, so its unit tests reach the hooks (the house
+# form: skep-media, skep-blobs, skep-content, skep-arrangement,
+# skep-signature, skep-client each carry the line).
+skep-core = { path = ".", features = ["test-hooks"] }
+# The TEST SIGNER and its fixture hooks (the session layer itself only
+# verifies): three unit suites sign sessions and entries through
+# `HybridSigner::from_seed` and the seeded stream `SeededRng06`, which the
+# hooks supply. `skep-signature` is the one crate that links the signature
+# libraries, so no test names `ed25519-dalek`.
+skep-signature = { path = "../skep-signature", features = ["test-hooks"] }
+tempfile.workspace = true

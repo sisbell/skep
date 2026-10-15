@@ -14,8 +14,8 @@ use super::reply::{
     reason_phrase, refuse, Fetch, Reply, TransportError, FETCH_CONTENT_TYPE, SESSION_HEADER,
 };
 use super::request::{at_most_once, BodySource, HttpRequest};
-use crate::auth::session::Peer;
-use crate::codec::to_bytes;
+use skep_core::auth::session::Peer;
+use skep_core::codec::to_bytes;
 use crate::limits::BLOB_IDLE_BOUND;
 
 /// Socket read deadline for one request's head+body: a stalled local
@@ -39,7 +39,7 @@ pub(super) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// per-call socket deadline, renewed by any byte — so only this bounds
 /// SLOWNESS. Without it a peer sending (or draining) one byte per interval
 /// renews the socket deadline indefinitely and holds its worker for as long
-/// as it cares to: [`MAX_REQUEST_BODY`](crate::limits::MAX_REQUEST_BODY) at one byte per interval is years,
+/// as it cares to: [`MAX_REQUEST_BODY`](skep_core::limits::MAX_REQUEST_BODY) at one byte per interval is years,
 /// and `workers` such peers occupy the whole pool, leaving the daemon
 /// answering nothing with every structure inside it healthy. It is also
 /// what makes [`Skepd::shutdown`](super::Skepd::shutdown)'s bound true, since that stop joins a

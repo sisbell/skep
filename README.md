@@ -48,6 +48,7 @@ beside them, the differential-conformance harness.
 | `skep-http` | the plain HTTP/1.1 subset two programs speak over loopback: one request per connection read under the caller's caps, the response written with `Connection: close` — no CORS, no event stream, no cap of its own |
 | `skep-media` | the daemon's media resource: the cell's one parser, the media door, the gate over the blob store, the cell index, the pruner, the fetch — generic over the world, no engine |
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
+| `skep-core` | the daemon's core: the session layer, the commits (the door, the feed, the head), the wire codec; the daemon's two crates are what depends on the engine |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
 | `skep-mcp` | stdio MCP adapter for agent harnesses |
 | `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |

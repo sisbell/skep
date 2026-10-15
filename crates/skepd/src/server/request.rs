@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Instant;
 
-use crate::auth::session::Peer;
+use skep_core::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 
 /// One request, as [`Daemon::route`](super::Daemon::route) receives it and as the socket reader
@@ -41,7 +41,7 @@ use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 /// `origin` and `peer` are different in kind: a violation there is a SILENT
 /// WIDENING of the one privilege this daemon grants without a signature. An
 /// absent `origin` reads as "no `Origin` header", which
-/// [`crate::auth::session::bare_bind_allowed`] admits, so a caller that
+/// `skep_core::auth::session::bare_bind_allowed` admits, so a caller that
 /// does not forward the header removes the daemon-side fence; and a `peer`
 /// reported `Loopback` for a socket that is not one hands the bare bind to
 /// the network. A caller that CHOOSES between two `Origin` values, or two

@@ -8,9 +8,9 @@ use skep_media::door::MediaRefusal;
 use skep_media::serve::{Admitted, FetchRefusal, NamedBlob};
 use skep_util::json::obj;
 
-use crate::auth::policy::{CredentialRefusal, RegistryRefusal};
-use crate::auth::session::HandshakeRefusal;
-use crate::codec::{
+use skep_core::auth::policy::{CredentialRefusal, RegistryRefusal};
+use skep_core::auth::session::HandshakeRefusal;
+use skep_core::codec::{
     credential_refused_reply, op_name, registry_refused_reply, to_bytes, JsonCodec,
 };
 use crate::history::Unavailable;
@@ -218,7 +218,7 @@ pub enum Routed<'a> {
     /// `GET /events` — the server-sent commit stream (wire v4).
     ///
     /// Serviceable only through [`serve`](super::serve): following the
-    /// stream is `write_path/`'s and crate-private, so a caller routing by
+    /// stream is `skep_core::commits`' and private to it, so a caller routing by
     /// hand can answer this variant only by refusing the route. It and the
     /// admitted fetch ([`Routed::Fetch`]) are the answers the socket-free
     /// surface names and cannot serve.
@@ -348,7 +348,7 @@ pub(super) enum TransportError {
     /// The `/changes` query malformed or out of its range.
     ///
     /// It also covers a `limit` whose page from the given `since` would pass
-    /// the page byte budget (`crate::limits::MAX_CHANGES_PAGE_BYTES`): out of
+    /// the page byte budget (`skep_core::limits::MAX_CHANGES_PAGE_BYTES`): out of
     /// range for that fence, refused whole with `budget` and `fits` beside
     /// the name ([`refuse_over_budget`]) — the same code, so the armed set
     /// does not grow and the fuzz oracle's transcription stands.
@@ -391,7 +391,7 @@ pub(super) enum TransportError {
     MalformedBlob,
     /// An upload act refused by the session layer or the closed upload setting.
     ///
-    /// The session layer's refusal ([`crate::auth::policy::UploadRefusal`]:
+    /// The session layer's refusal ([`skep_core::auth::policy::UploadRefusal`]:
     /// a guest, an unclaimed board, a node-tier principal), or the closed
     /// upload setting's `uploads_closed` — `detail` names which.
     UploadRefused,

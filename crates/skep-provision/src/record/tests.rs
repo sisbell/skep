@@ -175,12 +175,12 @@ fn a_record_the_genesis_can_never_take_is_refused() {
 }
 
 /// THE GENESIS's REFUSALS ARE THE DAEMON's, READ BACK at test time from
-/// skepd's `src/auth/policy/credential.rs`: the cap [`MAX_GENESIS_KEYS`]
+/// the core's `crates/skep-core/src/auth/policy/credential.rs`: the cap [`MAX_GENESIS_KEYS`]
 /// restates, and the decode over one entry past it ahead of the count — so
 /// an edit to either there is a red test here until the copy follows it.
 #[test]
 fn the_genesis_refusals_copy_the_daemons_precheck_as_it_stands() {
-    let precheck = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skepd/src/auth/policy/credential.rs")).expect("skepd's credential precheck");
+    let precheck = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skep-core/src/auth/policy/credential.rs")).expect("skepd's credential precheck");
     let at = |spelling: &str| precheck.find(spelling).unwrap_or_else(|| panic!("skepd's precheck no longer spells the genesis's refusals as `record::admit` copies them: `{spelling}`"));
     at(&format!("const MAX_ENROLLED_KEYS: usize = {MAX_GENESIS_KEYS};"));
     at("const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;");

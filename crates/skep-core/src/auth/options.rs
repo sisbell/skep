@@ -1,0 +1,636 @@
+//! The session layer's configuration.
+//!
+//! It holds the options an operator supplies, what the daemon resolves from
+//! them once a port is bound, and the board's mode read off them.
+
+use std::collections::BTreeSet;
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
+
+use skep_util::source::Source;
+
+use super::blocked::BlockedPrefixes;
+use super::lock::LockWrite;
+use super::origin::{signed_origins, Origin};
+use super::prefix::NodePrefix;
+
+/// The daemon's session-layer configuration, as the operator supplies it.
+///
+/// It holds the local-trust flag (Phase A default on — a hosted image must
+/// set it affirmatively false, AUTH-4.57 (i)), the configured origins
+/// (AUTH-4.7: configure what the board is actually reachable at), the
+/// blocked-prefix supply, the node prefix, and the one dev setting —
+/// `allow_preview_keys` (AUTH-1.44), default off; and beside the flag and
+/// the prefix where each came from (`local_trust_source`,
+/// `node_prefix_source`), so the open's report names each setting with its
+/// source (`operations.md` §1, the open's report; §1.1 rows 19 and m14).
+///
+/// `#[non_exhaustive]`, paired with the [`Default`] below: a caller starts
+/// from the defaults and sets what it means to change, so a knob added
+/// later arrives at its default rather than breaking every construction.
+/// The *opposite* call from `skepd::HttpRequest`, deliberately — a field
+/// there is a fact about the request that a caller must supply, and one
+/// added silently would be answered from a default the caller never chose;
+/// here every field is an operator's option and abstention is the safe
+/// state, which is the whole shape of `local_trust`'s own rule.
+///
+/// From outside this crate that starting-and-setting is the mutation form:
+/// `#[non_exhaustive]` bars a struct expression, functional update syntax
+/// (`..Default::default()`) included, so the shape this file's own tests use
+/// is in-crate only.
+///
+/// ```
+/// use skep_core::auth::AuthOptions;
+///
+/// let mut opts = AuthOptions::default();
+/// opts.local_trust = false;
+/// // …and whatever else this caller means to change; a knob added later
+/// // arrives at its own default rather than at whatever a literal omitted.
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AuthOptions {
+    /// Whether bare binds are honored on loopback after the claim.
+    ///
+    /// True is `ClaimedPermissive`, false `Enforcing`. Pre-claim the flag is
+    /// not consulted: the board is `Unclaimed` whatever it says (`Mode::of`,
+    /// AUTH-4.26).
+    pub local_trust: bool,
+    /// Where `local_trust` came from, as the binary's parse recorded it.
+    ///
+    /// It is the default, the flag (`--local-trust` / `--no-local-trust`) or
+    /// the variable (`SKEPD_LOCAL_TRUST`), which the open's `auth:` line
+    /// names beside the flag's value (§1.1 m14); `Source::Default` from a
+    /// caller that sets the flag and names no source, which the line then
+    /// says.
+    pub local_trust_source: Source,
+    /// The configured origin set.
+    ///
+    /// It is the signed arm's whole set once claimed, unioned with the
+    /// loopback defaults on the bare arm.
+    ///
+    /// Deliberately not `origins`: `/health` publishes a field of that name
+    /// (AUTH-6.13) and it is the bare set — configured ∪ the three loopback
+    /// defaults — so copying that field back into this one re-admits the
+    /// defaults the claim-time drop exists to remove.
+    pub configured: Vec<Origin>,
+    /// The blocked-prefix list's supply (AUTH-1.44, AUTH-4.70).
+    ///
+    /// It is the file the operator maintains from the standing takedown
+    /// records of the board it fronts — `--blocked-prefixes <FILE>`. It is
+    /// supplied at every start, as `configured` is: a named file is read at
+    /// open, and one that cannot be read or is not a list fails the open, so
+    /// no restart starts the daemon on an empty list the standing records do
+    /// not support. It is re-issued while the daemon runs by replacing the
+    /// file; the format and the re-read are `BlockedSupply`'s. `None` is a
+    /// board whose operator supplies none — the notebook — and no prefix is
+    /// blocked.
+    ///
+    /// Deliberately not `blocked_prefixes`, as `configured` is deliberately
+    /// not `origins`: `blocked_prefixes` is `AuthConfig`'s read of the list
+    /// in force, and this is the path of the file that supplies it. The flag
+    /// keeps the list's name — `--blocked-prefixes` is what an operator
+    /// thinks about — and the field keeps the file's.
+    pub blocked_supply_path: Option<PathBuf>,
+    /// The board's full node prefix in the registry (REG-1.69).
+    ///
+    /// It is `--node-prefix 1.N`: egress and assertion config, per daemon,
+    /// supplied at every start as `configured` is and never a journaled
+    /// genesis fact, which is what lets the same board answer to a successor
+    /// under a fresh prefix — taken by a reconfigure and restart (REG-1.70).
+    /// In no record, journal, sidecar or fold. The one thing this daemon
+    /// decides by it: the blocked-prefix list's off-board test
+    /// (`BlockedPrefixes::installed_under`) — whether the list's configured
+    /// operator account is an account of this board — read against this
+    /// prefix and never against the local root `1`, under which every
+    /// address in the registry's global form would read as this board's own
+    /// (REG-1.66). `None` is a board that has not been told its prefix: the
+    /// notebook, or a hosted board mis-launched — and that test is then off,
+    /// every operator reading as on-board, the start-up log saying so.
+    ///
+    /// The form is [`NodePrefix`]'s, carried by the type: a `Some` is a node
+    /// address strictly under the root because nothing else can be built.
+    pub node_prefix: Option<NodePrefix>,
+    /// Where `node_prefix` came from.
+    ///
+    /// It is the flag (`--node-prefix`) or the variable
+    /// (`SKEPD_NODE_PREFIX`); `Source::Default` where none was supplied, and
+    /// from a caller that sets a prefix and names no source — which the
+    /// start-up line (`AuthConfig::node_prefix_line`) names beside the prefix
+    /// (§1.1 row 19).
+    pub node_prefix_source: Source,
+    /// The dev setting `allow_preview_keys` (AUTH-1.44; AUTH RES-206).
+    ///
+    /// Its flag is `--allow-preview-keys`. The daemon refuses enrollment of a
+    /// tag-3 key — a key of the preview row, `fndsa512-preview-ed25519` — as
+    /// `preview_key`, slot (4)'s first token (AUTH-3.44, AUTH-3.56), in every
+    /// enrolment record, a genesis included, unless this is on; the test
+    /// fixtures run with it on. Default off: tag 3 never reaches a served
+    /// board. It gates enrollment and nothing else — tag-3 verification stays
+    /// compiled in (the frozen-tag rule), the fold admits the row's keys as
+    /// syntax, and a tag-3 key already enrolled opens sessions and signs
+    /// entries as any other. Daemon config, never board state: in no record,
+    /// journal, sidecar or fold, and `/health` publishes nothing of it.
+    pub allow_preview_keys: bool,
+}
+
+impl Default for AuthOptions {
+    fn default() -> AuthOptions {
+        AuthOptions {
+            local_trust: true,
+            local_trust_source: Source::Default,
+            configured: Vec::new(),
+            blocked_supply_path: None,
+            node_prefix: None,
+            node_prefix_source: Source::Default,
+            allow_preview_keys: false,
+        }
+    }
+}
+
+/// The resolved configuration the auth surface reads.
+///
+/// It is the options plus the bound port. The port exists only once it is
+/// bound: `serve` sets it once the listener exists; a socket-free embedder
+/// that wants origin-set behavior calls `skepd::Daemon::bind_auth_port`
+/// itself. Until set there is no port and so no loopback defaults — origin
+/// membership then admits only what an explicit `--origin` names, which is
+/// the honest degenerate for a daemon that is not serving, and which
+/// [`AuthConfig::port`] says in its type rather than through a sentinel
+/// every reader has to carve around.
+///
+/// Beside the members the blocked-prefix list (AUTH-1.44): daemon config as
+/// `configured` is, never board state — in no record, journal, sidecar or
+/// fold — and the one member re-issued while the daemon runs, which is why
+/// it alone sits behind a lock. Read through [`AuthConfig::blocked_prefixes`]
+/// and replaced whole through `AuthConfig::install_blocked`, under the
+/// credential write lock — both here, beside the cell they are the only
+/// doors to. And the node prefix (REG-1.69), fixed at open as `configured`
+/// is: a fresh one is a reconfigure and restart (REG-1.70), so it sits
+/// behind no lock, and every install of the list reads the one in force.
+pub struct AuthConfig {
+    /// The `--local-trust` flag: bare loopback binds stay honored once
+    /// claimed.
+    pub local_trust: bool,
+    /// [`AuthOptions::local_trust_source`], as supplied.
+    ///
+    /// It is what the `auth:` line reads beside the flag.
+    local_trust_source: Source,
+    /// The configured origin set, as the options named it; fixed at open.
+    pub configured: BTreeSet<Origin>,
+    port: OnceLock<u16>,
+    /// The list in force.
+    ///
+    /// It is read through [`AuthConfig::blocked_prefixes`] and replaced
+    /// through [`AuthConfig::install_blocked`] alone — private, so that
+    /// guard-taking door is the only writer. The `RwLock` makes the swap of
+    /// one pointer safe for readers that hold no credential lock (the
+    /// handshake, the route level's `resolve`); what *orders* an install
+    /// against the writes it ends is the credential write lock its installer
+    /// holds, and names.
+    blocked: parking_lot::RwLock<Arc<BlockedPrefixes>>,
+    /// [`AuthOptions::node_prefix`], as supplied.
+    ///
+    /// `None` where the daemon was told none.
+    node_prefix: Option<NodePrefix>,
+    /// [`AuthOptions::node_prefix_source`], as supplied.
+    ///
+    /// It is what the start-up line reads beside the prefix.
+    node_prefix_source: Source,
+    /// [`AuthOptions::allow_preview_keys`], as supplied.
+    ///
+    /// It is the one setting the precheck's slot (4) reads (AUTH-3.15 as
+    /// RES-206 amends it).
+    pub allow_preview_keys: bool,
+}
+
+impl AuthConfig {
+    pub(super) fn new(opts: AuthOptions) -> AuthConfig {
+        AuthConfig {
+            local_trust: opts.local_trust,
+            local_trust_source: opts.local_trust_source,
+            configured: opts.configured.into_iter().collect(),
+            port: OnceLock::new(),
+            // Empty until [`AuthState::open`] installs the start-up supply.
+            blocked: parking_lot::RwLock::new(Arc::new(BlockedPrefixes::default())),
+            node_prefix: opts.node_prefix,
+            node_prefix_source: opts.node_prefix_source,
+            allow_preview_keys: opts.allow_preview_keys,
+        }
+    }
+
+    /// Returns the node prefix in force (REG-1.69).
+    ///
+    /// It is `None` where the daemon was told none. Its only readers are the
+    /// list's install and the log.
+    pub fn node_prefix(&self) -> Option<&NodePrefix> {
+        self.node_prefix.as_ref()
+    }
+
+    /// Returns the start-up line's text (`operations.md` §1.1 row 19).
+    ///
+    /// It names the node prefix in force with its source — `(--node-prefix)`
+    /// or `(SKEPD_NODE_PREFIX)`, the name alone, the line already saying the
+    /// value; `(the default)` from a caller that set one and named no source
+    /// — or its absence; said once, at start, whether or not a list is
+    /// supplied, because a hosted board launched without its prefix has its
+    /// off-board test off and would otherwise learn so only at its first
+    /// install.
+    pub fn node_prefix_line(&self) -> String {
+        match &self.node_prefix {
+            Some(prefix) => format!(
+                "node prefix {prefix} ({}): egress and assertion config, never journaled; the \
+                 blocked-prefix list's off-board test runs against it",
+                self.node_prefix_source.words("--node-prefix", "SKEPD_NODE_PREFIX")
+            ),
+            None => "no --node-prefix: the off-board test is off (every operator account reads \
+                     as this board's own); a hosted board must supply one"
+                .to_string(),
+        }
+    }
+
+    /// Returns the board's mode at a snapshot whose claim is `claimed`.
+    ///
+    /// It is [`Mode::of`] over this config, for the sites outside this module
+    /// that say the mode on the operator stream and can name the words but
+    /// not the type.
+    pub fn mode(&self, claimed: bool) -> Mode {
+        Mode::of(self, claimed)
+    }
+
+    /// Returns the open's-report `auth:` line (`operations.md` §1.1 m14).
+    ///
+    /// It is rendered here because this is where its state lives — the
+    /// convention `auth/` keeps for everything it publishes, the `/health`
+    /// object included: `auth: {unclaimed | CLAIMED-ENFORCING |
+    /// CLAIMED-PERMISSIVE} (--local-trust {on|off}, {source}); configured
+    /// origins {list | none}; signed origins {list}` — the mode derived from
+    /// the pair as AUTH-5.86 derives it ([`Mode::of`]), the flag's value and
+    /// its source beside it, the configured set, and the signed set as the
+    /// handshake admits it at this claim (`signed_origins`: the configured
+    /// set alone once claimed, else the bare set — the loopback defaults of
+    /// the bound port with the configured). Each set in one spelling: the
+    /// origins' canonical text, in the set's order, `none` where the set is
+    /// empty — a claimed board with no configured origin has an empty signed
+    /// set, which row 17's warning names the consequence of. The one line
+    /// that names a mistyped `--origin` on an `Enforcing` board, where every
+    /// signed session is otherwise refused in silence.
+    pub fn auth_line(&self, claimed: bool) -> String {
+        let (flag, variable) = if self.local_trust {
+            ("--local-trust", "SKEPD_LOCAL_TRUST=true")
+        } else {
+            ("--no-local-trust", "SKEPD_LOCAL_TRUST=false")
+        };
+        let list = |set: &BTreeSet<Origin>| -> String {
+            if set.is_empty() {
+                "none".to_string()
+            } else {
+                set.iter().map(Origin::as_str).collect::<Vec<_>>().join(", ")
+            }
+        };
+        format!(
+            "auth: {} (--local-trust {}, {}); configured origins {}; signed origins {}",
+            Mode::of(self, claimed),
+            if self.local_trust { "on" } else { "off" },
+            self.local_trust_source.words(flag, variable),
+            list(&self.configured),
+            list(&signed_origins(self, claimed)),
+        )
+    }
+
+    /// Returns whether the config is `ClaimedPermissive` when `claimed`.
+    ///
+    /// `claimed` is the claim of the snapshot asked about. This is the one bit
+    /// the standing line re-says once an hour while it stands
+    /// (`operations.md` §1, the rates, `CLAIMED-PERMISSIVE`), read as
+    /// [`Mode::of`] reads the pair rather than as the conjunction that
+    /// computes it. A method and not a `Mode` at the caller because this
+    /// module is private to the session layer: the daemon's tick can reach
+    /// the config it holds and no type of this file's.
+    pub fn claimed_permissive(&self, claimed: bool) -> bool {
+        Mode::of(self, claimed) == Mode::ClaimedPermissive
+    }
+
+    /// Returns the list in force — AUTH-4.36 step 4b's `blocked_prefixes(cfg)`.
+    ///
+    /// It is a pure read of the cell `AuthConfig::install_blocked`
+    /// replaces. By value (one pointer clone), so no reader holds the cell's
+    /// lock across its own work and an install never waits on a handshake's
+    /// verify loop.
+    pub fn blocked_prefixes(&self) -> Arc<BlockedPrefixes> {
+        Arc::clone(&self.blocked.read())
+    }
+
+    /// Installs `list` whole and atomically as the list in force (AUTH-4.70).
+    ///
+    /// It runs under the credential write lock the caller holds and names
+    /// here (AUTH-3.3) — that install being the list's commit. The guard is
+    /// the obligation, not a decoration: every session-authenticated write
+    /// re-resolves under that lock, so a covered session's write that took
+    /// the lock first lands *before* this install and one arriving after
+    /// meets its death (AUTH-4.63's second trigger) — no `/changes` entry of
+    /// a killed session carries a position after it.
+    pub(super) fn install_blocked(&self, _lock: &LockWrite<'_>, list: BlockedPrefixes) {
+        *self.blocked.write() = Arc::new(list);
+    }
+
+    /// Records the bound port, which is set once.
+    ///
+    /// A second bind would otherwise be a silent no-op. `skepd::serve` and
+    /// a socket-free embedder are the two callers, and they are exclusive by
+    /// design.
+    ///
+    /// # Errors
+    ///
+    /// [`PortAlreadyBound`] where a port is already bound. It carries the
+    /// port already bound — the number every live session's origin set was
+    /// established against, which is what a caller disagreeing about it
+    /// needs to be told.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `port` is 0: it stops here loudly rather than being
+    /// admitted — the posture `skepd::serve` takes on a zero worker count,
+    /// for the same reason: it is a caller's bug and not an outcome.
+    /// [`AuthConfig::port`] states that zero is not a port this daemon can
+    /// serve on, and zero is the one value that makes `Origin::from_parts`
+    /// build text [`Origin::parse`] refuses — `http://127.0.0.1:0` fails the
+    /// leading-zero clause. Admitted, it fires that constructor's debug
+    /// assert on every request that reads a derived origin, and in release
+    /// publishes a `/health` origin set whose members this daemon's own
+    /// parser rejects and no `Origin` header can match. `serve` cannot reach
+    /// it (the OS never assigns port 0 to a bound listener), so the one
+    /// caller is the socket-free embedder.
+    pub fn bind_port(&self, port: u16) -> Result<(), PortAlreadyBound> {
+        assert!(port != 0, "port 0 is not a port this daemon can serve on");
+        self.port.set(port).map_err(|_| {
+            PortAlreadyBound(self.port().expect("set once, so a refusal means one is bound"))
+        })
+    }
+
+    /// Returns the bound port, or `None` until one is bound.
+    ///
+    /// An `Option` rather than a zero: port 0 is not a port this daemon can
+    /// serve on, and a sentinel would make every reader of a derived origin
+    /// carve the case out for itself.
+    pub fn port(&self) -> Option<u16> {
+        self.port.get().copied()
+    }
+}
+
+/// The refusal of `skepd::Daemon::bind_auth_port`: a port is already bound.
+///
+/// It carries that port — the number every live session's origin set was
+/// established against, which is what a caller disagreeing about it needs
+/// to be told — and not the number it offered, which it already has.
+///
+/// A named error rather than a bare `u16`, for
+/// [`NotCanonical`](super::NotCanonical)'s reason:
+/// this is an ecosystem door, and only a type carrying `Display` and
+/// `std::error::Error` composes with `?` in a caller's own error type. A
+/// caller cannot add either impl to an integer, and an `Err(8642)` says
+/// nothing about which of the two ports it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PortAlreadyBound(u16);
+
+impl PortAlreadyBound {
+    /// Returns the port already bound.
+    pub fn port(self) -> u16 {
+        self.0
+    }
+}
+
+impl fmt::Display for PortAlreadyBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the auth port is already bound to {}", self.0)
+    }
+}
+
+impl std::error::Error for PortAlreadyBound {}
+
+/// The board's mode (wire.md §Identity).
+///
+/// There, "the board is always in exactly one of three modes, derived from
+/// two facts `GET /health` publishes". This is the one place the corpus's
+/// three names are said in the code rather than re-derived as a
+/// conjunction of `claimed` and `local_trust`.
+///
+/// `Unclaimed` admits only the claim ceremony's own write shapes and honors
+/// bare loopback binds; `ClaimedPermissive` honors them still (the default's
+/// disclosed cost, which
+/// [`super::origin::Warning::ClaimedWithLocalTrust`] names); `Enforcing`
+/// refuses every bare session, so only signed sessions write.
+///
+/// Derived and never stored: the claim lives in the identity fold and the
+/// flag in [`AuthConfig`], so a mode value is always a reading of the pair
+/// as of one snapshot. The wire publishes the pair and deliberately no
+/// `mode` field (AUTH-6.13), which is why this type is the daemon's and not
+/// the wire's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// No claim yet: the claim ceremony's shapes, bare loopback binds honored.
+    Unclaimed,
+    /// Claimed with `--local-trust`: bare loopback binds honored still.
+    ClaimedPermissive,
+    /// Claimed without it: every bare session refused; signed sessions write.
+    Enforcing,
+}
+
+impl Mode {
+    /// Returns the mode `cfg` is in at a snapshot whose claim is `claimed`.
+    ///
+    /// It reads the pair once, so a caller states the mode it means rather
+    /// than the conjunction that computes it.
+    pub fn of(cfg: &AuthConfig, claimed: bool) -> Mode {
+        match (claimed, cfg.local_trust) {
+            // Pre-claim the flag is not consulted (AUTH-4.26).
+            (false, _) => Mode::Unclaimed,
+            (true, true) => Mode::ClaimedPermissive,
+            (true, false) => Mode::Enforcing,
+        }
+    }
+}
+
+/// The mode as the operator stream spells it (`operations.md` §1.1 m14).
+///
+/// It writes `unclaimed`, `CLAIMED-PERMISSIVE`, `CLAIMED-ENFORCING` — the
+/// two claimed modes in capitals, the design's own spelling, so the `auth:`
+/// line at start and the flip's landing line say one word for one mode.
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Mode::Unclaimed => "unclaimed",
+            Mode::ClaimedPermissive => "CLAIMED-PERMISSIVE",
+            Mode::Enforcing => "CLAIMED-ENFORCING",
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks the mode's words (m14): one spelling per mode, the design's own.
+    #[test]
+    fn each_mode_spells_its_own_word() {
+        assert_eq!(Mode::Unclaimed.to_string(), "unclaimed");
+        assert_eq!(Mode::ClaimedPermissive.to_string(), "CLAIMED-PERMISSIVE");
+        assert_eq!(Mode::Enforcing.to_string(), "CLAIMED-ENFORCING");
+    }
+
+    /// Checks the `auth:` line's words (m14) at fixed figures.
+    ///
+    /// An unclaimed board under the defaults names the bare set — the bound
+    /// port's three loopback defaults — as its signed set and no configured
+    /// origin; a claimed board with the flag off by its flag names its mode
+    /// `CLAIMED-ENFORCING` and the configured set alone, in the set's order;
+    /// one claimed with the flag on by its variable names
+    /// `CLAIMED-PERMISSIVE`; and a claimed board with no configured origin
+    /// says `none` for both sets. The source's words are the setting's,
+    /// `(--local-trust {on|off}, {source})` as m14 spells them.
+    #[test]
+    fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets() {
+        let cfg = AuthConfig::new(AuthOptions::default());
+        cfg.bind_port(8642).expect("binds once");
+        assert_eq!(
+            cfg.auth_line(false),
+            "auth: unclaimed (--local-trust on, the default); configured origins none; signed \
+             origins http://127.0.0.1:8642, http://[::1]:8642, http://localhost:8642"
+        );
+        let configured = |s: &str| Origin::parse(s).expect("canonical");
+        let enforcing = AuthConfig::new(AuthOptions {
+            local_trust: false,
+            local_trust_source: Source::Flag,
+            configured: vec![
+                configured("https://board.example"),
+                configured("http://127.0.0.1:8642"),
+            ],
+            ..AuthOptions::default()
+        });
+        enforcing.bind_port(8642).expect("binds once");
+        assert_eq!(
+            enforcing.auth_line(true),
+            "auth: CLAIMED-ENFORCING (--local-trust off, --no-local-trust); configured origins \
+             http://127.0.0.1:8642, https://board.example; signed origins http://127.0.0.1:8642, \
+             https://board.example"
+        );
+        let permissive = AuthConfig::new(AuthOptions {
+            local_trust: true,
+            local_trust_source: Source::Env,
+            configured: vec![configured("https://board.example")],
+            ..AuthOptions::default()
+        });
+        permissive.bind_port(443).expect("binds once");
+        assert_eq!(
+            permissive.auth_line(true),
+            "auth: CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true); configured \
+             origins https://board.example; signed origins https://board.example"
+        );
+        let unconfigured = AuthConfig::new(AuthOptions {
+            local_trust: false,
+            local_trust_source: Source::Env,
+            ..AuthOptions::default()
+        });
+        unconfigured.bind_port(8642).expect("binds once");
+        assert_eq!(
+            unconfigured.auth_line(true),
+            "auth: CLAIMED-ENFORCING (--local-trust off, SKEPD_LOCAL_TRUST=false); configured \
+             origins none; signed origins none"
+        );
+    }
+
+    /// Checks that the node prefix's line (row 19) names its source.
+    ///
+    /// It names the flag, the variable by its bare name, and the default's
+    /// phrase where a caller set a prefix and named no source; a board told
+    /// none keeps its one sentence.
+    #[test]
+    fn the_node_prefix_line_names_the_prefix_with_its_source() {
+        let at = |source: Source| {
+            AuthConfig::new(AuthOptions {
+                node_prefix: Some("1.3".parse().expect("a node prefix")),
+                node_prefix_source: source,
+                ..AuthOptions::default()
+            })
+            .node_prefix_line()
+        };
+        let rest = ": egress and assertion config, never journaled; the blocked-prefix list's \
+                    off-board test runs against it";
+        assert_eq!(at(Source::Flag), format!("node prefix 1.3 (--node-prefix){rest}"));
+        assert_eq!(at(Source::Env), format!("node prefix 1.3 (SKEPD_NODE_PREFIX){rest}"));
+        assert_eq!(at(Source::Default), format!("node prefix 1.3 (the default){rest}"));
+        assert_eq!(
+            AuthConfig::new(AuthOptions::default()).node_prefix_line(),
+            "no --node-prefix: the off-board test is off (every operator account reads as this \
+             board's own); a hosted board must supply one"
+        );
+    }
+
+    /// Checks that a second bind is refused and names the bound port.
+    ///
+    /// [`AuthConfig::bind_port`] names the port already bound — the number
+    /// every live session's origin set was established against, which is what
+    /// the second caller needs told.
+    #[test]
+    fn a_second_bind_is_refused_and_names_the_bound_port() {
+        let cfg = AuthConfig::new(AuthOptions::default());
+        cfg.bind_port(8642).expect("a fresh config binds once");
+        assert_eq!(cfg.port(), Some(8642));
+        assert_eq!(
+            cfg.bind_port(9999),
+            Err(PortAlreadyBound(8642)),
+            "the bound port, not the refused one"
+        );
+        assert_eq!(cfg.port(), Some(8642), "and the binding did not move");
+    }
+
+    /// Checks that a bind of port 0 panics, as a caller's bug.
+    ///
+    /// Port 0 is the one value from which
+    /// [`loopback_defaults`](crate::auth::origin::loopback_defaults) derives
+    /// origins [`Origin::parse`] refuses: `http://127.0.0.1:0` fails the
+    /// leading-zero clause, so admitting the bind fires
+    /// [`Origin::from_parts`]'s debug assert on every request that reads a
+    /// derived origin, and in release publishes a `/health` set whose
+    /// members no `Origin` header can match. The bind refuses it instead —
+    /// a caller's bug, stopped loudly, as a zero worker count is at
+    /// `skepd::serve`.
+    #[test]
+    #[should_panic(expected = "port 0 is not a port")]
+    fn port_zero_is_a_callers_bug() {
+        // The premise, first: this is what the defaults would derive from it.
+        assert!(
+            Origin::parse("http://127.0.0.1:0").is_none(),
+            "the front door refuses the text a zero-port default would carry"
+        );
+        let cfg = AuthConfig::new(AuthOptions::default());
+        let _ = cfg.bind_port(0);
+    }
+
+    /// Checks that the list in force is read where it is installed.
+    ///
+    /// Its two doors sit on the cell that holds it: a fresh config answers the
+    /// empty list, and what an install under the credential write lock puts
+    /// in is what the next read answers.
+    #[test]
+    fn the_list_in_force_is_read_where_it_is_installed() {
+        use super::super::blocked::{BlockedEntry, BlockedIssue};
+        use super::super::lock::CredentialLock;
+        use crate::codec::wire_address;
+
+        let cfg = AuthConfig::new(AuthOptions::default());
+        assert!(cfg.blocked_prefixes().issue_is_empty(), "a fresh config holds no list");
+        let prefix = wire_address("1.0.3").expect("an account address");
+        let record = wire_address("1.0.1.0.7.1").expect("a record's address");
+        let entry = BlockedEntry { prefix: prefix.clone(), record: record.clone() };
+        let issue = BlockedIssue { entries: vec![entry], ..BlockedIssue::default() };
+        let list = BlockedPrefixes::installed_under(issue, None, None);
+        cfg.install_blocked(&CredentialLock::new().write(), list);
+        assert_eq!(
+            cfg.blocked_prefixes().covers(&prefix),
+            Some(&record),
+            "the read answers what the install put in"
+        );
+    }
+}

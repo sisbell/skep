@@ -643,7 +643,7 @@ fn the_upload_settings_line_names_its_state_and_its_source() {
 /// owed after the head writer's refusal.
 #[test]
 fn the_flips_line_names_the_account_the_position_the_mode_and_each_head_arm() {
-    use crate::codec::wire_address;
+    use skep_core::codec::wire_address;
 
     let claimant = wire_address("1.0.1").expect("an account address");
     let at = |head: FirstHead, mode: &str| {
@@ -698,11 +698,12 @@ fn the_two_refusal_lines_carry_their_ruled_words() {
 /// `auth:` line, the node prefix, the blocked list, the reissue's refusal —
 /// goes out through `Daemon::say` or `Daemon::say_lines`, which emit with
 /// the class word each takes, and none through the un-classed `line` or
-/// `lines`; the flip's line in `op.rs`, the checkpoint thread's refusal in
-/// `listen.rs` and the head writer's row 40 take the classed door too — read
-/// off the sources, since no suite captures the stream in-process; the
-/// class each line is emitted under is pinned through `Daemon::lines_said`
-/// by the integration suites.
+/// `lines`; the flip's line in `op.rs` and the checkpoint thread's refusal
+/// in `listen.rs` take the classed door too — read off the sources, since
+/// no suite captures the stream in-process; the class each line is emitted
+/// under is pinned through `Daemon::lines_said` by the integration suites.
+/// The head writer's row 40 is held the same way by `skep-core`'s
+/// `commits/tests.rs`, beside the file it reads.
 #[test]
 fn the_configuration_lines_go_through_the_classed_door_with_their_class_words() {
     let source = include_str!("../server.rs");
@@ -757,11 +758,6 @@ fn the_configuration_lines_go_through_the_classed_door_with_their_class_words() 
     .map(|site| listen[serve_bound..].find(site).unwrap_or_else(|| panic!("`{site}`")))
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "§3.1 step 3's order: {order:?}");
-    let head = include_str!("../write_path/head.rs");
-    let draft = head.find("    fn ensure_draft(").expect("ensure_draft");
-    let draft = &head[draft..head[draft..].find("    fn commit_insert(").expect("the next fn") + draft];
-    assert!(draft.contains("notice::emit(") && draft.contains("DraftMintedElsewhere {"));
-    assert!(!draft.contains("notice::line("), "row 40 through the classed door");
 }
 
 /// A bare session's token for `principal`, opened through the route itself.
@@ -798,7 +794,7 @@ fn only_a_committing_write_announces_and_only_its_own_position() {
     let dir = tempfile::tempdir().expect("tempdir");
     let daemon = Daemon::open(dir.path()).expect("genesis open");
     let token = bare_session(&daemon, 0);
-    let announced = || daemon.writes.announced();
+    let announced = || daemon.commits.announced();
     let post = |body: &str| match daemon.route(&HttpRequest {
         method: "POST".to_string(),
         path: "/op".to_string(),
@@ -856,7 +852,7 @@ fn only_a_committing_write_announces_and_only_its_own_position() {
 }
 
 /// A connecting subscriber is told the last ANNOUNCED position, not the
-/// kernel's head — `write_path/`'s guarantee (every position a
+/// kernel's head — `skep-core`'s `commits`' guarantee (every position a
 /// subscriber hears is one `/changes` already carries) applied to the
 /// connect event.
 ///
@@ -889,7 +885,7 @@ fn a_connecting_subscriber_is_told_the_announced_position_not_the_head() {
                 String::from_utf8_lossy(&d.codec.marshal(&other))
             ),
         };
-        (d.writes.announced(), ahead)
+        (d.commits.announced(), ahead)
     };
     assert!(announced < ahead, "the head is now ahead of the commit stream");
 
@@ -1296,7 +1292,7 @@ fn a_write_whose_record_step_finds_the_inline_count_moved_wakes_the_checkpoint_t
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use crate::write_path::Woken;
+    use skep_core::commits::Woken;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let daemon = Daemon::open(dir.path()).expect("genesis open");
@@ -1323,7 +1319,7 @@ fn a_write_whose_record_step_finds_the_inline_count_moved_wakes_the_checkpoint_t
     assert!(daemon.newest_checkpoint().is_some(), "…and landed");
     assert!(daemon.checkpoint_lines().is_empty(), "no thread, nothing said");
 
-    let signal = daemon.writes.checkpoint_signal();
+    let signal = daemon.commits.checkpoint_signal();
     std::thread::scope(|scope| {
         let (woken, waiter) = mpsc::channel();
         scope.spawn(move || {
@@ -1399,7 +1395,7 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
 /// which is no line at all (`stands` false).
 #[test]
 fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
-    use crate::write_path::StoppedFile;
+    use skep_core::commits::StoppedFile;
 
     let every = StandingLine {
         halted_at: Some(Seq(17)),
@@ -1454,7 +1450,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
 /// act; the checkpoint thread's and the pruner's, verbatim.
 #[test]
 fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
-    use crate::write_path::KernelHaltLine;
+    use skep_core::commits::KernelHaltLine;
 
     assert_eq!(
         KernelHaltLine { at: Seq(1203) }.to_string(),

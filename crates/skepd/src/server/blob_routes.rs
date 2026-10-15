@@ -129,9 +129,9 @@ use super::reply::{
 };
 use super::request::{sole_param, BodySource, HttpRequest};
 use super::Daemon;
-use crate::auth::policy::{upload_admission, UploadRefusal};
-use crate::auth::session::Actor;
-use crate::codec::wire_address;
+use skep_core::auth::policy::{upload_admission, UploadRefusal};
+use skep_core::auth::session::Actor;
+use skep_core::codec::wire_address;
 
 /// The family's own path — the creation's and the deposit read's; one
 /// upload's paths lie beneath it.
@@ -614,14 +614,14 @@ impl Daemon {
         match self.media.store().unlink_asides() {
             Ok(_) => {
                 if self.aside_fault_said.swap(false, Ordering::AcqRel) {
-                    self.writes.lines().say(Class::Landing, "blob store: the asides unlink again");
+                    self.commits.lines().say(Class::Landing, "blob store: the asides unlink again");
                 }
             }
             Err(e) => {
                 if self.aside_fault_said.swap(true, Ordering::AcqRel) {
                     return;
                 }
-                self.writes.lines().say(
+                self.commits.lines().say(
                     Class::Failure,
                     format_args!(
                         "blob store: the deferred unlink failed: {e}; the aside stands for the \

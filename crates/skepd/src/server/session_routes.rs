@@ -11,10 +11,10 @@ use super::actor::Resolved;
 use super::reply::{refuse, refuse_handshake, Reply, TransportError};
 use super::request::{sole_param, HttpRequest};
 use super::Daemon;
-use crate::auth::session::{
+use skep_core::auth::session::{
     handshake, parse_session_body, Actor, Opened, SessionBinding, Token, CHALLENGE_TTL_MS,
 };
-use crate::auth::OsEntropy;
+use skep_core::auth::OsEntropy;
 
 impl Daemon {
     /// `GET /challenge?principal=N` (AUTH-6.1): issue a nonce for ANY
@@ -112,7 +112,7 @@ impl Daemon {
     ///
     /// THE THIRD CASE CLOSES NOTHING, and the uniform answer is the point: a
     /// LIVE BARE binding whose request
-    /// [`crate::auth::session::bare_bind_allowed`] refuses resolves
+    /// `skep_core::auth::session::bare_bind_allowed` refuses resolves
     /// `Guest(GuestReason::RequestRefused)`, which [`Actor`] rules "lives
     /// untouched", so this arm does not fire, nothing is retired, `closed`
     /// is false, and the 204 is byte-identical to a successful close. The

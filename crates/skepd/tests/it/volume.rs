@@ -16,7 +16,7 @@
 //!   `change-feed sidecar: feed-attest.log: Permission denied (os error
 //!   13)`, the kind `PermissionDenied` kept inside.
 //!
-//! The words are the unit suite's (`write_path/tests.rs`); the class word
+//! The words are the core's unit suite's (`commits/tests.rs`); the class word
 //! and the figures are read here. Every daemon is shut down before the
 //! claim returns, and every file made unreadable is restored.
 

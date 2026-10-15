@@ -1330,6 +1330,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-core"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "parking_lot",
+ "rand_core 0.9.5",
+ "serde_json",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-core",
+ "skep-discovery",
+ "skep-engine",
+ "skep-febe",
+ "skep-identity",
+ "skep-kernel",
+ "skep-links",
+ "skep-media",
+ "skep-namespace",
+ "skep-registry",
+ "skep-retrieval",
+ "skep-signature",
+ "skep-util",
+ "tempfile",
+]
+
+[[package]]
 name = "skep-corpus"
 version = "0.1.0"
 dependencies = [
@@ -1603,17 +1630,16 @@ name = "skepd"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "getrandom 0.3.4",
  "memory-stats",
  "parking_lot",
  "proptest",
- "rand_core 0.9.5",
  "rustix",
  "serde_json",
  "skep-address",
  "skep-arrangement",
  "skep-blobs",
  "skep-content",
+ "skep-core",
  "skep-discovery",
  "skep-engine",
  "skep-febe",

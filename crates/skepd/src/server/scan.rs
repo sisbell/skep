@@ -3,7 +3,7 @@
 use skep_febe::Op;
 use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits};
 
-use crate::limits::EDGE_HOLD_DOWN;
+use skep_core::limits::EDGE_HOLD_DOWN;
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
 /// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
@@ -204,7 +204,7 @@ mod tests {
     use skep_febe::Codec;
 
     use super::*;
-    use crate::codec::JsonCodec;
+    use skep_core::codec::JsonCodec;
 
     /// THE CLASS-SCAN TEST, over the OP and not over the query's slots: as
     /// M7 is built every link-discovery read walks the store end to end, or —
@@ -289,7 +289,7 @@ mod tests {
         for frame in &bounded {
             let op = parse(frame);
             assert!(is_class_scan(&op), "walks the link store, so it is bounded: {frame}");
-            names.insert(crate::codec::op_name(op.kind()));
+            names.insert(skep_core::codec::op_name(op.kind()));
         }
         for frame in &unbounded {
             assert!(!is_class_scan(&parse(frame)), "walks no link store: {frame}");

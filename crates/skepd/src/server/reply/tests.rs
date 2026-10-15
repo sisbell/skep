@@ -22,7 +22,7 @@ fn refusals_pair_their_status_with_their_name() {
 }
 
 /// wire.md §HTTP status codes, BOTH columns — the discipline
-/// [`code_name`](crate::codec) already gives M10's sixty rejection
+/// [`code_name`](skep_core::codec) already gives M10's sixty rejection
 /// codes. The table is transcribed by hand for the reason
 /// [`crate::fuzz_support::TRANSPORT_ERRORS`] is: one read out of the
 /// code under test would agree with whatever that code says.
@@ -122,8 +122,8 @@ fn every_transport_error_pairs_its_documented_name_with_its_documented_status() 
 /// replies' 204 and 200.
 #[test]
 fn every_status_outside_the_transport_errors_has_a_reason_phrase() {
-    use crate::auth::session::SessionRejected;
-    let record = crate::codec::wire_address("1.0.1.0.7.1").expect("a record's address");
+    use skep_core::auth::session::SessionRejected;
+    let record = skep_core::codec::wire_address("1.0.1.0.7.1").expect("a record's address");
     let rejected = refuse_handshake(&HandshakeRefusal::Rejected(SessionRejected));
     let blocked = refuse_handshake(&HandshakeRefusal::Blocked { record });
     for status in [rejected.status, blocked.status, Reply::preflight().status, 200] {
@@ -160,7 +160,7 @@ fn the_fetch_preflight_and_each_refusals_status_and_body() {
     assert_eq!(fetch.headers[0], ("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS"));
     assert_eq!(fetch.headers[1..], Reply::preflight().headers[1..]);
     assert_eq!((fetch.status, fetch.body.is_none()), (204, true));
-    let home = crate::codec::wire_address("1.0.1.0.2").expect("a document");
+    let home = skep_core::codec::wire_address("1.0.1.0.2").expect("a document");
     let withheld = Rejection::classified(
         OpKind::RetrieveI,
         RejectCode::Withheld,

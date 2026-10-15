@@ -114,6 +114,20 @@ cargo check -p skep-media --lib || exit $?
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skep-media --lib --no-deps --document-private-items || exit $?
 
+# skep-core's library without `test-hooks` — every test build turns it on
+# (the crate's self dev-dependency, and skepd's forward), so this is the
+# build that shows the daemon's core compiles without its test seam: the
+# feed walk's hold and fault, the head writer's clock and refusal, the
+# feed's and the attest store's failure arms, the lines said.
+cargo check -p skep-core --lib || exit $?
+
+# …and its docs as they ship, without `test-hooks`, for skep-blobs' reason:
+# a shipped doc that linked a gated item would resolve under
+# `--all-features` below and break here, so the crate names one by code
+# span, never by link.
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skep-core --lib --no-deps --document-private-items || exit $?
+
 # skep-util, the support crate below skepd and the media crate: `std` and
 # `serde_json` alone, no feature. The test run below builds it as a member,
 # but only after every check above has passed and inside the one long run;
@@ -171,8 +185,9 @@ cargo nextest run -p skepd --all-features --profile full \
     -E 'test(/^client::/) | test(/^cors::/) | test(/the_death_signal_rides_exactly_the_documented_routes$/) | test(/the_route_set_agrees_across_preflight_dispatch_and_refusal$/)' \
     || exit $?
 
-# Every intra-doc link in skepd, skep-media, skep-signature, skep-resolve,
-# skep-search, skep-blobs, skep-util, skep-registry and skep-http resolves —
+# Every intra-doc link in skepd, skep-core, skep-media, skep-signature,
+# skep-resolve, skep-search, skep-blobs, skep-util, skep-registry and
+# skep-http resolves —
 # a private item's too, and a link resolves only where its module could
 # name the target in code, so a narrowing that strands a link fails here
 # rather than in a reader's hands. skep-search's docs link its three
@@ -182,7 +197,7 @@ cargo nextest run -p skepd --all-features --profile full \
 # rename strands without a word from the compiler; skep-http's map links
 # its two private modules' items through the root's re-exports the same way.
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
-    cargo doc -p skepd -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util -p skep-registry -p skep-http --lib --no-deps --document-private-items --all-features \
+    cargo doc -p skepd -p skep-core -p skep-media -p skep-signature -p skep-resolve -p skep-search -p skep-blobs -p skep-util -p skep-registry -p skep-http --lib --no-deps --document-private-items --all-features \
     || exit $?
 
 # skep-provision's binary without `test-hooks` — every test build turns it on

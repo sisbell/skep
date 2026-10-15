@@ -57,8 +57,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   a file a committed cell names by the PUT's own install order, no lease
   and no record written, beside a serving daemon when held to the
   inventory's hash.
-- **Deterministic JSON codec** — key-sorted marshalling so wire bytes
-  never depend on map iteration order.
+- **The daemon's core** is [skep-core](../skep-core)'s, the crate below
+  this one, whose README lists its surface: the session layer — who may
+  act, and what a credential write may do — the commits — the one door
+  every write rides, the change feed and its files, the published head's
+  cadence — and the deterministic JSON codec, key-sorted marshalling so
+  wire bytes never depend on map iteration order. The daemon's part is
+  the router that composes them and the files they write, which are the
+  daemon's own.
 - **Durability is configuration** — fsync policy and checkpoint
   cadence are chosen here, not baked into the kernel: a checkpoint every
   1024 commits or a byte bound — a quarter of the newest checkpoint's
@@ -72,16 +78,18 @@ A library and a binary. The binary runs against a data directory and
 serves a board; the library (`Daemon`, `serve`) is the same daemon for
 an embedder or a test. Everything it serves is the operation surface
 of [skep-febe](../skep-febe) over the world of
-[skep-engine](../skep-engine); the counting permit its five pools are
-built on, the operator's notice line and the codec's key-sorting `obj`
-are [skep-util](../skep-util)'s, the support crate below it that the
-media crate shares; how its modules are layered is in
-[ARCHITECTURE.md](../../ARCHITECTURE.md).
+[skep-engine](../skep-engine); its core — the session layer, the commits
+and the codec — is [skep-core](../skep-core)'s, the crate below it; the
+counting permit its five pools are built on, the operator's notice line
+and the codec's key-sorting `obj` are [skep-util](../skep-util)'s, the
+support crate below both that the media crate shares; how its modules
+are layered is in [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
-The daemon verifies signatures and makes none: it calls
+The daemon verifies signatures and makes none: its core calls
 [skep-signature](../skep-signature)'s verify with that crate's `sign`
-feature off, so its build holds no signer and no key. That verify runs
-at three doors: the signed session's handshake; the entry signature a
+feature off, so the daemon's build holds no signer and no key. That
+verify runs at three doors, each in the core's session layer: the signed
+session's handshake; the entry signature a
 publish-class write carries in its `attest`, checked before the
 transaction; and, above the claim, the `sig` a credential record — or a
 registry record, the binding and the endpoint of

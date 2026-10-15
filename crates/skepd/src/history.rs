@@ -27,7 +27,7 @@
 //! [`EdgeTracker`] the one door tells of every refusal and admission, which
 //! answers the edge crossed — the first refusal of an episode, the admission
 //! a hold-down past its last — and queues it for the daemon's classed door,
-//! this module holding none (`crate::limits::EDGE_HOLD_DOWN`'s card).
+//! this module holding none (`skep_core::limits::EDGE_HOLD_DOWN`'s card).
 
 use std::sync::Arc;
 
@@ -40,7 +40,7 @@ use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource
 use skep_namespace::PrincipalId;
 use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits};
 
-use crate::limits::EDGE_HOLD_DOWN;
+use skep_core::limits::EDGE_HOLD_DOWN;
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`, and the chain read behind `/chain?at`, which
@@ -263,7 +263,7 @@ impl History {
 /// dropped when this returns, and answer the caller an acknowledgment for a
 /// write that did not happen, carrying a position that names nothing
 /// ([`stamp_as_of`] leaves acks alone). The route's own guard restates M10's
-/// read/write partition, which `crate::write_path::write_meta` records as
+/// read/write partition, which `skep_core::commits::write_meta` records as
 /// agreeing at 15 writes of 45 — the enum's variant count, which moves with
 /// `Op` and which the codec suite's op-name table is held to — and warns
 /// can drift; so the assert below is what makes this premise loud for the

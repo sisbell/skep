@@ -6,7 +6,7 @@ use skep_namespace::PrincipalId;
 
 use super::request::HttpRequest;
 use super::Daemon;
-use crate::auth::session::{resolve, Actor, GuestReason, Token};
+use skep_core::auth::session::{resolve, Actor, GuestReason, Token};
 
 impl Daemon {
     /// Close one token's binding in BOTH stores — the sessions map and M10

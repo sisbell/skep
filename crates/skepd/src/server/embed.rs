@@ -35,7 +35,7 @@ use skep_media::MediaOptions;
 
 use super::listen::{bind, serve_bound, Skepd};
 use super::{Daemon, DaemonError};
-use crate::auth::AuthOptions;
+use skep_core::auth::AuthOptions;
 
 /// THE OPEN's ATTEMPTS — twelve, [`OPEN_RETRY_PAUSE`] apart — for the ONE
 /// condition a start retries ([`lost_the_lock_race`]). A start over the

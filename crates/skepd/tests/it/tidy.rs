@@ -1,11 +1,14 @@
 //! THE LAYERING, CHECKED: `AGENTS.md`'s "skepd is layered; imports point
-//! down", over the six layers `ARCHITECTURE.md` §The daemon draws. Two
-//! leaves of the sixth — the permit pool and the operator's notice line —
-//! and the codec's determinism helpers live in `skep-util`, the support
-//! crate below this one; the media resource, once rows of the fifth, and
-//! its two leaf cells, once rows of the sixth, are `skep-media`'s, the
-//! crate beside the write path, whose own `tests/it/tidy.rs` holds its two
-//! layers. A path into either is a path outside this crate, which this
+//! down", over the four layers `ARCHITECTURE.md` §The daemon draws. The
+//! session layer, the write path and three leaves — the wire codec, the
+//! serialization lock and the six bounds the core reads — are
+//! `skep-core`'s, the daemon's core, the crate below this one, whose own
+//! `tests/it/tidy.rs` holds its three layers; two leaves — the permit pool
+//! and the operator's notice line — and the codec's determinism helpers
+//! live in `skep-util`, the support crate below both; the media resource,
+//! once rows beside the write path, and its two leaf cells are
+//! `skep-media`'s, whose own `tests/it/tidy.rs` holds its two layers. A
+//! path into any of the three is a path outside this crate, which this
 //! check reads as it reads any other crate's, and no row names them.
 //!
 //! Every in-crate module a `src/` file names in code — the leading module
@@ -21,8 +24,8 @@
 //! Two consequences meet a reader as failures. A module that fits no row of
 //! [`LAYERS`] fails until it is placed, and placing it is the decision
 //! `ARCHITECTURE.md` records. And code names an in-crate item by its home
-//! module (`crate::codec::JsonCodec`), never through the crate root's
-//! re-export (`crate::JsonCodec`): the root re-exports items of every
+//! module (`crate::server::Daemon`), never through the crate root's
+//! re-export (`crate::Daemon`): the root re-exports items of every
 //! layer, so a path through it hides the layer it reaches.
 //!
 //! And THE TEST HOOKS, GATED: every item documented as a test hook — here,
@@ -32,7 +35,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Module → layer, top (0) to bottom (6). A module takes the layer of its
+/// Module → layer, top (0) to bottom (4). A module takes the layer of its
 /// LONGEST matching row, on `::` boundaries: `server::op` is a route by
 /// `server`, `server::http` is transport by its own row.
 const LAYERS: &[(&str, u8)] = &[
@@ -52,18 +55,13 @@ const LAYERS: &[(&str, u8)] = &[
     ("server::reply", 3),
     ("server::request", 3),
     ("server::scan", 3),
-    // 4 — the session layer, the registry sequence's producers among it.
-    ("auth", 4),
-    ("auth::policy::registry", 4),
-    // 5 — the write path; the media resource beside it — the door, the gate,
-    // the index, the pruner and the serve, once rows here — is `skep-media`'s.
-    ("write_path", 5),
-    // 6 — the leaves; `permits` and `notice`, once rows here, are
-    // `skep-util`'s, and the two cells `skep-media`'s.
-    ("codec", 6),
-    ("history", 6),
-    ("limits", 6),
-    ("serial", 6),
+    // 4 — the leaves: the history service and the daemon's seven bounds.
+    // The session layer, the write path (now the commits), the codec, the
+    // serialization lock and the six bounds the core reads, once rows here,
+    // are `skep-core`'s; `permits` and `notice` are `skep-util`'s; the media
+    // resource and the two cells `skep-media`'s.
+    ("history", 4),
+    ("limits", 4),
 ];
 
 #[test]
@@ -444,8 +442,8 @@ fn layer(module: &str) -> u8 {
         })
 }
 
-/// `src/server/op.rs` → `server::op`; `src/write_path/feed.rs` and
-/// `src/write_path/feed/mod.rs` alike → `write_path::feed`.
+/// `src/server/op.rs` → `server::op`; `src/server/reply.rs` and
+/// `src/server/reply/mod.rs` alike → `server::reply`.
 fn module_of(src: &Path, file: &Path) -> String {
     let relative = file.strip_prefix(src).unwrap().with_extension("");
     let mut segments: Vec<String> =

@@ -638,7 +638,7 @@ fn no_edge_pair_takes_the_unclassed_door_and_the_write_pool_has_one_door() {
     for path in [
         "src/history.rs",
         "src/server/scan.rs",
-        "src/auth/session.rs",
+        "../skep-core/src/auth/session.rs",
         "../skep-util/src/permits.rs",
         "../skep-media/src/serve.rs",
         "../skep-media/src/lib.rs",

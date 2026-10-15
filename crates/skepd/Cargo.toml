@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, sessions, configuration, and process lifetime — no semantics but the three the spec gives it: the session layer's gates, the published head's cadence and the media door."
+description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, sessions, configuration, and process lifetime — no semantics but the three the spec gives it, two of them its core's (skep-core): the session layer's gates, the published head's cadence and the media door."
 readme = "README.md"
 
 [features]
@@ -31,28 +31,43 @@ client = []
 # `test-hooks` compiles in the test-only code: `Daemon`'s `#[doc(hidden)]`
 # hooks (server/hooks.rs) and the claim-flip hold one of them arms, the
 # `fuzz_support` harness, and the `Permit` re-export the pool hooks return —
-# and turns on THREE things in other crates, a chain: `skep-media`'s own
-# `test-hooks`, the seam the daemon's media hooks call (the walk hold, the
-# stream hold, the prune hold, the gate's clock, free-space and limits
-# overrides, the index's report and counts, the pools' `try_hold`);
-# `skep-blobs`'s hazard seam — the hold at a named step of a finish that
-# this crate's own blob-store hold (`Daemon::hold_blob_finish_at`, media
-# lane B) is a door to, reached through the media crate's gate; the media
-# crate forwards the latter too; and `skep-kernel`'s write-fault seam (its
-# `src/hooks.rs`) — the next checkpoint write, before or past its rename,
-# or the next journal append, barrier or repair failing with a named
-# `io::ErrorKind`, or a panic in the checkpoint write — reached through the
-# kernel's own `#[doc(hidden)]` doors on the engine's kernel.
-# `skep-signature`'s signer and fixture hooks reach this crate's tests
-# through their own dev-dependency line below, and a consumer that signs
-# names the feature it needs on its own
+# and turns on FOUR things in other crates, a chain: `skep-core`'s own
+# `test-hooks`, the seam the daemon's hooks on its core call (the feed
+# walk's hold, notice and panic arm, the head writer's clock and its one
+# refusal, the feed's and the attest store's failure arms and the attest
+# store's sync mark, the walk's pending region and progress cadence, the
+# lines said, the checkpoint signal's tick), which forwards nothing;
+# `skep-media`'s own `test-hooks`, the seam the daemon's media hooks call
+# (the walk hold, the stream hold, the prune hold, the gate's clock,
+# free-space and limits overrides, the index's report and counts, the
+# pools' `try_hold`); `skep-blobs`'s hazard seam — the hold at a named step
+# of a finish that this crate's own blob-store hold
+# (`Daemon::hold_blob_finish_at`, media lane B) is a door to, reached
+# through the media crate's gate; the media crate forwards the latter too;
+# and `skep-kernel`'s write-fault seam (its `src/hooks.rs`) — the next
+# checkpoint write, before or past its rename, or the next journal append,
+# barrier or repair failing with a named `io::ErrorKind`, or a panic in the
+# checkpoint write — reached through the kernel's own `#[doc(hidden)]`
+# doors on the engine's kernel. `skep-signature`'s signer and fixture hooks
+# reach this crate's tests through their own dev-dependency line below, and
+# a consumer that signs names the feature it needs on its own
 # `skep-signature` line. DEFAULT-OFF, and the shipped binary never enables
 # it: this crate's own tests turn it on through the self dev-dependency
 # below, and skep-mcp's tests and skep/fuzz/ on their `skepd` lines, so a
 # build that compiles no test compiles none of it.
-test-hooks = ["skep-blobs/test-hooks", "skep-kernel/test-hooks", "skep-media/test-hooks"]
+test-hooks = ["skep-blobs/test-hooks", "skep-kernel/test-hooks", "skep-media/test-hooks", "skep-core/test-hooks"]
 
 [dependencies]
+# THE DAEMON's CORE, the crate below this one: the session layer (who may
+# act — the origin sets, the handshake, the sessions, the credential lock
+# and the refusal producers it scopes, the signed-ops check), the commits
+# (the one door every write rides, the record, the feed, the published
+# head — opened and driven from `server.rs`), the wire codec, the two
+# bounds this daemon reads from its `limits` and the serialization lock
+# the routes hold across the door. Its `README.md` lists the surface; this
+# crate's root re-exports the six session-layer names and the codec on its
+# own surface, so no caller depends on the core for them.
+skep-core = { path = "../skep-core" }
 # The assembled engine: Engine::open (genesis-or-recover), the Stores<World>
 # factory, and (behind `observe`) the WorldDump surface.
 skep-engine = { path = "../skep-engine", default-features = false }
@@ -62,7 +77,10 @@ skep-febe = { path = "../skep-febe" }
 # M2 — KernelConfig/Durability/CheckpointPolicy (durability is configuration,
 # chosen here) and Seq.
 skep-kernel = { path = "../skep-kernel" }
-# The wire value types the codec round-trips, each from its owning crate.
+# The wire value types the routes, the tools and the history service name
+# — addresses, principals, the link reads' answers; the codec's round trips
+# over every one are the core's, and the content, arrangement, retrieval
+# and link crates are named by this crate's suites alone.
 skep-address = { path = "../skep-address" }
 skep-namespace = { path = "../skep-namespace" }
 skep-content = { path = "../skep-content" }
@@ -70,14 +88,16 @@ skep-arrangement = { path = "../skep-arrangement" }
 skep-retrieval = { path = "../skep-retrieval" }
 skep-links = { path = "../skep-links" }
 skep-discovery = { path = "../skep-discovery" }
-# The AUTH identity vocabulary: the credential data model, key sets, the
-# classify oracle and the entry frame's rows. The fold itself is the
-# engine's — the World's identity slice (AUTH-2.79) — which skepd reads.
+# The AUTH identity vocabulary's two reads the routes make themselves:
+# `HasIdentity`, the World's identity slice off the snapshot a route holds,
+# and `IdentityState`, what the open and the claim flip hand the session
+# layer. The credential data model, the key sets and the classify oracle
+# are the core's uses; the fold itself is the engine's (AUTH-2.79).
 skep-identity = { path = "../skep-identity" }
-# THE REGISTRY'S CORE AS VALUES: the twelve commons rows, the binding and
-# endpoint bodies under one canonical rule, and the seeding check — read
-# by the registry sequence's parse (`auth/policy/registry.rs`) and run by
-# the open ahead of every genesis.
+# `SeedingRefusal`, the refusal `DaemonError::Registry` carries and the
+# root re-exports: the registry's rows, bodies and seeding check are the
+# core's uses (`auth/policy/registry.rs`), the check run by this daemon's
+# open ahead of every genesis.
 skep-registry = { path = "../skep-registry" }
 # THE BLOB STORE (media lane B): the files, the partials, the upload records
 # and the lease log under `blobs/` in the data dir — the PUT's fsync order
@@ -101,20 +121,9 @@ skep-media = { path = "../skep-media" }
 # key-sorting `obj` every JSON object goes through, lowercase hex and its
 # exact inverse. It depends on nothing of skep.
 skep-util = { path = "../skep-util" }
-# THE HYBRID ENTRY SIGNATURE's frozen rules (signed ops): `skep-signature` is
-# the one crate that links the signature libraries; skepd calls its verify
-# (AUTH-2.2) — the session verify, the write-path check — and its all-halves
-# decode, the enrollment courtesy's. NO feature: its `sign` half (the KDF,
-# keygen, signing) stays out of the daemon's build, which holds no signer
-# (AUTH-2.89); the tests' line below turns it on for test builds alone.
-skep-signature = { path = "../skep-signature" }
-# OS entropy for nonces and session tokens (AUTH-4.13: at least 128 bits per
-# token from a CryptoRng, never a per-process prefix plus a counter), and
-# the `CryptoRng` bound the auth surface's declared signatures carry.
-getrandom = "0.3"
-rand_core = "0.9"
-# JSON frames. The codec builds Values through `skep-util`'s key-sorting
-# `obj`, so marshal determinism never depends on serde_json's map backend.
+# JSON frames and the daemon's own objects (`/health`, the replies), built
+# through `skep-util`'s key-sorting `obj` as the core's codec builds its,
+# so marshal determinism never depends on serde_json's map backend.
 serde_json.workspace = true
 # No HTTP server dependency, deliberately (wire v4): the daemon speaks a
 # written-out HTTP/1.1 subset over std's TcpListener; server.rs's module doc

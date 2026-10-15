@@ -23,16 +23,16 @@ use super::reply::{
 use super::request::HttpRequest;
 use super::scan::ScanBusy;
 use super::{ClaimLine, Daemon, WRITE_POOL};
-use crate::auth::key_set_of;
-use crate::auth::policy::{
+use skep_core::auth::key_set_of;
+use skep_core::auth::policy::{
     deposits_credential_link, deposits_registry_link, op_shape_refusal, plain_admission,
     registry_admission, CredentialRefusal, DepositSpans, RecordSig,
 };
-use crate::auth::session::Actor;
-use crate::auth::LockWrite;
-use crate::codec::{key_set_reply, DaemonOp};
-use crate::serial::SerialGuard;
-use crate::write_path::{write_meta, FrameMeta, Signed};
+use skep_core::auth::session::Actor;
+use skep_core::auth::LockWrite;
+use skep_core::codec::{key_set_reply, DaemonOp};
+use skep_core::serial::SerialGuard;
+use skep_core::commits::{write_meta, FrameMeta, Signed};
 
 impl Daemon {
     /// THE CLAIM FLIP's consequences, whole and under the two guards the
@@ -51,18 +51,18 @@ impl Daemon {
     /// One method because the four fire TOGETHER and only here — the claim
     /// is set once, so this is the one transition at which the first head is
     /// owed, a comparand appears and the two logs are owed again — which is
-    /// [`crate::auth::AuthState::commit_tail`]'s own reason for bundling its
+    /// [`skep_core::auth::AuthState::commit_tail`]'s own reason for bundling its
     /// three obligations one step earlier. The two guards are that obligation
     /// and not a decoration. `serial` is the write path's lock the claim's
     /// `commit_under` ran under, held through this method: every commit this
-    /// daemon makes takes it ([`WritePath::serial_lock`](crate::write_path::WritePath::serial_lock) — both write
+    /// daemon makes takes it ([`Commits::serial_lock`](skep_core::commits::Commits::serial_lock) — both write
     /// sequences, and the head writer's door inside them), so no write of any
     /// kind lands between the claim and `H.1`: the head names the claim's own
     /// position, and — where the head writer's driver ADMITS it — the first
     /// write admitted after the claim finds the board term present. Where the
     /// driver REFUSES it, the claim STANDS, whatever the refusal: its ack is
     /// owed, so
-    /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)'s
+    /// [`Commits::write_first_head`](skep_core::commits::Commits::write_first_head)'s
     /// answer is read for ONE thing here — the flip's landing line
     /// (`operations.md` §1.1 m14), which says whether `H.1` was written, stood
     /// from before the claim, or is owed — and decides nothing: the head
@@ -72,7 +72,7 @@ impl Daemon {
     /// writes `H.1`, and its retry is admitted. What a refusal is and when
     /// the first head comes after one are the head writer's (`head.rs`, WHAT
     /// A REFUSAL DOES); what an attested write meets meanwhile is
-    /// [`crate::write_path::board_term`]'s. `credential_lock` is the
+    /// `skep_core::commits::board_term`'s. `credential_lock` is the
     /// credential write lock's write guard: the re-install replaces the list
     /// under the lock the claim itself committed under, so no SESSION write
     /// lands between the claim and the comparands it moves — every one takes
@@ -81,7 +81,7 @@ impl Daemon {
     /// writer's turn after the claim's commit already wrote it (an operator
     /// pausing an hour before the ceremony's last step is enough), in which
     /// case `H.1` stands and
-    /// [`WritePath::write_first_head`](crate::write_path::WritePath::write_first_head)
+    /// [`Commits::write_first_head`](skep_core::commits::Commits::write_first_head)
     /// writes nothing — made by no session, they meet no list, and they
     /// deposit no credential, so the slice is as the claim left it. `identity`
     /// is the POST-COMMIT world's slice — the one that names the claimant the
@@ -117,7 +117,7 @@ impl Daemon {
         // `H.1` fails nothing here — the claim stands (the card above), the
         // head writer surfaces the refusal itself and owes the head at its
         // next turn, a refused write's included (l7-C1).
-        let head = self.writes.write_first_head(serial);
+        let head = self.commits.write_first_head(serial);
         let claimant = identity
             .claimant()
             .expect("the flip is the transition to a slice that names a claimant");
@@ -254,7 +254,7 @@ impl Daemon {
         };
         // 2 — the locks, the locked snapshot, and this site's own resolution.
         let credential_lock = self.auth.credential_lock.read();
-        let serial = self.writes.serial_lock();
+        let serial = self.commits.serial_lock();
         let (snap, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let binding = match actor {
             Actor::Principal(b) => b,
@@ -265,13 +265,13 @@ impl Daemon {
             registry_admission(&credential_lock, snap.world(), &frame.op, binding.signer.as_ref())
         {
             // A refused write's TURN (l7-C1), as on every path.
-            self.writes.take_turn_after_refusal(&serial);
+            self.commits.take_turn_after_refusal(&serial);
             return with_signal(registry_refused(meta.kind, &r), closed);
         }
         // 4 — execute, the link row signed by its record.
         let signed = Some(Signed::RecordSig);
         let resp =
-            self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
+            self.commits.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
                 self.febe.execute(binding.sid, frame)
             });
         with_signal(self.op_reply(&resp), closed)
@@ -368,7 +368,7 @@ impl Daemon {
             return refuse_write_busy(meta.kind);
         };
         let credential_lock = self.auth.credential_lock.read();
-        let serial = self.writes.serial_lock();
+        let serial = self.commits.serial_lock();
         // THE GUARD's HOLD (test seam): armed, this writer parks HERE with
         // its permit and both locks held — the shape of the trigger inside an
         // inline backstop — so a suite parks W − 1 more writers on
@@ -404,7 +404,7 @@ impl Daemon {
                 // first head the driver refused at every turn of the write
                 // path, this one included — the one trigger the refused
                 // writer can fire.
-                self.writes.take_turn_after_refusal(&serial);
+                self.commits.take_turn_after_refusal(&serial);
                 return with_signal(credential_refused(meta.kind, &r), closed);
             }
         };
@@ -418,7 +418,7 @@ impl Daemon {
         // does (l7-C1); the admitted attestation is dropped with the write,
         // as every refusal ahead of the store drops it.
         if let Some(refusal) = media_door(snap.world(), &frame.op, binding.principal, &self.media) {
-            self.writes.take_turn_after_refusal(&serial);
+            self.commits.take_turn_after_refusal(&serial);
             return with_signal(media_door_refused(meta.kind, refusal), closed);
         }
         // THE ENTRY'S SIGNEDNESS, for the change feed's row (D12): the marker
@@ -433,7 +433,7 @@ impl Daemon {
         let signed = admitted.as_ref().map(|a| Signed::Marker(a.clone()));
         frame.attest = admitted;
         let resp =
-            self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
+            self.commits.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
                 self.febe.execute(binding.sid, frame)
             });
         with_signal(self.op_reply(&resp), closed)
@@ -505,7 +505,7 @@ impl Daemon {
         // 3 — the credential write lock, the serialization lock, the locked
         // snapshot, and this site's OWN resolution.
         let credential_lock = self.auth.credential_lock.write();
-        let serial = self.writes.serial_lock();
+        let serial = self.commits.serial_lock();
         let (snap, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let binding = match actor {
             Actor::Principal(b) => b,
@@ -530,7 +530,7 @@ impl Daemon {
         // (AUTH-1.44; RES-206), handed over the same way. The list is stable
         // under the write guard held here: its install takes the same one.
         let list = self.auth.cfg.blocked_prefixes();
-        let record_sig = match crate::auth::policy::precheck(
+        let record_sig = match skep_core::auth::policy::precheck(
             &credential_lock,
             snap.world(),
             &dep,
@@ -542,7 +542,7 @@ impl Daemon {
             Ok(record_sig) => record_sig,
             Err(r) => {
                 // A refused write's TURN (l7-C1), as on the plain path.
-                self.writes.take_turn_after_refusal(&serial);
+                self.commits.take_turn_after_refusal(&serial);
                 return with_signal(credential_refused(meta.kind, &r), closed);
             }
         };
@@ -578,7 +578,7 @@ impl Daemon {
         };
         let req_id = frame.id.clone();
         let resp =
-            self.writes.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
+            self.commits.commit_under(&serial, meta.attributed(binding.testimony(), signed), || {
                 self.febe.execute(binding.sid, frame)
             });
         let ack = self.codec.marshal(&resp);

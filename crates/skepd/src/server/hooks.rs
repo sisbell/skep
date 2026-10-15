@@ -24,7 +24,7 @@ use skep_util::notice::{self, Class};
 use skep_util::permits::Permit;
 
 use super::{Daemon, DaemonError};
-use crate::auth::AuthOptions;
+use skep_core::auth::AuthOptions;
 
 /// THE WORKER's FAULT DOOR (the test seam behind [`Daemon::panic_the_next_worker`]):
 /// one process-wide arm — `WORKER_FAULT_NONE` while nothing is armed, else
@@ -270,7 +270,7 @@ impl Daemon {
     /// Every daemon's interval is the constant until this is called.
     #[doc(hidden)]
     pub fn set_standing_interval_millis(&self, millis: u64) {
-        self.writes.checkpoint_signal().set_tick_interval(Duration::from_millis(millis));
+        self.commits.checkpoint_signal().set_tick_interval(Duration::from_millis(millis));
     }
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): PANIC THE NEXT WORKER, ONCE — `"inside"` its handler's
@@ -435,7 +435,7 @@ impl Daemon {
     /// parks — what the dirty-crash harness watches the child's stderr for
     /// before it kills.
     #[doc(hidden)]
-    pub const FEED_WALK_HOLD_NOTICE: &'static str = crate::write_path::FEED_WALK_HOLD_NOTICE;
+    pub const FEED_WALK_HOLD_NOTICE: &'static str = skep_core::commits::FEED_WALK_HOLD_NOTICE;
 
     /// TEST HOOK (the same standing): HOLD THE FEED WALK — every walk of a
     /// lost or torn `commits.log`'s region started from here on, in this
@@ -453,14 +453,14 @@ impl Daemon {
     /// the next open.
     #[doc(hidden)]
     pub fn hold_the_feed_walk() {
-        crate::write_path::FEED_WALK_HOLD.hold();
+        skep_core::commits::FEED_WALK_HOLD.hold();
     }
 
     /// TEST HOOK (the same standing): release every held feed walk, and hold
     /// no later one.
     #[doc(hidden)]
     pub fn release_the_feed_walk() {
-        crate::write_path::FEED_WALK_HOLD.release();
+        skep_core::commits::FEED_WALK_HOLD.release();
     }
 
     /// TEST HOOK (the same standing): THE REGION PENDING — `(low, head]`,
@@ -471,7 +471,7 @@ impl Daemon {
     /// reads a feed the walk is landing, and pins a page's refusal against.
     #[doc(hidden)]
     pub fn feed_pending_region(&self) -> Option<(u64, u64)> {
-        self.writes.feed_pending_region()
+        self.commits.feed_pending_region()
     }
 
     /// TEST HOOK (the same standing): PANIC THE FEED WALK's THREAD after its
@@ -483,7 +483,7 @@ impl Daemon {
     /// the open, or while the walk parks at the hold; arming again re-arms.
     #[doc(hidden)]
     pub fn panic_the_feed_walk() {
-        crate::write_path::arm_the_feed_walks_fault();
+        skep_core::commits::arm_the_feed_walks_fault();
     }
 
     /// TEST HOOK (the same standing): SET THE FEED WALK's PROGRESS CADENCE —
@@ -496,7 +496,7 @@ impl Daemon {
     /// through a seam rather than a wait.
     #[doc(hidden)]
     pub fn set_feed_walk_progress_cadence(&self, boundaries: u64, millis: u64) {
-        self.writes.set_feed_walk_progress_cadence(boundaries, millis);
+        self.commits.set_feed_walk_progress_cadence(boundaries, millis);
     }
 
     /// TEST HOOK (the same standing): RUN THE PRUNER's PASS now, on this
@@ -739,7 +739,7 @@ impl Daemon {
     /// of the wall clock, which this seam does not move.
     #[doc(hidden)]
     pub fn set_head_writer_clock_millis(&self, millis: u64) {
-        self.writes.set_head_writer_clock_millis(millis);
+        self.commits.set_head_writer_clock_millis(millis);
     }
 
     /// The line [`Daemon::hold_between_the_claim_and_its_head`]'s hold writes
@@ -782,7 +782,7 @@ impl Daemon {
     /// the one refusal it injects.
     #[doc(hidden)]
     pub fn refuse_the_next_head_once(&self) {
-        self.writes.refuse_next_head_once(None);
+        self.commits.refuse_next_head_once(None);
     }
 
     /// TEST HOOK (the same standing): [`Daemon::refuse_the_next_head_once`]
@@ -792,7 +792,7 @@ impl Daemon {
     /// same cause again is not.
     #[doc(hidden)]
     pub fn refuse_the_next_head_once_as(&self, detail: &str) {
-        self.writes.refuse_next_head_once(Some(detail));
+        self.commits.refuse_next_head_once(Some(detail));
     }
 
     /// TEST HOOK (the same standing: `#[doc(hidden)]`, not a stable API):
@@ -922,7 +922,7 @@ impl Daemon {
     /// the one rewrite it fails.
     #[doc(hidden)]
     pub fn fail_the_feeds_next_rewrite_past_rename(&self) {
-        self.writes.fail_the_feeds_next_rewrite_past_rename();
+        self.commits.fail_the_feeds_next_rewrite_past_rename();
     }
 
     /// TEST HOOK (the same standing): the feed files STOPPED this uptime —
@@ -931,7 +931,7 @@ impl Daemon {
     /// beside the name, which the standing line says.
     #[doc(hidden)]
     pub fn stopped_feed_files(&self) -> Vec<&'static str> {
-        self.writes.stopped_feed_files().into_iter().map(|file| file.name).collect()
+        self.commits.stopped_feed_files().into_iter().map(|file| file.name).collect()
     }
 
     /// TEST HOOK (the same standing): FAIL THE NEXT `step` of the kernel's
@@ -1132,7 +1132,7 @@ impl Daemon {
     /// process loses nothing the OS already holds.
     #[doc(hidden)]
     pub fn attest_store_synced_through(&self) -> u64 {
-        self.writes.attest_store_synced_through()
+        self.commits.attest_store_synced_through()
     }
 
     /// TEST HOOK (the same standing): FAIL THE ATTEST STORE'S NEXT WRITE —
@@ -1143,6 +1143,6 @@ impl Daemon {
     /// act failed PANICS here. Not disarmable.
     #[doc(hidden)]
     pub fn fail_the_attest_stores_next_write(&self) {
-        self.writes.fail_the_attest_stores_next_write();
+        self.commits.fail_the_attest_stores_next_write();
     }
 }

@@ -3,7 +3,7 @@
 //! parse/marshal/dispatch/configure; every decision lives in a store, save
 //! the three the spec gives the daemon — the session layer's gates (`auth/`,
 //! the upload family's among them), the published head's cadence
-//! (`write_path/head.rs`) and the media door (`skep-media`'s `door.rs`).
+//! (`skep-core`'s `commits/head.rs`) and the media door (`skep-media`'s `door.rs`).
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
 //! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
@@ -45,8 +45,8 @@
 //! `feed-streams.log`), the attest store `feed-attest.log` — the marker slot
 //! mirrored per attested commit, the one daemon file that is primary state
 //! below the reclaim floor — and, transiently while any is compacted, its
-//! `.compact` twin — all opened here through `WritePath::open` and owned by
-//! `write_path/sidecar.rs` and `write_path/feed/`; nothing here writes any
+//! `.compact` twin — all opened here through `Commits::open` and owned by
+//! `skep-core`'s `commits/sidecar.rs` and `commits/feed/`; nothing here writes any
 //! file of the WORLD's, which is why two daemons replaying one journal still
 //! converge byte-identically.
 //!
@@ -83,7 +83,7 @@
 //! access): it stays, because neither credential is browser-ambient.
 //! Reads are principal-free, so `*` grants any page the whole read
 //! surface. Writes do not follow it: a write needs a session,
-//! [`crate::auth::session::bare_bind_allowed`] refuses a bare bind whose
+//! `skep_core::auth::session::bare_bind_allowed` refuses a bare bind whose
 //! `Origin` is not in the bare set (a browser sends that header on every
 //! cross-origin POST), and the signed arm binds its origin inside the
 //! signature. A foreign page's POST is fenced by the daemon rather than
@@ -107,9 +107,9 @@
 //! and never alters an answer: M7 and M8 are not told a query is bounded. A
 //! concurrency bound, never a rate statement.
 //!
-//! **Writes go through one card** (`write_path/`): `POST /op` — the
+//! **Writes go through one card** (`skep-core`'s `commits`): `POST /op` — the
 //! daemon's only write ROUTE — hands each write to
-//! `WritePath::commit_under`, which commits it, records its change-feed
+//! `Commits::commit_under`, which commits it, records its change-feed
 //! entry, and announces its position, in that order and inside the
 //! serialization guard the write sequences here hold — and then gives the
 //! published head writer its turn, which when the cadence is due writes `H`
@@ -135,7 +135,7 @@
 //! of committed log positions — one event carrying the last announced
 //! position on connect, then an event whenever a later position is
 //! announced.
-//! `write_path/` owns the stream: what a subscriber is told first and
+//! `skep-core`'s `commits` owns the stream: what a subscriber is told first and
 //! next, and the coalescing that falls out of asking "anything past what I
 //! last sent"; `Subscribers` (in `listen.rs`) owns the budget, the admission, and
 //! the join at shutdown. What `server` adds is the SSE framing (`http.rs`'s
@@ -153,7 +153,7 @@
 //! `commits.log`: its crash honesty, its retention, and what a position
 //! whose record was lost answers; `feed/` owns the mask, the four derived
 //! sidecars, the attest store, the supplement merge and the two narrowings
-//! (`under=`, `drafts=true`); `write_path/` owns the ordering that makes the
+//! (`under=`, `drafts=true`); `skep-core`'s `commits` owns the ordering that makes the
 //! sidecar's invariants true. What `server` adds is the query's parse,
 //! the requester's FEED CLASS — resolved once per request off ONE head
 //! snapshot and threaded down (PUB-6.40) — the marshal, and `/health`'s
@@ -223,19 +223,20 @@ use skep_util::source::Source;
 
 use std::sync::Arc;
 
-use crate::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
-use crate::codec::JsonCodec;
+use skep_core::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
+use skep_core::codec::JsonCodec;
 use crate::history::History;
-use crate::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY, MAX_SMALL_BODY};
+use crate::limits::MAX_SMALL_BODY;
+use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
-use crate::write_path::LinesSaid;
-use crate::write_path::{FeedCompaction, FirstHead, StoppedFile, WritePath};
+use skep_core::commits::LinesSaid;
+use skep_core::commits::{FeedCompaction, FirstHead, StoppedFile, Commits};
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use request::BodySource;
 use scan::ClassScans;
 
-pub use crate::auth::session::Peer;
+pub use skep_core::auth::session::Peer;
 #[cfg(any(test, feature = "test-hooks"))]
 pub use embed::embed_seeded;
 pub use embed::{embed, EmbedError, IndexNotReady};
@@ -446,7 +447,7 @@ fn path_is_known(path: &str) -> bool {
 }
 
 // The token ↔ session binding, the handshake, and per-request resolution
-// live in `crate::auth` (the AUTH session layer). The glue that remains is
+// live in `skep_core::auth` (the AUTH session layer). The glue that remains is
 // `actor.rs`.
 
 /// THE WRITE PERMIT POOL's WIDTH — W = 4 (`operations.md` §4 rows 25, 27;
@@ -502,7 +503,7 @@ pub struct Daemon {
     /// them. One field because the four are one ordering — commit, record,
     /// announce, then the head writer's turn — that no handler may take
     /// apart.
-    writes: WritePath,
+    commits: Commits,
     /// The history surface behind `/op-at`, `/dump?at` and `/chain?at`,
     /// holding its own reconstruction budget: a guest may ask any of them
     /// and replay is per-call uncached, so without that budget any local
@@ -705,7 +706,7 @@ impl Daemon {
     /// retained window (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
     /// `CommitsLog::open` states that bound; `Feed::open` the derived
     /// sidecars' own, O(their files) plus O(any missing tail); and the attest
-    /// store's open inside it (`write_path/feed/attest.rs`'s
+    /// store's open inside it (`skep-core`'s `commits/feed/attest.rs`'s
     /// `AttestStore::open`) is O(its file) — the one feed file the journal's
     /// retention does not bound, a line for every attested commit the board
     /// has ever made, never compacted — plus one bounded journal scan per
@@ -808,7 +809,7 @@ impl Daemon {
         // data dir's genesis and a reopen's re-genesis alike — so a refusal
         // is a genesis that does not complete: no claim, no session and no
         // board record, nothing written, no engine opened.
-        crate::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
+        skep_core::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
         // THE ENGINE's OPEN, TIMED: the daemon's own `Instant` around the
         // call, the figure the recovery's landing carries.
         let began = Instant::now();
@@ -903,7 +904,7 @@ impl Daemon {
         media.note_checkpoint(start_point_len);
         say_open_line(media.startup_line());
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
-        let writes = WritePath::open(data_dir, &engine, Arc::clone(media.index()))
+        let commits = Commits::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
         // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
         // PUB round 2, lane 3.3). The live front door is given NO consult:
@@ -933,7 +934,7 @@ impl Daemon {
             AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
         };
         #[cfg(any(test, feature = "test-hooks"))]
-        let said = Arc::clone(writes.lines_said());
+        let said = Arc::clone(commits.lines_said());
         // THE TWO MEDIA POOLS, over the media gate's classed door and the
         // daemon's one hold-down for every edge pair (m12): built before the
         // gate moves into the daemon, each holding a clone of its door.
@@ -944,7 +945,7 @@ impl Daemon {
             febe,
             codec: JsonCodec,
             auth,
-            writes,
+            commits,
             history: History::new(),
             scans: ClassScans::new(),
             media,
@@ -993,7 +994,7 @@ impl Daemon {
     /// otherwise answer every attested write until the cadence's next head.
     /// Closed HERE, at open and before anything is served: a claimed board
     /// (its identity slice naming a claimant) whose head writer resumed no
-    /// head writes `H.1` now ([`WritePath::write_first_head`]) under the write
+    /// head writes `H.1` now ([`Commits::write_first_head`]) under the write
     /// path's own lock, naming the committed pair as it stands — the claim's
     /// own position where the crash was the split, and the last commit's on a
     /// board whose claim's `H.1` the driver refused, or claimed under a build
@@ -1019,8 +1020,8 @@ impl Daemon {
         if !self.board_is_claimed() {
             return;
         }
-        let serial = self.writes.serial_lock();
-        if self.writes.write_first_head(&serial) == FirstHead::Written {
+        let serial = self.commits.serial_lock();
+        if self.commits.write_first_head(&serial) == FirstHead::Written {
             notice::emit(
                 Class::Landing,
                 "the board is claimed and its journal held no head: H.1 written at open, \
@@ -1316,10 +1317,10 @@ impl Daemon {
     /// again at the claim flip, which RES-30 requires unconditionally — each
     /// under its class word, `warning ({when}):`, through the classed door.
     /// One method because the warnings are one obligation: WHICH apply is
-    /// [`crate::auth::startup_warnings`]'s, but the claim reading they are
+    /// [`skep_core::auth::startup_warnings`]'s, but the claim reading they are
     /// computed against and the stream they go to are this daemon's, and
     /// [`serve`] would otherwise reach two levels into
-    /// [`crate::auth::AuthState`] to spell them.
+    /// [`skep_core::auth::AuthState`] to spell them.
     ///
     /// `when` is the grammar's moment and only labels the line. The claim
     /// itself is READ from the head's slice ([`Daemon::board_is_claimed`])
@@ -1423,7 +1424,7 @@ impl Daemon {
 
     /// THE STANDING LINE's ACT (`operations.md` §1 THE RATES; §1.1 m11) —
     /// what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](crate::write_path::Woken::Tick)): the EIGHT reads,
+    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the EIGHT reads,
     /// each one atomic load or one lock and none under the serialization
     /// guard, in the order the line says them — (1) the write path's halt
     /// with its position, (2) the kernel's poison, (3) the feed's stopped
@@ -1440,11 +1441,11 @@ impl Daemon {
     /// death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let line = StandingLine {
-            halted_at: self.writes.halted_at(),
+            halted_at: self.commits.halted_at(),
             poisoned: self.engine.kernel().is_poisoned(),
-            stopped_files: self.writes.stopped_feed_files(),
+            stopped_files: self.commits.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
-            feed_walk_gone: self.writes.feed_walk_gone(),
+            feed_walk_gone: self.commits.feed_walk_gone(),
             index_failed: self.media.index_failed(),
             floor: self
                 .media
@@ -1464,11 +1465,11 @@ impl Daemon {
     /// catch answers is the only answer that write gives and no `Rejected`
     /// comes until the next write, hours away on a quiet board — and, where
     /// it reads poisoned, the line through the write path's once-flag
-    /// ([`WritePath::say_the_kernels_halt_once`]), which the first site
+    /// ([`Commits::say_the_kernels_halt_once`]), which the first site
     /// shares: said once between the two, whichever is reached first.
     pub(crate) fn say_the_kernels_halt_if_poisoned(&self) {
         if self.engine.kernel().is_poisoned() {
-            self.writes.say_the_kernels_halt_once();
+            self.commits.say_the_kernels_halt_once();
         }
     }
 
@@ -1665,7 +1666,7 @@ impl Daemon {
     /// and the media floor, kept by the gate from the newest checkpoint's
     /// size as it is noted (`MediaGate::note_checkpoint`), then the change
     /// feed's five files compacted to the
-    /// journal's reclaim floor (`WritePath::compact_feed_below_reclaim_floor`).
+    /// journal's reclaim floor (`Commits::compact_feed_below_reclaim_floor`).
     /// ONE function, so the three arms cannot disagree about what follows a
     /// landing; the newest header is the caller's one read of it, its length
     /// handed in. Where the floor has not moved — a reclamation that failed,
@@ -1675,7 +1676,7 @@ impl Daemon {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
         let floor = self.media.note_checkpoint(newest_len);
-        let compaction = self.writes.compact_feed_below_reclaim_floor(&self.engine);
+        let compaction = self.commits.compact_feed_below_reclaim_floor(&self.engine);
         ReRead { bytes_bound, floor, compaction }
     }
 
@@ -2488,7 +2489,7 @@ pub(super) struct StandingLine {
     /// The pruner's liveness flag.
     pub(super) pruner_gone: bool,
     /// The feed walk's liveness flag, with the region it left uncovered
-    /// (`WritePath::feed_walk_gone`).
+    /// (`Commits::feed_walk_gone`).
     pub(super) feed_walk_gone: Option<(u64, u64)>,
     /// The cell index's FAILED state — the media gate's read
     /// (`MediaGate::index_failed`).
@@ -2600,7 +2601,7 @@ impl fmt::Display for PrunerThreadEndedLine {
 /// the credential sequence's ack, passed down (P21's boundary — never the
 /// head's position after the flip, which the head's own commits move); the
 /// mode the board is now in, derived as AUTH-5.86 derives it with the claim
-/// read as set; and what [`WritePath::write_first_head`] answered. The
+/// read as set; and what [`Commits::write_first_head`] answered. The
 /// design's two arms are the first and the third; the second says the one
 /// state neither covers — a head the cadence wrote before the claim, so the
 /// board term stands and names an earlier position — rather than misname it

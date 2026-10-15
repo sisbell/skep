@@ -29,11 +29,10 @@ use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{
     AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine, Daemon,
 };
-use crate::auth::session::Peer;
-use crate::limits::{
-    BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, EDGE_HOLD_DOWN, PRUNE_INTERVAL,
-};
-use crate::write_path::{CheckpointSignal, StreamStep, Woken};
+use skep_core::auth::session::Peer;
+use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
+use skep_core::limits::EDGE_HOLD_DOWN;
+use skep_core::commits::{CheckpointSignal, StreamStep, Woken};
 
 /// The request worker count `skepd` serves with when the operator names
 /// none — held HERE rather than in the binary because it is the SIXTH TERM
@@ -491,7 +490,7 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
         let daemon = Arc::clone(&daemon);
         thread::Builder::new()
             .name("skepd-checkpoint".into())
-            .spawn(move || checkpoint_on_due(&daemon, daemon.writes.checkpoint_signal()))
+            .spawn(move || checkpoint_on_due(&daemon, daemon.commits.checkpoint_signal()))
     };
     let checkpointer = match checkpointer {
         Ok(h) => Some(h),
@@ -605,7 +604,7 @@ impl Skepd {
             let _ = h.join();
         }
         // The workers are gone, so no new subscriber can appear past here.
-        self.daemon.writes.shutdown();
+        self.daemon.commits.shutdown();
         self.subscribers.join_all();
         // The pruner: woken out of its wait at once, joined — at most one
         // file's work past the wake, the arm held one file at a time.
@@ -615,7 +614,7 @@ impl Skepd {
         }
         // The checkpoint thread: woken out of its wait at once, joined — a
         // checkpoint in flight let finish, no further one begun.
-        self.daemon.writes.checkpoint_signal().stop();
+        self.daemon.commits.checkpoint_signal().stop();
         if let Some(h) = self.checkpointer.take() {
             let _ = h.join();
         }
@@ -797,7 +796,7 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // queue move together under one lock, the sidecar appends before it
     // inserts, and an upload's hold is a guard its stream drops as it unwinds
     // (`skep_media::gate::Hold`). What a panic can cost is the tail of one write,
-    // on two cards, and an M10 session, on a third. `WritePath::commit_under`
+    // on two cards, and an M10 session, on a third. `Commits::commit_under`
     // runs `execute` under the serialization lock AND under a catch of its
     // own (the third arm, `operations.md` §4 row 34): a panic inside M10
     // after its commit is caught at the record step, the committed position
@@ -1077,7 +1076,7 @@ impl Subscribers {
 /// is inherent: the stream answers "anything past what I last sent", so a
 /// burst of commits is one event.
 ///
-/// The initial position comes from [`WritePath::announced`](crate::write_path::WritePath::announced) and not from
+/// The initial position comes from [`Commits::announced`](skep_core::commits::Commits::announced) and not from
 /// the kernel, which is what keeps every announced position one
 /// `GET /changes` already carries — see that method for the window the
 /// distinction closes.
@@ -1094,12 +1093,12 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream, closed: bool) {
     if stream.write_all(&head).is_err() {
         return;
     }
-    let mut last = daemon.writes.announced();
+    let mut last = daemon.commits.announced();
     if write_commit_event(&mut stream, last).is_err() {
         return;
     }
     loop {
-        match daemon.writes.next_step(last) {
+        match daemon.commits.next_step(last) {
             StreamStep::Shutdown => return,
             StreamStep::Commit(at) => {
                 last = at;

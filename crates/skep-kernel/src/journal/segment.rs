@@ -178,8 +178,8 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
 /// directory or a file that already stands keeps the mode it has — nothing
 /// here chmods. A pin, moved by a ruling and set by no operator, and moved
 /// with its siblings: skep-blobs' own pair (`blobs.rs`), the daemon's
-/// change-feed files (`write_path/feed/derived.rs`,
-/// `write_path/sidecar.rs`) and its refusal of a standing data directory
+/// change-feed files (`commits/feed/derived.rs`,
+/// `commits/sidecar.rs`) and its refusal of a standing data directory
 /// another user can read (`main.rs`, `mode & 0o077`). `tests/it/modes.rs`
 /// here, and the daemon's own, hold every entry to these exact bits. On a
 /// non-unix target no mode is set; v1 targets unix.

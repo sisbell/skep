@@ -16,7 +16,10 @@ skepd is layered; imports point down. The layers are drawn in
 `ARCHITECTURE.md` §The daemon, and `crates/skepd/tests/it/tidy.rs` checks
 them; the media resource beside its write path is the crate `skep-media`,
 whose two layers — the resource over its two leaf cells — are drawn in
-§The media resource and checked by `crates/skep-media/tests/it/tidy.rs`.
+§The media resource and checked by `crates/skep-media/tests/it/tidy.rs`;
+the daemon's core is the crate `skep-core`, whose three layers — the
+session layer over the commits over the leaves — are drawn in §The
+daemon's core and checked by `crates/skep-core/tests/it/tidy.rs`.
 
 ## Commits and comments
 

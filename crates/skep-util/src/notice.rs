@@ -18,7 +18,7 @@
 //! which PANICS when the stderr write fails. A daemon whose log pipe has
 //! lost its reader would otherwise fail the work the notice is ABOUT — and
 //! every notice the daemon writes is about work that has already succeeded.
-//! The commit-metadata append (`CommitsLog::record`, in `write_path::sidecar`)
+//! The commit-metadata append (`CommitsLog::record`, in `commits::sidecar`)
 //! runs between a commit and its ack, which is owed whatever the file does;
 //! the derived appends beside it are the same trade one layer down. The
 //! sharper cell is the credential write sequence's, which writes the

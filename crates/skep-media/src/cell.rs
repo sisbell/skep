@@ -280,7 +280,7 @@ fn parse_picture(object: &Map<String, Value>, bytes: &[u8]) -> Result<Cell, Cell
 
 /// THE CHEAP PREFIX TEST of the PICTURE kind, ahead of every parse the
 /// cell index makes (`index.rs`'s walk and entries, the daemon's
-/// `write_path.rs` prefix test ahead of a commit): past leading JSON
+/// `commits.rs` prefix test ahead of a commit): past leading JSON
 /// whitespace, the bytes
 /// open `{"type":"<the kind's address>"` — the canonical spelling every
 /// pinned schema puts first (D13: one JSON object naming its kind), so a

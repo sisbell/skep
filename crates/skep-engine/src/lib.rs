@@ -7,11 +7,14 @@
 //! implements every store's accessor trait, and supplies every `From`-lift.
 //! No store crate names `World`/`Record`, so the lib graph stays a DAG by
 //! construction (§Crate-graph consequence); what sits above it, as built, is
-//! the daemon (`skepd`), the conformance harness (`skep-conformance`, a
-//! library, not a binary), and — dev-only, the edge back through M2 that
-//! cargo permits — M2's dirty-crash harness, which judges recovery against
-//! this crate's world dump. Sizing a change to the public surface means
-//! those three.
+//! the daemon's two crates (`skep-core`, whose session layer reads the world
+//! and whose commits drive the kernel and the stores, and `skepd` over it),
+//! the conformance harness (`skep-conformance`, a library, not a binary),
+//! and — dev-only, the edges back through M2 and the media crate that cargo
+//! permits — M2's dirty-crash harness, which judges recovery against this
+//! crate's world dump, and `skep-media`'s unit suites, which judge generic
+//! code against the concrete `World`. Sizing a change to the public surface
+//! means those four.
 //!
 //! **The engine re-decides nothing a store decides.** A store's guards,
 //! policies and computations live in that store, and the engine reaches them

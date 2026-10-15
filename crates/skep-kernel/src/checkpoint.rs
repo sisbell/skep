@@ -9,20 +9,21 @@
 //! [chain_head 32][body_hash 32][body]`, at `checkpoint.<S>`; the fixed temp
 //! name `checkpoint.tmp` is no base — recovery REMOVES it (a crash
 //! mid-checkpoint leaves at most a `.tmp` the next open deletes, and a failed
-//! write deletes its own before answering — §6; the directory is the
-//! kernel's alone, so the file is the kernel's to delete). `chain_head` is the commit chain's value
-//! at `seq` — the marker that held it may be reclaimed, and this is where a
-//! replay above the base continues the chain from; `body_hash` is SHA-256 over
-//! the body, meaningful because the body is CANONICAL under `SKC4` —
-//! [`crate::WorldState`]'s canonical-encoding obligation, which the engine
-//! discharges with every serialized slice iterating in key order (the
-//! encoding report's option (i)) — so two writes of one world, on two
-//! processes or two machines, yield one byte string, and a published head can
-//! name a checkpoint by `(seq, chain_head, body_hash)`. The CRC stays as the
-//! first, cheap bit-rot check `load` runs before anything else.
+//! write deletes its own before answering — §6; the name is one of the four
+//! the kernel owns in its directory, so the file is the kernel's to delete).
+//! `chain_head` is the commit chain's value at `seq` — the marker that held it
+//! may be reclaimed, and this is where a replay above the base continues the
+//! chain from; `body_hash` is SHA-256 over the body, meaningful because the
+//! body is CANONICAL under `SKC4` — [`crate::WorldState`]'s
+//! canonical-encoding obligation, which the engine discharges with every
+//! serialized slice iterating in key order (the encoding report's option
+//! (i)) — so two writes of one world, on two processes or two machines, yield
+//! one byte string, and a published head can name a checkpoint by
+//! `(seq, chain_head, body_hash)`. The CRC stays as the first, cheap bit-rot
+//! check `load` runs before anything else.
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -32,7 +33,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::{at_file, stamp_text, Cause, NO_MIGRATION_REMEDY};
-use crate::journal::{codec, fsync_dir};
+use crate::journal::{codec, file_options, fsync_dir};
 use crate::{Seam, Seq, Step};
 
 // The trailing numeral is the checkpoint's FORMAT stamp; bumped 1 → 2 at
@@ -409,9 +410,10 @@ fn tmp_path(dir: &Path) -> PathBuf {
 /// length in bytes, or `None` where none stood. The open's act, under the
 /// flock ([`crate::Kernel::open`]): the file is no base ([`list`] skips the
 /// name) and keeps its room on the volume, which after a write the volume's
-/// room failed is the room the next checkpoint needs; the directory is the
-/// kernel's alone, so the deletion is the kernel's. A file that is there and
-/// cannot be removed fails the open as the I/O condition it is.
+/// room failed is the room the next checkpoint needs; the name is one of the
+/// four the kernel owns in its directory, so the deletion is the kernel's. A
+/// file that is there and cannot be removed fails the open as the I/O
+/// condition it is.
 pub(crate) fn remove_stray_tmp(dir: &Path) -> io::Result<Option<u64>> {
     let tmp = tmp_path(dir);
     let len = match fs::metadata(&tmp) {
@@ -660,20 +662,12 @@ pub(crate) fn write<W: Serialize>(
     let _ = body.try_reserve_exact(usize::try_from(hint).unwrap_or(usize::MAX));
     codec().serialize_into(&mut body, world).map_err(|e| WriteFail::Serialize(e))?;
     let tmp = tmp_path(dir);
-    // The temp file is born `0600` on unix — the mode set at creation,
-    // whatever the process umask — and the rename below carries it onto
-    // `checkpoint.<seq>`: a base is the world whole, owner-only from its
-    // first byte.
-    let mut opts = OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
+    // The temp file is born owner-only (`journal::file_options`), and the
+    // rename below carries its mode onto `checkpoint.<seq>`: a base is the
+    // world whole, owner-only from its first byte.
     let mut f = seam
         .before(Step::CheckpointCreate)
-        .and_then(|()| opts.open(&tmp))
+        .and_then(|()| file_options().write(true).create(true).truncate(true).open(&tmp))
         .map_err(at_file(TMP_NAME, "create"))?;
     let mut header = Vec::with_capacity(HEADER_LEN);
     header.extend_from_slice(&MAGIC);

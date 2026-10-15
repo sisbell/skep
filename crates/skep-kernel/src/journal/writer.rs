@@ -11,9 +11,9 @@ use serde::Serialize;
 
 use super::segment::segment_name;
 use super::{
-    encode_record, encode_txn, fsync_dir, list_segments, record_frame_len, record_payload_len,
-    segment_path, Attestation, CHAIN_GENESIS, MARKER_FRAME_LEN, MAX_FRAME_LEN, MAX_TXN_BYTES,
-    SEGMENT_ROTATE_BYTES,
+    encode_record, encode_txn, file_options, fsync_dir, list_segments, record_frame_len,
+    record_payload_len, segment_path, Attestation, CHAIN_GENESIS, MARKER_FRAME_LEN, MAX_FRAME_LEN,
+    MAX_TXN_BYTES, SEGMENT_ROTATE_BYTES,
 };
 use crate::config::SaltSource;
 use crate::error::{at_file, Cause};
@@ -203,16 +203,13 @@ impl JournalWriter {
     ) -> io::Result<Self> {
         let path = segment_path(dir, first_seq);
         let name = segment_name(first_seq);
-        // Born `0600` on unix: the segment is the board's history whole, and
-        // the mode is set at creation so the process umask cannot loosen it.
-        let mut opts = OpenOptions::new();
-        opts.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let file = opts.open(&path).map_err(at_file(&name, "create"))?;
+        // Born owner-only (`file_options`): the segment is the board's
+        // history whole.
+        let file = file_options()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(at_file(&name, "create"))?;
         // The new entry must be durable before any commit acked out of this
         // segment can rely on recovery finding the file (§1: fsync-of-dir on
         // rotate / first init).

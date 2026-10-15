@@ -1,4 +1,6 @@
-//! Segment files (names, listing, reclaim, directory fsync, the lock file).
+//! Segment files (names, listing, reclaim), and what the journal directory
+//! itself needs: its fsync, the modes every entry the kernel makes in it is
+//! born with, and the lock file.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -166,6 +168,46 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// THE KERNEL's MODES, owner-only — a directory `0700`, a file `0600` — set
+/// at creation, so the process umask can only tighten them: a reader of the
+/// journal directory holds the board whole, and a umask is the one thing no
+/// caller can be relied on to have set. Every directory and file the kernel
+/// makes is born with them, through [`dir_builder`] and [`file_options`],
+/// its one way to make either (`tests/it/tidy.rs` holds the library's
+/// source to that); a rename carries a file's mode onto its new name, and a
+/// directory or a file that already stands keeps the mode it has — nothing
+/// here chmods. A pin, moved by a ruling and set by no operator, and moved
+/// with its siblings: skep-blobs' own pair (`blobs.rs`), the daemon's
+/// change-feed files (`write_path/feed/derived.rs`,
+/// `write_path/sidecar.rs`) and its refusal of a standing data directory
+/// another user can read (`main.rs`, `mode & 0o077`). `tests/it/modes.rs`
+/// here, and the daemon's own, hold every entry to these exact bits. On a
+/// non-unix target no mode is set; v1 targets unix.
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
+
+/// A file's mode, owner-only: `DIR_MODE`'s card says why.
+#[cfg(unix)]
+const FILE_MODE: u32 = 0o600;
+
+/// A builder for a directory the kernel makes, born owner-only
+/// (`DIR_MODE`); the caller says whether it makes the parents too.
+pub(crate) fn dir_builder() -> fs::DirBuilder {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, DIR_MODE);
+    builder
+}
+
+/// The options a file the kernel makes is opened with, born owner-only
+/// (`FILE_MODE`); the caller says how it opens.
+pub(crate) fn file_options() -> OpenOptions {
+    let mut opts = OpenOptions::new();
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, FILE_MODE);
+    opts
+}
+
 /// The lock file's name in the journal directory.
 const LOCK_NAME: &str = "kernel.lock";
 
@@ -181,17 +223,15 @@ const LOCK_HELD: &str = "lock: another process holds it — a second kernel open
 /// `open()` fails with the acquisition error (surfaced as `OpenError::Io`),
 /// of kind `WouldBlock` and named as what it is ([`LOCK_HELD`]), so the
 /// refusal says a second process holds the journal rather than that a read
-/// failed. The lock file is born `0600` on unix where this creates it, as
-/// every file of the kernel's is; one that already stands keeps its mode.
+/// failed. The lock file is born owner-only ([`file_options`]) where this
+/// creates it; one that already stands keeps its mode.
 pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
-    let mut opts = OpenOptions::new();
-    opts.create(true).truncate(false).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let f = opts.open(dir.join(LOCK_NAME)).map_err(at_file(LOCK_NAME, "open"))?;
+    let f = file_options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK_NAME))
+        .map_err(at_file(LOCK_NAME, "open"))?;
     fs2::FileExt::try_lock_exclusive(&f).map_err(|e| {
         let act = if e.kind() == io::ErrorKind::WouldBlock { LOCK_HELD } else { "lock" };
         at_file(LOCK_NAME, act)(e)

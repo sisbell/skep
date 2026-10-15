@@ -1,17 +1,22 @@
+//! Two checks of the library's source text.
+//!
 //! THE TEST HOOKS, GATED: every item this crate documents as a test hook or
-//! a test seam compiles only under the `test-hooks` feature — the one check
-//! of this suite, in the media crate's form
-//! (`crates/skep-media/tests/it/tidy.rs`) with its helpers carried here, so
-//! each crate's suite stands alone. Two readings the kernel's own shapes
-//! need, which that form has not: the `impl` block that holds an item may
-//! carry the gate — the kernel's three doors are gated at theirs — and a
-//! file whose doc opens with the seam's words is a hook whole, held to its
-//! `mod` line's gate — the seam module `src/hooks.rs`, whose items carry no
-//! marker of their own. The layering check and the README check that stand
-//! beside the hook check in the media crate's suite are not here: `lib.rs`
-//! declares the kernel's modules in dependency order and `ARCHITECTURE.md`
-//! §The kernel states the rules across them, and the crate's surface is its
-//! `README.md`'s prose.
+//! a test seam compiles only under the `test-hooks` feature — in the media
+//! crate's form (`crates/skep-media/tests/it/tidy.rs`) with its helpers
+//! carried here, so each crate's suite stands alone. Two readings the
+//! kernel's own shapes need, which that form has not: the `impl` block that
+//! holds an item may carry the gate — the kernel's three doors are gated at
+//! theirs — and a file whose doc opens with the seam's words is a hook
+//! whole, held to its `mod` line's gate — the seam module `src/hooks.rs`,
+//! whose items carry no marker of their own. The layering check and the
+//! README check that stand beside the hook check in the media crate's suite
+//! are not here: `lib.rs` declares the kernel's modules in dependency order
+//! and `ARCHITECTURE.md` §The kernel states the rules across them, and the
+//! crate's surface is its `README.md`'s prose.
+//!
+//! THE MODES HAVE ONE HOME: every directory and file the library makes is
+//! born through `src/journal/segment.rs`'s `dir_builder` and `file_options`,
+//! which carry the owner-only modes.
 
 use std::path::{Path, PathBuf};
 
@@ -90,6 +95,88 @@ fn every_test_hook_compiles_only_under_test_hooks() {
         ungated.is_empty(),
         "every test hook compiles only under `test-hooks`; these do not:\n{}",
         ungated.join("\n")
+    );
+}
+
+/// What a code line of the library outside the modes' home may not name: a
+/// mode trait, an octal mode, or a way to make a directory or a file other
+/// than the home's two helpers.
+const MAKES_OUTSIDE_THE_HOME: [&str; 9] = [
+    "OpenOptionsExt",
+    "DirBuilderExt",
+    "PermissionsExt",
+    "DirBuilder::new",
+    "create_dir",
+    "File::create",
+    "fs::write",
+    "fs::copy",
+    "0o",
+];
+
+/// THE MODES HAVE ONE HOME: every directory and file the library makes is
+/// born through `src/journal/segment.rs`'s `dir_builder` and `file_options`,
+/// which carry the owner-only modes — so no code line of the library outside
+/// that file names a mode trait or an octal mode, makes a directory or a
+/// file any other way ([`MAKES_OUTSIDE_THE_HOME`]), or creates through
+/// options a bare `OpenOptions::new()` made; opening a file that stands, as
+/// the appender and the tail cut do, is not making one. `tests/it/modes.rs`
+/// holds the bits of the entries a commit and a checkpoint make; this holds
+/// every site, the ones no test reaches among them. Test modules and comment
+/// lines are not read, and the home must define both helpers, so a rename
+/// fails here rather than leaving the check unread.
+#[test]
+fn every_entry_the_library_makes_is_born_through_one_home_for_its_modes() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest.join("src");
+    let home = src.join("journal").join("segment.rs");
+    let home_text = std::fs::read_to_string(&home).unwrap();
+    for helper in ["pub(crate) fn dir_builder()", "pub(crate) fn file_options()"] {
+        assert!(
+            home_text.contains(helper),
+            "{} defines no `{helper}`: the modes' home this check reads has moved",
+            home.display()
+        );
+    }
+    let mut files = Vec::new();
+    rust_files(&src, &mut files);
+    files.sort();
+    let mut strays = Vec::new();
+    for file in &files {
+        if *file == home || file.file_name().is_some_and(|name| name == "tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(file).unwrap();
+        let code: Vec<&str> = text.lines().take_while(|l| l.trim() != "mod tests {").collect();
+        let relative = file.strip_prefix(manifest).unwrap().display();
+        for (i, line) in code.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            for token in MAKES_OUTSIDE_THE_HOME.iter().filter(|token| line.contains(**token)) {
+                strays.push(format!("{relative}:{}: `{token}` in `{trimmed}`", i + 1));
+            }
+        }
+        let joined = code.join("\n");
+        let mut from = 0;
+        while let Some(at) = joined[from..].find("OpenOptions::new()") {
+            let start = from + at;
+            let statement = joined[start..].split(';').next().unwrap_or("");
+            if statement.contains("create") {
+                let line = joined[..start].matches('\n').count() + 1;
+                strays.push(format!(
+                    "{relative}:{line}: a file created through a bare `OpenOptions::new()`"
+                ));
+            }
+            from = start + "OpenOptions::new()".len();
+        }
+    }
+    assert!(
+        strays.is_empty(),
+        "every directory and file the library makes is born through `dir_builder` or \
+         `file_options` ({}); these are not:\n{}",
+        home.display(),
+        strays.join("\n")
     );
 }
 

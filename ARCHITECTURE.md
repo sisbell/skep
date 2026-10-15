@@ -269,13 +269,18 @@ foundation and on the stores above it.
 
 ## The kernel, `skep-kernel`
 
-The kernel owns one directory: the journal's segments (`seg-<n>.wal`), the
-checkpoints (`checkpoint.<n>`, each written through `checkpoint.tmp` — a
-temp file the kernel alone deletes: a failed write removes its own before
-answering, and `Kernel::open` removes one a crash left, reporting its size)
-and the exclusion lock (`kernel.lock`) — the directory born `0700` and
-every file in it `0600` on unix, the mode set at creation so the process
-umask cannot loosen it. One applier lock serializes every
+The kernel owns four names in one directory: the journal's segments
+(`seg-<n>.wal`), the checkpoints (`checkpoint.<n>`, each written through
+`checkpoint.tmp` — a temp file the kernel alone deletes: a failed write
+removes its own before answering, and `Kernel::open` removes one a crash
+left, reporting its size) and the exclusion lock (`kernel.lock`). Every
+other name in that directory it leaves alone, so an embedder keeps files
+of its own beside the journal — the daemon keeps its change feed and its
+blob store there. The directory is born `0700` and every file the kernel
+makes in it `0600` on unix, through `journal::dir_builder` and
+`journal::file_options`, the modes' one home: the mode is set at creation
+so the process umask cannot loosen it, and `tests/it/tidy.rs` holds every
+other site to those two. One applier lock serializes every
 write; a write is appended, fsynced, and only then installed as the root
 that lock-free readers load. The checkpoint cadence is tested on commit
 under that lock and never by a timer; under its deferred arm a crossing
@@ -359,16 +364,24 @@ Rules that hold across its files:
   2026-09-29 the chain's preimage gained the signature slot's digest and
   M5's slice its shot terms, and the goldens were regenerated once under
   the unchanged `SKJ4`/`SKC4` by the owner's no-stamp ruling (no served
-  board exists; dev boards regenerate).
+  board exists; dev boards regenerate). A moved bound the reader holds
+  every journal to — the frame cap, the transaction budget, the segment
+  ceiling, the slot's width — is a format event too, though it keeps
+  every golden byte, so `src/journal/tests.rs` pins those four beside the
+  stamps; the rotation threshold and the resynchronization budget are
+  pins a ruling moves under one stamp.
 
 Its integration suites are one binary, `tests/it/`: `kernel` (the public
 surface's claims, the write-fault seam's among them — the full volume at a
 write, at a checkpoint before and past its rename, and at the repair after
 an unwind, and a panic inside the checkpoint write), `hazard` (dirty
 crashes, built through the engine), `golden` (the byte pins), `chain`
-(the commit chain's tamper matrix) and `tidy` (every item documented as a
-test hook or the test seam compiles only under `test-hooks`), over the
-shared `fixture` and `mutilate`.
+(the commit chain's tamper matrix), `docs` (the segment ceiling where the
+wire contract and the runbook restate it), `modes` (every directory and
+file the kernel makes owner-only) and `tidy` (every item documented as a
+test hook or the test seam compiles only under `test-hooks`, and every
+directory and file the library makes is born through the modes' one
+home), over the shared `fixture` and `mutilate`.
 
 ## The blob store, `skep-blobs`
 

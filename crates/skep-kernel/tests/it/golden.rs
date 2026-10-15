@@ -13,8 +13,12 @@
 //! longer matches its type, a chain formula or genesis value that moves, a
 //! salt formula that moves, a checkpoint header field that moves, a slice whose
 //! iteration order stops being a function of its contents — each fails here
-//! by name. What it cannot catch is a change that keeps the bytes, which is
-//! no change.
+//! by name. What it cannot catch is a change that keeps the bytes — and a
+//! moved bound the reader holds every journal to is one: the fixture's
+//! transactions are small, so the frame cap, the transaction budget, the
+//! segment ceiling and the slot's width move no golden byte and still decide
+//! whether another build's journal opens. `src/journal/tests.rs` pins those
+//! four beside the stamps.
 //!
 //! Three tests, as the report names them: the WRITER pin (the ops reproduce
 //! the files byte for byte), the READER pin (this build opens the files and

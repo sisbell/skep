@@ -1,6 +1,7 @@
 use super::*;
 use crate::error::HistoryError;
 use crate::journal::JournalWriter;
+use std::fs;
 
 // A minimal world for kernel-internal tests. WorldState is a local trait,
 // so the impl on a foreign type is fine inside the crate's test cfg.
@@ -1281,6 +1282,26 @@ fn retain_checkpoints_zero_is_refused() {
     let err = Kernel::<Vec<u64>>::open(bad_cfg, Vec::new()).err().unwrap();
     assert!(matches!(err, OpenError::InvalidConfig(_)), "got {err:?}");
     drop(live);
+}
+
+/// A relative `journal_path` is resolved against the working directory
+/// ONCE, at `open`: the kernel holds the directory as the path named it then,
+/// absolute, so a working directory that moves later moves no file the
+/// kernel touches. Asked through a path, relative to the test's own working
+/// directory, that names a temp directory.
+#[test]
+fn a_relative_journal_path_is_resolved_once_at_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let up: PathBuf = cwd.components().skip(1).map(|_| "..").collect();
+    let relative = up.join(dir.path().strip_prefix("/").unwrap());
+    assert!(relative.is_relative(), "the fixture names the directory relatively");
+    let k = Kernel::<Vec<u64>>::open(cfg(&relative, BurnedSeqPolicy::Rollback), Vec::new())
+        .expect("a relative path opens");
+    let held = &k.journaled.as_ref().expect("a journaled kernel").dir;
+    assert!(held.is_absolute(), "the kernel holds the directory resolved: {}", held.display());
+    assert_eq!(fs::canonicalize(held).unwrap(), fs::canonicalize(dir.path()).unwrap());
+    assert!(dir.path().join("kernel.lock").is_file(), "the lock lies in the directory named");
 }
 
 #[test]

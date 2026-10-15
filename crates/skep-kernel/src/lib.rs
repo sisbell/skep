@@ -35,11 +35,14 @@
 //! checkpoint inline after all, THE BACKSTOP: a caller that services no flag
 //! gets a checkpoint at every second crossing and never an unbounded
 //! window. [`CheckpointPolicy::EitherOf`] crosses on a commit count or a
-//! byte bound, whichever first, and [`Kernel::set_cadence_bytes`] moves the
-//! byte bound in a running kernel; [`CheckpointHeader::len`] is the figure a
-//! caller sizes it by — the newest base's through [`Kernel::newest_checkpoint`],
-//! or one base's by its seq through [`Kernel::checkpoint_header`], the start
-//! point's after an open that skipped a newer base. The fixed
+//! byte bound, whichever first, and [`Kernel::set_cadence_bytes`] and
+//! [`Kernel::set_cadence_commits`] move the bound and the count in a running
+//! kernel — the two values of a [`KernelConfig`] that move after
+//! [`Kernel::open`] reads it; [`CheckpointHeader::len`] is the figure a
+//! caller sizes the byte bound by — the newest base's through
+//! [`Kernel::newest_checkpoint`], or one base's by its seq through
+//! [`Kernel::checkpoint_header`], the start point's after an open that
+//! skipped a newer base. The fixed
 //! `checkpoint.tmp` is the kernel's to remove: a failed write removes its
 //! own, and [`Kernel::open`] removes one a crash left, reporting its size as
 //! [`Kernel::stray_checkpoint_removed`].

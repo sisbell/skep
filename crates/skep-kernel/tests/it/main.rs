@@ -3,6 +3,7 @@
 //! instead of once per file. Nothing but module declarations belongs here.
 
 mod chain;
+mod docs;
 // The engine fixture, not a suite: `hazard`, `golden` and `chain` each use a
 // subset of it, so the `dead_code` allow rides its `mod` line.
 #[allow(dead_code)]

@@ -46,6 +46,8 @@ pub(crate) use scan::FirstSyncWord;
 pub(crate) use scan::ScanFail;
 pub(crate) use scan::ScanOutcome;
 pub(crate) use segment::acquire_journal_lock;
+pub(crate) use segment::dir_builder;
+pub(crate) use segment::file_options;
 pub(crate) use segment::fsync_dir;
 pub(crate) use segment::list_segments;
 pub(crate) use segment::reaches_genesis;
@@ -99,6 +101,15 @@ pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// decision: max frame size), which is what every mention of the frame cap
 /// here names. The writer enforces it, so recovery may treat a larger claimed
 /// `len` as corrupt.
+///
+/// A FORMAT constant for that reason, never a pin a ruling moves alone:
+/// recovery holds every journal to it, so a build that lowered it under an
+/// unchanged [`MAGIC`] would read an older build's honest frame as a corrupt
+/// run — a halt mid-history, an acknowledged transaction cut as the tail at
+/// the end — and a build that raised it would write frames an older one reads
+/// so. It moves only with the stamp, so a journal written under the old
+/// figure is refused by name before a byte of it is scanned, with PUB-1.2's
+/// remedy; `src/journal/tests.rs` pins it beside the stamps.
 pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// The most bytes one TRANSACTION may occupy in the journal — its record
 /// frames, commit marker and headers together, the signature slot's blob
@@ -127,6 +138,13 @@ pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// and cannot commit, which is the one case where
 /// [`crate::TxnError::OverBudget`]'s remedy is to shrink the record rather
 /// than to split the transaction — as that variant states.
+///
+/// A FORMAT constant, as the frame cap it equals is: the reader holds every
+/// journal to it — a group past it never commits, and the marker after it
+/// reads as rewritten — and [`MAX_SEGMENT_LEN`] is twice it. So a build that
+/// moved it under an unchanged stamp would read another build's honest
+/// journal as damage, with no golden byte moving to say so. It moves only
+/// with [`JOURNAL_FORMAT`].
 pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// Rotation threshold (open build decision), tested BEFORE a transaction is
 /// appended and only at a txn boundary — so a closed segment holds this many
@@ -136,6 +154,10 @@ pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// per-commit Fsync the old segment is already durable at rotation (its last
 /// txn's barrier fsynced it), preserving marker-as-ack across the boundary
 /// (§1).
+///
+/// A PIN, not a format constant: no reader holds a journal to it — a closed
+/// segment's reach is read off its successor's name, never off this figure —
+/// so a ruling moves it under one stamp, within the assertion below.
 const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// The longest segment this module READS: twice the transaction budget. The
 /// writer appends only to a segment under `SEGMENT_ROTATE_BYTES`, and a
@@ -146,7 +168,8 @@ const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// what makes the memory floor [`MAX_TXN_BYTES`] promises a fact about the
 /// reader as well as the writer. Twice the budget rather than the writer's
 /// exact maximum, so a later build that lowers the rotation threshold never
-/// refuses a segment an earlier one wrote: this moves only with the format.
+/// refuses a segment an earlier one wrote: this moves only with the format,
+/// as the budget it doubles does.
 ///
 /// PUBLIC as the one figure for "one maximal segment": a caller holding a
 /// volume's free space above a floor reserves this much for the segment in
@@ -184,6 +207,11 @@ const _: () =
 /// damaged length field lands inside the frame cap about once in 64, so
 /// tripping eight segment-sized candidates by accident is a ~10^-15 event.
 /// Crafted content trips it after a few dozen.
+///
+/// A PIN, as the rotation threshold is: it bounds only the work a scan
+/// spends reading through damage, so moving it changes how much damage a scan
+/// reads before it refuses, never whether an honest journal opens — and a
+/// ruling moves it under one stamp.
 const RESYNC_BUDGET_PASSES: u64 = 8;
 
 /// A transaction's identity: its FIRST `Seq` (§1) — a distinguished `Seq`,

@@ -123,6 +123,32 @@ fn push_frame_refuses_a_payload_past_the_frame_cap() {
     assert!(matches!(parse_frame(&buf, 0), Parsed::Intact { .. }));
 }
 
+/// THE READER's BOUNDS ARE THE FIGURES THE STAMPS WERE CUT AT. Recovery holds
+/// every journal to these four — a frame past the cap is a corrupt run, a
+/// group past the budget never commits, a segment past the ceiling is refused
+/// unread, a slot past the width is an undecodable marker — so a bound moved
+/// under an unchanged stamp reads another build's honest journal as damage,
+/// and no golden byte moves to say so (`tests/it/golden.rs`): the fixture's
+/// transactions are small. A moved bound fails here naming the act, and a
+/// moved stamp fails here too, so whoever bumps it re-reads the bounds beside
+/// it. The rotation threshold and the resynchronization budget are pins a
+/// ruling moves under one stamp, and are not here.
+#[test]
+fn the_readers_bounds_are_the_figures_the_stamps_were_cut_at() {
+    const RESTAMPED: &str = "a format stamp moved: each bound below is a figure the old stamps \
+                             were cut at — re-read them, and move these pins with the stamps";
+    assert_eq!(&MAGIC, b"SKJ4", "{RESTAMPED}");
+    assert_eq!(&crate::checkpoint::CHECKPOINT_FORMAT, b"SKC4", "{RESTAMPED}");
+    const MOVED: &str = "a bound the reader holds every journal to moved under unchanged stamps: \
+                         bump both format stamps, the journal's and the checkpoint's, regenerate \
+                         the goldens with SKEP_GOLDEN_WRITE=1, and move these pins in the same \
+                         commit";
+    assert_eq!(MAX_FRAME_LEN, 64 * 1024 * 1024, "the frame cap: {MOVED}");
+    assert_eq!(MAX_TXN_BYTES, 64 * 1024 * 1024, "the transaction budget: {MOVED}");
+    assert_eq!(MAX_SEGMENT_LEN, 128 * 1024 * 1024, "the segment ceiling: {MOVED}");
+    assert_eq!(MAX_SIG_BYTES, 64 * 1024, "the slot's width: {MOVED}");
+}
+
 /// The attestation's refused spellings, held at construction: tag 0 (the
 /// empty slot's own, with bytes or without), an empty blob, and a blob past
 /// the slot's width — so no transaction can write the marker the decoder

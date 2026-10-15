@@ -652,12 +652,12 @@ fn open_creates_the_journal_directory_it_was_pointed_at() {
 
 /// A `checkpoint.tmp` a crash left — no base, and room kept on the volume —
 /// is REMOVED by the open, under the flock, and the fact reported with its
-/// size for the daemon's startup line: the directory is the kernel's alone,
-/// so the file is the kernel's to delete, and the operator's acts at the
-/// floor stay two. Fixed at the open: a reopen with none standing answers
-/// `None`, as the in-memory mode, which opens no directory, always does.
-/// The bases beside it stand, and the world recovers whole (M-I5 (f);
-/// the checkpoint's safety: the `.tmp` is never a base).
+/// size for the daemon's startup line: the name is one of the four the
+/// kernel owns, so the file is the kernel's to delete, and the operator's
+/// acts at the floor stay two. Fixed at the open: a reopen with none
+/// standing answers `None`, as the in-memory mode, which opens no directory,
+/// always does. The bases beside it stand, and the world recovers whole
+/// (M-I5 (f); the checkpoint's safety: the `.tmp` is never a base).
 #[test]
 fn an_open_removes_a_stray_checkpoint_tmp_and_answers_its_size() {
     let dir = tempdir().unwrap();
@@ -687,6 +687,43 @@ fn an_open_removes_a_stray_checkpoint_tmp_and_answers_its_size() {
     assert_eq!(k.stray_checkpoint_removed(), None, "a report of this open, not of the last");
     let in_memory = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     assert_eq!(in_memory.stray_checkpoint_removed(), None, "no directory, no temp file");
+}
+
+/// THE KERNEL OWNS FOUR NAMES in its directory — `seg-<n>.wal`,
+/// `checkpoint.<n>`, `checkpoint.tmp`, `kernel.lock` — and leaves every
+/// other alone (`Durability::Fsync`'s `journal_path` contract), so an
+/// embedder keeps files of its own beside the journal: a file at the root, a
+/// directory with a file in it, and names that only resemble the kernel's,
+/// in spellings its writer never emits, come through an open, a rotation, a
+/// landing's retention and reclamation, and a reopen, byte for byte.
+#[test]
+fn every_name_but_the_kernels_four_is_left_alone() {
+    let dir = tempdir().unwrap();
+    let own: [(&str, &[u8]); 5] = [
+        ("commits.log", b"the embedder's own log"),
+        ("blobs/blake3-ab", b"a file in a directory of the embedder's"),
+        ("seg-01.wal", b"no segment: the writer spells its first one seg-1.wal"),
+        ("checkpoint.07", b"no checkpoint: the writer spells this one checkpoint.7"),
+        ("checkpoint.tmp.old", b"not the temp file"),
+    ];
+    fs::create_dir(dir.path().join("blobs")).unwrap();
+    for (name, bytes) in own {
+        fs::write(dir.path().join(name), bytes).unwrap();
+    }
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    for _ in 0..5 {
+        commit_blob(&k); // four fill seg-1 past the threshold, the fifth rotates
+    }
+    assert!(seg_file(dir.path(), 5).exists(), "the fixture rotates");
+    assert_eq!(k.checkpoint().unwrap(), Seq(5));
+    assert!(!seg_file(dir.path(), 1).exists(), "the landing reclaimed the kernel's own segment");
+    drop(k);
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    assert_eq!(items(&k).len(), 5, "the journal reopens whole beside the embedder's files");
+    drop(k);
+    for (name, bytes) in own {
+        assert_eq!(fs::read(dir.path().join(name)).unwrap(), bytes, "{name} is the embedder's");
+    }
 }
 
 #[test]

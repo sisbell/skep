@@ -9,7 +9,7 @@ mod history;
 
 use std::any::Any;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io;
 use std::num::NonZeroU64;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
@@ -290,9 +290,10 @@ impl<W: WorldState> fmt::Debug for Staging<W> {
 /// tested ON COMMIT, there is no timer thread — and only the policy is the
 /// open knob. Lives in the applier-locked state and is advanced, tested and
 /// reset only from there, so a caller-invoked `checkpoint()` cannot disturb
-/// the cadence it never asked for (§6). The one part of it a running kernel
-/// moves is the byte bound ([`Kernel::set_cadence_bytes`]), replaced under
-/// the same lock.
+/// the cadence it never asked for (§6). The two parts of it a running kernel
+/// moves are the byte bound and the commit count
+/// ([`Kernel::set_cadence_bytes`], [`Kernel::set_cadence_commits`]), each
+/// replaced under the same lock.
 struct Cadence {
     policy: CheckpointPolicy,
     commits_since_reset: u64,
@@ -434,6 +435,9 @@ struct ApplierState {
 /// directory, no fallback chain, nothing to derive and nothing to exclude, and
 /// the caller's `genesis` is consumed into the root rather than kept.
 struct Journaled<W> {
+    /// The journal's directory as `journal_path` named it at the open,
+    /// resolved there to an absolute path, so no later move of the process's
+    /// working directory moves a file the kernel touches.
     dir: PathBuf,
     retain_checkpoints: usize,
     /// Σ₀ — the genesis world this kernel was opened under, kept because it is
@@ -774,7 +778,13 @@ impl<W: WorldState> Kernel<W> {
                 retain_checkpoints,
                 ..
             } => {
-                let recovered = Self::recover(journal_path, &genesis, cfg.salt, seam.clone())?;
+                // The directory as the path names it NOW: a relative path is
+                // resolved against the working directory once, here, so every
+                // file the kernel touches afterwards lies under the directory
+                // it named at the open, wherever that working directory moves.
+                let dir = std::path::absolute(journal_path)
+                    .map_err(at_file(journal_path.display(), "resolve"))?;
+                let recovered = Self::recover(&dir, &genesis, cfg.salt, seam.clone())?;
                 // The names the open passed over, for retention to pass over
                 // in turn, until the first landing has removed them.
                 let skipped_bases = recovered.recovery.skipped.iter().map(|b| b.seq.0).collect();
@@ -782,7 +792,7 @@ impl<W: WorldState> Kernel<W> {
                     recovered.root,
                     recovered.journal,
                     Some(Journaled {
-                        dir: journal_path.clone(),
+                        dir,
                         retain_checkpoints: *retain_checkpoints,
                         genesis,
                         recovery: recovered.recovery,
@@ -815,29 +825,23 @@ impl<W: WorldState> Kernel<W> {
         seam: Seam,
     ) -> Result<Recovered<W>, OpenError> {
         // THE DIRECTORY, OWNER-ONLY: every component this creates is born
-        // `0700` on unix, the mode set at creation so the process umask can
-        // only tighten it — as every file the kernel creates in it is born
-        // `0600` (the lock, a segment, `checkpoint.tmp`). A reader of the
-        // directory holds the board whole, and a umask is the one thing no
-        // caller can be relied on to have set. A directory that already
-        // stands is left exactly as found: nothing here chmods.
-        let mut builder = fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        builder.create(dir).map_err(at_file(dir.display(), "create"))?;
+        // with the kernel's directory mode (`journal::dir_builder`), as every
+        // file the kernel creates in it is born with its file mode; one that
+        // already stands is left exactly as found.
+        journal::dir_builder()
+            .recursive(true)
+            .create(dir)
+            .map_err(at_file(dir.display(), "create"))?;
         let lock = journal::acquire_journal_lock(dir)?;
         // THE STRAY TEMP FILE, removed under the flock before anything is
         // listed: a checkpoint a crash or a failed write left half-written
         // under the fixed temp name is no base (`checkpoint::list` would skip
         // it by name) and keeps its room on the volume — which, after a
         // write the volume's room failed, is the room the next checkpoint
-        // needs. The directory is the kernel's alone, so the file is the
-        // kernel's to delete; the caller is told it was, and how large it
-        // was, through [`Kernel::stray_checkpoint_removed`].
+        // needs. The name is one of the four the kernel owns in this
+        // directory, so the file is the kernel's to delete; the caller is
+        // told it was, and how large it was, through
+        // [`Kernel::stray_checkpoint_removed`].
         let stray_checkpoint_removed = checkpoint::remove_stray_tmp(dir)?;
         let segs = journal::list_segments(dir)?;
         let checkpoints = checkpoint::list(dir)?;
@@ -1576,9 +1580,11 @@ impl<W: WorldState> Kernel<W> {
 
     /// Move the cadence's BYTE BOUND — every [`CheckpointPolicy::JournalBytes`]
     /// threshold the policy holds, wherever its arms nest one — to `bytes`,
-    /// answering whether the policy held one to move. The one knob of the
-    /// cadence a running kernel changes, for a caller that sizes the bound by
-    /// the newest checkpoint and re-reads it as each lands
+    /// answering whether the policy held one to move. One of the two figures
+    /// of the cadence a running kernel changes, [`Kernel::set_cadence_commits`]
+    /// the other: every other value of the configuration is read once, at
+    /// [`Kernel::open`] ([`KernelConfig`]). It serves a caller that sizes the
+    /// bound by the newest checkpoint and re-reads it as each lands
     /// ([`Kernel::newest_checkpoint`] answers the size). Taken under the
     /// applier lock, where the cadence lives and is tested: the next commit
     /// tests the new bound against the counters as they stand — the window
@@ -1607,8 +1613,10 @@ impl<W: WorldState> Kernel<W> {
     /// The `checkpoint.tmp` this kernel's [`Kernel::open`] FOUND AND REMOVED,
     /// by its length in bytes — a checkpoint a crash or a failed write left
     /// half-written under the fixed temp name, which is no base and keeps its
-    /// room on the volume until something deletes it; the directory belongs
-    /// to the kernel alone, so that something is the open, under the flock.
+    /// room on the volume until something deletes it; the name is one of the
+    /// four the kernel owns in its directory ([`Durability::Fsync`]'s
+    /// `journal_path` contract), so that something is the open, under the
+    /// flock.
     /// `None` where none stood, and under [`Durability::InMemory`], which
     /// opens no directory. Fixed at `open`, like [`Kernel::recovery`], and
     /// kept apart from it: the report is of the directory as found, not of

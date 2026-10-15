@@ -40,6 +40,17 @@ test-hooks = ["acting"]
 # shell and the `skep` command's search turn it on, as the shell turns `tls`
 # on. Implies `acting`: the supplement needs a session.
 search = ["acting", "dep:skep-search"]
+# `merge` — MERGING VERSIONS (the design's merge record, `_designs/CLIENT/
+# 2026-10-14-reconciling-versions-design.md` §7): the editor's act on a
+# daughter as a library — this build the pure core, `compose_runs` over
+# three run lists with the gap report and the counts; the reads, the
+# landing, the record and the journal to follow over it — the `merge`
+# module. OFF BY DEFAULT, as `search` is: the default build of the library
+# holds no merge, so the thirteen content-free commands and the fence stay
+# true of it; the editor's shell, the `skep` command's merge and the
+# attendant turn it on. Implies `acting`: the landing signs. No dependency
+# of its own — `serde_json` is in every build already.
+merge = ["acting"]
 
 [dependencies]
 # M1 — the address vocabulary the entry frame and the walks spell addresses
@@ -75,10 +86,11 @@ rustls-platform-verifier = { workspace = true, optional = true }
 # (tests/it, outside this library's `cfg(test)`) drive the walks through the
 # scripted person under a plain `cargo test` or workspace run, no flag added.
 # A build that compiles no test never reads this table. `default-features =
-# false`, so this line adds `test-hooks` (and the `acting` it implies) and
+# false`, so this line adds `test-hooks` (and the `acting` it implies),
 # `search` — so the `search` module's suites compile and run under a plain
-# `cargo test` and the workspace gate, no flag added — and nothing else.
-skep-client = { path = ".", features = ["test-hooks", "search"], default-features = false }
+# `cargo test` and the workspace gate, no flag added — and `merge`, so the
+# `merge` module's suite does too, and nothing else.
+skep-client = { path = ".", features = ["test-hooks", "search", "merge"], default-features = false }
 # The index's own types, named by the search suites directly — the units
 # they feed, the pair's inputs they check — with no feature of its own.
 skep-search = { path = "../skep-search" }

@@ -90,6 +90,15 @@
 //!   an embedder calls — the `skep` command one embedder, the shell the
 //!   other — and nothing in it assumes a page or a webview.
 //!
+//! Behind the default-OFF `merge` feature — MERGING VERSIONS, the editor's
+//! act on a daughter (the design's merge record):
+//!
+//! * [`merge`] — the pure core of the merge: `compose_runs` over the base's
+//!   and the sides' run lists, the one rule, the six kinds of gap of which
+//!   one settles by rule, the merged list with its counts, and beside it
+//!   the base of two members and the draft's in-place script; the reads,
+//!   the landing, the record and the journal are a later lane's.
+//!
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save
 //! the credential records the admitted read names and `H.1`'s pair;
@@ -126,6 +135,9 @@ pub mod verify;
 
 #[cfg(feature = "search")]
 pub mod search;
+
+#[cfg(feature = "merge")]
+pub mod merge;
 
 pub use board::{Board, Health, KeySet, Token};
 pub use dial::{DialError, Dialer, PlainHttp, Request, Response};

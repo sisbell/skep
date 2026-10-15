@@ -45,6 +45,18 @@ assumes a page:
 | `search::bridge` | `Consumer::search(who, query, opts) → SearchAnswer {hits, total, the four flags, places, state}`: the query bounded at `QUERY_BOUND` bytes (`QueryTooLong` echoing nothing), the pair by role with the header ranges and the honored set, `places` at the call's class with a standing at the document grain; `Who::{Guest, Session(SessionRef)}`, `SearchOpts`, `Place` |
 | `search::jump` | `land(span, pairs) → Landing::{Carried, Partial, Absent}` over a `compare` answer's `Correspondence`s, and `landing_of`, the three budget refusals landing `Pinned` |
 
+Behind `merge` (default off) — MERGING VERSIONS, the editor's act on a
+daughter (the design's merge record, `_designs/CLIENT/2026-10-14-
+reconciling-versions-design.md`), as a library the editor, the `skep`
+command and the agent adapters call. This build holds the PURE CORE alone;
+the reads (`merge/reads.rs`), the landing (`merge/land.rs`), the record
+(`merge/record.rs`) and the journal (`merge/journal.rs`) are absent, a
+later lane's:
+
+| module | holds |
+|---|---|
+| `merge` | `compose_runs(base, sides, spine_hint, options, values) → Composed {runs, gaps, counts, values, ignored}`: three run lists in, the merged list M coalesced as the member will hold it, the gap report and the run counts `{a, b, m}` out, every value read through the closure given; the one rule — safe when the two sides touched different material, a conflict when they touched the same material or the same spot — as six kinds of gap, `Order`, `Anchor`, `Corner`, `Cut`, `Collision`, `Moves`, of which the rules settle `Anchor` alone; the value rule's dedup (on) and retype (off); the merger's `Resolution`s; `base_of`, the nearest common ancestor of two members; `script`, the in-place `delete`/`reinstate` script a draft landing applies |
+
 ## Features
 
 - `acting` (default on) — the acting half: `sign`, `store`, `ceremony`,
@@ -62,5 +74,10 @@ assumes a page:
   fence as written); the frontend's shell and the `skep` command's search
   turn it on, as the shell turns `tls` on. The crate's own tests turn it on
   through the self dev-dependency.
+- `merge` (default off) — implies `acting`; the `merge` module, the pure
+  core of merging two versions. OFF by default so the default build holds
+  no merge; the editor's shell, the `skep` command's merge and the
+  attendant turn it on, as they turn `search` on. No dependency of its own.
+  The crate's own tests turn it on through the self dev-dependency.
 
 No async runtime, no HTTP crate, no argument-parsing crate.

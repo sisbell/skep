@@ -162,6 +162,7 @@ cargo check -p skep-search || exit $?
 cargo check -p skep-client --lib --no-default-features || exit $?
 cargo check -p skep-client --lib --features acting || exit $?
 cargo check -p skep-client --lib --features search || exit $?
+cargo check -p skep-client --lib --features merge || exit $?
 cargo check -p skep-cli --bins --no-default-features || exit $?
 
 # skep-cli's `dev-hooks` build, which no test run below makes at the

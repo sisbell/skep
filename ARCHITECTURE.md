@@ -229,7 +229,10 @@ foundation and on the stores above it.
   its `search` feature, the SHELL's HALF of search over `skep-search`: the
   feed consumer, the index directory, the resume, the session's triggers,
   the document index, the state event's arms, the bridge call and the
-  jump's landing rule. Of the skep crates it depends on `skep-address`,
+  jump's landing rule — and, behind its `merge` feature, the `merge`
+  module, the pure core of merging two versions of one document: the
+  composition over three run lists, the gap report and the counts. Of the
+  skep crates it depends on `skep-address`,
   `skep-identity`, `skep-signature`, `skep-resolve` and — optional, behind
   `search` — `skep-search` alone — never `skepd`, which does not depend on
   it either (its suite spawns the daemon as a dev-dependency). Four
@@ -1134,6 +1137,20 @@ each ceremony:
   grain; `search/jump.rs` the landing rule over a `compare` answer's pairs
   — its unit suite in `search/tests.rs` over a scripted board, its
   daemon suites in `tests/it/search/`.
+- Under `merge` (default off; the design's merge record,
+  `_designs/CLIENT/2026-10-14-reconciling-versions-design.md`) — MERGING
+  VERSIONS, the editor's act on a daughter: the base member and the two
+  sides read as run lists, the surviving base material walked in order
+  with every removal dropped and every addition placed back at the place
+  its anchors name, the result one `publish` of the merged list and a
+  record beside it. Its PURE CORE is built — `merge.rs` the module and the
+  one rule, `merge/compose.rs` the composition `compose_runs` over three
+  run lists with the gap report and the counts, `base_of` and the draft's
+  in-place `script`, its unit suite in `merge/tests.rs` over the record's
+  vectors — and its reads, its landing and its record are not. The one
+  rule it keeps: a case is safe when the two sides touched different
+  material, a conflict when they touched the same material or the same
+  spot; six kinds of gap carry it, and the rules settle one, the anchor.
 
 Rules that hold across its files:
 

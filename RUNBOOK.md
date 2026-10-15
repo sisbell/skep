@@ -101,8 +101,11 @@ apart.
    Every deposited file takes one inode, however few its bytes, and
    the floor holds back bytes alone, so on a volume of many small
    deposits the inodes run out first. The board's writes are then
-   refused as *full*, their causes reading `the volume is full (No
-   space left on device …)`, while the floor never binds, each
+   refused as *full*, their causes reading `the volume is full (…
+   No space left on device …)` — the journal's and the
+   checkpoint's naming first the file they could not create and the
+   act, `(seg-{n}.wal: create: No space left on device …)`,
+   `(checkpoint.tmp: create: …)` — while the floor never binds, each
    checkpoint's landing names gigabytes free, and `df -h` agrees;
    `df -i` shows the inodes spent.
 
@@ -238,7 +241,12 @@ apart.
    ```
 
    `{reclaimed}` reads `{bytes} journal bytes reclaimed` or
-   `nothing reclaimed`.
+   `nothing reclaimed`. Where the landing's retention removed a
+   checkpoint, the clause after it names each file and its length:
+   `; checkpoint.{n} removed ({bytes} bytes)`. The daemon keeps two;
+   the one removed is the older past them, or a checkpoint the open
+   passed over (Start, step 3, item 5), whose file this is the last
+   word on.
 
 7. **Know what no act clears.** `feed-attest.log` gains a line for
    every attested commit and is never compacted; nothing the daemon
@@ -258,6 +266,43 @@ apart.
    ```
 
 ## 2. Restore
+
+**Read the refusal before you restore.** An open the journal's own
+data refuses says so on one line, `skepd: engine open: durable
+committed data cannot be read; position {position} names the
+damage: {account}`, and leaves every segment and checkpoint as it
+found them. So first copy the data directory aside, whole: it
+is the evidence, and the way back. Then act on the account:
+
+- `damaged sync word: {segment} opens with …`: restore that one
+  file from a copy, or rewrite its first four bytes as the account
+  says, and start again.
+- `corrupt run … {segment} is closed — {next} follows it …`:
+  restore that one segment, alone, from a copy that holds the
+  segment named after it, and start again; nothing is lost, and the
+  open verifies the file by the commit chain. `… {segment} is the
+  active segment …`: restore the data directory whole from one
+  copy (the steps below), which rewinds the board to that copy.
+- `{segment} is {n} bytes, past …` or `{segment}'s frames could not
+  be enumerated …`: where the file is not one of this board's
+  segments, move it out of the data directory; where it is, restore
+  it from a copy.
+- `chain break at the base: checkpoint.{n} …`: move
+  `checkpoint.{n}` out of the data directory and start again; the
+  open re-verifies the journal from the base below it.
+- `chain break: …` or `chain break at an edited transaction: …`:
+  restore the data directory from a copy you trust (the steps
+  below), and keep the refused directory for whoever investigates.
+  A board written by an `SKJ4` build before 2026-09-29 meets a
+  chain break at its first transaction, since that build's chain
+  hashed no signature slot; there is no migration path, so start
+  over.
+- an account in the serializer's own words (`invalid value: …`,
+  `… expected variant index …`): a record this build cannot decode,
+  written by a newer build; run that build (Upgrade, step 5).
+
+A journal of another format, and a fallback chain with no
+checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
 1. **Stop the daemon** (Stop).
 
@@ -531,6 +576,23 @@ apart.
       warning (at open): checkpoint.{n} is not a start point and was SKIPPED — {why}; the world was resolved from {base} and replayed forward from there
       ```
 
+      And, after them, the corrupt runs the open read below its
+      start point and passed over (`{runs} corrupt runs lie below …
+      and were PASSED OVER — the first: …` where there are several):
+
+      ```
+      warning (at open): a corrupt run lies below the start point {base} and was PASSED OVER — corrupt run {span}, holding no position above position {n}: a history read from a base below position {n}, or an open that falls back to one, meets it and refuses; {act}
+      ```
+
+      The board serves: `{base}` holds every position the run does.
+      But a history read from an older base refuses at the run, and
+      so would this open the day `{base}` fails to load. Do the act
+      the line names while `{base}` stands: a run in closed segments
+      is cleared by restoring those files alone from a copy that
+      holds the segment named after them; a run in the active
+      segment stays until that segment has closed and a landing
+      reclaims the journal below it.
+
    6. The recovery, `{base}` being `checkpoint.{n}` or `genesis`:
 
       ```
@@ -540,6 +602,19 @@ apart.
       On a large board the open takes a while, and the board
       answers nothing until it is done. This line says how long the
       recovery took.
+
+      Where no journal stood in the data directory, no segment and
+      no checkpoint, the open began a new board rather than
+      recovering one, and says so after this line:
+
+      ```
+      open: no journal stood in the data directory: this open began a new board at genesis — on a board that had one, the directory named above is not where it lives (a volume not mounted over it, a mistyped --data-dir): stop the daemon before a write lands on the new board
+      ```
+
+      On a fresh board's first start this is the expected line. On
+      a board that had a journal, stop the daemon (Stop), mount the
+      volume or correct `--data-dir`, and start again: a write taken
+      meanwhile lands on the new journal and is not the board's.
 
    7. A checkpoint a crash left half-written, now removed:
 
@@ -552,11 +627,34 @@ apart.
       a clean stop says nothing here:
 
       ```
-      open: journal tail cut ({bytes} bytes): the un-acked tail a crash or a kill left past the last committed marker — a write caught before its commit was durable, never acknowledged — removed by the open; every acknowledged write stands
+      open: journal tail cut ({bytes} bytes, beginning at byte {byte} of {segment}, past position {position}): the un-acked tail a crash or a kill left past the last committed marker — a write caught before its commit was durable, never acknowledged — removed by the open; every acknowledged write stands
       ```
 
-      The inventory reports them as `journal.tail_cut` (Stop,
-      step 2).
+      `{position}` is the committed head the open left: every write
+      at or below it stands.
+
+      Where the cut tail held intact frames no torn write leaves,
+      the line is a failure instead, since the cut may then have
+      taken a write the daemon acknowledged, and names it:
+
+      ```
+      failure: journal tail cut ({bytes} bytes, beginning at byte {byte} of {segment}, past position {position}), {n} of its frames intact on disk — a commit marker whose records failed their check, or a frame no writer of this format writes, the signature of rot in or a rewrite of the journal's last transaction rather than of a crash: a write this daemon acknowledged may be among the cut, at position {claimed}, the position an intact commit marker in the cut claims; a copy taken before this open holds the bytes; check the volume and its device
+      ```
+
+      `{claimed}` is the position that write's acknowledgement named,
+      and `GET /changes` named it by while it stood: a client holding
+      an acknowledgement at that position holds the write the cut may
+      have taken. Where no intact marker in the cut claims a position
+      above the head, the line reads `at a position above {position}`
+      instead.
+
+      The cut bytes are gone from the data directory; the copy taken
+      before this open is the one place they stand, from byte
+      `{byte}` of `{segment}` on. Keep it, and check the volume and
+      its device before the board takes more writes.
+
+      The inventory reports the bytes cut as `journal.tail_cut`
+      (Stop, step 2).
 
    9. The media limits and the floor in force:
 
@@ -676,11 +774,18 @@ apart.
    An open that fails says why on one line and exits 1. A refusal
    from the journal reads `skepd: engine open: {reason}`; a second
    daemon on the same directory, for one, is refused at the
-   kernel's lock:
+   kernel's lock, and the line says what holds it:
 
    ```
-   skepd: engine open: journal open/recovery I/O failure: {error}
+   skepd: engine open: journal open/recovery I/O failure: kernel.lock: lock: another process holds it — a second kernel open over this journal directory, a daemon or a tool; stop it, or open another directory: {error}
    ```
+
+   Every other I/O refusal of the journal's names its file, by its
+   name in the data directory (the directory itself by its path),
+   and the act that failed, the OS's cause last: `journal
+   open/recovery I/O failure: {file}: {act}: {error}`. A refusal
+   that the journal's data cannot be read is answered at the head
+   of Restore.
 
    Every other refusal names what refused, after the `skepd: `:
    `registry seeding:`, `blob store:`, `change-feed sidecar:` or
@@ -791,9 +896,11 @@ apart.
      removes; until then the inventory lists it among
      `foreign_designations`. Nothing is said.
    - A write caught before its commit was durable is cut from the
-     journal's tail at the next open, which says the bytes it cut
-     (`journal tail cut ({bytes} bytes): …`); the inventory reports
-     them as `journal.tail_cut`.
+     journal's tail at the next open, which says the bytes it cut,
+     where the cut began and the position it lies past (`journal
+     tail cut ({bytes} bytes, beginning at byte {byte} of {segment},
+     past position {position}): …`, Start, step 3); the inventory
+     reports the bytes as `journal.tail_cut`.
    - A claim stopped before its first head: the next open writes
      the head and says so (Start, step 3).
    - The walk that re-covers a lost `commits.log` (Restart,
@@ -881,13 +988,14 @@ apart.
    older, before the journal is scanned or written, exit 1:
 
    ```
-   skepd: engine open: journal is not this build's format: its segment opens with the stamp `{found}`, this build reads and writes `{expected}` only; there is no migration path …
+   skepd: engine open: journal is not this build's format: {segment} opens with the stamp `{found}`, this build reads and writes `{expected}` only; there is no migration path …
    ```
 
-   The line ends by saying to delete the data directory and start
-   over. Nothing of the journal was written, so the binary that
-   last served the board still opens it, and the copy from step 1
-   stands besides.
+   `{segment}` is the file the stamp was read from, the first
+   segment the scan reads. The line ends by saying to delete the
+   data directory and start over. Nothing of the journal was
+   written, so the binary that last served the board still opens
+   it, and the copy from step 1 stands besides.
 
 4. **A checkpoint the new build cannot use is passed over**, with
    the warning in Start, step 3, item 5, and the open replays from
@@ -897,8 +1005,11 @@ apart.
    restore from a copy, or start over:
 
    ```
-   skepd: engine open: no retained checkpoint loads and genesis is unreachable; the newest refused: {cause}
+   skepd: engine open: no retained checkpoint loads and genesis is unreachable; the newest refused: checkpoint.{n}: {cause}
    ```
+
+   `checkpoint.{n}` is the newest retained checkpoint, the one the
+   open most wanted; `{cause}` is why it refused.
 
 5. **Never open a board directory with an older binary than the
    one that last served it.** The change feed's files carry no
@@ -927,15 +1038,29 @@ apart.
 
    - a snapshot of the volume;
    - a copy with the daemon stopped;
-   - a live copy, in this order: first the journal, the
-     `seg-<n>.wal` and `checkpoint.<n>` files; then the daemon's
-     own files, `commits.log`, the four `feed-*.log` index files
-     and `feed-attest.log`; then `blobs/`, its designation
-     directories (`blobs/blake3/`) first, then `blobs/uploads.log`,
-     then `blobs/leases.log`.
+   - a live copy, in this order: first the journal, its
+     `checkpoint.<n>` files and then its `seg-<n>.wal` files; then
+     the daemon's own files, `commits.log`, the four `feed-*.log`
+     index files and `feed-attest.log`; then `blobs/`, its
+     designation directories (`blobs/blake3/`) first, then
+     `blobs/uploads.log`, then `blobs/leases.log`. Once the
+     journal's files are copied, check that no checkpoint landed
+     while they were: the `checkpoint.<n>` names in the directory
+     are still the ones you copied, and no `landing: checkpoint at
+     position …` line fell between the copy's start and its end.
+     Where one did, take the journal's files again.
 
-   The order is what makes a live copy one moment. Every file a
-   cell in the copied journal names was on disk before the cell
+   The order is what makes a live copy one moment. A checkpoint's
+   landing is the one act that removes journal files while the board
+   serves: it removes the oldest checkpoint, and the segments below
+   the oldest one it keeps. A copy of the segments taken before a
+   landing and of the checkpoints after it holds a checkpoint newer
+   than its last segment; a copy the other way round holds a
+   checkpoint whose segments are gone. Either opens, and fails only
+   later, when a read or a fallback reaches below the newest
+   checkpoint; the check after the journal's copy is what catches
+   both. Every file a cell in the copied journal names was on disk
+   before the cell
    committed, so the later copy of `blobs/` holds it, where a
    `blobs/` copied first misses every picture that committed while
    it ran. Within `blobs/` the lease log goes last, because a
@@ -951,7 +1076,9 @@ apart.
    A copy taken while a checkpoint lands may hold a
    `checkpoint.tmp`, and a `feed-attest.log` with lines past the
    journal's head. Both are harmless: the copy's open removes the
-   first and says so, and drops the second.
+   first and says so, and drops the second. What the landing does to
+   the journal's own files is not harmless, and the check in the
+   live copy's bullet is what catches it.
 
    A copy holds bytes of its own. Never take it by hard links
    (`cp -al`, an `rsync --link-dest` backup) or by symbolic links
@@ -979,8 +1106,11 @@ apart.
    halt marks and any foreign designation directory; and under
    `journal`, its `log_position`, `start_point`,
    `skipped_checkpoints`, `tail_cut` and
-   `stray_checkpoint_removed`. A served directory is refused at the
-   kernel's lock, exit 1:
+   `stray_checkpoint_removed`. It proves the copy's newest
+   checkpoint and the journal above it, not the older checkpoint a
+   damaged newest falls back to; step 1's check is what keeps that
+   one whole. A served directory is refused at the kernel's lock,
+   exit 1:
 
    ```
    skepd inventory: the journal at {dir} is held by a running daemon: run the inventory over a copy or a stopped board, and pass --hash <hex> from its listing to pull beside the daemon

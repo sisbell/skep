@@ -1,113 +1,120 @@
-//! THE BLOB UPLOAD — "the PUT", the record's word for the surface
-//! (`media.md` Op inventory 1, "THE RESUMABLE UPLOAD IS THE STANDARD SHAPE,
-//! STATED ONCE", its seven clauses, the lease's crash story, the deposit
-//! read; the register M-I2 (e), M-I5 (a), (c), M-I6 (b), (e); the ruling
-//! ms5-R; wire.md §Media): the path family `/blob/upload`, every method of
-//! it TOKEN-ACCEPTING through [`Daemon::resolve_actor`], the readiness
-//! refusal of the cell index's three readers, and the pruner's pass as the
-//! daemon runs it.
+//! The blob upload — "the PUT", the record's word — and the blob fetch.
 //!
-//! THE SHAPE (the owner's ruling ms3-2: the tus protocol's SHAPE, no byte
-//! of its wire): the CREATION — `POST /blob/upload?length=<N>`, the
-//! identifier minted and answered before any body byte (with a body, the
-//! standard's creation-with-upload: the identifier rides the `100 Continue`
-//! a client that asked for one is sent before the body is invited, and the
-//! answer after it); the OFFSET RESUME — `PATCH /blob/upload/<id>?offset=<K>`,
-//! the bytes from `K`, refused naming the record's offset where `K` is not
-//! it, and refused while another stream holds the upload; the PROGRESS —
+//! The upload is the surface of `media.md` Op inventory 1 ("the resumable
+//! upload is the standard shape, stated once", its seven clauses, the
+//! lease's crash story, the deposit read; the register M-I2 (e), M-I5 (a),
+//! (c), M-I6 (b), (e); wire.md §Media): the path family `/blob/upload`,
+//! every method of it token-accepting through [`Daemon::resolve_actor`],
+//! the readiness refusal of the cell index's three readers, and the
+//! pruner's pass as the daemon runs it.
+//!
+//! **The shape** is the tus protocol's *shape*, no byte of its wire: the
+//! creation — `POST /blob/upload?length=<N>`, the identifier minted before
+//! any body byte and answered at once where no body follows (with a body,
+//! the standard's creation-with-upload: the identifier rides the
+//! `100 Continue` a client that asked for one is sent before the body is
+//! invited, and the answer comes after the body — the record where the
+//! upload stays short of its length, the finish's answer where it reaches
+//! it); the offset resume — `PATCH /blob/upload/<id>?offset=<K>`, the
+//! bytes from `K`, refused naming the record's offset where `K` is not it,
+//! and refused while another stream holds the upload; the progress —
 //! `GET /blob/upload/<id>`, the offset a resume continues from; the
-//! EXPIRATION — one expiry per upload, re-fixed from each byte received,
-//! after which the identifier answers "no upload"; the TERMINATION —
-//! `DELETE /blob/upload/<id>`, nothing kept; and THE DEPOSIT READ — `GET
-//! /blob/upload`, the principal's own deposits and uploads, no surface of
-//! its own (m-Q10). Every spelling here is an INTERIM pin (sm-Q8), stated
-//! once in wire.md §Media.
+//! expiration — one expiry per upload, re-fixed from each byte received,
+//! after which the identifier answers "no upload"; the termination —
+//! `DELETE /blob/upload/<id>`, nothing kept; and the deposit read —
+//! `GET /blob/upload`, the principal's own deposits and uploads, no surface
+//! of its own. Every spelling here is an interim pin, stated once in
+//! wire.md §Media.
 //!
-//! THE ORDER OF ONE REQUEST THAT CARRIES BYTES: the session-layer gate
+//! **The order of one request that carries bytes.** The session-layer gate
 //! ([`upload_admission`], the session layer's own: a guest, an unclaimed
 //! board, a node-tier principal, refused before anything — D12, PUB-6.35's
-//! I10, P13); THE UPLOAD SETTING — on a board whose uploads are CLOSED
+//! I10, P13); the upload setting — on a board whose uploads are closed
 //! (`--no-uploads`, echoed on `/health` as `media.uploads`) the creation
 //! and the resume answer `403 upload_refused` with `detail`
-//! `uploads_closed` before any body byte,
-//! the upload kept where one stood, and every read and the termination
-//! are served (`media.md` Op inventory 1, "ONLY ON A BOARD WHOSE UPLOADS
-//! ARE OPEN"; M-I7 (e)); THE READINESS — the creation and the resume read
-//! the own scope, whose base is the cell index's number, so until the
-//! index's walk at open completes both are refused `index_rebuilding`,
-//! 503, retry-class, as the deposit read is (ms5-R: the index's three
-//! readers wait, and nothing else — the progress read, the termination,
-//! every text read and write, the door's own binding arm are served
-//! throughout) — or, where that walk DIED, `index_failed`, 503, for the
-//! life of the process, its `detail` naming the operator's act and no
-//! retry (`operations.md` §4 row 26; PATTERNS P10), read AHEAD of the
-//! readiness so a failed index never answers the retry-class token; THE
-//! PERMIT — the creation and the resume, the two acts that
-//! take bytes and no other, are admitted at most the UPLOAD POOL at once
-//! ([`UploadPool`](skep_media::pools::UploadPool),
-//! [`MAX_CONCURRENT_UPLOADS`](skep_media::limits::MAX_CONCURRENT_UPLOADS) slots;
-//! `media.md` Op inventory 1, "AN UPLOAD IS ADMITTED AT MOST AN UPLOAD PERMIT POOL AT
-//! ONCE"; M-I5 (f): bounded by a pool, never a queue; P29, the budget
-//! refuses at the layer whose work the stream multiplies — the worker each
-//! stream holds to its end; P13), taken AFTER the three cheaper refusals
-//! above and BEFORE the shape, the cap and every gate read, so a request
-//! past the pool is refused `503 upload_busy`, retry-class as `fetch_busy`
-//! and `history_busy` are, before any body byte, any record and any
-//! partial: a creation refused here makes NO upload, a resume refused here
-//! leaves its upload KEPT where it stood; the permit is held for the
-//! request's whole life, the body's stream and the finish included, and
-//! returns as the reply is composed — the progress read, the deposit read
-//! and the termination take none, and the refusal names no headroom and no
-//! holder (M-I6 (h); D9); the request's shape; the per-file cap and the
-//! own scope on the DECLARED total, before the body — refused there, the
-//! upload is KEPT (clause (6)); AT THE CREATION, before its partial and its
-//! record, THE
-//! STANDING-UPLOADS BOUND and THE FLOOR read on no declared length (P13,
-//! P29; M-I5 (f), M-I6 (b): a creation refused `standing` or `floor` makes
-//! no upload, its face naming the end of one of them where the bound
-//! fired); the hold (clause (5)); then the body, chunk by chunk through
-//! the one buffer, each chunk gated — the own scope, the venue's total, the
-//! floor, in that order — and refused there the upload is ENDED, nothing
-//! kept, the refusal naming the scope and the bytes it had taken (ms4-E1,
-//! the venue total's priced residue); then, where the offset reaches the
-//! length, THE FINISH under the credential lock's READ arm and never
-//! `Serial`: the requester re-resolved against the head (dead there, the
-//! upload is ended), the store's rename through the lease's sync, the
-//! record retired, THEN the answer — one shape whether or not the file was
-//! already here (M-I5 (a); "NO ANSWER OF THE UPLOAD SAYS WHETHER THE FILE
-//! WAS ALREADY HERE") — and one TIME: the replaced instance's unlink is the
-//! store's deferred step, run by the transport after the reply is written
-//! ([`Daemon::retire_asides`]) and swept by the pruner's pass where that
-//! did not run. A finish cut before its rename — a failure there, a crash
-//! — leaves the upload standing over its partial at its record's offset:
-//! an ordinary resume finishes it, an EMPTY one where that offset is its
-//! length (clause (7); M-I5 (c)).
+//! `uploads_closed` before any body byte, the upload kept where one stood,
+//! and every read and the termination are served (`media.md` Op inventory
+//! 1, "only on a board whose uploads are open"; M-I7 (e)); the readiness —
+//! the creation and the resume read the own scope, whose base is the cell
+//! index's number, so until the index's walk at open completes both are
+//! refused `index_rebuilding`, 503, retry-class, as the deposit read is
+//! (the index's three readers wait, and nothing else — the progress read,
+//! the termination, every text read and write, the door's own binding arm
+//! are served throughout, the door answering `index_rebuilding` only where
+//! its lease arm alone refuses) — or, where that walk died,
+//! `index_failed`, 503, for the life of the process, its `detail` naming
+//! the operator's act and no retry (`operations.md` §4 row 26; PATTERNS
+//! P10), read ahead of the readiness so a failed index never answers the
+//! retry-class token; the permit — the creation and the resume, the two
+//! acts that take bytes and no other, are admitted at most the upload pool
+//! at once ([`UploadPool`](skep_media::pools::UploadPool),
+//! [`MAX_CONCURRENT_UPLOADS`](skep_media::limits::MAX_CONCURRENT_UPLOADS)
+//! slots; `media.md` Op inventory 1, "an upload is admitted at most an
+//! upload permit pool at once"; M-I5 (f): bounded by a pool, never a
+//! queue; P29, the budget refuses at the layer whose work the stream
+//! multiplies — the worker each stream holds to its end; P13), taken after
+//! the three cheaper refusals above and before the shape, the cap and every
+//! gate read, so a request past the pool is refused `503 upload_busy`,
+//! retry-class as `fetch_busy` and `history_busy` are, before any body
+//! byte, any record and any partial: a creation refused here makes no
+//! upload, a resume refused here leaves its upload kept where it stood; the
+//! permit is held for the request's whole life, the body's stream and the
+//! finish included, and returns as the reply is composed — the progress
+//! read, the deposit read and the termination take none, and the refusal
+//! names no headroom and no holder (M-I6 (h); D9); the request's shape; the
+//! per-file cap, the request's bytes against the declared length and the
+//! own scope on the declared total, before the body — refused there, the
+//! upload is kept (clause (6)); at the creation, before its partial and its
+//! record, the standing-uploads bound and the floor read on no declared
+//! length (P13, P29; M-I5 (f), M-I6 (b): a creation refused `standing` or
+//! `floor` makes no upload, its face naming the end of one of them where
+//! the bound fired); the hold (clause (5)) — at the
+//! resume taken once its record is found, ahead of its offset and its own
+//! scope; then the body, chunk by chunk through the one buffer, each chunk
+//! gated — the own scope, the venue's total, the floor, in that order — and
+//! refused there the upload is ended, nothing kept, the refusal naming the
+//! scope and the bytes it had taken (the venue total's priced residue);
+//! then, where the offset reaches the length, the finish under the
+//! credential lock's read arm and never `Serial`: the requester re-resolved
+//! against the head (dead there, the upload is ended), the store's rename
+//! through the lease's sync, the record retired, *then* the answer — one
+//! shape whether or not the file was already here (M-I5 (a); "no answer of
+//! the upload says whether the file was already here") — and one *time*:
+//! the replaced instance's unlink is the store's deferred step, run by the
+//! transport after the reply is written ([`Daemon::retire_asides`]) and
+//! swept by the pruner's pass where that did not run. A finish cut before
+//! its rename — a failure there, a crash — leaves the upload standing over
+//! its partial at its record's offset: an ordinary resume finishes it, an
+//! empty one where that offset is its length (clause (7); M-I5 (c)).
 //!
-//! THE TRANSPORT SEAM. The transport reads the request head and, for the
-//! two body-carrying methods of this family, reads NO body: it hands the
-//! router a [`BodySource`] over a clone of the connection's socket BESIDE
-//! the request, through the daemon's private door (`Daemon::route_parked`),
-//! and the router hands the source to the route, which drains the socket
-//! one [`BLOB_CHUNK`](crate::limits::BLOB_CHUNK) at a time into the store. A
-//! caller over its own transport — the socket-free router, the tests — has
-//! none, and the route reads the request's own `body` through the same
-//! type. The arm's whole memory is the one buffer the source holds; nothing
+//! **The transport seam.** The transport reads the request head and, for
+//! the two body-carrying methods of this family, reads no body: it hands
+//! the router a [`BodySource`] over a clone of the connection's socket
+//! *beside* the request, through the daemon's private door
+//! (`Daemon::route_parked`), and the router hands the source to the route,
+//! which drains the socket one [`BLOB_CHUNK`](crate::limits::BLOB_CHUNK) at
+//! a time into the store. A caller over its own transport — the socket-free
+//! router, the tests — has none, and the route reads the request's own
+//! `body` through the same type. The arm's whole memory is the one buffer
+//! the source holds and the body bytes that arrived with the head; nothing
 //! here ever holds the body whole.
 //!
-//! AND THE FETCH — `GET /blob?i=<address>`, with `HEAD` for the head alone
-//! (`media.md` Op inventory 3; the register M-I2 (a)–(d), (g), M-I3 (b),
-//! M-I5 (f), M-I7 (a), (b); wire.md §Media, THE FETCH): the one path beside the
-//! family, TOKEN-ACCEPTING through [`Daemon::resolve_actor`] like every
-//! method of it, its order THE SERVE's (`skep-media`'s `serve.rs` — the shape, M10's
-//! read by identity as the gate, the classification, the permit, the whole
-//! file checked before its first byte) and its answer the transport's to
-//! stream ([`Routed::Fetch`]), the requester re-resolved between chunks
-//! through [`Daemon::fetch_still_admitted`]. Every refusal is a reply of
-//! this route's own (`reply::refuse_fetch`), class-varying as the family's
-//! are; a `HEAD` is answered as its `GET` is and the transport writes the
-//! head alone. Unlike the family, the fetch meets NO session-layer gate of
-//! its own: a guest reads a published picture as a guest reads its cell,
-//! and what the guest may not read M10's gate withholds (M-I2 (a)).
+//! **And the fetch** — `GET /blob?i=<address>`, with `HEAD` for the head
+//! alone (`media.md` Op inventory 3; the register M-I2 (a)–(d), (g),
+//! M-I3 (b), M-I5 (f), M-I7 (a), (b); wire.md §Media, the fetch): the one
+//! path beside the family, token-accepting through
+//! [`Daemon::resolve_actor`] like every method of it, its order the serve's
+//! (`skep-media`'s `serve.rs` — the shape, M10's read by identity as the
+//! gate, the classification, the permit, the whole file checked before its
+//! first byte) and its answer the transport's to stream ([`Routed::Fetch`]),
+//! the requester re-resolved between chunks through
+//! [`Daemon::fetch_still_admitted`]. Every refusal is a reply of this
+//! route's own (`reply::refuse_fetch`, and `malformed_blob` for its query),
+//! class-varying as the family's are; a `HEAD` is answered as its `GET` is
+//! and the transport writes the head alone. Unlike the family, the fetch
+//! meets no session-layer gate of its own: a guest reads a published
+//! picture as a guest reads its cell, and what the guest may not read M10's
+//! gate withholds (M-I2 (a)).
 
 use std::sync::atomic::Ordering;
 
@@ -133,24 +140,29 @@ use skep_core::auth::policy::{upload_admission, UploadRefusal};
 use skep_core::auth::session::Actor;
 use skep_core::codec::wire_address;
 
-/// The family's own path — the creation's and the deposit read's; one
-/// upload's paths lie beneath it.
+/// The family's own path: the creation's and the deposit read's.
+///
+/// One upload's paths lie beneath it.
 const FAMILY: &str = "/blob/upload";
 
-/// THE FETCH's one path — beside the family, never of it: `/blob/upload`
-/// is the family's and `/blob/<anything else>` is unknown.
+/// The fetch's one path, beside the family and never of it.
+///
+/// `/blob/upload` is the family's and `/blob/<anything else>` is unknown.
 const FETCH: &str = "/blob";
 
-/// Whether `path` is the fetch's — the router's `path_is_known` half for
-/// it, and the arm test of its two methods and its preflight.
+/// Returns whether `path` is the fetch's.
+///
+/// It is the router's `path_is_known` half for it, and the arm test of its
+/// two methods and its preflight.
 pub(super) fn is_fetch_path(path: &str) -> bool {
     path == FETCH
 }
 
 /// What a path of the family names.
 pub(super) enum BlobPath {
-    /// `/blob/upload` — the family's own path: the creation and the deposit
-    /// read.
+    /// `/blob/upload`, the family's own path.
+    ///
+    /// It names the creation and the deposit read.
     Family,
     /// `/blob/upload/<id>` — one upload: the resume, the progress, the end.
     Upload(UploadId),
@@ -158,7 +170,7 @@ pub(super) enum BlobPath {
     Malformed,
 }
 
-/// The family's parse: `None` for a path outside it.
+/// Parses a path of the family, or answers `None` for a path outside it.
 pub(super) fn blob_path(path: &str) -> Option<BlobPath> {
     if path == FAMILY {
         return Some(BlobPath::Family);
@@ -170,13 +182,15 @@ pub(super) fn blob_path(path: &str) -> Option<BlobPath> {
     })
 }
 
-/// Whether `path` is of the family — the router's `path_is_known` half.
+/// Returns whether `path` is of the family: the router's `path_is_known` half.
 pub(super) fn is_blob_path(path: &str) -> bool {
     blob_path(path).is_some()
 }
 
-/// Whether a request STREAMS its body: the creation's `POST` and the
-/// resume's `PATCH`, the two methods of the family that carry bytes.
+/// Returns whether a request streams its body.
+///
+/// It does for the creation's `POST` and the resume's `PATCH`, the two
+/// methods of the family that carry bytes.
 pub(super) fn streams_body(method: &str, path: &str) -> bool {
     matches!(
         (method, blob_path(path)),
@@ -187,27 +201,32 @@ pub(super) fn streams_body(method: &str, path: &str) -> bool {
 // ── the routes ───────────────────────────────────────────────────────────
 
 impl Daemon {
-    /// The family's one entry: resolve the actor against the head, dispatch,
-    /// attach the death signal the answer may owe.
+    /// Routes one request of the family, through its one entry.
+    ///
+    /// It resolves the actor against the head, dispatches, and attaches the
+    /// death signal the answer may owe.
     pub(super) fn blob_route(&self, req: &HttpRequest, body: &mut BodySource<'_>) -> Reply {
         let resolved = self.resolve_at_head(req);
         let reply = self.blob_dispatch(&resolved, req, body);
         with_signal(reply, resolved.closed)
     }
 
-    /// THE FETCH's entry — `GET /blob?i=` and `HEAD /blob?i=` (wire.md
-    /// §Media, THE FETCH): the actor resolved against the head, as every
-    /// token-accepting route resolves it — the death arm closing a dead
-    /// token's binding and the signal owed on the answer — then the query's
-    /// shape, then THE SERVE's order (`skep-media`'s `serve.rs`) as the resolved
-    /// session, the guest where none was. An admitted fetch is the
-    /// transport's to stream ([`Routed::Fetch`]), its headers stamped here:
-    /// the class-varying pair — the answer is a function of the presented
-    /// token's class, as `/op`'s is — the inert pair, and the signal. Every
-    /// refusal is an ordinary reply, class-varying and signalled the same.
-    /// A `HEAD` is routed as its `GET` is — the same order, the same answer
-    /// — and the transport writes the head alone (`http::write_reply`, the
-    /// stream's own first step): HTTP's rule, kept in one place.
+    /// Routes the fetch: `GET /blob?i=` and `HEAD /blob?i=`.
+    ///
+    /// It follows wire.md §Media, the fetch: the actor resolved against the
+    /// head, as every token-accepting route resolves it — the death arm
+    /// closing a dead token's binding and the signal owed on the answer —
+    /// then the query's shape, then the serve's order (`skep-media`'s
+    /// `serve.rs`) as the resolved session, the guest where none was. An
+    /// admitted fetch is the transport's to stream ([`Routed::Fetch`]), its
+    /// headers stamped here: the class-varying pair — the answer is a
+    /// function of the presented token's class, as `/op`'s is — the inert
+    /// pair, and the signal. Every refusal is an ordinary reply,
+    /// class-varying and signalled the same. A `HEAD` is routed as its `GET`
+    /// is — the same order, the same answer — and the transport writes the
+    /// head alone (`http::write_reply` for a refusal; for an admitted fetch,
+    /// `http::write_fetch_head`, the stream's own first step): HTTP's rule,
+    /// kept at the transport.
     pub(super) fn fetch_route(&self, req: &HttpRequest) -> Routed<'_> {
         let resolved = self.resolve_at_head(req);
         let refusal =
@@ -222,10 +241,11 @@ impl Daemon {
         }
     }
 
-    /// THE MID-STREAM RE-CHECK (M-I2 (g); s6-E1 (a)): the requester
-    /// re-resolved against the head — a token closed since the stream
-    /// opened resolves dead, and its binding is retired by the same arm —
-    /// and M10's gate run again as the session it now resolves to
+    /// Re-checks the requester mid-stream (M-I2 (g)).
+    ///
+    /// The requester is re-resolved against the head — a token closed since
+    /// the stream opened resolves dead, and its binding is retired by the
+    /// same arm — and M10's gate run again as the session it now resolves to
     /// (`serve::gate_admits`): `false` ends the stream by a reset. A guest
     /// stays a guest and is re-gated as one: a picture unpublished
     /// mid-stream is withheld from it at the next interval.
@@ -237,25 +257,29 @@ impl Daemon {
         serve::gate_admits(&self.febe, resolved.sid(), i)
     }
 
-    /// The media gate's clock, unix milliseconds — what the stream's time
-    /// interval is judged on, so a suite drives it through the clock seam.
+    /// Returns the media gate's clock, in unix milliseconds.
+    ///
+    /// It is what the stream's time interval is judged on, so a suite drives
+    /// it through the clock seam.
     pub(super) fn fetch_clock_ms(&self) -> u64 {
         self.media.now_ms()
     }
 
-    /// THE SESSION-LAYER GATE ([`upload_admission`], which states its order
-    /// and its reasons), then THE UPLOAD SETTING, then THE READINESS, then
-    /// THE PERMIT, then the method. The readiness (ms5-R): the creation, the
-    /// resume and the deposit read — the index's three readers at this
-    /// family — are refused `index_rebuilding` until the walk at open
+    /// Dispatches one request of the family, its gates first.
+    ///
+    /// The order is the session-layer gate ([`upload_admission`], which
+    /// states its order and its reasons), then the upload setting, then the
+    /// readiness, then the permit, then the method. The readiness: the
+    /// creation, the resume and the deposit read — the index's three readers
+    /// at this family — are refused `index_rebuilding` until the walk at open
     /// completes, and `index_failed` for the uptime where that walk died
-    /// (`operations.md` §4 row 26), the FAILED state read first so a failed
+    /// (`operations.md` §4 row 26), the failed state read first so a failed
     /// index never answers the retry-class token; the progress read and the
     /// termination read no base and are served. The permit (M-I5 (f); P29,
-    /// P13): the creation and the
-    /// resume take one of the upload pool's or are refused `upload_busy` —
-    /// after the three refusals above, which spend no permit, and before any
-    /// byte, record or partial; held for the request's life.
+    /// P13): the creation and the resume take one of the upload pool's or
+    /// are refused `upload_busy` — after the three refusals above, which
+    /// spend no permit, and before any byte, record or partial; held for the
+    /// request's life.
     fn blob_dispatch(
         &self,
         resolved: &Resolved,
@@ -265,8 +289,9 @@ impl Daemon {
         let Some(target) = blob_path(&req.path) else {
             return refuse(TransportError::NoSuchEndpoint, Some(&req.path));
         };
-        // THE SESSION-LAYER GATE (`auth::policy::upload_admission`), off ONE
-        // head snapshot: the claim and the tier are one committed state.
+        // The session-layer gate (`skep_core::auth::policy::upload_admission`),
+        // off one head snapshot: the claim and the tier are one committed
+        // state.
         let principal = {
             let snap = self.engine.kernel().snapshot();
             match upload_admission(snap.world(), &resolved.actor) {
@@ -274,7 +299,7 @@ impl Daemon {
                 Err(refusal) => return refuse_upload(&refusal.token()),
             }
         };
-        // THE UPLOAD SETTING: the two acts that take bytes, refused before
+        // The upload setting: the two acts that take bytes, refused before
         // any body byte on a closed board; the reads and the end served.
         let takes_bytes = matches!(
             (req.method.as_str(), &target),
@@ -287,7 +312,7 @@ impl Daemon {
             (req.method.as_str(), &target),
             ("POST", BlobPath::Family) | ("GET", BlobPath::Family) | ("PATCH", BlobPath::Upload(_))
         );
-        // THE FAILED STATE BEFORE THE NOT-READY ONE (`operations.md` §4 row
+        // The failed state before the not-ready one (`operations.md` §4 row
         // 26): a walk that died readies nothing, so a failed index must
         // never answer the retry-class token — the final refusal is read
         // first, and the window's only where the walk still runs.
@@ -297,7 +322,7 @@ impl Daemon {
         if reads_the_index && !self.media.index_ready() {
             return refuse_rebuilding();
         }
-        // THE PERMIT (M-I5 (f); P29, P13): the two acts that take bytes are
+        // The permit (M-I5 (f); P29, P13): the two acts that take bytes are
         // admitted at most the upload pool at once — taken here, after the
         // cheaper refusals above and before the shape, the cap and every
         // gate read, so a request past the pool is refused before any body
@@ -333,15 +358,17 @@ impl Daemon {
         }
     }
 
-    /// THE CREATION (clause (1)): `length=<N>`, the per-file cap on it, the
-    /// own scope on it BEFORE the body, then the standing-uploads bound and
-    /// the floor on no declared length (`MediaGate::admit_creation`) — each
-    /// refusal before the partial and the record, no upload made — the
-    /// identifier minted and the record written under the gate's terms
-    /// (`MediaGate::create_upload`: the key, the deposit's function, the
-    /// lease interval in force); with no body the answer is the record; with
-    /// one — the creation-with-upload — the identifier is held and the body
-    /// streamed.
+    /// Runs the creation (clause (1)).
+    ///
+    /// It takes `length=<N>`, the per-file cap on it, the request's bytes
+    /// against it, the own scope on it *before* the body, then the
+    /// standing-uploads bound and the floor on no declared length
+    /// (`MediaGate::admit_creation`) — each refusal before the partial and
+    /// the record, no upload made — the identifier minted and the record
+    /// written under the gate's terms (`MediaGate::create_upload`: the key,
+    /// the deposit's function, the lease interval in force); with no body the
+    /// answer is the record; with one — the creation-with-upload — the
+    /// identifier is held and the body streamed.
     fn blob_create(
         &self,
         principal: PrincipalId,
@@ -393,11 +420,13 @@ impl Daemon {
         self.stream_body(principal, record, req, body, &[("Upload-Id", hex.as_str())])
     }
 
-    /// THE RESUME (clauses (3), (5), (6)): the record under the requester's
-    /// own key, the hold, the stated offset against the record's, the
-    /// request's bytes against the length, the own scope on what the upload
-    /// leaves past the offset BEFORE the body — refused there, the upload
-    /// is kept — then the body.
+    /// Runs the resume (clauses (3), (5), (6)).
+    ///
+    /// In order: the record under the requester's own key, the hold, the
+    /// stated offset against the record's, the request's bytes against the
+    /// length, the own scope on what the upload leaves past the offset
+    /// *before* the body — refused there, the upload is kept — then the
+    /// body.
     fn blob_resume(
         &self,
         principal: PrincipalId,
@@ -419,9 +448,11 @@ impl Daemon {
         self.resume_held(principal, record, offset, req, body)
     }
 
-    /// The resume under its hold: the stated `offset` held to the record's
-    /// own — the one offset [`Daemon::stream_body`] resumes at — then the
-    /// request's bytes against the length and the own scope, then the body.
+    /// Runs the resume under its hold.
+    ///
+    /// The stated `offset` is held to the record's own — the one offset
+    /// [`Daemon::stream_body`] resumes at — then the request's bytes against
+    /// the length and the own scope, then the body.
     fn resume_held(
         &self,
         principal: PrincipalId,
@@ -453,14 +484,16 @@ impl Daemon {
         self.stream_body(principal, record, req, body, &[])
     }
 
-    /// THE BODY, chunk by chunk: resumed at the record's own offset — a
-    /// fresh record's zero at the creation, the stated offset the resume held
-    /// to it — each chunk gated as the body is written and then appended; a
-    /// connection that dies or stalls KEEPS the upload at its durable point;
-    /// a refusal as the body is written ENDS it; a body that leaves the
-    /// upload short of its length settles and answers the record; one that
-    /// reaches it goes on to the finish. The store's records are keyed to
-    /// `principal` ([`MediaGate::key`]).
+    /// Streams the body into the store, chunk by chunk.
+    ///
+    /// It resumes at the record's own offset — a fresh record's zero at the
+    /// creation, the stated offset the resume held to it — each chunk gated
+    /// as the body is written and then appended; a connection that dies or
+    /// stalls keeps the upload at its durable point; a refusal as the body is
+    /// written ends it; a body that leaves the upload short of its length
+    /// settles and answers the record; one that reaches it goes on to the
+    /// finish. The store's records are keyed to `principal`
+    /// ([`MediaGate::key`]).
     fn stream_body(
         &self,
         principal: PrincipalId,
@@ -486,7 +519,7 @@ impl Daemon {
                 Ok(Some(c)) => c,
                 Ok(None) => break,
                 Err(e) => {
-                    // The connection died or stalled: the upload is KEPT at
+                    // The connection died or stalled: the upload is kept at
                     // its durable point — what was written settles.
                     let _ = stream.settle(self.media.now_ms());
                     return refuse(
@@ -497,7 +530,7 @@ impl Daemon {
             };
             let n = chunk.len() as u64;
             if let Err(scope) = self.media.admit_bytes(principal, &id, written, n, now) {
-                // REFUSED IS ENDED (clause (6)): nothing kept.
+                // Refused is ended (clause (6)): nothing kept.
                 drop(stream);
                 let _ = store.end_upload(&key, &id, now);
                 return refuse_deposit(scope, RefusedAt::AsTheBodyIsWritten, written);
@@ -518,20 +551,21 @@ impl Daemon {
         self.blob_finish(principal, id, stream, req)
     }
 
-    /// THE FINISH (clause (7); M-I5 (a)), under the credential lock's READ
-    /// arm from the rename through the lease's sync — the lock the plain
-    /// write path's door holds, so the check that reads the lease and the
-    /// finish that writes it never interleave with a credential write; never
-    /// `Serial`, which orders commits and the PUT commits nothing. The
-    /// requester is re-resolved against the head under it: a session killed
-    /// mid-transfer is dead at its rename — its token resolves to an actor
-    /// other than `principal`, the stream's own — its upload ended, nothing
-    /// kept (clause (6); M-I2 (g)). The finish is the media gate's
-    /// (`MediaGate::finish_upload`): the lease taken for the lease interval
-    /// in force, and the finished size noted (`operations.md` §1.1 m9), the
-    /// one site the floor's lift is said from — a finish is proof the volume
-    /// held a whole file above the floor, where an admission proves nothing
-    /// the next chunk cannot undo.
+    /// Runs the finish (clause (7); M-I5 (a)), under the credential lock.
+    ///
+    /// It holds the lock's read arm from the rename through the lease's sync
+    /// — the lock the plain write path's door holds, so the check that reads
+    /// the lease and the finish that writes it never interleave with a
+    /// credential write; never `Serial`, which orders commits and the PUT
+    /// commits nothing. The requester is re-resolved against the head under
+    /// it: a session killed mid-transfer is dead at its rename — its token
+    /// resolves to an actor other than `principal`, the stream's own — its
+    /// upload ended, nothing kept (clause (6); M-I2 (g)). The finish is the
+    /// media gate's (`MediaGate::finish_upload`): the lease taken for the
+    /// lease interval in force, and the finished size noted (`operations.md`
+    /// §1.1 m9), the one site the floor's lift is said from — a finish is
+    /// proof the volume held a whole file above the floor, where an
+    /// admission proves nothing the next chunk cannot undo.
     fn blob_finish(
         &self,
         principal: PrincipalId,
@@ -561,8 +595,9 @@ impl Daemon {
         }
     }
 
-    /// THE PROGRESS: the upload's record under the requester's own key — the
-    /// offset a resume continues from.
+    /// Answers the progress: the upload's record under the requester's key.
+    ///
+    /// It carries the offset a resume continues from.
     fn blob_progress(&self, principal: PrincipalId, id: UploadId) -> Reply {
         match self.media.store().upload(&MediaGate::key(principal), &id, self.media.now_ms()) {
             Some(r) => progress_reply(&r),
@@ -570,8 +605,9 @@ impl Daemon {
         }
     }
 
-    /// THE END (clause (6), the termination): claimed as a stream claims
-    /// it, then ended — nothing kept; `204`.
+    /// Ends the upload (clause (6), the termination), nothing kept.
+    ///
+    /// It is claimed as a stream claims it, then ended; the answer is `204`.
     fn blob_end(&self, principal: PrincipalId, id: UploadId) -> Reply {
         let Some(_hold) = self.media.claim(id) else {
             return refuse(TransportError::UploadHeld, Some("another stream holds this upload"));
@@ -582,32 +618,33 @@ impl Daemon {
         }
     }
 
-    /// THE DEFERRED STEP of a replace (the store's `unlink_asides`): the
-    /// replaced instance's names unlinked, off the answer's path — the
-    /// transport runs it after a blob reply is written; the pruner's pass
-    /// sweeps whatever it did not reach. An I/O failure here is the
+    /// Runs a replace's deferred step: the store's `unlink_asides`.
+    ///
+    /// The replaced instance's names are unlinked, off the answer's path —
+    /// the transport runs it after a blob reply is written; the pruner's
+    /// pass sweeps whatever it did not reach. An I/O failure here is the
     /// operator's line, never a client's: the aside stands for the pass or
     /// the next open.
     ///
-    /// ROW 37, ONCE PER STANDING FAULT (`operations.md` §1.1 row 37; §1
-    /// NEVER — a line is said once per condition, never per request; the
-    /// family's requests write no line of their own, D9): the store
+    /// **Row 37, once per standing fault** (`operations.md` §1.1 row 37; §1's
+    /// never list — a line is said once per condition, never per request;
+    /// the family's requests write no line of their own, D9). The store
     /// re-queues a failed aside at the queue's head, so every later request
     /// of the family meets the same fault; the once-flag
     /// (`Daemon::aside_fault_said`) says it at the first and not again,
-    /// naming THE ASIDE as the store's error names it — `{file}: remove:
-    /// {cause}`, the file by its name under the data directory as every
-    /// blob-store line names it, never an absolute path, and the OS's cause
-    /// — and the act that clears it. The error is this call's own, so the
-    /// line names the aside this call met whatever another worker's call has
-    /// taken from the queue since. A later call that answers `Ok` with the
-    /// flag set — the queue drained here, or swept by the pruner's pass
-    /// first — says the clearing line once and clears the flag; the common
-    /// case, `Ok` with the flag clear, writes nothing. Through the write
-    /// path's classed door, so the pair stands in the one record beside the
-    /// daemon's other lines.
+    /// naming the aside as the store's error names it —
+    /// `{file}: remove: {cause}`, the file by its name under the data
+    /// directory as every blob-store line names it, never an absolute path,
+    /// and the OS's cause — and the act that clears it. The error is this
+    /// call's own, so the line names the aside this call met whatever
+    /// another worker's call has taken from the queue since. A later call
+    /// that answers `Ok` with the flag set — the queue drained here, or swept
+    /// by the pruner's pass first — says the clearing line once and clears
+    /// the flag; the common case, `Ok` with the flag clear, writes nothing.
+    /// Through the write path's classed door, so the pair stands in the one
+    /// record beside the daemon's other lines.
     pub(super) fn retire_asides(&self) {
-        // THE FAULT (test seam): a panic inside the deferred step, which the
+        // The fault (test seam): a panic inside the deferred step, which the
         // transport's catch around this call contains.
         #[cfg(any(test, feature = "test-hooks"))]
         self.fire_the_unlinks_fault();
@@ -632,25 +669,28 @@ impl Daemon {
         }
     }
 
-    /// THE PRUNER's PASS, as the daemon runs it (`skep-media`'s `pruner.rs`,
-    /// `Pruner::pass`, through the daemon's one pruner): the credential
-    /// lock's WRITE arm taken for one file at a time. `None` where the index
-    /// is not ready — the pass does not start (ms5-R).
+    /// Runs the pruner's pass as the daemon runs it, through its one pruner.
+    ///
+    /// The pass is `skep-media`'s `pruner.rs` (`Pruner::pass`), the
+    /// credential lock's write arm taken for one file at a time. `None` where
+    /// the index is not ready — the pass does not start.
     pub(super) fn prune_pass(&self) -> Option<PrunePass> {
         self.pruner.pass(&self.media, || self.auth.credential_lock.write())
     }
 
-    /// THE PASS SAID (`operations.md` §1.1 rows 34, 35): one line per pass
-    /// on the daemon's classed door — ROW 34 under `Class::Landing` where no
-    /// step failed, the report's own `Display` (its figures, the halt, the
-    /// compaction half); ROW 35 under `Class::Failure` where one did —
-    /// `pruner: the pass failed: {e}`, the step and the cause — then the SAME
-    /// compaction half (`PrunePass::compaction`: each log's size, `{log}
-    /// {n} lines ({b} bytes)`, and what a compaction rewrote it from;
+    /// Says the pass (`operations.md` §1.1 rows 34, 35): one line per pass.
+    ///
+    /// The line goes on the daemon's classed door — row 34 under
+    /// `Class::Landing` where no step failed, the report's own `Display`
+    /// (its figures, the halt, the compaction half); row 35 under
+    /// `Class::Failure` where one did — `pruner: the pass failed: {e}`, the
+    /// step and the cause — then the same compaction half
+    /// (`PrunePass::compaction`: each log's size,
+    /// `{log} {n} lines ({b} bytes)`, and what a compaction rewrote it from;
     /// `{log}'s stop lifted, rewritten whole after {stop}`; `a compaction
     /// FAILED`; `STOPPED: {log} takes no append until a compaction completes
     /// — {stop}`, a stop its cause, its age and the appends it refused), so
-    /// the line names the failure AND whether the stop it may have met is
+    /// the line names the failure *and* whether the stop it may have met is
     /// lifted or stands, why it stood and what it cost. Nothing where the
     /// pass did not start (`None`: the index not ready). The cadence's loop
     /// and the test seam's pass say it alike.
@@ -665,8 +705,9 @@ impl Daemon {
         }
     }
 
-    /// Whether the cell index's walk at open has completed — what the
-    /// pruner's loop waits on before its first pass.
+    /// Returns whether the cell index's walk at open has completed.
+    ///
+    /// It is what the pruner's loop waits on before its first pass.
     pub(super) fn index_is_ready_for_pruning(&self) -> bool {
         self.media.index_ready()
     }
@@ -674,29 +715,51 @@ impl Daemon {
 
 // ── the queries, the answers, the refusals ───────────────────────────────
 
-/// THE FETCH's query: exactly `i=<address>` ([`sole_param`]), the address in
-/// the wire's dotted-decimal form through the codec's own door
-/// (`wire_address`), so a query string's address and a frame's meet one
-/// grammar under one budget. What the address must NAME — an element
-/// position of a document — is the serve's step 0, not this parse's.
+/// Parses the fetch's query: exactly `i=<address>` ([`sole_param`]).
+///
+/// The address is in the wire's dotted-decimal form, through the codec's
+/// own door (`wire_address`), so a query string's address and a frame's
+/// meet one grammar under one budget. What the address must name — an
+/// element position of a document — is the serve's step 0, not this
+/// parse's.
+///
+/// # Errors
+///
+/// The detail of a query that is not one `i` and nothing else, or whose
+/// address the codec refuses.
 fn fetch_query(query: Option<&str>) -> Result<Address, String> {
     let i = sole_param(query, "i")?.ok_or("the required parameter is i=<address>")?;
     wire_address(i).map_err(|e| format!("i: {e}"))
 }
 
-/// The creation's query: exactly `length=<bytes>` ([`sole_param`]).
+/// Parses the creation's query: exactly `length=<bytes>` ([`sole_param`]).
+///
+/// # Errors
+///
+/// The detail of a query that is not one `length` and nothing else, or
+/// whose value is not a byte count ([`count`]).
 fn create_query(query: Option<&str>) -> Result<u64, String> {
     let length = sole_param(query, "length")?.ok_or("the required parameter is length=<bytes>")?;
     count(length, "length")
 }
 
-/// The resume's query: exactly `offset=<bytes>` ([`sole_param`]).
+/// Parses the resume's query: exactly `offset=<bytes>` ([`sole_param`]).
+///
+/// # Errors
+///
+/// The detail of a query that is not one `offset` and nothing else, or
+/// whose value is not a byte count ([`count`]).
 fn resume_query(query: Option<&str>) -> Result<u64, String> {
     let offset = sole_param(query, "offset")?.ok_or("the required parameter is offset=<bytes>")?;
     count(offset, "offset")
 }
 
-/// A byte count: `1*DIGIT`, in range.
+/// Parses a byte count: `1*DIGIT`, in range.
+///
+/// # Errors
+///
+/// A value that is empty, holds anything but digits, or does not fit a
+/// `u64`, named by `name`.
 fn count(v: &str, name: &str) -> Result<u64, String> {
     if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
         return Err(format!("{name}: '{v}' is not a byte count"));
@@ -704,8 +767,10 @@ fn count(v: &str, name: &str) -> Result<u64, String> {
     v.parse().map_err(|_| format!("{name}: '{v}' is not a byte count"))
 }
 
-/// The record as the wire answers it: the identifier, the offset a resume
-/// continues from, the length, the expiry.
+/// Returns the record as the wire answers it.
+///
+/// It carries the identifier, the offset a resume continues from, the
+/// length, the expiry.
 fn progress_reply(r: &UploadRecord) -> Reply {
     Reply::json(
         200,
@@ -718,8 +783,10 @@ fn progress_reply(r: &UploadRecord) -> Reply {
     )
 }
 
-/// The finish as the wire answers it: the designation, the hash, the size
-/// — what the client compares with its own and never adopts (Q-sm2).
+/// Returns the finish as the wire answers it.
+///
+/// It carries the designation, the hash, the size — what the client
+/// compares with its own and never adopts.
 fn finish_reply(f: &Finished) -> Reply {
     Reply::json(
         200,
@@ -731,14 +798,18 @@ fn finish_reply(f: &Finished) -> Reply {
     )
 }
 
-/// `403 upload_refused`, naming which: the session layer's refusal
-/// ([`UploadRefusal::token`]) or the closed setting's `uploads_closed`.
+/// Returns `403 upload_refused`, naming which refusal it is.
+///
+/// It is the session layer's refusal ([`UploadRefusal::token`]) or the
+/// closed setting's `uploads_closed`.
 fn refuse_upload(detail: &str) -> Reply {
     refuse(TransportError::UploadRefused, Some(detail))
 }
 
-/// THE READINESS REFUSAL (ms5-R): the cell index's walk at open is not
-/// done, and this request is one of its three readers.
+/// Returns the readiness refusal, `index_rebuilding`.
+///
+/// The cell index's walk at open is not done, and this request is one of
+/// its three readers.
 fn refuse_rebuilding() -> Reply {
     refuse(
         TransportError::IndexRebuilding,
@@ -746,15 +817,16 @@ fn refuse_rebuilding() -> Reply {
     )
 }
 
-/// THE FAILED REFUSAL (`operations.md` §4 row 26; §1.1 row 41; PATTERNS
-/// P10): the cell index's walk at open DIED on its thread — caught, the
-/// index FAILED for the life of the process — and this request is one of
-/// its three readers. The `detail` states the state and the one act that
-/// exists, elsewhere and another hand's — a restart — and carries NO retry
-/// hint, since no retry can succeed: a client that retries retry-class
-/// tokens stops here. The operator's faces of the same state are the
-/// catch's line, the pruner's `no pass runs` line and the standing line's
-/// clause.
+/// Returns the failed refusal, `index_failed`.
+///
+/// It answers `operations.md` §4 row 26, §1.1 row 41 and PATTERNS P10: the
+/// cell index's walk at open died on its thread — caught, the index failed
+/// for the life of the process — and this request is one of its three
+/// readers. The `detail` states the state and the one act that exists,
+/// elsewhere and another hand's — a restart — and carries no retry hint,
+/// since no retry can succeed: a client that retries retry-class tokens
+/// stops here. The operator's faces of the same state are the catch's line,
+/// the pruner's `no pass runs` line and the standing line's clause.
 fn refuse_failed() -> Reply {
     refuse(
         TransportError::IndexFailed,
@@ -765,31 +837,37 @@ fn refuse_failed() -> Reply {
     )
 }
 
-/// THE PERMIT's REFUSAL (M-I5 (f); P29): every upload permit is in use, and
-/// this request is the creation or the resume — the fetch's `fetch_busy`
-/// twin, its `detail` naming the one act the person holds, the retry
-/// (M-I7 (e)), and no headroom and no holder (M-I6 (h); D9).
+/// Returns the permit's refusal, `upload_busy` (M-I5 (f); P29).
+///
+/// Every upload permit is in use, and this request is the creation or the
+/// resume — the fetch's `fetch_busy` twin, its `detail` naming the one act
+/// the person holds, the retry (M-I7 (e)), and no headroom and no holder
+/// (M-I6 (h); D9).
 fn refuse_upload_busy() -> Reply {
     refuse(TransportError::UploadBusy, Some("all upload permits are in use; retry shortly"))
 }
 
-/// Where the media gate refused a deposit — clause (6)'s two cases, each
-/// with what it leaves of the upload, which the refusal's `ended` reports.
+/// Where the media gate refused a deposit: clause (6)'s two cases.
+///
+/// Each carries what it leaves of the upload, which the refusal's `ended`
+/// reports.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RefusedAt {
-    /// Before the body, on the declared total or at the creation: the upload
-    /// is KEPT (none made, at a creation).
+    /// Before the body, on the declared total or at the creation.
+    ///
+    /// The upload is kept (none made, at a creation).
     BeforeTheBody,
-    /// As the body is written: the upload is ENDED, nothing kept.
+    /// As the body is written: the upload is ended, nothing kept.
     AsTheBodyIsWritten,
 }
 
-/// The media gate's refusal: the scope it fired on, where — and so whether
-/// the upload was ended or kept ([`RefusedAt`]) — and the bytes received; no
-/// headroom (M-I6 (h)). At the standing-uploads bound, a `detail` naming the
-/// end of one of them as the act the person holds (M-I7 (e)) — the count the
-/// bound pins, which the same principal's deposit read lists upload by
-/// upload.
+/// Returns the media gate's refusal, `deposit_refused`.
+///
+/// It names the scope it fired on, where — and so whether the upload was
+/// ended or kept ([`RefusedAt`]) — and the bytes received; no headroom
+/// (M-I6 (h)). At the standing-uploads bound, a `detail` names the end of
+/// one of them as the act the person holds (M-I7 (e)) — the count the bound
+/// pins, which the same principal's deposit read lists upload by upload.
 fn refuse_deposit(scope: DepositScope, at: RefusedAt, offset: u64) -> Reply {
     let mut fields = vec![
         ("ended", Value::Bool(at == RefusedAt::AsTheBodyIsWritten)),
@@ -809,41 +887,44 @@ fn refuse_deposit(scope: DepositScope, at: RefusedAt, offset: u64) -> Reply {
     refuse_with(TransportError::DepositRefused, fields)
 }
 
-/// THE DEPOSIT READ (`media.md` Op inventory 1, "THE DEPOSITOR CAN READ
-/// THEIR OWN DEPOSIT RECORD, AND THE RESUME NAMES ONE ACT PER RESIDUE"; "IT
-/// ANSWERS THE REQUESTER's OWN USAGE BESIDE THEM"; the register M-I5 (c),
-/// M-I2 (e), M-I6 (a), (b)): one read of the asking principal's OWN records
-/// — its standing deposits (hash, size, expiry; a live lease over a file
-/// that is not there marked LAPSED, at this read as at the `insert`), its
-/// standing uploads (identifier, the offset a resume continues from, the
-/// length, the expiry), its usage as two figures — the BASE, the cell
-/// index's number for its account (the distinct hashes its cells name, at
-/// their size), and its PENDING bytes (its live leases on hashes none of
-/// its cells names, and its uploads' bytes received) — the limits
-/// record's address as installed, or `null` where none is — and THE
-/// PER-ACCOUNT LIMIT IN FORCE, `per_account`, whatever its source: the
-/// daemon's default where no record is installed, echoed as a written
-/// limit is, so R68's read-before-refusal holds under the default (P37; the
-/// register M-I6 (b), (d)); `null` only where a written record sets none.
+/// Returns the deposit read: the asking principal's own records, as JSON.
 ///
-/// NO SURFACE OF ITS OWN (m-Q10, RULED): it is the resumable PUT's own
-/// state made readable, served on the upload's path family (`GET
-/// /blob/upload`) and priced with the transport delta — a route helper
-/// beside the family's refusals, built off the media gate's reads as the
-/// family's other wire shapes are built here and in `reply.rs`, the one
-/// wire shape of the resource's that the daemon composes. It is keyed to
-/// the asking principal's own record and never to a file's presence beyond
-/// that record's live lease: it lists no deposit of another's, and answers
-/// "this board holds these bytes" of nothing a principal did not deposit
-/// itself. Its base is one of the index's three readers: the route refuses
-/// it `index_rebuilding` until the walk at open completes (ms5-R), and
-/// `index_failed` for the uptime where that walk died (`operations.md` §4
-/// row 26). The sweep-3 subtraction of this read was DECLINED (sm-Q10): the records
-/// exist for the resume and the binding, and the listing is this one
-/// function over them.
+/// It answers `media.md` Op inventory 1 ("the depositor can read their own
+/// deposit record, and the resume names one act per residue"; "it answers
+/// the requester's own usage beside them"; the register M-I5 (c), M-I2 (e),
+/// M-I6 (a), (b)): one read of the asking principal's *own* records — its
+/// standing deposits (hash, size, expiry; a live lease over a file that is
+/// not there marked lapsed, at this read as at the `insert`), its standing
+/// uploads (identifier, the offset a resume continues from, the length, the
+/// expiry), its usage as two figures — the base, the cell index's number
+/// for its account (the distinct hashes its cells name, at their size), and
+/// its pending bytes (its live leases on hashes none of its cells names,
+/// and its uploads' bytes received) — the limits record's address as
+/// installed, or `null` where none is — and the per-account limit in force,
+/// `per_account`, whatever its source: the daemon's default where no record
+/// is installed, echoed as a written limit is, so R68's read-before-refusal
+/// holds under the default (P37; the register M-I6 (b), (d)); `null` only
+/// where a written record sets none.
 ///
-/// The read, as its JSON object, off `media_gate`, the media gate whose store
-/// holds the records. The caller has read the index's readiness: the base
+/// **No surface of its own.** It is the resumable PUT's own state made
+/// readable, served on the upload's path family (`GET /blob/upload`) and
+/// priced with the transport delta — a route helper beside the family's
+/// refusals, built off the media gate's reads as the family's other wire
+/// shapes are built here and in `reply.rs`, the one wire shape of the
+/// resource's that the daemon composes. It is keyed to the asking
+/// principal's own record and never to a file's presence beyond that
+/// record's live lease: it lists no deposit of another's, and answers "this
+/// board holds these bytes" of nothing a principal did not deposit itself.
+/// Its base is one of the index's three readers: the route refuses it
+/// `index_rebuilding` until the walk at open completes, and `index_failed`
+/// for the uptime where that walk died (`operations.md` §4 row 26).
+/// Removing the read would save nothing: the records exist for the resume
+/// and the binding, and the listing is this one function over them.
+///
+/// It is built as its JSON object off `media_gate`, the media gate whose
+/// store holds the records.
+///
+/// **Precondition.** The caller has read the index's readiness: the base
 /// here is the index's number.
 fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
     let key = MediaGate::key(principal);
@@ -856,7 +937,7 @@ fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
             // Exact of what is on disk, by the binding's own reading
             // (`MediaGate::deposit_whole`): a lease over a file that is
             // absent, not whole, or whose size cannot be read reads as
-            // LAPSED here as at the insert.
+            // lapsed here as at the insert.
             let whole = media_gate.deposit_whole(&l.designation, &l.hex, l.size);
             obj(vec![
                 ("designation", Value::String(l.designation)),
@@ -893,7 +974,7 @@ fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
     ])
 }
 
-/// The store's refusal as the wire's.
+/// Returns the store's refusal as the wire's.
 fn blob_refusal(e: BlobError) -> Reply {
     match e {
         BlobError::NoUpload => refuse(TransportError::NoUpload, None),
@@ -913,9 +994,10 @@ fn blob_refusal(e: BlobError) -> Reply {
 mod tests {
     use super::*;
 
-    /// The family's parse: the creation, an upload by a well-formed
-    /// identifier, a malformed one (known, refused by name), and the paths
-    /// outside it; and which method/path pairs stream.
+    /// Checks the family's parse and which method/path pairs stream.
+    ///
+    /// The parse covers the creation, an upload by a well-formed identifier,
+    /// a malformed one (known, refused by name), and the paths outside it.
     #[test]
     fn the_path_family_and_the_streaming_pairs() {
         assert!(matches!(blob_path("/blob/upload"), Some(BlobPath::Family)));

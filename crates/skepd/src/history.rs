@@ -1,13 +1,14 @@
-//! Reading the journal as of a committed position (wire v3) — the whole
-//! obligation on one card: the budget every historical answer spends, the
-//! throwaway kernel a historical world is read through, the `as_of` stamping
-//! that makes the answer say which position it is OF, and the commit chain's
-//! value there (`/chain?at`), which spends the same budget and folds no
-//! world.
+//! The history surface: the journal read as of a committed position (wire v3).
+//!
+//! It holds the whole obligation on one card: the budget every historical
+//! answer spends, the throwaway kernel a historical world is read through,
+//! the `as_of` stamping that makes the answer say which position it is
+//! *of*, and the commit chain's value there (`/chain?at`), which spends the
+//! same budget and folds no world.
 //!
 //! The mechanism is the engine's bounded replay (`Engine::world_at`):
 //! checkpoint-or-genesis base plus journal fold, per call, uncached. That
-//! is core-bound work AND a whole second copy of the world, so [`History`]
+//! is core-bound work and a whole second copy of the world, so [`History`]
 //! admits at most [`MAX_CONCURRENT_RECONSTRUCTIONS`] at once and refuses
 //! the surplus outright ([`Unavailable::Busy`]) rather than queueing — a
 //! worker parked behind a replay is a worker lost to live traffic, and a
@@ -22,12 +23,13 @@
 //! mapping onto the wire's transport errors.
 //!
 //! The budget is a [`Permits`] pool — `skep_util::permits`, the daemon's one
-//! permit mechanism, whose other instance is the class-scan pool — and
-//! beside it the pool's EDGE PAIR (`operations.md` §1.1 m12; §4 row 27): an
-//! [`EdgeTracker`] the one door tells of every refusal and admission, which
-//! answers the edge crossed — the first refusal of an episode, the admission
-//! a hold-down past its last — and queues it for the daemon's classed door,
-//! this module holding none (`skep_core::limits::EDGE_HOLD_DOWN`'s card).
+//! permit mechanism, whose other instances are the class-scan, write, fetch
+//! and upload pools — and beside it the pool's edge pair (`operations.md`
+//! §1.1 m12; §4 row 27): an [`EdgeTracker`] the one door tells of every
+//! refusal and admission, which answers the edge crossed — the first refusal
+//! of an episode, the admission a hold-down past its last — and queues it
+//! for the daemon's classed door, this module holding none
+//! (`skep_core::limits::EDGE_HOLD_DOWN`'s card).
 
 use std::sync::Arc;
 
@@ -42,48 +44,59 @@ use skep_util::permits::{edge_clock_now, EdgeTracker, Permit, Permits};
 
 use skep_core::limits::EDGE_HOLD_DOWN;
 
-/// Concurrent historical reconstructions (`Engine::world_at` behind
-/// `/op-at` and `/dump?at`, and the chain read behind `/chain?at`, which
-/// spends a permit of this pool for the span of its scan) allowed at once:
-/// each is a whole-checkpoint deserialize plus journal fold, per call,
-/// uncached, and each leaves a whole second world resident for as long as
-/// its answer is being built — two keeps history panes serviceable without
-/// letting core-bound replay occupy the worker pool or letting
-/// reconstructed worlds accumulate one per worker.
+/// The concurrent historical reconstructions allowed at once.
+///
+/// A reconstruction is `Engine::world_at` behind `/op-at` and `/dump?at`,
+/// and the chain read behind `/chain?at` spends a permit of this pool for
+/// the span of its scan, folding no world. Each reconstruction is a
+/// whole-checkpoint deserialize plus journal fold, per call, uncached, and
+/// each leaves a whole second world resident for as long as its answer is
+/// being built — two keeps history panes serviceable without letting
+/// core-bound replay occupy the worker pool or letting reconstructed worlds
+/// accumulate one per worker.
 pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 
-/// Why a historical answer is unavailable — the daemon's momentary
-/// saturation, or the journal's own verdict on the position. Deliberately
-/// free of HTTP: what a caller is owed for each is a wire decision.
+/// Why a historical answer is unavailable.
+///
+/// It is the daemon's momentary saturation, or the journal's own verdict on
+/// the position. Deliberately free of HTTP: what a caller is owed for each
+/// is a wire decision.
 #[derive(Debug)]
 pub(crate) enum Unavailable {
-    /// Every reconstruction permit is in use; the position may be perfectly
-    /// good. Retryable, and the only variant that is.
+    /// Every reconstruction permit is in use.
     ///
-    /// PRECEDENCE: the permit is taken before the journal is consulted, so
-    /// this precedes every [`HistoryError`] — including M2's own published
-    /// refusal order. A `Busy` answer therefore says NOTHING about whether
+    /// The position may be perfectly good. Retryable, and the only variant
+    /// that is.
+    ///
+    /// **Precedence.** The permit is taken before the journal is consulted,
+    /// so this precedes every [`HistoryError`] — including M2's own published
+    /// refusal order. A `Busy` answer therefore says nothing about whether
     /// `at` is a good position: a request naming one long past the head is
     /// told to retry, and only a retry that finds a free permit learns
     /// otherwise.
     Busy,
-    /// The bounded replay refused: beyond the head, not a position (M2's
-    /// `NotABoundary` — a number inside a multi-record commit), reclaimed,
-    /// or the journal is unreadable. M2 fixes the order among these;
-    /// [`Unavailable::Busy`] sits ahead of all of them.
+    /// The bounded replay or the chain read refused the position.
+    ///
+    /// It is beyond the head, not a position (M2's `NotABoundary` — a number
+    /// inside a multi-record commit), reclaimed, or the journal is
+    /// unreadable. M2 fixes the order among these; [`Unavailable::Busy`] sits
+    /// ahead of all of them.
     Journal(HistoryError),
 }
 
-/// The history surface: the budget, and the three questions asked of it — a
-/// read as of a position ([`History::read_at`]), the world's dump there
-/// (`History::dump_at`, observe builds), and the chain's value there
+/// The history surface: the budget, and the three questions asked of it.
+///
+/// They are a read as of a position ([`History::read_at`]), the world's dump
+/// there (`History::dump_at`, observe builds), and the chain's value there
 /// ([`History::chain_at`]).
 #[derive(Debug)]
 pub(crate) struct History {
     permits: Permits,
-    /// THE POOL's EDGE PAIR (m12): the memory of the episode that stands, if
-    /// one does, and the edges the one door crossed and has not yet handed
-    /// the daemon ([`History::edge`]).
+    /// The pool's edge pair (m12).
+    ///
+    /// It is the memory of the episode that stands, if one does, and the
+    /// edges the one door crossed and has not yet handed the daemon
+    /// ([`History::edge`]).
     edge: EdgeTracker,
 }
 
@@ -95,22 +108,28 @@ impl History {
         }
     }
 
-    /// The budget's one door — a permit, or [`Unavailable::Busy`] when every
-    /// one is in use — which every historical question passes through BEFORE
-    /// it examines `at`. That order is what puts `Busy` ahead of every
-    /// journal verdict ([`Unavailable::Busy`]'s card states what that costs a
-    /// caller), so it is written here once rather than by each question that
-    /// spends a permit.
+    /// Takes a permit through the budget's one door.
     ///
-    /// THE EDGE PAIR's ONE SITE (m12): the tracker is told of the refusal or
-    /// the admission at the edge clock's instant, and the edge it answers —
-    /// the first refusal of an episode, the first admission a hold-down past
-    /// its last refusal — is queued for the daemon, which says it through
-    /// its classed door at the end of the request that crossed it, in the
-    /// pool's ruled words (`the history pool is saturated` / `has room
-    /// again`). The test hook (`History::try_hold_permit`) takes its permits
-    /// beside this door and crosses no edge: what a suite holds is the pool,
-    /// not a request.
+    /// Every historical question passes through it *before* it examines
+    /// `at`. That order is what puts `Busy` ahead of every journal verdict
+    /// ([`Unavailable::Busy`]'s card states what that costs a caller), so it
+    /// is written here once rather than by each question that spends a
+    /// permit.
+    ///
+    /// **The edge pair's one site (m12).** The tracker is told of the refusal
+    /// or the admission at the edge clock's instant, and the edge it answers
+    /// — the first refusal of an episode, the first admission a hold-down
+    /// past its last refusal — is queued for the daemon, which says it
+    /// through its classed door once the request that crossed it is routed,
+    /// before its reply is written, in the pool's words (`the history pool
+    /// is saturated` / `has room again`).
+    /// The test hook (`History::try_hold_permit`) takes its permits beside
+    /// this door and crosses no edge: what a suite holds is the pool, not a
+    /// request.
+    ///
+    /// # Errors
+    ///
+    /// [`Unavailable::Busy`] when every permit is in use.
     fn admit(&self) -> Result<Permit<'_>, Unavailable> {
         let permit = self.permits.try_acquire();
         let now = edge_clock_now();
@@ -121,31 +140,37 @@ impl History {
         permit.ok_or(Unavailable::Busy)
     }
 
-    /// The pool's edge tracker, for the daemon to drain: the edges the one
-    /// door crossed since the last drain, in order.
+    /// Returns the pool's edge tracker, for the daemon to drain.
+    ///
+    /// It holds the edges the one door crossed since the last drain, in
+    /// order.
     pub(crate) fn edge(&self) -> &EdgeTracker {
         &self.edge
     }
 
-    /// One reconstruction and the permit that licenses it. The guard is
-    /// handed back rather than dropped here, so the budget bounds LIVE
-    /// reconstructed worlds and not merely concurrent replays: a detached
-    /// world competes with the live one for no CPU and for a full copy of
-    /// its memory, so a permit released at the engine call would leave one
-    /// world resident per worker against a budget of
+    /// Reconstructs the world as of `at`, with the permit that licenses it.
+    ///
+    /// The guard is handed back rather than dropped here, so the budget
+    /// bounds *live* reconstructed worlds and not merely concurrent replays:
+    /// a detached world competes with the live one for no CPU and for a full
+    /// copy of its memory, so a permit released at the engine call would
+    /// leave one world resident per worker against a budget of
     /// [`MAX_CONCURRENT_RECONSTRUCTIONS`]. The permit therefore spans the
     /// read (or the dump) the world was reconstructed for, which is the
     /// same trade [`MAX_CONCURRENT_RECONSTRUCTIONS`] already makes for the
     /// replay: two slow historical answers make a third `Busy`.
     ///
-    /// Admitted through [`History::admit`], so [`Unavailable::Busy`]
-    /// precedes every journal verdict about `at`.
-    ///
     /// The world handed back carries its identity slice as of `at`
     /// (AUTH-6.20: the slice riding in the reconstructed World), folded by
-    /// the same replay that built the rest of it; a position no retained
-    /// checkpoint at or below it can stand in for — every one slice-less over
-    /// credential deposits, the journal below reclaimed — is refused whole as
+    /// the same replay that built the rest of it.
+    ///
+    /// # Errors
+    ///
+    /// Admitted through [`History::admit`], so [`Unavailable::Busy`]
+    /// precedes every journal verdict about `at`; the replay's own refusal
+    /// is [`Unavailable::Journal`]. A position no retained checkpoint at or
+    /// below it can stand in for — every one slice-less over credential
+    /// deposits, the journal below reclaimed — is refused whole as
     /// `Reclaimed` (AUTH-2.87), never served without its table.
     pub(crate) fn reconstruct(
         &self,
@@ -157,16 +182,17 @@ impl History {
         Ok((permit, world))
     }
 
-    /// The `WorldDump` of the world as of `at` at the READER'S CLASS — the
-    /// same bounded replay [`History::read_at`] answers from, rendered by
-    /// the engine that reconstructed it through the per-class post-filter
-    /// (PUB round 2, lane 3.4 §4), exactly as the live `/dump` is. `/dump`'s
-    /// two arms therefore each simply ask a collaborator for a filtered dump.
+    /// Returns the `WorldDump` of the world as of `at`, at the reader's class.
     ///
-    /// THE TWO-WORLD SHAPE, as [`History::read_at`] has it (PUB-6.48): the
-    /// STATE dumped is the N-world's — its content, arrangements, links and
-    /// its as-of-N publication slice — and the PREDICATE it is filtered
-    /// through is `readable`, which the route closes over the ONE head
+    /// It is the same bounded replay [`History::read_at`] answers from,
+    /// rendered by the engine that reconstructed it through the per-class
+    /// post-filter, exactly as the live `/dump` is. `/dump`'s two arms
+    /// therefore each simply ask a collaborator for a filtered dump.
+    ///
+    /// **The two-world shape**, as [`History::read_at`] has it (PUB-6.48).
+    /// The *state* dumped is the N-world's — its content, arrangements, links
+    /// and its as-of-N publication slice — and the *predicate* it is filtered
+    /// through is `readable`, which the route closes over the one head
     /// snapshot it took at admission, so a grant committed after `at` opens
     /// a draft's sections at `/dump?at=N` exactly as it satisfies a read
     /// there. Left to the N-world's own sets, a draft minted after `at`
@@ -176,6 +202,11 @@ impl History {
     /// The permit is held across the render, which is where this route's
     /// peak sits: the dump is a second whole-world materialization beside
     /// the world it renders.
+    ///
+    /// # Errors
+    ///
+    /// [`History::reconstruct`]'s: [`Unavailable::Busy`] ahead of every
+    /// journal verdict about `at`, then the replay's [`Unavailable::Journal`].
     #[cfg(feature = "observe")]
     pub fn dump_at(
         &self,
@@ -187,24 +218,29 @@ impl History {
         Ok(engine.dump_of_visible(&world, &readable))
     }
 
-    /// One already-classified READ frame answered as of `at`: reconstruct
-    /// the world, run the frame against a throwaway M10 over it, and stamp
-    /// the position the answer is OF. The world comes from
+    /// Answers one already-classified read frame as of `at`.
+    ///
+    /// It reconstructs the world, runs the frame against a throwaway M10 over
+    /// it, and stamps the position the answer is *of*. The world comes from
     /// [`History::reconstruct`] here and nowhere else, which is what
     /// discharges [`execute_read_on`]'s precondition on it — and the permit
     /// that call hands back is held across the read, so the world is
     /// accounted for as long as it is resident.
     ///
-    /// THE READER, NOT THE GUEST (PUB-8.13, PUB-6.48; PUB round 2, lane
-    /// 3.3): `principal` is the presented session's resolved principal
-    /// (`None` = guest), and `head` is the ONE head snapshot the route took
-    /// at admission — the read predicate for the N-world's answer is
-    /// `readable()` against the HEAD's exception set and grant set, never
-    /// the N-world's: a grant committed after `at` satisfies a read at `at`.
-    /// The caller has already run the doc-argument consult against that same
-    /// snapshot ahead of the reconstruction (PUB-6.49); what runs here is the
-    /// rest of the read surface — the per-run masks and the result-set
-    /// filter — through the same predicate.
+    /// **The reader, not the guest** (PUB-8.13, PUB-6.48). `principal` is the
+    /// presented session's resolved principal (`None` = guest), and `head` is
+    /// the one head snapshot the route took at admission — the read predicate
+    /// for the N-world's answer is `readable()` against the head's exception
+    /// set and grant set, never the N-world's: a grant committed after `at`
+    /// satisfies a read at `at`. The caller has already run the doc-argument
+    /// consult against that same snapshot ahead of the reconstruction
+    /// (PUB-6.49); what runs here is the rest of the read surface — the
+    /// per-run masks and the result-set filter — through the same predicate.
+    ///
+    /// # Errors
+    ///
+    /// [`History::reconstruct`]'s: [`Unavailable::Busy`] ahead of every
+    /// journal verdict about `at`, then the replay's [`Unavailable::Journal`].
     pub fn read_at(
         &self,
         engine: &Engine,
@@ -219,27 +255,34 @@ impl History {
         Ok(resp)
     }
 
-    /// The commit chain's value AS OF `at` — `GET /chain?at=N` (the chain's
-    /// open items, item 7; QUEUE item 10) — the kernel's own recomputation
-    /// off its journal (`Kernel::chain_at`), under THIS pool's permit,
-    /// conservatively: the kernel selects the base and READS every segment
-    /// above it exactly as a reconstruction does (the corrupt-run sweep and
-    /// the chain's verification run to the journal's end), so it is the same
-    /// core-bound I/O, with no world folded and none resident — the permit
-    /// spans the call alone and returns with it. A lighter pool of its own is
-    /// a later refinement; sharing this one keeps the bound the wire promises
-    /// for historical work one number. Admitted through [`History::admit`],
-    /// as a reconstruction is.
+    /// Returns the commit chain's value as of `at`, for `GET /chain?at=N`.
+    ///
+    /// It is the kernel's own recomputation off its journal
+    /// (`Kernel::chain_at`), under this pool's permit, conservatively: the
+    /// kernel selects the base and reads every segment above it exactly as a
+    /// reconstruction does (the corrupt-run sweep and the chain's
+    /// verification run to the journal's end), so it is the same core-bound
+    /// I/O, with no world folded and none resident — the permit spans the
+    /// call alone and returns with it. A lighter pool of its own is a later
+    /// refinement; sharing this one keeps the bound the wire promises for
+    /// historical work one number.
+    ///
+    /// # Errors
+    ///
+    /// Admitted through [`History::admit`], as a reconstruction is, so
+    /// [`Unavailable::Busy`] comes first; the kernel's own refusal is
+    /// [`Unavailable::Journal`].
     pub(crate) fn chain_at(&self, engine: &Engine, at: Seq) -> Result<[u8; 32], Unavailable> {
         let _permit = self.admit()?;
         engine.kernel().chain_at(at).map_err(Unavailable::Journal)
     }
 
-    /// TEST HOOK (the `fuzz_support` standing: not a stable API): hold one
-    /// permit exactly as an in-flight reconstruction does, or `None` when
-    /// all [`MAX_CONCURRENT_RECONSTRUCTIONS`] are taken. Real
-    /// reconstructions finish in milliseconds, so the integration tests pin
-    /// the counter through this instead of racing the engine.
+    /// Holds one permit exactly as an in-flight reconstruction does.
+    ///
+    /// **Test hook** (the `fuzz_support` standing: not a stable API). It
+    /// answers `None` when all [`MAX_CONCURRENT_RECONSTRUCTIONS`] are taken.
+    /// Real reconstructions finish in milliseconds, so the integration tests
+    /// pin the counter through this instead of racing the engine.
     #[cfg(any(test, feature = "test-hooks"))]
     #[must_use = "a permit dropped at once holds nothing"]
     pub fn try_hold_permit(&self) -> Option<Permit<'_>> {
@@ -247,47 +290,49 @@ impl History {
     }
 }
 
-/// Run one already-classified READ frame against a historical world: a
-/// throwaway in-memory M2 kernel rooted at that world, a throwaway M10 over
-/// it, one `execute`. All the read semantics stay M10's and the stores' —
-/// the daemon only assembles. The session is the reader's own principal, or
-/// M10's guest ([`SessionId::GUEST`]) when the request presented none: the
-/// read predicate resolves off it.
+/// Runs one already-classified read frame against a historical world.
 ///
-/// PRECONDITION: `frame.op` is a READ, and it is the ROUTE that establishes
-/// it — `crate::server::Daemon::post_op_at` refuses a write frame `400
-/// write_at_history` before this is reached. Since the reader became the
-/// presented principal rather than the guest, that refusal is the only thing
-/// between a misclassified write and this throwaway store: under a live
-/// session a write frame would EXECUTE here, against a kernel that is
-/// dropped when this returns, and answer the caller an acknowledgment for a
-/// write that did not happen, carrying a position that names nothing
-/// ([`stamp_as_of`] leaves acks alone). The route's own guard restates M10's
-/// read/write partition, which `skep_core::commits::write_meta` records as
-/// agreeing at 15 writes of 45 — the enum's variant count, which moves with
-/// `Op` and which the codec suite's op-name table is held to — and warns
-/// can drift; so the assert below is what makes this premise loud for the
-/// reader auditing exactly that drift.
+/// It is a throwaway in-memory M2 kernel rooted at that world, a throwaway
+/// M10 over it, one `execute`. All the read semantics stay M10's and the
+/// stores' — the daemon only assembles. The session is the reader's own
+/// principal, or M10's guest ([`SessionId::GUEST`]) when the request
+/// presented none: the read predicate resolves off it.
 ///
-/// THE TWO-WORLD SHAPE (PUB-6.48, PUB-6.61): the CONTENT answered is the
-/// N-world's, the PREDICATE it is answered through is the HEAD's. The
+/// **Precondition.** `frame.op` is a read, and it is the *route* that
+/// establishes it — `crate::server::Daemon::post_op_at` refuses a write
+/// frame `400 write_at_history` before this is reached. Because the reader
+/// is the presented principal rather than the guest, that refusal is, in a
+/// release build, the only thing between a misclassified write and this
+/// throwaway store: under a live session a write frame would execute here,
+/// against a kernel that is dropped when this returns, and answer the
+/// caller an acknowledgment for a write that did not happen, carrying a
+/// position that names nothing ([`stamp_as_of`] leaves acks alone). The
+/// route's own guard asks M10's read/write partition directly
+/// (`Op::is_read`), which `skep_core::commits::write_meta` restates at 16
+/// writes of 46 — the enum's variant count, which moves with `Op` and which
+/// the codec suite's op-name table is held to — and warns can drift; so the
+/// assert below is what makes this premise loud for the reader auditing
+/// exactly that drift.
+///
+/// **The two-world shape** (PUB-6.48, PUB-6.61). The *content* answered is
+/// the N-world's, the *predicate* it is answered through is the head's. The
 /// throwaway front door is given M10's `ReadPredicate` closed over `head` —
-/// the world of the one snapshot the route took at admission — so `readable()`
-/// is evaluated against the head's exception set and grant set for every
-/// per-run mask and every result-set filter of this read, and a grant
-/// committed after `at` satisfies a read at `at`. Left to its own world, the
-/// front door would read the N-world's sets: a document minted after `at`
-/// is absent from them and so reads PUBLISHED (the fail-open sign,
-/// PUB-7.5), and every masking decision would turn on state the reader may
-/// not hold today.
+/// the world of the one snapshot the route took at admission — so
+/// `readable()` is evaluated against the head's exception set and grant set
+/// for every per-run mask and every result-set filter of this read, and a
+/// grant committed after `at` satisfies a read at `at`. Left to its own
+/// world, the front door would read the N-world's sets: a document minted
+/// after `at` is absent from them and so reads as published (the fail-open
+/// sign, PUB-7.5), and every masking decision would turn on state the
+/// reader may not hold today.
 ///
-/// PRECONDITION: `world` is one `Engine::world_at` produced — the
+/// **Precondition.** `world` is one `Engine::world_at` produced — the
 /// precondition [`detached_kernel`] states, which the bounded replay
 /// discharges: it seeds its base through `rebuild_derived` and maintains the
 /// derived hints across the fold.
 ///
-/// The two worlds differ BY TYPE in the signature below — the content is
-/// MOVED in, the mask is BORROWED — so the transposition that would answer
+/// The two worlds differ *by type* in the signature below — the content is
+/// moved in, the mask is borrowed — so the transposition that would answer
 /// the head's content through the N-world's sets, inverting both halves of
 /// the shape above at once, does not compile.
 ///
@@ -296,6 +341,11 @@ impl History {
 /// slot is assembly knowledge, and the daemon holds none of it. The `Arc` is
 /// one allocation against a whole-world replay; `head` is one root clone,
 /// taken inside because the predicate's closure owns its captures.
+///
+/// # Panics
+///
+/// Panics in a debug build if `frame.op` is not a read: the assert that
+/// makes the first precondition loud.
 fn execute_read_on(
     world: World,
     frame: Request,
@@ -305,8 +355,8 @@ fn execute_read_on(
     debug_assert!(frame.op.is_read(), "the history surface runs read frames alone");
     let kernel = detached_kernel(world);
     // The predicate's closure is boxed behind M10's `ReadPredicate`, so it
-    // owns its captures: one root clone, made HERE so the two worlds differ
-    // BY TYPE at the signature above and the swap this card warns about
+    // owns its captures: one root clone, made here so the two worlds differ
+    // by type at the signature above and the swap this card warns about
     // cannot compile.
     let head = head.clone();
     let febe = OperationSurface::new(
@@ -321,28 +371,35 @@ fn execute_read_on(
     febe.execute(session, frame)
 }
 
-/// A THROWAWAY M2 kernel rooted at `world`: in memory, no journal, no
-/// recovery, and nothing it answers outliving it — the one door this crate
-/// opens a second kernel through, for the history surface, reading a
-/// reconstructed world ([`execute_read_on`]). Dropped, it takes every
-/// transaction it ever ran with it.
+/// Opens a throwaway M2 kernel rooted at `world`.
 ///
-/// PRECONDITION: `world` carries TRUE derived hints — a live snapshot's root,
-/// or one `Engine::world_at` produced. That is what discharges
-/// `Durability::InMemory`'s genesis obligation: this mode does not LOAD, so
+/// It runs in memory, with no journal, no recovery, and nothing it answers
+/// outliving it — the one door this crate opens a second kernel through,
+/// for the history surface, reading a reconstructed world
+/// ([`execute_read_on`]). Dropped, it takes every transaction it ever ran
+/// with it.
+///
+/// **Precondition.** `world` carries true derived hints — a live snapshot's
+/// root, or one `Engine::world_at` produced. That is what discharges
+/// `Durability::InMemory`'s genesis obligation: this mode does not load, so
 /// `WorldState::rebuild_derived` never runs on the root, and the world is
 /// read through whatever hints it arrives with. The live kernel maintains
 /// them across every commit, and the bounded replay seeds its base through
 /// `rebuild_derived` and maintains them across the fold. A world assembled
 /// any other way would be read through stale hints, and nothing about the
 /// answer would look wrong.
+///
+/// # Panics
+///
+/// Panics if the in-memory open fails, which it cannot: it runs no
+/// recovery.
 fn detached_kernel(world: World) -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
         // The daemon's own source, for the record: a detached kernel frames
         // no marker and draws no salt. The salts of a reconstructed world's
-        // history were READ off the journal's markers by the replay that
+        // history were read off the journal's markers by the replay that
         // built it, never regenerated — a reconstruction under any source is
         // the same reconstruction.
         salt: SaltSource::Os,
@@ -350,13 +407,15 @@ fn detached_kernel(world: World) -> Kernel<World> {
     Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail")
 }
 
-/// Stamp the requested position as `as_of`: the throwaway kernel is rooted
-/// at the historical world with its own seq at 0, so M10's snapshot-seq
-/// stamping — correct live — must be overwritten with the position the
-/// answer is OF. Which shapes carry an `as_of` is M10's classification,
-/// asked through `Response::as_of_mut` rather than restated here: every read
-/// shape is stamped, writes cannot reach here, and rejections carry no
-/// `as_of` at history exactly as they carry none live.
+/// Stamps the requested position as the answer's `as_of`.
+///
+/// The throwaway kernel is rooted at the historical world with its own seq
+/// at 0, so M10's snapshot-seq stamping — correct live — must be overwritten
+/// with the position the answer is *of*. Which shapes carry an `as_of` is
+/// M10's classification, asked through `Response::as_of_mut` rather than
+/// restated here: every read shape is stamped, writes cannot reach here,
+/// and rejections carry no `as_of` at history exactly as they carry none
+/// live.
 fn stamp_as_of(resp: &mut Response, at: Seq) {
     if let Some(as_of) = resp.as_of_mut() {
         *as_of = at;
@@ -370,8 +429,10 @@ mod tests {
 
     use super::*;
 
-    /// The counter is exact: [`MAX_CONCURRENT_RECONSTRUCTIONS`] acquires
-    /// succeed, the next fails, and a drop returns exactly one slot.
+    /// Checks that the reconstruction permits' counter is exact.
+    ///
+    /// [`MAX_CONCURRENT_RECONSTRUCTIONS`] acquires succeed, the next fails,
+    /// and a drop returns exactly one slot.
     #[test]
     fn reconstruction_permits_account_exactly() {
         let permits = Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
@@ -391,6 +452,8 @@ mod tests {
         drop((a, b));
     }
 
+    /// Checks that real threads never hold more permits than the budget.
+    ///
     /// Under real threads, at most [`MAX_CONCURRENT_RECONSTRUCTIONS`]
     /// holders exist at any instant — the invariant is asserted inside the
     /// hold, so any overshoot fails loudly regardless of scheduling.
@@ -421,9 +484,10 @@ mod tests {
         assert!(granted.load(Ordering::Relaxed) > 0, "some acquires must have succeeded");
     }
 
-    /// `History`'s budget is the permits' budget: exhausting it through the
-    /// public hook makes the next reconstruction request unavailable as
-    /// `Busy`, and releasing one reopens exactly one slot.
+    /// Checks that `History`'s budget is the permits' budget.
+    ///
+    /// Exhausting it through its test hook leaves the next hold `None`, and
+    /// releasing the held permits returns them to the budget.
     #[test]
     fn history_hands_out_exactly_the_reconstruction_budget() {
         let history = History::new();
@@ -438,14 +502,16 @@ mod tests {
         assert!(history.try_hold_permit().is_some(), "released permits return to the budget");
     }
 
-    /// [`History::admit`] stands ahead of EVERY question that spends a
+    /// Checks that `Busy` precedes the journal's verdict for every question.
+    ///
+    /// [`History::admit`] stands ahead of every question that spends a
     /// permit: with the budget exhausted, the reconstruction and the chain
     /// read both answer `Busy` for a position the journal refuses on its own
     /// — an in-memory kernel keeps no journal, so any position is
     /// `Unjournaled` — and once a permit returns, the same question reaches
     /// that verdict. A question that consulted the journal first would answer
-    /// the journal's verdict under saturation, which is the order the one
-    /// door exists to keep.
+    /// the journal's verdict under saturation, the order the one door exists
+    /// to prevent.
     #[test]
     fn busy_precedes_the_journals_verdict_for_every_question() {
         let engine = Engine::open(KernelConfig {

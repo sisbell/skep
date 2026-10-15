@@ -1,42 +1,49 @@
-//! THE OPERATOR's TOOLS — THE INVENTORY AND THE PULL (`media.md` §Recovery,
-//! "THE OPERATOR CAN LIST THE HOLES", "AND IS RESTORED BY THE OPERATOR's
-//! OWN PULL", "NEITHER OPENS THE STORE AS skepd DOES"; the register M-I5
-//! (d), M-I5 (e), M-I6 (d), M-I6 (f); DOCTRINE D9): two acts over a BOARD
-//! DIRECTORY, the `skepd` binary's two subcommands, run with NO server —
-//! no port, no session, no `/health`, no log line of the daemon's. Both are
-//! the ORIGIN cell's: a replica's reference cells are foreign and their
-//! bytes a cache's, which neither tool reads.
+//! The operator's tools: the inventory and the pull.
 //!
-//! THE INVENTORY ([`inventory`]; `skepd inventory --data-dir <dir>
-//! [--no-rehash]`), OVER A DIRECTORY NO DAEMON SERVES — a stopped board, a
-//! served board's one moment's copy, a backup: it opens the board's JOURNAL
-//! through the engine's ordinary public open — recovery reads the
-//! committed state, under the exclusion lock the kernel takes, so a
-//! directory a daemon serves is refused at that lock and never read
-//! beside it — walks the replayed world into a FRESH cell index through
-//! the walk the daemon's open runs (`skep-media`'s `index.rs`), and opens the blob
-//! store READ-ONLY (`skep-blobs`'s `Store::inspect`: the logs read as the
-//! open reads them, their torn tails cut in memory alone, nothing
-//! reconciled, compacted, swept, synced or created). It prints ONE JSON
-//! object: THE HOLES — every reference cell (the picture kind's; a blind
-//! cell is never a hole, nothing of its kind naming a file) whose file is
-//! absent at its hex, present at a length other than the cell's `size`,
-//! or present and re-hashing to another hash — the re-hash one whole read
-//! per file, skipped under [`HoleCheck::LengthOnly`] (`--no-rehash`); PER
-//! ACCOUNT its base (the index's number) and its pending bytes (its live
-//! leases on hashes none of its cells names, plus its standing uploads'
-//! bytes received), the UNATTRIBUTED bytes no account's scope holds (a
-//! live lease's or a standing upload's whose key spells no principal of
-//! this build), and THE VENUE TOTAL they all sum to — the gate's own
-//! figure, under the gate's own pending rule and its own reading of a
-//! record's key (`MediaGate::lease_counted`, `MediaGate::upload_counted`,
-//! the inventory's two reads of the media crate), which the limits record
-//! is written against; the standing uploads and the expired ones by count; the halt
-//! marks and any foreign designation directory. It RECORDS NO READ anywhere
-//! (D9) and writes nothing under `blobs/`. What the engine's open writes to
-//! the directory it is run over — the copy the inventory proves — is the
-//! kernel's own: the lock file `kernel.lock`, created where absent; a torn
-//! tail cut off the last segment where a crash left one, which the
+//! They are two acts over a board directory (`media.md` §Recovery, "THE
+//! OPERATOR CAN LIST THE HOLES", "AND IS RESTORED BY THE OPERATOR's OWN
+//! PULL", "NEITHER OPENS THE STORE AS skepd DOES"; the register M-I5 (d),
+//! M-I5 (e), M-I6 (d), M-I6 (f); DOCTRINE D9), the `skepd` binary's two
+//! subcommands, run with no server — no port, no session, no `/health`, no
+//! log line of the daemon's. Both are the origin cell's: a replica's
+//! reference cells are foreign and their bytes a cache's, which neither
+//! tool reads.
+//!
+//! **The inventory** ([`inventory`];
+//! `skepd inventory --data-dir <dir> [--no-rehash]`), over a directory no
+//! daemon serves — a stopped board, a served board's one moment's copy, a
+//! backup: it opens the board's journal through the engine's ordinary
+//! public open — recovery reads the committed state, under the exclusion
+//! lock the kernel takes, so a directory a daemon serves is refused at that
+//! lock and never read beside it — walks the replayed world into a fresh
+//! cell index through the walk the daemon's open runs (`skep-media`'s
+//! `index.rs`), and opens the blob store read-only (`skep-blobs`'s
+//! `Store::inspect`: the logs read as the open reads them, their torn tails
+//! cut in memory alone, nothing reconciled, compacted, swept, synced or
+//! created). It prints one JSON object: the holes — every reference cell
+//! (the picture kind's; a blind cell is never a hole, nothing of its kind
+//! naming a file) whose file is absent at its hex, present at a length
+//! other than the cell's `size`, or present and re-hashing to another hash
+//! — the re-hash one whole read per file, skipped under
+//! [`HoleCheck::LengthOnly`] (`--no-rehash`); per account its base (the
+//! index's number) and its pending bytes (its live leases on hashes none of
+//! its cells names, plus its standing uploads' bytes received), the
+//! unattributed bytes no account's scope holds (a live lease's or a
+//! standing upload's whose key spells no principal of this build), and the
+//! venue total they all sum to — the gate's own figure, under the gate's
+//! own pending rule and its own reading of a record's key
+//! (`MediaGate::lease_counted`, `MediaGate::upload_counted`, the
+//! inventory's two calls on `MediaGate`), which the limits record is
+//! written against; the standing uploads and the expired ones by count;
+//! the halt marks and any foreign designation directory; the asides and
+//! the partials no upload record names, by count; the cells and the values
+//! the walk read and the files the cells reference, by count, and whether
+//! the holes were re-hashed; and the journal's log position, its start
+//! point and the checkpoints its open skipped, by count. It records no read
+//! anywhere (D9) and writes nothing under `blobs/`. What the engine's open
+//! writes to the directory it is run over — the copy the inventory proves —
+//! is the kernel's own: the lock file `kernel.lock`, created where absent;
+//! a torn tail cut off the journal's end where a crash left one, which the
 //! inventory reports as `journal.tail_cut` — the bytes cut, `0` where the
 //! last committed marker ended the journal: a count and never `null`, since
 //! every open runs the cut and a cut that took nothing leaves the journal a
@@ -44,28 +51,30 @@
 //! or a full volume left half-written — removed, which the inventory
 //! reports as `journal.stray_checkpoint_removed`; no checkpoint, no commit,
 //! no head, no feed sidecar — the daemon's own open is never run. So the
-//! copy is run over WRITABLE: one the open cannot write — a read-only
+//! copy is run over writable: one the open cannot write — a read-only
 //! mount, a directory or a file without its write bit — is refused by name
 //! ([`ToolError::ReadOnlyCopy`]), never read as a journal that would not
 //! open.
 //!
-//! THE PULL ([`pull`]; `skepd pull --data-dir <dir> [--hash <hex>] <file>`):
-//! takes a FILE, hashes it (BLAKE3) and INSTALLS it at
-//! `blobs/blake3/<hex>` as the PUT's order installs one (`Store::install_file`:
-//! the temp file in the designation directory, fsynced, renamed onto the
-//! hash name — REPLACE where a file stands, which ends any hole — the
-//! directory fsynced), ONLY WHERE A COMMITTED REFERENCE CELL NAMES THAT
-//! HASH: the pull is a restore, never a deposit, and writes NO lease, NO
-//! record, NO journal entry and NO log line of the daemon's. Which cell
-//! names the hash is read one of two ways: with no `--hash`, off the
-//! board's own journal — opened as the inventory opens it, which the
-//! kernel's lock refuses beside a serving daemon — a file no committed
-//! cell names refused with one line; with `--hash <hex>`, off the
-//! inventory's own listing, the hex the operator took from it, the file
-//! held to it and the journal left unopened — the form that runs BESIDE A
-//! SERVING DAEMON holding none of its gates, the daemon's fetch serving the
-//! restored file at its next read. A daemon's open that meets the pull's
-//! temp file mid-pull removes it as an orphan, the pull then run again.
+//! **The pull** ([`pull`];
+//! `skepd pull --data-dir <dir> [--hash <hex>] <file>`): takes a file,
+//! hashes it (BLAKE3) and installs it at `blobs/blake3/<hex>` as the PUT's
+//! order installs one (`Store::install_file`: the temp file in the
+//! designation directory, fsynced, renamed onto the hash name — replace
+//! where a file stands, which ends any hole — the directory fsynced, then
+//! `blobs/` and the board's own directory), for a hash a committed
+//! reference cell names: the pull is a restore, never a deposit, and writes
+//! no lease, no record, no journal entry and no log line of the daemon's.
+//! Which cell names the hash is read one of two ways: with no `--hash`, off
+//! the board's own journal — opened as the inventory opens it, which the
+//! kernel's lock refuses beside a serving daemon — a file no committed cell
+//! names refused with one line; with `--hash <hex>`, off the inventory's own
+//! listing, the hex the operator took from it, which the pull checks
+//! against no cell, the file held to it and the journal left unopened — the
+//! form that runs beside a serving daemon holding none of its gates, the
+//! daemon's fetch serving the restored file at its next read. A daemon's
+//! open that meets the pull's temp file mid-pull removes it as an orphan,
+//! the pull then run again.
 
 use std::fmt;
 use std::fs;
@@ -89,31 +98,42 @@ use skep_util::json::{obj, parse_lower_hex};
 #[non_exhaustive]
 pub enum ToolError {
     /// No board stands at the directory: no journal segment there.
+    ///
+    /// A directory that cannot be read is answered as one with none.
     NoBoard(PathBuf),
-    /// The journal is HELD — a daemon serves the directory, and the
-    /// kernel's exclusion lock refused this open.
+    /// The journal is held: the kernel's exclusion lock refused this open.
+    ///
+    /// A live kernel holds the directory — a serving daemon's, or another
+    /// tool run's.
     JournalHeld(PathBuf),
-    /// The copy cannot be WRITTEN — a read-only mount, a directory or a
-    /// file without its write bit — where the engine's open writes the
-    /// kernel's lock and may cut a torn tail: the operator's copy to make
-    /// writable, told apart from a journal that would not open.
+    /// The copy cannot be written.
+    ///
+    /// It is a read-only mount, a directory or a file without its write bit,
+    /// where the engine's open writes the kernel's lock and may cut a torn
+    /// tail: the operator's copy to make writable, told apart from a journal
+    /// that would not open.
     ReadOnlyCopy(PathBuf),
-    /// The engine's open refused the journal for another reason — a
-    /// corrupt journal, a bad checkpoint: the operator's condition.
+    /// The engine's open refused the journal for another reason.
+    ///
+    /// A corrupt journal, a bad checkpoint: the operator's condition.
     Journal(EngineError),
     /// The blob store or the file could not be read.
     Io(io::Error),
     /// The pull: a hex that is not 64 lowercase hexadecimal characters.
     NotAHash(String),
-    /// The pull: the file's hash is one no committed reference cell names
-    /// — a restore of nothing, refused rather than deposited.
+    /// The pull: the file's hash is one no committed reference cell names.
+    ///
+    /// A restore of nothing, refused rather than deposited; `hex` is that
+    /// hash.
     Unnamed { hex: String },
-    /// The pull's install refused the file — its bytes hash to another
-    /// hash than the one named, no board directory stands at the path, or
-    /// it could not be written: `nothing installed: …` — or installed it
-    /// and could not make the install durable: `installed at …, but …`.
-    /// The store's error says which side of the rename it failed on
-    /// (`Store::install_file`), and is said whole.
+    /// The pull's install refused the file, or could not make it durable.
+    ///
+    /// A refusal — its bytes hash to another hash than the one named, no
+    /// board directory stands at the path, or it could not be read or
+    /// written — reads `nothing installed: …`; an install it could not make
+    /// durable reads `installed at …, but …`. The store's error says which
+    /// side of the rename it failed on (`Store::install_file`), and is said
+    /// whole.
     Install(io::Error),
 }
 
@@ -178,22 +198,36 @@ pub struct Pulled {
     pub path: PathBuf,
 }
 
-/// What the inventory holds a referenced file's bytes to: its length alone,
-/// or its length and — one whole read per file — its hash (`--no-rehash`
-/// asks for the first).
+/// What the inventory holds a referenced file's bytes to.
+///
+/// It is its length alone, or its length and — one whole read per file —
+/// its hash (`--no-rehash` asks for the first).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HoleCheck {
-    /// Length and hash: a file of the cell's length holding other bytes is a
-    /// hole, found by reading it whole.
+    /// Length and hash.
+    ///
+    /// A file of the cell's length holding other bytes is a hole, found by
+    /// reading it whole.
     Rehash,
     /// Length alone: no referenced file is read.
     LengthOnly,
 }
 
-/// THE INVENTORY over the board at `data_dir` (the module doc): one JSON
-/// object, its members in sorted order, the holes found under `check` —
-/// re-hashed, one whole read per referenced file, where it is
-/// [`HoleCheck::Rehash`].
+/// Takes the inventory of the board at `data_dir` (the module doc).
+///
+/// It answers one JSON object, its members in sorted order, the holes found
+/// under `check` — re-hashed, one whole read per referenced file, where it
+/// is [`HoleCheck::Rehash`].
+///
+/// # Errors
+///
+/// In the order it meets them: [`ToolError::NoBoard`] where no journal
+/// segment stands at `data_dir`, or the directory cannot be read;
+/// [`ToolError::JournalHeld`] where a live kernel holds the journal,
+/// [`ToolError::ReadOnlyCopy`] where the copy cannot be written, and
+/// [`ToolError::Journal`] where the engine's open refuses the journal for
+/// another reason; and [`ToolError::Io`] where the blob store or a
+/// referenced file cannot be read.
 pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> {
     require_board(data_dir)?;
     let engine = open_journal(data_dir)?;
@@ -204,7 +238,7 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
     let now = wall_clock_ms();
     let store = inspect_store(data_dir)?;
 
-    // THE HOLES: every reference whose file is absent, short or long, or —
+    // The holes: every reference whose file is absent, short or long, or —
     // re-hashed — not the bytes the cell names.
     let references = index.references();
     let mut holes = Vec::new();
@@ -232,12 +266,13 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
         }
     }
 
-    // PER ACCOUNT: the base off the index, the pending bytes off the store's
+    // Per account: the base off the index, the pending bytes off the store's
     // records by the gate's own rule (`MediaGate::lease_counted`,
-    // `MediaGate::upload_counted`) — every principal the index or either log
-    // names — and the UNATTRIBUTED bytes, a live lease's or a standing
-    // upload's whose key spells no principal of this build: in no account's
-    // scope, and in the venue's total as the gate counts it.
+    // `MediaGate::upload_counted`) — every principal the index names or a
+    // live lease or standing upload counts pending — and the unattributed
+    // bytes, a live lease's or a standing upload's whose key spells no
+    // principal of this build: in no account's scope, and in the venue's
+    // total as the gate counts it.
     let mut accounts: std::collections::BTreeMap<PrincipalId, (u64, u64)> =
         index.accounts().into_iter().map(|(p, base)| (p, (base, 0))).collect();
     let mut unattributed = 0u64;
@@ -335,7 +370,7 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
                         .stray_checkpoint_removed()
                         .map_or(Value::Null, |n| Value::Number(n.into())),
                 ),
-                // The tail cut's bytes: a COUNT, `0` for a clean close — the
+                // The tail cut's bytes: a count, `0` for a clean close — the
                 // kernel's member is one, every journaled open running the
                 // cut — and `0` too where the engine gave no account, as the
                 // start point renders the same absence.
@@ -352,9 +387,22 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
     ]))
 }
 
-/// THE PULL of `file` into the board at `data_dir` (the module doc): held
-/// to `expected` where one is given, the journal unopened; else to the
-/// board's own index, read off its journal.
+/// Pulls `file` into the board at `data_dir` (the module doc).
+///
+/// The file is held to `expected` where one is given, the journal unopened;
+/// else to the board's own index, read off its journal.
+///
+/// # Errors
+///
+/// With `expected`: [`ToolError::NotAHash`] where it is not 64 lowercase
+/// hexadecimal characters. Without it, in the order the pull meets them:
+/// [`ToolError::NoBoard`], [`ToolError::JournalHeld`],
+/// [`ToolError::ReadOnlyCopy`] or [`ToolError::Journal`] as [`inventory`]
+/// meets them; [`ToolError::Io`] where `file` cannot be read; and
+/// [`ToolError::Unnamed`] where no committed reference cell names its hash.
+/// Either way, last, [`ToolError::Install`] where the install refuses the
+/// file — its bytes hashing to another hash than the one named among the
+/// causes — or cannot make it durable.
 pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pulled, ToolError> {
     let hex = match expected {
         Some(hex) => {
@@ -383,9 +431,16 @@ pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pull
     Ok(Pulled { path: root.join(&finished.designation).join(&finished.hex), hex: finished.hex, size: finished.size })
 }
 
-/// A board stands at `dir`: a directory holding at least one journal
-/// segment. Nothing is created for a directory that holds none — the
-/// engine's open would make a genesis there.
+/// Checks that a board stands at `dir`.
+///
+/// A board is a directory holding at least one journal segment. Nothing is
+/// created for a directory that holds none — the engine's open would make a
+/// genesis there.
+///
+/// # Errors
+///
+/// [`ToolError::NoBoard`] where `dir` holds no journal segment, or cannot
+/// be read.
 fn require_board(dir: &Path) -> Result<(), ToolError> {
     let has_segment = fs::read_dir(dir)
         .map(|entries| {
@@ -402,19 +457,26 @@ fn require_board(dir: &Path) -> Result<(), ToolError> {
     }
 }
 
-/// The engine's ordinary public open over `dir` — the daemon's own
-/// configuration but for the checkpoint cadence, MANUAL here, so no
-/// checkpoint is ever taken: nothing commits through this handle. Two of
-/// the kernel's I/O refusals are told apart from every other, read off the
-/// open's own I/O arm: the lock refused (`WouldBlock`) is the held journal;
-/// and a write the copy would not take is the read-only copy —
+/// Opens the engine over `dir` through its ordinary public open.
+///
+/// It is the daemon's own configuration but for the checkpoint cadence,
+/// manual here, so no checkpoint is ever taken: nothing commits through
+/// this handle.
+///
+/// # Errors
+///
+/// Two of the kernel's I/O refusals are told apart from every other, read
+/// off the open's own I/O arm: the lock refused (`WouldBlock`) is the held
+/// journal, [`ToolError::JournalHeld`]; and a write the copy would not take
+/// is the read-only copy, [`ToolError::ReadOnlyCopy`] —
 /// `ReadOnlyFilesystem`, a snapshot mount's answer to every write, and
 /// `PermissionDenied`, what a directory or a file without its write bit
 /// answers the lock's creation, its open or the tail's cut (`chmod a-w`, an
 /// immutable flag). Both are one fault to the operator — the copy is not
-/// theirs to write — and take one remedy. A refusal the open carries as a
-/// base's or a damaged region's cause — a checkpoint that could not be read
-/// — is not the copy's mode and stays the journal's own.
+/// theirs to write — and take one remedy. Every other refusal is
+/// [`ToolError::Journal`]: a refusal the open carries as a base's or a
+/// damaged region's cause — a checkpoint that could not be read — is not
+/// the copy's mode and stays the journal's own.
 fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
     let cfg = KernelConfig {
         durability: Durability::Fsync {
@@ -443,8 +505,14 @@ fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
     })
 }
 
-/// The store's inspection under `dir/blobs`, or `None` where no `blobs/`
-/// stands — a board that never opened its store.
+/// Returns the store's inspection under `dir/blobs`.
+///
+/// `None` where no `blobs/` stands — a board that never opened its store.
+///
+/// # Errors
+///
+/// [`ToolError::Io`] where the store cannot be inspected
+/// (`Store::inspect`'s refusals).
 fn inspect_store(dir: &Path) -> Result<Option<Inspection>, ToolError> {
     let root = dir.join("blobs");
     if !root.is_dir() {
@@ -453,7 +521,13 @@ fn inspect_store(dir: &Path) -> Result<Option<Inspection>, ToolError> {
     Ok(Some(Store::inspect(root)?))
 }
 
-/// BLAKE3 of the file at `path`, as 64 lowercase hex — one whole read.
+/// Returns the BLAKE3 hash of the file at `path`, as 64 lowercase hex.
+///
+/// It takes one whole read.
+///
+/// # Errors
+///
+/// The file's open or read error.
 fn hash_file(path: &Path) -> io::Result<String> {
     let mut f = fs::File::open(path)?;
     let mut hasher = blake3::Hasher::new();
@@ -472,8 +546,10 @@ fn hash_file(path: &Path) -> io::Result<String> {
 mod tests {
     use super::*;
 
-    /// The pull's spelling check, the hash of a file, and the refusals a
-    /// directory with no board meets: nothing is created for it.
+    /// Checks the hash spelling, the file hash and a directory with no board.
+    ///
+    /// The spelling check is the pull's. A directory with no board meets the
+    /// refusals, and nothing is created for it.
     #[test]
     fn the_hash_spelling_the_file_hash_and_a_directory_with_no_board() {
         let dir = tempfile::tempdir().expect("tempdir");

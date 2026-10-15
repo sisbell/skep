@@ -1,11 +1,11 @@
-//! Shared fuzzing harness (hardening H2) — the pure oracle and mutation
-//! logic that BOTH the in-gate tier-1 `#[test]`s
-//! (`crates/skepd/tests/fuzz_*.rs`) and the ad-hoc nightly libFuzzer targets
-//! (`skep/fuzz/`) drive. The pinned stable toolchain cannot compile
-//! libFuzzer, so the tier-2 wrappers must be trivial by construction: they
-//! call the functions here, which the gate DOES compile and test. Nothing
-//! here is a stable API — the module is `#[doc(hidden)]` and may change with
-//! the daemon.
+//! The shared fuzzing harness: the oracle and mutation logic both tiers drive.
+//!
+//! Both the in-gate tier-1 `#[test]`s (`crates/skepd/tests/it/fuzz_*.rs`)
+//! and the ad-hoc nightly libFuzzer targets (`skep/fuzz/`) drive it. The
+//! pinned stable toolchain cannot compile libFuzzer, so the tier-2 wrappers
+//! must be trivial by construction: they call the functions here, which the
+//! gate does compile and test. Nothing here is a stable API — the module is
+//! `#[doc(hidden)]` and may change with the daemon.
 //!
 //! Every function serves one contract: **any bytes in → exactly one
 //! well-formed answer out, never a panic, never a hang, never silence.** The
@@ -18,11 +18,13 @@
 //! The exchange helper never hangs (bounded socket deadlines); the
 //! mutation engine is a pure, deterministic `(seed, corpus) → bytes`.
 //!
-//! Dependency posture: std plus this crate's own `serde_json`/codec only —
-//! no `tempfile`, no server library — and it compiles only under the
-//! `test-hooks` feature, so a production build carries none of it. Daemon
-//! lifetime (temp dirs, `serve`) stays with the caller, which is why the
-//! exchange helpers take a live `port`, never a directory.
+//! Dependency posture: std plus `serde_json`, the core's codec (through
+//! `skep_febe`'s `Codec` trait) and `skep_util`'s hex only — no
+//! `tempfile`, no server library — and it compiles only under the
+//! `test-hooks` feature or this crate's own unit tests, so a production
+//! build carries none of it. Daemon lifetime (temp dirs, `serve`) stays with
+//! the caller, which is why the exchange helpers take a live `port`, never a
+//! directory.
 
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -33,8 +35,11 @@ use skep_febe::Codec;
 
 use skep_core::codec::JsonCodec;
 
-/// SplitMix64 — the deterministic seed source the whole H-suite uses (H3's
-/// pattern); the seed is the entire reproduction.
+/// Returns the next value of SplitMix64, advancing `rng`.
+///
+/// It is the deterministic seed source the in-gate fuzz tests use (the
+/// kernel's dirty-crash suite's pattern); the seed is the entire
+/// reproduction.
 pub fn splitmix64(rng: &mut u64) -> u64 {
     *rng = rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut z = *rng;
@@ -43,13 +48,15 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The 25 response shapes every client must decode (wire.md §The response
-/// envelope + §Rejections); a `/op` answer always carries one of these in
-/// `resp`. `doc_metadata` and `edition_claims` joined at wire v7.6 (PUB
-/// round 2, lane 3.4); `effective_owner` with the owner-of-address read
-/// (AUTH-6.37); `universal_grants` with the any-principal discovery read
-/// (PUB-8.47); `i_delivery` and `frontier` with the read by identity and
-/// the content chain's frontier (wire.md §Content & provenance reads).
+/// The 25 response shapes every client must decode.
+///
+/// wire.md documents them (§The response envelope + §Rejections); every
+/// `200` answer on `/op` carries one of these in `resp`. `doc_metadata` and
+/// `edition_claims` are wire v7.6's; `effective_owner` is the
+/// owner-of-address read's (AUTH-6.37); `universal_grants` the any-principal
+/// discovery read's (PUB-8.47); `i_delivery` and `frontier` the read by
+/// identity's and the content chain's frontier's (wire.md §Content &
+/// provenance reads).
 pub const RESP_SHAPES: &[&str] = &[
     "ack",
     "ack_addr",
@@ -78,22 +85,23 @@ pub const RESP_SHAPES: &[&str] = &[
     "rejected",
 ];
 
-/// The transport-level `error` names the HTTP surface is allowed to answer
-/// (wire.md §HTTP status codes, §Reading history, §The change feed). A
-/// non-2xx body naming anything else is a never-silent violation: an
-/// undocumented failure a client cannot interpret.
+/// The transport-level `error` names the HTTP surface is allowed to answer.
 ///
-/// Transcribed from wire.md by hand and deliberately NOT derived from the
+/// wire.md documents them (§HTTP status codes, §Reading history, §The
+/// change feed). A non-2xx body naming anything else is a never-silent
+/// violation: an undocumented failure a client cannot interpret.
+///
+/// Transcribed from wire.md by hand and deliberately not derived from the
 /// daemon's own error table: the oracle asks whether the daemon answers
-/// what the DOCUMENT promises, and a list read out of the code under test
+/// what the *document* promises, and a list read out of the code under test
 /// would agree with any name that code invented.
 pub const TRANSPORT_ERRORS: &[&str] = &[
     "malformed_session_request",
     "malformed_challenge",
-    // The ONE auth transport code (AUTH-6.5): permanent, no detail, 401 —
+    // The one auth transport code (AUTH-6.5): permanent, no detail, 401 —
     // a fuzz payload that assembles a well-formed signed body lands here.
     "session_rejected",
-    // The handshake's ONE exception, by status (AUTH-6.5): 403, carrying the
+    // The handshake's one exception, by status (AUTH-6.5): 403, carrying the
     // takedown record's address — a principal under a listed prefix.
     "prefix_blocked",
     "malformed_op_at",
@@ -135,9 +143,9 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     // the readiness refusal of the cell index's three readers, 503,
     // retry-class as `history_busy` is, the tenth the upload pool's: a
     // creation or a resume past the pool's permits, 503, retry-class as
-    // `fetch_busy` is, before any body byte — and the eleventh the FAILED
+    // `fetch_busy` is, before any body byte — and the eleventh the failed
     // index's (`operations.md` §4 row 26): the three readers' answer for
-    // the life of a process whose index walk at open died, 503 and NOT
+    // the life of a process whose index walk at open died, 503 and not
     // retry-class, its detail naming a restart and no retry (P10). A fuzz
     // daemon's walk over a fresh directory never dies, so the name is one
     // no fuzz target is answered today.
@@ -152,7 +160,7 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "index_rebuilding",
     "upload_busy",
     "index_failed",
-    // The blob fetch's seven (wire.md §Media, THE FETCH): what the address
+    // The blob fetch's seven (wire.md §Media, the fetch): what the address
     // holds or the store under it is not a file to serve — six 404s told
     // apart by name — and the fetch pool full, 503, retry-class.
     "no_value",
@@ -166,14 +174,21 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
 
 // ── the codec oracle ─────────────────────────────────────────────────────
 
-/// The codec's never-silent contract under hostile bytes. Returning at all
-/// witnesses that `parse` did not panic; a parse that succeeds must
-/// canonicalize to a fixpoint (`marshal_request` of the parse re-parses and
-/// re-marshals byte-identically — the observable round-trip, standing in for
-/// `parse(marshal_request(x)) == x` without needing `Request: Eq`); a parse
-/// that fails is simply the transport's Unparseable path. Returns whether
-/// the frame parsed, so a caller can drive the "if it parses, it executes to
-/// a single response" clause. **Panics only on an oracle violation.**
+/// Checks the codec's never-silent contract on one hostile frame.
+///
+/// Returning at all witnesses that `parse` did not panic; a parse that
+/// succeeds must canonicalize to a fixpoint (`marshal_request` of the parse
+/// re-parses and re-marshals byte-identically — the observable round-trip,
+/// standing in for `parse(marshal_request(x)) == x` without needing
+/// `Request: Eq`); a parse that fails is simply the transport's
+/// `Unparseable` path. Returns whether the frame parsed, so a caller can
+/// drive the "if it parses, it executes to a single response" clause.
+///
+/// # Panics
+///
+/// Panics only on an oracle violation: a `parse` that panics, a parsed
+/// frame whose marshal does not re-parse, or a re-marshal that is not
+/// byte-identical.
 pub fn codec_roundtrip_oracle(frame: &[u8]) -> bool {
     let codec = JsonCodec;
     match codec.parse(frame) {
@@ -205,25 +220,32 @@ pub fn codec_roundtrip_oracle(frame: &[u8]) -> bool {
     }
 }
 
-/// Lowercase hex of a byte slice — the reproduction form findings record,
-/// and the codec's own encoding, so a finding's bytes read back through the
-/// `{"hex"}` form they may have come from. Re-exported rather than wrapped:
-/// it IS that function, and the fuzz tier is external to this library, so
-/// this is the path by which it reaches it.
+/// Returns the lowercase hex of a byte slice.
+///
+/// It is the reproduction form findings record, and the codec's own
+/// encoding, so a finding's bytes read back through the `{"hex"}` form they
+/// may have come from. Re-exported rather than wrapped: it *is* that
+/// function, and the fuzz tier is external to this library, so this is the
+/// path by which it reaches it.
 pub use skep_util::json::hex_string as hex;
 
 // ── the HTTP oracle ──────────────────────────────────────────────────────
 
-/// One raw exchange against a running daemon: connect, write `raw` verbatim
-/// (a complete request, a fragment, or garbage), half-close the write side
-/// so the daemon sees EOF and cannot wait on a body that will never arrive,
-/// then read to close under a bounded deadline. Returns whatever bytes came
-/// back — empty for a clean close with no answer (a probe), a full response
-/// otherwise. **Never hangs**: a wedged or streaming peer hits the read
-/// deadline and returns what has arrived so far. `Err` where the *connect*
-/// fails (the daemon is gone), and where the socket refuses its read or
-/// write deadline — without which the read below could block for good, so
-/// the exchange refuses rather than risk the hang.
+/// Makes one raw exchange against a running daemon.
+///
+/// It connects, writes `raw` verbatim (a complete request, a fragment, or
+/// garbage), half-closes the write side so the daemon sees EOF and cannot
+/// wait on a body that will never arrive, then reads to close under a
+/// bounded deadline. Returns whatever bytes came back — empty for a clean
+/// close with no answer (a probe), a full response otherwise. **Never
+/// hangs**: a wedged or streaming peer hits the read deadline and returns
+/// what has arrived so far.
+///
+/// # Errors
+///
+/// Fails where the *connect* fails (the daemon is gone), and where the
+/// socket refuses its read or write deadline — without which the read below
+/// could block for good, so the exchange refuses rather than risk the hang.
 pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))?;
     stream.set_nodelay(true).ok();
@@ -239,7 +261,7 @@ pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&chunk[..n]),
-            // ANY read end — EOF, a deadline (a kept-open stream or a
+            // Any read end — EOF, a deadline (a kept-open stream or a
             // mid-response wedge), or a reset/broken pipe (the daemon
             // answered a large hostile request and closed while we were still
             // writing) — returns the bytes gathered so far; the oracle judges
@@ -253,12 +275,14 @@ pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// The well-formedness oracle for one HTTP response: a parseable
-/// `HTTP/1.1 <code>` status line, a header block of `Name: value` lines, the
-/// universal `Access-Control-Allow-Origin` (wire v4), and a body whose
-/// length agrees with `Content-Length`.
+/// Checks that `bytes` hold one well-formed HTTP response.
 ///
-/// Returns the status AND the body, because a caller that judges the body
+/// It is the well-formedness oracle: a parseable `HTTP/1.1 <code>` status
+/// line, a header block of `Name: value` lines, the universal
+/// `Access-Control-Allow-Origin` (wire v4), and a body whose length agrees
+/// with `Content-Length`.
+///
+/// Returns the status *and* the body, because a caller that judges the body
 /// (an error name, a success shape) would otherwise re-find the header
 /// terminator this function has already located — a second split whose only
 /// proof of soundness is that this one returned `Ok`. The two cases where
@@ -266,10 +290,19 @@ pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
 /// that caller need not re-derive them: a `204` carries no body, and a
 /// `text/event-stream` body is a prefix of an unbounded stream.
 ///
-/// TOTAL over any bytes, including none: an empty response is reported as
+/// # Errors
+///
+/// Total over any bytes, including none: an empty response is reported as
 /// an `Err` naming a close with no answer. Whether that is a fault belongs
 /// to the caller's context — [`envelope_oracle`] decides it is not, and a
 /// probe that expects a clean close checks emptiness itself before asking.
+/// Past that, the `Err` names the first rule the response breaks, in this
+/// order: no `\r\n\r\n` header terminator; a head that is not UTF-8; a
+/// status line other than `HTTP/1.1` and a numeric code; a header line
+/// with no `:` or a `Content-Length` that is not a number, whichever line
+/// comes first; no `Access-Control-Allow-Origin`; then, outside an event
+/// stream, a `204` that carries a body, a body whose length is not the
+/// `Content-Length`, or a non-`204` with no `Content-Length`.
 pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
     if bytes.is_empty() {
         return Err("no response bytes (server closed without answering)".into());
@@ -330,21 +363,26 @@ pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
     }
 }
 
-/// The envelope endpoints' oracle (wire.md §Reading history, §The change
-/// feed, §Sessions, §Media): route the fuzz bytes to one of the five
-/// structured endpoints — the blob upload's creation among them, which a
-/// tokenless exchange meets at its session-layer gate — exchange, and
-/// demand a well-formed HTTP response whose error name — on any non-2xx —
-/// is one wire.md documents. A 2xx is any documented success. An empty
-/// answer (clean close) is accepted; the endpoint-specific success shapes
-/// are asserted more tightly in the tier-1 tests.
+/// Runs the envelope endpoints' oracle over one fuzz input.
 ///
-/// Reports a violation — an undocumented error name, a malformed response,
-/// or an exchange that could not be made (the daemon gone, or its socket
-/// refusing a deadline) — as an `Err`, which the calling test surfaces as
-/// its own panic naming the seed. The one oracle here that does not panic
-/// itself: it is driven in a loop where only the caller knows the
-/// reproduction.
+/// It routes the fuzz bytes to one of the five structured endpoints
+/// (wire.md §Reading history, §The change feed, §Sessions, §Media) — the
+/// blob upload's creation among them, which a tokenless exchange meets at
+/// its session-layer gate — exchanges, and demands a well-formed HTTP
+/// response whose error name — at any status of 400 or above — is one
+/// wire.md documents. A 2xx is any documented success. An empty answer
+/// (clean close) is accepted; the endpoint-specific success shapes are
+/// asserted more tightly in the tier-1 tests.
+///
+/// # Errors
+///
+/// Reports a violation — an undocumented error name, a malformed response
+/// (one [`check_http_response`] refuses, or an error body that is not JSON
+/// or names no `error`), or an exchange that could not be made (the daemon
+/// gone, or its socket refusing a deadline) — as an `Err`, which the
+/// calling test surfaces as its own panic naming the seed. Like
+/// [`check_http_response`], it does not panic itself: it is driven in a
+/// loop where only the caller knows the reproduction.
 pub fn envelope_oracle(port: u16, data: &[u8]) -> Result<(), String> {
     if data.is_empty() {
         return Ok(());
@@ -376,7 +414,9 @@ pub fn envelope_oracle(port: u16, data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// A minimal `POST <path>` with a JSON body and correct `Content-Length`.
+/// Builds a minimal JSON-typed `POST <path>` with a correct `Content-Length`.
+///
+/// The body is `body` as given, under `Content-Type: application/json`.
 pub fn build_post(path: &str, body: &[u8]) -> Vec<u8> {
     let mut v = format!(
         "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
@@ -388,21 +428,23 @@ pub fn build_post(path: &str, body: &[u8]) -> Vec<u8> {
     v
 }
 
-/// A minimal bodyless `GET <path>` (the query rides in `path`).
+/// Builds a minimal bodyless `GET <path>` (the query rides in `path`).
 pub fn build_get(path: &str) -> Vec<u8> {
     format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").into_bytes()
 }
 
 // ── the grammar-aware mutation engine ────────────────────────────────────
 
-/// One mutant from a corpus of example frames (tier-1's core). Raw byte
-/// storms find panics; field-wise mutation finds the semantic edges — so
-/// this parses a seeded base example, applies one seeded mutation, and
-/// re-serializes: drop / duplicate / rename / retype / swap a field, junk a
-/// tumbler's digits, deep-nest a value, splice two examples (field-merge),
-/// truncate mid-frame, or splice at the byte level. Pure and deterministic
-/// in `(seed, corpus)`; the recipe and base indices are recoverable from the
-/// seed, which a failing tier-1 test records.
+/// Returns one mutant from a corpus of example frames (tier-1's core).
+///
+/// Raw byte storms find panics; field-wise mutation finds the semantic
+/// edges — so this takes a seeded base example and applies one seeded
+/// recipe. Eight parse the base, edit the value and re-serialize: drop /
+/// duplicate / rename / retype / swap a field, junk a tumbler's digits,
+/// deep-nest a value, or splice two examples (field-merge). Two work on the
+/// bytes alone: truncate mid-frame, or splice at the byte level. Pure and
+/// deterministic in `(seed, corpus)`; the recipe and base indices are
+/// recoverable from the seed, which a failing tier-1 test records.
 pub fn mutate(seed: u64, corpus: &[Vec<u8>]) -> Vec<u8> {
     if corpus.is_empty() {
         return Vec::new();
@@ -449,7 +491,7 @@ pub fn mutate(seed: u64, corpus: &[Vec<u8>]) -> Vec<u8> {
     serde_json::to_vec(&val).unwrap_or_else(|_| base.clone())
 }
 
-/// Recipes 0–4: structural edits over one object's fields.
+/// Applies recipes 0–4, the structural edits, over one object's fields.
 fn object_edit(m: &mut Map<String, Value>, recipe: u64, rng: &mut u64) {
     let keys: Vec<String> = m.keys().cloned().collect();
     if keys.is_empty() {
@@ -461,8 +503,8 @@ fn object_edit(m: &mut Map<String, Value>, recipe: u64, rng: &mut u64) {
             m.remove(&k);
         }
         1 => {
-            // JSON cannot carry a duplicate key; duplicate the value under a
-            // near-name, which is itself an unknown-field probe.
+            // A parsed `Map` cannot carry a duplicate key; duplicate the
+            // value under a near-name, which is itself an unknown-field probe.
             if let Some(v) = m.get(&k).cloned() {
                 m.insert(format!("{k}_dup"), v);
             }
@@ -494,8 +536,9 @@ fn object_edit(m: &mut Map<String, Value>, recipe: u64, rng: &mut u64) {
     }
 }
 
-/// Retype a value across the JSON type lattice (string↔number↔object↔array↔
-/// null↔bool).
+/// Returns `v` retyped across the JSON type lattice.
+///
+/// The lattice is string↔number↔object↔array↔null↔bool.
 fn retype(v: &Value, rng: &mut u64) -> Value {
     match splitmix64(rng) % 6 {
         0 => Value::Null,
@@ -511,8 +554,10 @@ fn retype(v: &Value, rng: &mut u64) -> Value {
     }
 }
 
-/// Flip one byte of a key to a different ASCII letter — turns a known field
-/// name into an unknown one (the never-silent-on-typos probe).
+/// Returns `k` with one byte flipped to a different ASCII letter.
+///
+/// It turns a known field name into an unknown one (the
+/// never-silent-on-typos probe).
 fn edit_one_char(k: &str, rng: &mut u64) -> String {
     if k.is_empty() {
         return "x".into();
@@ -523,9 +568,11 @@ fn edit_one_char(k: &str, rng: &mut u64) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// Junk the first tumbler-shaped string in the tree: empty components, a
-/// huge natural, adjacent zeros, or a minus sign — the address-grammar
-/// hostilities the leaf parsers must reject cleanly.
+/// Junks the first tumbler-shaped string in the tree.
+///
+/// The junk is empty components, a huge natural, adjacent zeros, or a minus
+/// sign — the address-grammar hostilities the leaf parsers must reject
+/// cleanly.
 fn junk_first_tumbler(v: &mut Value, rng: &mut u64) -> bool {
     match v {
         Value::String(s) if looks_like_tumbler(s) => {
@@ -544,16 +591,18 @@ fn junk_first_tumbler(v: &mut Value, rng: &mut u64) -> bool {
     }
 }
 
-/// A dotted-decimal tumbler string: nonempty, digits and dots only, at least
-/// one digit.
+/// Returns whether `s` is a dotted-decimal tumbler string.
+///
+/// One is nonempty, digits and dots only, with at least one digit.
 fn looks_like_tumbler(s: &str) -> bool {
     !s.is_empty()
         && s.bytes().all(|b| b.is_ascii_digit() || b == b'.')
         && s.bytes().any(|b| b.is_ascii_digit())
 }
 
-/// Deep-nest one field's value inside a seeded number of array wrappers — a
-/// recursion-depth probe for the parsers.
+/// Deep-nests one field's value inside a seeded number of array wrappers.
+///
+/// It is a recursion-depth probe for the parsers.
 fn deep_nest_a_field(v: &mut Value, rng: &mut u64) {
     let Value::Object(m) = v else { return };
     let keys: Vec<String> = m.keys().cloned().collect();
@@ -569,8 +618,13 @@ fn deep_nest_a_field(v: &mut Value, rng: &mut u64) {
     }
 }
 
-/// Splice two examples: merge another example's top-level fields into this
-/// object, colliding keys and mixing operation shapes.
+/// Splices two examples, merging another's top-level fields into this one.
+///
+/// The merge collides keys and mixes operation shapes.
+///
+/// # Panics
+///
+/// Panics if `v` is an object and `corpus` is empty.
 fn splice_merge(v: &mut Value, corpus: &[Vec<u8>], rng: &mut u64) {
     let Value::Object(m) = v else { return };
     let other = &corpus[(splitmix64(rng) as usize) % corpus.len()];

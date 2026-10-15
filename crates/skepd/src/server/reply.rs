@@ -37,8 +37,8 @@ pub(super) const SESSION_HEADER: &str = "Skepd-Session";
 ///
 /// A *request's* body is bare bytes
 /// ([`HttpRequest::body`](super::HttpRequest::body)) because this daemon does
-/// not read the type a client declares, while every response it writes must
-/// declare one. That is one concept in two shapes, not two concepts.
+/// not read the type a client declares, while every response body it writes
+/// must declare one. That is one concept in two shapes, not two concepts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
     /// The media type the `Content-Type` header carries, verbatim.
@@ -52,7 +52,7 @@ pub struct Body {
 /// `POST /op` is always `200` once a `Response` exists — rejections
 /// included; the `Response` envelope, not the HTTP status, is the operation
 /// protocol. On that route non-200 codes are transport-level only
-/// (`{"error": …}` bodies, wire.md §Transport errors).
+/// (`{"error": …}` bodies, wire.md §HTTP status codes).
 ///
 /// `body: None` is the bodiless answer, written with no content headers
 /// at all (the 204 preflight). Making bodilessness the body's own absence
@@ -115,7 +115,8 @@ impl Reply {
     /// A success answer names its own code here. A refusal names a
     /// [`TransportError`] instead and takes its status from there — save the
     /// handshake's pair, which [`refuse_handshake`] builds here at statuses
-    /// of its own.
+    /// of its own, and the fetch gate's rejections, which [`refuse_fetch`]
+    /// gives three statuses of its own through [`Reply::bodied`].
     pub(super) fn json(status: u16, v: Value) -> Reply {
         Reply::bodied(status, "application/json", to_bytes(&v))
     }
@@ -124,8 +125,8 @@ impl Reply {
     ///
     /// The answer is a 204 with no body and the fixed method and header
     /// lists. `Access-Control-Allow-Origin: *` is in
-    /// [`UNIVERSAL_HEADERS`](super::UNIVERSAL_HEADERS), which every response
-    /// writer emits, so it is not repeated here.
+    /// [`UNIVERSAL_HEADERS`](super::UNIVERSAL_HEADERS), which every final
+    /// response's writer emits, so it is not repeated here.
     ///
     /// The method list must name every method
     /// [`Daemon::reply`](super::Daemon::reply) dispatches on a path this
@@ -218,10 +219,10 @@ pub enum Routed<'a> {
     /// `GET /events` — the server-sent commit stream (wire v4).
     ///
     /// Serviceable only through [`serve`](super::serve): following the
-    /// stream is `skep_core::commits`' and private to it, so a caller routing by
-    /// hand can answer this variant only by refusing the route. It and the
-    /// admitted fetch ([`Routed::Fetch`]) are the answers the socket-free
-    /// surface names and cannot serve.
+    /// stream is `skep_core::commits`', which the daemon keeps private, so a
+    /// caller routing by hand can answer this variant only by refusing the
+    /// route. It and the admitted fetch ([`Routed::Fetch`]) are the answers
+    /// the socket-free surface names and cannot serve.
     EventStream,
     /// The admitted answer of `GET /blob?i=` and `HEAD /blob?i=`.
     ///
@@ -335,7 +336,7 @@ const FETCH_INERT_HEADERS: [(&str, &str); 2] =
 /// It holds every `{"error": …}` name this daemon can answer but the
 /// handshake's two, and is the only way one of those is written. It is
 /// exhaustive over the rest of the wire's transport-error table (wire.md
-/// §Transport errors, §Reading history, §The change feed), so a new failure
+/// §HTTP status codes, §Reading history, §The change feed), so a new failure
 /// cannot ship without a documented name, exactly as `code_name` guarantees
 /// for M10's rejections. The handshake's two answers — the 401 and the 403 —
 /// are the table's two rows written elsewhere: [`refuse_handshake`] says why.
@@ -348,10 +349,10 @@ pub(super) enum TransportError {
     /// The `/changes` query malformed or out of its range.
     ///
     /// It also covers a `limit` whose page from the given `since` would pass
-    /// the page byte budget (`skep_core::limits::MAX_CHANGES_PAGE_BYTES`): out of
-    /// range for that fence, refused whole with `budget` and `fits` beside
-    /// the name ([`refuse_over_budget`]) — the same code, so the armed set
-    /// does not grow and the fuzz oracle's transcription stands.
+    /// the page byte budget (`skep_core::limits::MAX_CHANGES_PAGE_BYTES`):
+    /// out of range for that fence, refused whole with `budget` and `fits`
+    /// beside the name ([`refuse_over_budget`]) — the same code, so the
+    /// armed set does not grow and the fuzz oracle's transcription stands.
     MalformedChanges,
     /// The one-parameter `at=<position>` query of `/dump?at` and `/chain?at`.
     ///
@@ -379,7 +380,7 @@ pub(super) enum TransportError {
     /// parks at most W writers and the board answers `/health` meanwhile.
     /// Retry-class, `scan_busy`'s sibling on the same route; answered before
     /// the credential lock and the guard are taken, so nothing was committed
-    /// and no line was written.
+    /// and no change-feed line was written.
     WriteBusy,
     // The HTTP layer.
     MalformedHttp,
@@ -409,7 +410,7 @@ pub(super) enum TransportError {
     UploadLength,
     /// The gate's refusal.
     ///
-    /// `scope` names which of the three fired, `ended` whether the upload was
+    /// `scope` names which of the four fired, `ended` whether the upload was
     /// ended (refused as the body was written) or kept (refused before it),
     /// `offset` the bytes received.
     DepositRefused,
@@ -421,7 +422,8 @@ pub(super) enum TransportError {
     /// of its three readers — the PUT's creation or resume, the deposit read.
     /// Retry-class, `history_busy`'s sibling: the request may be perfectly
     /// good and the walk momentarily unfinished. Every other request is
-    /// served throughout.
+    /// served throughout, save an `/op` write the media door refuses with the
+    /// same token on the operation channel ([`media_door_refused`]).
     IndexRebuilding,
     /// The failed-index refusal: the cell index's walk at open died.
     ///
@@ -526,7 +528,7 @@ impl TransportError {
 
     /// Returns the status this failure is answered with.
     ///
-    /// The status is the second column of the same table
+    /// The status is the first column of the table whose second
     /// [`TransportError::name`] transcribes (wire.md §HTTP status codes).
     /// Clients dispatch on the status, so the pairing is contract; stating it
     /// here is what keeps one name from arriving under two statuses depending
@@ -586,7 +588,8 @@ impl TransportError {
             // the life of the process: the detail names a restart and no
             // retry, and a client that retries retry-class tokens stops.
             TransportError::IndexFailed => 503,
-            // The gate's: the scope it names has no room for these bytes.
+            // The gate's: the scope it names has no room for these bytes —
+            // or, the standing scope, for another upload.
             TransportError::DepositRefused => 507,
         }
     }
@@ -778,14 +781,14 @@ pub(super) fn refuse_scan_busy(kind: OpKind) -> Reply {
 ///
 /// The refusal is the write permit pool's (`operations.md` §4 rows 25, 27).
 /// Retry-class — the write may be perfectly good and the pool momentarily
-/// full, an inline backstop holding the guard with W writers parked behind
-/// it — and the body names the `op` it refused in [`refuse_scan_busy`]'s
-/// shape, the one sibling refused on the same route, so a client pairs the
-/// refusal with the frame it answers. A *transport* refusal and not an
-/// operation response: it is answered before the credential lock and the
-/// guard are taken, so no `Op` ran, nothing was committed, and there is no
-/// `resp` and no `code` — the envelope is `{"error": …}`, never
-/// `{"resp": "rejected"}`.
+/// full, an inline backstop holding the guard with W − 1 writers parked
+/// behind it — and the body names the `op` it refused in
+/// [`refuse_scan_busy`]'s shape, the one sibling refused on the same route,
+/// so a client pairs the refusal with the frame it answers. A *transport*
+/// refusal and not an operation response: it is answered before the
+/// credential lock and the guard are taken, so no `Op` ran, nothing was
+/// committed, and there is no `resp` and no `code` — the envelope is
+/// `{"error": …}`, never `{"resp": "rejected"}`.
 pub(super) fn refuse_write_busy(kind: OpKind) -> Reply {
     refuse_with(
         TransportError::WriteBusy,

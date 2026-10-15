@@ -1,4 +1,6 @@
-//! The session endpoints (`GET /challenge`, `POST /session`, `POST /session/close`).
+//! The session endpoints.
+//!
+//! They are `GET /challenge`, `POST /session` and `POST /session/close`.
 
 use std::time::Instant;
 
@@ -17,16 +19,19 @@ use skep_core::auth::session::{
 use skep_core::auth::OsEntropy;
 
 impl Daemon {
-    /// `GET /challenge?principal=N` (AUTH-6.1): issue a nonce for ANY
-    /// principal — nothing is secret; the burn is the credential.
+    /// Answers `GET /challenge?principal=N` with a nonce (AUTH-6.1).
     ///
-    /// The mint's clock is the EDGE CLOCK (`skep_util::permits::edge_clock_now`):
-    /// the monotonic clock plus the test seam's offset, which is nothing in
-    /// a shipped daemon — so the store judges a nonce's time to live and its
-    /// edge pair's hold-down (`operations.md` §1.1 m12) by one reading, and
-    /// a suite drives both through the daemon's one clock seam. The pair is
-    /// judged at the mint and said by the daemon at the end of this routing
-    /// (`Daemon::say_the_edges_crossed`); the answer is unchanged.
+    /// It issues a nonce for any principal — nothing is secret; the burn is
+    /// the credential.
+    ///
+    /// The mint's clock is the edge clock
+    /// (`skep_util::permits::edge_clock_now`): the monotonic clock plus the
+    /// test seam's offset, which is nothing in a shipped daemon — so the
+    /// store judges a nonce's time to live and its edge pair's hold-down
+    /// (`operations.md` §1.1 m12) by one reading, and a suite drives both
+    /// through the daemon's one clock seam. The pair is judged at the mint
+    /// and said by the daemon at the end of this routing
+    /// (`Daemon::say_the_edges_crossed`); it changes nothing of the answer.
     pub(super) fn get_challenge(&self, query: Option<&str>) -> Reply {
         let principal = match challenge_principal(query) {
             Ok(p) => p,
@@ -44,17 +49,19 @@ impl Daemon {
         )
     }
 
-    /// `POST /session` — the three-form body (AUTH-6.2): bare (honored per
-    /// `bare_bind_allowed`), signed (the challenge/response handshake,
-    /// verified in EVERY mode), or SCOPED signed — the signed form carrying
-    /// `"scope": "content"`, verified under the v2 bytes and opening a
-    /// binding that deposits no credential (AUTH-4.39). A syntax fault — a
-    /// scope fault included — is the 400 and spends no credential; every
-    /// handshake failure OF THE CREDENTIAL is the ONE 401,
-    /// `session_rejected`, byte-identical across causes (AUTH-6.5).
-    /// THE ONE EXCEPTION, BY STATUS: a signed body naming a principal under
-    /// a listed prefix is `403 prefix_blocked` carrying the record's
-    /// address (AUTH-4.36 step 4b) — [`refuse_handshake`] builds both.
+    /// Opens a session from `POST /session`'s three-form body (AUTH-6.2).
+    ///
+    /// The forms are bare (honored per `bare_bind_allowed`), signed (the
+    /// challenge/response handshake, verified in every mode), or scoped
+    /// signed — the signed form carrying `"scope": "content"`, verified under
+    /// the v2 bytes and opening a binding that deposits no credential
+    /// (AUTH-4.39). A syntax fault — a scope fault included — is the 400 and
+    /// spends no credential; every handshake failure *of the credential* is
+    /// the one 401, `session_rejected`, byte-identical across causes
+    /// (AUTH-6.5). The one exception, by status: a signed body naming a
+    /// principal under a listed prefix is `403 prefix_blocked` carrying the
+    /// record's address (AUTH-4.36 step 4b) — [`refuse_handshake`] builds
+    /// both.
     pub(super) fn post_session(&self, req: &HttpRequest) -> Reply {
         let body = match parse_session_body(&req.body) {
             Ok(b) => b,
@@ -62,7 +69,7 @@ impl Daemon {
                 return refuse(TransportError::MalformedSessionRequest, Some(&detail))
             }
         };
-        // ONE head snapshot: the world and the key table it carries, so the
+        // One head snapshot: the world and the key table it carries, so the
         // handshake's account registry and its key set are one committed
         // state.
         let snap = self.engine.kernel().snapshot();
@@ -77,15 +84,15 @@ impl Daemon {
         );
         match outcome {
             Ok(Opened { principal, signer, scope }) => {
-                // Every POST /session mints a DISTINCT SessionId, principal
+                // Every POST /session mints a distinct SessionId, principal
                 // 0 included (AUTH-4.40; M10's bootstrap_session mints
-                // fresh per call — confirmed as-built, AUTH-6.35).
+                // fresh per call, as built, AUTH-6.35).
                 let sid = if principal == skep_namespace::BOOTSTRAP_PRINCIPAL {
                     self.febe.bootstrap_session()
                 } else {
                     self.febe.open_session(principal)
                 };
-                // The scope is set ONCE, here, from the VERIFIED body — the
+                // The scope is set once, here, from the verified body — the
                 // handshake's answer — and the 200 below says nothing of it
                 // (AUTH-4.39): a client knows the scope it asked for.
                 let token = self
@@ -104,24 +111,27 @@ impl Daemon {
         }
     }
 
-    /// `POST /session/close` (AUTH-4.47): idempotent 204. Through
-    /// [`Daemon::token_route`], the header falls out with no special case —
-    /// a LIVE token's 204 carries no header (the close is the person's own
-    /// act); an unknown or already-dead one resolved Guest, so the route
-    /// closed it already and its 204 carries `Skepd-Session: closed`.
+    /// Answers `POST /session/close` (AUTH-4.47): an idempotent 204.
     ///
-    /// THE THIRD CASE CLOSES NOTHING, and the uniform answer is the point: a
-    /// LIVE BARE binding whose request
+    /// Through [`Daemon::token_route`], the header falls out with no special
+    /// case — a live token's 204 carries no header (the close is the
+    /// person's own act); an unknown or already-dead one resolved `Guest`,
+    /// so the route closed it already and its 204 carries
+    /// `Skepd-Session: closed`.
+    ///
+    /// **The third case closes nothing**, and the uniform answer is the
+    /// point. A live bare binding whose request
     /// `skep_core::auth::session::bare_bind_allowed` refuses resolves
-    /// `Guest(GuestReason::RequestRefused)`, which [`Actor`] rules "lives
+    /// `Guest(GuestReason::RequestRefused)`, which [`Actor`] states "lives
     /// untouched", so this arm does not fire, nothing is retired, `closed`
-    /// is false, and the 204 is byte-identical to a successful close. The
-    /// one reachable cell is a foreign `Origin` — the cross-site case the
-    /// bare arm's origin fence exists for, since this daemon binds loopback
-    /// and the signed arm consults neither peer nor origin — and a page that
-    /// may not WRITE as a binding must not retire it, nor learn from the
-    /// answer whether it is live. Every honest client is at an admitted
-    /// origin or sends no `Origin` at all.
+    /// is false, and the 204 is byte-identical to a successful close. On the
+    /// default loopback bind the one reachable cell is a foreign `Origin` —
+    /// the cross-site case the bare arm's origin fence exists for, since
+    /// every peer there is loopback and the signed arm consults neither peer
+    /// nor origin; a bind beyond loopback (`--bind`) reaches the peer's cell
+    /// too. A page that may not write as a binding must not retire it, nor
+    /// learn from the answer whether it is live. Every honest client is at an
+    /// admitted origin or sends no `Origin` at all.
     pub(super) fn post_session_close(&self, resolved: &Resolved, req: &HttpRequest) -> Reply {
         if let Actor::Principal(_) = &resolved.actor {
             if let Some(t) = req.session_token.as_deref().and_then(Token::parse) {
@@ -132,8 +142,14 @@ impl Daemon {
     }
 }
 
-/// The `/challenge` query: exactly `principal=<non-negative integer>`
-/// ([`sole_param`]).
+/// Parses the `/challenge` query: exactly `principal=<non-negative integer>`.
+///
+/// It reads the query through [`sole_param`].
+///
+/// # Errors
+///
+/// [`sole_param`]'s refusals, an absent `principal`, and a value that is
+/// not a non-negative integer.
 fn challenge_principal(query: Option<&str>) -> Result<u64, String> {
     let v = sole_param(query, "principal")?.ok_or("the required parameter is principal=<id>")?;
     v.parse().map_err(|_| format!("principal: '{v}' is not a non-negative integer"))

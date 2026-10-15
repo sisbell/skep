@@ -1,66 +1,72 @@
-//! The process: one long-running server owning one `World`. The daemon is
-//! transport, configuration, and lifetime — every handler is
+//! The process: one long-running server owning one `World`.
+//!
+//! The daemon is transport, configuration, and lifetime — every handler is
 //! parse/marshal/dispatch/configure; every decision lives in a store, save
-//! the three the spec gives the daemon — the session layer's gates (`auth/`,
-//! the upload family's among them), the published head's cadence
-//! (`skep-core`'s `commits/head.rs`) and the media door (`skep-media`'s `door.rs`).
+//! the three the spec gives the daemon — the session layer's gates
+//! (`skep-core`'s `auth/`, the upload family's among them), the published
+//! head's cadence (`skep-core`'s `commits/head.rs`) and the media door
+//! (`skep-media`'s `door.rs`).
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
 //! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
 //! wrap it in a synchronous accept loop over a plain `TcpListener`. The
-//! HTTP/1.1 subset this daemon speaks (GET/POST/OPTIONS, `Content-Length`
-//! bodies, one request per connection, `Connection: close` on every
-//! response) is written out here rather than taken from a server library,
-//! because the commit stream needs two things a pull-based library response
-//! cannot give: event bytes flushed to the socket at commit time, and a
-//! server-initiated close at shutdown. Owning the socket makes both
-//! one-line facts.
+//! HTTP/1.1 subset this daemon speaks (`GET`, `HEAD`, `POST`, `PATCH`,
+//! `DELETE` and `OPTIONS`, `Content-Length` bodies, one request per
+//! connection, `Connection: close` on every final response) is written out
+//! here rather than taken from a server library, because the commit stream
+//! needs two things a pull-based library response cannot give: event bytes
+//! flushed to the socket at commit time, and a server-initiated close at
+//! shutdown. Owning the socket makes both one-line facts.
 //!
 //! **History is served from the journal** (wire v3): `POST /op-at` answers
-//! any READ frame as of any committed position, `GET /dump?at=N`
-//! (observe builds) dumps that position's world, and `GET /chain?at=N`
-//! answers the commit chain's value there — the kernel's recomputation off
-//! its journal, no world folded. All three ask `history.rs`, which owns the
-//! reconstruction (the engine's bounded replay), the chain read beside it,
-//! their one concurrency budget, and the `as_of` stamping; what `server`
-//! adds is the envelope, the read/write classification, and the one mapping
-//! from an unavailable answer onto the wire's transport errors. Writes never
-//! reach history — a write frame is refused at the transport
-//! (`400 write_at_history`) before anything runs — and the live `/op` path
-//! is untouched.
+//! any read frame as of any committed position the journal has not
+//! reclaimed, `GET /dump?at=N` (observe builds) dumps that position's world,
+//! and `GET /chain?at=N` answers the commit chain's value there — the
+//! kernel's recomputation off its journal, no world folded. All three ask
+//! `history.rs`, which owns the reconstruction (the engine's bounded replay),
+//! the chain read beside it, their one concurrency budget, and the `as_of`
+//! stamping; what `server` adds is the envelope, the read/write
+//! classification, and the one mapping from an unavailable answer onto the
+//! wire's transport errors. Writes never reach history — a write frame is
+//! refused at the transport (`400 write_at_history`) before anything runs —
+//! and the live `/op` path is untouched.
 //!
 //! **Durability is configuration, not code**: [`Daemon::open`] opens M2's
 //! kernel on a real directory with `Durability::Fsync` (rollback burned-seq
-//! policy), a checkpoint cadence of every 1024 commits OR a byte bound,
-//! whichever first — the bound a quarter of the newest checkpoint's size
-//! and never below 24 MiB, re-read as each checkpoint lands — DEFERRED to
-//! the daemon's own checkpoint thread (`server/listen.rs`), which runs the
-//! checkpoint off the write path's guard, says a failure once on the
-//! operator stream, and compacts the change feed's files to the journal's
-//! reclaim floor after each landing; and two retained checkpoints — genesis
-//! on a fresh store, recovery on an existing one, both inside
-//! `Engine::open`. The only files this crate writes itself are the
-//! change feed's: the commit-metadata sidecar `commits.log`, its four
-//! derived sidecars (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
+//! policy), a checkpoint cadence of every 1024 commits or a byte bound,
+//! whichever first — the bound a quarter of the newest checkpoint's size,
+//! the start point's at open, and never below 24 MiB, re-read as each
+//! checkpoint lands — deferred to the daemon's own checkpoint thread
+//! (`server/listen.rs`), which runs the checkpoint off the write path's
+//! guard, says a failure once on the operator stream, and compacts the
+//! change feed's files to the journal's reclaim floor after each landing;
+//! and two retained checkpoints — genesis on a fresh store, recovery on an
+//! existing one, both inside `Engine::open`. Beside the kernel's files and
+//! the blob store's (under `blobs/`, opened through `MediaGate::open_with`),
+//! the only files the daemon writes are the change feed's: the
+//! commit-metadata sidecar `commits.log`, its four derived sidecars
+//! (`feed-index.log`, `feed-offsets.log`, `feed-masked.log`,
 //! `feed-streams.log`), the attest store `feed-attest.log` — the marker slot
 //! mirrored per attested commit, the one daemon file that is primary state
 //! below the reclaim floor — and, transiently while any is compacted, its
 //! `.compact` twin — all opened here through `Commits::open` and owned by
-//! `skep-core`'s `commits/sidecar.rs` and `commits/feed/`; nothing here writes any
-//! file of the WORLD's, which is why two daemons replaying one journal still
-//! converge byte-identically.
+//! `skep-core`'s `commits/sidecar.rs` and `commits/feed/`; nothing here
+//! writes any file of the world's, which is why two daemons replaying one
+//! journal still converge byte-identically.
 //!
-//! **Identity is the AUTH session layer** (`auth/`): `GET /challenge` and
-//! `POST /session` mint a session by one of two arms — a BARE bind (v1's
-//! form, honored only from a loopback peer at an admitted origin, and only
-//! while the board is not ENFORCING) or a SIGNED challenge/response — and
-//! the daemon maps the opaque token → M10-minted `SessionId` in its own
-//! state, so a `SessionId` never rides the wire (M10's non-forgeability
-//! precondition). A request with no token, or one whose binding is gone,
-//! runs under M10's guest session (`SessionId::GUEST`, bound to no
-//! principal): reads are principal-free and succeed, writes get M10's own
-//! `Unauthenticated`, and a token naming a binding this daemon has closed
-//! carries `Skepd-Session: closed` back.
+//! **Identity is the AUTH session layer** (`skep-core`'s `auth/`):
+//! `GET /challenge` and `POST /session` mint a session by one of two arms —
+//! a bare bind (v1's form, honored only from a loopback peer whose `Origin`,
+//! where it sends one, is admitted, and only while the board is not
+//! enforcing) or a signed challenge/response — and the daemon maps the
+//! opaque token → M10-minted `SessionId` in its own state, so a `SessionId`
+//! never rides the wire (M10's non-forgeability precondition). A request
+//! with no token, one whose binding is gone, or one whose bare bind its peer
+//! or origin refuses runs under M10's guest session (`SessionId::GUEST`,
+//! bound to no principal): reads need no principal and are answered at the
+//! guest's class, writes get M10's own `Unauthenticated`, and a token naming
+//! no live binding — unknown to this daemon, or its binding dead — carries
+//! `Skepd-Session: closed` back.
 //! `auth/` owns the rest and `server` holds none of it: the two origin
 //! sets and their publication, the handshake, the credential write lock,
 //! the ordered refusal producers, and the readers of the World's identity
@@ -70,45 +76,47 @@
 //! the table it reads are one committed state.
 //! What `server` adds is the three write sequences that call them in their
 //! pinned order, and the `/session` and `/health` marshals. Tokens are
-//! uptime-scoped; the daemon binds 127.0.0.1 only.
+//! uptime-scoped; the daemon binds `127.0.0.1` unless `--bind` or
+//! `SKEPD_BIND` names another IPv4 address.
 //!
-//! **Cross-origin posture (wire v7)**: every response carries
+//! **Cross-origin posture (wire v7)**: every final response carries
 //! `Access-Control-Allow-Origin: *` and
 //! `Access-Control-Expose-Headers: Skepd-Session`, written from one
-//! constant ([`UNIVERSAL_HEADERS`]) by both response writers — the reply
-//! path and the event stream — so nothing this daemon answers can miss
-//! them, and `OPTIONS` on any known path answers a 204 preflight naming
-//! the allowed methods and headers. The `*` is a scope decision, and it
-//! was revisited when authentication landed (wire.md §Cross-origin
-//! access): it stays, because neither credential is browser-ambient.
-//! Reads are principal-free, so `*` grants any page the whole read
-//! surface. Writes do not follow it: a write needs a session,
+//! constant ([`UNIVERSAL_HEADERS`]) where every final response begins — the
+//! reply path, the event stream and the blob fetch alike — so no final
+//! response this daemon writes can miss them, and `OPTIONS` on any known
+//! path answers a 204 preflight naming the allowed methods and headers. The
+//! `*` is a scope decision that holds with authentication in force (wire.md
+//! §Cross-origin access), because neither credential is browser-ambient.
+//! Reads need no principal, so `*` grants any page the whole read surface
+//! at the guest's class. Writes do not follow it: a write needs a session,
 //! `skep_core::auth::session::bare_bind_allowed` refuses a bare bind whose
 //! `Origin` is not in the bare set (a browser sends that header on every
 //! cross-origin POST), and the signed arm binds its origin inside the
 //! signature. A foreign page's POST is fenced by the daemon rather than
-//! by what the browser lets it read back, which is why a narrower ACAO
-//! was weighed and declined.
+//! by what the browser lets it read back, which is why a narrower ACAO is
+//! declined.
 //!
-//! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37 — PUB round 2,
-//! lane 3.7)**: `/op` admits at most [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
-//! CLASS-SCAN-shaped reads at once — the reads that walk the LINK STORE END
-//! TO END, or the lineage pair the whole supersession class, which as M7 is
-//! built is every link-discovery read there is
-//! (`scan::is_class_scan` enumerates them and states why the shape of a
-//! query does not narrow one). [`ClassScans`] is the whole bound on one card — the
-//! op test, the pool, and the admission that takes the permit after the
-//! parse and the session read and before M10 is asked, so a refused request
-//! costs the parse alone and an admitted one holds its slot for the WHOLE
-//! answer. The pool is a second instance of [`skep_util::permits::Permits`],
-//! disjoint from the reconstruction pool — a scan spends no reconstruction
-//! permit and a reconstruction spends no scan permit. The bound admits or
-//! refuses a REQUEST (`503 scan_busy`, retry-class, the body naming the op)
-//! and never alters an answer: M7 and M8 are not told a query is bounded. A
-//! concurrency bound, never a rate statement.
+//! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37)**: `/op` admits at
+//! most [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
+//! class-scan-shaped reads at once — the reads that walk the link store end
+//! to end, or the lineage pair the whole supersession class, which as M7 is
+//! built is every link-discovery read there is (`scan::is_class_scan`
+//! enumerates them and states why the shape of a query does not narrow
+//! one). [`ClassScans`] is the whole bound on one card — the op test, the
+//! pool, and the admission that takes the permit after the parse and the
+//! session read and before M10 is asked, so a refused request costs the
+//! parse and the session read alone and an admitted one holds its slot for
+//! the whole answer. The pool is a second instance of
+//! [`skep_util::permits::Permits`], disjoint from the reconstruction pool —
+//! a scan spends no reconstruction permit and a reconstruction spends no
+//! scan permit. The bound admits or refuses a request (`503 scan_busy`,
+//! retry-class, the body naming the op) and never alters an answer: M7 and
+//! M8 are not told a query is bounded. A concurrency bound, never a rate
+//! statement.
 //!
-//! **Writes go through one card** (`skep-core`'s `commits`): `POST /op` — the
-//! daemon's only write ROUTE — hands each write to
+//! **Writes go through one card** (`skep-core`'s `commits`): `POST /op` —
+//! the daemon's only write route — hands each write its sequence admits to
 //! `Commits::commit_under`, which commits it, records its change-feed
 //! entry, and announces its position, in that order and inside the
 //! serialization guard the write sequences here hold — and then gives the
@@ -118,49 +126,52 @@
 //! which take `serial_lock` themselves so their gates and the execute they
 //! gate stand on one committed state; the ordering the commit stream and
 //! the change feed below rest on is not a thing a handler here can take
-//! apart. Reads execute directly and take no lock. EVERY WRITE REQUEST
-//! TAKES A PERMIT OF THE WRITE POOL FIRST (`operations.md` §4 rows 25, 27)
-//! — the fifth instance of [`skep_util::permits::Permits`], of width
-//! [`MAX_CONCURRENT_WRITES`], disjoint from the reconstruction, class-scan,
-//! fetch and upload pools — before the credential lock and the guard, held
-//! through `commit_under`'s return; a write that finds none is refused
+//! apart. Reads execute directly and take no lock. Every write that reaches
+//! a lock holds a permit of the write pool (`operations.md` §4 rows 25, 27),
+//! taken before the credential lock and the guard — the plain sequence's
+//! first act, and the credential and registry sequences' after the pre-lock
+//! refusals they answer, which cost none — the fifth instance of
+//! [`skep_util::permits::Permits`], of width [`MAX_CONCURRENT_WRITES`],
+//! disjoint from the reconstruction, class-scan, fetch and upload pools,
+//! held through `commit_under`'s return; a write that finds none is refused
 //! `503 write_busy`, retry-class, before any lock, nothing committed. The
-//! head writer's own commits take none: they run inside `commit_under`'s
-//! turn, under the permit the triggering write already holds. So while an
-//! inline backstop holds the guard, writes occupy at most W workers — the
-//! trigger and W − 1 parked — and `/health`, `/session` and every read
-//! stay answered.
+//! head writer's own commits take none: they run in the turn of the write
+//! that triggers them — inside `commit_under`, after a refusal, or in the
+//! claim's flip — under the permit that write already holds, and at the
+//! open before anything is served. So while an inline backstop holds the
+//! guard, writes occupy at most W workers — the trigger and W − 1 parked —
+//! and `/health`, `/session` and every read stay answered.
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the last announced
 //! position on connect, then an event whenever a later position is
 //! announced.
-//! `skep-core`'s `commits` owns the stream: what a subscriber is told first and
-//! next, and the coalescing that falls out of asking "anything past what I
-//! last sent"; `Subscribers` (in `listen.rs`) owns the budget, the admission, and
-//! the join at shutdown. What `server` adds is the SSE framing (`http.rs`'s
-//! `write_commit_event`), the subscriber's loop (`listen.rs`'s
-//! `serve_events`), and the hand-off that keeps an open stream off the op
-//! pool — the accepting worker gives the socket to a dedicated thread and
-//! returns to `accept`.
+//! `skep-core`'s `commits` owns the stream: what a subscriber is told first
+//! and next, and the coalescing that falls out of asking "anything past
+//! what I last sent"; `Subscribers` (in `listen.rs`) owns the budget, the
+//! admission, and the join at shutdown. What `server` adds is the SSE
+//! framing (`http.rs`'s `write_commit_event`), the subscriber's loop
+//! (`listen.rs`'s `serve_events`), and the hand-off that keeps an open
+//! stream off the op pool — the accepting worker gives the socket to a
+//! dedicated thread and returns to `accept`.
 //!
-//! **The change feed (wire v6; class-gated since v7.8)**: `GET
-//! /changes?since=N` answers the committed positions in `(N, head]` the
-//! presented token's class may see, oldest first, each with its op kind,
-//! affected document(s) reduced to the readable ones, and commit
-//! wall-clock time — so clients refresh what they display instead of
-//! re-walking the world on every SSE tick. `sidecar.rs` owns
-//! `commits.log`: its crash honesty, its retention, and what a position
-//! whose record was lost answers; `feed/` owns the mask, the four derived
-//! sidecars, the attest store, the supplement merge and the two narrowings
-//! (`under=`, `drafts=true`); `skep-core`'s `commits` owns the ordering that makes the
-//! sidecar's invariants true. What `server` adds is the query's parse,
-//! the requester's FEED CLASS — resolved once per request off ONE head
+//! **The change feed (wire v6; class-gated, wire v7.8)**:
+//! `GET /changes?since=N` answers, a page at a time, the committed positions
+//! in `(N, head]` the presented token's class may see, oldest first, each
+//! with its op kind, affected document(s) reduced to the readable ones, and
+//! commit wall-clock time — so clients refresh what they display instead of
+//! re-walking the world on every SSE tick. `sidecar.rs` owns `commits.log`:
+//! its crash honesty, its retention, and what a position whose record was
+//! lost answers; `feed/` owns the mask, the four derived sidecars, the
+//! attest store, the supplement merge and the two narrowings (`under=`,
+//! `drafts=true`); `skep-core`'s `commits` owns the ordering that makes the
+//! sidecar's invariants true. What `server` adds is the query's parse, the
+//! requester's feed class — resolved once per request off one head
 //! snapshot and threaded down (PUB-6.40) — the marshal, and `/health`'s
 //! `head_time`.
 //!
-//! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
-//! answers the embedded GUEST READER (`skep/clients/board.html`,
+//! **The served client (wire v6, `client` feature, default off)**: `GET /`
+//! answers the embedded guest reader (`skep/clients/board.html`,
 //! `include_str!` at build — the binary is self-contained), `text/html`,
 //! same CORS posture as everything else. One file by design; there is no
 //! asset pipeline. The page is read-only — it holds no key, token or
@@ -245,82 +256,93 @@ pub use listen::{bind, serve, serve_bound, Listener, Skepd, DEFAULT_WORKERS, MIN
 pub use reply::{Body, Fetch, Reply, Routed};
 pub use request::HttpRequest;
 
-/// Auto-checkpoint cadence, the commit half: every N commits (M2 evaluates
-/// on-commit; the daemon's checkpoint thread waits on the kernel's due flag,
-/// not on a timer — no timer thread exists anywhere in this daemon).
-/// Together with [`RETAINED_CHECKPOINTS`] this sets the sidecar's
-/// reconstruction ceiling at open (see `CommitsLog::open`): raising either
-/// lengthens startup on a data dir whose commit metadata is missing. The
-/// byte half beside it — [`CHECKPOINT_BYTES_FLOOR`], [`CHECKPOINT_BYTES_SHARE`]
-/// — crosses first on a board of large commits, where this count alone would
+/// The auto-checkpoint cadence's commit half: every N commits.
+///
+/// M2 evaluates it on-commit; the daemon's checkpoint thread runs a
+/// checkpoint on the kernel's due flag, never on a timer. Together with
+/// [`RETAINED_CHECKPOINTS`] this sets the sidecar's reconstruction ceiling
+/// (see `CommitsLog::open`): raising either lengthens the walk behind the
+/// listener on a data dir whose commit metadata is missing. The byte half
+/// beside it — [`CHECKPOINT_BYTES_FLOOR`], [`CHECKPOINT_BYTES_SHARE`] —
+/// crosses first on a board of large commits, where this count alone would
 /// let the journal outrun the floor.
 const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 
-/// THE CADENCE's BYTE BOUND, its FLOOR — 24 MiB, INTERIM (D1; the
-/// journal-writes investigation §3.2, the owner's ruling jw-R1): the least
-/// the byte bound B is, whatever the newest checkpoint's size. The bound is
-/// what makes the media floor a guarantee: the floor must hold the next
-/// checkpoint, the journal appended until it lands and the daemon's own
-/// lines for those commits, which holds iff B·(1 + g + d) ≤ C — C the
-/// newest checkpoint's size, g the checkpoint's growth per journal byte, d
-/// the daemon's lines per journal byte, 1 + g + d measured from 1.35 (bulk
-/// prose) to ≈ 3.0 (tiny attested commits). Below the floor's crossover
-/// the constant half of the media floor covers C + 3·B + one segment at
-/// 24 MiB with room; above it [`CHECKPOINT_BYTES_SHARE`] holds. The grace
-/// of the deferred cadence (one window, the backstop's) doubles the window
-/// the floor must cover, which the share's slack absorbs.
+/// The cadence's byte bound's floor, 24 MiB.
+///
+/// The figure is interim (D1; the journal-writes investigation §3.2). It is
+/// the least the byte bound B is, whatever the newest checkpoint's size.
+/// The bound is what makes the media floor a guarantee: the floor must hold
+/// the next checkpoint, the journal appended until it lands and the
+/// daemon's own lines for those commits, which holds iff B·(1 + g + d) ≤ C
+/// — C the newest checkpoint's size, g the checkpoint's growth per journal
+/// byte, d the daemon's lines per journal byte, 1 + g + d measured from
+/// 1.35 (bulk prose) to ≈ 3.0 (tiny attested commits). Below the floor's
+/// crossover the constant half of the media floor covers C + 3·B + one
+/// segment at 24 MiB with room; above it [`CHECKPOINT_BYTES_SHARE`] holds.
+/// The grace of the deferred cadence (one window, the backstop's) doubles
+/// the window the floor must cover, which the share's slack absorbs.
 const CHECKPOINT_BYTES_FLOOR: u64 = 24 * 1024 * 1024;
 
-/// THE CADENCE's BYTE BOUND, its SHARE — 4, INTERIM (D1; jw-R1): the byte
-/// bound B is the newest checkpoint's size divided by this, never below
+/// The cadence's byte bound's share, 4.
+///
+/// The figure is interim (D1). The byte bound B is the newest checkpoint's
+/// size divided by this — at open, the start point's — never below
 /// [`CHECKPOINT_BYTES_FLOOR`], re-read as each checkpoint lands. A quarter
 /// holds the inequality above at every measured regime with slack of at
 /// least C/4 — a half holds prose and 1 KiB values alone, a third every
 /// unsigned size and the signed tiny case at its edge — at a checkpoint I/O
 /// of about four bytes of checkpoint per byte of journal on bulk inserts.
-/// The owner may move the divisor; the bound stays RELATIVE to the newest
+/// The divisor may be moved; the bound stays relative to the newest
 /// checkpoint, never a constant: a constant sized for a small board lets a
 /// large one's journal outrun its floor, and one sized for a large board
 /// checkpoints a small one at every few megabytes.
 const CHECKPOINT_BYTES_SHARE: u64 = 4;
 
-/// THE BYTE BOUND for a newest checkpoint of `newest_checkpoint_len` bytes
-/// (`None`: none yet, the floor alone): `max(CHECKPOINT_BYTES_FLOOR, C /
-/// CHECKPOINT_BYTES_SHARE)`. Non-zero by the floor, which is what the
-/// kernel's setter takes.
+/// Returns the byte bound for a checkpoint of `newest_checkpoint_len` bytes.
+///
+/// The checkpoint is the newest — at open, the start point — and `None`,
+/// no checkpoint to size by, is the floor alone:
+/// `max(CHECKPOINT_BYTES_FLOOR, C / CHECKPOINT_BYTES_SHARE)`. Non-zero by
+/// the floor, which is what the kernel's setter takes.
 fn cadence_bytes_for(newest_checkpoint_len: Option<u64>) -> NonZeroU64 {
     let share = newest_checkpoint_len.map_or(0, |c| c / CHECKPOINT_BYTES_SHARE);
     NonZeroU64::new(share.max(CHECKPOINT_BYTES_FLOOR))
         .expect("the byte bound's floor is a non-zero constant")
 }
 
-/// Retained checkpoints: two, so `BadCheckpoint` recovery can fall back to
-/// the older base instead of a full-journal replay from genesis. The other
-/// factor of the sidecar's reconstruction ceiling — see
-/// [`CHECKPOINT_EVERY_COMMITS`].
+/// The retained checkpoints: two.
+///
+/// With two, `BadCheckpoint` recovery can fall back to the older base
+/// instead of a full-journal replay from genesis. The other factor of the
+/// sidecar's reconstruction ceiling — see [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
 
-/// THE RETRY MEMO's CAPACITY — 1024 entries, INTERIM: the daemon's own pin,
-/// handed to M10's `OperationSurface::new` at the open as the construction
-/// parameter the M10 design makes it (§7's knob "with no implicit default";
-/// the operations design §2.6, op-D5; the configuration register's row "the
+/// The retry memo's capacity, 1024 entries.
+///
+/// The figure is interim: the daemon's own pin, handed to M10's
+/// `OperationSurface::new` at the open as the construction parameter the
+/// M10 design makes it (§7's knob "with no implicit default"; the
+/// operations design §2.6, op-D5; the configuration register's row "the
 /// retry memo's capacity, THE DAEMON's PIN"). Never an operator knob: the
 /// memo is a best-effort hint nobody can observe — an evicted key costs one
 /// re-execution and nothing says so — so a flag for it would be a setting
-/// with no echo and no face. The figure is the one the crate fixed before
-/// the parameter existed, so no board's behaviour moves with it.
+/// with no echo and no face. The figure is this crate's one fixed capacity,
+/// the same on every board, so the parameter moves no board's behaviour.
 const MEMO_CAPACITY: std::num::NonZeroUsize =
     std::num::NonZeroUsize::new(1024).expect("1024 is nonzero");
 
-/// The body cap for a request — its method and its path — checked on the
-/// declared `Content-Length` before a byte is read, so a route that cannot
-/// use a large body is never asked to allocate for one: the frame routes,
-/// `/op` and `/op-at`, take `MAX_REQUEST_BODY` whatever the method; the
-/// blob upload's two body-carrying methods — the creation's `POST` and the
-/// resume's `PATCH` — take `MAX_BLOB_BYTES`, a body the daemon's own
-/// transport never holds whole (`server/http.rs`, THE STREAMING ARM) and a
-/// caller over its own transport holds whole if it buffers; every other
-/// request, the rest of the blob family's included, takes `MAX_SMALL_BODY`.
+/// Returns the body cap for a request, by its method and its path.
+///
+/// The cap is checked on the declared `Content-Length` before a byte is
+/// read, so a route that cannot use a large body is never asked to allocate
+/// for one: the frame routes, `/op` and `/op-at`, take `MAX_REQUEST_BODY`
+/// whatever the method; the blob upload's two body-carrying methods — the
+/// creation's `POST` and the resume's `PATCH` — take `MAX_BLOB_BYTES`, a
+/// body the daemon's own transport never holds whole (`server/http.rs`, the
+/// streaming arm) and a caller over its own transport holds whole if it
+/// buffers; every other request, the rest of the blob family's included,
+/// takes `MAX_SMALL_BODY`.
 ///
 /// Public because [`HttpRequest`] names it as a caller's obligation: a
 /// caller building a request for [`Daemon::route`] over a transport of its
@@ -335,61 +357,70 @@ pub fn body_cap(method: &str, path: &str) -> usize {
     }
 }
 
-/// The embedded authoring client (wire v6): one file, compiled in so the
-/// binary is self-contained.
+/// The embedded guest reader (wire v6).
+///
+/// It is one file, compiled in so the binary is self-contained.
 #[cfg(feature = "client")]
 const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 
-/// `Daemon::open` failure — WHICH SUBSYSTEM refused, and not a disposition:
-/// four of the five are uniform operator-intervention conditions (report and
-/// stop, never retry) and `Engine` is not. A caller that means to RETRY reads
-/// the wrapped error and never this enum alone, which cannot tell a failure a
-/// retry clears from one it does not.
+/// The `Daemon::open` failure: which subsystem refused, not a disposition.
+///
+/// Four of the five are uniform operator-intervention conditions (report
+/// and stop, never retry) and `Engine` is not. A caller that means to retry
+/// reads the wrapped error and never this enum alone, which cannot tell a
+/// failure a retry clears from one it does not.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum DaemonError {
-    /// The engine could not genesis/recover — M2's [`OpenError`](crate::OpenError)
-    /// verbatim, re-exported beside [`EngineError`] so the match this doc
-    /// describes is written against this crate alone, and the ONE variant
-    /// here whose disposition is the WRAPPED error's rather than this enum's.
+    /// The engine could not genesis or recover.
+    ///
+    /// It carries M2's [`OpenError`](crate::OpenError) verbatim, re-exported
+    /// beside [`EngineError`] so the match this doc describes is written
+    /// against this crate alone, and it is the one variant here whose
+    /// disposition is the wrapped error's rather than this enum's.
     /// `ForeignFormat`, `BadCheckpoint` and `Corruption` are operator
     /// intervention and `InvalidConfig` wants a corrected configuration; `Io`
-    /// fuses failures no retry clears WITH the two M2 documents as clearable
+    /// fuses failures no retry clears with the two M2 documents as clearable
     /// — the journal-path exclusion lock ([`Daemon::open`]'s precondition: a
     /// second live kernel on this data dir) and a recovery truncation the
-    /// next open repeats. So `Io` narrows a failure to POSSIBLY retryable and
+    /// next open repeats. So `Io` narrows a failure to possibly retryable and
     /// no further, and a caller that retries on it bounds its attempts. Reach
     /// it through this enum's `source`, or by destructuring
     /// `Engine(EngineError::Open(…))`.
     Engine(EngineError),
-    /// `commits.log` (the commit-metadata sidecar), one of the change
-    /// feed's four derived sidecars or its attest store could not be opened,
-    /// replayed, or extended. A torn tail is NOT an error (it truncates);
-    /// this is the data dir refusing I/O the kernel just performed.
+    /// A change feed file could not be opened, replayed, or extended.
+    ///
+    /// The file is `commits.log` (the commit-metadata sidecar), one of the
+    /// change feed's four derived sidecars or its attest store. A torn tail
+    /// is not an error (it truncates); this is the data dir refusing I/O the
+    /// kernel just performed.
     Sidecar(std::io::Error),
-    /// The blocked-prefix list's START-UP SUPPLY
-    /// ([`AuthOptions::blocked_supply_path`]) could not be read, is not a
-    /// list, or is past the byte cap the supply channel applies — the last
-    /// two both `InvalidData`; the error names the file and, for the cap,
-    /// the number. The list is supplied at every start (AUTH-4.70), so a
-    /// daemon that cannot read the one it was handed does not start on an
-    /// empty one: that would lapse every standing block in silence.
+    /// The blocked-prefix list's start-up supply could not be read as a list.
+    ///
+    /// The supply ([`AuthOptions::blocked_supply_path`]) could not be read,
+    /// is not a list, or is past the byte cap the supply channel applies —
+    /// the last two both `InvalidData`; the error names the file and, for
+    /// the cap, the number. The list is supplied at every start (AUTH-4.70),
+    /// so a daemon that cannot read the one it was handed does not start on
+    /// an empty one: that would lapse every standing block in silence.
     BlockedPrefixes(std::io::Error),
-    /// The blob store under `blobs/` in the data dir (media lane B) could
-    /// not be opened: its two logs tail-checked and compacted, its partials
-    /// reconciled with its records, the directory synced — the data dir
-    /// refusing I/O, as [`DaemonError::Sidecar`] is.
+    /// The blob store under `blobs/` in the data dir could not be opened.
+    ///
+    /// Its open tail-checks and compacts its two logs, reconciles its
+    /// partials with its records and syncs the directory; this is the data
+    /// dir refusing I/O, as [`DaemonError::Sidecar`] is.
     Media(std::io::Error),
-    /// THE REGISTRY'S SEEDING CHECK refused the genesis (REG-1.28 to
-    /// REG-1.32): one of its three arms — disjointness, completeness, the
-    /// count — fired over the registry's twelve rows and every other commons
-    /// row this build holds, the refusal naming the arm. Run ahead of
-    /// `Engine::open` on every open, so a refusal is a genesis that does not
-    /// complete: nothing is written and no engine is opened. A BUILD fault,
-    /// never a data dir's: the rows and the domain are compiled constants,
-    /// so the condition is operator intervention at the build and no retry.
-    /// The payload is re-exported as [`SeedingRefusal`](crate::SeedingRefusal),
-    /// so a caller names it through this crate alone.
+    /// The registry's seeding check refused the genesis (REG-1.28 to REG-1.32).
+    ///
+    /// One of its three arms — disjointness, completeness, the count — fired
+    /// over the registry's twelve rows and every other commons row this build
+    /// holds, the refusal naming the arm. Run ahead of `Engine::open` on
+    /// every open, so a refusal is a genesis that does not complete: nothing
+    /// is written and no engine is opened. A build fault, never a data dir's:
+    /// the rows and the domain are compiled constants, so the condition is
+    /// operator intervention at the build and no retry. The payload is
+    /// re-exported as [`SeedingRefusal`](crate::SeedingRefusal), so a caller
+    /// names it through this crate alone.
     Registry(skep_registry::SeedingRefusal),
 }
 
@@ -405,6 +436,8 @@ impl std::fmt::Display for DaemonError {
     }
 }
 
+/// The error's chain: `source` exposes the cause as a link.
+///
 /// `Display` states the whole condition on one line — that is what the
 /// operator reads — and `source` additionally exposes the cause as a link,
 /// so a generic reporter walking the chain finds one where there is one.
@@ -420,14 +453,15 @@ impl std::error::Error for DaemonError {
     }
 }
 
-/// The paths this daemon serves — the one place the route set is stated, so
-/// preflight, method refusal and dispatch cannot disagree about what exists.
-/// A known path answers `OPTIONS` with a preflight and a wrong method with
-/// `405`; everything else is the ordinary `404`. The blob upload's path
-/// family (media lane B) is known as a family: `/blob/upload` and
-/// `/blob/upload/<id>`, the latter known for any `<id>` and refused by name
-/// where it is no identifier; the blob fetch's path `/blob` is known beside
-/// it.
+/// Returns whether `path` is one of the paths this daemon serves.
+///
+/// This is the one place the route set is stated, so preflight, method
+/// refusal and dispatch cannot disagree about what exists. A known path
+/// answers `OPTIONS` with a preflight and a wrong method with `405`;
+/// everything else is the ordinary `404`. The blob upload's path family is
+/// known as a family: `/blob/upload` and `/blob/upload/<id>`, the latter
+/// known for any `<id>` and refused by name where it is no identifier; the
+/// blob fetch's path `/blob` is known beside it.
 fn path_is_known(path: &str) -> bool {
     matches!(
         path,
@@ -447,27 +481,28 @@ fn path_is_known(path: &str) -> bool {
 }
 
 // The token ↔ session binding, the handshake, and per-request resolution
-// live in `skep_core::auth` (the AUTH session layer). The glue that remains is
+// live in `skep_core::auth` (the AUTH session layer). The glue on this side is
 // `actor.rs`.
 
-/// THE WRITE PERMIT POOL's WIDTH — W = 4 (`operations.md` §4 rows 25, 27;
-/// the ops lanes' D6; the spike S25's measurement, the owner's pin): the
-/// most write requests admitted onto the write path at once, every other
-/// refused `503 write_busy` at once, retry-class — a pool and never a queue
-/// (P29), as the four pools before it are.
+/// The write permit pool's width, W = 4.
 ///
-/// WHY A POOL ON WRITES AT ALL. The write path serializes writes under one
-/// guard, and the kernel's backstop runs a checkpoint INLINE on the
+/// It is the most write requests admitted onto the write path at once
+/// (`operations.md` §4 rows 25, 27; the spike S25's measurement), every
+/// other refused `503 write_busy` at once, retry-class — a pool and never a
+/// queue (P29), as the four other pools are.
+///
+/// **Why a pool on writes at all.** The write path serializes writes under
+/// one guard, and the kernel's backstop runs a checkpoint inline on the
 /// committing thread when the cadence crosses twice before the checkpoint
-/// thread has serviced the first — seconds at ten million positions. Every
-/// write that arrived during such a run held a worker blocked on the guard,
-/// and no pool bounded them, so twelve writers at once left no worker for
-/// `/health`, `/session` or any read for the run's length: the board DOWN,
-/// not slow. With the pool, writes hold at most W workers through a run —
-/// the trigger and W − 1 parked behind it — and the rest are told so at
-/// once.
+/// thread has serviced the first — seconds at ten million positions.
+/// Without a pool, every write that arrives during such a run holds a
+/// worker blocked on the guard, so [`DEFAULT_WORKERS`] writers at once
+/// leave no worker for `/health`, `/session` or any read for the run's
+/// length: the board down, not slow. With the pool, writes hold at most W
+/// workers through a run — the trigger and W − 1 parked behind it — and the
+/// rest are told so at once.
 ///
-/// WHY FOUR. The upload pool's figure, measured (S25 §5.4): at a shared
+/// **Why four.** The upload pool's figure, measured (S25 §5.4): at a shared
 /// venue it refuses almost nothing outside a backstop (≈ 0.3% at fifty
 /// writes a second) and parks three writers through one, each answered
 /// inside a client's ten-second patience on a quiet machine; and it keeps
@@ -476,177 +511,211 @@ fn path_is_known(path: &str) -> bool {
 /// one refuses every overlapping write, backstop or none; two moves the
 /// same pins for less.
 ///
-/// PUBLIC for one reason: [`MIN_WORKERS`] is DERIVED from the five pools'
-/// counts by path, as this crate's own and `skep-media`'s are named there,
-/// so the minimum moves with this figure and no reader does the sum. The
-/// daemon's own pool, held on [`Daemon`] beside the four.
+/// It is crate-internal — `pub` in a private module the crate root does not
+/// re-export — and [`MIN_WORKERS`] is derived from the five pools' counts by
+/// path, as this crate's own and `skep-media`'s are named there, so the
+/// minimum moves with this figure and no reader does the sum. The daemon's
+/// own pool, held on [`Daemon`] beside the four.
 pub const MAX_CONCURRENT_WRITES: usize = 4;
 
-/// The daemon's state: the assembled engine, M10's front door, the codec,
-/// and the token → session binding. Socket-free — [`Daemon::route`] is the
-/// entire HTTP surface as a request→reply function over this state, with no
-/// socket in its signature. Not a PURE one: see [`Daemon::route`].
+/// The daemon's state.
+///
+/// It is the assembled engine, M10's front door, the codec, and the token →
+/// session binding. Socket-free — [`Daemon::route`] is the entire HTTP
+/// surface as a request→reply function over this state, with no socket in
+/// its signature. Not a pure one: see [`Daemon::route`].
 pub struct Daemon {
     engine: Engine,
-    /// M10's front door — the operation surface every frame executes
-    /// against. `op` throughout this crate names an operation or its kind
-    /// (`Op`, `OpKind`, `op_name`, the wire's own `"op"` field), so the
-    /// boundary takes the boundary's name.
+    /// M10's front door: the operation surface every frame executes against.
+    ///
+    /// `op` throughout this crate names an operation or its kind (`Op`,
+    /// `OpKind`, `op_name`, the wire's own `"op"` field), so the boundary
+    /// takes the boundary's name.
     febe: OperationSurface<World>,
     codec: JsonCodec,
-    /// The AUTH session layer: config, the challenge and session stores,
-    /// the credential write lock, the credential memo.
+    /// The AUTH session layer.
+    ///
+    /// It holds the config, the challenge and session stores, the credential
+    /// write lock, the credential memo and the blocked-prefix list's supply.
     auth: AuthState,
-    /// The write path: the serialization point, the commit-metadata sidecar
-    /// behind `GET /changes` and `head_time` (wire v6), the commit stream
-    /// behind `GET /events` (wire v4), and the published head writer behind
-    /// them. One field because the four are one ordering — commit, record,
+    /// The write path.
+    ///
+    /// It is the serialization point, the commit-metadata sidecar behind
+    /// `GET /changes` and `head_time` (wire v6), the commit stream behind
+    /// `GET /events` (wire v4), and the published head writer behind them.
+    /// One field because the four are one ordering — commit, record,
     /// announce, then the head writer's turn — that no handler may take
     /// apart.
     commits: Commits,
-    /// The history surface behind `/op-at`, `/dump?at` and `/chain?at`,
-    /// holding its own reconstruction budget: a guest may ask any of them
+    /// The history surface behind `/op-at`, `/dump?at` and `/chain?at`.
+    ///
+    /// It holds its own reconstruction budget: a guest may ask any of them
     /// and replay is per-call uncached, so without that budget any local
     /// caller could pin every worker on reconstruction.
     history: History,
-    /// The class-scan bound behind `/op`'s class-scan-shaped FTT reads (wire
-    /// v7.9; PUB-8.36), holding its own shape test and its own pool — a
-    /// second instance of [`skep_util::permits`]'s mechanism, and so disjoint
-    /// from the reconstruction pool `history` holds. Lives in the serving
-    /// path and nowhere lower (doctrine D9: the meter is an attribute of a
-    /// gate, never of the substrate): M8 and M7 are asked or not asked, and
-    /// never told.
+    /// The class-scan bound behind `/op`'s class-scan-shaped reads.
+    ///
+    /// It holds its own shape test and its own pool (wire v7.9; PUB-8.36) —
+    /// a second instance of [`skep_util::permits`]'s mechanism, and so
+    /// disjoint from the reconstruction pool `history` holds. Lives in the
+    /// serving path and nowhere lower (doctrine D9: the meter is an
+    /// attribute of a gate, never of the substrate): M8 and M7 are asked or
+    /// not asked, and never told.
     scans: ClassScans,
-    /// The daemon's MEDIA resource: the blob store under `blobs/` in the
-    /// data dir — the files, the partials, the upload records and the lease
-    /// log — the limits in force, the hold a stream has on its upload, THE
-    /// CELL INDEX (entered by the write path at every commit that mints a
-    /// cell, rebuilt at open on a thread) and the binding the write door
-    /// asks. The PUT's routes reach it as `op.rs` reaches the write path;
-    /// the door reads it under the plain sequence's locks; the pruner's
-    /// pass reads it under the credential lock's write arm. It commits
-    /// nothing to the journal and takes no `Serial`.
+    /// The daemon's media resource.
+    ///
+    /// It is the blob store under `blobs/` in the data dir — the files, the
+    /// partials, the upload records and the lease log — the limits in force,
+    /// the hold a stream has on its upload, the cell index (entered by the
+    /// write path at every commit that mints a cell, rebuilt at open on a
+    /// thread where the OS gives one) and the binding the write door asks.
+    /// The PUT's routes reach it as `op.rs` reaches the write path; the door
+    /// reads it under the plain sequence's locks; the pruner's pass reads it
+    /// under the credential lock's write arm. It commits nothing to the
+    /// journal and takes no `Serial`.
     media: MediaGate,
-    /// THE PRUNER beside it (`skep-media`'s `pruner.rs`): the pass the
-    /// cadence and the test seam run over `media`, handed the credential
-    /// lock's write arm one file at a time (`Daemon::prune_pass`), and,
-    /// under the test seam, the pass's own hold and count.
+    /// The pruner beside it (`skep-media`'s `pruner.rs`).
+    ///
+    /// It is the pass the cadence and the test seam run over `media`, handed
+    /// the credential lock's write arm one file at a time
+    /// (`Daemon::prune_pass`), and, under the test seam, the pass's own hold
+    /// and count.
     pruner: Pruner,
-    /// The fetch pool behind `GET /blob?i=` (wire.md §Media, THE FETCH;
-    /// M-I5 (f)) — the third instance of [`skep_util::permits`]'s mechanism,
-    /// disjoint from the reconstruction and class-scan pools by the borrow:
-    /// an admitted fetch holds its whole file from the check to the last
-    /// byte written, so the pool is the route's memory bound, and its count
-    /// is the third term of [`MIN_WORKERS`]. In the serving path like the
-    /// scan pool (D9): the serve is asked or refused, never told.
+    /// The fetch pool behind `GET /blob?i=`.
+    ///
+    /// It is the third instance of [`skep_util::permits`]'s mechanism
+    /// (wire.md §Media, the fetch; M-I5 (f)), disjoint from the
+    /// reconstruction and class-scan pools by the borrow: an admitted fetch
+    /// holds its whole file from the check to the last byte written, so the
+    /// pool is the route's memory bound, and its count is the third term of
+    /// [`MIN_WORKERS`]. In the serving path like the scan pool (D9): the
+    /// serve is asked or refused, never told.
     fetches: FetchPool,
-    /// The upload pool behind the PUT's two body-carrying methods — the
-    /// creation and the resume of `/blob/upload` (wire.md §Media, THE
-    /// PERMIT; M-I5 (f)) — the fourth instance of [`skep_util::permits`]'s
-    /// mechanism and the fetch pool's twin, disjoint from the three others
-    /// by the borrow: an admitted creation or resume holds its worker from
-    /// the permit to its finish, so the pool is the family's bound on worker
-    /// occupancy, and its count is the fourth term of [`MIN_WORKERS`]. In
-    /// the serving path like the fetch pool (D9): the family is asked or
-    /// refused, never told.
+    /// The upload pool behind the PUT's two body-carrying methods.
+    ///
+    /// They are the creation and the resume of `/blob/upload` (wire.md
+    /// §Media, the permit; M-I5 (f)). It is the fourth instance of
+    /// [`skep_util::permits`]'s mechanism and the fetch pool's twin,
+    /// disjoint from the three others by the borrow: an admitted creation or
+    /// resume holds its worker from the permit to its finish, so the pool is
+    /// the family's bound on worker occupancy, and its count is the fourth
+    /// term of [`MIN_WORKERS`]. In the serving path like the fetch pool
+    /// (D9): the family is asked or refused, never told.
     uploads: UploadPool,
-    /// THE WRITE PERMIT POOL (`operations.md` §4 rows 25, 27; the ops lanes'
-    /// D6) — the fifth instance of [`skep_util::permits`]'s mechanism, of
+    /// The write permit pool (`operations.md` §4 rows 25, 27).
+    ///
+    /// It is the fifth instance of [`skep_util::permits`]'s mechanism, of
     /// width [`MAX_CONCURRENT_WRITES`], disjoint from the four others by the
-    /// borrow: every write request on `/op` — the plain, the credential and
-    /// the registry sequence alike — takes one permit as its first act
-    /// before the credential lock and the serialization guard (`op.rs`), and
-    /// holds it in the sequence's frame through `commit_under`'s return, so a
-    /// writer parked on the guard behind an inline backstop holds its permit
-    /// the whole wait and the pool bounds the WORKERS writes can occupy; a
-    /// write that finds none is refused `503 write_busy` before any lock. The
-    /// head writer's own commits take none — they run inside the triggering
-    /// write's `commit_under`, under its permit. Its count is the fifth term
-    /// of [`MIN_WORKERS`]. In the serving path like the four (D9): the write
-    /// path is asked or not asked, never told.
+    /// borrow. Every write request on `/op` that reaches a lock — the plain,
+    /// the credential and the registry sequence alike — takes one permit
+    /// before the credential lock and the serialization guard (`op.rs`): the
+    /// plain sequence's first act, the other two's after their pre-lock
+    /// refusals. It holds the permit in the sequence's frame through
+    /// `commit_under`'s return, so a writer parked on the guard behind an
+    /// inline backstop holds its permit the whole wait and the pool bounds
+    /// the workers writes can occupy; a write that finds none is refused
+    /// `503 write_busy` before any lock. The head writer's own commits take
+    /// none — they run in the turn of the write that triggers them, under
+    /// its permit, or at the open before anything is served. Its count is
+    /// the fifth term of [`MIN_WORKERS`]. In the serving path like the four
+    /// (D9): the write path is asked or not asked, never told.
     write_permits: Permits,
-    /// THE WRITE POOL's EDGE PAIR (`operations.md` §1.1 m12; §4 row 27): the
-    /// tracker the pool's one door (`op.rs`'s `Daemon::take_write_permit`)
-    /// tells of every refusal and every permit taken, whose edges that door
-    /// says at once through [`Daemon::say`] — `the write pool is saturated`
-    /// at the first refusal of an episode, `the write pool has room again`
-    /// at the first permit taken a hold-down past its last — once per
-    /// episode and nothing per request; the pool's twin of the tracker each
-    /// of the four other pools holds for itself.
+    /// The write pool's edge pair (`operations.md` §1.1 m12; §4 row 27).
+    ///
+    /// It is the tracker the pool's one door (`op.rs`'s
+    /// `Daemon::take_write_permit`) tells of every refusal and every permit
+    /// taken, whose edges that door says at once through [`Daemon::say`] —
+    /// `the write pool is saturated` at the first refusal of an episode,
+    /// `the write pool has room again` at the first permit taken a hold-down
+    /// past its last — once per episode and nothing per request; the pool's
+    /// twin of the tracker each of the four other pools holds for itself.
     write_edge: EdgeTracker,
-    /// THE CHECKPOINT THREAD's MEMORY between its wakes ([`CheckpointMemory`]):
-    /// the inline count as it last said it and the position that count is
-    /// counted from, the newest checkpoint as it last looked, and the
-    /// resident set's high-water. Held here because the thread is
+    /// The checkpoint thread's memory between its wakes ([`CheckpointMemory`]).
+    ///
+    /// It is the inline count as the thread last said it and the position
+    /// that count is counted from, the newest checkpoint as it last looked,
+    /// and the resident set's high-water. Held here because the thread is
     /// `listen.rs`'s and the test seam runs its arms on a caller's thread.
     checkpointer: CheckpointMemory,
-    /// THE LIVENESS FLAGS of the daemon's two threads ([`ThreadLiveness`]):
-    /// each set by its loop's catch as the thread ends on a caught panic,
-    /// the pruner's read by the standing line.
+    /// The liveness flags of the daemon's two loop threads.
+    ///
+    /// Each ([`ThreadLiveness`]) is set by its loop's catch as the thread
+    /// ends on a caught panic, the pruner's read by the standing line.
     threads: ThreadLiveness,
-    /// THE ASIDE FAULT's ONCE-FLAG (`operations.md` §1.1 row 37; the ops
-    /// lanes' D21): whether row 37's line has been said for the unlink
-    /// fault that stands — set at [`Daemon::retire_asides`] where the
-    /// store's deferred unlink answers an error, the line naming the aside
-    /// at the queue's head and the act that clears it; cleared, with the
-    /// clearing line, at the next call that answers `Ok` — the queue
-    /// drained by that call, or found empty because the pruner's pass swept
-    /// the aside first — and clear at every open, the store's queue being
-    /// empty there. The pruner's pass clears nothing here: the flag reads
-    /// the deferred unlink's own answer and nothing else. Set, read and
-    /// cleared at one site, under no lock: the atomic is what makes the
-    /// field `Sync`.
+    /// The aside fault's once-flag (`operations.md` §1.1 row 37).
+    ///
+    /// It holds whether row 37's line has been said for the unlink fault
+    /// that stands — set at [`Daemon::retire_asides`] where the store's
+    /// deferred unlink answers an error, the line naming the aside at the
+    /// queue's head and the act that clears it; cleared, with the clearing
+    /// line, at the next call that answers `Ok` — the queue drained by that
+    /// call, or found empty because the pruner's pass swept the aside first
+    /// — and clear at every open, the store's queue being empty there. The
+    /// pruner's pass clears nothing here: the flag reads the deferred
+    /// unlink's own answer and nothing else. Set, read and cleared at one
+    /// site, under no lock: the atomic is what makes the field `Sync`.
     aside_fault_said: AtomicBool,
-    /// The dirty-crash harness's one seam into the claim's step
-    /// (`Daemon::hold_between_the_claim_and_its_head`): armed, the
-    /// claim-flip tail announces the crash window and parks there, both
-    /// locks held, for the harness to SIGKILL. `false` is the only state
-    /// production ever sees; compiled under the `test-hooks` feature, not
-    /// `cfg(test)` alone, because the harness is an integration test of
+    /// The dirty-crash harness's one seam into the claim's step.
+    ///
+    /// It is armed through `Daemon::hold_between_the_claim_and_its_head`:
+    /// armed, the claim-flip tail announces the crash window and parks
+    /// there, both locks held, for the harness to SIGKILL. `false` is its
+    /// state on every run the harness does not arm, and a build without the
+    /// `test-hooks` feature has no such field — compiled under that feature,
+    /// not `cfg(test)` alone, because the harness is an integration test of
     /// this crate's library, outside its `cfg(test)`.
     #[cfg(any(test, feature = "test-hooks"))]
     hold_between_claim_and_head: AtomicBool,
-    /// TEST SEAM: the three panic seams the thread-death claims arm
-    /// ([`ThreadFaults`]) — the checkpoint thread's, the pruner's and the
-    /// deferred unlink's — each fired once at its site and disarmed as it
-    /// fires. `false` is the only state production ever sees.
+    /// The three panic seams the thread-death claims arm ([`ThreadFaults`]).
+    ///
+    /// **Test seam.** They are the checkpoint thread's, the pruner's and the
+    /// deferred unlink's, each fired once at its site and disarmed as it
+    /// fires. `false` is each one's state until a suite arms it, and a build
+    /// without the `test-hooks` feature has no such field.
     #[cfg(any(test, feature = "test-hooks"))]
     faults: ThreadFaults,
-    /// TEST SEAM: every line this daemon has said through its own classed
-    /// door ([`Daemon::say`], [`Daemon::say_lines`]) this uptime, each
-    /// `{class}: {text}` — the configuration lines after the bind, the
-    /// warnings at both their moments, the blocked list, the flip's landing
-    /// line, the reissue's refusal, the standing line, the kernel's halt
-    /// line and the two thread catches' lines — kept for
-    /// `Daemon::lines_said`, since no suite captures stderr in-process. The
-    /// record is the write path's ([`LinesSaid`]), shared: the kernel's halt
-    /// line has a site below the daemon. The open's own lines are said
+    /// Every line said through this daemon's own classed door this uptime.
+    ///
+    /// **Test seam.** The door is [`Daemon::say`] and [`Daemon::say_lines`],
+    /// each line kept as `{class}: {text}` — the configuration lines after
+    /// the bind, the warnings at both their moments, the blocked list, the
+    /// flip's landing line, the reissue's refusal, the standing line, the
+    /// kernel's halt line and the two thread catches' lines among them —
+    /// for `Daemon::lines_said`, since no suite captures stderr in-process.
+    /// The record is the write path's ([`LinesSaid`]), shared: the kernel's
+    /// halt line has a site below the daemon. The open's own lines are said
     /// before this value exists and the checkpoint thread's keep their own
     /// record; neither is here.
     #[cfg(any(test, feature = "test-hooks"))]
     said: LinesSaid,
 }
 
-/// THE LIVENESS FLAGS (`operations.md` §1.1 row 41; §4 rows 24 and 25): one
-/// per daemon-owned loop thread, set by the thread's own catch as it ends
-/// on a caught panic — never cleared, since nothing re-spawns a thread but
-/// a restart. The pruner's is a read of the standing line (`the pruner's
-/// thread is gone`); the checkpoint thread's is the standing line's own
-/// carrier, so no clause reads it — the hook reads both.
+/// The liveness flags (`operations.md` §1.1 row 41; §4 rows 24 and 25).
+///
+/// There is one per daemon-owned loop thread, set by the thread's own catch
+/// as it ends on a caught panic — never cleared, since nothing re-spawns a
+/// thread but a restart. The pruner's is a read of the standing line (`the
+/// pruner's thread is gone`); the checkpoint thread's is the standing
+/// line's own carrier, so no clause reads it — the hook reads both.
 struct ThreadLiveness {
-    /// The pruner's thread ended on a caught panic: no pass runs until a
-    /// restart.
+    /// The pruner's thread ended on a caught panic.
+    ///
+    /// No pass runs until a restart.
     pruner_ended: AtomicBool,
-    /// The checkpoint thread ended on a caught panic: every checkpoint from
-    /// here is the backstop's, and no standing line comes.
+    /// The checkpoint thread ended on a caught panic.
+    ///
+    /// Every checkpoint from here is the backstop's, and no standing line
+    /// comes.
     checkpointer_ended: AtomicBool,
 }
 
-/// TEST SEAM: the three panic seams, each an arm fired ONCE at its site —
-/// the checkpoint thread's at the top of its next loop turn, the pruner's at
-/// the top of its next, the deferred unlink's inside `Daemon::retire_asides`
-/// — and disarmed as it fires. Per daemon, as the checkpoint hold is, since
-/// each site is a method or a loop of one daemon's.
+/// The three panic seams, each an arm fired once at its site.
+///
+/// **Test seam.** The checkpoint thread's fires at the top of its next loop
+/// turn, the pruner's at the top of its next, the deferred unlink's inside
+/// `Daemon::retire_asides` — and each is disarmed as it fires. Per daemon,
+/// as the checkpoint hold is, since each site is a method or a loop of one
+/// daemon's.
 #[cfg(any(test, feature = "test-hooks"))]
 struct ThreadFaults {
     checkpointer: AtomicBool,
@@ -654,9 +723,11 @@ struct ThreadFaults {
     unlink: AtomicBool,
 }
 
-/// Deliberately opaque: reporting the log position would take the kernel's
-/// lock, and a `Debug` that can block is one that turns `dbg!` into a
-/// hazard. [`Daemon::log_position`] is how you ask.
+/// The daemon's `Debug`, deliberately opaque.
+///
+/// A `Debug` that can block is one that turns `dbg!` into a hazard, and
+/// [`Daemon::log_position`] — a lock-free read of the kernel's root — is
+/// how you ask for the position.
 impl std::fmt::Debug for Daemon {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Daemon").finish_non_exhaustive()
@@ -664,27 +735,62 @@ impl std::fmt::Debug for Daemon {
 }
 
 impl Daemon {
-    /// Open (genesis or recover) the one world at `data_dir`, replay the
-    /// commit-metadata sidecar, and assemble the operation surface.
+    /// Opens the one world at `data_dir`, by genesis or recovery.
     ///
-    /// A COMMAND on the journal beyond genesis and recovery, on one kind of
-    /// board: a CLAIMED board whose head writer resumes no head from `H` —
-    /// the crash window between the claim and its head, a claim whose `H.1`
-    /// the head writer's driver refused while serving, or a board claimed
-    /// under a build that wrote no head at the claim — has `H.1` written
-    /// before this returns ([`Daemon::write_the_claims_head_if_owed`];
-    /// signed ops, s1): up to three commits of the daemon's own, as the
-    /// system account's principal (the staging draft's one-time mint, the
-    /// record's insert, the publish into `H`), so [`Daemon::log_position`]
-    /// can stand past the recovered head. A refusal there fails nothing: the
-    /// head writer surfaces it on the operator stream, the open returns `Ok`,
-    /// and the board answers attested writes
+    /// It replays the commit-metadata sidecar and assembles the operation
+    /// surface. A command on the journal beyond genesis and recovery, on one
+    /// kind of board: a claimed board whose head writer resumes no head from
+    /// `H` — the crash window between the claim and its head, a claim whose
+    /// `H.1` the head writer's driver refused while serving, or a board
+    /// claimed under a build that wrote no head at the claim — has `H.1`
+    /// written before this returns (`Daemon::write_the_claims_head_if_owed`;
+    /// signed ops): up to three commits of the daemon's own, as the system
+    /// account's principal (the staging draft's one-time mint, the record's
+    /// insert, the publish into `H`), so [`Daemon::log_position`] can stand
+    /// past the recovered head. A refusal there fails nothing: the head
+    /// writer surfaces it on the operator stream, the open returns `Ok`, and
+    /// the board answers attested writes
     /// `attestation_invalid:board_unavailable` until a head lands.
     ///
-    /// PRECONDITION: no other live kernel holds `data_dir`. M2 takes an
+    /// Two steps here cost more than O(1) in the data dir beyond the
+    /// engine's own recovery: the blob store's open, which tail-checks and
+    /// compacts its two logs and reconciles its partials with its records,
+    /// and the feed's. Where commit metadata is missing, the feed's open
+    /// leaves the uncovered positions pending for a walk behind the
+    /// listener, which reconstructs them from the journal while the board
+    /// serves — one whole-world replay (plus one world diff, for the
+    /// position's class) each, up to the retained window
+    /// (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
+    /// `CommitsLog::open` states that bound; `Feed::open` the derived
+    /// sidecars' own, O(their files) plus O(any missing tail); and the
+    /// attest store's open inside it (`skep-core`'s `commits/feed/attest.rs`'s
+    /// `AttestStore::open`) is O(its file) — the one feed file the journal's
+    /// retention does not bound, a line for every attested commit the board
+    /// has ever made, never compacted — plus one base loaded and one journal
+    /// scan for its whole uncovered tail. The identity table costs nothing
+    /// here: it rides in the World the engine recovered, checkpointed with
+    /// it and stepped by the replay (AUTH-2.79, AUTH-2.80). What the
+    /// engine's recovery can cost over it is a base written without the
+    /// slice over credential deposits — not a start point, so the open steps
+    /// back to an older one or to genesis and replays, slower, once — and
+    /// that is said on the operator stream (AUTH-2.86; [`Engine::recovery`]).
+    /// A board with no start point left refuses to open (AUTH-2.88):
+    /// `Engine` carries `BadCheckpoint` with the slice's own remedy, and
+    /// nothing is invented.
+    ///
+    /// # Errors
+    ///
+    /// In the order the open meets them: [`DaemonError::Registry`] where the
+    /// seeding check refuses the genesis, [`DaemonError::Engine`] where the
+    /// engine cannot genesis or recover, [`DaemonError::Media`] where the
+    /// blob store cannot be opened, and [`DaemonError::Sidecar`] where the
+    /// change feed cannot be.
+    ///
+    /// **Precondition.** No other live kernel holds `data_dir`. M2 takes an
     /// exclusive lock on the journal directory, and a second open fails on
-    /// it — the one CONDITION here a retry can clear, and so the one
-    /// exception to the disposition below. It is NOT a variant of
+    /// it — a condition a retry can clear, as a recovery truncation the next
+    /// open repeats is ([`DaemonError::Engine`] names both), and so an
+    /// exception to the disposition below. It is not a variant of
     /// [`DaemonError`]: it arrives inside `Engine`, as
     /// `EngineError::Open(OpenError::Io(_))`, an arm that also carries
     /// failures no retry clears — so a caller that retries matches the
@@ -698,98 +804,101 @@ impl Daemon {
     /// other condition is an operator-intervention one (corrupt journal, bad
     /// checkpoint, a data dir refusing I/O the kernel just performed):
     /// surface it and exit, never retry.
-    ///
-    /// ONE step here costs more than O(1) in the data dir beyond the engine's
-    /// own recovery: the feed's open. Where commit metadata is missing it
-    /// reconstructs the uncovered positions from the journal, one whole-world
-    /// replay (plus one world diff, for the position's class) each, up to the
-    /// retained window (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
-    /// `CommitsLog::open` states that bound; `Feed::open` the derived
-    /// sidecars' own, O(their files) plus O(any missing tail); and the attest
-    /// store's open inside it (`skep-core`'s `commits/feed/attest.rs`'s
-    /// `AttestStore::open`) is O(its file) — the one feed file the journal's
-    /// retention does not bound, a line for every attested commit the board
-    /// has ever made, never compacted — plus one bounded journal scan per
-    /// uncovered retained position. The identity table costs nothing here:
-    /// it rides in the World the engine recovered, checkpointed with it and
-    /// stepped by the replay (AUTH-2.79, AUTH-2.80). What the engine's
-    /// recovery can cost over it is a base written WITHOUT the slice over
-    /// credential deposits — not a start point, so the open steps back to an
-    /// older one or to genesis and replays, slower, once — and that is said
-    /// on the operator stream (AUTH-2.86; [`Engine::recovery`]). A board with
-    /// no start point left refuses to open (AUTH-2.88): `Engine` carries
-    /// `BadCheckpoint` with the slice's own remedy, and nothing is invented.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Daemon, DaemonError> {
         Daemon::open_with(data_dir, AuthOptions::default())
     }
 
-    /// [`Daemon::open`] with the session-layer configuration named: the
-    /// local-trust flag, the configured origins, and the blocked-prefix
-    /// list's supply. [`Daemon::open`]'s PRECONDITION, its account of which
-    /// failures a retry can clear, and the commits it makes on a claimed board
-    /// whose journal holds no head are this one's too — that method delegates
-    /// here, so both doors carry one contract. The identity table is the
-    /// recovered World's own slice (AUTH-2.86: the daemon serves from the
-    /// resolved World): nothing is rebuilt here, and what the engine's open
-    /// skipped or resolved on the way to that World is logged here as the two
-    /// warnings that rule names.
+    /// Opens as [`Daemon::open`] does, with the session layer's configuration.
     ///
-    /// A supply file the options name is read HERE, at every start, and the
-    /// list installed from it before anything is served
-    /// ([`DaemonError::BlockedPrefixes`] where it cannot be).
+    /// The configuration `opts` names the local-trust flag, the configured
+    /// origins, the node prefix, the blocked-prefix list's supply and the
+    /// preview-keys allowance. [`Daemon::open`]'s precondition, its account
+    /// of which failures a retry can clear, and the commits it makes on a
+    /// claimed board whose journal holds no head are this one's too — that
+    /// method delegates here, so both doors carry one contract. The identity
+    /// table is the recovered World's own slice (AUTH-2.86: the daemon serves
+    /// from the resolved World): nothing is rebuilt here, and what the
+    /// engine's open skipped or resolved on the way to that World is logged
+    /// here as the two warnings that rule names.
+    ///
+    /// A supply file the options name is read here, at every start, and the
+    /// list installed from it before anything is served.
+    ///
+    /// # Errors
+    ///
+    /// [`Daemon::open`]'s, in its order, then
+    /// [`DaemonError::BlockedPrefixes`] where the supply file `opts` names
+    /// cannot be read, is not a list, or is past the channel's byte cap.
     pub fn open_with(data_dir: impl AsRef<Path>, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         Self::open_configured(data_dir, opts, MediaOptions::default())
     }
 
-    /// [`Daemon::open_with`] with the MEDIA resource's configuration named
-    /// beside the session layer's: the upload setting (`--no-uploads`,
-    /// wire.md §Media), echoed on `/health` as the `media` object. The two
-    /// doors above delegate here, so all three carry one contract.
+    /// Opens as [`Daemon::open_with`] does, with the media configuration too.
+    ///
+    /// The media resource's configuration is named beside the session
+    /// layer's: the upload setting (`--no-uploads`, wire.md §Media), echoed
+    /// on `/health` as the `media` object. The two doors above delegate
+    /// here, so all three carry one contract.
+    ///
+    /// # Errors
+    ///
+    /// [`Daemon::open_with`]'s: the [`DaemonError`] naming the subsystem
+    /// that refused.
     pub fn open_configured(
         data_dir: impl AsRef<Path>,
         opts: AuthOptions,
         media: MediaOptions,
     ) -> Result<Daemon, DaemonError> {
-        // THE PRODUCTION SALT (`SKJ4`): OS entropy per transaction, the one
+        // The production salt (`SKJ4`): OS entropy per transaction, the one
         // source a daemon opens under — a seeded stream is a pure function
         // of the seed and the position, which is exactly the predictability
         // the salt exists to deny a reader of `/chain?at=N`. The seeded
         // source reaches a daemon through the test seam alone
-        // (`Daemon::open_seeded`, compiled only under `test-hooks`).
+        // (`Daemon::open_seeded`, compiled only under `test-hooks` or in this
+        // crate's own unit tests).
         Self::open_under(data_dir.as_ref(), opts, media, SaltSource::Os)
     }
 
-    /// The one open, under a named salt source — [`Daemon::open_configured`]'s
-    /// body, which that door reaches with [`SaltSource::Os`] and the test
-    /// seam `Daemon::open_seeded` with a seeded stream. Private, so no
-    /// fourth caller can name a source; and over `&Path`, so the public
-    /// doors are the generic shims and this body is compiled ONCE whatever
-    /// path type a caller holds — the split std keeps, `File::open` over its
-    /// inner `&Path`.
+    /// Opens under a named salt source: [`Daemon::open_configured`]'s body.
+    ///
+    /// That door reaches it with [`SaltSource::Os`] and the test seam
+    /// `Daemon::open_seeded` with a seeded stream. Private, so no caller
+    /// outside this module and its children can name a source; and over
+    /// `&Path`, so the public doors are the generic shims and this body is
+    /// compiled once whatever path type a caller holds — the split std
+    /// keeps, `File::open` over its inner `&Path`.
+    ///
+    /// # Errors
+    ///
+    /// In the order this body meets them: [`DaemonError::Registry`] where
+    /// the seeding check refuses the genesis, [`DaemonError::Engine`] where
+    /// the engine cannot genesis or recover, [`DaemonError::Media`] where the
+    /// blob store cannot be opened, [`DaemonError::Sidecar`] where the change
+    /// feed cannot be, and [`DaemonError::BlockedPrefixes`] where the supply
+    /// file `opts` names cannot be read as a list.
     fn open_under(
         data_dir: &Path,
         opts: AuthOptions,
         media_opts: MediaOptions,
         salt: SaltSource,
     ) -> Result<Daemon, DaemonError> {
-        // THE VERSION LINE, THE OPEN's FIRST (§3.4 step 6's gap): the
+        // The version line, the open's first (§3.4 step 6's gap): the
         // build's version and the three format stamps it reads, before the
         // directory's line and so before anything is read from the
         // directory — a refusal that names the stamp it found has, above
         // it, the line that says which stamps this build reads.
         say_open_line(VersionLine);
-        // THE FIRST OF THE OPEN's TWO RULED LINES (§3.1 step 3; m7): the
-        // directory, before the seeding check and the engine's open — the one
-        // line on the operator stream that names the directory, which a
-        // collector keys on, and the tell that an open has begun where it is
-        // long.
+        // The first of the open's two m7 lines (§3.1 step 3): the directory,
+        // before the seeding check and the engine's open — the one line on
+        // the operator stream that names the directory, which a collector
+        // keys on, and the tell that an open has begun where it is long.
         say_open_line(DataDirLine(data_dir));
-        // THE CADENCE (jw-R1, jw-R2): every `CHECKPOINT_EVERY_COMMITS` OR the
-        // byte bound, whichever first, DEFERRED — a crossing sets the
-        // kernel's due flag and the checkpoint thread runs it off the write
-        // path's guard; a second crossing before the thread has serviced the
-        // first runs inline as the kernel's backstop. The byte bound opens at
-        // its floor and is re-read off the newest checkpoint below, once the
+        // The cadence: every `CHECKPOINT_EVERY_COMMITS` or the byte bound,
+        // whichever first, deferred — a crossing sets the kernel's due flag
+        // and the checkpoint thread runs it off the write path's guard; a
+        // second crossing before the thread has serviced the first runs
+        // inline as the kernel's backstop. The byte bound opens at its floor
+        // and is re-read off the start point's checkpoint below, once the
         // engine has opened, and by the thread as each one lands.
         let cfg = KernelConfig {
             durability: Durability::Fsync {
@@ -803,19 +912,19 @@ impl Daemon {
             ))),
             salt,
         };
-        // THE SEEDING CHECK, THIS DAEMON ITS HAND (REG-1.28, REG-1.32): the
+        // The seeding check, this daemon its hand (REG-1.28, REG-1.32): the
         // registry's three arms over its twelve rows and every other commons
-        // row this build holds, AHEAD of the engine on every open — a fresh
+        // row this build holds, ahead of the engine on every open — a fresh
         // data dir's genesis and a reopen's re-genesis alike — so a refusal
         // is a genesis that does not complete: no claim, no session and no
         // board record, nothing written, no engine opened.
         skep_core::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
-        // THE ENGINE's OPEN, TIMED: the daemon's own `Instant` around the
+        // The engine's open, timed: the daemon's own `Instant` around the
         // call, the figure the recovery's landing carries.
         let began = Instant::now();
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
         let open_ms = began.elapsed().as_millis();
-        // THE START POINT's account (AUTH-2.86): every retained checkpoint
+        // The start point's account (AUTH-2.86): every retained checkpoint
         // the engine's open passed over, with the start point it resolved
         // from, a slice-less start point that resolved to the empty table,
         // and the corrupt runs below the start point the open's scan read
@@ -824,22 +933,22 @@ impl Daemon {
         for warning in recovery_warnings(engine.recovery()) {
             notice::emit(Class::Warning(Moment::AtOpen), warning);
         }
-        // THE RECOVERY's LANDING (m7): the base the open loaded, the commits
+        // The recovery's landing (m7): the base the open loaded, the commits
         // it replayed above it and how long the engine's open took — said on
-        // EVERY open, not on a skip alone, after the account above of what
+        // every open, not on a skip alone, after the account above of what
         // was passed over on the way to that base.
         say_open_line(RecoveredLine::of(engine.recovery(), open_ms));
-        // THE BEGINNING (AUTH-2.86's family of startup reports): where no
+        // The beginning (AUTH-2.86's family of startup reports): where no
         // journal stood in the directory the landing above reads `recovered
-        // from genesis` all the same, so the open says it BEGAN a board —
+        // from genesis` all the same, so the open says it began a board —
         // the expected line on a fresh board's first start, and on a board
         // that had a journal the one tell that the directory opened is not
         // where it lives, before a write lands beside the real journal.
         if engine.recovery().is_some_and(|recovery| recovery.began) {
             say_open_line(BeganLine);
         }
-        // THE STRAY TEMP FILE (jw-R4; AUTH-2.86's family of startup reports):
-        // a checkpoint a crash or a full volume left half-written, which the
+        // The stray temp file (AUTH-2.86's family of startup reports): a
+        // checkpoint a crash or a full volume left half-written, which the
         // kernel's open found and removed — said here, the kernel answering
         // the fact, so the operator's acts at the floor stay two.
         if let Some(bytes) = engine.kernel().stray_checkpoint_removed() {
@@ -849,13 +958,13 @@ impl Daemon {
                  volume reclaimed by the open"
             ));
         }
-        // THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8): the bytes the
+        // The tail cut (`operations.md` §1.1 m3; §4 row 8): the bytes the
         // kernel's open took off the journal above its last committed marker
         // (`Recovery::tail_cut`), the file and the byte the cut began at, and
         // the position it lies past — the committed head the open left,
         // read before anything is served — said here as the stray file is,
         // and nothing where nothing was cut, which is every open after a
-        // clean close. Of two arms ([`TailCutLine`]): a crash's or a kill's
+        // clean close. Of two arms (`TailCutLine`): a crash's or a kill's
         // tail, said under `Class::Open` through the door; and a tail holding
         // intact frames no torn write leaves (`Recovery::tail_cut_intact`),
         // where the cut may have taken an acknowledged write — at the
@@ -867,16 +976,16 @@ impl Daemon {
                 class => notice::emit(class, cut),
             }
         }
-        // THE START POINT's SIZE, read once here: the byte bound of the
+        // The start point's size, read once here: the byte bound of the
         // cadence and the floor in force both scale by a checkpoint's size,
-        // and the one the open sizes by is the START POINT's — the base the
-        // engine's open LOADED the world from (`recovery.start_point`), its
+        // and the one the open sizes by is the start point's — the base the
+        // engine's open loaded the world from (`recovery.start_point`), its
         // header read by name — never the newest file's, whose header may be
         // a skipped base's claim: a damaged `body_len` the open passed over
         // would otherwise refuse every deposit at a floor sized to the claim
         // and hold the cadence's byte half off until the first landing. A
         // start point at genesis names no file and sizes as no checkpoint
-        // does. The thread re-reads the NEWEST checkpoint as each one lands,
+        // does. The thread re-reads the newest checkpoint as each one lands,
         // every later base having loaded.
         let start_point = engine.recovery().map_or(Seq(0), |recovery| recovery.start_point);
         let start_point_len =
@@ -886,19 +995,19 @@ impl Daemon {
         // so a wake with no flag and no landing re-reads nothing off a header
         // the open did not size by.
         let newest_at_open = engine.kernel().newest_checkpoint().map(|header| header.seq);
-        // THE BLOB STORE, opened under `blobs/` beside the journal: its
+        // The blob store, opened under `blobs/` beside the journal: its
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
         // BEFORE THE DAEMON SERVES ITS FIRST REQUEST"). The limits in force
         // — the daemon's default, a share of the volume's capacity
         // (`DEFAULT_LIMIT_SHARE`) read once here, until the serving layer's
         // channel installs a record (AUTH-4.70, owed) — are named on the
-        // operator stream with their
-        // source, the floor in force at start beside them, and the upload
-        // setting after, WITH ITS SOURCE (§1.1 row 8): the default, the
-        // flag or the variable, as the parse recorded it on the option type
-        // the gate takes. Opened AHEAD of the write path, which takes the
-        // gate's cell index to enter at every commit from here on.
+        // operator stream with their source, the floor in force at start
+        // beside them, and the upload setting after, with its source (§1.1
+        // row 8): the default, the flag or the variable, as the parse
+        // recorded it on the option type the gate takes. Opened ahead of the
+        // write path, which takes the gate's cell index to enter at every
+        // commit from here on.
         let uploads_source = media_opts.uploads_source;
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
         media.note_checkpoint(start_point_len);
@@ -906,28 +1015,28 @@ impl Daemon {
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let commits = Commits::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
-        // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
-        // PUB round 2, lane 3.3). The live front door is given NO consult:
-        // M10 answers `World::readable` — published ∨ subtree ∨ grant, with
-        // the version member projected to its document (PUB-2.15) — off the
-        // ONE snapshot it pins per request, so every named argument, every
-        // per-run mask and the result-set filter of one request stand on one
-        // committed state, the state its `as_of` names; and the publish
-        // shot's source gate (PUB-6.23, PUB-8.1) reads the same predicate
-        // over the working world of the shot's own transaction, which M5
-        // hands it. A consult closed over a per-call snapshot of the live
-        // kernel — lane 3.2's shape — would judge one request's arguments
-        // against different heads. The one front door that DOES take a
-        // consult is history's (`history.rs`): a read as of N answers the
-        // N-world's content through the HEAD's sets (PUB-6.48), which no
-        // world of its own can supply.
+        // The read predicate (PUB-1.31; PUB-6.39's one-per-request shape).
+        // The live front door is given no consult: M10 answers
+        // `World::readable` — published ∨ subtree ∨ grant, with the version
+        // member projected to its document (PUB-2.15) — off the one snapshot
+        // it pins per request, so every named argument, every per-run mask
+        // and the result-set filter of one request stand on one committed
+        // state, the state its `as_of` names; and the publish shot's source
+        // gate (PUB-6.23, PUB-8.1) reads the same predicate over the working
+        // world of the shot's own transaction, which M5 hands it. A consult
+        // closed over a per-call snapshot of the live kernel would judge one
+        // request's arguments against different heads. The one front door
+        // that does take a consult is history's (`history.rs`): a read as of
+        // N answers the N-world's content through the head's sets
+        // (PUB-6.48), which no world of its own can supply.
         //
         // And the write-path check leans on this door carrying none: its dry
-        // run of a shot's source gate (`auth/policy/attestation.rs`) asks
-        // `World::visible_to` at the principal, which is what this door lends
-        // the store ONLY while it carries no consult — a consult added here is
-        // owed to that dry run too, or the check passes through, UNATTESTED, a
-        // shot the store then admits.
+        // run of a shot's source gate (`skep-core`'s
+        // `auth/policy/attestation.rs`) asks `World::visible_to` at the
+        // principal, which is what this door lends the store only while it
+        // carries no consult — a consult added here is owed to that dry run
+        // too, or the check passes through, unattested, a shot the store then
+        // admits.
         let febe = OperationSurface::new(Box::new(engine.stores()), MEMO_CAPACITY);
         let auth = {
             let snap = engine.kernel().snapshot();
@@ -935,7 +1044,7 @@ impl Daemon {
         };
         #[cfg(any(test, feature = "test-hooks"))]
         let said = Arc::clone(commits.lines_said());
-        // THE TWO MEDIA POOLS, over the media gate's classed door and the
+        // The two media pools, over the media gate's classed door and the
         // daemon's one hold-down for every edge pair (m12): built before the
         // gate moves into the daemon, each holding a clone of its door.
         let fetches = FetchPool::new(&media, EDGE_HOLD_DOWN);
@@ -971,51 +1080,56 @@ impl Daemon {
             #[cfg(any(test, feature = "test-hooks"))]
             said,
         };
-        // THE CRASH WINDOW, closed before anything is served (signed ops, s1;
+        // The crash window, closed before anything is served (signed ops;
         // see the method): a claimed board whose journal holds no head owes
         // `H.1`, and the open is where it is paid.
         daemon.write_the_claims_head_if_owed();
-        // THE CELL INDEX's WALK, on a thread of its own over the world as it
-        // stands now — every commit from here on enters its own cells, and
-        // the walk adds the world's into the same copy (the composition
-        // clause). The daemon serves while it walks; the index's three
-        // readers refuse `index_rebuilding` until it completes (ms5-R).
+        // The cell index's walk, on a thread of its own over the world as it
+        // stands now, or here at the open where the OS refuses the thread —
+        // every commit from here on enters its own cells, and the walk adds
+        // the world's into the same copy (the composition clause). The
+        // daemon serves while the thread walks; the index's three readers
+        // refuse `index_rebuilding` until it completes.
         index::start_walk(daemon.engine.kernel(), Arc::clone(daemon.media.index()));
         Ok(daemon)
     }
 
-    /// THE CRASH WINDOW (signed ops, s1; RULED 2026-09-25 — "THE CLAIM WRITES
-    /// `H.1`"): the claim and its head are TWO transactions in one serialized
-    /// step ([`Daemon::on_claim_flip`]), and a process that dies between them
-    /// — the claim durable, no head — leaves a claimed board with no board
-    /// term on disk, as does a claim whose `H.1` the head writer's driver
-    /// refused while serving ([`Daemon::on_claim_flip`] states that refusal):
-    /// the two states in which the check's `board_unavailable` would
-    /// otherwise answer every attested write until the cadence's next head.
-    /// Closed HERE, at open and before anything is served: a claimed board
-    /// (its identity slice naming a claimant) whose head writer resumed no
-    /// head writes `H.1` now ([`Commits::write_first_head`]) under the write
-    /// path's own lock, naming the committed pair as it stands — the claim's
-    /// own position where the crash was the split, and the last commit's on a
-    /// board whose claim's `H.1` the driver refused, or claimed under a build
-    /// that wrote no head at the claim. The unclaimed board writes nothing
-    /// here: no head by a claim that did not happen (A1/A5). A claimed board
-    /// with its head finds writing it a no-op, so a clean restart writes none.
-    /// The line on the operator stream is I11 (c)'s: a head written for a
-    /// reason other than the cadence's is said, never silent — a landing, as
-    /// the flip's own line is (`operations.md` §1.1 row 12). A head the
-    /// driver refuses HERE is surfaced as every refused head is, and fails
-    /// nothing: the open returns all the same, and the board answers attested
-    /// writes `board_unavailable` until a head lands.
+    /// Closes the crash window: writes `H.1` where a claimed board owes it.
     ///
-    /// WHY NOT ONE TRANSACTION. A head names the committed `(position,
-    /// chain)` pair read BEFORE its own write opens — a coordinate strictly
-    /// below its own commit, since no bytes can carry their own hash — so a
-    /// head folded into the claim's transaction could name only the position
-    /// BEFORE the claim, and the claim's own chain value does not exist until
-    /// its transaction closes. The two-transaction shape is the head's rule
-    /// (`head.rs`, WHAT A HEAD IS), not a limit of the journal's format, and
-    /// this open is what closes the gap it leaves.
+    /// The claim and its head are two transactions in one serialized step
+    /// ([`Daemon::on_claim_flip`]; signed ops), and a process that dies
+    /// between them — the claim durable, no head — leaves a claimed board
+    /// with no board term on disk, as does a claim whose `H.1` the head
+    /// writer's driver refused while serving ([`Daemon::on_claim_flip`]
+    /// states that refusal): the two states in which the check's
+    /// `board_unavailable` would otherwise answer every attested write until
+    /// the cadence's next head. Closed here, at open and before anything is
+    /// served: a claimed board (its identity slice naming a claimant) whose
+    /// head writer resumed no head writes `H.1` now
+    /// ([`Commits::write_first_head`]) under the write path's own lock,
+    /// naming the committed pair as it stands — the claim's own position
+    /// where the crash was the split, and the last commit's on a board whose
+    /// claim's `H.1` the driver refused, or claimed under a build that wrote
+    /// no head at the claim. The unclaimed board writes nothing here: no
+    /// head by a claim that did not happen (the required-signing check's
+    /// A1/A5). A claimed board with its head finds writing it a no-op, so a
+    /// clean restart writes none. The line on the operator stream is
+    /// I11 (c)'s: a head written for a reason other than the cadence's is
+    /// said, never silent — a landing, as the flip's own line is
+    /// (`operations.md` §1.1 row 12). A head the driver refuses here is
+    /// surfaced as every refused head is, and fails nothing: the open
+    /// returns all the same, and the board answers attested writes
+    /// `board_unavailable` until a head lands.
+    ///
+    /// **Why not one transaction.** A head names the committed
+    /// `(position, chain)` pair read before its own write opens — a
+    /// coordinate strictly below its own commit, since no bytes can carry
+    /// their own hash — so a head folded into the claim's transaction could
+    /// name only the position before the claim, and the claim's own chain
+    /// value does not exist until its transaction closes. The
+    /// two-transaction shape is the head's rule (`head.rs`, what a head is),
+    /// not a limit of the journal's format, and this open is what closes the
+    /// gap it leaves.
     fn write_the_claims_head_if_owed(&self) {
         if !self.board_is_claimed() {
             return;
@@ -1030,46 +1144,63 @@ impl Daemon {
         }
     }
 
-    /// Whether the board is CLAIMED, read off the head's identity slice —
-    /// the one bit the mode and the two origin sets turn on (AUTH-1.42),
-    /// read here rather than supplied so no caller can hand a line a fact
-    /// the daemon can answer.
+    /// Returns whether the board is claimed, from the head's identity slice.
+    ///
+    /// It is the one bit the mode and the two origin sets turn on
+    /// (AUTH-1.42), read here rather than supplied so no caller can hand a
+    /// line a fact the daemon can answer.
     fn board_is_claimed(&self) -> bool {
         self.engine.kernel().snapshot().world().identity().claimant().is_some()
     }
 
-    /// Bind the auth surface to the served port — the origin sets and the
-    /// `/health.auth` lists derive from it. [`serve`] calls this with the
-    /// bound port; a socket-free embedder that wants origin behavior calls
-    /// it itself. The two are exclusive: a [`PortAlreadyBound`] says a port
-    /// is already bound, and the number it carries is the one already
-    /// there — the number every live session's origin set was established
-    /// against — not the one refused.
+    /// Binds the auth surface to the served port.
     ///
-    /// PRECONDITION: `port != 0`, which PANICS rather than being refused —
-    /// a caller's bug and not an outcome, so it is not one of the errors
-    /// above. Zero is not a port this daemon can serve on, and it is the one
-    /// value from which the loopback defaults derive origins this daemon's
-    /// own parser rejects and no `Origin` header can match.
+    /// The origin sets and the `/health.auth` lists derive from it.
+    /// [`serve`] calls this with the bound port; a socket-free embedder that
+    /// wants origin behavior calls it itself. The two are exclusive.
+    ///
+    /// # Errors
+    ///
+    /// [`PortAlreadyBound`] where a port is already bound: the number it
+    /// carries is the one already there — the number every live session's
+    /// origin set was established against — not the one refused.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `port` is 0 — a caller's bug and not an outcome, so it is
+    /// not one of the errors above. Zero is not a port this daemon can serve
+    /// on, and it is the one value from which the loopback defaults derive
+    /// origins this daemon's own parser rejects and no `Origin` header can
+    /// match.
     pub fn bind_auth_port(&self, port: u16) -> Result<(), PortAlreadyBound> {
         self.auth.cfg.bind_port(port)
     }
 
-    /// The world as of a committed position — the same bounded replay
-    /// `POST /op-at` answers from, for embedders that want the state rather
-    /// than a wire answer. Unbudgeted: the reconstruction permit bounds
-    /// concurrent HTTP callers, and an embedder calling this holds the
-    /// daemon itself.
+    /// Returns the world as of a committed position.
+    ///
+    /// It is the same bounded replay `POST /op-at` answers from, for
+    /// embedders that want the state rather than a wire answer. Unbudgeted:
+    /// the reconstruction permit bounds concurrent HTTP callers, and an
+    /// embedder calling this holds the daemon itself.
+    ///
+    /// # Errors
+    ///
+    /// The engine's [`HistoryError`]: `BeyondHead` where `at` is above the
+    /// head, `NotABoundary` where it is no commit boundary, `Reclaimed` where
+    /// no base at or below it remains derivable, and `Io` or `Corruption`
+    /// where the journal cannot be read.
     pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
         self.engine.world_at(at)
     }
 
-    /// The committed world's dump at `principal`'s class — what `GET /dump`
-    /// answers a session bound to `principal` (`None` = the guest), through
-    /// the same engine call, so a suite holding the daemon can state the H4
-    /// oracle: the wire body equals this post-filter of the harness-only
-    /// walk byte for byte. Unbudgeted, like [`Daemon::world_at`]: an
-    /// embedder calling this holds the daemon itself.
+    /// Returns the committed world's dump at `principal`'s class.
+    ///
+    /// It is what `GET /dump` answers a session bound to `principal` (`None`
+    /// = the guest), through the same engine call, so a suite holding the
+    /// daemon can state the oracle: the wire body equals this post-filter of
+    /// the harness-only walk byte for byte. Unbudgeted, like
+    /// [`Daemon::world_at`]: an embedder calling this holds the daemon
+    /// itself.
     ///
     /// The answer's type is re-exported as [`crate::WorldDump`], for the
     /// reason the engine types beside it are: naming it must not oblige a
@@ -1079,119 +1210,129 @@ impl Daemon {
         self.engine.world_dump_visible_to(principal)
     }
 
-    /// Current log position (M10's `log_position`; never regresses).
+    /// Returns the current log position (M10's `log_position`).
+    ///
+    /// It never regresses.
     pub fn log_position(&self) -> Seq {
         self.febe.log_position()
     }
 
-    /// Whether THE CELL INDEX's WALK AT OPEN has completed — the media gate's
-    /// readiness, the one read the index's three readers make. The walk runs
-    /// on a thread of the daemon's from the open on, seconds to a minute on a
-    /// large board, and the daemon serves meanwhile: until this is true, the
-    /// three readers — the PUT's creation and resume and the deposit read —
-    /// refuse `503 index_rebuilding`, retry-class, and the media door answers
-    /// a picture cell's write the same token where the index alone could
-    /// admit it (wire.md §Media; ms5-R); every other request is served.
-    /// [`Skepd::wait_for_the_index`] waits on this read. A walk that DIED
+    /// Returns whether the cell index's walk at open has completed.
+    ///
+    /// It is the media gate's readiness, which the index's three readers read
+    /// after the gate's failed state. The walk runs on a thread of the
+    /// daemon's from the open on — at the open itself where the OS refuses
+    /// the thread — seconds to a minute on a large board, and the daemon
+    /// serves meanwhile: until this is true, the three readers — the PUT's
+    /// creation and resume and the deposit read — refuse
+    /// `503 index_rebuilding`, retry-class, and the media door answers a
+    /// picture cell's write the same token where the index alone could admit
+    /// it (wire.md §Media); every other request is served.
+    /// [`Skepd::wait_for_the_index`] waits on this read. A walk that died
     /// never completes (`operations.md` §4 row 26): the three readers refuse
     /// `index_failed` for the uptime instead, and this stays false.
     pub fn index_is_ready(&self) -> bool {
         self.media.index_ready()
     }
 
-    /// The router — the whole HTTP surface, still socket-free: the two
-    /// routes that cannot be a request/response `Reply` — `GET /events`, an
-    /// unbounded response, and the blob fetch's admitted answer, a file
-    /// streamed with its requester re-resolved between chunks — are returned
-    /// as their own [`Routed`] variants, and the accept path owns the socket
-    /// from there.
+    /// Routes one request: the whole HTTP surface, still socket-free.
     ///
-    /// A COMMAND, not a query. `POST /op` commits to the journal, records
+    /// The two routes that cannot be a request/response `Reply` —
+    /// `GET /events`, an unbounded response, and the blob fetch's admitted
+    /// answer, a file streamed with its requester re-resolved between chunks
+    /// — are returned as their own [`Routed`] variants, and the accept path
+    /// owns the socket from there.
+    ///
+    /// A command, not a query. `POST /op` commits to the journal, records
     /// the change-feed entry, and announces the commit — and where that
     /// commit makes the published head due (wire.md §The other endpoints: 64
     /// commits since the last head, a moved checkpoint, or the hour), the
     /// daemon's own head writer commits up to three writes of its own before
     /// the reply is built, so the journal can stand past the ack's `at` when
-    /// this returns — and the credential write that CLAIMS the board is
+    /// this returns — and the credential write that claims the board is
     /// followed by its first head `H.1` in the same step, whatever the
-    /// cadence says (signed ops, s1), where the head writer's driver admits
-    /// it ([`Daemon::on_claim_flip`] states the refusal); `POST /session`
-    /// mints an M10 session; `GET /challenge` mints a nonce into the bounded
-    /// challenge store and evicts the oldest past
-    /// `auth`'s `MAX_LIVE_NONCES` — a GET that is not safe, and
-    /// whose eviction can spend another caller's outstanding nonce;
-    /// `POST /session/close` retires a binding. And EVERY token-accepting
-    /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, the
-    /// blob family and the blob fetch, and `/events` on the accept path)
-    /// can retire one, because
-    /// [`Daemon::resolve_actor`]'s death arm closes the binding a dead or
-    /// unknown token names — in this daemon's map, in M10, and in the
-    /// credential memo. So routing one write frame twice COMMITS TWICE
-    /// unless the frame carries an idempotency `id` (wire.md §Correlation
-    /// and idempotency) — a speculative retry after a timeout duplicates
-    /// the insert or mints a second document. Of the DISPATCH arms, the
-    /// three that alter nothing are `GET /health`, `GET /chain` — whose
-    /// permit returns within the request — and, in `client` builds, `GET /`;
-    /// but no route does, because the reissue below sits ahead of dispatch
-    /// on every request.
+    /// cadence says (signed ops), where the head writer's driver admits it
+    /// (`Daemon::on_claim_flip` states the refusal); `POST /session` mints an
+    /// M10 session; `GET /challenge` mints a nonce into the bounded challenge
+    /// store and evicts the oldest past `auth`'s `MAX_LIVE_NONCES` — a GET
+    /// that is not safe, and whose eviction can spend another caller's
+    /// outstanding nonce; `POST /session/close` retires a binding. And every
+    /// token-accepting route (`/op`, `/op-at`, `/changes`, `/dump`,
+    /// `/session/close`, the blob family and the blob fetch, and `/events`
+    /// on the accept path) can retire one, because `Daemon::resolve_actor`'s
+    /// death arm closes the binding a dead or unknown token names — in this
+    /// daemon's map, in M10, and in the credential memo. So routing one
+    /// write frame twice commits twice unless the frame carries an
+    /// idempotency `id` (wire.md §Correlation and idempotency) — a
+    /// speculative retry after a timeout duplicates the insert or mints a
+    /// second document. Of the dispatch arms, those that alter nothing are
+    /// the preflights, the `404` and `405` refusals, `GET /health`,
+    /// `GET /chain` — whose permit returns within the request — and, in
+    /// `client` builds, `GET /`; but no route does, because the reissue
+    /// below sits ahead of dispatch on every request.
     ///
     /// What the caller owes on the way in is [`HttpRequest`]'s field
     /// precondition, which routing cannot check; what a [`Reply`] is not on
-    /// the way out is the headers [`http::write_reply`] supplies,
+    /// the way out is the headers `http::write_reply` supplies,
     /// [`UNIVERSAL_HEADERS`] among them, which wire.md promises on every
     /// response.
     ///
-    /// PANICS where the OS refuses entropy — the one panic this crate's own
-    /// code raises by design on an honest request: `GET /challenge` and
-    /// `POST /session` draw their nonce and their token from the crate's
-    /// fail-stop OS source (`auth/entropy.rs`), which never mints a
-    /// credential from anything weaker. `POST /session` draws AFTER M10 has
-    /// minted the session the token would name (AUTH-4.23 declares the store
-    /// that way), so that unwind drops a `SessionId` nothing can close, and a
-    /// signed body's nonce is spent. Every other panic this router can raise
-    /// is a defect — a premise this crate, or a store beneath it, relies on,
-    /// failing — never a refusal an honest input earns. [`serve`] contains
-    /// each to `500 internal_panic` and the worker survives it; a caller
-    /// routing over its own transport owes the same containment, and finds
-    /// the daemon serviceable after the unwind, every lock it holds being one
-    /// that does not poison.
+    /// Every request first looks at the blocked-prefix list's supply
+    /// (`Daemon::reissue_blocked_prefixes`) — ahead of dispatch and of every
+    /// lock, so a reissue is in force before the request that noticed it
+    /// resolves its own actor, `/events` included.
     ///
-    /// Every request FIRST looks at the blocked-prefix list's supply
-    /// ([`Daemon::reissue_blocked_prefixes`]) — ahead of dispatch and of
-    /// every lock, so a reissue is in force before the request that noticed
-    /// it resolves its own actor, `/events` included.
-    ///
-    /// THE BLOB UPLOAD's BODY: a caller over its own transport hands the
+    /// **The blob upload's body.** A caller over its own transport hands the
     /// family's two body-carrying methods their body in `req.body`, and the
     /// route reads it through the same source type the daemon's own
-    /// transport streams a socket through (`server/http.rs`, THE STREAMING
-    /// ARM) — that transport's body stays on the socket and reaches the route
-    /// by a door of its own, beside the request and by value
+    /// transport streams a socket through (`server/http.rs`, the streaming
+    /// arm) — that transport's body stays on the socket and reaches the
+    /// route by a door of its own, beside the request and by value
     /// (`Daemon::route_parked`), so it is read by the one routing it was
     /// parked for.
     ///
-    /// THE BLOB FETCH's ANSWER (wire.md §Media, THE FETCH): `GET /blob?i=`
-    /// and `HEAD /blob?i=` admitted are [`Routed::Fetch`] — the whole file,
-    /// checked, with the fetch pool's permit the value holds — which the
-    /// accept path streams; every refusal of the route is a [`Routed::Reply`].
+    /// **The blob fetch's answer** (wire.md §Media, the fetch).
+    /// `GET /blob?i=` and `HEAD /blob?i=` admitted are [`Routed::Fetch`] —
+    /// the whole file, checked, with the fetch pool's permit the value holds
+    /// — which the accept path streams; every refusal of the route is a
+    /// [`Routed::Reply`].
     ///
-    /// THE EDGE PAIRS (`operations.md` §1.1 m12): a routing that first meets
-    /// a saturated pool, or first spends a live nonce past the challenge
-    /// store's cap, puts ONE `failure:` line on the operator stream before
-    /// its answer is written, and the first routing admitted once the
+    /// **The edge pairs** (`operations.md` §1.1 m12). A routing that first
+    /// meets a saturated pool, or first spends a live nonce past the
+    /// challenge store's cap, puts one `failure:` line on the operator stream
+    /// before its answer is written, and the first routing admitted once the
     /// condition has stood clear for `EDGE_HOLD_DOWN` one `landing:`
     /// (`Daemon::say_the_edges_crossed`); nothing per request. The answers
     /// themselves — the five `503 …_busy` refusals, `/challenge`'s nonce —
-    /// are unchanged.
+    /// are the same with the lines as without them.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the OS refuses entropy — the one panic the daemon's own
+    /// code, this crate's and `skep-core`'s, raises by design on an honest
+    /// request: `GET /challenge` and `POST /session` draw their nonce and
+    /// their token from `skep-core`'s fail-stop OS source (`auth/entropy.rs`),
+    /// which never mints a credential from anything weaker. `POST /session`
+    /// draws after M10 has minted the session the token would name
+    /// (AUTH-4.23 declares the store that way), so that unwind drops a
+    /// `SessionId` nothing can close, and a signed body's nonce is spent.
+    /// Every other panic this router can raise is a defect — a premise this
+    /// crate, or a store beneath it, relies on, failing — never a refusal an
+    /// honest input earns. [`serve`] contains each to `500 internal_panic`
+    /// and the worker survives it; a caller routing over its own transport
+    /// owes the same containment, and finds the daemon serviceable after the
+    /// unwind, every lock it holds being one that does not poison.
     pub fn route(&self, req: &HttpRequest) -> Routed<'_> {
         self.route_parked(req, None)
     }
 
-    /// [`Daemon::route`], for the daemon's own transport, with the body that
-    /// transport left on the socket — the blob upload's creation and resume
-    /// (`server/http.rs`, THE STREAMING ARM) — handed in BESIDE the request,
-    /// by value, so it is read by this one routing and by no other. Private:
-    /// a caller over its own transport has no socket to park, and
+    /// Routes as [`Daemon::route`] does, with the body the transport parked.
+    ///
+    /// It is the daemon's own transport's door: the body that transport left
+    /// on the socket — the blob upload's creation and resume
+    /// (`server/http.rs`, the streaming arm) — is handed in beside the
+    /// request, by value, so it is read by this one routing and by no other.
+    /// Private: a caller over its own transport has no socket to park, and
     /// [`Daemon::route`] reads the request's own `body` through the same
     /// source type.
     fn route_parked(&self, req: &HttpRequest, parked: Option<BodySource<'static>>) -> Routed<'_> {
@@ -1201,7 +1342,7 @@ impl Daemon {
             ("GET" | "HEAD", p) if blob_routes::is_fetch_path(p) => self.fetch_route(req),
             _ => Routed::Reply(self.reply(req, parked)),
         };
-        // THE EDGES THIS ROUTING CROSSED, SAID (m12): the three holders with
+        // The edges this routing crossed, said (m12): the three holders with
         // no door of their own — the reconstruction pool, the class-scan
         // pool and the challenge store — queued the edge an admission or a
         // refusal crossed; the daemon says each here, after the handler and
@@ -1211,12 +1352,13 @@ impl Daemon {
         routed
     }
 
-    /// The request/response routes — every method/path pair but the event
-    /// stream and the fetch's admitted answer, decided in one match. The
-    /// token-accepting set (AUTH-4.43) is the arms wearing
-    /// [`Daemon::token_route`]: `/op`, `/op-at`, `/changes`, `/dump` and
-    /// `/session/close` here, plus `/events`, which the accept path runs by
-    /// hand because a stream is not a [`Reply`] — and the blob upload's
+    /// Answers the request/response routes, decided in one match.
+    ///
+    /// They are every method/path pair but `GET /events` and the fetch's
+    /// `GET` and `HEAD`. The token-accepting set (AUTH-4.43) is the arms
+    /// wearing [`Daemon::token_route`]: `/op`, `/op-at`, `/changes`, `/dump`
+    /// and `/session/close` here, plus `/events`, which the accept path runs
+    /// by hand because a stream is not a [`Reply`] — and the blob upload's
     /// family and the blob fetch, whose every method resolves its actor the
     /// same way inside `blob_route` and `fetch_route` and carries the signal
     /// the same. `/health`, `/chain`, `/challenge`, `/session` and `/` are
@@ -1224,17 +1366,17 @@ impl Daemon {
     fn reply(&self, req: &HttpRequest, parked: Option<BodySource<'static>>) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
             // The blob family's preflight names its own four methods, the
-            // fetch's its own two; every other known path keeps the common
-            // preflight, byte-identical.
+            // fetch's its own two; every other known path answers the common
+            // preflight.
             ("OPTIONS", p) if blob_routes::is_blob_path(p) => Reply::preflight_blob(),
             ("OPTIONS", p) if blob_routes::is_fetch_path(p) => Reply::preflight_fetch(),
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404 below.
             ("OPTIONS", p) if path_is_known(p) => Reply::preflight(),
-            // THE BLOB UPLOAD (media lane B; wire.md §Media): the family's
-            // five method/path pairs, dispatched inside — each answer a
-            // function of the presented token, so each wears the
-            // class-varying headers as `/op`'s does.
+            // The blob upload (wire.md §Media): the family's five method/path
+            // pairs, dispatched inside — each answer a function of the
+            // presented token, so each wears the class-varying headers as
+            // `/op`'s does.
             (_, p) if blob_routes::is_blob_path(p) => {
                 let mut source = parked.unwrap_or_else(|| BodySource::bytes(&req.body));
                 class_varying(self.blob_route(req, &mut source))
@@ -1244,9 +1386,9 @@ impl Daemon {
             ("POST", "/session/close") => {
                 self.token_route(req, |r| self.post_session_close(r, req))
             }
-            // The four CLASS-VARYING routes (wire v7.6, lane 3.4 §5): each
-            // answer is a function of the presented token's class, so each
-            // wears [`class_varying`] — `Cache-Control: no-store` and
+            // The four class-varying routes (wire v7.6): each answer is a
+            // function of the presented token's class, so each wears
+            // `class_varying` — `Cache-Control: no-store` and
             // `Vary: Skepd-Session` — on every reply it can give, transport
             // refusals included. The blob family above and the blob fetch
             // (`fetch_route`) wear it the same, on the stream's head too.
@@ -1278,13 +1420,15 @@ impl Daemon {
         }
     }
 
-    /// [`Daemon::resolve_actor`] against the HEAD — the route-level
-    /// resolution run before dispatch on every token-accepting route, over
-    /// ONE head snapshot: the world and the key table it carries. The
+    /// Resolves the request's actor against the head.
+    ///
+    /// It is [`Daemon::resolve_actor`] at the route level — the resolution
+    /// run before dispatch on every token-accepting route, over one head
+    /// snapshot: the world and the key table it carries. The
     /// resolved actor is handed to dispatch; the write sequences re-resolve
     /// at their own sites against the snapshot their gates stand on.
     ///
-    /// A COMMAND: `resolve_actor`'s death arm retires the binding a dead or
+    /// A command: `resolve_actor`'s death arm retires the binding a dead or
     /// unknown token names, in this daemon's map, in M10 and in the
     /// credential memo. Idempotent — a second resolution of the same token
     /// finds `Unknown` and closes nothing — which is what makes running it
@@ -1294,17 +1438,19 @@ impl Daemon {
         self.resolve_actor(req, snap.world())
     }
 
-    /// One token-accepting route (AUTH-4.43): resolve the actor against the
-    /// HEAD — which may retire the binding a dead or unknown token names —
-    /// run the handler, and attach the `Skepd-Session: closed` header the
-    /// answer may owe (AUTH-6.7). The arm that wears this IS its
-    /// declaration that the route accepts a token, so the set is a fact of
-    /// [`Daemon::reply`]'s shape rather than a list each arm keeps for
-    /// itself. `/events` is the one member that cannot: a stream is not a
-    /// [`Reply`], so the accept path runs the same pair by hand
-    /// (AUTH-4.44).
+    /// Runs one token-accepting route (AUTH-4.43).
     ///
-    /// The three write sequences wrap again, against their own LOCKED
+    /// It resolves the actor against the head — which may retire the binding
+    /// a dead or unknown token names — runs the handler, and attaches the
+    /// `Skepd-Session: closed` header the answer may owe (AUTH-6.7). The arm
+    /// that wears this is its declaration that the route accepts a token, so
+    /// the set is a fact of [`Daemon::reply`]'s shape rather than a list each
+    /// arm keeps for itself. `/events` and the blob fetch are the members
+    /// that cannot: a stream is not a [`Reply`], so the accept path runs the
+    /// same pair by hand for `/events` (AUTH-4.44) and `fetch_route` runs it
+    /// itself, as `blob_route` does for the upload family.
+    ///
+    /// The three write sequences wrap again, against their own locked
     /// resolution — which can find a death this one did not — and that
     /// double is harmless by construction: [`with_signal`] attaches the
     /// header once however many sites observed the death.
@@ -1313,17 +1459,19 @@ impl Daemon {
         with_signal(f(&resolved), resolved.closed)
     }
 
-    /// Log the config-lockout warnings (AUTH-4.9–4.11) — at startup, and
-    /// again at the claim flip, which RES-30 requires unconditionally — each
-    /// under its class word, `warning ({when}):`, through the classed door.
-    /// One method because the warnings are one obligation: WHICH apply is
-    /// [`skep_core::auth::startup_warnings`]'s, but the claim reading they are
-    /// computed against and the stream they go to are this daemon's, and
+    /// Logs the config-lockout warnings (AUTH-4.9–4.11).
+    ///
+    /// They are logged at startup, and again at the claim flip, which RES-30
+    /// requires unconditionally — each under its class word,
+    /// `warning ({when}):`, through the classed door. One method because the
+    /// warnings are one obligation: which apply is
+    /// [`skep_core::auth::startup_warnings`]'s, but the claim reading they
+    /// are computed against and the stream they go to are this daemon's, and
     /// [`serve`] would otherwise reach two levels into
     /// [`skep_core::auth::AuthState`] to spell them.
     ///
     /// `when` is the grammar's moment and only labels the line. The claim
-    /// itself is READ from the head's slice ([`Daemon::board_is_claimed`])
+    /// itself is read from the head's slice ([`Daemon::board_is_claimed`])
     /// rather than supplied, so no caller can hand this method a fact the
     /// daemon can answer.
     fn log_config_warnings(&self, when: Moment) {
@@ -1333,48 +1481,54 @@ impl Daemon {
         }
     }
 
-    /// THE OPEN's-REPORT `auth:` LINE (`operations.md` §1.1 m14; §3.1 step
-    /// 3): the mode as AUTH-5.86 derives it from the pair, the local-trust
-    /// flag with its source, and the two origin sets — said on EVERY start,
-    /// after the bind (the signed set's bare arm is the BOUND port's
-    /// defaults) and the configuration warnings, before the node prefix and
-    /// the blocked list. A state line and no warning: `startup_warnings`
-    /// says what is wrong, this says what IS, so an ENFORCING board with a
-    /// mistyped `--origin` names the origin it will refuse every signed
-    /// session but. WHAT the line says is `AuthConfig::auth_line`'s, built
-    /// where its state lives; the claim reading and the stream are this
-    /// daemon's, for [`Daemon::log_config_warnings`]'s reason.
+    /// Logs the `auth:` line of the open's report.
+    ///
+    /// It carries the mode as AUTH-5.86 derives it from the pair, the
+    /// local-trust flag with its source, and two origin sets, the configured
+    /// and the signed (`operations.md` §1.1 m14; §3.1 step 3) — said on
+    /// every start, after the bind (the signed set's bare arm is the bound
+    /// port's defaults) and the configuration warnings, before the node
+    /// prefix and the blocked list. A state line and no warning:
+    /// `startup_warnings` says what is wrong, this says what *is*, so an
+    /// enforcing board with a mistyped `--origin` names the origin it will
+    /// refuse every signed session but. What the line says is
+    /// `AuthConfig::auth_line`'s, built where its state lives; the claim
+    /// reading and the stream are this daemon's, for
+    /// [`Daemon::log_config_warnings`]'s reason.
     fn log_auth_line(&self) {
         self.say(Class::Open, self.auth.cfg.auth_line(self.board_is_claimed()));
     }
 
-    /// The node prefix in force, or its absence (REG-1.69), named ONCE at
-    /// start with its source (§1.1 row 19) — whether or not a list is
+    /// Logs the node prefix in force, or its absence (REG-1.69), once at start.
+    ///
+    /// It is named with its source (§1.1 row 19) — whether or not a list is
     /// supplied, because a hosted board launched without its prefix has its
-    /// off-board test OFF and would otherwise learn so only at its first
+    /// off-board test off and would otherwise learn so only at its first
     /// install. It is the one config the blocked-prefix list's off-board
-    /// test reads (AUTH-4.36 step 4b as ruled 2026-09-18). WHAT the line
-    /// says is `AuthConfig::node_prefix_line`'s; the stream is this
-    /// daemon's, for [`Daemon::log_config_warnings`]'s reason. A line of
-    /// the open's report, so `Class::Open`.
+    /// test reads (AUTH-4.36 step 4b). What the line says is
+    /// `AuthConfig::node_prefix_line`'s; the stream is this daemon's, for
+    /// [`Daemon::log_config_warnings`]'s reason. A line of the open's
+    /// report, so `Class::Open`.
     fn log_node_prefix(&self) {
         self.say(Class::Open, self.auth.cfg.node_prefix_line());
     }
 
-    /// Log the blocked-prefix list IN FORCE (AUTH-4.70: "the startup log
-    /// names the list in force"; AUTH-4.36 step 4b: an inert entry is
-    /// "ignored at install and said so in the log") — the count, the header
-    /// as the install resolved it, and the inert entries by name, as ONE
-    /// notice of several lines through the classed door. Written at the
-    /// three moments an install happens, under the class row 20 gives each
-    /// ([`ListHeader`]): at start a line of the open's report, `Class::Open`;
-    /// at a reissue and at the claim — where the flip re-compares the issue
-    /// against the claimant it first has — a `Class::Landing`. WHAT the lines
-    /// say is `BlockedPrefixes::log_lines`'s; the stream is this daemon's,
-    /// for [`Daemon::log_config_warnings`]'s reason.
+    /// Logs the blocked-prefix list in force, as one notice of several lines.
     ///
-    /// SILENT where no supply was named: that is a board whose operator
-    /// supplies none, and there is no list to name.
+    /// The notice (AUTH-4.70: "the startup log names the list in force";
+    /// AUTH-4.36 step 4b: an inert entry is "ignored at install and said so
+    /// in the log") carries the count, the header as the install resolved
+    /// it, and the inert entries by name, through the classed door. Written
+    /// at the three moments an install happens, under the class row 20 gives
+    /// each ([`ListHeader`]): at start a line of the open's report,
+    /// `Class::Open`; at a reissue and at the claim — where the flip
+    /// re-compares the issue against the claimant it first has — a
+    /// `Class::Landing`. What the lines say is `BlockedPrefixes::log_lines`'s;
+    /// the stream is this daemon's, for [`Daemon::log_config_warnings`]'s
+    /// reason.
+    ///
+    /// It is silent where no supply was named: that is a board whose
+    /// operator supplies none, and there is no list to name.
     fn log_blocked_prefixes(&self, when: Moment) {
         let Some(path) = self.auth.blocked_supply_path() else { return };
         let class = match when {
@@ -1388,19 +1542,21 @@ impl Daemon {
         );
     }
 
-    /// THE REISSUE, at the head of every request (AUTH-4.70): where the
-    /// supply file moved, [`AuthState::reissue_blocked_prefixes`] re-reads
-    /// it and installs the new issue WHOLE under the credential write lock
-    /// — the list's commit — and the log names the list then in force, a
-    /// landing under row 20's `reissued` header. A file that cannot be read,
-    /// or is not a list, installs NOTHING: the list in force stands and the
-    /// refusal is said ONCE per bad issue, as a failure in row 24's words
-    /// ([`ReissueRefusedLine`]) — what stands, and that the NEXT START
-    /// refuses until a valid list stands at the path, since every start
-    /// reads the file again (RES-115). No warning is written at a reissue:
-    /// `startup_warnings` is evaluated at AUTH-4.11's two points alone.
+    /// Runs the reissue at the head of every request (AUTH-4.70).
     ///
-    /// A COMMAND, and called under NO lock: it takes the credential write
+    /// Where the supply file moved, [`AuthState::reissue_blocked_prefixes`]
+    /// re-reads it and installs the new issue whole under the credential
+    /// write lock — the list's commit — and the log names the list then in
+    /// force, a landing under row 20's `reissued` header. A file that cannot
+    /// be read, is not a list, or is past the channel's byte cap installs
+    /// nothing: the list in force stands and the refusal is said once per
+    /// bad issue, as a failure in row 24's words ([`ReissueRefusedLine`]) —
+    /// what stands, and that the next start refuses until a valid list
+    /// stands at the path, since every start reads the file again (RES-115).
+    /// No warning is written at a reissue: `startup_warnings` is evaluated
+    /// at AUTH-4.11's two points alone.
+    ///
+    /// A command, and called under no lock: it takes the credential write
     /// lock, which is why it runs here and not where the list is read. The
     /// claimant the install compares against is the head's slice, read
     /// under that lock through the closure handed down.
@@ -1422,23 +1578,24 @@ impl Daemon {
         }
     }
 
-    /// THE STANDING LINE's ACT (`operations.md` §1 THE RATES; §1.1 m11) —
-    /// what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the EIGHT reads,
-    /// each one atomic load or one lock and none under the serialization
-    /// guard, in the order the line says them — (1) the write path's halt
-    /// with its position, (2) the kernel's poison, (3) the feed's stopped
-    /// files with theirs, (4) the pruner's liveness flag, (5) the feed
-    /// walk's liveness flag with the region its death left uncovered, (6)
-    /// the cell index's FAILED state, the media gate's (`operations.md` §4
-    /// row 26), (7) the media gate's floor binding — its free space below
-    /// its floor in force, the creation's own test (`MediaGate::floor_binding`,
-    /// both figures read fresh, so the floor's clause stops by itself once
-    /// room stands) — and (8) the CLAIMED-PERMISSIVE bit as
-    /// `log_config_warnings` reads the claim — and ONE line,
-    /// [`StandingLine`], under `Class::Standing`, where at least one clause
-    /// stands; NOTHING otherwise. No clause for the checkpoint thread's own
-    /// death — it is the carrier.
+    /// Says the standing line (`operations.md` §1, the rates; §1.1 m11).
+    ///
+    /// It is what the checkpoint thread runs at each tick of its timed wait
+    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the eight reads —
+    /// each atomic loads or one lock, save the floor's fresh read of the
+    /// volume, and none under the serialization guard — in the order the
+    /// line says them: (1) the write path's halt with its position, (2) the
+    /// kernel's poison, (3) the feed's stopped files with theirs, (4) the
+    /// pruner's liveness flag, (5) the feed walk's liveness flag with the
+    /// region its death left uncovered, (6) the cell index's failed state,
+    /// the media gate's (`operations.md` §4 row 26), (7) the media gate's
+    /// floor binding — its free space below its floor in force, the
+    /// creation's own test (`MediaGate::floor_binding`, both figures read
+    /// fresh, so the floor's clause stops by itself once room stands) — and
+    /// (8) the `CLAIMED-PERMISSIVE` bit as `log_config_warnings` reads the
+    /// claim; and one line, [`StandingLine`], under `Class::Standing`, where
+    /// at least one clause stands; nothing otherwise. No clause for the
+    /// checkpoint thread's own death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let line = StandingLine {
             halted_at: self.commits.halted_at(),
@@ -1458,58 +1615,66 @@ impl Daemon {
         }
     }
 
-    /// THE KERNEL's HALT, READ AT THE CATCH (m10's second site): after the
-    /// transport caught a panic on a write, one atomic load of the kernel's
-    /// poison — an unwind whose repair failed, or that passed the barrier,
-    /// poisons the kernel and re-raises, so the `500 internal_panic` the
-    /// catch answers is the only answer that write gives and no `Rejected`
-    /// comes until the next write, hours away on a quiet board — and, where
-    /// it reads poisoned, the line through the write path's once-flag
-    /// ([`Commits::say_the_kernels_halt_once`]), which the first site
-    /// shares: said once between the two, whichever is reached first.
+    /// Reads the kernel's halt at the catch (m10's second site).
+    ///
+    /// After the transport caught a panic on a write, it makes one atomic
+    /// load of the kernel's poison — an unwind whose repair failed, or that
+    /// passed the barrier, poisons the kernel and re-raises, so the
+    /// `500 internal_panic` the catch answers is the only answer that write
+    /// gives and no `Rejected` comes until the next write, hours away on a
+    /// quiet board — and, where it reads poisoned, says the line through the
+    /// write path's once-flag ([`Commits::say_the_kernels_halt_once`]),
+    /// which the first site shares: said once between the two, whichever is
+    /// reached first.
     pub(crate) fn say_the_kernels_halt_if_poisoned(&self) {
         if self.engine.kernel().is_poisoned() {
             self.commits.say_the_kernels_halt_once();
         }
     }
 
-    /// THE CHECKPOINT THREAD's CATCH (`operations.md` §1.1 row 41; §4 row
-    /// 25): what its loop's `catch_unwind` runs on a caught panic, as the
-    /// thread ends — the liveness flag, then the consequence line
-    /// ([`CheckpointThreadEndedLine`]) under `Class::Failure`. The hook's
-    /// line has said the panic and its site; this says what the board lost.
-    /// The standing line ends with its carrier: no cure here.
+    /// Runs the checkpoint thread's catch, as the thread ends.
+    ///
+    /// It is what the loop's `catch_unwind` runs on a caught panic
+    /// (`operations.md` §1.1 row 41; §4 row 25) — the liveness flag, then
+    /// the consequence line ([`CheckpointThreadEndedLine`]) under
+    /// `Class::Failure`. The hook's line has said the panic and its site;
+    /// this says what the board lost. The standing line ends with its
+    /// carrier: no cure here.
     pub(crate) fn the_checkpoint_thread_ended(&self) {
         self.threads.checkpointer_ended.store(true, Ordering::Release);
         self.say(Class::Failure, CheckpointThreadEndedLine);
     }
 
-    /// THE PRUNER's CATCH (row 41; §4 row 24): what its loop's
-    /// `catch_unwind` runs on a caught panic, as the thread ends — the
-    /// liveness flag the standing line reads, then the consequence line
-    /// ([`PrunerThreadEndedLine`]) under `Class::Failure`.
+    /// Runs the pruner's catch, as the thread ends.
+    ///
+    /// It is what the loop's `catch_unwind` runs on a caught panic (row 41;
+    /// §4 row 24) — the liveness flag the standing line reads, then the
+    /// consequence line ([`PrunerThreadEndedLine`]) under `Class::Failure`.
     pub(crate) fn the_pruner_thread_ended(&self) {
         self.threads.pruner_ended.store(true, Ordering::Release);
         self.say(Class::Failure, PrunerThreadEndedLine);
     }
 
-    /// One classed line of this daemon's own on the operator stream — the
-    /// configuration lines, the warnings, the flip's landing, a refusal,
-    /// the standing line, a thread catch's consequence — through the classed
-    /// door, so no line of this daemon's can go out without its class word;
-    /// and, under the test seam, kept for the suite (`Daemon::lines_said`).
-    /// The checkpoint thread's lines take their own door
-    /// ([`Daemon::say_checkpoint_line`]), with their own record.
+    /// Says one classed line of this daemon's own on the operator stream.
+    ///
+    /// The configuration lines, the warnings, the flip's landing, a refusal,
+    /// the standing line and a thread catch's consequence are among them,
+    /// each through the classed door, so no line of this daemon's can go out
+    /// without its class word; under the test seam each is also kept for the
+    /// suite (`Daemon::lines_said`). The checkpoint thread's lines take their
+    /// own door ([`Daemon::say_checkpoint_line`]), with their own record.
     fn say(&self, class: Class, what: impl fmt::Display) {
         #[cfg(any(test, feature = "test-hooks"))]
         self.said.lock().push(format!("{class}: {what}"));
         notice::emit(class, what);
     }
 
-    /// [`Daemon::say`] for a notice of several lines — the blocked list's —
-    /// through `emit_lines`: one write, the head carrying the class word and
-    /// the time; and, under the test seam, kept whole, the head and each
-    /// line of the rest on a line of its own.
+    /// Says a notice of several lines, as [`Daemon::say`] says one.
+    ///
+    /// The notice is the blocked list's, through `emit_lines`: one write,
+    /// the head carrying the class word and the time; and, under the test
+    /// seam, kept whole, the head and each line of the rest on a line of its
+    /// own.
     fn say_lines(&self, class: Class, head: impl fmt::Display, rest: &[String]) {
         #[cfg(any(test, feature = "test-hooks"))]
         {
@@ -1523,23 +1688,25 @@ impl Daemon {
         notice::emit_lines(class, head, rest);
     }
 
-    /// THE EDGES CROSSED BY ONE ROUTING, SAID (`operations.md` §1.1 m12; §4
-    /// row 27; §6's three rows): the reconstruction pool's, the class-scan
-    /// pool's and the challenge store's edge trackers drained in turn — each
-    /// the edges its one door crossed since the last drain, in order — and
-    /// each edge said through [`Daemon::say`] in its holder's ruled words
-    /// under the edge's own class word ([`PoolEdgeLine`] for a pool,
-    /// [`ChallengeEdgeLine`] for the store). Run at the end of every routing
-    /// ([`Daemon::route_parked`]), on the request's thread, after the handler
-    /// has answered and before the transport writes the reply, so a line is
-    /// on the stream and in the record by the time its request's answer is
-    /// read. The three holders QUEUE because they hold no door: `History` and
-    /// `ClassScans` know nothing of the daemon, and the challenge store is
-    /// the session layer's. The write pool's door is the daemon's own
-    /// (`op.rs`'s `Daemon::take_write_permit`), the live-stream budget and
-    /// the accept loop hold the daemon (`listen.rs`), and the two media pools
-    /// hold the media gate's door: those five say their edges AT the edge.
-    /// A routing that crossed no edge costs three atomic loads here.
+    /// Says the edges one routing crossed.
+    ///
+    /// The reconstruction pool's, the class-scan pool's and the challenge
+    /// store's edge trackers are drained in turn (`operations.md` §1.1 m12;
+    /// §4 row 27; §6's three rows) — each the edges its one door crossed
+    /// since the last drain, in order — and each edge said through
+    /// [`Daemon::say`] in its holder's words under the edge's own class word
+    /// ([`PoolEdgeLine`] for a pool, [`ChallengeEdgeLine`] for the store).
+    /// Run at the end of every routing ([`Daemon::route_parked`]), on the
+    /// request's thread, after the handler has answered and before the
+    /// transport writes the reply, so a line is in the record and queued for
+    /// the stream by the time its request's answer is read. The three holders
+    /// queue because they hold no door: `History` and `ClassScans` know
+    /// nothing of the daemon, and the challenge store is the session layer's.
+    /// The write pool's door is the daemon's own (`op.rs`'s
+    /// `Daemon::take_write_permit`), the live-stream budget and the accept
+    /// loop hold the daemon (`listen.rs`), and the two media pools hold the
+    /// media gate's door: those five say their edges at the edge. A routing
+    /// that crossed no edge costs three atomic loads here.
     fn say_the_edges_crossed(&self) {
         self.history
             .edge()
@@ -1560,51 +1727,65 @@ impl Daemon {
 // suite pins by `to_string()`, and every one goes to the operator stream
 // through `Daemon::say_checkpoint_line`, classed.
 
-/// THE CHECKPOINT THREAD's MEMORY between wakes — what one line of the
-/// thread's leaves for the next: the inline count as last said and the
-/// position it is counted from, the newest checkpoint as the thread last
-/// looked, the resident set's high-water, and — under the test seam — every
-/// line the arms rendered this uptime, since no suite captures stderr
-/// in-process.
+/// The checkpoint thread's memory between wakes.
+///
+/// It is what one line of the thread's leaves for the next: the inline count
+/// as last said and the position it is counted from, the newest checkpoint
+/// as the thread last looked, the resident set's high-water, and — under
+/// the test seam — every line the arms rendered this uptime, since no suite
+/// captures stderr in-process.
 struct CheckpointMemory {
     looked: Mutex<Looked>,
-    /// THE RESIDENT SET's HIGH-WATER: the largest reading the daemon has
-    /// taken of its own physical memory (`memory_stats`), one reading per
-    /// landing and per backstop wake, on the checkpoint thread — the figure
-    /// line 25 carries as "peaked at". The daemon's own, not the kernel's
-    /// `ru_maxrss`, which this differs from by what rose and fell between two
-    /// readings. Zero before the first reading: a resident set is never zero.
+    /// The resident set's high-water.
+    ///
+    /// It is the largest reading the daemon has taken of its own physical
+    /// memory (`memory_stats`), one reading per landing and per backstop
+    /// wake, on the checkpoint thread — the figure line 25 carries as
+    /// "peaked at". The daemon's own, not the kernel's `ru_maxrss`, which
+    /// this differs from by what rose and fell between two readings. Zero
+    /// before the first reading: a resident set is never zero.
     resident_peak: AtomicU64,
-    /// TEST SEAM: the lines rendered this uptime, each `{class}: {text}`.
+    /// The lines rendered this uptime, each `{class}: {text}` (a test seam).
     #[cfg(any(test, feature = "test-hooks"))]
     lines: Mutex<Vec<String>>,
-    /// TEST SEAM: the hold the two-crossings claim parks the thread at, read
-    /// by `listen.rs`'s loop before it looks at the flag.
+    /// The hold the two-crossings claim parks the thread at (a test seam).
+    ///
+    /// It is read by `listen.rs`'s loop before it looks at the flag.
     #[cfg(any(test, feature = "test-hooks"))]
     hold: CheckpointHold,
 }
 
-/// What the thread last looked at and last said — one value under one lock,
-/// because the three move together at every line.
+/// What the thread last looked at and last said, as one value.
+///
+/// One value under one lock, because the thread reads and moves the three
+/// within one hold of it.
 struct Looked {
-    /// THE INLINE COUNT AS LAST SAID (m13): the kernel's `inline_checkpoints`
-    /// as the thread last carried it on a line — line 25's inline clause or
-    /// the backstop's line. The next line's `{n}` is the count past this.
+    /// The inline count as last said (m13).
+    ///
+    /// It is the kernel's `inline_checkpoints` as the thread last carried it
+    /// on a line — line 25's inline clause or the backstop's line. The next
+    /// line's `{n}` is the count past this.
     inline_said: u64,
-    /// THE POSITION THE COUNT IS COUNTED FROM — the next line's `{p}`: the
-    /// newest checkpoint's position as the thread read it at the wake it
-    /// last said a line at (the landing's own position on line 25), and
-    /// before any line this uptime the open's START POINT, genesis as `0`.
+    /// The position the count is counted from: the next line's `{p}`.
+    ///
+    /// It is the newest checkpoint's position as the thread read it at the
+    /// wake it last said a landing or backstop line at (the landing's own
+    /// position on line 25), and before any such line this uptime the open's
+    /// start point, genesis as `0`.
     since: Seq,
-    /// The newest checkpoint's position as the thread last looked — at the
-    /// open, and at every line since — so a wake with no flag takes the
-    /// landing's re-reads only where the newest moved.
+    /// The newest checkpoint's position as the thread last looked.
+    ///
+    /// The thread looks at the open, and at every line since but a failure
+    /// that landed nothing — so a wake with no flag takes the landing's
+    /// re-reads only where the newest moved.
     newest: Option<Seq>,
 }
 
 impl CheckpointMemory {
-    /// The memory at the open: nothing said, the count counted from the start
-    /// point, the newest checkpoint as the open found it.
+    /// Returns the memory at the open.
+    ///
+    /// Nothing is said, the count is counted from the start point, and the
+    /// newest checkpoint is as the open found it.
     fn at_open(start_point: Seq, newest: Option<Seq>) -> CheckpointMemory {
         CheckpointMemory {
             looked: Mutex::new(Looked { inline_said: 0, since: start_point, newest }),
@@ -1616,10 +1797,12 @@ impl CheckpointMemory {
         }
     }
 
-    /// One reading of the process's resident set, folded into the high-water,
-    /// which is answered — `None` where no reading was ever made, this one
-    /// included. A reading the crate cannot make moves nothing and fails
-    /// nothing: the line then carries the peak so far, or says it is unread.
+    /// Folds a reading of the resident set into the high-water it answers.
+    ///
+    /// The reading is the process's; the high-water is answered — `None`
+    /// where no reading was ever made, this one included. A reading the
+    /// crate cannot make moves nothing and fails nothing: the line then
+    /// carries the peak so far, or says it is unread.
     fn note_resident_set(&self) -> Option<u64> {
         if let Some(reading) = memory_stats::memory_stats() {
             self.resident_peak.fetch_max(reading.physical_mem as u64, Ordering::AcqRel);
@@ -1631,20 +1814,22 @@ impl CheckpointMemory {
     }
 }
 
-/// TEST SEAM: the hold `Daemon::hold_the_checkpoint_thread` arms — the
-/// thread parks at the top of its loop, before it looks at the flag, until
-/// the release — so a suite lands a second crossing while the flag still
-/// stands and the kernel's backstop runs it inline, with no race against
-/// the thread. The stream hold's shape (`skep_media::serve::STREAM_HOLD`),
-/// per daemon rather than per process.
+/// The hold `Daemon::hold_the_checkpoint_thread` arms (a test seam).
+///
+/// The thread parks at the top of its loop, before it looks at the flag,
+/// until the release — so a suite lands a second crossing while the flag
+/// still stands and the kernel's backstop runs it inline, with no race
+/// against the thread. The stream hold's shape
+/// (`skep_media::serve::STREAM_HOLD`), per daemon rather than per process.
 #[cfg(any(test, feature = "test-hooks"))]
 struct CheckpointHold {
     held: Mutex<bool>,
     released: Condvar,
 }
 
-/// THE LANDING's RE-READS, what follows ANY checkpoint — the figures the
-/// one function below answers for the line.
+/// The landing's re-reads, which follow any checkpoint.
+///
+/// They are the figures the one function below answers for the line.
 struct ReRead {
     bytes_bound: NonZeroU64,
     floor: u64,
@@ -1652,26 +1837,29 @@ struct ReRead {
 }
 
 impl Daemon {
-    /// Whether the kernel's cadence has crossed since the last checkpoint
-    /// began (`Kernel::checkpoint_due`) — what the checkpoint thread reads
-    /// before each run, and after one, since a crossing during a run sets
-    /// the flag again.
+    /// Returns whether the kernel's cadence is due (`Kernel::checkpoint_due`).
+    ///
+    /// That is, whether it has crossed since the last checkpoint began —
+    /// what the checkpoint thread reads before each run, and after one, since
+    /// a crossing during a run sets the flag again.
     pub(crate) fn checkpoint_is_due(&self) -> bool {
         self.engine.kernel().checkpoint_due()
     }
 
-    /// THE LANDING's RE-READS, after ANY checkpoint — the thread's own, a
-    /// base that landed before its run failed, or a backstop's found on a
-    /// wake with no flag: the cadence's byte bound ([`cadence_bytes_for`])
-    /// and the media floor, kept by the gate from the newest checkpoint's
-    /// size as it is noted (`MediaGate::note_checkpoint`), then the change
-    /// feed's five files compacted to the
-    /// journal's reclaim floor (`Commits::compact_feed_below_reclaim_floor`).
-    /// ONE function, so the three arms cannot disagree about what follows a
-    /// landing; the newest header is the caller's one read of it, its length
-    /// handed in. Where the floor has not moved — a reclamation that failed,
-    /// a landing below the retained window — the compaction finds nothing
-    /// below the floor and writes nothing.
+    /// Takes the landing's re-reads, after any checkpoint.
+    ///
+    /// The checkpoint is the thread's own, a base that landed before its run
+    /// failed, or a backstop's found on a wake with no flag. The re-reads
+    /// are the cadence's byte bound ([`cadence_bytes_for`]) and the media
+    /// floor, kept by the gate from the newest checkpoint's size as it is
+    /// noted (`MediaGate::note_checkpoint`), then the change feed's five
+    /// files compacted to the journal's reclaim floor
+    /// (`Commits::compact_feed_below_reclaim_floor`). One function, so the
+    /// three arms cannot disagree about what follows a landing; the newest
+    /// header is the caller's one read of it, its length handed in. Where
+    /// the floor has not moved — a reclamation that failed, a landing below
+    /// the retained window — the compaction finds nothing below the floor
+    /// and writes nothing.
     fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> ReRead {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
@@ -1680,40 +1868,43 @@ impl Daemon {
         ReRead { bytes_bound, floor, compaction }
     }
 
-    /// One line of the checkpoint thread's on the operator stream, with its
-    /// class word — the classed door, so no line of this section can go out
-    /// without one — and, under the test seam, kept for the suite.
+    /// Says one line of the checkpoint thread's on the operator stream.
+    ///
+    /// It goes with its class word — the classed door, so no line of this
+    /// section can go out without one — and, under the test seam, is kept
+    /// for the suite.
     fn say_checkpoint_line(&self, class: Class, text: String) {
         #[cfg(any(test, feature = "test-hooks"))]
         self.checkpointer.lines.lock().push(format!("{class}: {text}"));
         notice::emit(class, text);
     }
 
-    /// RUN THE CHECKPOINT THE CADENCE CALLS FOR, on the calling thread —
-    /// the checkpoint thread's one act (jw-R2 (c)), off the write path's
-    /// guard: `Kernel::checkpoint`, which clears the due flag first and
-    /// takes its own mutex and no applier lock, so every write proceeds
+    /// Runs the checkpoint the cadence calls for, on the calling thread.
+    ///
+    /// It is the checkpoint thread's act on the due flag, off the write
+    /// path's guard: `Kernel::checkpoint`, which clears the due flag first
+    /// and takes its own mutex and no applier lock, so every write proceeds
     /// beside it, timed by this thread's own `Instant` around the call,
-    /// under no lock. On a LANDING: the newest checkpoint's header read once,
-    /// the landing's re-reads taken from it ([`Daemon::re_read_after_a_landing`]),
-    /// and ONE line — [`LandingLine`], the position and the size, the run's
-    /// duration, the journal bytes the kernel reclaimed
-    /// (`Kernel::last_reclaimed_bytes`, read after the `Ok`), the checkpoint
-    /// files its retention removed, each by name and length
-    /// (`Kernel::last_removed_checkpoints`, read after the `Ok`), both bounds in
-    /// force, the volume's free space as the media floor reads it (the
-    /// gate's one door, so the floor's refusal and this line never
+    /// under no lock. On a landing: the newest checkpoint's header read
+    /// once, the landing's re-reads taken from it
+    /// ([`Daemon::re_read_after_a_landing`]), and one line — [`LandingLine`],
+    /// the position and the size, the run's duration, the journal bytes the
+    /// kernel reclaimed (`Kernel::last_reclaimed_bytes`, read after the
+    /// `Ok`), the checkpoint files its retention removed, each by name and
+    /// length (`Kernel::last_removed_checkpoints`, read after the `Ok`), both
+    /// bounds in force, the volume's free space as the media floor reads it
+    /// (the gate's one door, so the floor's refusal and this line never
     /// disagree), the resident set's high-water, the feed's compaction per
     /// file, and the inline count where it moved since the thread last said
-    /// it. On a FAILURE: ONE line per ATTEMPT — [`FailureLine`]: the head's
+    /// it. On a failure: one line per attempt — [`FailureLine`]: the head's
     /// position when the run began as an ordering, the cause (a full volume
     /// in the operator's words), and the trailer the cause earns; and where
-    /// the kernel answers that a BASE LANDED before the step after its rename
-    /// failed (`CheckpointError::Landed`), the newest header is read after
-    /// the call — the base is on disk — the landing's re-reads are taken off
-    /// it, and the line names the landed position and which step failed.
-    /// The kernel removes its own temp file before answering a failure that
-    /// landed nothing.
+    /// the kernel answers that a base landed before the step after its
+    /// rename failed (`CheckpointError::Landed`), the newest header is read
+    /// after the call — the base is on disk — the landing's re-reads are
+    /// taken off it, and the line names the landed position and which step
+    /// failed. The kernel removes its own temp file, best-effort, before
+    /// answering a failure that landed nothing.
     pub(crate) fn service_the_checkpoint(&self) {
         let kernel = self.engine.kernel();
         let at = kernel.current_seq();
@@ -1769,20 +1960,21 @@ impl Daemon {
         }
     }
 
-    /// THE BACKSTOP's WAKE (m13; §4 rows 25 and 35) — what the checkpoint
-    /// thread runs on every wake AFTER the flag's arm, so a wake with NO flag
-    /// is answered: where the kernel's count of checkpoints run inline on a
-    /// committing thread (`Kernel::inline_checkpoints`) moved past the count
-    /// the thread last said, the newest checkpoint is read ONCE and, where
-    /// it moved since the thread last looked, the landing's re-reads are
-    /// taken off it — the same function the landing arm runs — and the
-    /// backstop's line is said ([`BackstopLine`]): the runs since the last
-    /// line, the position they are counted from, and of the last of them the
-    /// commit that ran it, how long it held every write, and whether it
-    /// landed or how it failed (`Kernel::last_inline_checkpoint`).
-    /// Said once for each movement of the count and never otherwise; a
-    /// count line 25 has just carried is one that moved not. The resident
-    /// set is read here too, as at a landing.
+    /// Follows the backstop on a wake (m13; §4 rows 25 and 35).
+    ///
+    /// It is what the checkpoint thread runs on every wake after the flag's
+    /// arm, so a wake with no flag is answered: where the kernel's count of
+    /// checkpoints run inline on a committing thread
+    /// (`Kernel::inline_checkpoints`) moved past the count the thread last
+    /// said, the newest checkpoint is read once and, where it moved since
+    /// the thread last looked, the landing's re-reads are taken off it — the
+    /// same function the landing arm runs — and the backstop's line is said
+    /// ([`BackstopLine`]): the runs since the last line, the position they
+    /// are counted from, and of the last of them the commit that ran it, how
+    /// long it held every write, and whether it landed or how it failed
+    /// (`Kernel::last_inline_checkpoint`). Said once for each movement of the
+    /// count and never otherwise; a count line 25 has just carried is one
+    /// that moved not. The resident set is read here too, as at a landing.
     pub(crate) fn follow_the_backstop(&self) {
         let kernel = self.engine.kernel();
         let runs = kernel.inline_checkpoints();
@@ -1813,27 +2005,30 @@ impl Daemon {
     }
 }
 
-/// LINE 25 — THE LANDING, in the operator stream's words (`operations.md`
-/// §1.1 row 25), rendered from the figures the thread read: a pure value,
-/// so the unit suite pins the words by `to_string()` at fixed figures. The
-/// class word is the emitter's (`Class::Landing`); every dimension is spelt
-/// the stream's one way — a position as `position N`, a file by its name,
-/// a duration in milliseconds.
+/// Line 25, the landing (`operations.md` §1.1 row 25).
+///
+/// It is rendered in the operator stream's words from the figures the thread
+/// read: a pure value, so the unit suite pins the words by `to_string()` at
+/// fixed figures. The class word is the emitter's (`Class::Landing`); every
+/// dimension is spelt the stream's one way — a position as `position N`, a
+/// file by its name, a duration in milliseconds.
 struct LandingLine {
     /// The position the checkpoint embodies — `Kernel::checkpoint`'s answer.
     position: Seq,
-    /// The file's length as the newest header claims it, `None` where the
-    /// header did not answer — "size unread".
+    /// The file's length as the newest header claims it.
+    ///
+    /// `None` where the header did not answer — "size unread".
     bytes: Option<u64>,
     /// The run's duration, whole milliseconds, the thread's own `Instant`.
     duration_ms: u128,
     /// The journal bytes the landing reclaimed; zero is "nothing reclaimed".
     reclaimed: u64,
-    /// The checkpoint files the landing's retention removed, oldest first,
-    /// each by its position and its length in bytes
+    /// The checkpoint files the landing's retention removed, oldest first.
+    ///
+    /// Each is named by its position and its length in bytes
     /// (`Kernel::last_removed_checkpoints`): the oldest base past the two
     /// kept, and any base the open passed over — the file the open's own
-    /// SKIPPED warning named, which this clause names by the same
+    /// `SKIPPED` warning named, which this clause names by the same
     /// `checkpoint.{n}`. Empty where retention removed none, and the clause
     /// is absent.
     removed: Vec<(Seq, u64)>,
@@ -1843,18 +2038,22 @@ struct LandingLine {
     floor: u64,
     /// The volume's free space as the media floor reads it.
     free_space: u64,
-    /// The daemon's high-water of its resident set, in bytes; `None` where
-    /// no reading was ever made — "unread".
+    /// The daemon's high-water of its resident set, in bytes.
+    ///
+    /// `None` where no reading was ever made — "unread".
     resident_peak: Option<u64>,
     /// The feed's compaction: the fence, and the files that stood.
     compaction: FeedCompaction,
-    /// The inline count where it moved since the thread last said it, with
-    /// the position it is counted from; `None` where it did not move, and
-    /// the clause is absent.
+    /// The inline count where it moved since the thread last said it.
+    ///
+    /// It comes with the position it is counted from; `None` where it did
+    /// not move, and the clause is absent.
     inline: Option<InlineRuns>,
 }
 
-/// The inline clause's two figures — line 25's and the backstop line's.
+/// The inline clause's two figures, as line 25 carries them.
+///
+/// The backstop line carries the same two in fields of its own.
 struct InlineRuns {
     /// The checkpoints run inline on a writer since `since`.
     runs: u64,
@@ -1874,7 +2073,7 @@ impl fmt::Display for LandingLine {
             0 => f.write_str("nothing reclaimed")?,
             reclaimed => write!(f, "{reclaimed} journal bytes reclaimed")?,
         }
-        // Each file by its own name — never [`Base`]'s, whose `genesis` would
+        // Each file by its own name — never `Base`'s, whose `genesis` would
         // misname a checkpoint written at position 0.
         for (i, (seq, len)) in self.removed.iter().enumerate() {
             f.write_str(if i == 0 { "; " } else { ", " })?;
@@ -1911,27 +2110,31 @@ impl fmt::Display for LandingLine {
     }
 }
 
-/// LINE 26 — THE FAILURE, in the operator stream's words (row 26; §4 row
-/// 2), rendered from what the kernel answered: a pure value the unit suite
-/// pins by `to_string()` at each cause. Where the error is
-/// `CheckpointError::Landed`, the line opens on the landed base — "a
-/// checkpoint landed at position {n} but {step} failed" — the step in the
-/// DAEMON's three words (the directory's sync, retention, the journal's
-/// reclamation), chosen by `LandedStep`'s arm and never the kernel's
-/// `Display`; otherwise on the head's position when the run began, worded
-/// as the ordering it is. The cause: a full volume (`StorageFull`) in the
-/// operator's words beside the OS's text, in the `Io` arm and the `Landed`
-/// arm alike; every other cause its own `Display`. The trailer is keyed to
-/// the cause: an I/O cause retries at the cadence's next crossing, a
-/// poisoned kernel takes no checkpoint until a restart, a world that will
-/// not serialize refuses the same way until the build fixes it. The class
-/// word is the emitter's (`Class::Failure`).
+/// Line 26, the failure (row 26; §4 row 2).
+///
+/// It is rendered in the operator stream's words from what the kernel
+/// answered: a pure value the unit suite pins by `to_string()` at each
+/// cause. Where the error is `CheckpointError::Landed`, the line opens on
+/// the landed base — "a checkpoint landed at position {n} but {step}
+/// failed" — the step in the daemon's three words (the directory's sync,
+/// retention, the journal's reclamation), chosen by `LandedStep`'s arm and
+/// never the kernel's `Display`; otherwise on the head's position when the
+/// run began, worded as the ordering it is. The cause: a full volume
+/// (`StorageFull`) in the operator's words beside the OS's text, in the
+/// `Io` arm and the `Landed` arm alike; every other cause its own
+/// `Display`. The trailer is keyed to the cause: an I/O cause retries at
+/// the cadence's next crossing, a poisoned kernel takes no checkpoint until
+/// a restart, a world that will not serialize refuses the same way until
+/// the build fixes it. The class word is the emitter's (`Class::Failure`).
 struct FailureLine<'a> {
-    /// `Kernel::current_seq` read BEFORE the call — an ordering, since the
-    /// checkpoint loads its own root under its mutex.
+    /// `Kernel::current_seq`, read before the call.
+    ///
+    /// An ordering, since the checkpoint loads its own root under its mutex.
     at: Seq,
-    /// Where a base landed: the newest checkpoint's position read AFTER the
-    /// call, `None` where its header did not answer.
+    /// Where a base landed, its position, read after the call.
+    ///
+    /// It is the newest checkpoint's position, `None` where its header did
+    /// not answer.
     landed_at: Option<Seq>,
     error: &'a CheckpointError,
 }
@@ -1967,7 +2170,7 @@ impl fmt::Display for FailureLine<'_> {
                 self.at
             )?,
         }
-        // THE TRAILER, keyed to the cause: what still serves and when the
+        // The trailer, keyed to the cause: what still serves and when the
         // next attempt comes — a promise of a crossing only where one can.
         f.write_str(match self.error {
             CheckpointError::Io(_) | CheckpointError::Landed { .. } => {
@@ -1984,10 +2187,11 @@ impl fmt::Display for FailureLine<'_> {
     }
 }
 
-/// An I/O cause in the operator's words: a full volume (`StorageFull`) is
-/// "the volume is full" with the OS's text beside it — the one cause whose
-/// act, room freed on the volume, is the operator's alone — and every other
-/// kind its own text.
+/// An I/O cause in the operator's words.
+///
+/// A full volume (`StorageFull`) is "the volume is full" with the OS's text
+/// beside it — the one cause whose act, room freed on the volume, is the
+/// operator's alone — and every other kind its own text.
 struct VolumeWords<'a>(&'a std::io::Error);
 
 impl fmt::Display for VolumeWords<'_> {
@@ -2000,33 +2204,36 @@ impl fmt::Display for VolumeWords<'_> {
     }
 }
 
-/// THE BACKSTOP's LINE (`operations.md` §1.1 m13), rendered from the
-/// kernel's count and its record of the last inline run: the checkpoints run
-/// inline on a writer since the position the count is counted from
-/// (`Looked::since` — the newest checkpoint's position at the thread's last
-/// line, the start point before any); and of the last of them, the commit
-/// whose crossing ran it, by its position — the one the write's own
-/// acknowledgement and the change feed name it by — how long the run held
-/// every write, whole milliseconds (the write path's serial guard spans the
-/// commit that runs it, so every other writer waited it out: the one figure
-/// that tells a slow board's operator the stall was a checkpoint's), and
-/// whether it landed and where, or how it failed, in the kernel's rendered
-/// words. A pure value, pinned by `to_string()`; emitted under
-/// `Class::Landing`.
+/// The backstop's line (`operations.md` §1.1 m13).
+///
+/// It is rendered from the kernel's count and its record of the last inline
+/// run: the checkpoints run inline on a writer since the position the count
+/// is counted from (`Looked::since` — the newest checkpoint's position at
+/// the thread's last landing or backstop line, the start point before any);
+/// and of the last of them, the commit whose crossing ran it, by its
+/// position — the one the write's own acknowledgement and the change feed
+/// name it by — how long the run held every write, whole milliseconds (the
+/// write path's serial guard spans the commit that runs it, so every other
+/// writer waited it out: the one figure that tells a slow board's operator
+/// the stall was a checkpoint's), and whether it landed and where, or how it
+/// failed, in the kernel's rendered words. A pure value, pinned by
+/// `to_string()`; emitted under `Class::Landing`.
 struct BackstopLine {
     runs: u64,
     since: Seq,
-    /// `Kernel::last_inline_checkpoint`, read after the count moved: never
-    /// `None` then, since the kernel stores a run's record before it moves the
-    /// count; rendered `unread` should the type's absence ever arise, rather
-    /// than spelled as a landing.
+    /// `Kernel::last_inline_checkpoint`, read after the count moved.
+    ///
+    /// Never `None` then, since the kernel stores a run's record before it
+    /// moves the count; rendered `unread` should the type's absence ever
+    /// arise, rather than spelled as a landing.
     last: Option<LastInlineRun>,
 }
 
-/// The last inline run as [`BackstopLine`] says it: the kernel's record
-/// ([`InlineCheckpoint`], which only the kernel makes) carried in the
-/// figures the line renders, so the line stays a pure value the unit suite
-/// builds at fixed figures.
+/// The last inline run as [`BackstopLine`] says it.
+///
+/// It is the kernel's record ([`InlineCheckpoint`], which only the kernel
+/// makes) carried in the figures the line renders, so the line stays a pure
+/// value the unit suite builds at fixed figures.
 struct LastInlineRun {
     /// The commit whose crossing ran the checkpoint, by its position.
     after: Seq,
@@ -2065,23 +2272,25 @@ impl fmt::Display for BackstopLine {
     }
 }
 
-/// AUTH-2.86's two startup warnings, rendered from what the engine's open
-/// found — one line per retained checkpoint that was NOT a start point,
-/// naming it, why, and the start point the world was resolved from; and one
-/// line where the start point itself carried no identity slice and resolved
-/// to the EMPTY table (AUTH-2.83), naming that checkpoint and the empty
-/// resolution — the operator's one tell that a build which wrote no slice
-/// ran on this board. And after them, one line where the open's scan read
-/// corrupt runs BELOW the start point and passed them over
-/// (`Recovery::runs_passed_over`): the start point embodies every position
-/// they hold, so the open answered around them, and no line of an open
-/// that succeeded said so — while a history read from an older base, and the
-/// open that falls back past this start point the day its checkpoint fails
-/// to load, meet the first of them and refuse. Said with how many and the
-/// kernel's account of the first (`Recovery::first_run_passed_over`): its
-/// files and bytes, the position it holds none above, and the act that
-/// clears it. Nothing where there is nothing to say, which is every open on
-/// a board whose checkpoints carry the slice and whose journal holds no run.
+/// Renders the startup warnings from what the engine's open found.
+///
+/// AUTH-2.86's two startup warnings are one line per retained checkpoint
+/// that was not a start point, naming it, why, and the start point the world
+/// was resolved from; and one line where the start point itself carried no
+/// identity slice and resolved to the empty table (AUTH-2.83), naming that
+/// checkpoint and the empty resolution — the operator's one tell that a
+/// build which wrote no slice ran on this board. After them comes one line
+/// where the open's scan read corrupt runs below the start point and passed
+/// them over (`Recovery::runs_passed_over`): the start point embodies every
+/// position they hold, so the open answered around them, and no other line
+/// of an open that succeeds says so — while a history read from an older
+/// base, and the open that falls back past this start point the day its
+/// checkpoint fails to load, meet the first of them and refuse. It is said
+/// with how many and the kernel's account of the first
+/// (`Recovery::first_run_passed_over`): its files and bytes, the position it
+/// holds none above, and the act that clears it. Nothing where there is
+/// nothing to say, which is every open on a board whose retained
+/// checkpoints all load and carry the slice and whose journal holds no run.
 /// The downgrade window's own commits read `key: null` on `/changes`
 /// (AUTH-1.52), which needs no line here.
 fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
@@ -2119,11 +2328,13 @@ fn recovery_warnings(recovery: Option<&Recovery>) -> Vec<String> {
     lines
 }
 
-/// A BASE as every line of the open names it: `genesis` where the world was
-/// folded from nothing — `Seq(0)`, no checkpoint file — and `checkpoint.{n}`
-/// for a retained checkpoint's position, the file's own name. ONE rendering,
-/// so the recovery's landing and the two warnings above it spell the start
-/// point one way and a reader joins them on it.
+/// A base as every line of the open names it.
+///
+/// It is `genesis` where the world was folded from nothing — `Seq(0)`, no
+/// checkpoint file — and `checkpoint.{n}` for a retained checkpoint's
+/// position, the file's own name. One rendering, so the recovery's landing
+/// and the two warnings above it spell the start point one way and a reader
+/// joins them on it.
 struct Base(Seq);
 
 impl fmt::Display for Base {
@@ -2135,22 +2346,23 @@ impl fmt::Display for Base {
     }
 }
 
-/// THE VERSION LINE — the open's FIRST line (`operations.md` §3.4 step 6's
-/// gap: "no line names the binary's version or the formats it reads at
-/// start; the stamp is said only on refusal"): `version {v}; this build
-/// reads journal format {SKJ4}, checkpoint format {SKC4} and world format
-/// {0x…}` — the build's version (`CARGO_PKG_VERSION`, the workspace's one)
-/// and the three format stamps this build opens under, each FROM ITS
-/// CONSTANT and never a literal here: the kernel's journal and checkpoint
-/// stamps ([`JOURNAL_FORMAT`], [`CHECKPOINT_FORMAT`]) as the kernel's own
-/// refusal spells a stamp, four ASCII bytes, and the engine's World stamp
-/// ([`WORLD_FORMAT`]) as the engine's refusal renders it, `{:#018x}`. Said
-/// before [`DataDirLine`] and so before anything is read from the
-/// directory: an open refused at a stamp has, above its refusal, the line
-/// that says which stamps this build reads, and an operator reading a
-/// board's stream after an upgrade reads which binary opened it. A pure
-/// value the unit suite pins by `to_string()`; emitted under `Class::Open`
-/// through [`say_open_line`].
+/// The version line, the open's first (`operations.md` §3.4 step 6's gap).
+///
+/// The gap reads "no line names the binary's version or the formats it
+/// reads at start; the stamp is said only on refusal". The line is
+/// `version {v}; this build reads journal format {SKJ4}, checkpoint format
+/// {SKC4} and world format {0x…}` — the build's version
+/// (`CARGO_PKG_VERSION`, the workspace's one) and the three format stamps
+/// this build opens under, each from its constant and never a literal here:
+/// the kernel's journal and checkpoint stamps ([`JOURNAL_FORMAT`],
+/// [`CHECKPOINT_FORMAT`]) as the kernel's own refusal spells a stamp, four
+/// ASCII bytes, and the engine's World stamp ([`WORLD_FORMAT`]) as the
+/// engine's refusal renders it, `{:#018x}`. Said before [`DataDirLine`] and
+/// so before anything is read from the directory: an open refused at a
+/// stamp has, above its refusal, the line that says which stamps this build
+/// reads, and an operator reading a board's stream after an upgrade reads
+/// which binary opened it. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
 struct VersionLine;
 
 impl fmt::Display for VersionLine {
@@ -2167,12 +2379,13 @@ impl fmt::Display for VersionLine {
     }
 }
 
-/// THE FIRST OF THE OPEN's TWO RULED LINES (`operations.md` §3.1 step 3;
-/// m7), after [`VersionLine`]: the data directory, as the operator named it
-/// — `data-dir {path}` — said before the seeding check and the engine's
-/// open, so the one line that names the directory stands on the stream
-/// before anything is read from it. A pure value the unit suite pins by
-/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
+/// The first of the open's two m7 lines (`operations.md` §3.1 step 3).
+///
+/// It comes after [`VersionLine`]: the data directory, as the operator
+/// named it — `data-dir {path}` — said before the seeding check and the
+/// engine's open, so the one line that names the directory stands on the
+/// stream before anything is read from it. A pure value the unit suite pins
+/// by `to_string()`; emitted under `Class::Open` through [`say_open_line`].
 struct DataDirLine<'a>(&'a Path);
 
 impl fmt::Display for DataDirLine<'_> {
@@ -2181,16 +2394,17 @@ impl fmt::Display for DataDirLine<'_> {
     }
 }
 
-/// THE RECOVERY's LANDING (m7), in the operator stream's words — `recovered
-/// from {checkpoint.n | genesis}, {k} commits replayed, in {d} ms` — rendered
-/// from the engine's own account of its open: the base it loaded ([`Base`]'s
-/// words, the ones the two warnings name the start point by), the commits
-/// it replayed above that base (`Recovery::replayed`: transactions, never
-/// the records they carry; `0` where the base was the committed head, a
-/// fresh board's genesis included) and the engine's open's duration, whole
-/// milliseconds, the daemon's own `Instant` around the call. A pure value
-/// the unit suite pins by `to_string()`; emitted under `Class::Open` through
-/// [`say_open_line`].
+/// The recovery's landing (m7), in the operator stream's words.
+///
+/// It reads `recovered from {checkpoint.n | genesis}, {k} commits replayed,
+/// in {d} ms`, rendered from the engine's own account of its open: the base
+/// it loaded ([`Base`]'s words, the ones the two warnings name the start
+/// point by), the commits it replayed above that base (`Recovery::replayed`:
+/// transactions, never the records they carry; `0` where the base was the
+/// committed head, a fresh board's genesis included) and the engine's
+/// open's duration, whole milliseconds, the daemon's own `Instant` around
+/// the call. A pure value the unit suite pins by `to_string()`; emitted
+/// under `Class::Open` through [`say_open_line`].
 struct RecoveredLine {
     start_point: Seq,
     replayed: u64,
@@ -2198,11 +2412,12 @@ struct RecoveredLine {
 }
 
 impl RecoveredLine {
-    /// The line from the engine's account, where it gave one. An engine that
-    /// answers NO account loads nothing — `Durability::InMemory`, which no
-    /// daemon opens under: every daemon's open is journaled — and is said as
-    /// a genesis that replayed nothing, which is what the open's sizing reads
-    /// of the same absence.
+    /// Returns the line from the engine's account, where it gave one.
+    ///
+    /// An engine that answers no account loads nothing —
+    /// `Durability::InMemory`, which no daemon opens under: every daemon's
+    /// open is journaled — and is said as a genesis that replayed nothing,
+    /// which is what the open's sizing reads of the same absence.
     fn of(recovery: Option<&Recovery>, duration_ms: u128) -> RecoveredLine {
         RecoveredLine {
             start_point: recovery.map_or(Seq(0), |r| r.start_point),
@@ -2224,16 +2439,17 @@ impl fmt::Display for RecoveredLine {
     }
 }
 
-/// THE OPEN's BEGINNING, said after the recovery's landing where the
-/// engine's account says no journal stood in the directory
-/// (`Recovery::began`): no segment and no checkpoint, so the open began a
-/// board at genesis rather than recovering one. The landing reads `recovered
-/// from genesis` either way; this line is what tells them apart — the
-/// expected line on a fresh board's first start, and on a board that had a
-/// journal the tell that the directory opened is not where it lives: a
-/// volume not mounted over its mount point, a mistyped `--data-dir`. A pure
-/// value the unit suite pins by `to_string()`; emitted under `Class::Open`
-/// through [`say_open_line`].
+/// The open's beginning, said after the recovery's landing.
+///
+/// It is said where the engine's account says no journal stood in the
+/// directory (`Recovery::began`): no segment and no checkpoint, so the open
+/// began a board at genesis rather than recovering one. The landing reads
+/// `recovered from genesis` either way; this line is what tells them apart
+/// — the expected line on a fresh board's first start, and on a board that
+/// had a journal the tell that the directory opened is not where it lives:
+/// a volume not mounted over its mount point, a mistyped `--data-dir`. A
+/// pure value the unit suite pins by `to_string()`; emitted under
+/// `Class::Open` through [`say_open_line`].
 struct BeganLine;
 
 impl fmt::Display for BeganLine {
@@ -2247,15 +2463,16 @@ impl fmt::Display for BeganLine {
     }
 }
 
-/// THE TAIL CUT (`operations.md` §1.1 m3; §4 row 8), in the operator
-/// stream's words, rendered from the engine's account of its open: the
-/// bytes the open took off the journal above its last committed marker
-/// (`Recovery::tail_cut`), the file and the byte the cut began at
-/// (`Recovery::tail_cut_from`), the position it lies past — the committed
-/// head the open left, every position at or below which stands — and, of the
-/// frames among the cut bytes, the intact ones no torn write leaves
-/// (`Recovery::tail_cut_intact`). Two arms, since the two say opposite things
-/// of the acknowledged writes:
+/// The tail cut (`operations.md` §1.1 m3; §4 row 8).
+///
+/// It is rendered in the operator stream's words from the engine's account
+/// of its open: the bytes the open took off the journal above its last
+/// committed marker (`Recovery::tail_cut`), the file and the byte the cut
+/// began at (`Recovery::tail_cut_from`), the position it lies past — the
+/// committed head the open left, every position at or below which stands —
+/// and, of the frames among the cut bytes, the intact ones no torn write
+/// leaves (`Recovery::tail_cut_intact`). Two arms, since the two say
+/// opposite things of the acknowledged writes:
 ///
 /// * none intact — the tail a crash or a kill left, a write caught before
 ///   its commit was durable and so never acknowledged: `Class::Open`;
@@ -2269,7 +2486,8 @@ impl fmt::Display for BeganLine {
 ///   above the head; else a position above the head, unnamed — and where the
 ///   bytes still are, and the act.
 ///
-/// A pure value the unit suite pins by `to_string()` and [`TailCutLine::class`].
+/// A pure value the unit suite pins by `to_string()` and
+/// [`TailCutLine::class`].
 struct TailCutLine {
     bytes: u64,
     intact: u64,
@@ -2282,11 +2500,12 @@ struct TailCutLine {
 }
 
 impl TailCutLine {
-    /// The line from the engine's account and the head the open left — read
-    /// before anything is served, so it is the recovered committed head —
-    /// `None` where nothing was cut, which is every open after a clean close,
-    /// and where the engine gave no account (`Durability::InMemory`, which no
-    /// daemon opens under).
+    /// Returns the line from the engine's account and the head the open left.
+    ///
+    /// The head is read before anything is served, so it is the recovered
+    /// committed head. `None` where nothing was cut, which is every open
+    /// after a clean close, and where the engine gave no account
+    /// (`Durability::InMemory`, which no daemon opens under).
     fn of(recovery: Option<&Recovery>, head: Seq) -> Option<TailCutLine> {
         let recovery = recovery?;
         (recovery.tail_cut > 0).then(|| TailCutLine {
@@ -2298,9 +2517,10 @@ impl TailCutLine {
         })
     }
 
-    /// The class the line is said under: the report's own, `Class::Open`,
-    /// for a crash's tail; `Class::Failure` where the cut may have taken an
-    /// acknowledged write.
+    /// Returns the class the line is said under.
+    ///
+    /// It is the report's own, `Class::Open`, for a crash's tail;
+    /// `Class::Failure` where the cut may have taken an acknowledged write.
     fn class(&self) -> Class {
         if self.intact == 0 {
             Class::Open
@@ -2348,26 +2568,29 @@ impl fmt::Display for TailCutLine {
     }
 }
 
-/// THE OPEN's OWN LINES, SAID: the one classed door for every line of the
-/// open's report said from `open_under` under the report's own class — the
-/// version's, the directory's, the recovery's landing, the beginning's, the
-/// stray `checkpoint.tmp`'s, the tail cut's, the media gate's limits and the
+/// Says one of the open's own lines, under the report's own class.
+///
+/// It is the one classed door for every line of the open's report said from
+/// `open_under` under the report's own class — the version's, the
+/// directory's, the recovery's landing, the beginning's, the stray
+/// `checkpoint.tmp`'s, the tail cut's, the media gate's limits and the
 /// upload setting's, the eight the unit suite pins as this door's callers —
-/// each rendered here under `Class::Open`, the ruled lines as pure values and
-/// the conditional or borrowed ones built as they are said, so no site in
-/// the open spells the class. The tail cut's failure arm is said under its
-/// own class, `Class::Failure`, beside the door. Through the queue, as every
-/// notice is.
+/// each rendered here under `Class::Open`, the fixed-form lines as pure
+/// values and the conditional or borrowed ones built as they are said, so
+/// no site in the open spells the class. The tail cut's failure arm is said
+/// under its own class, `Class::Failure`, beside the door. Through the
+/// queue, as every notice is.
 fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
 }
 
-/// LINE 8 — THE UPLOAD SETTING (`operations.md` §1.1 row 8), in the operator
-/// stream's words: the switch's state and its SOURCE — `the default`, the
-/// flag as typed (`--uploads` / `--no-uploads`) or the variable with its
-/// value (`SKEPD_UPLOADS=true` / `=false`) — and, closed, what the family
-/// answers. A pure value the unit suite pins by `to_string()`; emitted under
-/// `Class::Open` through [`say_open_line`].
+/// Line 8, the upload setting (`operations.md` §1.1 row 8).
+///
+/// It says, in the operator stream's words, the switch's state and its
+/// source — `the default`, the flag as typed (`--uploads` / `--no-uploads`)
+/// or the variable with its value (`SKEPD_UPLOADS=true` / `=false`) — and,
+/// closed, what the family answers. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
 struct UploadsLine {
     open: bool,
     source: Source,
@@ -2388,12 +2611,14 @@ impl fmt::Display for UploadsLine {
     }
 }
 
-/// ROW 20's HEADER — `blocked-prefix list ({at start | reissued | at claim},
-/// {path}):` — the head of the list's multi-line notice, in the row's own
-/// ruled spelling: the moment's word is the grammar's for the start and the
-/// claim, and row 20's own `reissued` where the grammar's warning class
-/// would say `at reissue` — two spellings of one moment, the header's kept
-/// as ruled. A pure value the unit suite pins by `to_string()`.
+/// Row 20's header, the head of the blocked list's multi-line notice.
+///
+/// It reads `blocked-prefix list ({at start | reissued | at claim},
+/// {path}):`, in the row's own spelling: the moment's word is the grammar's
+/// for the start and the claim, and row 20's own `reissued` where the
+/// grammar's warning class would say `at reissue` — two spellings of one
+/// moment, the header's kept as the row spells it. A pure value the unit
+/// suite pins by `to_string()`.
 struct ListHeader<'a> {
     when: Moment,
     path: &'a Path,
@@ -2411,13 +2636,14 @@ impl fmt::Display for ListHeader<'_> {
     }
 }
 
-/// LINE 24 — A REISSUE REFUSED (`operations.md` §1.1 row 24; §4 row 20), in
-/// the operator stream's words: the cause, what stands — the list in force,
-/// until a restart — and what the NEXT START does: refuses, until a valid
-/// list stands at the path, since every start reads the file again
-/// (AUTH-4.70; RES-115); and the lift's form, so a file deleted to lift
-/// every block is told from the empty issue that would. A pure value the
-/// unit suite pins by `to_string()`; emitted under `Class::Failure`.
+/// Line 24, a reissue refused (`operations.md` §1.1 row 24; §4 row 20).
+///
+/// It says, in the operator stream's words, the cause, what stands — the
+/// list in force, until a restart — and what the next start does: refuses,
+/// until a valid list stands at the path, since every start reads the file
+/// again (AUTH-4.70; RES-115); and the lift's form, so a file deleted to
+/// lift every block is told from the empty issue that would. A pure value
+/// the unit suite pins by `to_string()`; emitted under `Class::Failure`.
 struct ReissueRefusedLine<'a> {
     error: &'a std::io::Error,
     path: &'a Path,
@@ -2436,15 +2662,16 @@ impl fmt::Display for ReissueRefusedLine<'_> {
     }
 }
 
-/// LINE 22 — THE CHECKPOINT THREAD REFUSED (`operations.md` §1.1 row 22), in
-/// the operator stream's words: the cause, what still serves — the kernel's
-/// backstop — the ACT (a restart; nothing else re-spawns the thread) and
-/// WHAT IS LOST with it: every checkpoint is the backstop's and says nothing,
-/// the change feed's files are not compacted, the cadence's byte bound and
-/// the media floor stay at the open's figures (the re-reads are the
-/// thread's, on its wake), and no standing line will come. A pure value the
-/// unit suite pins by `to_string()`; emitted under `Class::Failure` at
-/// `serve_bound`'s one site.
+/// Line 22, the checkpoint thread refused (`operations.md` §1.1 row 22).
+///
+/// It says, in the operator stream's words, the cause, what still serves —
+/// the kernel's backstop — the act (a restart; nothing else re-spawns the
+/// thread) and what is lost with it: every checkpoint is the backstop's and
+/// says nothing, the change feed's files are not compacted, the cadence's
+/// byte bound and the media floor stay at the open's figures (the re-reads
+/// are the thread's, on its wake), and no standing line will come. A pure
+/// value the unit suite pins by `to_string()`; emitted under
+/// `Class::Failure` at `serve_bound`'s one site.
 pub(super) struct CheckpointThreadRefusedLine<'a>(pub(super) &'a std::io::Error);
 
 impl fmt::Display for CheckpointThreadRefusedLine<'_> {
@@ -2462,11 +2689,12 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
     }
 }
 
-/// THE STANDING LINE (`operations.md` §1 THE RATES; §1.1 m11), in the
-/// operator stream's ruled words: one clause per standing bad state, each
-/// by name with its position or file, joined by `; ` in THE RATES' order —
-/// `the write path is halted since position {p} (feed-attest.log)`; `the
-/// kernel is poisoned`; `{file} stopped since position {p}` once per
+/// The standing line (`operations.md` §1, the rates; §1.1 m11).
+///
+/// It is in the operator stream's words: one clause per standing bad state,
+/// each by name with its position or file, joined by `; ` in the rates'
+/// order — `the write path is halted since position {p} (feed-attest.log)`;
+/// `the kernel is poisoned`; `{file} stopped since position {p}` once per
 /// stopped file; `the pruner's thread is gone`; `the feed walk's thread is
 /// gone; positions ({low}, {head}] stay uncovered` (the walk behind the
 /// listener dead on a caught panic, its region pending for the uptime —
@@ -2475,10 +2703,10 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
 /// in force {F})`; `CLAIMED-PERMISSIVE`. A pure value over the reads
 /// ([`Daemon::say_the_standing_line`] makes them), pinned by `to_string()`
 /// in the unit suite; emitted under `Class::Standing` at a tick where
-/// [`StandingLine::stands`], and never otherwise. States, positions and
-/// files alone — no principal, token, path, query or reader rides it. The
-/// index's clause reads the media gate's FAILED state (`operations.md` §4
-/// row 26).
+/// [`StandingLine::stands`], and never otherwise. States, positions, files
+/// and the floor's two figures alone — no principal, token, path, query or
+/// reader rides it. The index's clause reads the media gate's failed state
+/// (`operations.md` §4 row 26).
 pub(super) struct StandingLine {
     /// The write path's halt and the position it was set at.
     pub(super) halted_at: Option<Seq>,
@@ -2488,28 +2716,33 @@ pub(super) struct StandingLine {
     pub(super) stopped_files: Vec<StoppedFile>,
     /// The pruner's liveness flag.
     pub(super) pruner_gone: bool,
-    /// The feed walk's liveness flag, with the region it left uncovered
-    /// (`Commits::feed_walk_gone`).
+    /// The feed walk's liveness flag, with the region it left uncovered.
+    ///
+    /// It is `Commits::feed_walk_gone`'s read.
     pub(super) feed_walk_gone: Option<(u64, u64)>,
-    /// The cell index's FAILED state — the media gate's read
-    /// (`MediaGate::index_failed`).
+    /// The cell index's failed state, the media gate's read.
+    ///
+    /// It is `MediaGate::index_failed`'s.
     pub(super) index_failed: bool,
     /// The floor binding: the free space read below the floor in force.
     pub(super) floor: Option<FloorBinding>,
-    /// The board CLAIMED-PERMISSIVE.
+    /// Whether the board is `CLAIMED-PERMISSIVE`.
     pub(super) claimed_permissive: bool,
 }
 
-/// The floor's two figures at the tick, as the media gate answered its
-/// binding standing (`MediaGate::floor_binding`).
+/// The floor's two figures at the tick.
+///
+/// They are as the media gate answered its binding standing
+/// (`MediaGate::floor_binding`).
 pub(super) struct FloorBinding {
     pub(super) free_space: u64,
     pub(super) floor: u64,
 }
 
 impl StandingLine {
-    /// Whether at least one clause stands — the one condition the line is
-    /// said under.
+    /// Returns whether at least one clause stands.
+    ///
+    /// It is the one condition the line is said under.
     pub(super) fn stands(&self) -> bool {
         self.halted_at.is_some()
             || self.poisoned
@@ -2558,11 +2791,13 @@ impl fmt::Display for StandingLine {
     }
 }
 
-/// THE CHECKPOINT THREAD's CONSEQUENCE LINE (`operations.md` §1.1 row 41;
-/// §4 row 25), the ruled words verbatim: what the board lost with the
-/// thread — every checkpoint from here is the kernel's backstop's, run
-/// inline on a writer and said by nothing, and the byte bound and the media
-/// floor stand frozen at the last landing's figures (the re-reads were the
+/// The checkpoint thread's consequence line.
+///
+/// Its words (`operations.md` §1.1 row 41; §4 row 25), verbatim, say what
+/// the board lost with the thread — every checkpoint from here is the
+/// kernel's backstop's, run inline on a writer and said by nothing, and the
+/// byte bound and the media floor stand frozen at the last landing's
+/// figures, or the open's where none landed (the re-reads are the
 /// thread's). A pure value pinned by `to_string()`; emitted under
 /// `Class::Failure` by [`Daemon::the_checkpoint_thread_ended`], once, after
 /// the hook's line has said the panic itself.
@@ -2577,10 +2812,11 @@ impl fmt::Display for CheckpointThreadEndedLine {
     }
 }
 
-/// THE PRUNER's CONSEQUENCE LINE (row 41; §4 row 24), the ruled words
-/// verbatim: no pass runs until a restart, so the blob logs are never
-/// compacted and the lapsed tail is never reclaimed. A pure value pinned by
-/// `to_string()`; emitted under `Class::Failure` by
+/// The pruner's consequence line (row 41; §4 row 24).
+///
+/// Its words, verbatim, say that no pass runs until a restart, so the blob
+/// logs are never compacted and the lapsed tail is never reclaimed. A pure
+/// value pinned by `to_string()`; emitted under `Class::Failure` by
 /// [`Daemon::the_pruner_thread_ended`], once, after the hook's line.
 pub(super) struct PrunerThreadEndedLine;
 
@@ -2593,20 +2829,22 @@ impl fmt::Display for PrunerThreadEndedLine {
     }
 }
 
-/// THE CLAIM's FLIP LINE (`operations.md` §1.1 m14), in the operator stream's
-/// words — `board claimed by {account} at position {p}: the mode is now
-/// {mode}; H.1 {written | written before the claim | owed — the head writer
-/// refused it}` — rendered from what the flip's tail holds: the claimant the
-/// commit seated, spelled as `/health` spells it; the claim's own position,
-/// the credential sequence's ack, passed down (P21's boundary — never the
-/// head's position after the flip, which the head's own commits move); the
-/// mode the board is now in, derived as AUTH-5.86 derives it with the claim
-/// read as set; and what [`Commits::write_first_head`] answered. The
-/// design's two arms are the first and the third; the second says the one
-/// state neither covers — a head the cadence wrote before the claim, so the
-/// board term stands and names an earlier position — rather than misname it
-/// a refusal. A pure value the unit suite pins by `to_string()`; emitted
-/// under `Class::Landing` from `op.rs`'s `Daemon::on_claim_flip`.
+/// The claim's flip line (`operations.md` §1.1 m14).
+///
+/// It reads, in the operator stream's words, `board claimed by {account}
+/// at position {p}: the mode is now {mode}; H.1 {written | written before
+/// the claim | owed — the head writer refused it}`, rendered from what the
+/// flip's tail holds: the claimant the commit seated, spelled as `/health`
+/// spells it; the claim's own position, the credential sequence's ack,
+/// passed down (P21's boundary — never the head's position after the flip,
+/// which the head's own commits move); the mode the board is now in,
+/// derived as AUTH-5.86 derives it with the claim read as set; and what
+/// [`Commits::write_first_head`] answered. The design's two arms are the
+/// first and the third; the second says the one state neither covers — a
+/// head the cadence wrote before the claim, so the board term stands and
+/// names an earlier position — rather than misname it a refusal. A pure
+/// value the unit suite pins by `to_string()`; emitted under
+/// `Class::Landing` from `op.rs`'s `Daemon::on_claim_flip`.
 pub(super) struct ClaimLine<'a> {
     pub(super) claimant: &'a Address,
     pub(super) position: Seq,
@@ -2637,31 +2875,37 @@ impl fmt::Display for ClaimLine<'_> {
 // §6's three rows): the five pools in one form — `skep_util::permits`'s
 // `PoolEdgeLine`, under the word each pool names itself by — the live-stream
 // budget in that form too, the challenge store and the accept loop in their
-// own ruled words. Each a pure value pinned by `to_string()` in the edge
-// suite (`tests/it/edges.rs`), said under the edge's class word through the
+// own words. Each a pure value whose words the edge suite pins as said
+// (`tests/it/edges.rs`), said under the edge's class word through the
 // classed door and never the un-classed one; nothing on a line but the
-// condition — no count (the upload pool's landing alone carries one), no
-// path, query, principal, peer, position or reader.
+// condition — no count (the upload pool's landing and the accept loop's
+// recovery alone carry one), no path, query, principal, peer, position or
+// reader.
 
-/// The word the reconstruction pool's two lines name it by (m12: one word
-/// per pool, the same in both lines) — the refusal's own, `history_busy`.
+/// The word the reconstruction pool's two lines name it by.
+///
+/// It is the refusal's own, `history_busy` (m12: one word per pool, the
+/// same in both lines).
 pub(super) const HISTORY_POOL: &str = "history";
 
-/// The word the class-scan pool's two lines name it by — the refusal's own,
-/// `scan_busy`.
+/// The word the class-scan pool's two lines name it by.
+///
+/// It is the refusal's own, `scan_busy`.
 pub(super) const SCAN_POOL: &str = "scan";
 
-/// The word the write pool's two lines name it by — the refusal's own,
-/// `write_busy`.
+/// The word the write pool's two lines name it by.
+///
+/// It is the refusal's own, `write_busy`.
 pub(super) const WRITE_POOL: &str = "write";
 
-/// THE LIVE-STREAM BUDGET's TWO LINES (m12, the budget's pair in the pools'
-/// form; §6's row): `the live-stream budget is saturated` when a stream past
-/// the budget is first refused — the 65th, dropped with a clean close — and
+/// The live-stream budget's two lines, in the pools' form (m12; §6's row).
+///
+/// It says `the live-stream budget is saturated` when a stream past the
+/// budget is first refused — the 65th, dropped with a clean close — and
 /// `the live-stream budget has room again` at the first stream admitted a
 /// hold-down past the last refusal. No count: the budget's size is
-/// `listen.rs`'s `MAX_SUBSCRIBERS`'s card's, and a line naming no reader and
-/// counting nothing is not read telemetry (D9, read loose). Said from
+/// `listen.rs`'s `MAX_SUBSCRIBERS`'s card's, and a line naming no reader
+/// and counting nothing is not read telemetry (D9, read loose). Said from
 /// `listen.rs`'s `Subscribers::admit` through [`Daemon::say`].
 pub(super) struct BudgetEdgeLine(pub(super) Edge);
 
@@ -2674,14 +2918,15 @@ impl fmt::Display for BudgetEdgeLine {
     }
 }
 
-/// THE CHALLENGE STORE's TWO LINES (m12; §6's row), the ruled words
-/// verbatim: `challenge store: a nonce was evicted inside its time to live;
-/// a handshake it belonged to will be refused` when a mint first evicts a
-/// nonce younger than its TTL, and `challenge store: minting without
-/// evicting a live nonce again` at the first mint that evicted no live nonce
-/// a hold-down after the last that did. No caller, count or origin
-/// (AUTH-1.48: the cap is a memory bound and never an abuse bound — the line
-/// says the fact, not who met it). Said from
+/// The challenge store's two lines (m12; §6's row).
+///
+/// Their words, verbatim: `challenge store: a nonce was evicted inside its
+/// time to live; a handshake it belonged to will be refused` when a mint
+/// first evicts a nonce younger than its TTL, and `challenge store: minting
+/// without evicting a live nonce again` at the first mint that evicted no
+/// live nonce a hold-down after the last that did. No caller, count or
+/// origin (AUTH-1.48: the cap is a memory bound and never an abuse bound —
+/// the line says the fact, not who met it). Said from
 /// [`Daemon::say_the_edges_crossed`].
 pub(super) struct ChallengeEdgeLine(pub(super) Edge);
 
@@ -2697,13 +2942,14 @@ impl fmt::Display for ChallengeEdgeLine {
     }
 }
 
-/// THE ACCEPT PAIR's FIRST LINE (m12; §4 row 33), the ruled words: `worker:
-/// accept failed ({e}); new connections wait`, `{e}` the OS's own text of
-/// the error — `Too many open files (os error 24)` at the descriptor wall —
-/// which names the cause; the act is the operator's, the descriptor limit.
-/// Said ONCE across the workers at the first failed `accept` of an episode,
-/// from the worker loop (`listen.rs`) through [`Daemon::say`]; no peer and
-/// no worker named.
+/// The accept pair's first line (m12; §4 row 33).
+///
+/// Its words: `worker: accept failed ({e}); new connections wait`, `{e}`
+/// the OS's own text of the error — `Too many open files (os error 24)` at
+/// the descriptor wall — which names the cause; the act is the operator's,
+/// the descriptor limit. Said once across the workers at the first failed
+/// `accept` of an episode, from the worker loop (`listen.rs`) through
+/// [`Daemon::say`]; no peer and no worker named.
 pub(super) struct AcceptFailedLine<'a>(pub(super) &'a std::io::Error);
 
 impl fmt::Display for AcceptFailedLine<'_> {
@@ -2712,11 +2958,12 @@ impl fmt::Display for AcceptFailedLine<'_> {
     }
 }
 
-/// THE ACCEPT PAIR's SECOND LINE (m12; §4 row 33), the ruled words: `worker:
-/// accept recovered after {n} failures`, `{n}` every worker's failures
-/// counted into the one episode — said at the first `accept` that succeeded
-/// a hold-down after the episode's last failure, from the worker loop
-/// through [`Daemon::say`].
+/// The accept pair's second line (m12; §4 row 33).
+///
+/// Its words: `worker: accept recovered after {n} failures`, `{n}` every
+/// worker's failures counted into the one episode — said at the first
+/// `accept` that succeeded a hold-down after the episode's last failure,
+/// from the worker loop through [`Daemon::say`].
 pub(super) struct AcceptRecoveredLine {
     pub(super) failures: u64,
 }

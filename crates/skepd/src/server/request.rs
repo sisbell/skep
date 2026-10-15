@@ -1,7 +1,9 @@
-//! The request a handler reads (`HttpRequest`), the streaming body the
-//! daemon's own transport may hand the router beside it (`BodySource`), and
-//! the two rules every read of its headers and query applies: a query is a
-//! parameter list, and a field appears at most once.
+//! The request a handler reads, and the rules every read of it applies.
+//!
+//! It holds the request (`HttpRequest`), the streaming body the daemon's own
+//! transport may hand the router beside it (`BodySource`), and the two rules
+//! every read of its headers and query applies: a query is a parameter list,
+//! and a field appears at most once.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -10,27 +12,30 @@ use std::time::Instant;
 use skep_core::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 
-/// One request, as [`Daemon::route`](super::Daemon::route) receives it and as the socket reader
-/// builds it — one value rather than a list of arguments, so the two
-/// `Option<String>`s cannot be handed over in the wrong order.
+/// One request, as the router receives it and the socket reader builds it.
 ///
-/// PRECONDITION on every field, established by [`super::http::read_request`] and owed by
-/// any other caller of [`Daemon::route`](super::Daemon::route): `method` is the uppercase token;
-/// `path` is the request target with its query AND its `?` removed; `query`
-/// is what followed that `?`, without it; `session_token` and `origin` are
-/// the `Skepd-Session` and `Origin` header values VERBATIM, or `None` when
-/// the header is absent — never normalized and never defaulted; the request
-/// carries neither header — nor `Content-Length` or `Expect` — MORE THAN
-/// ONCE, since the socket reader refuses such a request `400 malformed_http`
-/// before it is routed, and a caller over its own transport refuses it too,
-/// never choosing between the values; `peer` is the transport's own answer
-/// about the remote address of THIS connection; `body` is exactly the
-/// declared `Content-Length` bytes, and at most
-/// [`body_cap`](super::body_cap) of its `method` and `path` of them — the
-/// blob upload's creation and resume included, whose body the daemon's own
-/// transport leaves on the socket and routes through a door of its own, and
-/// which a caller over its own transport hands in here, the route reading it
-/// through the same source type.
+/// It is the value [`Daemon::route`](super::Daemon::route) receives — one
+/// value rather than a list of arguments, so the three `Option<String>`s
+/// cannot be handed over in the wrong order.
+///
+/// **Precondition.** It holds on every field, established by
+/// `http::read_request` and owed by any other caller of
+/// [`Daemon::route`](super::Daemon::route): `method` is the uppercase token;
+/// `path` is the request target with its query *and* its `?` removed;
+/// `query` is what followed that `?`, without it; `session_token` and
+/// `origin` are the `Skepd-Session` and `Origin` header values verbatim, or
+/// `None` when the header is absent — never normalized and never defaulted;
+/// the request carries neither header — nor `Content-Length` or `Expect` —
+/// more than once, since the socket reader refuses such a request
+/// `400 malformed_http` before it is routed, and a caller over its own
+/// transport refuses it too, never choosing between the values; `peer` is
+/// the transport's own answer about the remote address of *this*
+/// connection; `body` is exactly the declared `Content-Length` bytes, and at
+/// most [`body_cap`](super::body_cap) of its `method` and `path` of them —
+/// the blob upload's creation and resume included, whose body the daemon's
+/// own transport leaves on the socket and routes through a door of its own,
+/// and which a caller over its own transport hands in here, the route
+/// reading it through the same source type.
 ///
 /// Routing re-checks none of them — it cannot tell a caller's mistake from a
 /// client's request — and what a violation costs is not uniform. The first
@@ -38,26 +43,27 @@ use crate::limits::{BLOB_CHUNK, BLOB_TRANSFER_BOUND};
 /// misleadingly for the one intended: a `path` still carrying its query is
 /// an unknown path (`404`), a lowercase `method` matches no arm (`405`), a
 /// `query` still carrying its `?` names a parameter called `?since`.
-/// `origin` and `peer` are different in kind: a violation there is a SILENT
-/// WIDENING of the one privilege this daemon grants without a signature. An
+/// `origin` and `peer` are different in kind: a violation there is a silent
+/// widening of the one privilege this daemon grants without a signature. An
 /// absent `origin` reads as "no `Origin` header", which
 /// `skep_core::auth::session::bare_bind_allowed` admits, so a caller that
 /// does not forward the header removes the daemon-side fence; and a `peer`
 /// reported `Loopback` for a socket that is not one hands the bare bind to
-/// the network. A caller that CHOOSES between two `Origin` values, or two
+/// the network. A caller that chooses between two `Origin` values, or two
 /// tokens, answers one request two ways — the socket path refuses it — and
 /// picks for the sender which origin the bare-bind fence reads, or which
 /// binding acts.
 ///
-/// The body cap is the OUTERMOST bound on what a frame allocates, and the
+/// The body cap is the outermost bound on what a frame allocates, and the
 /// one clause a caller cannot discharge by inspection: every JSON-carrying
 /// route builds the whole `serde_json` tree before any codec cap runs, so a
 /// body admitted past it buys roughly twenty times its size in transient
-/// heap — for a frame the codec is then about to refuse. [`super::http::read_request`]
-/// enforces it on the declared `Content-Length`, before a byte is read.
+/// heap — for a frame the codec is then about to refuse.
+/// `http::read_request` enforces it on the declared `Content-Length`, before
+/// a byte is read.
 ///
-/// This is the value a caller BUILDS, one per probe rather than by mutating
-/// a template: every field is a fact about ONE request. Deliberately no
+/// This is the value a caller builds, one per probe rather than by mutating
+/// a template: every field is a fact about one request. Deliberately no
 /// `Default` — an empty method and path are not a request — no `PartialEq`,
 /// nothing here comparing two requests, and no `Clone`, since nothing in the
 /// tree clones a request.
@@ -66,8 +72,9 @@ pub struct HttpRequest {
     pub method: String,
     /// The request target with any query stripped — `/op`, `/changes`.
     pub path: String,
-    /// The raw query string, if the target carried one, without the `?` that
-    /// introduced it. Read by the routes that take parameters — `/challenge`
+    /// The raw query string, without its `?`, if the target carried one.
+    ///
+    /// It is read by the routes that take parameters — `/challenge`
     /// (`principal=`, required), `/chain` (`at=`, required), `/changes`
     /// (`since=`, required, beside its optional narrowings), the blob fetch
     /// `/blob` (`i=`, required), the upload's creation (`length=`, required)
@@ -75,30 +82,36 @@ pub struct HttpRequest {
     /// (`at=`, optional) — each refusing an unknown or repeated parameter by
     /// name; every other route ignores it.
     pub query: Option<String>,
-    /// The `Skepd-Session` header's value, if present: the opaque token a
-    /// session was bound to. Absent or unknown resolves to the guest.
+    /// The `Skepd-Session` header's value, if present.
+    ///
+    /// It is the opaque token a session was bound to. Absent or unknown
+    /// resolves to the guest.
     pub session_token: Option<String>,
-    /// The `Origin` header's value verbatim, if present — the bare arm's
-    /// per-request origin check reads it; `Origin: null` arrives as the
-    /// literal string and parses to nothing.
+    /// The `Origin` header's value verbatim, if present.
+    ///
+    /// The bare arm's per-request origin check reads it; `Origin: null`
+    /// arrives as the literal string and parses to nothing.
     pub origin: Option<String>,
-    /// The TCP peer's loopback-ness — established by the accept path from
-    /// the socket's peer address. A caller routing over its own transport
-    /// supplies it, and takes it from [`Peer::of`] rather than deriving it:
-    /// that is this daemon's own rule, and the paragraph above says what
-    /// getting it wrong costs. A transport with no address at all — a Unix
-    /// socket — names the variant it means.
+    /// The TCP peer's loopback-ness, established by the accept path.
+    ///
+    /// The accept path reads it from the socket's peer address. A caller
+    /// routing over its own transport supplies it, and takes it from
+    /// [`Peer::of`] rather than deriving it: that is this daemon's own rule,
+    /// and the type's doc says what getting it wrong costs. A transport with
+    /// no address at all — a Unix socket — names the variant it means.
     pub peer: Peer,
-    /// The body, exactly `Content-Length` bytes (empty when absent) — empty,
-    /// from the daemon's own transport, for the blob upload's creation and
-    /// resume, whose body stays on the socket (`server/http.rs`, THE
-    /// STREAMING ARM).
+    /// The body, exactly `Content-Length` bytes (empty when absent).
+    ///
+    /// It is empty, from the daemon's own transport, for the blob upload's
+    /// creation and resume, whose body stays on the socket (`server/http.rs`,
+    /// the streaming arm).
     pub body: Vec<u8>,
 }
 
-/// The body's LENGTH and the token's PRESENCE: the body runs to the
-/// request's [`body_cap`](super::body_cap), and the token names a live
-/// session, which is not a thing to leave in a log line.
+/// The request's `Debug`: the body's length and the token's presence.
+///
+/// The body runs to the request's [`body_cap`](super::body_cap), and the
+/// token names a live session, which is not a thing to leave in a log line.
 impl std::fmt::Debug for HttpRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpRequest")
@@ -115,19 +128,23 @@ impl std::fmt::Debug for HttpRequest {
 
 // ── the streaming body ───────────────────────────────────────────────────
 
-/// Where a body's bytes come from: the connection's socket (its clone,
-/// owned here), or the request's own bytes.
+/// Where a body's bytes come from.
+///
+/// They come from the connection's socket (its clone, owned here), or the
+/// request's own bytes.
 enum Conn<'a> {
     Socket(TcpStream),
     Bytes(&'a [u8]),
 }
 
-/// THE STREAMING ARM's reader: the body of one blob request, handed to the
-/// route one chunk at a time through the ONE buffer this value holds — the
-/// arm's whole memory per in-flight upload, [`BLOB_CHUNK`] and the
-/// counters beside it (asserted by `the_arm_holds_one_chunk_and_no_body`).
-/// Over a socket it carries the early bytes the head's read took with it,
-/// the declared length, the `Expect: 100-continue` the transport deferred to
+/// The streaming arm's reader: the body of one blob request.
+///
+/// It hands the body to the route one chunk at a time through the one
+/// chunk buffer this value holds — the arm's whole memory per in-flight
+/// upload, [`BLOB_CHUNK`] and the counters beside it (asserted by
+/// `the_arm_holds_one_chunk_and_no_body`), with the early bytes below. Over
+/// a socket it carries the early bytes the head's read took with it, the
+/// declared length, the `Expect: 100-continue` the transport deferred to
 /// the route, and the transfer bound; the socket's own read deadline is the
 /// idle bound, set by the transport.
 pub(super) struct BodySource<'a> {
@@ -140,16 +157,19 @@ pub(super) struct BodySource<'a> {
     continued: bool,
     deadline: Instant,
     buf: Box<[u8]>,
-    /// An end met while a chunk was filling — the connection closed, a
-    /// deadline — answered AFTER the bytes filled so far, so a dropped
-    /// connection's last bytes are received before its drop is.
+    /// An end met while a chunk was filling.
+    ///
+    /// Such an end — the connection closed, a deadline — is answered after
+    /// the bytes filled so far, so a dropped connection's last bytes are
+    /// received before its drop is.
     pending_end: Option<io::Error>,
 }
 
 impl<'a> BodySource<'a> {
-    /// A source over the connection's socket, parked by the transport: the
-    /// bytes that arrived with the head, the declared length, and whether
-    /// the client is holding the body for a `100 Continue`.
+    /// Returns a source over the connection's socket, parked by the transport.
+    ///
+    /// It carries the bytes that arrived with the head, the declared length,
+    /// and whether the client is holding the body for a `100 Continue`.
     pub(super) fn parked(
         socket: TcpStream,
         early: Vec<u8>,
@@ -170,7 +190,7 @@ impl<'a> BodySource<'a> {
         }
     }
 
-    /// A source over a request's own bytes — the socket-free router's.
+    /// Returns a source over a request's own bytes: the socket-free router's.
     pub(super) fn bytes(body: &'a [u8]) -> BodySource<'a> {
         BodySource {
             conn: Conn::Bytes(body),
@@ -186,15 +206,21 @@ impl<'a> BodySource<'a> {
         }
     }
 
-    /// The declared length of the body.
+    /// Returns the declared length of the body.
     pub(super) fn declared(&self) -> usize {
         self.declared
     }
 
-    /// Invite the body: where the client asked `Expect: 100-continue`, the
-    /// interim `100 Continue` carrying `interim`'s headers — the creation's
+    /// Invites the body, where the client is holding it.
+    ///
+    /// Where the client asked `Expect: 100-continue`, the interim
+    /// `100 Continue` carrying `interim`'s headers — the creation's
     /// identifier, so it reaches the uploader before the first body byte
-    /// (clause (1)) — written once; nothing otherwise.
+    /// (clause (1)) — is written once; nothing otherwise.
+    ///
+    /// # Errors
+    ///
+    /// The socket's write error, where the interim answer is written.
     pub(super) fn begin(&mut self, interim: &[(&str, &str)]) -> io::Result<()> {
         if !self.expects_continue || self.continued {
             return Ok(());
@@ -211,16 +237,24 @@ impl<'a> BodySource<'a> {
         Ok(())
     }
 
-    /// The next chunk of the body — [`BLOB_CHUNK`] bytes, FILLED to that
-    /// grain from the early bytes and the socket however the socket paces
-    /// them, or the body's last bytes; `None` once the declared length is
-    /// consumed. The grain is what the gate's refusal offset is read at: a
-    /// refusal as the body is written fires at a chunk's boundary, never at
-    /// whatever a socket read happened to deliver. A connection closed
-    /// inside the body, a read past the idle bound, or a transfer past its
-    /// bound is an error — answered after the bytes it found filled, so a
-    /// dropped connection's last bytes are received before its drop is — and
-    /// the route keeps the upload at its durable point.
+    /// Returns the next chunk of the body; `None` once it is consumed.
+    ///
+    /// A chunk is [`BLOB_CHUNK`] bytes, filled to that grain from the early
+    /// bytes and the socket however the socket paces them; or the body's last
+    /// bytes; or, where an end cuts a chunk short, the bytes filled before
+    /// it. `None` comes once the declared length is consumed. The grain is
+    /// what the gate's refusal offset is read at: a refusal as the body is
+    /// written fires at a chunk's boundary, never at whatever a socket read
+    /// happened to deliver.
+    ///
+    /// # Errors
+    ///
+    /// A connection closed inside the body, a read past the idle bound or
+    /// another socket read error, a transfer past its bound, or, over a
+    /// request's own bytes, a body shorter than its declared length —
+    /// answered after the bytes it found filled, so a dropped connection's
+    /// last bytes are received before its drop is — and the route keeps the
+    /// upload at its durable point.
     pub(super) fn next_chunk(&mut self) -> io::Result<Option<&[u8]>> {
         if let Some(end) = self.pending_end.take() {
             return Err(end);
@@ -286,12 +320,17 @@ impl<'a> BodySource<'a> {
     }
 }
 
-/// A query string as its parameter list — `k=v` pairs split on `&`, shape
-/// checked and nothing else. Every query this daemon reads walks this — the
-/// one-parameter queries through [`sole_param`] — so one discipline covers
-/// them all and each parser adds only its own vocabulary: an unknown or
-/// repeated parameter is a named refusal, which is the wire's never-silent
-/// posture applied to queries.
+/// Splits a query string into its parameter list of `k=v` pairs.
+///
+/// The pairs are split on `&`, shape checked and nothing else. Every query
+/// this daemon reads walks this — the one-parameter queries through
+/// [`sole_param`] — so one discipline covers them all and each parser adds
+/// only its own vocabulary: an unknown or repeated parameter is a named
+/// refusal, which is the wire's never-silent posture applied to queries.
+///
+/// # Errors
+///
+/// `malformed parameter '{pair}'` for a pair with no `=`.
 pub(super) fn query_pairs(query: &str) -> Result<Vec<(&str, &str)>, String> {
     query
         .split('&')
@@ -299,17 +338,22 @@ pub(super) fn query_pairs(query: &str) -> Result<Vec<(&str, &str)>, String> {
         .collect()
 }
 
-/// A field that may appear at most ONCE — the never-silent rule applied to
-/// repeats, shared by the request head's headers and by every query this
-/// daemon reads, so a duplicate is a named refusal rather than a last-wins
-/// nobody chose. `field_kind` is the wire's word for the kind of field —
-/// `"header"` or `"parameter"` — which is all the header reader and the
-/// query parsers differ by.
+/// Checks that a field appears at most once, refusing a repeat by name.
+///
+/// It is the never-silent rule applied to repeats, shared by the request
+/// head's headers and by every query this daemon reads, so a duplicate is a
+/// named refusal rather than a last-wins nobody chose. `field_kind` is the
+/// wire's word for the kind of field — `"header"` or `"parameter"` — which
+/// is all the header reader and the query parsers differ by.
 ///
 /// One home because the alternative is one literal name per field, kept in
 /// step with the field it guards by inspection alone: a `since.is_some()`
 /// left standing in the `limit` arm accepts a repeated `limit` and refuses a
 /// `limit` that follows a `since`, and the shape compiles either way.
+///
+/// # Errors
+///
+/// `duplicate {field_kind} '{name}'` where `seen` already holds a value.
 pub(super) fn at_most_once<T>(
     seen: &Option<T>,
     field_kind: &str,
@@ -321,11 +365,18 @@ pub(super) fn at_most_once<T>(
     }
 }
 
-/// A query that carries ONE parameter, `name`: its value, or `None` where the
-/// query is absent or empty — the parameter list [`query_pairs`] reads, a
-/// repeat refused through [`at_most_once`] and any other name refused as
-/// unknown, naming the one this route reads. Each caller adds its value's
-/// grammar and, where the parameter is required, its own refusal of `None`.
+/// Returns the value of a query's one parameter, `name`, if present.
+///
+/// The query is the parameter list [`query_pairs`] reads, and it carries one
+/// parameter: the answer is its value, or `None` where the query is absent
+/// or empty. Each caller adds its value's grammar and, where the parameter
+/// is required, its own refusal of `None`.
+///
+/// # Errors
+///
+/// [`query_pairs`]'s refusal of a pair with no `=`, a repeat refused
+/// through [`at_most_once`], and any other name refused as unknown, naming
+/// the one this route reads.
 pub(super) fn sole_param<'q>(
     query: Option<&'q str>,
     name: &str,
@@ -346,9 +397,11 @@ pub(super) fn sole_param<'q>(
 mod tests {
     use super::*;
 
-    /// A request's `Debug` carries the token's PRESENCE and the body's
-    /// LENGTH, never either's bytes: the token names a live session, and a
-    /// request's `{:?}` is what a panic or a trace line would carry.
+    /// Checks that a request's `Debug` carries no token and no body.
+    ///
+    /// It carries the token's presence and the body's length, never either's
+    /// bytes: the token names a live session, and a request's `{:?}` is what
+    /// a panic or a trace line would carry.
     #[test]
     fn a_requests_debug_carries_no_token_and_no_body() {
         let token = "0123456789abcdef0123456789abcdef";
@@ -376,7 +429,9 @@ mod tests {
         );
     }
 
-    /// THE RSS BOUND BY CONSTRUCTION (the investigation §3.4, "memory per
+    /// Checks the RSS bound by construction: one chunk per in-flight upload.
+    ///
+    /// The bound is the media seam investigation's (§3.4, "memory per
     /// in-flight PUT under the streaming arm — O(chunk), never O(body)"):
     /// the arm's one buffer is [`BLOB_CHUNK`] long, the source's own size
     /// is a few words beside it — no `Vec` that grows with the body — and a
@@ -403,9 +458,10 @@ mod tests {
         assert_eq!(source.buf.len(), BLOB_CHUNK, "the buffer never grew");
     }
 
-    /// A one-parameter query: its value, or `None` for an absent or empty
-    /// query; a repeat, any other name and a pair with no `=` are named
-    /// refusals.
+    /// Checks a one-parameter query's value and its named refusals.
+    ///
+    /// It answers its value, or `None` for an absent or empty query; a
+    /// repeat, any other name and a pair with no `=` are named refusals.
     #[test]
     fn a_one_parameter_query_has_one_value_or_a_named_refusal() {
         assert_eq!(sole_param(None, "at"), Ok(None));

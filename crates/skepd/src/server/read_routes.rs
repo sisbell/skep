@@ -1,4 +1,6 @@
-//! The read endpoints (`/op-at`, `/health`, `/chain`, `/changes`, `/dump`) and their parsers.
+//! The read endpoints and their parsers.
+//!
+//! The endpoints are `/op-at`, `/health`, `/chain`, `/changes` and `/dump`.
 
 use std::num::NonZeroUsize;
 
@@ -22,28 +24,29 @@ use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
 use skep_core::commits::{ChangesAnswer, ChangesQuery, FeedClass};
 
 impl Daemon {
-    /// `POST /op-at` — answer one READ frame as of a committed position:
-    /// envelope `{"at": <position>, "frame": {<op>}}`. The frame goes through
-    /// the same codec as `/op`; the answer is the same response document with
-    /// `as_of` reporting `at`. History is not a place you can act — a write
-    /// frame is a transport-level 400 before anything runs; an unparseable
-    /// frame gets the same `unparseable` rejection `/op` gives it.
+    /// Answers `POST /op-at`: one read frame as of a committed position.
     ///
-    /// THE READER IS THE PRESENTED SESSION's (PUB-8.13; PUB round 2, lane
-    /// 3.3): the route resolved `resolved` against the head, and the read
-    /// runs as that principal — the guest when none was presented — never
-    /// as a guest regardless of the token. And the read predicate is
-    /// the HEAD's (PUB-6.48): ONE head snapshot is taken here, at admission,
-    /// and every consult of this request reads its exception set and grant
-    /// set — the doc-argument consult below, and, threaded into the throwaway
-    /// front door `history.rs` builds over the reconstructed world, the
-    /// per-run masks and the result-set filter. A grant committed after `at`
+    /// The envelope is `{"at": <position>, "frame": {<op>}}`. The frame goes
+    /// through the same codec as `/op`; the answer is the same response
+    /// document with `as_of` reporting `at`. History is not a place you can
+    /// act — a write frame is a transport-level 400 before anything runs; an
+    /// unparseable frame gets the same `unparseable` rejection `/op` gives it.
+    ///
+    /// **The reader is the presented session's** (PUB-8.13). The route
+    /// resolved `resolved` against the head, and the read runs as that
+    /// principal — the guest when none was presented — never as a guest
+    /// regardless of the token. And the read predicate is the head's
+    /// (PUB-6.48): one head snapshot is taken here, at admission, and every
+    /// consult of this request reads its exception set and grant set — the
+    /// doc-argument consult below, and, threaded into the throwaway front
+    /// door `history.rs` builds over the reconstructed world, the per-run
+    /// masks and the result-set filter. A grant committed after `at`
     /// therefore satisfies a read at `at`.
     ///
-    /// THE HEAD-SET CHECK COMES FIRST (PUB-6.49): the doc-argument consult
-    /// runs BEFORE the reconstruction — before the N-world's registration
-    /// check, so a document in the head's exception set answers `withheld` at
-    /// EVERY `at` to a requester the predicate refuses, never
+    /// **The head-set check comes first** (PUB-6.49). The doc-argument
+    /// consult runs before the reconstruction — before the N-world's
+    /// registration check, so a document in the head's exception set answers
+    /// `withheld` at every `at` to a requester the predicate refuses, never
     /// `doc_not_registered` for a position before its creation; and before
     /// `history_reclaimed` and `history_busy`, so one op has one code, and a
     /// withheld answer occupies no reconstruction permit (PUB-7.11). The
@@ -62,14 +65,14 @@ impl Daemon {
         };
         match parsed {
             DaemonOp::KeySet { account } => {
-                // The SAME dispatcher as /op's, over the reconstructed World
+                // The same dispatcher as /op's, over the reconstructed World
                 // with the identity slice riding in it (AUTH-6.20) — the
-                // table AS OF `at`, folded by the same replay that built the
+                // table as of `at`, folded by the same replay that built the
                 // world, in commit order (AUTH-2.95: equal to the live
                 // `key_set` when the head was `at`) — under the
                 // reconstruction budget like every historical answer. A
                 // position whose every base is slice-less over credential
-                // deposits is refused WHOLE as `history_reclaimed`
+                // deposits is refused whole as `history_reclaimed`
                 // (AUTH-2.87), as every read at that position is. Exempt
                 // from the predicate (PUB-6.50): it reads only the
                 // born-published credential class.
@@ -85,11 +88,11 @@ impl Daemon {
                 // holds no second reading of it, and `skep_core::commits`'s
                 // `write_meta` records what a drift on the other side costs.
                 if !frame.op.is_read() {
-                    // The ruling-fixed body, exactly: {"error": "write_at_history"}.
+                    // The fixed body, exactly: {"error": "write_at_history"}.
                     return refuse(TransportError::WriteAtHistory, None);
                 }
                 let principal = resolved.principal();
-                // ONE head snapshot per request (PUB-6.39, PUB-6.48), and ONE
+                // One head snapshot per request (PUB-6.39, PUB-6.48), and one
                 // reader class over it, so the principal's seat is looked up
                 // once for every argument the consult asks about.
                 let head = self.engine.kernel().snapshot();
@@ -107,13 +110,14 @@ impl Daemon {
 
     pub(super) fn get_health(&self) -> Reply {
         // The head position's recorded wall-clock time (wire v6) — null
-        // when the head's own record is bare or nothing is recorded at all
-        // (a fresh world): transport metadata, never invented, and never an
-        // older position's time offered in the head's place.
+        // when the head's own record is bare, lies in the region the feed's
+        // walk has yet to land, or nothing is recorded at all (a fresh
+        // world): transport metadata, never invented, and never an older
+        // position's time offered in the head's place.
         //
-        // FOUR independent reads under no lock — this, the auth object's
-        // own head snapshot (whose World carries the key table), the
-        // `(log_position, chain_head)` pair at the end, and the `writes`
+        // Four independent reads, no lock held across them — this, the auth
+        // object's own head snapshot (whose World carries the key table),
+        // the `(log_position, chain_head)` pair at the end, and the `writes`
         // member's two atomic loads beside them — so this answer may
         // straddle one in-flight commit at either seam. A `head_time` correct
         // for the position the sidecar last recorded sits beside a
@@ -126,12 +130,12 @@ impl Daemon {
         // the worse trade; `CommitsLog::head_time` states what each field is
         // true of.
         //
-        // `log_position` and `chain_head` do NOT straddle each other: the
+        // `log_position` and `chain_head` do not straddle each other: the
         // kernel's root carries the seq and the chain together, and
-        // `head_coordinate` reads both off ONE snapshot — one root load —
-        // so the chain served is the chain AT the position served, never
+        // `head_coordinate` reads both off one snapshot — one root load —
+        // so the chain served is the chain at the position served, never
         // `current_seq()` and `chain_head()` asked apart with a commit
-        // landing between. The value is the KERNEL's (the marker closing
+        // landing between. The value is the kernel's (the marker closing
         // that position's transaction carries it; recovery derives it),
         // rendered as 64 lowercase hex and never recomputed here; a fresh
         // world answers the genesis seed — sixty-four `0`s — never null.
@@ -139,18 +143,19 @@ impl Daemon {
             self.commits.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         // The auth object (AUTH-6.13), rendered where its state lives — the
         // claimant, the flag and the two origin sets, with the wire's own
-        // negative pin stated there too. Read BEFORE that pair, which is the
+        // negative pin stated there too. Read before that pair, which is the
         // direction the straddle above describes.
         let auth = self.auth.auth_object(self.engine.kernel().snapshot().world().identity());
         let (log_position, chain_head) = self.febe.head_coordinate();
-        // THE `writes` OBJECT (wire.md §The other endpoints; op-D10 (a)):
-        // whether the daemon refuses every write until a restart — the
-        // write path's halt (a failed attest line) OR the kernel's poison —
-        // two atomic loads, so the member and the operator stream's two
-        // halt lines agree on one fact; a `true` is terminal for the uptime
-        // and so actionable without a race, a `false` one moment's reading.
+        // The `writes` object (wire.md §The other endpoints; `operations.md`
+        // op-D10): whether the daemon refuses every write until a restart —
+        // the write path's halt (a failed attest line) or the kernel's
+        // poison — two atomic loads, so the member and the operator stream's
+        // two halt lines agree on one fact; a `true` is terminal for the
+        // uptime and so actionable without a race, a `false` one moment's
+        // reading.
         let halted = self.commits.halted_at().is_some() || self.engine.kernel().is_poisoned();
-        // The media object (wire.md §Media, THE UPLOAD SETTING): the upload
+        // The media object (wire.md §Media, the upload setting): the upload
         // switch echoed where its state lives (`MediaGate::health_object`),
         // a boundary setting read once by the client before any face that
         // names an upload speaks (P37) — daemon config, never board state,
@@ -170,14 +175,17 @@ impl Daemon {
         )
     }
 
-    /// `GET /chain?at=N` (the chain's open items, item 7; QUEUE item 10) —
-    /// the commit chain's value AS OF committed position `N`, `{"at": N,
-    /// "chain": "<64 lowercase hex>"}`: the kernel's RECOMPUTATION off its
-    /// own journal (`Kernel::chain_at`), under the verification a historical
-    /// read runs — every link from the base it selects below `N` to the
-    /// journal's end — and under the same reconstruction permit, with no
-    /// world materialized. At the committed head it is the value `/health`
-    /// serves as `chain_head` beside `log_position`; at `0` the genesis seed.
+    /// Answers `GET /chain?at=N`: the commit chain's value as of position `N`.
+    ///
+    /// The answer, `{"at": N, "chain": "<64 lowercase hex>"}`, is the value
+    /// as of committed position `N`: the kernel's recomputation off its own
+    /// journal (`Kernel::chain_at`), under the verification a historical
+    /// read runs — every link from the base it selects at or below `N` to
+    /// the journal's end, save where `N` is that base's own position, which
+    /// answers the base's own chain with the journal unread — and under the
+    /// same reconstruction permit, with no world folded and none kept. At the
+    /// committed head it is the value `/health` serves as `chain_head` beside
+    /// `log_position`; at `0` the genesis seed.
     /// Token-blind and class-invariant like `/health`: a hash over the whole
     /// journal discloses no byte, and `/health` already serves it to
     /// everyone. What a peer holding a saved `(position, chain)` pair — a
@@ -206,35 +214,37 @@ impl Daemon {
         }
     }
 
-    /// `GET /changes?since=N[&limit=K][&under=P][&drafts=true]` (wire v6;
-    /// class-gated since v7.8) — the delta read: the committed positions in
-    /// `(N, head]` the presented token's class may see, oldest first, from
-    /// the feed. What this route adds over the feed's own paging is the
-    /// requester's FEED CLASS (PUB-6.40): resolved ONCE, off ONE head
+    /// Answers `GET /changes`: the delta read.
+    ///
+    /// The route is `GET /changes?since=N[&limit=K][&under=P][&drafts=true]`
+    /// (wire v6; class-gated, wire v7.8), and the answer is the committed
+    /// positions in `(N, head]` the presented token's class may see, oldest
+    /// first, from the feed. What this route adds over the feed's own paging
+    /// is the requester's feed class (PUB-6.40): resolved once, off one head
     /// snapshot — the read predicate at the requester's class, the
     /// requester's own and ancestor accounts and the prefix its descendant
     /// owner accounts lie under (the subtree clause, both ways), its
     /// grant-selected issuers with their covered prefixes, and the live
     /// any-principal set (the universal term, principals alone) — and
-    /// threaded down; the feed module resolves nothing itself. An absent
-    /// or dead token is the GUEST (PUB-8.13). Determinism is PER CLASS
-    /// (PUB-8.26): same `(since, limit, under, drafts)`, same journal,
-    /// same head publication and grant state, same class ⇒ byte-equal
-    /// pages, across repeats and restarts.
+    /// threaded down; the feed module resolves nothing itself. An absent or
+    /// dead token is the guest (PUB-8.13). Determinism is per class
+    /// (PUB-8.26): same `(since, limit, under, drafts)`, same journal, same
+    /// head publication and grant state, same class ⇒ byte-equal pages,
+    /// across repeats and restarts.
     pub(super) fn get_changes(&self, resolved: &Resolved, query: Option<&str>) -> Reply {
         let changes_query = match changes_params(query) {
             Ok(parsed) => parsed,
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
-        // ONE head snapshot per request (PUB-6.39, PUB-6.40): the predicate
+        // One head snapshot per request (PUB-6.39, PUB-6.40): the predicate
         // every entry is masked by and the class the candidates come from
         // stand on the same committed state.
         let head = self.engine.kernel().snapshot();
         let class = FeedClass::of(head.world(), resolved.principal());
         match self.commits.changes(&class, &changes_query) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
-            // The page byte budget (bu7-2; SO-I9): refused whole, with the
-            // budget and the largest `limit` that fits from this fence.
+            // The page byte budget (SO-I9): refused whole, with the budget
+            // and the largest `limit` that fits from this fence.
             ChangesAnswer::OverBudget { budget, fits } => refuse_over_budget(budget, fits),
             // The walk behind the listener (`operations.md` §3.3 step 2):
             // the page's rows would come from the region a lost or torn
@@ -252,15 +262,16 @@ impl Daemon {
         }
     }
 
-    /// `GET /dump` — the engine's deterministic `WorldDump` of the committed
-    /// world AT THE REQUEST'S CLASS (PUB round 2, lane 3.4 §4): the
-    /// harness-only walk (`Engine::world_dump`) post-filtered by the read
+    /// Answers `GET /dump`: the committed world's dump at the request's class.
+    ///
+    /// It is the engine's deterministic `WorldDump` of the committed world:
+    /// the harness-only walk (`Engine::world_dump`) post-filtered by the read
     /// predicate for the presented session's principal — an absent or dead
-    /// token is the GUEST, whose publication slice renders EMPTY and whose
-    /// dump holds no draft's content, arrangement or link. ONE head snapshot
+    /// token is the guest, whose publication slice renders empty and whose
+    /// dump holds no draft's content, arrangement or link. One head snapshot
     /// per request: the world dumped and the predicate it is filtered at
     /// are that snapshot's (PUB-6.39). `GET /dump?at=N` is the dump of the
-    /// world as of position `N` (bounded replay) at the HEAD's class — the
+    /// world as of position `N` (bounded replay) at the head's class — the
     /// N-world's state through the head's exception set and grant set
     /// (PUB-6.48), as `/op-at` reads it. Determinism holds per class
     /// (PUB-8.26): two equal `N`s at one class are byte-equal, and `N` =
@@ -276,9 +287,9 @@ impl Daemon {
         let dump = match at {
             None => self.engine.world_dump_visible_to(principal),
             Some(at) => {
-                // The head predicate, closed over ONE head snapshot for this
+                // The head predicate, closed over one head snapshot for this
                 // request — the two-world shape `history.rs` states — through
-                // ONE reader class, so the seat is looked up once per dump.
+                // one reader class, so the seat is looked up once per dump.
                 let head = self.engine.kernel().snapshot();
                 let reader = head.world().reader_class(principal);
                 match self.history.dump_at(&self.engine, at, |doc| reader.readable(doc)) {
@@ -293,10 +304,19 @@ impl Daemon {
 
 // ── the change feed (wire v6) ────────────────────────────────────────────
 
-/// The `/changes` query string's parameters, parsed into a [`ChangesQuery`]:
-/// `since=<position>` (required) plus optional `limit=<1..=4096>`,
+/// Parses the `/changes` query string's parameters into a [`ChangesQuery`].
+///
+/// They are `since=<position>` (required) plus optional `limit=<1..=4096>`,
 /// `under=<address-or-prefix>` (wire v7.8, PUB-7.31) and `drafts=true|false`
 /// (the drafts-only narrowing, PUB-7.35).
+///
+/// # Errors
+///
+/// A detail naming the fault: an absent or empty query, a pair with no `=`,
+/// an unknown or repeated parameter, a `since` that is not a non-negative
+/// integer, a `limit` that is not a count in `1..=4096`, an `under` the
+/// codec's tumbler grammar refuses, a `drafts` other than `true` or
+/// `false`, or a query with no `since`.
 fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
     let query = match query {
         None | Some("") => {
@@ -329,7 +349,7 @@ fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
             "under" => {
                 at_most_once(&under, "parameter", "under")?;
                 // The codec's own door, so a query string's tumbler and a
-                // frame's meet ONE grammar under ONE budget rather than two
+                // frame's meet one grammar under one budget rather than two
                 // that agree today: the depth and digit caps and the
                 // dotted-decimal grammar are all `wire_tumbler`'s, applied
                 // before any component is converted.
@@ -357,11 +377,21 @@ fn changes_params(query: Option<&str>) -> Result<ChangesQuery, String> {
 
 // ── the history surface (wire v3) ────────────────────────────────────────
 
-/// Strictly `{"at": <non-negative integer>, "frame": <object>}`; returns the
-/// position and the frame, which the codec parses from here. The
-/// object-ness check is a decision, not duplicated validation: a non-object
-/// `frame` is a malformed ENVELOPE (a transport fault), where the same
-/// value reaching the codec would be an operation-channel rejection.
+/// Parses the `/op-at` envelope into its position and its frame.
+///
+/// The envelope is strictly `{"at": <non-negative integer>, "frame":
+/// <object>}`; it returns the position and the frame, which the codec
+/// parses from here. The object-ness check is a decision, not duplicated
+/// validation: a non-object `frame` is a malformed envelope (a transport
+/// fault), where the same value reaching the codec would be an
+/// operation-channel rejection.
+///
+/// # Errors
+///
+/// A detail naming the fault: a body that is not JSON or not an object, a
+/// member other than `at` and `frame`, an `at` that is missing or not a
+/// non-negative integer, a missing `frame`, or a `frame` that is not an
+/// object.
 fn op_at_envelope(body: &[u8]) -> Result<(Seq, Value), String> {
     let v: Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {e}"))?;
@@ -380,9 +410,15 @@ fn op_at_envelope(body: &[u8]) -> Result<(Seq, Value), String> {
     Ok((Seq(at), frame))
 }
 
-/// The one-parameter `at=<position>` query two routes read — `/dump`, where
-/// it is optional, and `/chain`, where it is required: [`sole_param`]'s value
-/// as a position.
+/// Parses the one-parameter `at=<position>` query two routes read.
+///
+/// The routes are `/dump`, where it is optional, and `/chain`, where it is
+/// required: [`sole_param`]'s value as a position.
+///
+/// # Errors
+///
+/// [`sole_param`]'s refusals, and a value that is not a non-negative
+/// integer.
 fn at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
     sole_param(query, "at")?
         .map(|v| {
@@ -393,15 +429,24 @@ fn at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
         .transpose()
 }
 
-/// The `/dump` query: nothing, or exactly `at=<decimal position>`.
+/// Parses the `/dump` query: nothing, or exactly `at=<decimal position>`.
+///
+/// # Errors
+///
+/// [`at_param`]'s.
 #[cfg(feature = "observe")]
 fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
     at_param(query)
 }
 
-/// The `/chain` query: exactly `at=<decimal position>`, REQUIRED — the
-/// head's own pair is `/health`'s, so a chain read with no position names
-/// nothing.
+/// Parses the `/chain` query: exactly `at=<decimal position>`, required.
+///
+/// The head's own pair is `/health`'s, so a chain read with no position
+/// names nothing.
+///
+/// # Errors
+///
+/// [`at_param`]'s refusals, and an absent `at`.
 fn chain_at_param(query: Option<&str>) -> Result<Seq, String> {
     at_param(query)?
         .ok_or_else(|| String::from("missing parameter 'at'; the one /chain parameter is at=<position>"))
@@ -411,12 +456,13 @@ fn chain_at_param(query: Option<&str>) -> Result<Seq, String> {
 mod tests {
     use super::*;
 
-    /// The `/changes` query's accepted forms, and the page size the wire
-    /// promises when `limit` is absent (wire.md §The change feed: "default
-    /// 256, maximum 4096"). Every other test drives this parser through
-    /// its refusals; the seeded feeds are four writes long, so a default
-    /// silently changed to 4 — or to 4096 — produces an identical wire
-    /// answer in all of them.
+    /// Checks the `/changes` query's accepted forms and its default page size.
+    ///
+    /// The page size is the one the wire promises when `limit` is absent
+    /// (wire.md §The change feed: "default 256, maximum 4096"). The
+    /// integration tests drive this parser over the wire, and
+    /// `tests/it/changes.rs`'s page-budget test serves the default page of
+    /// 256 rows; this test holds the forms and the default at the parser.
     #[test]
     fn the_changes_query_defaults_to_the_documented_page_size() {
         let plain = |q: &str| {
@@ -468,9 +514,10 @@ mod tests {
         }
     }
 
-    /// The `/dump` query is absent or exactly one position — the accepted
-    /// half of the parser `tests/it/history.rs` exercises only through its
-    /// refusals.
+    /// Checks that the `/dump` query is absent or exactly one position.
+    ///
+    /// It pins the parser's accepted half, which `tests/it/history.rs` also
+    /// drives over the wire beside its refusals.
     #[cfg(feature = "observe")]
     #[test]
     fn the_dump_query_is_absent_or_exactly_one_position() {

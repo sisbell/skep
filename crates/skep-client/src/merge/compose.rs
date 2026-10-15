@@ -934,7 +934,9 @@ fn placement(
                 }
                 (true, false) => Placed { kind: Some(GapKind::Anchor), home: after(st.x), before: false },
                 (false, true) => {
-                    Placed { kind: Some(GapKind::Anchor), home: st.y.and_then(|y| spine_pos[y]).unwrap_or(0), before: true }
+                    // The right anchor survives: before it in the spine — and where
+                    // it is `⊤`, the end of the document, before the spine's end.
+                    Placed { kind: Some(GapKind::Anchor), home: st.y.and_then(|y| spine_pos[y]).unwrap_or(spine.len()), before: true }
                 }
                 (false, false) => Placed { kind: Some(GapKind::Corner), home: left(st.x), before: false },
             }

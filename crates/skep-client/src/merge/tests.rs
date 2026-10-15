@@ -274,6 +274,19 @@ fn case_h_a_window_beside_a_removal_is_an_anchor_settled() {
     assert_eq!(anchors(&c), vec![(Some(4), Some(8))]);
 }
 
+/// (h′) an addition at the END whose left anchor was removed: A appended
+/// "!" after `D·11` (`⊤` its right anchor), B removed ` sat` (`8–11`) — an
+/// `anchor`, settled, placed BEFORE the end, so M reads "the cat!" and
+/// never "!the cat" (R2: "immediately before ⊤"; found by the command's
+/// walk, 2026-10-15).
+#[test]
+fn case_h_prime_an_addition_at_the_end_beside_a_removal_stays_at_the_end() {
+    let c = compose(&base(), &two(vec![rd(1, 11), rd(12, 1)], vec![rd(1, 7)]));
+    assert_eq!(runs(&c), vec![rd(1, 7), rd(12, 1)], "the cat!");
+    assert_eq!(kinds(&c), vec![(GapKind::Anchor, true)]);
+    assert_eq!(c.gaps[0].placed, Placement::Before);
+}
+
 /// (i) an atom replaced on one side, the other untouched: no gap.
 #[test]
 fn case_i_an_atom_replaced_on_one_side_asks_nothing() {

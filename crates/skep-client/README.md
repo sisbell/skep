@@ -48,14 +48,21 @@ assumes a page:
 Behind `merge` (default off) — MERGING VERSIONS, the editor's act on a
 daughter (the design's merge record, `_designs/CLIENT/2026-10-14-
 reconciling-versions-design.md`), as a library the editor, the `skep`
-command and the agent adapters call. This build holds the PURE CORE alone;
-the reads (`merge/reads.rs`), the landing (`merge/land.rs`), the record
-(`merge/record.rs`) and the journal (`merge/journal.rs`) are absent, a
-later lane's:
+command and the agent adapters call. The library is whole but its
+surfaces — the `skep merge` command, the attendant's call and skep-mcp's
+compose-and-report tool are a later lane's — and the supersession claim
+over version members, which the wire's `assert_sup` does not admit (it
+takes resident links alone): the record's public link from the merger's
+doc 1 to the member and the daughter states the supersession on this wire,
+and `land` reads `in_claims` first without writing a claim:
 
 | module | holds |
 |---|---|
-| `merge` | `compose_runs(base, sides, spine_hint, options, values) → Composed {runs, gaps, counts, values, ignored}`: three run lists in, the merged list M coalesced as the member will hold it, the gap report and the run counts `{a, b, m}` out, every value read through the closure given; the one rule — safe when the two sides touched different material, a conflict when they touched the same material or the same spot — as six kinds of gap, `Order`, `Anchor`, `Corner`, `Cut`, `Collision`, `Moves`, of which the rules settle `Anchor` alone; the value rule's dedup (on) and retype (off); the merger's `Resolution`s; `base_of`, the nearest common ancestor of two members; `script`, the in-place `delete`/`reinstate` script a draft landing applies |
+| `merge` | the PURE CORE: `compose_runs(base, sides, spine_hint, options, values) → Composed {runs, gaps, counts, values, ignored}`, three run lists in, the merged list M coalesced as the member will hold it, the gap report and the run counts `{a, b, m}` out, every value read through the closure given; the one rule — safe when the two sides touched different material, a conflict when they touched the same material or the same spot — as six kinds of gap, `Order`, `Anchor`, `Corner`, `Cut`, `Collision`, `Moves`, of which the rules settle `Anchor` alone; the value rule's dedup (on) and retype (off); the merger's `Resolution`s; `base_of`, the nearest common ancestor of two members; `script`, the in-place `delete`/`reinstate` script a draft landing applies |
+| `merge` (the reads) | `compose(board, token, &Inputs {doc, head, base, sides, options, kind}) → Merged {composed, families, key, cap, record, as_of, prior, head_extent}`: the record's §1.3 reads in order — the document's metadata and the head's extent, the base named or derived, the base, the head and each `Side::{Member, Draft {at, position}, Fork}` imaged whole or in parts, the values through the side that holds them, the prior records for the key — writing nothing; `origin_of`, the bare document a content I-address was minted under; `head_of`, the feed-walk fallback for a bare document's head member; `Refusal::{BaseUnknown, TwoDrafts, Unreadable, NoSuchDocument, TooFragmented, HistoryBusy, WindowWithheld, OverCap, NeedsSignedSession, Halt}`; `SHOT_RUN_CAP`, 4,096 |
+| `merge` (the landing) | `land(board, &Merged, Landing::{Shot {session, signer, draft, journal}, Draft {session, signer, into, journal}}) → Landed::{Member {address, position, claims, record, retries}, AsDaughter {address, position}, Draft {into, ops, record}}`: the cap before any frame, the shot read first then one `publish` with its signed `PublishBody` and one re-ask under the same id on a lost acknowledgment, a daughter reported at once and never retried, the claim's read, the record in the journal with its public link, each read first; `resume`, the residue walk that completes what a lost acknowledgment left and writes nothing twice; `SHOT_BODY_BUDGET` |
+| `merge::record` | `Record` — the D13 `merge` kind as a struct, `to_value`/`from_value` by hand, `key`, `options` — with `RecordKey (doc, base, {sides})`, `SideAt`, `RecordLanding`; `current(board, token, kind, key)`, newest per key with the trunk owner's home over another's, the atom read through the journal's arrangement; `verify(board, token, &Record) → Verdict::{Equal, Differs {at}, Unreadable}`, M recomputed and compared with the member's image over `placed`, `compare` the oracle of the join |
+| `merge::journal` | `of(board, session, kind, journal) → Address`: the journal named, or the account's default — found by its own links of the kind from doc 1, or minted as a private draft |
 
 ## Features
 
@@ -74,9 +81,10 @@ later lane's:
   fence as written); the frontend's shell and the `skep` command's search
   turn it on, as the shell turns `tls` on. The crate's own tests turn it on
   through the self dev-dependency.
-- `merge` (default off) — implies `acting`; the `merge` module, the pure
-  core of merging two versions. OFF by default so the default build holds
-  no merge; the editor's shell, the `skep` command's merge and the
+- `merge` (default off) — implies `acting`; the `merge` module: the pure
+  core of merging two versions, the reads, the landing with its signed
+  shot, the record and the journal. OFF by default so the default build
+  holds no merge; the editor's shell, the `skep` command's merge and the
   attendant turn it on, as they turn `search` on. No dependency of its own.
   The crate's own tests turn it on through the self dev-dependency.
 

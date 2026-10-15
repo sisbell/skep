@@ -93,11 +93,14 @@
 //! Behind the default-OFF `merge` feature — MERGING VERSIONS, the editor's
 //! act on a daughter (the design's merge record):
 //!
-//! * [`merge`] — the pure core of the merge: `compose_runs` over the base's
-//!   and the sides' run lists, the one rule, the six kinds of gap of which
-//!   one settles by rule, the merged list with its counts, and beside it
-//!   the base of two members and the draft's in-place script; the reads,
-//!   the landing, the record and the journal are a later lane's.
+//! * [`merge`] — the merge as a library: the pure core, `compose_runs` over
+//!   the base's and the sides' run lists under the one rule; `compose`, the
+//!   reads over a board in the record's order, writing nothing; `land` and
+//!   `resume`, the one `publish` of the merged list from the head with its
+//!   signed body, the claim's read, the record in a merge journal with its
+//!   public link, and the draft landing; `verify`, the record's testimony
+//!   recomputed; the record kind and the journal. The surfaces — the
+//!   command, the attendant's call, the agent tool — are a later lane's.
 //!
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save

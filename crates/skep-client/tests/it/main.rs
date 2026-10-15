@@ -9,7 +9,8 @@
 //! Two need no daemon: `backup`, the moment alone, and `tidy`, which reads
 //! the crate's own source for the arrangement it promises. `search` drives
 //! the `search` module — the feature the self dev-dependency turns on —
-//! over a claimed board, its fixture its own.
+//! over a claimed board, its fixture its own; `merge` drives the `merge`
+//! module's one whole merge over a claimed permissive board.
 
 mod backup;
 mod claim;
@@ -19,6 +20,7 @@ mod handoff;
 mod handshake;
 mod hosted;
 mod loss;
+mod merge;
 mod recover;
 mod retire;
 mod rotate;

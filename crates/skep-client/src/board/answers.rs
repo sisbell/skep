@@ -188,6 +188,108 @@ pub(crate) fn compare_pairs(v: &Value) -> Option<Vec<Correspondence>> {
         .collect()
 }
 
+/// A `delivery`'s items as THE VALUE AT EACH POSITION, in order (wire.md
+/// §Value encodings): a `content` item's bytes one per position, a `hex`
+/// run's likewise, an `atom` or `atom_hex` item the one composite value at
+/// its position — the values a `publish` body spells, and the value rule
+/// compares, one item a position. `None` for a document that is no
+/// delivery, and for an item that is no value a caller can spell: a
+/// `withheld` run, a `ref`, a hex that does not decode, a kind this crate
+/// does not know.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
+    if v["resp"].as_str() != Some("delivery") {
+        return None;
+    }
+    let mut out = Vec::new();
+    for item in v["items"].as_array()? {
+        if let Some(text) = item["content"].as_str() {
+            out.extend(text.bytes().map(|b| vec![b]));
+        } else if let Some(hex) = item["hex"].as_str() {
+            out.extend(crate::hex::decode(hex)?.into_iter().map(|b| vec![b]));
+        } else if let Some(text) = item["atom"].as_str() {
+            out.push(text.as_bytes().to_vec());
+        } else if let Some(hex) = item["atom_hex"].as_str() {
+            out.push(crate::hex::decode(hex)?);
+        } else {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// A `doc_metadata` answer's terms (wire.md §The response envelope): the
+/// publication bit, the owner account, and the shot terms a member carries
+/// — `placed`, the positions the client's runs cover, and `base_extent` —
+/// each `None` where the address carries none.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Metadata {
+    pub(crate) published: bool,
+    pub(crate) owner: String,
+    pub(crate) placed: Option<u64>,
+    pub(crate) base_extent: Option<u64>,
+}
+
+/// A `doc_metadata` answer decoded; `None` for a document that is no such
+/// answer — a rejection among them — or one without its owner.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
+    if v["resp"].as_str() != Some("doc_metadata") {
+        return None;
+    }
+    let count = |member: &str| v[member].as_str().and_then(natural);
+    Some(Metadata {
+        published: v["published"].as_bool()?,
+        owner: v["owner"].as_str()?.to_string(),
+        placed: count("placed"),
+        base_extent: count("base_extent"),
+    })
+}
+
+/// One claim of an `in_claims` or `out_claims` answer (wire.md §The
+/// response envelope, `claims`): the claim's address, its `old`, its `new`,
+/// its home and whether it is active.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Claim {
+    pub(crate) claim: String,
+    pub(crate) old: String,
+    pub(crate) new: String,
+    pub(crate) home: String,
+    pub(crate) active: bool,
+}
+
+/// A `claims` answer's rows in the order served; empty for a document that
+/// is no such answer, a row missing a member dropped.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+pub(crate) fn claims(v: &Value) -> Vec<Claim> {
+    if v["resp"].as_str() != Some("claims") {
+        return Vec::new();
+    }
+    v["claims"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some(Claim {
+                claim: row["claim"].as_str()?.to_string(),
+                old: row["old"].as_str()?.to_string(),
+                new: row["new"].as_str()?.to_string(),
+                home: row["home"].as_str()?.to_string(),
+                active: row["active"].as_bool().unwrap_or(true),
+            })
+        })
+        .collect()
+}
+
+/// An answer's `as_of` (wire.md §The response envelope), where the
+/// document carries one.
+#[cfg_attr(not(feature = "merge"), allow(dead_code))]
+pub(crate) fn as_of(v: &Value) -> Option<u64> {
+    v["as_of"].as_u64()
+}
+
 /// The number of content positions a `retrieve_doc_v_span_set` answer
 /// arranges — the width of its span at the content subspace's first
 /// position, `1.1` — and 0 where no content stands.

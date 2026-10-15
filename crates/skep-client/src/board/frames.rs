@@ -37,6 +37,15 @@ pub fn create_home(account: &str, id: Option<&str>) -> Value {
     with_id(json!({"op": "create_new_document", "account": account, "published": true}), id)
 }
 
+/// `{"op":"create_new_document","account":…,"published":<flag>}` — the
+/// three-valued flag passed AFFIRMATIVELY either way (wire.md §Namespace):
+/// `true` a mint born published, `false` a PRIVATE draft, the merge
+/// journal's (the merge record's decision 7). [`create_home`] is the `true`
+/// form every home mint takes.
+pub fn create_document(account: &str, published: bool, id: Option<&str>) -> Value {
+    with_id(json!({"op": "create_new_document", "account": account, "published": published}), id)
+}
+
 /// `{"op":"retrieve_doc_v_span_set","doc":…}` — the extents a deposit's
 /// next free content ordinal is read off, and the doc-1 resume read.
 pub fn span_set(doc: &str) -> Value {
@@ -102,6 +111,88 @@ pub fn insert_atom(doc: &str, ordinal: u64, atom: &str, deposit_type: &str, id: 
         }),
         id,
     )
+}
+
+/// A PLAIN insert of one atom into the DRAFT `doc` at content ordinal
+/// `ordinal` (wire.md §Arrangement, `insert`): `values` one composite
+/// `atom` and NO `deposit` member — an append into the writer's own draft,
+/// the merge journal's (the merge record's §4), where a declaration would
+/// be inert. [`insert_atom`] is the DECLARED form a credential record takes.
+pub fn insert_plain_atom(doc: &str, ordinal: u64, atom: &str, id: Option<&str>) -> Value {
+    with_id(
+        json!({
+            "op": "insert",
+            "doc": doc,
+            "at": {"subspace": "1", "ordinal": ordinal.to_string()},
+            "values": [{"atom": atom}],
+        }),
+        id,
+    )
+}
+
+/// `{"op":"delete","doc":…,"p":{…},"width":…}` (wire.md §Arrangement):
+/// `width` content positions of the draft `doc` from ordinal `p` removed —
+/// one in-place edit of the merge's draft landing (the merge record's §1.5).
+pub fn delete(doc: &str, p: u64, width: u64, id: Option<&str>) -> Value {
+    with_id(
+        json!({"op": "delete", "doc": doc, "p": {"subspace": "1", "ordinal": p.to_string()}, "width": width.to_string()}),
+        id,
+    )
+}
+
+/// `{"op":"reinstate","doc":…,"at":{…},"runs":[…]}` (wire.md §Arrangement,
+/// `reinstate`): `runs` placed BY IDENTITY before content ordinal `at` of
+/// the draft `doc`, each as [`shot_run`] spells it — the other in-place
+/// edit of the merge's draft landing.
+pub fn reinstate(doc: &str, at: u64, runs: &[Value], id: Option<&str>) -> Value {
+    with_id(
+        json!({"op": "reinstate", "doc": doc, "at": {"subspace": "1", "ordinal": at.to_string()}, "runs": runs}),
+        id,
+    )
+}
+
+/// One run of a `publish` or a `reinstate` frame — `origin`, `i_start`,
+/// `width` (wire.md §Arrangement, `publish`): `origin` the document that
+/// minted the run's addresses, `i_start` the first, `width` the count.
+pub fn shot_run(origin: &str, i_start: &str, width: u64) -> Value {
+    json!({"origin": origin, "i_start": i_start, "width": width.to_string()})
+}
+
+/// THE SHOT — `{"op":"publish","doc":…,"runs":[…]}` with `base` and
+/// `base_extent` together where the shot is staged from a member (neither
+/// is the birth version), `draft` the staging draft whose runs are
+/// re-inserted where one is named, `runs` the WHOLE arrangement in V-order
+/// as [`shot_run`] spells each, `attest` where the caller composed one
+/// (signed ops: the entry frame over the trunk with the `publish` body) and
+/// `id` the per-session idempotency key (wire.md §Arrangement, `publish`;
+/// §The publish shot and head-float).
+pub fn publish(
+    doc: &str,
+    base: Option<(&str, u64)>,
+    draft: Option<&str>,
+    runs: &[Value],
+    attest: Option<Value>,
+    id: Option<&str>,
+) -> Value {
+    let mut frame = with_id(json!({"op": "publish", "doc": doc, "runs": runs}), id);
+    if let Some((member, extent)) = base {
+        frame["base"] = Value::String(member.to_string());
+        frame["base_extent"] = Value::String(extent.to_string());
+    }
+    if let Some(draft) = draft {
+        frame["draft"] = Value::String(draft.to_string());
+    }
+    if let Some(a) = attest {
+        frame["attest"] = a;
+    }
+    frame
+}
+
+/// `{"op":"in_claims","view":"active","y":…}` (wire.md §Link discovery
+/// reads): the ACTIVE supersession claims whose `old` is `y` — the merge's
+/// read ahead of its claim (the merge record's §1.5).
+pub fn in_claims(y: &str) -> Value {
+    json!({"op": "in_claims", "view": "active", "y": y})
 }
 
 /// An address-form `make_link` homed in `home` (AUTH-5.4: deposit slots

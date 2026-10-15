@@ -16,15 +16,19 @@
 //! agent — sees them and resolves them with judgment, or stops. The list,
 //! the gap report and the counts come back before anything is written.
 //!
-//! THIS BUILD holds the pure core alone: [`compose_runs`] over three run
-//! lists, with [`base_of`] and [`script`] beside it. The record's other
-//! parts are absent, by name: the reads (`merge/reads.rs` — the three
-//! `image` reads, the value reads, the head's address), the landing
-//! (`merge/land.rs` — the publish, the draft's edit script applied, the
-//! supersession claim), the record (`merge/record.rs` — the D13 `merge`
-//! kind, its key and currency) and the journal (`merge/journal.rs` — the
-//! account's merge journal, found or minted). A later lane builds them
-//! over this core.
+//! THIS BUILD holds the library whole but its surfaces: [`compose_runs`], the
+//! pure core, with [`base_of`] and [`script`] beside it; [`compose`], the
+//! reads of §1.3 in order over a board, writing nothing; [`land`] and
+//! [`resume`], the one `publish` of the merged list from the head with its
+//! signed body, the claim's read, the record in a merge journal with its
+//! public link, the draft landing, and the residue walk over a lost
+//! acknowledgment; [`verify`], the record's testimony recomputed; the
+//! record kind and the journal under [`record`] and [`journal`]; and
+//! [`Refusal`], every refusal the wire answers. ABSENT, by name, a later
+//! lane's: every SURFACE — the `skep merge` command, the attendant's call,
+//! skep-mcp's compose-and-report tool, the editor's scene and its copy — and
+//! the supersession claim over version members, which this wire's
+//! `assert_sup` does not admit (`land`'s doc says what stands in its place).
 //!
 //! THE ONE RULE (merge record §2, as ruled): a case is safe when the two
 //! sides touched different material; a conflict when they touched the same
@@ -53,6 +57,10 @@
 //! side's identity unless the caller asks the base's back.
 
 mod compose;
+pub mod journal;
+mod land;
+mod reads;
+pub mod record;
 
 #[cfg(test)]
 mod tests;
@@ -61,3 +69,8 @@ pub use compose::{
     base_of, compose_runs, script, Choice, Composed, Gap, GapId, GapKind, InPlaceOp, Item, Options,
     PlacedRun, Placement, ResolvedBy, Resolution, Run, RunCounts, SideIx, ValueLog,
 };
+pub use land::{land, resume, Landed, Landing, Merger, SHOT_BODY_BUDGET};
+pub use reads::{
+    compose, head_of, origin_of, Family, Inputs, Merged, Refusal, Role, Side, SHOT_RUN_CAP,
+};
+pub use record::{current, verify, Record, RecordKey, RecordLanding, SideAt, Verdict};

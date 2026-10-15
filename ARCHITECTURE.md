@@ -1143,11 +1143,28 @@ each ceremony:
   sides read as run lists, the surviving base material walked in order
   with every removal dropped and every addition placed back at the place
   its anchors name, the result one `publish` of the merged list and a
-  record beside it. Its PURE CORE is built — `merge.rs` the module and the
-  one rule, `merge/compose.rs` the composition `compose_runs` over three
-  run lists with the gap report and the counts, `base_of` and the draft's
-  in-place `script`, its unit suite in `merge/tests.rs` over the record's
-  vectors — and its reads, its landing and its record are not. The one
+  record beside it. `merge.rs` the module and the one rule;
+  `merge/compose.rs` the PURE CORE, `compose_runs` over three run lists
+  with the gap report and the counts, `base_of` and the draft's in-place
+  `script`; `merge/reads.rs` the READS of the record's §1.3 in order —
+  `compose` over a board, every `image` and `retrieve_v` in parts past its
+  budget, each origin the bare document (`origin_of`), the head member's
+  feed-walk fallback `head_of`, the refusals — writing nothing;
+  `merge/land.rs` the LANDING — the cap before any frame, the one `publish`
+  from the head with its signed body through `skep_identity::PublishBody`,
+  a daughter reported and never retried, the claim's read, the record and
+  its public link, each read first, the draft landing, and `resume`;
+  `merge/record.rs` the D13 `merge` kind, its key and currency (newest per
+  key, the trunk owner's home first) and `verify`, the testimony
+  recomputed with `compare` the oracle of the join; `merge/journal.rs` the
+  merge journal, named or the account's default private draft; its unit
+  suite in `merge/tests.rs` over the record's vectors and a scripted
+  board, its daemon walk in `tests/it/merge.rs`. The SURFACES — the `skep
+  merge` command, the attendant's call, skep-mcp's compose-and-report tool
+  — are not built, and neither is the supersession claim over version
+  members: the wire's `assert_sup` takes resident links alone, so the
+  record's public link to the member and the daughter states the
+  supersession, and `land` reads `in_claims` without writing one. The one
   rule it keeps: a case is safe when the two sides touched different
   material, a conflict when they touched the same material or the same
   spot; six kinds of gap carry it, and the rules settle one, the anchor.

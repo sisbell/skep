@@ -42,14 +42,15 @@ test-hooks = ["acting"]
 search = ["acting", "dep:skep-search"]
 # `merge` — MERGING VERSIONS (the design's merge record, `_designs/CLIENT/
 # 2026-10-14-reconciling-versions-design.md` §7): the editor's act on a
-# daughter as a library — this build the pure core, `compose_runs` over
-# three run lists with the gap report and the counts; the reads, the
-# landing, the record and the journal to follow over it — the `merge`
-# module. OFF BY DEFAULT, as `search` is: the default build of the library
-# holds no merge, so the thirteen content-free commands and the fence stay
-# true of it; the editor's shell, the `skep` command's merge and the
-# attendant turn it on. Implies `acting`: the landing signs. No dependency
-# of its own — `serde_json` is in every build already.
+# daughter as a library — the pure core, `compose_runs` over three run lists
+# with the gap report and the counts; the reads over a board; the landing,
+# one `publish` with its signed body, the claim's read and the record in a
+# merge journal with its public link; the record's verification — the
+# `merge` module. OFF BY DEFAULT, as `search` is: the default build of the
+# library holds no merge, so the thirteen content-free commands and the
+# fence stay true of it; the editor's shell, the `skep` command's merge and
+# the attendant turn it on. Implies `acting`: the landing signs. No
+# dependency of its own — `serde_json` is in every build already.
 merge = ["acting"]
 
 [dependencies]

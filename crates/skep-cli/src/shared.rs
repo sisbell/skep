@@ -1,4 +1,4 @@
-//! WHAT BOTH BINARIES SHARE — `skep`'s thirteen commands and `skep-dev`'s
+//! WHAT BOTH BINARIES SHARE — `skep`'s fourteen commands and `skep-dev`'s
 //! verb, each root declaring this file as its `shared`: the two streams,
 //! stdout DATA (`data`, `data_verbatim`, `--help`'s text among what they
 //! carry) and stderr TALK (the terminal's `talk`, which the prompts share)
@@ -17,7 +17,7 @@
 //! a write refused `poisoned` or `durability`, named here where the
 //! library's rendering names none (`act_beside`). The
 //! operator's lines of both programs name a key one way (`key_named`) and
-//! echo a third party's text to one bound (`clipped`). What the thirteen
+//! echo a third party's text to one bound (`clipped`). What the fourteen
 //! commands share among themselves alone — the person doors, the payload's
 //! read, the anchor boxes' default, the three facts, the whole-set compare —
 //! stays in `commands.rs`.

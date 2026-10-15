@@ -4,7 +4,9 @@
 //! it with what arrives from outside the person's trust — a board's bytes, a
 //! third party's reply, a payload's length; `dev` spawns and claims a board
 //! and drives the built `skep-dev` against a corpus it builds under the
-//! system temp dir; `tidy` reads the crate's own source for the arrangement
+//! system temp dir; `merge` seeds a claimed board with a document's
+//! versions by hand and drives the fourteenth command, `skep merge`,
+//! against them; `tidy` reads the crate's own source for the arrangement
 //! `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
@@ -12,5 +14,6 @@ mod cli;
 mod common;
 mod dev;
 mod hostile;
+mod merge;
 mod serve;
 mod tidy;

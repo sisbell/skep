@@ -50,9 +50,10 @@
 //! read.
 //!
 //! THE SETTINGS ARE `args.rs`'s (§9 item 21). Every `SKEP_*` variable is
-//! named in code in `src/args.rs` alone — the dev binary's
-//! `SKEP_SEARCH_CORPUS` included — so no command and no verb reads a setting
-//! around the precedence a flag holds over its variable.
+//! named in code in `src/args.rs` alone — `merge`'s `SKEP_MERGE_KIND` and
+//! the dev binary's `SKEP_SEARCH_CORPUS` included — so no command and no
+//! verb reads a setting around the precedence a flag holds over its
+//! variable.
 //!
 //! EVERY VARIABLE READ IS TABLED. Every variable the source reads at run
 //! time — a `SKEP_*` setting, a `std::env::var("…")` or `var_os("…")`, the
@@ -67,7 +68,7 @@
 //!
 //! Each scan asserts that it found what it allows — an edge between
 //! modules, a write in each writer, a touch in each reader, an end in each
-//! `main`, the six variables in `src/args.rs`, the variables read beside
+//! `main`, the seven variables in `src/args.rs`, the variables read beside
 //! them — or, where it allows nothing, that it reads the forms it refuses,
 //! so a scan gone blind fails rather than passing a clean tree. Comments
 //! are not code, and neither is anything from an inline `mod tests {` on.
@@ -289,7 +290,7 @@ fn every_skep_variable_is_named_in_args_alone() {
     }
     found.sort();
     found.dedup();
-    assert_eq!(found, VARIABLES, "src/args.rs names §9 item 21's five variables and the dev binary's one: the scan reads them as `\"SKEP_…\"` literals");
+    assert_eq!(found, VARIABLES, "src/args.rs names §9 item 21's five variables, merge's one and the dev binary's one: the scan reads them as `\"SKEP_…\"` literals");
     assert!(faults.is_empty(), "the settings are src/args.rs's (§9 item 21):\n{}", faults.join("\n"));
 }
 

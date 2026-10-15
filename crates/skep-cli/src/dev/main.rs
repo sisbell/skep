@@ -11,9 +11,9 @@
 //! origin admitted under a per-run secret, the session bare as the
 //! claimant or signed with a dev key, and — behind the `dev-hooks` feature
 //! no shipped build enables — the daemon run in-process with its test
-//! hooks so its fault states are forced live. The thirteen commands of
-//! `client.md` §2.1 stand: this is no fourteenth, and the sidecar image,
-//! built `--bin skep`, holds none of it.
+//! hooks so its fault states are forced live. The fourteen commands of
+//! `skep` stand: this is no fifteenth, and the sidecar image, built `--bin
+//! skep`, holds none of it.
 //!
 //! The root declares `args`, `terminal` and `shared` from the `skep` root's
 //! own files, so the settings (`--board`, `--dir`, `--key`, `--principal`

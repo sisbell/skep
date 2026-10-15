@@ -5,9 +5,11 @@
 //! with the terminal as its `Person`; `bind` and `keygen` sequence the
 //! library's compositions themselves.
 //!
-//! THE THIRTEEN COMMANDS: `keygen`, `claim`, `session`, `fingerprint`,
-//! `verify`, `health`, `bind` — and the ceremonies over 5.1a's seams:
-//! `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`.
+//! THE FOURTEEN COMMANDS: `keygen`, `claim`, `session`, `fingerprint`,
+//! `verify`, `health`, `bind` — the ceremonies over 5.1a's seams:
+//! `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept` — and
+//! `merge`, the editor's act on a daughter over `skep_client::merge` (the
+//! merge record's §6), the one command that touches content.
 //!
 //! The modules are declared in dependency order, each naming only those
 //! above it (`tests/it/tidy.rs`); `ARCHITECTURE.md` §The command draws how
@@ -16,7 +18,7 @@
 
 #![forbid(unsafe_code)]
 
-// The thirteen `Command`s and the grammar — each command's flags and
+// The fourteen `Command`s and the grammar — each command's flags and
 // switches and the rules its forms hold them to, one row per command —
 // beside `HELP`, and the settings, each flag beating its environment
 // variable; and, in its `dev` module, the dev binary's grammar over the
@@ -31,7 +33,7 @@ mod terminal;
 // `finish`), DATA's two writers, and the plumbing from the flags to a
 // board, a store, a principal and a key.
 mod shared;
-// The thirteen commands, one file each beneath it, and what they share
+// The fourteen commands, one file each beneath it, and what they share
 // among themselves alone: the person doors' check, the payload's read, the
 // anchor boxes' default, the three facts' spelling, the whole-set compare.
 mod commands;
@@ -61,6 +63,7 @@ fn main() {
         Command::Rotate => commands::rotate(&line),
         Command::Handoff => commands::handoff(&line),
         Command::Accept => commands::accept(&line),
+        Command::Merge => commands::merge(&line),
     };
     exit(commands::finish(outcome));
 }

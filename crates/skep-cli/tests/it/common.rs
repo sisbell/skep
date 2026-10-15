@@ -288,10 +288,11 @@ fn command<A: AsRef<OsStr>>(args: &[A], envs: &[(&str, &OsStr)]) -> Command {
     cmd
 }
 
-/// Every variable either program reads as a setting — §9 item 21's five and
-/// the dev binary's `SKEP_SEARCH_CORPUS`, in order — the one list `tidy`
-/// holds `src/args.rs` to and [`scrub`] clears from every run.
-pub const VARIABLES: [&str; 6] = ["SKEP_BOARD", "SKEP_KEY", "SKEP_KEYSTORE", "SKEP_PRINCIPAL", "SKEP_SEARCH_CORPUS", "SKEP_SESSION"];
+/// Every variable either program reads as a setting — §9 item 21's five,
+/// `merge`'s `SKEP_MERGE_KIND` and the dev binary's `SKEP_SEARCH_CORPUS`,
+/// in order — the one list `tidy` holds `src/args.rs` to and [`scrub`]
+/// clears from every run.
+pub const VARIABLES: [&str; 7] = ["SKEP_BOARD", "SKEP_KEY", "SKEP_KEYSTORE", "SKEP_MERGE_KIND", "SKEP_PRINCIPAL", "SKEP_SEARCH_CORPUS", "SKEP_SESSION"];
 
 /// `cmd` without the settings a developer's shell may hold — every one of
 /// [`VARIABLES`], and `HOME` and `USERPROFILE`, whose `.skep` is the default

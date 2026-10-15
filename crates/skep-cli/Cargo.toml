@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "skep — the command over skep-client: the thirteen commands of client.md §2.1, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
+description = "skep — the command over skep-client: fourteen commands, client.md §2.1's thirteen and merge, flag parsing by hand, one file per command, a Person over the terminal, stdout DATA and stderr TALK (client.md §1.2, §2); and beside it skep-dev, the dev binary whose two verbs seed a running claimed board with a prose corpus and serve the shell's core (skep-shell) to a page over loopback"
 readme = "README.md"
 
 [[bin]]
@@ -15,8 +15,8 @@ path = "src/main.rs"
 # The dev binary beside `skep`: `skep-dev seed` fills a running, claimed
 # board with a prose corpus — editions, citation links, second versions,
 # drafts, a second account — and `skep-dev serve` serves the shell's core
-# (`skep-shell`) to a page in a browser over loopback. The thirteen
-# commands stand; this is no fourteenth. A plain second target, built by
+# (`skep-shell`) to a page in a browser over loopback. The fourteen
+# commands stand; this is no fifteenth. A plain second target, built by
 # every `--bins` and by the package's default build; the sidecar image
 # names `--bin skep`, so its image holds the command alone. `test = false`:
 # the two binaries compile the same `args`, `terminal` and `shared`
@@ -48,8 +48,10 @@ dev-hooks = ["dep:skepd"]
 [dependencies]
 # The library, its acting half on: every command is a library call, and
 # the dev binary's one signed session, its key and its attested writes are
-# the same half's.
-skep-client = { path = "../skep-client" }
+# the same half's. Its `merge` feature ON for `skep merge`, as the shell
+# turns `tls` on — the library's default build stays content-free; this
+# command, the fourteenth, is the one that reads and writes content.
+skep-client = { path = "../skep-client", features = ["merge"] }
 skep-identity = { path = "../skep-identity" }
 # The address vocabulary the dev binary signs with: a citation link's
 # from-end is a V-spec the tool resolves through `image` into the I-extent

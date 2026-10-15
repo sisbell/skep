@@ -1,6 +1,7 @@
 //! Flag parsing in the daemon's style (`skepd/src/main.rs`'s `parse_args`,
 //! `from_env`). A command line opens with its [`Command`], one of §2.1's
-//! thirteen, and is judged against THE GRAMMAR, one row per command beside
+//! thirteen or `merge`, the fourteenth (the merge record's §6), and is
+//! judged against THE GRAMMAR, one row per command beside
 //! `HELP`, the text that documents it: a flag in no row, a flag of another
 //! command's, a missing value, a value that is empty or is itself one of the
 //! grammar's flags, a second value of a flag that takes one, a flag outside
@@ -21,8 +22,9 @@
 //! item 21's: `SKEP_BOARD`, `SKEP_KEYSTORE`, `SKEP_KEY`, `SKEP_PRINCIPAL`,
 //! `SKEP_SESSION` — read here and nowhere else in the crate, `SKEP_SESSION`
 //! by `session_env` alone, the one setting no flag carries
-//! (`tests/it/tidy.rs`) — and beside them the dev binary's
-//! `SKEP_SEARCH_CORPUS`, read here by the same rule ([`dev`]). The crate's
+//! (`tests/it/tidy.rs`) — and beside them `merge`'s `SKEP_MERGE_KIND`
+//! (`Line::merge_kind`) and the dev binary's `SKEP_SEARCH_CORPUS`, each
+//! read here by the same rule ([`dev`]). The crate's
 //! README tables every setting both programs read — its flag, its variable,
 //! its default, when it is checked and where it is read — and this file's
 //! unit tests hold the table's flags to the grammars and its defaults to
@@ -87,9 +89,10 @@ fn version_line(program: &str) -> String {
     )
 }
 
-/// One of `client.md` §2.1's thirteen commands — the verb a command line
-/// opens with, what THE GRAMMAR's rows are keyed by, and what `main`
-/// dispatches on, one arm each, which the compiler holds exhaustive.
+/// One of the fourteen commands — `client.md` §2.1's thirteen and `merge`,
+/// the fourteenth (the merge record's §6) — the verb a command line opens
+/// with, what THE GRAMMAR's rows are keyed by, and what `main` dispatches
+/// on, one arm each, which the compiler holds exhaustive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     Keygen,
@@ -105,6 +108,7 @@ pub enum Command {
     Rotate,
     Handoff,
     Accept,
+    Merge,
 }
 
 impl Command {
@@ -124,6 +128,7 @@ impl Command {
             Command::Rotate => "rotate",
             Command::Handoff => "handoff",
             Command::Accept => "accept",
+            Command::Merge => "merge",
         }
     }
 }
@@ -146,7 +151,7 @@ pub struct Line<C> {
     switches: Vec<String>,
 }
 
-/// The `skep` command's line: one of the thirteen, and its flags.
+/// The `skep` command's line: one of the fourteen, and its flags.
 pub type CommandLine = Line<Command>;
 
 /// The flags every command takes — `client.md` §2.2's "All commands",
@@ -205,18 +210,23 @@ impl Form {
     }
 }
 
-/// THE GRAMMAR: the thirteen commands (`client.md` §2.1's IN set), each with
-/// the flags §2.2 gives it and `HELP` documents, and the rules its forms
-/// hold them to — the forms the record's synopses draw: `keygen --anchors`
-/// (§2.2), `claim`'s notebook walk or `--hosted` (§4.5), `enroll`'s walk or
-/// `--reply`, `recover`'s device arm or `--anchor-lost` (§4a.6),
-/// `handoff --payload` (§4c.2), and `accept`'s pair, its decline
+/// THE GRAMMAR: the fourteen commands (`client.md` §2.1's IN set and
+/// `merge`), each with the flags §2.2 gives it and `HELP` documents, and the
+/// rules its forms hold them to — the forms the record's synopses draw:
+/// `keygen --anchors` (§2.2), `claim`'s notebook walk or `--hosted` (§4.5),
+/// `enroll`'s walk or `--reply`, `recover`'s device arm or `--anchor-lost`
+/// (§4a.6), `handoff --payload` (§4c.2), `accept`'s pair, its decline
 /// (`--no-anchors`) or `--reprint` (§4c.1), whose synopsis requires the
-/// `--account` it reads nowhere. `--payload` takes a value where it names a
-/// file or `-`, and is a SWITCH at `keygen` and `fingerprint`, where it
-/// prints. `--yes` is in no row: a retirement's confirmation is a typed
-/// answer at the terminal, never a flag (AUTH-5.46).
-const GRAMMAR: [Row<Command>; 13] = [
+/// `--account` it reads nowhere, and `merge`'s three sides, two apart
+/// (`--alternative`, `--draft` with `--base` inside it, `--fork`) and its
+/// two landings apart (`--publish`, `--into`), the merge record's §6
+/// synopsis. `--payload` takes a value where it names a file or `-`, and is
+/// a SWITCH at `keygen` and `fingerprint`, where it prints. `--yes` is in
+/// no row: a retirement's confirmation is a typed answer at the terminal,
+/// never a flag (AUTH-5.46). That a side and `--doc` are required at `merge`
+/// is the command's judgment, as `retire` judges its `--fingerprint`: no
+/// form says "one of".
+const GRAMMAR: [Row<Command>; 14] = [
     Row {
         command: Command::Keygen,
         once: &[],
@@ -274,9 +284,22 @@ const GRAMMAR: [Row<Command>; 13] = [
             Form::AtMost("--anchor-out", 2),
         ],
     },
+    Row {
+        command: Command::Merge,
+        once: &["--doc", "--alternative", "--draft", "--base", "--fork", "--head", "--kind", "--journal", "--into", "--retries"],
+        repeated: &["--resolve"],
+        switches: &["--publish", "--no-dedup", "--retype"],
+        forms: &[
+            Form::Apart("--alternative", "--draft"),
+            Form::Apart("--alternative", "--fork"),
+            Form::Apart("--draft", "--fork"),
+            Form::Within("--base", "--draft"),
+            Form::Apart("--publish", "--into"),
+        ],
+    },
 ];
 
-/// The help text: the thirteen commands, each as the design writes it, and
+/// The help text: the fourteen commands, each as the design writes it, and
 /// the flags each takes — the grammar above, documented beside it.
 pub const HELP: &str = "\
 usage: skep <command> [flags]
@@ -312,25 +335,32 @@ usage: skep <command> [flags]
   accept       the recipient's beat at a handed-off address: the device
                key and the anchor pair, the record for the giver (a
                person door); --reprint re-composes the record, no write
+  merge        merge an alternative into its document's head: the base,
+               the head and the side read, the merged list and its gaps
+               composed under the rules and reported as one JSON document
+               on stdout; --publish lands it as the next version with its
+               record, --into lands it in a draft; a side of another
+               account is refused; no person door
 
 flags (a flag beats its env variable; a variable set empty is unset):
   --board <origin>      the board, a canonical origin (env SKEP_BOARD)
   --dir <path>          the key store (env SKEP_KEYSTORE; default ~/.skep)
   --key <path>          one key file, bypassing the store's lookup (env
                         SKEP_KEY): read at session, verify, bind,
-                        fingerprint and accept --reprint, an anchor file
-                        refused where the key signs; refused where enroll
-                        and retire sign, their walks taking none yet; not
-                        consulted elsewhere
+                        fingerprint, merge and accept --reprint, an anchor
+                        file refused where the key signs; refused where
+                        enroll and retire sign, their walks taking none
+                        yet; not consulted elsewhere
   --principal <n>       the principal (env SKEP_PRINCIPAL), read at
-                        session, verify, enroll, recover, retire, rotate
-                        and handoff — where omitted, the store's one
+                        session, verify, enroll, recover, retire, rotate,
+                        handoff and merge — where omitted, the store's one
                         binding at the board; at bind, the reply's where
                         omitted; at claim, the new account's id, 1 where
                         omitted; not consulted elsewhere
   --label <text>        a byline (keygen, rotate, accept)
   --json                one JSON document on stdout (verify, health,
-                        fingerprint)
+                        fingerprint; merge prints one always, so the flag
+                        changes nothing there)
   --version             this program's version and the commit it was
                         built from, one line on stdout
   keygen:   [--payload]  [--anchors, and with it  [--paper]
@@ -353,6 +383,17 @@ flags (a flag beats its env variable; a variable set empty is unset):
   accept:   --account <address>  [--label <l>], and the pair
             ([--anchor-out <dir>]... (two at most)  [--paper]) or its
             decline (--no-anchors); or --reprint  [--anchor <path>]...
+  merge:    --doc <D>  --kind <address> (env SKEP_MERGE_KIND; the merge
+            record kind's type address)  and one side: --alternative
+            <D.k.m>, or --draft <S> --base <D.k>, or --fork <F> (refused
+            until the fork-source read lands)  [--head <D.h>] (else the
+            feed's last trunk version)  [--journal <J>] (else the
+            account's private one)  [--resolve <gap>=<choice>]... (a
+            choice: order:<side>,<side>...  after:<address>
+            before:<address>  keep:<side>  both  omit; a side is its
+            index as the report numbers it)  [--no-dedup]  [--retype]
+            [--retries <n>]  [--publish, or --into <draft>]; with
+            neither it composes and prints
 
 exit codes: 0 done, 1 the board refused, 2 usage, 3 halt and surface,
 4 transport. stdout carries data; stderr carries talk. No --yes exists:
@@ -544,6 +585,16 @@ impl<C> Line<C> {
                 parse_principal(&v).map(Some).ok_or_else(|| Usage(format!("--principal: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})")))
             }
         }
+    }
+}
+
+impl Line<Command> {
+    /// `--kind` / `SKEP_MERGE_KIND` (`merge`): the merge record kind's TYPE
+    /// address as text, the command's to parse; `None` where neither is
+    /// set. The kind's commons row is interim and unpinned (the merge
+    /// record's decision 9), so the caller names it.
+    pub fn merge_kind(&self) -> Result<Option<String>, Usage> {
+        self.setting("--kind", "SKEP_MERGE_KIND")
     }
 }
 

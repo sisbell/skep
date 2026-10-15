@@ -255,9 +255,11 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, thirteen commands:
+- `skep-cli` — the `skep` command over `skep-client`, fourteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
-  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`; flag
+  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`, and
+  `merge`, the one over the library's `merge` feature, which this crate
+  alone turns on; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
@@ -1159,10 +1161,13 @@ each ceremony:
   recomputed with `compare` the oracle of the join; `merge/journal.rs` the
   merge journal, named or the account's default private draft; its unit
   suite in `merge/tests.rs` over the record's vectors and a scripted
-  board, its daemon walk in `tests/it/merge.rs`. The SURFACES — the `skep
-  merge` command, the attendant's call, skep-mcp's compose-and-report tool
-  — are not built, and neither is the supersession claim over version
-  members: the wire's `assert_sup` takes resident links alone, so the
+  board, its daemon walk in `tests/it/merge.rs`. Of the SURFACES the `skep
+  merge` command is built — `skep-cli`'s `commands/merge.rs`, the one
+  embedder that turns the feature on (§The command) — and no agent surface
+  is: the attendant is not built, and skep-mcp embeds no `skep-client`, so
+  its compose-and-report tool is not either. Neither is the supersession
+  claim over version members: the wire's `assert_sup` takes resident
+  links alone, so the
   record's public link to the member and the daughter states the
   supersession, and `land` reads `in_claims` without writing one. The one
   rule it keeps: a case is safe when the two sides touched different
@@ -1500,7 +1505,7 @@ landing the three facts of an enroll hop, a handoff or a hosted signup,
 and the payload it prints — and so carry their own text. Its modules, in
 the order `src/main.rs` declares them, each naming only those above it:
 
-- `args.rs` `Command`, one of the thirteen, the verb `main` dispatches
+- `args.rs` `Command`, one of the fourteen, the verb `main` dispatches
   on; the grammar — one row per command, its flags that take one value,
   those that repeat and its switches, and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
@@ -1545,7 +1550,7 @@ the order `src/main.rs` declares them, each naming only those above it:
   §3.5's one-binding test, whose halt names the store and the origins its
   bindings name) and a key (`select_key`, under `Purpose`) — a key file
   refused where a walk takes none (`require_no_key_file`).
-- `commands.rs` what the thirteen commands share among themselves alone:
+- `commands.rs` what the fourteen commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);

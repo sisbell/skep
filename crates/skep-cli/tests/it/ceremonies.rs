@@ -1,8 +1,8 @@
 //! THE SIX COMMANDS through the binary (`client.md` §2; the build brief §3):
-//! the help lists thirteen and `--yes` is exit 2; each person door refuses
+//! the help lists fourteen and `--yes` is exit 2; each person door refuses
 //! without a controlling terminal, and opens under a pseudo-terminal only
 //! where stdin and stderr are both one, while `accept --reprint`, `enroll
-//! --reply` and `handoff` without `--payload` run without one; a usage
+//! --reply`, `handoff` without `--payload` and `merge` run without one; a usage
 //! refusal — a required flag missing, a setting given badly, a key file a
 //! walk cannot take, a flag outside its form — is judged ahead of the door,
 //! and an anchor label at its box ahead of `keygen`'s generation, which
@@ -27,7 +27,7 @@ use skep_identity::parse_enroll;
 
 use crate::common::{origin, s, skep, skep_os, spawn, tree, Run};
 
-const THIRTEEN: [&str; 13] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept"];
+const FOURTEEN: [&str; 14] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept", "merge"];
 
 /// A claimed board through the LIBRARY (the notebook arm is a person door
 /// the binary refuses without a terminal): the store holds the device key,
@@ -42,10 +42,10 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
 }
 
 #[test]
-fn help_lists_thirteen_and_names_none_as_not_in_this_build_and_yes_is_exit_2() {
+fn help_lists_fourteen_and_names_none_as_not_in_this_build_and_yes_is_exit_2() {
     let run = skep(&["--help"], &[], None);
     assert_eq!(run.code, 0, "{run:?}");
-    for c in THIRTEEN {
+    for c in FOURTEEN {
         assert!(run.out.contains(&format!("\n  {c} ")), "{c} listed:\n{}", run.out);
     }
     assert!(!run.out.contains("not in this build"), "{}", run.out);
@@ -61,10 +61,11 @@ fn help_lists_thirteen_and_names_none_as_not_in_this_build_and_yes_is_exit_2() {
 /// THE TTY: each person door without a controlling terminal is exit 3, a
 /// halt's face naming the moments a person answers at THAT door (§2.4, §6)
 /// — the backup moment only at `accept`, the one door here that runs it;
-/// `accept --reprint`, `enroll --reply` and `handoff` without `--payload`
-/// run without one (they may halt on their state, never on the terminal).
+/// `accept --reprint`, `enroll --reply`, `handoff` without `--payload` and
+/// `merge`, no door at all, run without one (they may halt on their state,
+/// never on the terminal).
 #[test]
-fn the_person_doors_refuse_without_a_terminal_and_the_three_non_doors_run() {
+fn the_person_doors_refuse_without_a_terminal_and_the_four_non_doors_run() {
     let dir = tempfile::tempdir().unwrap();
     let sd = spawn(&dir.path().join("board"), false);
     let board = origin(sd.port());
@@ -95,6 +96,7 @@ fn the_person_doors_refuse_without_a_terminal_and_the_three_non_doors_run() {
         vec!["accept", "--dir", s(&store), "--reprint"],
         vec!["enroll", "--board", &board, "--dir", s(&store), "--principal", "1", "--reply", "ab"],
         vec!["handoff", "--board", &board, "--dir", s(&store), "--principal", "1", "--account", "1.0.1.2"],
+        vec!["merge", "--board", &board, "--dir", s(&store), "--principal", "1", "--doc", "1.0.1.0.2", "--alternative", "1.0.1.0.2.1.1", "--kind", "1.0.1.0.3"],
     ] {
         let r = skep(&args, &[], None);
         assert!(!r.err.contains("requires a controlling terminal"), "{args:?} runs without a terminal: {}", r.err);

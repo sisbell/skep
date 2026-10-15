@@ -1,5 +1,6 @@
-//! THE THIRTEEN COMMANDS, each exactly as `client.md` §2.2 writes it — one
-//! file per command beneath this one, each a `pub fn` that `main`
+//! THE FOURTEEN COMMANDS — `client.md` §2.2's thirteen, each exactly as it
+//! writes it, and `merge`, the fourteenth, as the merge record's §6 writes
+//! it — one file per command beneath this one, each a `pub fn` that `main`
 //! dispatches to and that answers `Ok` or the [`Stop`] it came to, every
 //! walk a library call — and what they share AMONG THEMSELVES ALONE,
 //! private here and so visible to each of them: `require_terminal`, the
@@ -25,6 +26,7 @@ mod fingerprint;
 mod handoff;
 mod health;
 mod keygen;
+mod merge;
 mod recover;
 mod retire;
 mod rotate;
@@ -39,6 +41,7 @@ pub use fingerprint::fingerprint;
 pub use handoff::handoff;
 pub use health::health;
 pub use keygen::keygen;
+pub use merge::merge;
 pub use recover::recover;
 pub use retire::retire;
 pub use rotate::rotate;

@@ -78,15 +78,10 @@ skep-febe = { path = "../skep-febe" }
 # chosen here) and Seq.
 skep-kernel = { path = "../skep-kernel" }
 # The wire value types the routes, the tools and the history service name
-# — addresses, principals, the link reads' answers; the codec's round trips
-# over every one are the core's, and the content, arrangement, retrieval
-# and link crates are named by this crate's suites alone.
+# — addresses and principals; the codec's round trips over every value type
+# are the core's.
 skep-address = { path = "../skep-address" }
 skep-namespace = { path = "../skep-namespace" }
-skep-content = { path = "../skep-content" }
-skep-arrangement = { path = "../skep-arrangement" }
-skep-retrieval = { path = "../skep-retrieval" }
-skep-links = { path = "../skep-links" }
 skep-discovery = { path = "../skep-discovery" }
 # The AUTH identity vocabulary's two reads the routes make themselves:
 # `HasIdentity`, the World's identity slice off the snapshot a route holds,
@@ -197,3 +192,10 @@ proptest.workspace = true
 # the end-to-end cells and the measurements run here, where boards are
 # spawned and registered. The daemon itself never depends on it.
 skep-resolve = { path = "../skep-resolve" }
+# The content, arrangement, retrieval and link value types the suites build
+# their fixtures and read their answers with; the daemon's own sources name
+# none of them (the codec that round-trips them is the core's).
+skep-content = { path = "../skep-content" }
+skep-arrangement = { path = "../skep-arrangement" }
+skep-retrieval = { path = "../skep-retrieval" }
+skep-links = { path = "../skep-links" }

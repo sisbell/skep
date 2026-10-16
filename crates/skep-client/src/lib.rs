@@ -76,6 +76,14 @@
 //!   — and the WALKS over them — `claim`, `enroll`, `recover`, `retire`,
 //!   `rotate`, `handoff`, `accept`. A walk names compositions and never
 //!   another walk.
+//! * [`share`] — the grant as this client composes and reads it (PUB-5.1,
+//!   PUB-5.15): `share`, one document or one account opened to one account;
+//!   `privash`, one draft opened to every account on the board and never a
+//!   guest (PUB-5.108, Nelson's term); `revoke`; and the three reads —
+//!   `issued`, `held` (R78's discovery read) and `privashed` (the board's
+//!   universal set). Each write reads the key's state first and sends no
+//!   duplicate; a lost acknowledgement is read back, never re-sent. Beside
+//!   the ceremonies and naming none: a grant is no credential.
 //!
 //! Behind the default-OFF `search` feature — the SHELL's half of search
 //! (`client.md` §4e; the index itself is `skep-search`'s):
@@ -127,6 +135,8 @@ pub mod ceremony;
 pub mod person;
 #[cfg(feature = "acting")]
 pub mod resolve;
+#[cfg(feature = "acting")]
+pub mod share;
 #[cfg(feature = "acting")]
 pub mod sheet;
 #[cfg(feature = "acting")]

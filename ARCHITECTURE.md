@@ -237,7 +237,11 @@ foundation and on the stores above it.
   the document index, the state event's arms, the bridge call and the
   jump's landing rule — and, behind its `merge` feature, the `merge`
   module, the pure core of merging two versions of one document: the
-  composition over three run lists, the gap report and the counts. Of the
+  composition over three run lists, the gap report and the counts — and,
+  under `acting`, the `share` module: `share`, a draft or an account
+  opened to one account; `privash`, a draft opened to every account on
+  the board and never a guest (PUB-5.108, Nelson's term); `revoke`; and
+  the grants issued, held and privashed read back. Of the
   skep crates it depends on `skep-address`,
   `skep-identity`, `skep-signature`, `skep-resolve` and — optional, behind
   `search` — `skep-search` alone — never `skepd`, which does not depend on
@@ -261,11 +265,13 @@ foundation and on the stores above it.
   (its suite spawns the daemon as a dev-dependency). No feature, no
   transport: the loopback server is `skep-cli`'s dev verb's, the native
   bridge the shell's. Its modules and rules: §The shell's core.
-- `skep-cli` — the `skep` command over `skep-client`, fourteen commands:
+- `skep-cli` — the `skep` command over `skep-client`, fifteen commands:
   `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
-  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`, and
+  `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept`,
   `merge`, the one over the library's `merge` feature, which this crate
-  alone turns on; flag
+  alone turns on, and `share`, which shares a draft or an account with
+  one account, privashes a draft, revokes a share and lists the grants
+  over the library's `share` module; flag
   parsing by hand, a `Person` over the terminal, stdout data and stderr
   talk — and the dev binary `skep-dev`, whose two verbs `seed` a running
   claimed board with a prose corpus (`skep-corpus`) and `serve` the
@@ -1119,7 +1125,14 @@ each ceremony:
   `derive/records/tests.rs`; `verify.rs` the reader's
   verifier over the signature-filtered set, its unit suite in
   `verify/tests.rs`; `resolve.rs` the registry walk's `Transport` over a
-  dialer.
+  dialer; `share.rs` the grant — `share`, `privash` (PUB-5.108), `revoke`,
+  the reads `issued`, `held` and `privashed`, the key's state read before
+  every write and the lost answer read back, never re-sent, and
+  `Ledger::fold`, the fold's walk over a doc 1's records, pure, its unit
+  suite in `share/tests.rs` and its daemon suite in `tests/it/share.rs`.
+  Grants are composed by the library and judged by the board, whose rules
+  are unchanged: the library writes the record the wire already honours,
+  and reads what the board makes of it.
 - `ceremony.rs` and `ceremony/`, in two layers. The COMPOSITIONS, each the
   one home of its frames, reads and refusals: `handshake.rs` the session
   open, `deposit.rs` the credential write, `first_session.rs` an account's
@@ -1246,7 +1259,8 @@ Its integration suite is one binary, `tests/it/`: the walks driven through
 the scripted person against a daemon spawned in-process, another hand's
 acts re-driven over the wire (`common::wire_*`) and never by a ceremony;
 `backup`, the moment with no daemon; `tidy`, the arrangement above and the
-two feature gates; and `search/` — the class fence, the two principals'
+two feature gates; `share`, the share, the revoke, the re-share, the
+privash and the lost answer over three keyed siblings; and `search/` — the class fence, the two principals'
 separation and the events stream (`consumer`), `history_reclaimed` reached
 through the daemon's checkpoint seam (`resume`), the orphan walk and the
 forget (`directory`), the query crossing nothing and the jump's band
@@ -1518,7 +1532,7 @@ landing the three facts of an enroll hop, a handoff or a hosted signup,
 and the payload it prints — and so carry their own text. Its modules, in
 the order `src/main.rs` declares them, each naming only those above it:
 
-- `args.rs` `Command`, one of the fourteen, the verb `main` dispatches
+- `args.rs` `Command`, one of the fifteen, the verb `main` dispatches
   on; the grammar — one row per command, its flags that take one value,
   those that repeat and its switches, and the rules its forms hold them to
   (`Form`), beside the flags every command takes (`GLOBAL`) — with `HELP`,
@@ -1563,7 +1577,7 @@ the order `src/main.rs` declares them, each naming only those above it:
   §3.5's one-binding test, whose halt names the store and the origins its
   bindings name) and a key (`select_key`, under `Purpose`) — a key file
   refused where a walk takes none (`require_no_key_file`).
-- `commands.rs` what the fourteen commands share among themselves alone:
+- `commands.rs` what the fifteen commands share among themselves alone:
   the `skep` `Program`'s `finish` and `help`; `require_terminal`, the
   check each `Door` makes; a payload read to its cap (`read_payload`,
   `MAX_PAYLOAD_BYTES`); the anchor boxes' per-run default (`BoxDefault`);

@@ -61,7 +61,8 @@ fn a_principal_past_the_wires_range_is_none() {
 fn each_command_takes_its_own_flags_and_a_flag_that_takes_one_value_takes_one() {
     assert_eq!(refusal(&["health", "--fingerprint", "ab"]), "`--fingerprint` is not a flag of `health`");
     assert_eq!(refusal(&["verify", "--anchor-out", "/d"]), "`--anchor-out` is not a flag of `verify`");
-    assert_eq!(refusal(&["retire", "--yes"]), "unknown argument `--yes`", "a flag of no command's is unknown");
+    assert_eq!(refusal(&["retire", "--yes"]), "`--yes` is not a flag of `retire`", "`--yes` is `share`'s alone: a retirement's answer is typed");
+    assert_eq!(refusal(&["retire", "--frob"]), "unknown argument `--frob`", "a flag of no command's is unknown");
     assert_eq!(refusal(&["recover", "--anchor", "/a", "--anchor", "/b"]), "`--anchor` is given at most once at `recover`");
     assert_eq!(refusal(&["session", "--principal", "1", "--principal", "2"]), "`--principal` is given at most once at `session`", "a setting takes one value");
     let Parsed::CommandLine(c) = parse(argv(&["verify", "--anchor", "/a", "--anchor", "/b", "--json"])).unwrap() else { panic!() };

@@ -5,12 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The library every acting skep client embeds: the one outbound dialer, bare and signed sessions, the key store, the signing seam over the hybrid key, the reader's verifier, the claim ceremony and the compositions every later ceremony runs over (client.md)"
+description = "The library every acting skep client embeds: the one outbound dialer, bare and signed sessions, the key store, the signing seam over the hybrid key, the reader's verifier, the claim ceremony and the compositions every later ceremony runs over, and the grant — a share, a privash, a revoke and the lists (client.md)"
 readme = "README.md"
 
 [features]
 # `acting` — the ACTING half (client.md §1.1's graph): `sign`, `store`,
-# `ceremony`, `person`, `sheet`, the reader's `verify` and the `skep-resolve`
+# `ceremony`, `person`, `sheet`, the reader's `verify`, `share` — the grant
+# composed and read, which signs — and the `skep-resolve`
 # edge. DEFAULT ON. It alone turns `skep-signature`'s `sign` on; a daemon
 # that embeds this crate's dialer takes it with `default-features = false`,
 # so its build graph holds no signer (AUTH-2.2 under feature unification).

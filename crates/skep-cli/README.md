@@ -1,14 +1,28 @@
 # skep-cli — the `skep` command, and the dev binary `skep-dev`
 
-The command over `skep-client` (`client.md` §1.2, §2), fourteen commands:
+The command over `skep-client` (`client.md` §1.2, §2), fifteen commands:
 `keygen`, `claim`, `session`, `fingerprint`, `verify`, `health`, `bind`,
 the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
-`accept`, and `merge` — the editor's act on a daughter over the library's
+`accept`, `merge` — the editor's act on a daughter over the library's
 `merge` feature (the design's merge record, §6), the one command that
 touches content: it composes the merge and prints the report as one JSON
 document, `--publish` lands it as the next version with its record,
 `--into` lands it in a draft, a daughter is reported and never retried,
-and a side of another account is refused. Flag parsing by hand, one file
+and a side of another account is refused — and `share`, over the
+library's `share` module: a draft (`--doc`) or the caller's whole account
+(`--whole-account`, every draft under it, those written later included)
+shared with ONE account (`--to`); a draft PRIVASHED (`--privash`, Nelson's
+term: opened to every account on the board and never a guest, until
+revoked); a share revoked (`--revoke`, the reader keeping what it
+fetched); a share made again after a revoke, naming the revocation it
+follows; and `--list`, what you shared, what is shared with you and what
+is privashed on the board. The share gesture's statement is said on stderr
+before the act — what the grant reaches, its history, what revoking will
+not take back, what the reader can disclose, that only you can revoke it
+and a lost key leaves it standing, the custody note for an agent — then a
+typed confirmation at a terminal, or `--yes` off one, required there; the
+grant, the revocation or the lists come back as one JSON document on
+stdout. Flag parsing by hand, one file
 per command, a `Person` over the terminal, stdout DATA and stderr TALK,
 §2.3's exit codes (0 done, 1 the board refused, 2 usage, 3 halt and
 surface, 4 transport).
@@ -107,7 +121,7 @@ each kind is met, with the route it was met at, since a browser shows the
 page an origin refusal only as a CORS failure, and every one is counted
 to the stop.
 
-The fourteen commands stand: the dev binary is no command of `skep`, and
+The fifteen commands stand: the dev binary is no command of `skep`, and
 the sidecar image, built `--no-default-features --bin skep`, holds none of
 it and no `skepd` (the default build neither: `dev-hooks` alone links the
 daemon, which `scripts/gate-full.sh`'s isolation line and
@@ -130,11 +144,11 @@ variable the source reads to a row here.
 |---|---|---|---|---|---|
 | `--board` | `SKEP_BOARD` | none | a canonical origin, as the command reads it | every command but `keygen` and `fingerprint`; asked at `accept` where absent | the board; the store keys each binding by the origin as written, so `localhost` is another board than `127.0.0.1` |
 | `--dir` | `SKEP_KEYSTORE` | `~/.skep`, under `HOME`, else `USERPROFILE` | the home an absolute path, else refused | every command but `health`, `claim --hosted` and `session --close` | the key store: `keys/` (each file 0600, the directory 0700), `bindings` and `lock`; `skep-dev seed`'s manifest in `<store>-seed/` beside it |
-| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `accept --reprint`; refused at `enroll` and `retire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
-| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `merge`, `bind`, `claim` | the principal; at `claim`, the new account's id |
-| `--json` | — | off | — | `verify`, `health`, `fingerprint`; at `merge` the report is one JSON document always, and the flag changes nothing | one JSON document on stdout |
+| `--key` | `SKEP_KEY` | none | the file, as the command reads it; an anchor's file refused where the key signs | `session`, `verify`, `bind`, `fingerprint`, `merge`, `share`, `accept --reprint`; refused at `enroll` and `retire` | one key file, bypassing the store's lookup; at `fingerprint`, the one key listed |
+| `--principal` | `SKEP_PRINCIPAL` (`skep-mcp` reads it too) | the store's one binding at the board; at `bind`, the reply's; at `claim`, `1` | an integer from 0 to 2^53 − 1, as the command reads it | `session`, `verify`, `enroll`, `recover`, `retire`, `rotate`, `handoff`, `merge`, `share`, `bind`, `claim` | the principal; at `claim`, the new account's id |
+| `--json` | — | off | — | `verify`, `health`, `fingerprint`; at `merge` and `share` the answer is one JSON document always, and the flag changes nothing | one JSON document on stdout |
 | `--kind` | `SKEP_MERGE_KIND` | none: required at `merge` | an address, as the command reads it, before any socket opens | `merge` | the merge record kind's type address — the kind's commons row is interim and unpinned (the merge record's decision 9), so the caller names it |
-| — | `SKEP_SESSION` | none | a session token, 32 lowercase hex | `session --close -` alone; never at `merge`, whose session is its own — a token cannot sign the shot | the token to end; stdin is then not read |
+| — | `SKEP_SESSION` | none | a session token, 32 lowercase hex | `session --close -` alone; never at `merge` or `share`, whose sessions are their own — a token cannot sign the shot or the grant | the token to end; stdin is then not read |
 | — | `HOME`, else `USERPROFILE` | — | an absolute path | where `--dir` and `SKEP_KEYSTORE` are absent | where the default store lives |
 | — | `COMPUTERNAME`, `HOSTNAME` | `this-machine` | — | at an anchor's name box | the box's default name, beside today's date: the first that answers of the two, `/etc/hostname` and `hostname` on `PATH`, cut at its first dot and lowercased |
 

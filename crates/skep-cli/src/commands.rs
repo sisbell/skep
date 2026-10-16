@@ -1,6 +1,7 @@
-//! THE FOURTEEN COMMANDS — `client.md` §2.2's thirteen, each exactly as it
-//! writes it, and `merge`, the fourteenth, as the merge record's §6 writes
-//! it — one file per command beneath this one, each a `pub fn` that `main`
+//! THE FIFTEEN COMMANDS — `client.md` §2.2's thirteen, each exactly as it
+//! writes it, `merge`, the fourteenth, as the merge record's §6 writes it,
+//! and `share`, the fifteenth, as the grant rules write it (PUB-5.29;
+//! PUB-5.108) — one file per command beneath this one, each a `pub fn` that `main`
 //! dispatches to and that answers `Ok` or the [`Stop`] it came to, every
 //! walk a library call — and what they share AMONG THEMSELVES ALONE,
 //! private here and so visible to each of them: `require_terminal`, the
@@ -31,6 +32,7 @@ mod recover;
 mod retire;
 mod rotate;
 mod session;
+mod share;
 mod verify;
 
 pub use accept::accept;
@@ -46,6 +48,7 @@ pub use recover::recover;
 pub use retire::retire;
 pub use rotate::rotate;
 pub use session::session;
+pub use share::share;
 pub use verify::verify;
 
 use std::fs::File;

@@ -11,8 +11,8 @@
 //! origin admitted under a per-run secret, the session bare as the
 //! claimant or signed with a dev key, and — behind the `dev-hooks` feature
 //! no shipped build enables — the daemon run in-process with its test
-//! hooks so its fault states are forced live. The fourteen commands of
-//! `skep` stand: this is no fifteenth, and the sidecar image, built `--bin
+//! hooks so its fault states are forced live. The fifteen commands of
+//! `skep` stand: this is no sixteenth, and the sidecar image, built `--bin
 //! skep`, holds none of it.
 //!
 //! The root declares `args`, `terminal` and `shared` from the `skep` root's

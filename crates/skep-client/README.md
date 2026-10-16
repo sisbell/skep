@@ -30,6 +30,7 @@ Behind `acting`:
 | `verify` | the reader's verifier: a committed signature judged against the signature-filtered key set as of the entry's base |
 | `resolve` | `skep_resolve::Transport` over this crate's dialer |
 | `ceremony` | the compositions every ceremony runs over — `handshake`, `deposit`, `first_session`, `backup`, `trail` public, the rest the crate's own — and the walks over them: `claim` (the notebook walk and the hosted arm), `enroll`, `recover` (the device and loss arms), `retire`, `rotate`, `handoff`, `accept` |
+| `share` | the grant as the client composes and reads it (PUB-5.1, PUB-5.15; the board's rules unchanged): `share(board, &Issuer, prefix, grantee) → Grant`, one document or one account opened to one account; `privash(board, &Issuer, document) → Grant`, one draft opened to every account on the board and never a guest — the ANY-PRINCIPAL grant, the one empty `to` (PUB-5.108, Nelson's term), an account prefix refused; `revoke(board, &Issuer, grant) → Revocation`, the one way a share is withdrawn (no retract); `issued`, every grant of the caller's doc 1 with its `GrantState::{Live, Revoked {by}, Inert}`; `held`, R78's discovery read over the issuers' doc 1s; `privashed`, the board's universal set; `key_state`, the key's latest record (`KeyState::{Empty, Live, Revoked}`) — a share reads it first, sends `replaces` naming a revocation it follows, refuses a live key as `Refusal::AlreadyShared`, and after a lost acknowledgement reads back and never re-sends; `Ledger::fold`, the fold's walk, pure; `agent_space_of`, AUTH-5.87's layout for the custody note; `T_GRANT`, `T_REPLACES` |
 
 Behind `search` (default off) — THE SHELL's HALF of search (`client.md`
 §4e), over `skep-search`, a library API an embedder calls (the `skep`
@@ -67,7 +68,7 @@ and `land` reads `in_claims` first without writing a claim:
 ## Features
 
 - `acting` (default on) — the acting half: `sign`, `store`, `ceremony`,
-  `person`, `sheet`, `verify`, `resolve`. It alone turns `skep-signature`'s
+  `person`, `sheet`, `verify`, `resolve`, `share`. It alone turns `skep-signature`'s
   `sign` on; a daemon embedding the dialer takes this crate with
   `default-features = false` and holds no signer.
 - `tls` (default off) — `https://` through rustls and the platform verifier;

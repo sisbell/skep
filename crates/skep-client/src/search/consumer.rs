@@ -110,10 +110,10 @@ pub const SAVE_EVERY: Duration = Duration::from_secs(30);
 /// it.
 pub const MAX_DELIVERY_ITEMS: u64 = 1 << 17;
 
-/// The GRANTS class type address (wire.md §The read predicate: "`ty` the
-/// grants class `1.1.0.1.0.1.0.3.90`") — the principal-keyed discovery
-/// read's `ty`.
-pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
+/// The GRANTS class type address — the principal-keyed discovery read's
+/// `ty` — at its one home, `board::frames`, which the `share` module names
+/// too.
+pub use crate::board::frames::T_GRANT;
 
 /// The resume's bounded wait on `history_busy`: this many retries, each
 /// after [`RESUME_RETRY_WAIT`], before the resume is left pending.

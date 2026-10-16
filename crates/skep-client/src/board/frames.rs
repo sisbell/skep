@@ -5,6 +5,20 @@
 
 use serde_json::{json, Value};
 
+/// The GRANTS class type address (wire.md §The read predicate: "`ty` the
+/// grants class `1.1.0.1.0.1.0.3.90`"): the type slot of every grant, of
+/// the record that revokes one (PUB-5.13, PUB-5.15), and of the
+/// principal-keyed discovery read's `ty`. The one home of the constant,
+/// which the `share` module and the search consumer both name.
+pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
+
+/// The `replaces` class type address (wire.md §Links (writes); PUB-1.27's
+/// row, PUB-5.15): the type of the second link a `make_link` carrying a
+/// `replaces` member deposits beside the first — `from` the first link's
+/// address, `to` the state it names — which is how a listed grant's
+/// `replaces` is read back.
+pub const T_REPLACES: &str = "1.1.0.1.0.1.0.3.12";
+
 /// `{"op":"principal_prefix","principal":n}`.
 pub fn principal_prefix(principal: u64) -> Value {
     json!({"op": "principal_prefix", "principal": principal})
@@ -208,6 +222,20 @@ pub fn make_link(home: &str, from: &[&str], to: &[&str], ty: &str, id: Option<&s
         }),
         id,
     )
+}
+
+/// [`make_link`]'s frame with the optional `replaces` member (wire.md
+/// §Links (writes); PUB-5.15 (iv)): `replaces` the address of the record
+/// whose STATE this link replaces — a re-share's the revocation it follows —
+/// or `None`, the EMPTY state, where the member is not sent and the frame is
+/// [`make_link`]'s exactly. The one builder that spells the member; every
+/// existing caller of [`make_link`] sends its frame unchanged.
+pub fn make_link_replacing(home: &str, from: &[&str], to: &[&str], ty: &str, replaces: Option<&str>, id: Option<&str>) -> Value {
+    let mut frame = make_link(home, from, to, ty, id);
+    if let Some(r) = replaces {
+        frame["replaces"] = Value::String(r.to_string());
+    }
+    frame
 }
 
 /// The unit subtree span at `addr` as a four-set slot — the spelling

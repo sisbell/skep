@@ -1,5 +1,5 @@
 //! THE SIX COMMANDS through the binary (`client.md` §2; the build brief §3):
-//! the help lists fourteen and `--yes` is exit 2; each person door refuses
+//! the help lists fifteen and `--yes` at a retirement is exit 2; each person door refuses
 //! without a controlling terminal, and opens under a pseudo-terminal only
 //! where stdin and stderr are both one, while `accept --reprint`, `enroll
 //! --reply`, `handoff` without `--payload` and `merge` run without one; a usage
@@ -27,7 +27,7 @@ use skep_identity::parse_enroll;
 
 use crate::common::{origin, s, skep, skep_os, spawn, tree, Run};
 
-const FOURTEEN: [&str; 14] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept", "merge"];
+const FIFTEEN: [&str; 15] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind", "enroll", "recover", "retire", "rotate", "handoff", "accept", "merge", "share"];
 
 /// A claimed board through the LIBRARY (the notebook arm is a person door
 /// the binary refuses without a terminal): the store holds the device key,
@@ -42,10 +42,10 @@ fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
 }
 
 #[test]
-fn help_lists_fourteen_and_names_none_as_not_in_this_build_and_yes_is_exit_2() {
+fn help_lists_fifteen_and_names_none_as_not_in_this_build_and_yes_at_a_retirement_is_exit_2() {
     let run = skep(&["--help"], &[], None);
     assert_eq!(run.code, 0, "{run:?}");
-    for c in FOURTEEN {
+    for c in FIFTEEN {
         assert!(run.out.contains(&format!("\n  {c} ")), "{c} listed:\n{}", run.out);
     }
     assert!(!run.out.contains("not in this build"), "{}", run.out);
@@ -53,9 +53,12 @@ fn help_lists_fourteen_and_names_none_as_not_in_this_build_and_yes_is_exit_2() {
         let r = skep(&[c], &[], None);
         assert!(!r.err.contains("not in this build") && !r.err.contains("unknown command"), "{c}: {}", r.err);
     }
+    // `--yes` is `share`'s alone (a share, a privash or a revoke off a
+    // terminal): a retirement's confirmation is typed, never a flag
+    // (AUTH-5.46), so at `retire` it is refused as another command's flag.
     let r = skep(&["retire", "--yes", "--board", "http://127.0.0.1:1"], &[], None);
-    assert_eq!(r.code, 2, "--yes does not exist: {r:?}");
-    assert!(r.err.contains("unknown argument `--yes`"), "{}", r.err);
+    assert_eq!(r.code, 2, "--yes is no flag of retire: {r:?}");
+    assert!(r.err.contains("`--yes` is not a flag of `retire`"), "{}", r.err);
 }
 
 /// THE TTY: each person door without a controlling terminal is exit 3, a

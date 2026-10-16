@@ -10,7 +10,9 @@
 //! the crate's own source for the arrangement it promises. `search` drives
 //! the `search` module — the feature the self dev-dependency turns on —
 //! over a claimed board, its fixture its own; `merge` drives the `merge`
-//! module's one whole merge over a claimed permissive board.
+//! module's one whole merge over a claimed permissive board; `share` drives
+//! the `share` module — the share, the revoke, the re-share, the privash and
+//! the lost answer — over three keyed siblings on a claimed permissive board.
 
 mod backup;
 mod claim;
@@ -25,5 +27,6 @@ mod recover;
 mod retire;
 mod rotate;
 mod search;
+mod share;
 mod tidy;
 mod verifier;

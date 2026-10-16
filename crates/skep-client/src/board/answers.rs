@@ -39,6 +39,18 @@ fn slot_start(v: &Value, index: usize) -> Option<&str> {
     v["link"]["slots"].get(index)?.get(0)?["start"].as_str()
 }
 
+/// The start of EVERY span of a `read_link` answer's slot at `index` (the
+/// read-back order: 0 FROM, 1 TO, 2 TYPE), in the order served — empty for
+/// an EMPTY slot, the ANY-PRINCIPAL grant's `to` (PUB-5.8) — and `None`
+/// where the document holds no link: `link: null`, the absent address's
+/// answer (wire.md §The read predicate), or no `link_value` at all. A grant
+/// reader needs the whole slot, where `link_to` answers one address: a `to`
+/// naming two is a record of neither kind (PUB-5.15).
+pub(crate) fn link_slot_starts(v: &Value, index: usize) -> Option<Vec<&str>> {
+    let slots = v["link"]["slots"].as_array()?;
+    Some(slots.get(index)?.as_array()?.iter().filter_map(|s| s["start"].as_str()).collect())
+}
+
 /// A `delivery`'s FIRST item read as the one composite value a record is
 /// (wire.md §Content values): an `atom` item's text, or an `atom_hex` item's
 /// bytes. `None` for any other item — a `content` or `hex` item is a RUN of

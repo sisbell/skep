@@ -6,8 +6,10 @@
 //! and drives the built `skep-dev` against a corpus it builds under the
 //! system temp dir; `merge` seeds a claimed board with a document's
 //! versions by hand and drives the fourteenth command, `skep merge`,
-//! against them; `tidy` reads the crate's own source for the arrangement
-//! `ARCHITECTURE.md` §The command states.
+//! against them; `share` drives the fifteenth, `skep share` — the usage
+//! forms against a dead port, then the share, the revoke, the re-share, the
+//! privash and the lists on a claimed board; `tidy` reads the crate's own
+//! source for the arrangement `ARCHITECTURE.md` §The command states.
 
 mod ceremonies;
 mod cli;
@@ -16,4 +18,5 @@ mod dev;
 mod hostile;
 mod merge;
 mod serve;
+mod share;
 mod tidy;

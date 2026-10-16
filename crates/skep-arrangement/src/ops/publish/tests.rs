@@ -5,7 +5,7 @@
 //! name values that were never stored.
 
 use serde::{Deserialize, Serialize};
-use skep_content::{stage_write, ContentStore, Val};
+use skep_content::{stage_write, ContentStore, ContentStretch, Piece, Val};
 use skep_kernel::Kernel;
 use skep_namespace::PrincipalId;
 
@@ -32,6 +32,7 @@ enum ShotRec {
     M3(M3Rec),
     Content(ContentWrite),
     M5(M5Rec),
+    Stretch(ContentStretch),
 }
 
 impl From<M3Rec> for ShotRec {
@@ -42,6 +43,11 @@ impl From<M3Rec> for ShotRec {
 impl From<ContentWrite> for ShotRec {
     fn from(r: ContentWrite) -> ShotRec {
         ShotRec::Content(r)
+    }
+}
+impl From<ContentStretch> for ShotRec {
+    fn from(r: ContentStretch) -> ShotRec {
+        ShotRec::Stretch(r)
     }
 }
 impl From<M5Rec> for ShotRec {
@@ -62,6 +68,11 @@ impl WorldState for ShotWorld {
             ShotRec::Content(x) => ShotWorld {
                 m3: self.m3.clone(),
                 content: self.content.apply_write(x),
+                m5: self.m5.clone(),
+            },
+            ShotRec::Stretch(x) => ShotWorld {
+                m3: self.m3.clone(),
+                content: self.content.apply_stretch(x),
                 m5: self.m5.clone(),
             },
             ShotRec::M5(x) => ShotWorld {
@@ -270,6 +281,50 @@ fn the_shot_refuses_a_reinsert_past_its_budget_before_probing_an_address() {
         PublishError::Withheld(d) if d == doc1()
     ));
     assert_eq!(k.current_seq(), before, "every refusal commits nothing");
+}
+
+#[test]
+fn a_shot_reinserts_a_drafts_one_byte_values_as_one_stretch() {
+    // THE LENGTH TEST: a draft a board written before stretches holds spells
+    // its text as one-byte VALUES — seeded here through `stage_write` apiece,
+    // the per-value form, and arranged as one run by M5's record. The
+    // re-insert takes each one-byte `Piece::Value` into its pending byte-run
+    // as it takes a `Piece::Bytes`, so the member holds ONE stretch for the
+    // run — one entry, the bytes in order at the trunk's three fresh
+    // addresses, each answering as a byte of a stretch — where re-minting
+    // each as a one-byte value would carry the old form into every edition.
+    let p1 = Caller::Principal(PrincipalId(1));
+    let mut content = ContentStore::default();
+    for (k, byte) in (1..=3u32).zip(b"abc") {
+        let cw = stage_write(&content, ca(k), Val::new([*byte])).expect("fresh");
+        content = content.apply_write(&cw);
+    }
+    let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+        doc: doc1(),
+        at: n(1),
+        runs: vec![run(&ca(1), 3)],
+    });
+    let k = mem_kernel_of(ShotWorld { m3: seeded_m3(), content, m5 });
+    let stored = k.snapshot().world().content().len();
+    let anyone = |_: &ShotWorld, _: &Address| true;
+    let shot = Shot {
+        base: None,
+        draft: Some(doc1()),
+        runs: vec![ShotRun { origin: doc1(), run: run(&ca(1), 3) }],
+    };
+    let (member, _) = Vstream::new(&k)
+        .publish(p1, &pdoc(), &shot, &anyone)
+        .expect("the birth shot commits");
+    let s = k.snapshot();
+    let (m5, content) = (s.world().m5(), s.world().content());
+    assert_eq!(m5.content_count(&member), n(3), "three positions re-inserted");
+    assert_eq!(content.len() - stored, 1, "one stretch, not three one-byte values");
+    for (ordinal, byte) in (1..=3u32).zip(b"abc") {
+        match content.value_at(pca(ordinal).tumbler()) {
+            Some(Piece::Bytes(b)) => assert_eq!(b, &[*byte][..], "the byte at pca({ordinal})"),
+            other => panic!("pca({ordinal}) holds {other:?}, not a byte of the member's stretch"),
+        }
+    }
 }
 
 #[test]

@@ -126,16 +126,22 @@ const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
 /// the body size, is what this cap exists to bound.
 ///
 /// The number is M2's transaction budget divided by what one value costs
-/// inside it. An `insert` of N values commits 2N + 1 records (a mint and a
-/// content write per value, plus one placement), and a content record
-/// carries a multi-component address, so a value's encoded share of the
-/// transaction runs to order a hundred bytes: [`skep_kernel::MAX_TXN_BYTES`]
-/// (64 MiB) therefore admits a few hundred thousand values and no more.
-/// Rounding down to a power of two leaves the cap comfortably inside a
-/// budget M2 would enforce anyway — the point being WHEN it is enforced.
-/// Without this the refusal arrives from M2 after the codec has allocated
-/// and M5 has staged; with it, a frame that cannot commit is refused
-/// before either.
+/// inside it, at the worst case that holds. An `insert` of N ATOMS commits
+/// 2N + 1 records (a mint and a content write per atom, plus one placement),
+/// each content record carrying a multi-component address, so an atom's
+/// encoded share of the transaction runs to order three hundred bytes; a
+/// run of N single-byte values commits TWO records however long (one range
+/// mint and one stretch, about N + 300 bytes), so the per-byte case the cap
+/// was cut for now stages a few hundred kilobytes under it. For small atoms
+/// the cap does not reach M2's ceiling: 2¹⁸ two-byte atoms are about 3.7 MB
+/// of request, inside the daemon's body cap, and stage about 75 MB past
+/// [`skep_kernel::MAX_TXN_BYTES`] (64 MiB) — there the refusal is M2's,
+/// after the staging, lifting with a smaller request. The cap stays
+/// denominated in values at this number — the point being WHEN it is
+/// enforced for the request shapes it bounds: without it the refusal
+/// arrives from M2 after the codec has allocated and M5 has staged; with
+/// it, a frame that cannot commit is refused before either. Whether the
+/// number moves is the configuration register's question.
 const MAX_INSERT_VALUES: usize = 1 << 18;
 
 /// The most decimal digits one decimal NATURAL may carry on the wire — a

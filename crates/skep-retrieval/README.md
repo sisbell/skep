@@ -6,8 +6,9 @@ over documents.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **`retrieve_v`** — deliver the content at a list of document V-spans,
-  in the order asked: one item per position, a link position as its
-  address; `retrieve_v_masked` withholds each run whose origin the
+  in the order asked: a maximal run of single-byte positions as one
+  `Bytes` item, an atom as its own `Content` item, a link position as
+  its address; `retrieve_v_masked` withholds each run whose origin the
   caller's predicate cannot read.
 - **`doc_vspan` / `doc_vspanset`** — a document's extents: its bounding
   span, or one exact span per occupied subspace.

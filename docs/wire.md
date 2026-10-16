@@ -1497,8 +1497,10 @@ not a descendant of the bootstrap node, 1), `not_fresh`.
 
 Arrangement: `empty_content`, `content` (insert and publish: M4 refused
 the content write because a value is already stored at the address M3
-just minted — an upstream invariant no sound store breaks, so, like
-`gate`, a defence rather than a well-formed request's refusal),
+just minted, or refused the stretch a run of single-byte values is
+written as — empty, or reaching over a stored address — an upstream
+invariant no sound store breaks, so, like `gate`, a defence rather than
+a well-formed request's refusal),
 `empty_source`, `not_ordinal_vspan`, `dangling_source` (copy and
 reinstate: an address a placed run names holds no value — a copy probes
 each resolved run's start, a reinstate every address of every run),
@@ -1696,8 +1698,9 @@ the client's WHOLE rendered arrangement, in order, each run its
 origin's relation to `doc`: the document's own I-space (its own chain
 or any member's) by reference; the staging `draft`'s RE-INSERTED as
 fresh identity under the document's own I-space — one content mint
-and one write per value, the bytes read at the draft's addresses — so
-no address of the draft survives in the member; any OTHER document's
+and one write per maximal run of single-byte values and per atom, the
+bytes read at the draft's addresses — so no address of the draft
+survives in the member; any OTHER document's
 stays a window, answering its origin. `origin` must be the document
 that minted the run's addresses (`bad_run` otherwise; a link element is
 no content run). Then the composite APPENDS the base's positions past
@@ -4594,15 +4597,15 @@ reads `"bare"`, and no entry is signed, so no row carries `attest`):
 `delegate` commits at position 22 — its row carrying the minted pair —,
 the home mint at 23, a second — private — document at 24 (the account's
 doc 1 is born published, where bare writes are gated by design, so the
-flow's content goes to a draft document), a two-byte `insert` at 29,
-`make_link` at 32 — its row carrying the minted link's address. The feed
-past the ceremony and its head, `GET /changes?since=20`, read AS
-PRINCIPAL 1 — the owner of the private document, whose class sees every
-one of these:
+flow's content goes to a draft document), a two-byte `insert` at 27 (one
+range mint, one stretch, one placement), `make_link` at 30 — its row
+carrying the minted link's address. The feed past the ceremony and its
+head, `GET /changes?since=20`, read AS PRINCIPAL 1 — the owner of the
+private document, whose class sees every one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":29,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":32,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":32,"more":false}
+{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":27,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":30,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":30,"more":false}
 ```
 
 The first page of the same feed, `GET /changes?since=20&limit=2`:
@@ -4639,12 +4642,12 @@ metadata field `null` — the op's own terms included, its op being unknown
 — (and masked at your class from what the journal shows it touched); its
 `attest` is served where the store still holds the slot, and is otherwise
 absent. A pre-feature data dir holding three writes (a delegate at 2, a
-mint at 3, an insert at 8 — written by the engine directly, before any
+mint at 3, an insert at 6 — written by the engine directly, before any
 daemon; all in the published world, so every class sees them), byte-exact:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":8,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":8,"more":false}
+{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":false}
 ```
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar

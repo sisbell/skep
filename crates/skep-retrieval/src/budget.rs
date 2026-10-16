@@ -124,9 +124,11 @@ pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 /// [`Query::show_deletions`]: crate::Query::show_deletions
 pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 
-/// The most items one RETRIEVEV's delivery may carry — one per position of
-/// each delivered run and one per withheld run, as [`Delivery::len`] counts —
-/// and so the ceiling on what the DELIVERY makes M6 hold live.
+/// The most items one RETRIEVEV's delivery may carry, counted in POSITIONS —
+/// one per position of each delivered run, a byte-run item standing for its
+/// run's width, and one per withheld run — and so the ceiling on what the
+/// DELIVERY makes M6 hold live. [`Delivery::len`] counts the items
+/// themselves, fewer wherever a run of single-byte positions is one item.
 ///
 /// THE EXTENT IS VIRTUAL, which is why no request field prices it. M5 caps the
 /// runs one placing request stores (`MAX_PLACED_RUNS`) and caps no position
@@ -138,7 +140,8 @@ pub const MAX_FIND_COVERAGE_SPANS: usize = MAX_COMPARE_OPERAND_BLOCKS;
 /// delivery is built here, whole, before any caller holds it.
 ///
 /// The budget: a content item is one [`DeliveryItem`] — order 64 bytes inline,
-/// its value an `Arc` clone and never a byte copy — and a link reference or a
+/// its value an `Arc` clone and never a byte copy, a byte-run item one
+/// allocation of its bytes for all its positions — and a link reference or a
 /// withheld run owns an `Address` besides, order 300 heap bytes. `2^17` items
 /// is therefore 8 MiB of delivery, and about 45 MiB at worst: under
 /// [`MAX_COMPARE_PAIRS`]' 64 MiB report, the largest answer any budget here

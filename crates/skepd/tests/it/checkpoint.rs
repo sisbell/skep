@@ -60,7 +60,7 @@ fn rotate_the_segment(port: u16, session: &str, dir: &Path) {
         Some(session),
         &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     ));
-    let bulk = "z".repeat(8192);
+    let bulk = "z".repeat(262_144);
     for _ in 0..64 {
         if segments(dir).len() >= 2 {
             return;

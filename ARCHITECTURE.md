@@ -103,13 +103,19 @@ foundation and on the stores above it.
   lock keys the stores take; the entity and principal registries and
   ownership (ω); each document's publication bit. Its modules and rules:
   §The name space.
-- `skep-content` — the write-once map from address to value, ordered by
-  address so a checkpoint walks it without sorting: point queries, and one
-  enumeration of every entry, in no promised order, for whole-store work
-  such as the cell index's walk. One feature, default off: `test-hooks`
-  compiles in `write`, the test-only twin of `stage_write`, and the
-  `skep-kernel` and `skep-namespace` edges only `write` takes. Every debug
-  build asserts that each address written is a content element address.
+- `skep-content` — the write-once map from address to value or STRETCH —
+  a run of consecutive single-byte values written by one insert, held as
+  one entry under its first address — ordered by address so a checkpoint
+  walks it without sorting and a read finds the entry at or below an
+  address (the predecessor read, `range(..=t).next_back()`, sound across
+  the map's leaves): point queries that answer every address inside a
+  stretch by its byte, one run read (`pieces`, the maximal pieces of an
+  I-extent), and one enumeration of every entry, in no promised order, for
+  whole-store work such as the cell index's walk. One feature, default off:
+  `test-hooks` compiles in `write` and `write_stretch`, the test-only twins
+  of `stage_write` and `stage_stretch`, and the `skep-kernel` and
+  `skep-namespace` edges only they take. Every debug build asserts that
+  each address written is a content element address.
   `scripts/gate-full.sh` builds the library and its docs without the
   feature and runs its suite in release.
 - `skep-arrangement` — documents as arrangements of content, versions,
@@ -385,11 +391,18 @@ Rules that hold across its files:
   kernel refuses what a journaled one refuses.
 - **The formats are pinned.** `tests/golden/` holds the bytes the
   fixture's ops must reproduce; a moved byte is a format event and bumps
-  the `SKJ` and `SKC` stamps — with one dev-time exception on record: on
-  2026-09-29 the chain's preimage gained the signature slot's digest and
-  M5's slice its shot terms, and the goldens were regenerated once under
-  the unchanged `SKJ4`/`SKC4` by the owner's no-stamp ruling (no served
-  board exists; dev boards regenerate). A moved bound the reader holds
+  the `SKJ` and `SKC` stamps — with one dev-time exception on record,
+  applied twice: on 2026-09-29 the chain's preimage gained the signature
+  slot's digest and M5's slice its shot terms, and on 2026-10-15 a run of
+  single-byte values became one range mint and one stretch record where it
+  was two records per byte, M4's checkpoint entry a tagged value or
+  stretch; each time the goldens were regenerated under the unchanged
+  `SKJ4`/`SKC4` by the owner's no-stamp ruling (no served board exists;
+  dev boards regenerate — after the second, every development board is
+  deleted and re-seeded, whether its open refuses it or opens it from
+  genesis), and the first regeneration's artifacts stand under
+  `tests/golden-prestretch/` as the one committed pre-stretch board, which
+  this build opens from genesis. A moved bound the reader holds
   every journal to — the frame cap, the transaction budget, the segment
   ceiling, the slot's width — is a format event too, though it keeps
   every golden byte, so `src/journal/tests.rs` pins those four beside the

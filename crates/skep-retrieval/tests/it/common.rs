@@ -4,16 +4,17 @@
 //! `Vstream` ops, since `M5Rec` is sealed to foreign crates.
 
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{
     deposit_class_types, Caller, Deposit, HasM5, M5State, Run, Shot, ShotRun, VPos, VSpec, Vstream,
 };
-use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
-use skep_retrieval::{RegionSpec, Spec};
+use skep_retrieval::{Delivery, DeliveryItem, RegionSpec, Spec};
 
 // ---- the minimal engine assembly (composition contract) ----
 
@@ -29,6 +30,7 @@ pub enum Rec {
     M3(M3Rec),
     Content(ContentWrite),
     M5(skep_arrangement::M5Rec),
+    Stretch(ContentStretch),
 }
 
 impl From<M3Rec> for Rec {
@@ -39,6 +41,11 @@ impl From<M3Rec> for Rec {
 impl From<ContentWrite> for Rec {
     fn from(r: ContentWrite) -> Rec {
         Rec::Content(r)
+    }
+}
+impl From<ContentStretch> for Rec {
+    fn from(r: ContentStretch) -> Rec {
+        Rec::Stretch(r)
     }
 }
 impl From<skep_arrangement::M5Rec> for Rec {
@@ -73,6 +80,10 @@ impl WorldState for World {
             },
             Rec::Content(x) => World {
                 content: self.content.apply_write(x),
+                ..self.clone()
+            },
+            Rec::Stretch(x) => World {
+                content: self.content.apply_stretch(x),
                 ..self.clone()
             },
             Rec::M5(x) => World {
@@ -270,6 +281,29 @@ pub fn mem_kernel() -> Kernel<World> {
     Kernel::open(cfg, genesis()).expect("in-memory open")
 }
 
+/// A delivered run of single-byte positions as ONE item — the piece of a
+/// stretch RETRIEVEV lends — which is how every per-byte insert the suites
+/// make is delivered: the one helper the expected deliveries are spelled
+/// with. An atom is spelled as `DeliveryItem::Content(val(..))` beside it.
+pub fn text(b: &[u8]) -> DeliveryItem {
+    DeliveryItem::Bytes(Arc::from(b))
+}
+
+/// The positions a delivery stands for — a byte-run item its width, a
+/// withheld run its width, every other item one: R3's one-per-position
+/// exactness read off the items, which `Delivery::len` no longer counts.
+pub fn positions(d: &Delivery) -> usize {
+    d.iter()
+        .map(|item| match item {
+            DeliveryItem::Bytes(b) => b.len(),
+            DeliveryItem::Withheld { width, .. } => {
+                usize::try_from(width).expect("a test width fits a usize")
+            }
+            DeliveryItem::Content(_) | DeliveryItem::Ref(_) => 1,
+        })
+        .sum()
+}
+
 /// doc1 arranged with content a, b, c (ca1..ca3).
 pub fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
@@ -364,18 +398,16 @@ pub fn fragmented_head(k: &Kernel<World>) -> Vstream<'_, World> {
 
 /// pdoc = `[a, b, c]` — [`deposit3`] — and its birth version, the head vdoc,
 /// published by one shot of two runs: pdoc's own pca1, then two positions
-/// `u`, `v` under [`unheld_member`], whose values M4's test-only `write`
-/// stores at addresses no registration names. M5 admits both runs on their
-/// TRUNK's registration, pdoc's; M6 takes a run's origin at its document, so
-/// the second run's origin is registered nowhere here — one node's RES-162
-/// unheld origin, which a guest-class mirror meets at a published window
-/// onto a draft it never held.
+/// `u`, `v` under [`unheld_member`], whose bytes M4's test-only
+/// `write_stretch` stores as one stretch at addresses no registration names.
+/// M5 admits both runs on their TRUNK's registration, pdoc's; M6 takes a
+/// run's origin at its document, so the second run's origin is registered
+/// nowhere here — one node's RES-162 unheld origin, which a guest-class
+/// mirror meets at a published window onto a draft it never held.
 pub fn unheld_origin_head(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = deposit3(k);
-    for (ordinal, byte) in [(1, b"u"), (2, b"v")] {
-        skep_content::write(k, &unheld_ca(ordinal), val(byte))
-            .expect("M4's test-only write commits");
-    }
+    skep_content::write_stretch(k, &unheld_ca(1), Arc::from(&b"uv"[..]))
+        .expect("M4's test-only stretch write commits");
     let shot_run = |start: Address, width: u32| ShotRun {
         origin: pdoc(),
         run: Run::new(start, n(width)).expect("a content run"),

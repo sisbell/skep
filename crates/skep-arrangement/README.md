@@ -10,7 +10,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   stored); every edit is a new arrangement, never a byte change.
 - **Editing composites** — insert, copy (transclusion — the transcluded
   spans keep their origin identity), delete, rearrange; each a
-  kernel transaction composing namespace mints and content writes.
+  kernel transaction composing namespace mints and content writes — a
+  run of single-byte values as one range mint and one stretch, an atom
+  as its own mint and write.
 - **Versioning** — VERSION forks a document: the fork's arrangement
   starts as a snapshot of the content map the source's readers answer
   from (a bare published source's head), the source untouched, and the

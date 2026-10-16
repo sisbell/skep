@@ -135,8 +135,10 @@ where
                     }
                     // Existence (S3★) at EVERY address: the run is the
                     // client's I-extent and no arrangement's, so nothing
-                    // vouches for its interior but the probe itself.
-                    if !run.addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
+                    // vouches for its interior but the probe itself — M4's run
+                    // read, which walks the extent piece by piece and says
+                    // whether every address of it is covered.
+                    if !content.pieces(run.i_start().tumbler(), run.width()).covered() {
                         return Err(ReinstateError::DanglingSource);
                     }
                     extend_or_push_run(&mut placement, run.clone());

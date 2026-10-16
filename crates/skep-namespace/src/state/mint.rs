@@ -1,19 +1,20 @@
-//! §A, beneath [`M3State`]: the lock keys a transaction holds, the five mints
-//! that read their frontiers, and the two peeks —
-//! [`M3State::next_account_prefix`] and [`M3State::next_content_address`],
-//! each its chain's mint without the record, kept beside the mints they
-//! call. An `impl M3State` child of `state`: it reaches the frontier
-//! arithmetic (`next_in`) the way a child does, and keeps `mint_on`, the mint
-//! behind the five, private to itself, so no other module reaches that mint
-//! except through one of the five gates.
+//! §A, beneath [`M3State`]: the lock keys a transaction holds, the six mints
+//! that read their frontiers — five single mints and the content chain's
+//! range mint — and the two peeks — [`M3State::next_account_prefix`] and
+//! [`M3State::next_content_address`], each its chain's mint without the
+//! record, kept beside the mints they call. An `impl M3State` child of
+//! `state`: it reaches the frontier arithmetic (`next_in`) the way a child
+//! does, and keeps `mint_on`, the mint behind the five single mints, private
+//! to itself, so no other module reaches that mint except through one of the
+//! gates.
 
-use skep_address::{Address, GateViolation, Level};
+use skep_address::{Address, GateViolation, Level, Nat};
 use skep_kernel::{LockKey, Space};
 
 use super::{M3State, MAX_PRINCIPAL_COMPONENTS, NO_PUBLICATION_STATE};
 use crate::error::MintError;
 use crate::ns::{account_ns, content_ns, document_ns, link_ns, ns_lock_key, version_ns, NsKey};
-use crate::record::{Allocation, M3Rec};
+use crate::record::{Allocation, M3Rec, RangeAllocation};
 
 // ---------------------------------------------------------------------------
 // §A The lock-key constructors: one per chain, and the two registry keys.
@@ -182,6 +183,48 @@ impl M3State {
         }
         self.mint_on(&content_ns(home), NO_PUBLICATION_STATE)
             .map_err(MintError::Gate)
+    }
+
+    /// The next `count` content addresses under `home` in ONE record:
+    /// namespace `(b_C(home), 1)`, the first at element field `[s_C, m+1]`
+    /// and the rest at the ordinals after it — byte for byte the addresses
+    /// `count` calls of [`M3State::mint_content`] would issue (B2), the one
+    /// [`M3Rec::AllocateRange`] advancing the frontier by `count` where those
+    /// calls would advance it one record at a time. [M5: INSERT and the
+    /// publish shot, for a run of single-byte values M4 stores as one
+    /// stretch.] The same gate as `mint_content` (P6/C2), the same key
+    /// ([`M3State::content_lock_key`]`(home)`) held BEFORE the closure, the
+    /// same staging obligation ([`M3Rec::Allocate`] states it): called on the
+    /// transaction's WORKING state, its record staged there before the next
+    /// mint on the chain, which then issues `first ⊕ count`.
+    ///
+    /// **Precondition.** `count ≥ 1`: a range of nothing moves no frontier,
+    /// and its record is refused at decode; the one caller passes the length
+    /// of a stretch, which is at least one.
+    ///
+    /// # Errors
+    ///
+    /// `HomeNotRegistered` where `home` is no registered document; `Gate`
+    /// where M1's TA5a gate refuses the first address, which no live path
+    /// reaches.
+    ///
+    /// # Panics
+    ///
+    /// In a debug build, on a zero `count`.
+    pub fn mint_content_range(
+        &self,
+        home: &Address,
+        count: &Nat,
+    ) -> Result<(Address, M3Rec), MintError> {
+        debug_assert!(*count != Nat::default(), "a content range mints at least one address");
+        if !self.is_registered_document(home) {
+            return Err(MintError::HomeNotRegistered); // P6/C2
+        }
+        let first = self.next_in(&content_ns(home)).map_err(MintError::Gate)?;
+        Ok((
+            first.clone(),
+            M3Rec::AllocateRange(RangeAllocation { first, count: count.clone() }),
+        ))
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element

@@ -47,12 +47,15 @@
 //! Four surfaces (§Public interface):
 //!
 //! * **Frontier allocation** (§A) — pure, composable mints
-//!   ([`M3State::mint_content`] / [`M3State::mint_link`] /
-//!   [`M3State::mint_version`] / [`M3State::mint_document`]) folded into
-//!   M5/M7 composites, each returning the minted address plus the one
-//!   [`M3Rec`] the caller stages, with the matching `*_lock_key`
-//!   constructor for M2 `transact`'s `keys` \[ASN-0040 B1/B2/B6–B10,
-//!   ASN-0123 VD\]. The two document-minting mints take the RESOLVED
+//!   ([`M3State::mint_content`] / [`M3State::mint_content_range`] /
+//!   [`M3State::mint_link`] / [`M3State::mint_version`] /
+//!   [`M3State::mint_document`]) folded into M5/M7 composites, each
+//!   returning the minted address plus the one [`M3Rec`] the caller stages
+//!   — the content chain's range mint returning the FIRST of the `count`
+//!   addresses its one record mints, the addresses `count` single mints
+//!   would have issued — with the matching `*_lock_key` constructor for M2
+//!   `transact`'s `keys` \[ASN-0040 B1/B2/B6–B10, ASN-0123 VD\]. The two
+//!   document-minting mints take the RESOLVED
 //!   publication bit the caller resolved and stamp it on the record
 //!   \[PUB-8.18\]. The remaining chain — the account chain, `A_account(N)`
 //!   under a node and the sub-account `(A, 1)` under an account — is minted
@@ -165,9 +168,9 @@ mod ns;
 // The ghost region: the five reserved type addresses M7 reads, and the floor
 // that keeps the allocator past them.
 mod ghost;
-// The journal delta `M3Rec`, its two sealed payloads `Allocation` and
-// `Principal`, and the two field doors, and the identity type it names with
-// that type's two fixed ids.
+// The journal delta `M3Rec`, its three sealed payloads `Allocation`,
+// `Principal` and `RangeAllocation`, and the field doors, and the identity
+// type it names with that type's two fixed ids.
 mod record;
 // M3's slice: `M3State`, genesis and the fold, the frontier arithmetic and
 // the two registry caps; beneath it `state/mint.rs` (§A: the lock keys, the
@@ -182,7 +185,8 @@ pub use ghost::{ghost_home_document, ghost_position, GHOST_POSITIONS};
 pub use ns::{first_document_address, first_version_address};
 pub use ops::Namespace;
 pub use record::{
-    Allocation, M3Rec, Principal, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+    Allocation, M3Rec, Principal, PrincipalId, RangeAllocation, BOOTSTRAP_PRINCIPAL,
+    SYSTEM_PRINCIPAL,
 };
 pub use state::{
     head_document, prefix_contains, system_account, system_node, M3State, MAX_NODE_COMPONENTS,

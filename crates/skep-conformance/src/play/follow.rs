@@ -308,18 +308,26 @@ impl Cx<'_> {
                         if k >= off + len {
                             break;
                         }
-                        if let DeliveryItem::Content(val) = it {
-                            for byte in val.as_bytes() {
-                                if k >= off + len {
-                                    break;
-                                }
-                                if buf[k].is_none() {
-                                    buf[k] = Some(*byte);
-                                }
-                                k += 1;
+                        // A value's bytes, or a byte-run item's — a run of
+                        // single-byte positions read out of one stored
+                        // stretch, one position per byte — fill the buffer
+                        // position by position.
+                        let text: &[u8] = match &it {
+                            DeliveryItem::Content(val) => val.as_bytes(),
+                            DeliveryItem::Bytes(run) => run,
+                            _ => {
+                                k += 1; // a link ref is never endset text
+                                continue;
                             }
-                        } else {
-                            k += 1; // a link ref is never endset text
+                        };
+                        for byte in text {
+                            if k >= off + len {
+                                break;
+                            }
+                            if buf[k].is_none() {
+                                buf[k] = Some(*byte);
+                            }
+                            k += 1;
                         }
                     }
                 }

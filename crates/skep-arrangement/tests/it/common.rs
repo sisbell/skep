@@ -11,7 +11,7 @@ use skep_arrangement::{
     deposit_class_types, ordinal_vspan, Base, Caller, Deposit, HasM5, M5State, Run, ShotRun, VPos,
     Vstream,
 };
-use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Snapshot,
     TxnError, WorldState,
@@ -32,6 +32,7 @@ pub enum Rec {
     M3(M3Rec),
     Content(ContentWrite),
     M5(skep_arrangement::M5Rec),
+    Stretch(ContentStretch),
 }
 
 impl From<M3Rec> for Rec {
@@ -42,6 +43,11 @@ impl From<M3Rec> for Rec {
 impl From<ContentWrite> for Rec {
     fn from(r: ContentWrite) -> Rec {
         Rec::Content(r)
+    }
+}
+impl From<ContentStretch> for Rec {
+    fn from(r: ContentStretch) -> Rec {
+        Rec::Stretch(r)
     }
 }
 impl From<skep_arrangement::M5Rec> for Rec {
@@ -76,6 +82,10 @@ impl WorldState for World {
             },
             Rec::Content(x) => World {
                 content: self.content.apply_write(x),
+                ..self.clone()
+            },
+            Rec::Stretch(x) => World {
+                content: self.content.apply_stretch(x),
                 ..self.clone()
             },
             Rec::M5(x) => World {

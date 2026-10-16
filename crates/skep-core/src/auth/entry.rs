@@ -107,7 +107,7 @@ use std::num::NonZeroU64;
 
 use skep_address::{document_of, Address, Nat};
 use skep_arrangement::{trunk_of, Deposit, HasM5, SegmentRun, Shot, MAX_REINSERTED_VALUES};
-use skep_content::HasContent;
+use skep_content::{HasContent, Piece};
 use skep_febe::{successor_link, Judgment, Op};
 use skep_identity::{
     entry_body_assert_sup, entry_body_edit_link, entry_body_emit, entry_body_empty,
@@ -443,12 +443,19 @@ fn every_copied_run_origin_readable(
 /// A copied run's values are pushed one by one and a window as its address
 /// and width, onto a [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over
 /// the shot's base — the member and the extent the request named,
-/// `Shot::base`, which the signer composed from the same request. The
-/// budget is measured in the body's own layout as each value is read, so
-/// nothing is collected ahead of the build and no body is held past it; a
-/// refused push takes the builder with it, so the shot is refused whole and
-/// no body is finished over the segments before the refusal — the preimage
-/// of a shorter publish.
+/// `Shot::base`, which the signer composed from the same request. THE
+/// BODY'S GRAIN STAYS PER VALUE: the values are read by M4's run read, one
+/// lookup per piece, and a piece of a stretch — a run of single-byte values
+/// — pushes ONE ROW PER BYTE, since the body is the entry frame's signed
+/// preimage, composed by the client from the values it inserted and by a
+/// later verifier from the member's runs; a row per piece would spell one
+/// N-byte value where the client spelled N one-byte values, and every
+/// attested per-byte publish would be refused for its signature. The budget
+/// is measured in the body's own layout as each value is read, so nothing
+/// is collected ahead of the build and no body is held past it; a refused
+/// push takes the builder with it, so the shot is refused whole and no body
+/// is finished over the segments before the refusal — the preimage of a
+/// shorter publish.
 ///
 /// **Precondition.** The principal may read every value the shot copies in
 /// ([`every_copied_run_origin_readable`]).
@@ -504,9 +511,22 @@ fn publish_body(
     for segment in segments {
         match segment {
             SegmentRun::Value(run) => {
-                for a in run.addrs() {
-                    let v = content.value_at(a.tumbler()).ok_or(ComposeFault::MissingValue)?;
-                    body = body.push(v.as_bytes()).map_err(refused)?;
+                // One row per VALUE (the function's doc): a stretch's piece
+                // one row per byte, a one-byte slice apiece; a value one row.
+                // `covered`, asked after the walk, is the missing value.
+                let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
+                for piece in pieces.by_ref() {
+                    match piece {
+                        Piece::Bytes(bytes) => {
+                            for byte in bytes {
+                                body = body.push(std::slice::from_ref(byte)).map_err(refused)?;
+                            }
+                        }
+                        Piece::Value(v) => body = body.push(v.as_bytes()).map_err(refused)?,
+                    }
+                }
+                if !pieces.covered() {
+                    return Err(ComposeFault::MissingValue);
                 }
             }
             SegmentRun::Window(run) => {
@@ -761,5 +781,103 @@ mod tests {
             width: Nat::from(1u32),
         };
         let _ = compose(world, &delete, BOOTSTRAP_PRINCIPAL, board);
+    }
+
+    /// Checks that the publish body's grain is per value, whatever M4 holds.
+    ///
+    /// THE PREIMAGE PIN: the body composed over a run M4 holds as ONE stretch
+    /// is byte-equal to the body composed over the same bytes M4 holds as
+    /// one-byte values — one row per byte either way — and both equal the
+    /// body the client composes from the values it inserted, one row apiece.
+    /// A row per piece would spell one N-byte value where the client spelled
+    /// N one-byte values, and every attested per-byte publish would be
+    /// refused for its signature. The two worlds are built through the
+    /// stores' own public doors: M3's mints and M4's two stage doors, under
+    /// the content key, into the head document genesis registers.
+    #[test]
+    fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
+        use std::sync::Arc;
+
+        use skep_arrangement::{InsertError, Run, SegmentRun, Shot};
+        use skep_content::{stage_stretch, stage_write, Val};
+        use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+        use skep_namespace::{head_document, M3State};
+
+        let open = || {
+            skep_engine::Engine::open(KernelConfig {
+                durability: Durability::InMemory,
+                checkpoint: CheckpointPolicy::Manual,
+                salt: SaltSource::Seeded(0),
+            })
+            .expect("in-memory genesis cannot fail")
+        };
+        let doc = head_document();
+        let keys = [M3State::content_lock_key(&doc)];
+        // The per-value world: three one-byte values, three mints, three
+        // writes — the form a board written before stretches holds.
+        let values = open();
+        let (first_of_values, _) = values
+            .kernel()
+            .transact::<_, InsertError>(&keys, |stg| {
+                let mut first = None;
+                for byte in b"abc" {
+                    let (addr, mint) = stg.working().m3().mint_content(&doc)?;
+                    stg.push(mint.into());
+                    let write = stage_write(stg.working().content(), addr.clone(), Val::new([*byte]))?;
+                    stg.push(write.into());
+                    first.get_or_insert(addr);
+                }
+                Ok(first.expect("three values"))
+            })
+            .expect("three values commit");
+        // The stretch world: one range mint, one stretch.
+        let stretch = open();
+        let (first_of_stretch, _) = stretch
+            .kernel()
+            .transact::<_, InsertError>(&keys, |stg| {
+                let (first, range) = stg.working().m3().mint_content_range(&doc, &Nat::from(3u32))?;
+                stg.push(range.into());
+                let rec = stage_stretch(stg.working().content(), first.clone(), Arc::from(&b"abc"[..]))?;
+                stg.push(rec.into());
+                Ok(first)
+            })
+            .expect("a range and its stretch commit");
+        assert_eq!(first_of_values, first_of_stretch, "B2: one chain, one first address");
+        let run = Run::new(first_of_stretch, Nat::from(3u32)).expect("a three-position run");
+        let shot = Shot { base: None, draft: None, runs: Vec::new() };
+        let body_of = |engine: &skep_engine::Engine| {
+            let snap = engine.kernel().snapshot();
+            publish_body(snap.world(), &shot, &[SegmentRun::Value(run.clone())])
+                .expect("the body composes")
+                .as_bytes()
+                .to_vec()
+        };
+        let over_values = body_of(&values);
+        let over_stretch = body_of(&stretch);
+        assert_eq!(over_stretch, over_values, "the body's grain parted from per value");
+        // …and both are the client's own composition: one row per value.
+        let mut by_hand = PublishBody::within(MAX_SHOT_BODY_BYTES, None).expect("an empty base");
+        for byte in b"abc" {
+            by_hand = by_hand.push(std::slice::from_ref(byte)).expect("three one-byte rows");
+        }
+        assert_eq!(over_stretch, by_hand.finish().as_bytes().to_vec());
+        // The control that the grain is what is pinned: a one-row body over
+        // the three bytes is another preimage.
+        let one_row = PublishBody::within(MAX_SHOT_BODY_BYTES, None)
+            .expect("an empty base")
+            .push(b"abc")
+            .expect("one row")
+            .finish();
+        assert_ne!(over_stretch, one_row.as_bytes().to_vec(), "a row per piece is another body");
+        // A run short of its stored bytes is still composed per value, and
+        // one past them is the missing value.
+        let snap = stretch.kernel().snapshot();
+        let short = Run::new(run.i_start().clone(), Nat::from(2u32)).expect("a two-position run");
+        assert!(publish_body(snap.world(), &shot, &[SegmentRun::Value(short)]).is_ok());
+        let long = Run::new(run.i_start().clone(), Nat::from(4u32)).expect("a four-position run");
+        assert!(matches!(
+            publish_body(snap.world(), &shot, &[SegmentRun::Value(long)]),
+            Err(ComposeFault::MissingValue)
+        ));
     }
 }

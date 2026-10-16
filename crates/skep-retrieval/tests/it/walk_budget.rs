@@ -12,7 +12,7 @@
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_arrangement::HasM5;
 use skep_retrieval::{
-    CompareError, Delivery, DeliveryItem, FindError, Operand, Query, RegionSpec, RetrieveError,
+    CompareError, Delivery, FindError, Operand, Query, RegionSpec, RetrieveError,
     SpanFault, MAX_COMPARE_OPERAND_BLOCKS,
 };
 
@@ -121,10 +121,7 @@ fn the_walk_price_is_exactly_the_documented_bound_at_each_of_its_arms() {
     specs.push(one_step());
     assert_eq!(
         ok_of(q.retrieve_v(&specs)),
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"a")),
-        ]),
+        Delivery(vec![text(b"a"), text(b"a")]),
         "the reach arm, at the budget"
     );
     specs.push(one_step());
@@ -182,7 +179,7 @@ fn every_operation_prices_its_walk_against_the_arrangement_it_walks() {
     assert_eq!(run_count, 8192, "the premise: pdoc's head is 8192 runs");
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 4, 1))])),
-        Delivery(vec![DeliveryItem::Content(val(b"a"))]),
+        Delivery(vec![text(b"a")]),
         "the premise: named pdoc, RETRIEVEV reads the head's fourth position, \
          which pdoc's own arrangement lacks"
     );

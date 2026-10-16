@@ -14,7 +14,7 @@ use std::ops::Deref;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
-use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState,
 };
@@ -78,6 +78,7 @@ pub enum Record {
     Content(ContentWrite),
     M5(M5Rec),
     Links(LinkRec),
+    Stretch(ContentStretch),
 }
 
 impl WorldState for World {
@@ -90,6 +91,10 @@ impl WorldState for World {
             },
             Record::Content(x) => World {
                 content: self.content.apply_write(x),
+                ..self.clone()
+            },
+            Record::Stretch(x) => World {
+                content: self.content.apply_stretch(x),
                 ..self.clone()
             },
             Record::M5(x) => World {
@@ -146,6 +151,11 @@ impl From<M3Rec> for Record {
 impl From<ContentWrite> for Record {
     fn from(r: ContentWrite) -> Record {
         Record::Content(r)
+    }
+}
+impl From<ContentStretch> for Record {
+    fn from(r: ContentStretch) -> Record {
+        Record::Stretch(r)
     }
 }
 impl From<M5Rec> for Record {

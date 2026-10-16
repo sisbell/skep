@@ -191,7 +191,7 @@ fn a_def_is_stored_as_its_source_and_reg_expanded_when_derived() {
     let some_class = define(exists(7, Dom::Reg, is_k7));
     let one_class = define(is_k(&retired_ty(), var(1)));
     let stored = |start: &Address| {
-        k.snapshot().world().content().value_at(start.tumbler()).expect("resident").len()
+        k.snapshot().world().content().value_at(start.tumbler()).expect("resident").as_bytes().len()
     };
     assert!(
         stored(&some_class) < stored(&one_class),

@@ -587,7 +587,7 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
 /// Six bulk prepends into `doc` from `session` — a segment has to rotate
 /// before anything below it can be reclaimed (`changes.rs`'s recipe).
 fn rotate_a_segment(port: u16, session: &str, doc: &str) {
-    let bulk = "z".repeat(8192);
+    let bulk = "z".repeat(262_144);
     for _ in 0..6 {
         let v = op(
             port,

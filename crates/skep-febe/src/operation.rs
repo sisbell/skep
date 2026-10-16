@@ -27,7 +27,7 @@ use std::num::NonZeroUsize;
 
 use skep_address::Address;
 use skep_arrangement::{Caller, M5Rec};
-use skep_content::ContentWrite;
+use skep_content::{ContentStretch, ContentWrite};
 use skep_kernel::{Seq, WorldState};
 use skep_links::LinkRec;
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -105,7 +105,7 @@ fn reject(kind: OpKind, code: RejectCode) -> Response {
 impl<W> OperationSurface<W>
 where
     W: FebeWorld,
-    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite> + From<ContentStretch>,
 {
     /// Receive a [`Stores`] factory (built by the binary/engine, wrapping the
     /// recovered kernel via the store-driver constructors). The binary calls

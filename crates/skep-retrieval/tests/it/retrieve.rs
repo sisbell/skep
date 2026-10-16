@@ -1,9 +1,10 @@
-//! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order,
-//! each stored value delivered itself and never a copy of its bytes, R6's
-//! silent degradations, the whole-request gate, the delivery and walk
-//! budgets, the masked form's per-origin consult, asked once per run, and
-//! the withheld item a run whose origin is not registered takes, asking
-//! nothing.
+//! §A RETRIEVEV (ASN-0115): exact per-position delivery in submitted order —
+//! a run of single-byte positions as one `Bytes` item, an atom as its own
+//! `Content` item, the seams between them kept — each stored atom delivered
+//! itself and never a copy of its bytes, R6's silent degradations, the
+//! whole-request gate, the delivery and walk budgets, the masked form's
+//! per-origin consult, asked once per run, and the withheld item a run whose
+//! origin is not registered takes, asking nothing.
 
 use std::cell::RefCell;
 
@@ -21,26 +22,25 @@ use crate::common::*;
 #[test]
 fn retrieve_v_delivers_one_item_per_position_in_v_order_with_verbatim_bytes() {
     // ASN-0115 R2/R3: exact per-position delivery, ascending V, bytes
-    // verbatim (M4 permanence/faithfulness).
+    // verbatim (M4 permanence/faithfulness) — the three per-byte values are
+    // one stretch in M4 and one `Bytes` item here, standing for the three
+    // positions; a window inside it is clipped to the positions named.
     let k = mem_kernel();
     insert3(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3))]));
-    assert_eq!(
-        got,
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"c")),
-        ])
-    );
+    assert_eq!(got, Delivery(vec![text(b"abc")]));
+    assert_eq!(positions(&got), 3);
+    assert_eq!(ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 2, 1))])), Delivery(vec![text(b"b")]));
 }
 
 #[test]
 fn retrieve_v_concatenates_per_spec_in_submitted_order_without_dedup() {
     // ASN-0115 R5/R8: per-spec concatenation in the ORDER submitted, no
-    // merge, no global sort; a repeated spec repeats its contribution.
+    // merge, no global sort; a repeated spec repeats its contribution — and
+    // two specs' runs are two items even where they would coalesce as one
+    // run, since each spec is delivered on its own.
     let k = mem_kernel();
     insert3(&k);
     let s = k.snapshot();
@@ -50,15 +50,7 @@ fn retrieve_v_concatenates_per_spec_in_submitted_order_without_dedup() {
         spec(doc1(), vspan(1, 1, 1)),
         spec(doc1(), vspan(1, 1, 1)),
     ]));
-    assert_eq!(
-        got,
-        Delivery(vec![
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"c")),
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"a")),
-        ])
-    );
+    assert_eq!(got, Delivery(vec![text(b"bc"), text(b"a"), text(b"a")]));
 }
 
 #[test]
@@ -74,11 +66,40 @@ fn retrieve_v_delivers_link_positions_as_address_references() {
     let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(2, 1, 2)), spec(doc1(), vspan(1, 1, 1))]));
     assert_eq!(
         got,
-        Delivery(vec![
-            DeliveryItem::Ref(la(1)),
-            DeliveryItem::Ref(la(2)),
-            DeliveryItem::Content(val(b"a")),
-        ])
+        Delivery(vec![DeliveryItem::Ref(la(1)), DeliveryItem::Ref(la(2)), text(b"a")])
+    );
+}
+
+#[test]
+fn retrieve_v_delivers_a_mixed_insert_as_bytes_content_bytes_across_the_seams() {
+    // THE SEAM, driven: the mixed insert `["abc", {"atom":"XY"}, "def"]` is
+    // one run by I-adjacency and three entries in M4 — a stretch, a value, a
+    // stretch — and RETRIEVEV delivers it as `Bytes`, `Content`, `Bytes`, the
+    // widths 3 / 1 / 3, seven positions; a window crossing both seams from
+    // one byte before the first is delivered piece by piece the same way.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    vs.insert(
+        P1,
+        &doc1(),
+        vp(1, 1),
+        vec![val(b"a"), val(b"b"), val(b"c"), val(b"XY"), val(b"d"), val(b"e"), val(b"f")],
+        Deposit::Undeclared,
+    )
+    .expect("insert commits");
+    let s = k.snapshot();
+    assert_eq!(s.world().content().len(), 3, "the premise: a stretch, an atom, a stretch");
+    assert_eq!(s.world().m5().content_run_count(&doc1()), 1, "the premise: one run");
+    let q = Query::new(&s);
+    let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 7))]));
+    assert_eq!(
+        got,
+        Delivery(vec![text(b"abc"), DeliveryItem::Content(val(b"XY")), text(b"def")])
+    );
+    assert_eq!(positions(&got), 7);
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 3, 3))])),
+        Delivery(vec![text(b"c"), DeliveryItem::Content(val(b"XY")), text(b"d")])
     );
 }
 
@@ -95,17 +116,11 @@ fn retrieve_v_degrades_silently_where_r6_mandates() {
     assert_eq!(ok_of(q.retrieve_v(&[])), Delivery(vec![]));
     // Overrun clips (accept-and-intersect upstream).
     let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 2, 10))]));
-    assert_eq!(
-        got,
-        Delivery(vec![
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"c")),
-        ])
-    );
+    assert_eq!(got, Delivery(vec![text(b"bc")]));
     // Depth-incompatible: well-formed, passes the gate, resolves to ⟨⟩ —
     // the good spec's contribution survives beside it.
     let got = ok_of(q.retrieve_v(&[spec(doc1(), deep_span(1)), spec(doc1(), vspan(1, 1, 1))]));
-    assert_eq!(got, Delivery(vec![DeliveryItem::Content(val(b"a"))]));
+    assert_eq!(got, Delivery(vec![text(b"a")]));
     // Foreign subspace: force-emptied upstream, never an error here.
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(doc1(), vspan(3, 1, 1))])),
@@ -130,46 +145,60 @@ fn retrieve_v_delivers_every_run_of_a_multi_block_document_in_v_order() {
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, 4))])),
         Delivery(vec![
-            DeliveryItem::Content(val(b"x")), // doc2's own block
-            DeliveryItem::Content(val(b"a")), // transcluded [ca1, ca2]
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"a")), // ca1 a second time — R8, no dedup
+            text(b"x"),  // doc2's own block
+            text(b"ab"), // transcluded [ca1, ca2], one piece of doc1's stretch
+            text(b"a"),  // ca1 a second time — R8, no dedup
         ])
     );
 }
 
 #[test]
-fn retrieve_v_delivers_each_stored_value_itself_and_never_a_copy_of_its_bytes() {
-    // §A's cost argument: a content item is an `Arc` clone of the value M4
-    // stores — one pointer per item however many bytes the value holds — so
-    // a delivery naming one value many times (R8: no dedup) costs its item
-    // count and not the bytes repeated. `Val::as_bytes` borrows the value's
-    // one allocation, so the value itself and a copy are told apart by
-    // address, which no `==` on a delivery can do.
+fn retrieve_v_delivers_each_stored_atom_itself_and_a_stretch_piece_as_one_allocation() {
+    // §A's cost argument: a content item for an ATOM is an `Arc` clone of
+    // the value M4 stores — one pointer per item however many bytes the value
+    // holds — so a delivery naming one value many times (R8: no dedup) costs
+    // its item count and not the bytes repeated. `Val::as_bytes` borrows the
+    // value's one allocation, so the value itself and a copy are told apart
+    // by address, which no `==` on a delivery can do. A run of single-byte
+    // positions is delivered as one `Bytes` item per piece — one allocation
+    // of the piece's width, fewer than the per-position refcount bumps it
+    // replaces — holding the same bytes.
     let k = mem_kernel();
-    three_runs(&k); // ca1 sits at doc1's V1 and at doc2's V2 and V4
+    let vs = Vstream::new(&k);
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"hello")], Deposit::Undeclared)
+        .expect("an atom commits");
+    for at in [1, 2] {
+        vs.copy(P1, &doc2(), vp(1, at), &[VSpec { source: doc1(), span: vspan(1, 1, 1) }])
+            .expect("copy commits");
+    }
     let s = k.snapshot();
     let q = Query::new(&s);
-    let stored = s
-        .world()
-        .content()
-        .value_at(ca(1).tumbler())
-        .expect("ca1 is stored");
+    let stored = s.world().content().value_at(ca(1).tumbler()).expect("ca1 is stored");
     let delivery = ok_of(q.retrieve_v(&[
         spec(doc1(), vspan(1, 1, 1)),
+        spec(doc2(), vspan(1, 1, 1)),
         spec(doc2(), vspan(1, 2, 1)),
-        spec(doc2(), vspan(1, 4, 1)),
     ]));
     assert_eq!(delivery.len(), 3);
     for item in &delivery {
         let DeliveryItem::Content(v) = item else {
-            panic!("ca1 is content, delivered as {item:?}");
+            panic!("ca1 is an atom, delivered as {item:?}");
         };
         assert!(
             std::ptr::eq(v.as_bytes(), stored.as_bytes()),
             "a delivered {v:?} is a copy of the stored value's bytes, not the value"
         );
     }
+    // The stretch: three per-byte values, one piece, one item of three bytes.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let delivery = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3)), spec(doc1(), vspan(1, 1, 3))]));
+    let [DeliveryItem::Bytes(first), DeliveryItem::Bytes(second)] = delivery.as_slice() else {
+        panic!("two byte-run items: {delivery:?}");
+    };
+    assert_eq!((&first[..], &second[..]), (&b"abc"[..], &b"abc"[..]));
 }
 
 #[test]
@@ -188,13 +217,7 @@ fn retrieve_v_delivers_content_a_source_document_has_deleted() {
         ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3))])),
         Delivery::default()
     );
-    assert_eq!(
-        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 2, 2))])),
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"b")),
-        ])
-    );
+    assert_eq!(ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 2, 2))])), Delivery(vec![text(b"ab")]));
 }
 
 #[test]
@@ -212,7 +235,7 @@ fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
     assert_eq!(
         ok_of(q.retrieve_v_masked(&[spec(doc2(), vspan(1, 1, 4))], &not_doc1)),
         Delivery(vec![
-            DeliveryItem::Content(val(b"x")),
+            text(b"x"),
             DeliveryItem::Withheld {
                 origin: doc1(),
                 width: n(2)
@@ -232,9 +255,8 @@ fn retrieve_v_masked_withholds_each_unreadable_run_at_its_own_position() {
                 origin: doc2(),
                 width: n(1)
             },
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"a")),
+            text(b"ab"),
+            text(b"a"),
         ])
     );
     // The identity predicate IS the unmasked door.
@@ -394,7 +416,7 @@ fn retrieve_v_withholds_a_run_whose_origin_is_not_registered_without_asking_its_
         "the premise: the second run's origin is registered nowhere on this node"
     );
     let want = Delivery(vec![
-        DeliveryItem::Content(val(b"a")),
+        text(b"a"),
         DeliveryItem::Withheld {
             origin: unheld_member(),
             width: n(2),
@@ -424,20 +446,32 @@ fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // anything else. Enumerated over the whole grid, so the boundaries no
     // hand-picked example visits (a start past the last position, a width
     // landing exactly on the end) are visited too.
+    // Two inserts, so M4 holds two stretches — `abc` and `d` — under one
+    // arranged run (the fresh addresses are I-adjacent): a window over both
+    // is delivered as two pieces, one per stretch.
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], Deposit::Undeclared)
         .expect("insert commits");
     let s = k.snapshot();
+    assert_eq!(s.world().m5().content_run_count(&doc1()), 1, "the premise: one arranged run");
+    assert_eq!(s.world().content().len(), 2, "the premise: two stretches");
     let q = Query::new(&s);
-    let text: [&[u8]; 4] = [b"a", b"b", b"c", b"d"];
+    let bytes: [u8; 4] = *b"abcd";
     for start in 1..=6u32 {
         // Width 0 is not constructible: T12 forbids a zero width.
         for width in 1..=6u32 {
-            let want: Vec<DeliveryItem> = (start..start + width)
-                .filter(|p| (1..=4).contains(p))
-                .map(|p| DeliveryItem::Content(val(text[p as usize - 1])))
-                .collect();
+            let covered: Vec<u32> =
+                (start..start + width).filter(|p| (1..=4).contains(p)).collect();
+            let mut want: Vec<DeliveryItem> = Vec::new();
+            let first_stretch: Vec<u8> =
+                covered.iter().filter(|&&p| p <= 3).map(|&p| bytes[p as usize - 1]).collect();
+            if !first_stretch.is_empty() {
+                want.push(text(&first_stretch));
+            }
+            if covered.contains(&4) {
+                want.push(text(b"d"));
+            }
             assert_eq!(
                 ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, start, width))])),
                 Delivery(want),
@@ -536,10 +570,13 @@ fn retrieve_v_refuses_a_delivery_past_its_budget_whole() {
         "the premise: 2^18 positions, past the budget, from 64 stored values"
     );
     let budget = u32::try_from(MAX_DELIVERY_ITEMS).expect("the budget fits a u32");
-    assert_eq!(
-        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, budget))])).len(),
-        MAX_DELIVERY_ITEMS
-    );
+    // The budget counts POSITIONS: exactly the budget's worth is delivered,
+    // as one `Bytes` item per 64-position run — 2048 items for 2^17
+    // positions, the whole stretch each time.
+    let at_budget = ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, budget))]));
+    assert_eq!(positions(&at_budget), MAX_DELIVERY_ITEMS);
+    assert_eq!(at_budget.len(), MAX_DELIVERY_ITEMS / 64);
+    assert!(at_budget.iter().all(|item| *item == text(&[b'x'; 64])));
     let e = err_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, budget + 1))]));
     assert_eq!(e, RetrieveError::TooManyItems);
     // The refusal names its budget, so a client narrows against the number.

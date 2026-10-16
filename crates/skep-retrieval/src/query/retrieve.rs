@@ -1,10 +1,12 @@
 //! §A RETRIEVEV (ASN-0115): resolve, then dereference — the one operation
 //! that delivers bytes, and so the one impl block bounded by `HasContent`.
 
+use std::sync::Arc;
+
 use num_traits::ToPrimitive;
 use skep_address::Address;
 use skep_arrangement::reading_surface;
-use skep_content::HasContent;
+use skep_content::{HasContent, Piece};
 
 use super::{run_origin, Query, RetrievalWorld};
 use crate::budget::{Count, OverBudget, MAX_DELIVERY_ITEMS, MAX_WALK_STEPS};
@@ -34,8 +36,10 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// refused for what they name (R6 — M5's defensive resolution yields
     /// fewer-or-zero runs); like every spec they are priced against the walk
     /// budget below, so a spec-set of them can still be refused for its size.
-    /// Empty spec-set ⇒ `Ok(empty)`. Delivery is one item per active
-    /// V-position of every DELIVERED run (R3 exactness, R8 no-dedup) — and one
+    /// Empty spec-set ⇒ `Ok(empty)`. Delivery is one `Content` item per
+    /// atom position and one `Bytes` item per maximal run of single-byte
+    /// positions of every DELIVERED run (R3 exactness position for position,
+    /// R8 no-dedup; [`DeliveryItem`] says how the wire keeps it) — and one
     /// [`DeliveryItem::Withheld`] per run whose origin is not a registered
     /// document, occupying that run's `width` positions (PUB-1.57): the one
     /// masking the identity predicate leaves, since the predicate is
@@ -173,39 +177,54 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
                 }
                 // The run's positions as ONE batch, admitted before the first
                 // is expanded, so a run wider than what the budget has left is
-                // refused whole; a width past `usize` is past any budget.
+                // refused whole; a width past `usize` is past any budget. The
+                // budget counts POSITIONS, as it did when every position was
+                // an item: a byte-run item below stands for its run's width.
                 items_produced
                     .admit(run.width().to_usize().unwrap_or(usize::MAX))
                     .map_err(over)?;
-                // Per active position, ascending V (R3) — no dedup (R8); the
-                // run answers for its own positions, in the owned form, since
-                // the resolution hands the run over and it outlives only this
-                // walk.
-                for a in run.into_addrs() {
-                    match sub {
-                        // S3★ — an arranged content position has an M4 value
-                        // — is M5's to keep, on its WRITE path, at every
-                        // operation that places a content run; this read is
-                        // where a regression in any of them would surface.
-                        Some(Subspace::Content) => out.push(DeliveryItem::Content(
-                            content
-                                .value_at(a.tumbler())
-                                .expect("S3★: an arranged content position has a stored value")
-                                .clone(),
-                        )),
-                        // The link reference IS the address — never reads M4.
-                        Some(Subspace::Link) => out.push(DeliveryItem::Ref(a)),
-                        // UNREACHABLE for an ACTIVE position: S3★-aux
-                        // confines every bound V-position to subspace ∈
-                        // {s_C, s_L}, and the resolution yields NO runs for
-                        // any other start subspace, so executing here means
-                        // upstream corruption. PANIC IN ALL PROFILES — one
-                        // read-path policy with the S3★ `expect` above:
-                        // silently dropping an active position would violate
-                        // exactness (R3).
-                        None => unreachable!(
-                            "active V-position must be content or link subspace (S3★-aux)"
-                        ),
+                match sub {
+                    // Per maximal PIECE of the run's I-extent, ascending V
+                    // (R3) — no dedup (R8): M4's one run read, one predecessor
+                    // lookup and a forward walk, lends each piece borrowed —
+                    // a run of single-byte values inside one stretch as ONE
+                    // `Bytes` item (one allocation per piece), a value as
+                    // `Content` (an `Arc` clone). S3★ — an arranged content
+                    // position has an M4 value — is M5's to keep, on its
+                    // WRITE path, at every operation that places a content
+                    // run; `covered`, asked of the walk after `by_ref()`, is
+                    // where a regression in any of them would surface.
+                    Some(Subspace::Content) => {
+                        let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
+                        for piece in pieces.by_ref() {
+                            out.push(match piece {
+                                Piece::Bytes(bytes) => DeliveryItem::Bytes(Arc::from(bytes)),
+                                Piece::Value(v) => DeliveryItem::Content(v.clone()),
+                            });
+                        }
+                        assert!(
+                            pieces.covered(),
+                            "S3★: an arranged content position has a stored value"
+                        );
+                    }
+                    // Per active position: the link reference IS the address
+                    // — never reads M4; the run answers for its own positions,
+                    // in the owned form, since the resolution hands the run
+                    // over and it outlives only this walk.
+                    Some(Subspace::Link) => {
+                        for a in run.into_addrs() {
+                            out.push(DeliveryItem::Ref(a));
+                        }
+                    }
+                    // UNREACHABLE for an ACTIVE position: S3★-aux confines
+                    // every bound V-position to subspace ∈ {s_C, s_L}, and the
+                    // resolution yields NO runs for any other start subspace,
+                    // so executing here means upstream corruption. PANIC IN
+                    // ALL PROFILES — one read-path policy with the S3★
+                    // assertion above: silently dropping an active position
+                    // would violate exactness (R3).
+                    None => {
+                        unreachable!("active V-position must be content or link subspace (S3★-aux)")
                     }
                 }
             }

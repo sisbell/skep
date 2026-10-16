@@ -7,7 +7,7 @@ use skep_arrangement::{seat_link, Deposit, VSpec};
 use skep_kernel::Seq;
 use skep_namespace::HasM3;
 use skep_retrieval::{
-    CompareError, DeletionsError, Delivery, DeliveryItem, ExtentError, FindError, Operand,
+    CompareError, DeletionsError, Delivery, ExtentError, FindError, Operand,
     OriginError, Query, RetrieveError, SpanFault,
 };
 
@@ -89,25 +89,19 @@ fn a_query_answers_from_its_pinned_snapshot_after_later_commits() {
         "the fixture committed after the pin"
     );
     // Three positions, not four: the fourth is not in this query's world.
-    assert_eq!(
-        ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 4))])),
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"c")),
-        ])
-    );
+    assert_eq!(ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 4))])), Delivery(vec![text(b"abc")]));
     // The extent is the pinned count, not the live one.
     assert_eq!(
         ok_of(q.doc_vspanset(&doc1())),
         SpanSet::singleton(Span::new(t(&[1, 1]), t(&[0, 3])).expect("T12"))
     );
-    // The control: a handle taken now sees all four.
+    // The control: a handle taken now sees all four positions — two items,
+    // the second insert's stretch beside the first's.
     let s2 = k.snapshot();
     let q2 = Query::new(&s2);
     assert_eq!(
-        ok_of(q2.retrieve_v(&[spec(doc1(), vspan(1, 1, 4))])).len(),
-        4
+        ok_of(q2.retrieve_v(&[spec(doc1(), vspan(1, 1, 4))])),
+        Delivery(vec![text(b"abc"), text(b"d")])
     );
 }
 

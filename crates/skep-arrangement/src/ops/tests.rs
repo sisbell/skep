@@ -90,6 +90,7 @@ struct AllocWorld {
 enum AllocRec {
     M3(M3Rec),
     Content(ContentWrite),
+    Stretch(ContentStretch),
 }
 
 impl From<M3Rec> for AllocRec {
@@ -100,6 +101,11 @@ impl From<M3Rec> for AllocRec {
 impl From<ContentWrite> for AllocRec {
     fn from(r: ContentWrite) -> AllocRec {
         AllocRec::Content(r)
+    }
+}
+impl From<ContentStretch> for AllocRec {
+    fn from(r: ContentStretch) -> AllocRec {
+        AllocRec::Stretch(r)
     }
 }
 
@@ -114,6 +120,10 @@ impl WorldState for AllocWorld {
             AllocRec::Content(x) => AllocWorld {
                 m3: self.m3.clone(),
                 content: self.content.apply_write(x),
+            },
+            AllocRec::Stretch(x) => AllocWorld {
+                m3: self.m3.clone(),
+                content: self.content.apply_stretch(x),
             },
         }
     }
@@ -159,7 +169,7 @@ fn the_allocation_step_mints_writes_and_accumulates_through_the_merge_condition(
     let s = k.snapshot();
     let content = s.world().content();
     for (addr, byte) in [(ca(1), b"a"), (ca(2), b"b"), (doc2_first, b"c")] {
-        assert_eq!(content.value_at(addr.tumbler()).map(Val::as_bytes), Some(&byte[..]));
+        assert_eq!(content.value_at(addr.tumbler()).map(|p| p.as_bytes()), Some(&byte[..]));
     }
     let (next, _) = s.world().m3().mint_content(&doc1()).expect("doc1 is registered");
     assert_eq!(next, ca(3));

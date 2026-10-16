@@ -73,8 +73,11 @@ use crate::shared::clipped;
 use crate::terminal::talk;
 
 /// The most bytes one `insert` frame carries: 128 KiB, the search budgets'
-/// chunk — one transaction is bounded by the kernel's `MAX_TXN_BYTES`, and a
-/// per-byte value costs the journal far more than its byte.
+/// chunk — one transaction is bounded by the kernel's `MAX_TXN_BYTES`, and
+/// the codec's `MAX_INSERT_VALUES` caps a frame at 2¹⁸ values; a run of
+/// single-byte values costs the journal its bytes and two records, so the
+/// chunk sits well inside both, and the per-value cap is the one it meets
+/// first.
 pub const INSERT_CHUNK: usize = 1 << 17;
 
 /// The first pause before a transient refusal is sent again.

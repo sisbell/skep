@@ -749,18 +749,32 @@ fn a_delivery_masks_an_unreadable_origin_in_place() {
     let other = fx.febe.open_session(OTHER);
     let whole = || Op::RetrieveV { specs: vec![Spec { doc: readable_doc.clone(), span: vspan(1, 1, 4) }] };
 
-    // The owner reads both origins: four positions, nothing withheld.
+    // The owner reads both origins: four positions in three runs — the
+    // readable document's first byte, the transcluded byte, the readable
+    // document's last two — each run one byte-run item, nothing withheld.
     let (mine, _) = delivery(ex(&fx.febe, fx.user, whole()));
-    assert_eq!(mine.len(), 4);
+    assert_eq!(mine.len(), 3, "three runs: {mine:?}");
+    let widths = |items: &[DeliveryItem]| -> Vec<usize> {
+        items
+            .iter()
+            .map(|item| match item {
+                DeliveryItem::Bytes(run) => run.len(),
+                DeliveryItem::Content(_) | DeliveryItem::Ref(_) => 1,
+                DeliveryItem::Withheld { width, .. } => usize::try_from(width).expect("small"),
+            })
+            .collect()
+    };
+    assert_eq!(widths(mine.as_slice()), [1, 1, 2], "four positions");
     assert!(
-        mine.iter().all(|i| matches!(i, DeliveryItem::Content(_))),
+        mine.iter().all(|i| matches!(i, DeliveryItem::Bytes(_))),
         "the owner's delivery masks nothing: {mine:?}"
     );
 
     // The stranger reads the document and not the transcluded run's origin:
-    // same length, same positions, one item replaced by the withheld arm.
+    // same runs, same positions, one item replaced by the withheld arm.
     let (theirs, _) = delivery(ex(&fx.febe, other, whole()));
-    assert_eq!(theirs.len(), 4, "a masked run is emitted, not dropped: {theirs:?}");
+    assert_eq!(theirs.len(), 3, "a masked run is emitted, not dropped: {theirs:?}");
+    assert_eq!(widths(theirs.as_slice()), [1, 1, 2], "the same four positions");
     match &theirs.as_slice()[1] {
         DeliveryItem::Withheld { origin, width } => {
             assert_eq!(origin, &unreadable_origin, "the withheld item names the run's ORIGIN document");
@@ -770,8 +784,8 @@ fn a_delivery_masks_an_unreadable_origin_in_place() {
     }
     for (i, item) in theirs.iter().enumerate().filter(|(i, _)| *i != 1) {
         assert!(
-            matches!(item, DeliveryItem::Content(_)),
-            "position {i} is `readable_doc`'s own content and survives: {item:?}"
+            matches!(item, DeliveryItem::Bytes(_)),
+            "run {i} is `readable_doc`'s own content and survives: {item:?}"
         );
     }
 }

@@ -38,6 +38,7 @@
 //! the narrower promise is the honest one.
 
 use std::fmt;
+use std::sync::Arc;
 
 use serde::Serialize;
 use skep_address::{Address, Nat, Span};
@@ -78,9 +79,14 @@ pub struct RegionSpec {
     pub spans: Vec<Span>,
 }
 
-/// An item of a delivery. A DELIVERED run gives one per active V-position
-/// (ASN-0115 R3 exactness): a content position delivers its stored value (an
-/// `Arc` clone — cheap, never a byte copy); a link position delivers the
+/// An item of a delivery. A DELIVERED run gives one `Content` item per atom
+/// position and one `Bytes` item per maximal run of single-byte positions
+/// (ASN-0115 R3 exactness, held position for position: the wire's one
+/// renderer feeds a `Bytes` item byte by byte into the same per-byte run a
+/// one-byte `Content` item joins, and the delivery budget admits a run's
+/// WIDTH in positions): a content position delivers its stored value (an
+/// `Arc` clone — cheap, never a byte copy) or, inside a stretch, its run's
+/// bytes (one allocation per piece); a link position delivers the
 /// address-as-reference and never reads M4.
 ///
 /// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the one item
@@ -103,13 +109,21 @@ pub enum DeliveryItem {
     /// `width` the number of positions withheld, emitted at the run's own
     /// position.
     Withheld { origin: Address, width: Nat },
+    /// A maximal run of consecutive single-byte positions, as one item: the
+    /// bytes of one piece of a stored stretch, in V-order, `bytes[k]` the
+    /// value at the piece's first position plus `k`. The one renderer feeds
+    /// it byte by byte into the per-byte run a one-byte `Content` item joins,
+    /// so the wire item is the same whichever form delivered it; a reader
+    /// that counts positions sums its length. `Debug` renders its byte count,
+    /// never a byte.
+    Bytes(Arc<[u8]>),
 }
 
 /// Renders a content item by its value's BYTE LENGTH, as `Val`'s own `Debug`
-/// does — never a payload byte — and a link item by its address in M1's
-/// dotted decimal, where a derive would spell the address out field by
-/// field. Shape: `Content(n bytes)` / `Ref(c₁.….c_#t)` /
-/// `Withheld(origin, width wide)`.
+/// does — never a payload byte — a byte-run item by its length the same way,
+/// and a link item by its address in M1's dotted decimal, where a derive
+/// would spell the address out field by field. Shape: `Content(n bytes)` /
+/// `Ref(c₁.….c_#t)` / `Withheld(origin, width wide)` / `Bytes(n bytes)`.
 impl fmt::Debug for DeliveryItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -118,15 +132,17 @@ impl fmt::Debug for DeliveryItem {
             DeliveryItem::Withheld { origin, width } => {
                 write!(f, "Withheld({origin}, {width} wide)")
             }
+            DeliveryItem::Bytes(bytes) => write!(f, "Bytes({} bytes)", bytes.len()),
         }
     }
 }
 
 /// RETRIEVEV's result: per-spec concatenation in submitted order,
 /// ascending-V within each spec, no merge, no dedup, no global sort
-/// (ASN-0115 R3/R5/R8); one item per delivered position and one per withheld
-/// run, as [`Delivery::len`] counts. `Default` is the empty delivery, which
-/// is the exact answer to an empty spec-set.
+/// (ASN-0115 R3/R5/R8); one `Content` item per delivered atom position, one
+/// `Bytes` item per maximal run of delivered single-byte positions and one
+/// item per withheld run, as [`Delivery::len`] counts. `Default` is the
+/// empty delivery, which is the exact answer to an empty spec-set.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Delivery(pub Vec<DeliveryItem>);
 
@@ -137,9 +153,13 @@ impl Delivery {
         &self.0
     }
 
-    /// How many items the delivery carries — one per active V-position of
-    /// each delivered run (R3), and one per withheld run, however many
-    /// positions it spans.
+    /// How many ITEMS the delivery carries — one per atom position of each
+    /// delivered run, one per maximal run of its single-byte positions
+    /// ([`DeliveryItem::Bytes`], standing for every position of the run), and
+    /// one per withheld run, however many positions it spans. Fewer than the
+    /// positions delivered wherever a byte-run item stands for several (R3's
+    /// one-per-position exactness holds at the wire's renderer, which expands
+    /// it, and in the delivery budget, which admits positions).
     pub fn len(&self) -> usize {
         self.0.len()
     }

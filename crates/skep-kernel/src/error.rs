@@ -3,6 +3,7 @@
 use std::fmt;
 use std::io;
 
+use crate::checkpoint::refused_at_decode;
 use crate::Seq;
 
 /// The one remedy a board written under another format has (PUB-1.2, the
@@ -197,25 +198,35 @@ pub enum OpenError {
         /// Why the NEWEST base recovery could have used refused — the whole
         /// of what names the remedy, since nothing else about an exhausted
         /// chain distinguishes one condition from another. A body that will
-        /// not decode is a binary on the wrong side of a `W` format change:
-        /// roll it forward. A failed header checksum or hash, or a truncated
-        /// file, is damage: restore the media. A foreign format stamp is a
-        /// checkpoint written under another format, and its account names the
-        /// stamp found, the stamp expected and the remedy
-        /// (`NO_MIGRATION_REMEDY`), as [`OpenError::ForeignFormat`] does
-        /// for the journal. A base that decoded but could not SEED a derived
-        /// slice carries [`RebuildError`]'s sentence, which names its own
-        /// remedy — a base that carries the slice, or a journal that reaches
-        /// one (AUTH-2.88). A base that could not be READ at all carries the
-        /// read's own I/O failure, which names the file and its own remedy —
+        /// not decode UNDER THIS BUILD'S OWN STAMP, its checksum and hash
+        /// intact, is a body another layout wrote under the same stamp — a
+        /// development board from before a layout change landed under the
+        /// owner's no-stamp ruling, or a binary on the wrong side of a `W`
+        /// format change — and the line appends the ruled remedy,
+        /// `NO_MIGRATION_REMEDY`, after the serializer's words: the one act
+        /// that serves both, where "roll the binary" or "restore the media"
+        /// would each teach another condition's act (the predicate is
+        /// `checkpoint::refused_at_decode`, by the kind the refusal travels
+        /// as; it never fires where the newest base refused for damage). A
+        /// failed header checksum or hash, or a truncated file, is damage:
+        /// restore the media. A foreign format stamp is a checkpoint written
+        /// under another format, and its account names the stamp found, the
+        /// stamp expected and the remedy (`NO_MIGRATION_REMEDY`), as
+        /// [`OpenError::ForeignFormat`] does for the journal. A base that
+        /// decoded but could not SEED a derived slice carries
+        /// [`RebuildError`]'s sentence, which names its own remedy — a base
+        /// that carries the slice, or a journal that reaches one (AUTH-2.88).
+        /// A base that could not be READ at all carries the read's own I/O
+        /// failure, which names the file and its own remedy —
         /// `checkpoint.{n}: read: Permission denied (os error 13)`, a
-        /// permission, a device — rather than any of the four above. Whichever
-        /// it is, the account opens on the base's file, `checkpoint.{n}: …` —
-        /// the read's own failure named so where it failed, every other
-        /// refusal wrapped in the name and travelling beneath it as its
-        /// `source` — so the line names the one base an operator acts on.
-        /// `None` when no candidate was tried at all — the journal retains no
-        /// checkpoint, and only its unreachable genesis was ever available.
+        /// permission, a device — rather than any of the shapes above.
+        /// Whichever it is, the account opens on the base's file,
+        /// `checkpoint.{n}: …` — the read's own failure named so where it
+        /// failed, every other refusal wrapped in the name and travelling
+        /// beneath it as its `source` — so the line names the one base an
+        /// operator acts on. `None` when no candidate was tried at all — the
+        /// journal retains no checkpoint, and only its unreachable genesis
+        /// was ever available.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
     /// Durable committed data the recovered state needs cannot be read, or
@@ -318,6 +329,14 @@ impl fmt::Display for OpenError {
             OpenError::BadCheckpoint { cause: None } => {
                 write!(f, "no retained checkpoint loads and genesis is unreachable")
             }
+            // The ruled remedy after the serializer's words, where the newest
+            // base refused at decode under this build's own stamp (the
+            // variant's doc); every other account carries its own.
+            OpenError::BadCheckpoint { cause: Some(e) } if refused_at_decode(&**e) => write!(
+                f,
+                "no retained checkpoint loads and genesis is unreachable; the newest \
+                 refused: {e}; {NO_MIGRATION_REMEDY}"
+            ),
             OpenError::BadCheckpoint { cause: Some(e) } => write!(
                 f,
                 "no retained checkpoint loads and genesis is unreachable; the newest \

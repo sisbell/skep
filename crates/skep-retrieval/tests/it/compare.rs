@@ -5,7 +5,7 @@
 use skep_address::{Address, Nat, Span};
 use skep_arrangement::{HasM5, VPos, VSpec};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{CompareReport, CorrPair, Delivery, DeliveryItem, Query, RegionSpec};
+use skep_retrieval::{CompareReport, CorrPair, Delivery, Query, RegionSpec};
 
 use crate::common::*;
 
@@ -337,10 +337,7 @@ fn compare_joins_on_address_equality_never_on_value() {
     assert_ne!(doc2_ca(1), ca(1));
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 3, 1)), spec(doc1(), vspan(1, 1, 1))])),
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"a")),
-        ])
+        Delivery(vec![text(b"a"), text(b"a")])
     );
     // Equal bytes, distinct addresses — and no pair follows.
     let rep = ok_of(q.compare(

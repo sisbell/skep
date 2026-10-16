@@ -922,16 +922,17 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
 /// RESUME WHILE THE WALK's REGION IS PENDING — EARLY, NEVER LATE (the
 /// operations design §3.3 step 2: "the head writer's resume counts commits
 /// off the kernel's seq while entries are pending, an over-count, EARLY and
-/// never late"): a head, then twenty two-value inserts — twenty commits,
-/// a hundred records — the testimony deleted, the reopen with the walk
+/// never late"): a head, then twenty-two two-value inserts — twenty-two
+/// commits, sixty-six records (a per-byte insert is three: a range mint, a
+/// stretch, a placement) — the testimony deleted, the reopen with the walk
 /// HELD — every retained position pending, the feed holding none of them
 /// — and the FIRST write after the open brings the next head, the region
-/// still pending: the count resumed off the seq, a hundred records above
-/// the head, is past the bound of 64 where the twenty commits that landed
-/// are not — the over-count, EARLY — and where a resume off the empty feed
-/// would have started at zero and put the head 64 commits away. After the
-/// landing the count is exact: the 63 commits after that head write none,
-/// the 64th writes the next.
+/// still pending: the count resumed off the seq, sixty-six records and more
+/// above the head, is past the bound of 64 where the twenty-two commits
+/// that landed are not — the over-count, EARLY — and where a resume off the
+/// empty feed would have started at zero and put the head 64 commits away.
+/// After the landing the count is exact: the 63 commits after that head
+/// write none, the 64th writes the next.
 #[test]
 fn a_pending_region_resumes_the_count_off_the_seq_early_and_never_late() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -944,7 +945,7 @@ fn a_pending_region_resumes_the_count_off_the_seq_early_and_never_late() {
         let v = op(port, Some(&owner), &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#));
         let draft = acked_addr(&v);
         let before = health(port).0;
-        for _ in 0..20 {
+        for _ in 0..22 {
             let v = op(
                 port,
                 Some(&owner),
@@ -952,8 +953,8 @@ fn a_pending_region_resumes_the_count_off_the_seq_early_and_never_late() {
             );
             expect_resp(&v, "ack_addr");
         }
-        assert!(health(port).0 - before >= 64, "a hundred records in twenty commits");
-        assert_eq!(head_record(port, H).unwrap()["position"].as_u64(), Some(p), "21 since the head: none yet");
+        assert!(health(port).0 - before >= 64, "sixty-six records in twenty-two commits");
+        assert_eq!(head_record(port, H).unwrap()["position"].as_u64(), Some(p), "23 since the head: none yet");
         sd.shutdown();
         p
     };

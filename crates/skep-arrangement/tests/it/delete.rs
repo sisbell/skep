@@ -3,7 +3,7 @@
 
 use skep_address::Span;
 use skep_arrangement::{DeleteError, Deposit, HasM5, Vstream};
-use skep_content::{HasContent, Val};
+use skep_content::HasContent;
 
 use crate::common::*;
 
@@ -33,8 +33,8 @@ fn delete_contracts_the_arrangement_and_touches_neither_content_nor_r() {
         s.world()
             .content()
             .value_at(ca(2).tumbler())
-            .map(Val::as_bytes),
-        Some(&b"b"[..])
+            .map(|piece| piece.as_bytes().to_vec()),
+        Some(b"b".to_vec())
     );
     // SHOWDELETIONS: ever-placed minus current image = [ca2, ca4).
     let d = m5.deletions(&doc1());

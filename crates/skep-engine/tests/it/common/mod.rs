@@ -177,11 +177,14 @@ pub fn seq_of(addrs: &[&Address]) -> String {
     format!("[{}]", rendered.join(", "))
 }
 
-/// The delivered content bytes, in delivery order; panics on a `Ref` item.
+/// The delivered content bytes, in delivery order — one entry per ITEM, a
+/// byte-run item (a run of single-byte positions, read out of one stored
+/// stretch) as its whole run; panics on a `Ref` item.
 pub fn delivered_bytes(d: &Delivery) -> Vec<Vec<u8>> {
     d.0.iter()
         .map(|item| match item {
             DeliveryItem::Content(v) => v.as_bytes().to_vec(),
+            DeliveryItem::Bytes(run) => run.to_vec(),
             DeliveryItem::Ref(_) => panic!("expected a content item, got a link reference"),
             DeliveryItem::Withheld { .. } => panic!("expected a content item, got a withheld run"),
         })

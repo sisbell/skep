@@ -124,6 +124,9 @@ fn a_delivery_renders_items_by_length_and_address_and_never_by_payload() {
         format!("Withheld({}, 2 wide)", doc1())
     );
     assert!(!format!("{:?}", DeliveryItem::Content(val(b"secret"))).contains("secret"));
+    // A byte-run item the same way: its byte count, never a byte.
+    assert_eq!(format!("{:?}", text(b"hello")), "Bytes(5 bytes)");
+    assert!(!format!("{:?}", text(b"secret")).contains("secret"));
     assert_eq!(
         format!(
             "{:?}",
@@ -252,11 +255,17 @@ fn the_answer_collections_behave_like_std_collections() {
     .expect("copy commits");
     let s = k.snapshot();
     let q = Query::new(&s);
-    let delivery = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3))]));
+    // Three specs, so three items — one byte-run item apiece, since the three
+    // per-byte values are one stretch and a spec's run is delivered whole.
+    let delivery = ok_of(q.retrieve_v(&[
+        spec(doc1(), vspan(1, 1, 1)),
+        spec(doc1(), vspan(1, 2, 1)),
+        spec(doc1(), vspan(1, 3, 1)),
+    ]));
     assert_eq!(delivery.len(), 3);
     assert!(!delivery.is_empty());
     assert_eq!(delivery.iter().count(), 3);
-    assert_eq!(delivery.as_slice()[0], DeliveryItem::Content(val(b"a")));
+    assert_eq!(delivery.as_slice()[0], text(b"a"));
     // Borrowed iteration, then an owned one that collects straight back.
     let borrowed: Vec<&DeliveryItem> = (&delivery).into_iter().collect();
     assert_eq!(borrowed.len(), 3);

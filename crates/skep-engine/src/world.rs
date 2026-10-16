@@ -16,9 +16,9 @@ mod identity;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use skep_address::Address;
+use skep_address::{document_of, shift, Address, Nat};
 use skep_arrangement::{HasM5, M5Rec, M5State};
-use skep_content::{ContentStore, ContentWrite, HasContent};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent};
 use skep_febe::EditionClaim;
 use skep_identity::IdentityState;
 use skep_kernel::{RebuildError, WorldState};
@@ -203,22 +203,34 @@ impl fmt::Debug for World {
 /// every slice's top-level fields to the count, and says what it cannot see
 /// below that level.
 ///
-/// `1` has named THREE layouts: the first carries M3's publication bit
+/// `1` has named FOUR layouts: the first carries M3's publication bit
 /// (2026-09-05, PUB round 1); the second appends M5's birth memo to its slice
 /// (W5, 2026-09-17) under the same count; the third appends the IDENTITY
 /// SLICE after M7's (AUTH-2.79, 2026-10-04), under the same count by the
-/// owner's no-stamp ruling in dev. No base any build wrote in the first
-/// reaches this word through a header this build loads: every one carries an
-/// M2 stamp older than this build's, which M2 refuses at load by name, with
-/// the owner's no-migration remedy (PUB-1.2). A body in the SECOND layout
-/// under a current header — every checkpoint written before the slice — does
-/// reach the decoder, and is NOT refused here: it ends where the slice would
+/// owner's no-stamp ruling in dev; the fourth holds each of M4's entries as a
+/// value OR a stretch — a tagged enum where a bare value stood — and gains
+/// the stretch record, [`Record::ContentStretch`] (2026-10-15), under the
+/// same count by that ruling renewed: no served board exists, the dev boards
+/// are re-seeded, and the kernel's golden was regenerated a second time
+/// under the unchanged stamps. No base any build wrote in the first reaches
+/// this word through a header this build loads: every one carries an M2
+/// stamp older than this build's, which M2 refuses at load by name, with the
+/// owner's no-migration remedy (PUB-1.2). A body in the SECOND layout under a
+/// current header — every checkpoint written before the slice — does reach
+/// the decoder, and is NOT refused here: it ends where the slice would
 /// begin, reads as `identity: None` (`World`'s field states the reading), and
 /// is RESOLVED or REFUSED at load by AUTH-2.83's rule rather than defaulted
 /// into a table — the one layout change this count has named whose old
-/// bodies the spec gives a reading. So the count names two loadable layouts,
-/// the second resolving into the third, and the next World layout change
-/// bumps it. A body in the first layout under a current header — which only
+/// bodies the spec gives a reading. A body in the THIRD layout under a
+/// current header — a checkpoint written before the stretch — is not refused
+/// at this word either: it fails at its first content entry, whose value's
+/// length prefix reads as an entry tag no variant or an overlong stretch
+/// (skep-content's suite pins both shapes), or decodes where its content map
+/// is empty, and the board then opens from genesis where its journal still
+/// reaches it, replaying its per-byte frames into one-byte values the
+/// readers serve as they serve any value. So the count names loadable
+/// layouts beside the current one, and the next World layout change bumps
+/// it. A body in the first layout under a current header — which only
 /// hand-built bytes produce — still fails to decode, and not by chance:
 /// `a_base_written_before_the_birth_memo_fails_to_decode` states why, in the
 /// encodings of M5's and M7's slices, and pins the refusal on each shape it
@@ -284,19 +296,21 @@ impl<'de> Deserialize<'de> for FormatStamp {
 /// obligation as `World`'s fields: variants encode by index, so a rename is
 /// byte-neutral for replay and a reordering is not.
 ///
-/// One variant per STATE-CONTRIBUTING store — M3, M4, M5 and M7 today, with
-/// M6/M8/M9/M10 contributing none — so the set grows with the decomposition,
-/// which is why it is `#[non_exhaustive]`: a store that starts carrying a
-/// slice adds a variant here, and `match` exhaustiveness over a public enum
-/// is a promise the assembler has no reason to make to a caller that only
-/// ever lifts and folds.
+/// One variant per record kind of each STATE-CONTRIBUTING store — M3, M4, M5
+/// and M7 today, M4 carrying two kinds, with M6/M8/M9/M10 contributing none
+/// — so the set grows with the decomposition, which is why it is
+/// `#[non_exhaustive]`: a store that starts carrying a slice, or a second
+/// record kind, adds a variant here — APPENDED, as the fifth was — and
+/// `match` exhaustiveness over a public enum is a promise the assembler has
+/// no reason to make to a caller that only ever lifts and folds.
 ///
 /// `Debug` is the whole of what a holder can read a record BY, and it is the
 /// four stores' own: each gives its variant's account of itself, and M4's
-/// reports a byte length where the value is (`Val`'s own `Debug`), so a
-/// content blob never renders into a log. A journal inspector or a harness
-/// holding a central record has no accessor to reach past it, by design,
-/// since a store's record is that store's to describe.
+/// two report a byte length where the value or the stretch is (`Val`'s own
+/// `Debug`, and `ContentStretch`'s), so a content blob never renders into a
+/// log. A journal inspector or a harness holding a central record has no
+/// accessor to reach past it, by design, since a store's record is that
+/// store's to describe.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Record {
@@ -304,6 +318,27 @@ pub enum Record {
     Content(ContentWrite),
     Arrangement(M5Rec),
     Links(LinkRec),
+    /// M4's second record kind: a run of consecutive single-byte values
+    /// written by one insert, held as one record and one map entry, folded by
+    /// [`ContentStore::apply_stretch`]. Index 4, appended after `Links`, so
+    /// every record journaled before it decodes as it did.
+    ContentStretch(ContentStretch),
+}
+
+/// Whether `stretch` lies within the content chain's frontier of its
+/// document in `namespace` — THE SECOND SITE of the one-number check M5's
+/// staging step makes (`a range mint and its stretch carry one number`): the
+/// fold sees M3's slice and M4's together, live and on replay, the one place
+/// a record decoded from bytes is held to the chain. The stretch's reach,
+/// `first ⊕ len`, is at or below the next address the chain would mint —
+/// `ordinal(first) + len − 1 ≤ the frontier`. A home M3 never registered,
+/// or a key with no document, has no frontier to hold the stretch to and is
+/// not judged here: the mint path never issues one, and a release build's
+/// mis-routed key is the store card's own warning.
+fn stretch_within_frontier(namespace: &M3State, stretch: &ContentStretch) -> bool {
+    let Some(home) = document_of(stretch.addr()) else { return true };
+    let Some(next) = namespace.next_content_address(&home) else { return true };
+    shift(stretch.addr().tumbler(), &Nat::from(stretch.len())) <= *next.tumbler()
 }
 
 impl WorldState for World {
@@ -363,6 +398,20 @@ impl WorldState for World {
                 World { namespace, drafts, ..self.clone() }
             }
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
+            Record::ContentStretch(x) => {
+                // The fold-side check of the one number two records carry
+                // (`stretch_within_frontier`): a debug build fail-stops on a
+                // stretch past its chain's frontier; a release build folds
+                // it, the fold staying total and silent as M2 asks of
+                // `apply` — the wedge it would leave is the staging site's to
+                // refuse, and this site's to name.
+                debug_assert!(
+                    stretch_within_frontier(&self.namespace, x),
+                    "a content stretch reaches past its document's content frontier: the range \
+                     minted and the stretch written carry two numbers"
+                );
+                World { content: self.content.apply_stretch(x), ..self.clone() }
+            }
             Record::Arrangement(x) => {
                 World { arrangement: self.arrangement.apply_m5(x), ..self.clone() }
             }
@@ -613,6 +662,12 @@ impl From<M3Rec> for Record {
 impl From<ContentWrite> for Record {
     fn from(r: ContentWrite) -> Record {
         Record::Content(r)
+    }
+}
+
+impl From<ContentStretch> for Record {
+    fn from(r: ContentStretch) -> Record {
+        Record::ContentStretch(r)
     }
 }
 

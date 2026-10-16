@@ -1,24 +1,25 @@
 //! M3's journal delta and the identity type it names (§Core data model):
 //! [`PrincipalId`] with its two fixed ids, and [`M3Rec`] — the records M3
 //! stages through M2's `transact` and the fold [`M3State::apply_m3`]
-//! consumes — with the two payloads whose fields are private, `Allocate`'s
-//! [`Allocation`] and `RegisterPrincipal`'s [`Principal`], and the two field
-//! doors a record re-enters through off the journal, private here because
-//! the record's own decode is their one caller. The variant order is the
-//! journal format, as `M3State`'s field order is the checkpoint's: a variant
-//! is appended, never inserted or reordered. No other crate constructs a
-//! record of its own choosing except by decoding bytes, and none edits one
-//! past its doors — [`M3Rec`] states the seals, and what a decoded record
-//! costs; the `test-hooks` feature compiles in three constructors for the
-//! test suites that seed M3 state through the fold. What a caller staging a
-//! mint's record owes is on [`M3Rec::Allocate`]; the `published` a
-//! non-document record carries, `NO_PUBLICATION_STATE`, is its producers'
-//! word and is declared beside them, in `state`.
+//! consumes — with the three payloads whose fields are private, `Allocate`'s
+//! [`Allocation`], `RegisterPrincipal`'s [`Principal`] and `AllocateRange`'s
+//! [`RangeAllocation`], and the field doors a record re-enters through off
+//! the journal, private here because the record's own decode is their one
+//! caller. The variant order is the journal format, as `M3State`'s field
+//! order is the checkpoint's: a variant is appended, never inserted or
+//! reordered. No other crate constructs a record of its own choosing except
+//! by decoding bytes, and none edits one past its doors — [`M3Rec`] states
+//! the seals, and what a decoded record costs; the `test-hooks` feature
+//! compiles in four constructors for the test suites that seed M3 state
+//! through the fold. What a caller staging a mint's record owes is on
+//! [`M3Rec::Allocate`]; the `published` a non-document record carries,
+//! `NO_PUBLICATION_STATE`, is its producers' word and is declared beside
+//! them, in `state`.
 //!
 //! [`M3State::apply_m3`]: crate::M3State::apply_m3
 
 use serde::{Deserialize, Deserializer, Serialize};
-use skep_address::{Address, Level};
+use skep_address::{Address, Level, Nat};
 
 /// Opaque external identity, supplied by M10/session. `delegate` enforces
 /// id-injectivity ([`crate::DelegateError::DuplicateId`]) ⇒ one id ↦ one
@@ -235,9 +236,10 @@ pub const SYSTEM_PRINCIPAL: PrincipalId = PrincipalId(9_000_000_000_000_000);
 #[non_exhaustive]
 pub enum M3Rec {
     /// A mint's COMMIT HALF: advance the frontier of the chain its address
-    /// ([`Allocation::addr`]) lies on (§1) — this record is the only thing
-    /// that moves a frontier — which is exactly the chain whose `*_lock_key`
-    /// its mint pairs with: frontier key and lock key are one key.
+    /// ([`Allocation::addr`]) lies on (§1) — these two records, this one and
+    /// [`M3Rec::AllocateRange`], are the only things that move a frontier —
+    /// which is exactly the chain whose `*_lock_key` its mint pairs with:
+    /// frontier key and lock key are one key.
     ///
     /// WHERE IT MAY BE STAGED — the caller's half of every mint, and the one
     /// obligation M3 cannot check, since the record carries an address and
@@ -319,6 +321,29 @@ pub enum M3Rec {
     ///
     /// [`M3State::principal_prefix`]: crate::M3State::principal_prefix
     RegisterPrincipal(Principal),
+    /// A RANGE mint's commit half, the content chain's alone (§1): advance
+    /// the frontier of the chain [`RangeAllocation::first`] lies on by
+    /// [`RangeAllocation::count`] in one record, so the `count` addresses
+    /// `first`, `first ⊕ 1`, …, `first ⊕ (count − 1)` are minted — byte for
+    /// byte the addresses `count` successive [`M3Rec::Allocate`]s would have
+    /// issued (B2: a mint is a pure function of the frontier), and the next
+    /// single mint issues `first ⊕ count`. Written by
+    /// [`M3State::mint_content_range`] for a run of single-byte values that
+    /// M4 stores as one stretch; the staging obligation is `Allocate`'s, and
+    /// the fold's contiguity check holds `first` to the frontier as it holds
+    /// `Allocate`'s address. No publication bit rides it: a range is minted
+    /// on a content chain only, and the fold reads no bit of an element.
+    /// Index 3, appended after `RegisterPrincipal`, so every record journaled
+    /// before it decodes as it did.
+    ///
+    /// The one obligation this record shares with M4's stretch: its `count`
+    /// and the stretch's byte length are ONE number, and neither decode door
+    /// nor fold sees both records — M5's one staging site stages both from
+    /// one length and checks them where it does, and the engine's fold holds
+    /// the stretch to the frontier this record set.
+    ///
+    /// [`M3State::mint_content_range`]: crate::M3State::mint_content_range
+    AllocateRange(RangeAllocation),
 }
 
 /// What an [`M3Rec::Allocate`] carries — the address a mint issued and the
@@ -359,6 +384,44 @@ impl Allocation {
     /// the `NO_PUBLICATION_STATE` absence the fold never reads.
     pub fn published(&self) -> bool {
         self.published
+    }
+}
+
+/// What an [`M3Rec::AllocateRange`] carries — the first address a range mint
+/// issued and how many addresses it issued — behind private fields, for the
+/// reason [`Allocation`]'s are: no crate but this one builds one by literal,
+/// and another crate holds one only as the mint returned it or as it decoded
+/// it, through the two field doors. Read through [`RangeAllocation::first`]
+/// and [`RangeAllocation::count`].
+///
+/// Its bytes are a struct variant's, as [`Allocation`]'s are: the variant's
+/// index, then `first` as its bare tumbler and `count` as a natural — the
+/// field order is journal format, a field appended, never inserted or
+/// reordered. `first` re-enters through `Allocation.addr`'s at-rest door
+/// (`parented_address`) and the element-tier check this kind alone needs
+/// (`content_range_first`): a range is minted on a content chain only, so a
+/// `first` that is no element address is refused at decode as a parentless
+/// one is. `count` is refused at decode where it is zero (`nonzero_count`):
+/// a range of nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RangeAllocation {
+    /// The first address the mint issued: `c_{m+1}` of the content chain.
+    #[serde(deserialize_with = "content_range_first")]
+    pub(crate) first: Address,
+    /// How many addresses the mint issued, at least one.
+    #[serde(deserialize_with = "nonzero_count")]
+    pub(crate) count: Nat,
+}
+
+impl RangeAllocation {
+    /// The first address the mint issued.
+    pub fn first(&self) -> &Address {
+        &self.first
+    }
+
+    /// How many addresses the mint issued: the frontier moved by this many.
+    pub fn count(&self) -> &Nat {
+        &self.count
     }
 }
 
@@ -407,21 +470,26 @@ impl Principal {
     }
 }
 
-/// The record's three TEST constructors (`test-hooks`, default off): the one
+/// The record's four TEST constructors (`test-hooks`, default off): the one
 /// way a crate other than this one constructs an `M3Rec` of its own choosing
 /// without decoding bytes, for the suites that seed M3 state through the
 /// fold — states no op produces among them, an account allocated without its
-/// seat, a seat below the account tier. Each builds its variant as given and
-/// checks nothing, as a struct literal inside this crate does. The feature
-/// is turned on only on dev-dependency lines, so a build that compiles no
-/// test holds none of them, and a production path that reached for one
-/// would not compile.
+/// seat, a seat below the account tier, a range whose count parts from the
+/// stretch beside it. Each builds its variant as given and checks nothing,
+/// as a struct literal inside this crate does. The feature is turned on only
+/// on dev-dependency lines, so a build that compiles no test holds none of
+/// them, and a production path that reached for one would not compile.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 impl M3Rec {
     /// `Allocate(Allocation { addr, published })`.
     pub fn allocate(addr: Address, published: bool) -> M3Rec {
         M3Rec::Allocate(Allocation { addr, published })
+    }
+
+    /// `AllocateRange(RangeAllocation { first, count })`.
+    pub fn allocate_range(first: Address, count: Nat) -> M3Rec {
+        M3Rec::AllocateRange(RangeAllocation { first, count })
     }
 
     /// `RegisterNode { addr }`.
@@ -454,6 +522,32 @@ fn parented_address<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error
         ));
     }
     Ok(addr)
+}
+
+/// `RangeAllocation.first`'s at-rest door: [`parented_address`]'s check, then
+/// the element-tier check a range alone needs — a range is minted on a
+/// content chain only, so a `first` at any other level is a producer no build
+/// has, and the fold's publication write must never see one.
+fn content_range_first<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error> {
+    let first = parented_address(d)?;
+    if first.level() != Level::Element {
+        return Err(serde::de::Error::custom(
+            "an AllocateRange first address is an element address (a range is minted on a \
+             content chain only)",
+        ));
+    }
+    Ok(first)
+}
+
+/// `RangeAllocation.count`'s at-rest door: a natural of at least one. A zero
+/// count is a range of nothing — a frontier moved by nothing under a record
+/// that says it moved — and is refused where it is decoded.
+fn nonzero_count<'de, D: Deserializer<'de>>(d: D) -> Result<Nat, D::Error> {
+    let count = Nat::deserialize(d)?;
+    if count == Nat::default() {
+        return Err(serde::de::Error::custom("an AllocateRange count is at least one"));
+    }
+    Ok(count)
 }
 
 /// `Principal.prefix`'s at-rest door: M1's validating decode, then the fact

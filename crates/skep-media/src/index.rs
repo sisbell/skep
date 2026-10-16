@@ -45,9 +45,11 @@
 //! behind a `parking_lot::RwLock` taken innermost and held across no other
 //! lock.
 //! The cheap PREFIX TEST (`cell::names_kind_by_prefix`, the picture kind's
-//! canonical opening) stands before every parse, so a walk over a prose
-//! board's million one-byte values costs a byte compare apiece and a parse
-//! for the cells alone.
+//! canonical opening) stands before every parse, and a STRETCH — one entry
+//! for a run of single-byte values, none of which can be a cell — is counted
+//! and skipped whole by its arm before the test, so a walk over a prose
+//! board's million one-byte values costs a step per stretch, a board of atoms
+//! a byte compare apiece, and a parse for the cells alone.
 //!
 //! THE INVENTORY's READS ([`CellIndex::references`], [`CellIndex::accounts`],
 //! [`CellIndex::halts`]; `media.md` §Recovery, "THE OPERATOR CAN LIST THE
@@ -73,6 +75,7 @@ use skep_address::{
     Tumbler,
 };
 use skep_arrangement::{trunk_of, MAX_REINSERTED_VALUES};
+use skep_content::Piece;
 use skep_febe::FebeWorld;
 use skep_kernel::{Kernel, Snapshot};
 use skep_namespace::PrincipalId;
@@ -423,9 +426,12 @@ impl CellIndex {
         let content = world.content();
         for &i in naming {
             let Ok(at) = validate(shift(start.tumbler(), &Nat::from(i as u64))) else { continue };
-            if let Some(value) = content.value_at(at.tumbler()) {
-                if names_kind_by_prefix(value.as_bytes()) {
-                    self.enter_value(world, &at, value.as_bytes());
+            // The point read lends a piece: a value's bytes, or the one byte
+            // at an address inside a stretch, which the prefix test refuses by
+            // itself — a one-byte value never opens `{"type":"`.
+            if let Some(piece) = content.value_at(at.tumbler()) {
+                if names_kind_by_prefix(piece.as_bytes()) {
+                    self.enter_value(world, &at, piece.as_bytes());
                 }
             }
         }
@@ -455,9 +461,11 @@ impl CellIndex {
                 ordinal: &next_ordinal - back,
             };
             let Ok(at) = elem_addr(position) else { continue };
-            if let Some(value) = content.value_at(at.tumbler()) {
-                if names_kind_by_prefix(value.as_bytes()) {
-                    self.enter_value(world, &at, value.as_bytes());
+            // As at an insert: a one-byte piece inside a re-minted stretch
+            // fails the prefix test by itself.
+            if let Some(piece) = content.value_at(at.tumbler()) {
+                if names_kind_by_prefix(piece.as_bytes()) {
+                    self.enter_value(world, &at, piece.as_bytes());
                 }
             }
         }
@@ -513,9 +521,23 @@ pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild 
     let world = snapshot.world();
     let (mut values, mut cells, mut halts) = (0usize, 0usize, 0usize);
     let mut parse = Duration::ZERO;
-    for (at, value) in world.content().iter() {
-        values += 1;
-        let bytes = value.as_bytes();
+    for (at, piece) in world.content().iter() {
+        // BY ARM, not by the prefix test: a stretch is N single-byte values,
+        // none of which can be a cell, so it is counted — `values` keeps
+        // counting VALUES, which keeps the operator line's words true — and
+        // skipped whole; the test run over a whole stretch's bytes would take
+        // typed text that happens to open `{"type":"` for a cell. A value is
+        // tested as before.
+        let bytes = match piece {
+            Piece::Bytes(bytes) => {
+                values += bytes.len();
+                continue;
+            }
+            Piece::Value(v) => {
+                values += 1;
+                v.as_bytes()
+            }
+        };
         if !names_kind_by_prefix(bytes) {
             continue;
         }

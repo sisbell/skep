@@ -170,7 +170,14 @@ use crate::serial::SerialGuard;
 /// SHA-256 over a preimage carrying a per-transaction salt, so a head naming
 /// `SKJ3` belongs to a chain no `SKJ4` board recomputes. The stamp is the one
 /// member that moved; the head's schema and its other bytes are as they were.
-const FORMAT_STAMP: &str = "SKJ4";
+/// DERIVED from the kernel's own stamp, [`skep_kernel::JOURNAL_FORMAT`], by
+/// a `const` UTF-8 read, so the next bump of the journal format moves this
+/// member by itself and no hand re-key is owed here; the stamp is four ASCII
+/// bytes, so the read cannot fail.
+const FORMAT_STAMP: &str = match std::str::from_utf8(&skep_kernel::JOURNAL_FORMAT) {
+    Ok(stamp) => stamp,
+    Err(_) => panic!("the journal format stamp is four ASCII bytes"),
+};
 
 /// The head record's `type` member — one spelling for the writer and the
 /// resume that reads it back.

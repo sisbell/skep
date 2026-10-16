@@ -251,7 +251,7 @@ fn chain_at_below_the_retention_floor_is_history_reclaimed() {
         ));
         let (early, early_chain) = health(port);
         assert_eq!(chain_ok(port, early)["chain"].as_str(), Some(early_chain.as_str()));
-        let bulk = "z".repeat(8192);
+        let bulk = "z".repeat(262_144);
         for _ in 0..6 {
             let v = op(
                 port,

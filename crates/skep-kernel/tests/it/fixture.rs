@@ -1,5 +1,5 @@
 //! The engine fixture the hazard, golden and chain suites share: the mixed-op
-//! fixture — the hazard suite's eleven ops, extended to the golden's eighteen
+//! fixture — the hazard suite's eleven ops, extended to the golden's nineteen
 //! — with its capture-and-compare oracle, the seeded salt every fixture
 //! kernel runs under, the address and configuration constructors, and
 //! wedge-bounded opens.
@@ -157,7 +157,7 @@ pub struct Fixture {
 }
 
 /// How far a fixture's op sequence runs: the hazard suite's eleven, or those
-/// eleven EXTENDED by the golden fixture's seven (the encoding report's §7).
+/// eleven EXTENDED by the golden fixture's eight (the encoding report's §7).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Extent {
     /// The eleven ops the H3 ruling names — the dirty-crash suite's fixture,
@@ -166,15 +166,20 @@ enum Extent {
     /// The eleven, then the ops that reach every journal variant and leaf
     /// form the eleven do not: `RegisterNode` with a component above 2³² (a
     /// two-digit `Nat`), `Allocate { published: true }`, a second document,
-    /// a multi-run `ContentPlace` (a copy from a range the pivot fragmented),
-    /// and `ContentReorder` in both its shapes (three and four ordinals).
+    /// a per-byte insert — M3's `AllocateRange` and M4's `ContentStretch`,
+    /// the pair every run of single-byte values journals as, and the
+    /// `Stretch` entry of the checkpoint's content map — a multi-byte ATOM
+    /// (`Allocate` + `ContentWrite`, the `Value` entry, which the per-byte
+    /// inserts no longer reach), a multi-run `ContentPlace` (a copy from a
+    /// range the pivot fragmented), and `ContentReorder` in both its shapes
+    /// (three and four ordinals).
     Golden,
 }
 
 /// The op index of a golden fixture's commits — eleven hazard ops and the
-/// seven golden ones; the hazard fixture stops at the first figure.
+/// eight golden ones; the hazard fixture stops at the first figure.
 pub const HAZARD_OPS: usize = 11;
-pub const GOLDEN_OPS: usize = 18;
+pub const GOLDEN_OPS: usize = 19;
 
 /// A node component above 2³²: two base-`u32` digits, the `Nat` form the
 /// hazard ops never reach.
@@ -192,8 +197,8 @@ impl Fixture {
         Self::build_with(dir, ckpt_after, Extent::Hazard)
     }
 
-    /// [`Fixture::build`] EXTENDED by the golden fixture's seven ops
-    /// ([`Extent::Golden`]): the eighteen commits the byte fixture under
+    /// [`Fixture::build`] EXTENDED by the golden fixture's eight ops
+    /// ([`Extent::Golden`]): the nineteen commits the byte fixture under
     /// `tests/golden/` is produced from — by these ops and never by literals,
     /// since M5's record variants cannot be built outside their crate. The
     /// same capture discipline: one oracle dump per boundary, bounded replay
@@ -361,7 +366,8 @@ impl Fixture {
                 .expect("create the second document");
             capture(&engine, &mut boundaries);
 
-            // 15: its content — three values, one run.
+            // 15: its content — three per-byte values, one run: one range
+            //     mint and one stretch.
             engine
                 .vstream()
                 .insert(
@@ -374,24 +380,36 @@ impl Fixture {
                 .expect("insert xyz");
             capture(&engine, &mut boundaries);
 
-            // 16: a three-ordinal REARRANGE (the pivot): [1, 2) moves after
-            //     [2, 4), so `x y z` reads `y z x` — and the arrangement is now
-            //     two runs, the fragmented source the copy below wants.
+            // 16: an ATOM appended to it — a multi-byte value, the one
+            //     `Allocate` + `ContentWrite` pair and the one `Value` entry
+            //     the golden holds, since every per-byte insert above is a
+            //     stretch.
+            engine
+                .vstream()
+                .insert(OWNER, &doc2, vp(1, 4), vec![Val::new(b"atom".to_vec())], Deposit::Undeclared)
+                .expect("insert the atom");
+            capture(&engine, &mut boundaries);
+
+            // 17: a three-ordinal REARRANGE (the pivot): [1, 2) moves after
+            //     [2, 4), so `x y z atom` reads `y z x atom` — and the
+            //     arrangement is now three runs, the fragmented source the
+            //     copy below wants.
             engine
                 .vstream()
                 .rearrange(OWNER, &doc2, &[vp(1, 1), vp(1, 2), vp(1, 4)])
                 .expect("pivot doc2");
             capture(&engine, &mut boundaries);
 
-            // 17: a COPY of that fragmented range into the first document, at
-            //     its append boundary — a `ContentPlace` carrying two runs.
+            // 18: a COPY of the fragmented range `y z x` into the first
+            //     document, at its append boundary — a `ContentPlace` carrying
+            //     two runs.
             engine
                 .vstream()
                 .copy(OWNER, &doc, vp(1, 3), &[vspec(&doc2, 1, 3)])
                 .expect("copy doc2's range into doc");
             capture(&engine, &mut boundaries);
 
-            // 18: a four-ordinal REARRANGE (the swap) over the five positions
+            // 19: a four-ordinal REARRANGE (the swap) over the five positions
             //     the first document now holds.
             engine
                 .vstream()

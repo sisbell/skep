@@ -1,35 +1,44 @@
 //! # skep-content — M4: Content Store (Istream)
 //!
 //! The **permascroll**: an append-only, write-once map from allocated
-//! I-address to opaque content value, plus the two point queries over it —
-//! *is content stored here?* ([`ContentStore::contains`]) and *what is
-//! stored here?* ([`ContentStore::value_at`]) — and its one enumeration,
-//! every entry once ([`ContentStore::iter`]). M4 owns the immutable,
-//! never-GC'd half of the strand — ASN-0036's two-component state, the
-//! content store and the arrangements — and does exactly that one thing:
-//! **store an immutable value at an address forever, and look it up — never
-//! mutate, never delete, never reclaim, never key on the value.** Addresses
-//! arrive as parameters already minted and validated upstream (M3); M4
-//! trusts them and stores bytes.
+//! I-address to opaque content value, whose entries are one value or one
+//! STRETCH of consecutive single-byte values written by one insert, plus the
+//! two point queries over it — *is content stored here?*
+//! ([`ContentStore::contains`]) and *what is stored here?*
+//! ([`ContentStore::value_at`]) — the one run read, the pieces of an I-extent
+//! ([`ContentStore::pieces`]), and its one enumeration, every entry once
+//! ([`ContentStore::iter`]). M4 owns the immutable, never-GC'd half of the
+//! strand — ASN-0036's two-component state, the content store and the
+//! arrangements — and does exactly that one thing: **store an immutable
+//! value at an address forever, and look it up — never mutate, never delete,
+//! never reclaim, never key on the value.** Addresses arrive as parameters
+//! already minted and validated upstream (M3); M4 trusts them and stores
+//! bytes. A read inside a stretch finds the entry just below the address and
+//! indexes into its bytes, so every address still answers by itself.
 //!
 //! Three surfaces (§Public interface):
 //!
-//! * **Engine plug** (§A) — the slice [`ContentStore`], the record
-//!   [`ContentWrite`], the accessor [`HasContent`], and the fold
-//!   [`ContentStore::apply_write`], per the Engine Composition Contract.
+//! * **Engine plug** (§A) — the slice [`ContentStore`], the two records
+//!   [`ContentWrite`] and [`ContentStretch`], the accessor [`HasContent`],
+//!   and the two folds [`ContentStore::apply_write`] and
+//!   [`ContentStore::apply_stretch`], per the Engine Composition Contract.
 //! * **Read API** (§B) — [`ContentStore::contains`] (the
 //!   referential-integrity oracle of S3★'s content clause: content-presence,
 //!   whether content is stored here — not "allocated", not "registered") and
 //!   [`ContentStore::value_at`] (`C(a)`), point queries over any slice, a
 //!   reader's pinned snapshot or a composite's working slice alike
-//!   ([`HasContent`] names both); and [`ContentStore::iter`], the one
-//!   enumeration — an [`Iter`], the walk `&ContentStore` yields too — in no
-//!   promised order, for whole-store work over a pinned snapshot such as the
-//!   cell index's walk.
-//! * **Write surface** (§C) — the pure step [`stage_write`] (the storage
-//!   half of K.α, composed by M5's placement composite) and `write`, the
-//!   `#[doc(hidden)]` standalone transact-wrapped form (M2 contract 3) —
-//!   compiled only under the `test-hooks` feature.
+//!   ([`HasContent`] names both), each answering a borrowed [`Piece`];
+//!   [`ContentStore::pieces`], the one run read — the [`Pieces`] of an
+//!   I-extent, each one stored entry clipped to the window; and
+//!   [`ContentStore::iter`], the one enumeration — an [`Iter`], the walk
+//!   `&ContentStore` yields too — in no promised order, for whole-store work
+//!   over a pinned snapshot such as the cell index's walk. The point queries
+//!   and the one run read, `pieces`; no prefix read.
+//! * **Write surface** (§C) — the pure steps [`stage_write`] (one value)
+//!   and [`stage_stretch`] (a run of single-byte values), the storage half of
+//!   K.α composed by M5's placement composite, and `write` and
+//!   `write_stretch`, the `#[doc(hidden)]` standalone transact-wrapped forms
+//!   (M2 contract 3) — compiled only under the `test-hooks` feature.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0036 S0, S1, S4 and S5; ASN-0047 S3★ and J0; ASN-0093 C0,
@@ -59,10 +68,12 @@
 //! invariant's gate.
 //!
 //! **Diagnosed, not relied on:** a second write at one address.
-//! [`stage_write`] refuses an address already stored in the slice it is
-//! handed (`AlreadyStored`), so an address minted twice upstream becomes a
-//! typed rejection instead of a write the fold drops; its doc says which
-//! slice to hand it.
+//! [`stage_write`] and [`stage_stretch`] refuse an address already covered
+//! in the slice they are handed — a key, or an address inside a stored
+//! stretch's reach (`AlreadyStored`), and a stretch whose window holds a
+//! stored key (`Overlap`) — so an address minted twice upstream becomes a
+//! typed rejection instead of a write the fold drops; their docs say which
+//! slice to hand them.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -79,25 +90,25 @@
 //!   layer (M7/M8) never reads M4 (store-disjointness SD:
 //!   `dom(C) ∩ dom(L) = ∅`);
 //! * journal, replay, snapshot, recovery (M2) — M2 owns the files, and M4
-//!   only its own bytes inside them: [`ContentWrite`] is the authoritative
-//!   delta M2 journals, and the slice is its fold, fully serialized in
-//!   checkpoints (M2's default `rebuild_derived` identity), both in this
-//!   crate's serde form and both holding [`Val`]'s. Those bytes are
-//!   formats — read by code no compiler check ties to their form — and
-//!   what a change to each owes is said where it is spelled: on
-//!   [`ContentWrite`], on `in_tumbler_order` (`store.rs`) for the slice, and
-//!   on [`Val`];
+//!   only its own bytes inside them: [`ContentWrite`] and [`ContentStretch`]
+//!   are the authoritative deltas M2 journals, and the slice is their fold,
+//!   fully serialized in checkpoints (M2's default `rebuild_derived`
+//!   identity), all in this crate's serde form. Those bytes are formats —
+//!   read by code no compiler check ties to their form — and what a change
+//!   to each owes is said where it is spelled: on the two records, on
+//!   `in_tumbler_order` (`store.rs`) for the slice, and on [`Val`];
 //! * modify, delete, GC, reclamation, refcounts — none exists, and no
 //!   fixed-width counter that could cap or overflow is ever introduced;
 //! * author/source/origin metadata — origin (S7) is established by M3's
 //!   allocation discipline and computed structurally by M1's `document_of`
 //!   (surfaced as SHOWORIGIN in M6); M4 stores only `address → Val`, so no
 //!   redundant origin field can diverge;
-//! * range, prefix-scan, max-under-prefix — the reads are the two point
-//!   queries and the one enumeration, [`ContentStore::iter`]; no query is
-//!   built on the map's order (its field in `store.rs` says what the order is
-//!   for), and the allocator's max-under-prefix reads M3's own frontier,
-//!   never M4;
+//! * prefix-scan, max-under-prefix — the reads are the two point queries,
+//!   the one run read [`ContentStore::pieces`] and the one enumeration,
+//!   [`ContentStore::iter`]; the point queries and the run read stand on the
+//!   key order's predecessor lookup (its field in `store.rs` says what the
+//!   order is for), and the allocator's max-under-prefix reads M3's own
+//!   frontier, never M4;
 //! * concurrency — none of M4's own: no locks, no threads, no interior
 //!   mutability. Content writes ride M5's composite under the
 //!   per-(document, content-subspace) lock key; every content address is
@@ -107,66 +118,75 @@
 //!
 //! Per the Engine Composition Contract, M4 never names the concrete
 //! `World`/`Record`: the engine implements [`HasContent`] for its
-//! `W: WorldState` (the read accessor), lifts M4's delta via
-//! `impl From<ContentWrite> for W::Record` (the write-side mirror), and
-//! dispatches its `Record::Content` variant into the fold
-//! [`ContentStore::apply_write`]. The engine only `From`-lifts and folds
-//! the record; it never builds one. Anything that inspects a journaled
-//! record reads it through [`ContentWrite::addr`] /
-//! [`ContentWrite::val`] and its `Debug`, which the engine's
-//! `Record: Debug` rests on and which renders a value as its length.
+//! `W: WorldState` (the read accessor), lifts M4's deltas via
+//! `impl From<ContentWrite> for W::Record` and `impl From<ContentStretch>
+//! for W::Record` (the write-side mirror), and dispatches its
+//! `Record::Content` and `Record::ContentStretch` variants into the folds
+//! [`ContentStore::apply_write`] and [`ContentStore::apply_stretch`]. The
+//! engine only `From`-lifts and folds a record; it never builds one.
+//! Anything that inspects a journaled record reads it through
+//! [`ContentWrite::addr`] / [`ContentWrite::val`], or
+//! [`ContentStretch::addr`] / [`ContentStretch::bytes`], and its `Debug`,
+//! which the engine's `Record: Debug` rests on and which renders a value or
+//! a stretch as its length.
 
 #![forbid(unsafe_code)]
 
 // The opaque content value, `Val`.
 mod value;
-// The write surface's one typed rejection, `ContentError`.
+// The write surface's typed rejections, `ContentError`.
 mod error;
-// The routing assertion (Open build decision #4), shared by `stage_write`
-// and `write`.
+// The routing assertion (Open build decision #4), shared by the stage doors
+// and the standalone ops.
 mod routing;
-// The slice — its fold, point queries, one enumeration (`Iter`) and
-// serialized form — the record, and `stage_write`, the record's one producer
-// (`ContentWrite`'s fields are private to this file).
+// The slice — its two folds, point queries, one run read (`Pieces`), one
+// enumeration (`Iter`) and serialized form — the two records, the borrowed
+// `Piece`, and `stage_write`/`stage_stretch`, the records' one producer each
+// (the records' fields are private to this file).
 mod store;
-// `write`, the standalone transact-wrapped twin of `stage_write` —
-// `test-hooks` builds only.
+// `write` and `write_stretch`, the standalone transact-wrapped twins of the
+// two stage doors — `test-hooks` builds only.
 #[cfg(feature = "test-hooks")]
 mod ops;
 
 pub use error::ContentError;
 #[cfg(feature = "test-hooks")]
-pub use ops::write;
-pub use store::{stage_write, ContentStore, ContentWrite, Iter};
+pub use ops::{write, write_stretch};
+pub use store::{
+    stage_stretch, stage_write, ContentStore, ContentStretch, ContentWrite, Iter, Piece, Pieces,
+};
 pub use value::Val;
 
 /// The engine's **read accessor** for M4's slice (§A; Engine Composition
 /// Contract). The engine implements it for its concrete world, and every
 /// reader of M4 reaches the permascroll through it: M5's composites as
-/// `stg.working().content()` — the slice they hand [`stage_write`], and ask
-/// `contains` and `value_at` of — and every reader of a snapshot as
-/// `snapshot.world().content()`. M4's library reads no world of its own;
-/// only the test-only `write` bounds on this. READ side only; its write-side
-/// mirror is the engine's `impl From<ContentWrite> for W::Record` lift,
-/// through which the write paths stage deltas via `stg.push(rec.into())`.
+/// `stg.working().content()` — the slice they hand [`stage_write`] and
+/// [`stage_stretch`], and ask `contains`, `value_at` and `pieces` of — and
+/// every reader of a snapshot as `snapshot.world().content()`. M4's library
+/// reads no world of its own; only the test-only `write` and `write_stretch`
+/// bound on this. READ side only; its write-side mirror is the engine's
+/// `impl From<ContentWrite> for W::Record` and `impl From<ContentStretch>
+/// for W::Record` lifts, through which the write paths stage deltas via
+/// `stg.push(rec.into())`.
 ///
 /// IMPLEMENTORS OWE one fact the signature cannot carry: `content()` is the
 /// very slice the world's `WorldState::apply` folds this crate's records
-/// into, through [`ContentStore::apply_write`], once per record — and that
-/// fold is the only thing that moves it. Every other record's fold carries
-/// the slice through unchanged; a checkpoint carries it through this crate's
-/// own serde form, neither skipped nor defaulted; and `rebuild_derived`
-/// hands it back as it was decoded. Three promises rest on it:
-/// [`stage_write`]'s already-stored check sees only the slice it is handed,
-/// so it refuses what the fold would drop only when
-/// `stg.working().content()` is that slice; a value stored in one
-/// `content()` is in every later one, unchanged (S0) — the fold keeps that
-/// only for a slice nothing else replaces, and M5's publish shot `expect`s
-/// it of the working slice; and a reader's `snapshot.world().content()`
-/// holds a value for every arranged content position the snapshot resolves,
-/// which M6's RETRIEVEV `expect`s (S3★). An implementor that answered any
-/// other `ContentStore`, or moved this one by any other path, would void all
-/// three, and nothing in this crate can check it.
+/// into, through the two folds [`ContentStore::apply_write`] and
+/// [`ContentStore::apply_stretch`], once per record — and those folds are
+/// the only things that move it. Every other record's fold carries the slice
+/// through unchanged; a checkpoint carries it through this crate's own serde
+/// form, neither skipped nor defaulted; and `rebuild_derived` hands it back
+/// as it was decoded. Three promises rest on it: the two stage doors'
+/// already-stored checks see only the slice they are handed, so they refuse
+/// what the folds would drop only when `stg.working().content()` is that
+/// slice; a value stored in one `content()` is in every later one, unchanged
+/// (S0) — the folds keep that only for a slice nothing else replaces, and
+/// M5's publish shot `expect`s it of the working slice; and a reader's
+/// `snapshot.world().content()` holds a value for every arranged content
+/// position the snapshot resolves, which M6's RETRIEVEV `expect`s (S3★). An
+/// implementor that answered any other `ContentStore`, or moved this one by
+/// any other path, would void all three, and nothing in this crate can check
+/// it.
 pub trait HasContent {
     /// M4's slice of the world state.
     fn content(&self) -> &ContentStore;
@@ -175,20 +195,22 @@ pub trait HasContent {
 /// The auto traits M4's types promise without saying. `WorldState` is
 /// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes
 /// those bounds of [`ContentStore`], a field of its `World`, and of
-/// [`ContentWrite`], the record its `Record::Content` carries, through types
-/// no signature in this crate mentions; [`Val`] rides M10's `Request` across
-/// the daemon's workers; and [`ContentError`] travels inside M5's
-/// `InsertError` and `PublishError`. They are kept by what the private fields
-/// contain — the `im` map, the `Arc` under each of its keys and under `Val` —
-/// so a field that revoked one (the `Rc`-backed `im-rc` for `im`, an `Rc`
-/// under a key or under `Val`) would compile here and fail a crate away,
-/// never naming the field. Asserted in the library rather than the suite,
-/// because that is the build a manifest change is made in, and it is this
-/// crate's manifest that names `im`.
+/// [`ContentWrite`] and [`ContentStretch`], the records its `Record::Content`
+/// and `Record::ContentStretch` carry, through types no signature in this
+/// crate mentions; [`Val`] rides M10's `Request` across the daemon's workers;
+/// and [`ContentError`] travels inside M5's `InsertError` and
+/// `PublishError`. They are kept by what the private fields contain — the
+/// `im` map, the `Arc` under each of its keys, under `Val` and under a
+/// stretch's bytes — so a field that revoked one (the `Rc`-backed `im-rc`
+/// for `im`, an `Rc` under a key or under `Val`) would compile here and fail
+/// a crate away, never naming the field. Asserted in the library rather than
+/// the suite, because that is the build a manifest change is made in, and it
+/// is this crate's manifest that names `im`.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<ContentStore>(); // the `WorldState` bound reaches this through the engine
     owed::<ContentWrite>(); // and this through `WorldState::Record`
+    owed::<ContentStretch>(); // the second record, through the same bound
     owed::<Val>();
     // The rejection too: a caller that boxes one meets
     // `Box<dyn Error + Send + Sync>`, which is the crossing form.

@@ -2,11 +2,14 @@
 //! hash chain's first lane; `SKJ4`/`SKC4` since the chain's salt): one
 //! journal segment, one checkpoint and one world dump per boundary, produced
 //! BY THE OPS of [`Fixture::build_golden`] — the hazard suite's eleven
-//! extended by the seven that reach every journal variant and leaf form —
+//! extended by the eight that reach every journal variant and leaf form —
 //! under the SEEDED salt source ([`GOLDEN_SALT_SEED`]: a marker's salt is a
 //! pure function of the seed and the transaction, so the bytes reproduce),
 //! and committed under `tests/golden/` as `seg-1.wal`, `checkpoint.<S>` and
-//! `dumps/<seq>.txt`.
+//! `dumps/<seq>.txt`. Beside it, `tests/golden-prestretch/` keeps the three
+//! artifacts as they stood before the stretch record — the one committed
+//! board written in M4's per-byte form — for the pin that this build opens
+//! such a board from genesis ([`the_pre_stretch_golden_opens_from_genesis_and_answers_every_boundary`]).
 //!
 //! What the pin catches: a release of bincode or serde that moves a width or
 //! a tag, a field reordered or inserted, a variant inserted, a shadow that no
@@ -34,14 +37,20 @@
 //! ```
 //!
 //! rewrites the three artifacts from the ops; the stamp gate then holds the
-//! new files to the new stamp, and the bump's commit carries them. ONE
-//! regeneration moved the bytes under an UNCHANGED stamp: 2026-09-29, when
+//! new files to the new stamp, and the bump's commit carries them. TWO
+//! regenerations moved the bytes under an UNCHANGED stamp. 2026-09-29, when
 //! the chain's preimage gained the signature slot's digest (the board's
 //! r6-2c) and M5's slice its shot terms (D25's (c′)) — a format event by the
 //! marker doc's own rule, landed as `SKJ4`/`SKC4` by the owner's no-stamp
-//! ruling (no served board exists; dev boards regenerate). Every marker's
-//! chain, `checkpoint.37`'s header and every dump moved; the fixture's ops
-//! did not.
+//! ruling (no served board exists; dev boards regenerate): every marker's
+//! chain, the checkpoint's header and every dump moved; the fixture's ops
+//! did not. And 2026-10-15, when a per-byte insert became one `AllocateRange`
+//! and one `ContentStretch` where it was two records per byte, and M4's
+//! checkpoint entry a tagged value or stretch — the same ruling renewed: the
+//! fixture gained one op, the atom at 16, so the records the per-byte inserts
+//! no longer reach stay under the pin, and every record position, the
+//! checkpoint's seq and every dump moved. The artifacts of the first
+//! regeneration stand under `tests/golden-prestretch/`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -56,12 +65,13 @@ use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
 
 /// The op after which the golden checkpoints: the pivot, so the checkpoint
-/// body carries the wide node, the published bit, both documents and a
-/// fragmented arrangement, and the copy and the swap replay ABOVE it — the
-/// reader pin then exercises the `SKC4` header's `chain_head` as the value
-/// the chain continues from, and the boundaries below it fold from genesis
-/// with the chain verified from its genesis value.
-const CHECKPOINT_AFTER_OP: usize = 16;
+/// body carries the wide node, the published bit, both documents, a stretch
+/// and an atom in the content map and a fragmented arrangement, and the copy
+/// and the swap replay ABOVE it — the reader pin then exercises the `SKC4`
+/// header's `chain_head` as the value the chain continues from, and the
+/// boundaries below it fold from genesis with the chain verified from its
+/// genesis value.
+const CHECKPOINT_AFTER_OP: usize = 17;
 
 /// The seed the golden was regenerated under, restated beside the stamps it
 /// belongs with: a golden written under another seed carries other salts,
@@ -292,6 +302,117 @@ fn the_reader_pin_this_build_opens_the_golden_and_answers_every_boundary() {
         engine.world_at(Seq(1)).is_err(),
         "below the base the damaged first transaction must halt a genesis replay"
     );
+}
+
+/// The golden as it stood before the stretch record, kept whole beside the
+/// crate: the one committed board written in M4's per-byte form.
+fn pre_stretch_golden_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden-prestretch")
+}
+
+/// The recorded dumps of the pre-stretch golden, by boundary.
+fn pre_stretch_dumps() -> BTreeMap<u64, String> {
+    let dumps = pre_stretch_golden_dir().join("dumps");
+    fs::read_dir(&dumps)
+        .unwrap_or_else(|e| panic!("list {}: {e}", dumps.display()))
+        .map(|entry| {
+            let path = entry.expect("a directory entry").path();
+            let seq: u64 = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse().ok())
+                .unwrap_or_else(|| panic!("a dump is named <seq>.txt: {}", path.display()));
+            (seq, fs::read_to_string(&path).expect("read a dump"))
+        })
+        .collect()
+}
+
+/// A dump of this build over the pre-stretch board, as the pre-stretch build
+/// rendered it: the one difference between the two is M4's entry form — a
+/// bare value then, `Value([..])` now, every entry of an opened old board
+/// being a one-byte value — so the `Value(` … `)` wrapper is taken off each
+/// content entry and nothing else moves.
+fn without_the_value_wrapper(dump: &str) -> String {
+    let mut out = String::with_capacity(dump.len());
+    let mut rest = dump;
+    while let Some(at) = rest.find("Value([") {
+        out.push_str(&rest[..at]);
+        let inner = &rest[at + "Value(".len()..];
+        let close = inner.find("])").expect("a byte list closes") + 1;
+        out.push_str(&inner[..close]);
+        assert!(inner[close..].starts_with(')'), "the wrapper closes after the list");
+        rest = &inner[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// (b′) THE PRE-STRETCH READER PIN — this build opens the one committed
+/// pre-stretch board FROM GENESIS: its checkpoint, written under this build's
+/// own stamps over the bare-value content form, refuses at decode and is
+/// passed over (the open's report says so, and says why), the journal still
+/// reaches genesis, every per-byte frame replays into a one-byte value
+/// entry, and the board answers its head and every recorded boundary — the
+/// dumps differing from the pre-stretch build's in nothing but the content
+/// entry's rendering — writing nothing to the files. The open is the class
+/// an existing development board meets under the no-stamp ruling renewed;
+/// such a board is correct data, served as it stands until it is re-seeded.
+#[test]
+fn the_pre_stretch_golden_opens_from_genesis_and_answers_every_boundary() {
+    let tmp = tempdir().expect("tempdir");
+    let case = tmp.path().join("prestretch");
+    copy_dir(&pre_stretch_golden_dir(), &case);
+    let segment = seg_file(&case, 1);
+    let checkpoint = checkpoint_in(&case);
+    let checkpoint_seq: u64 = checkpoint
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix("checkpoint."))
+        .and_then(|seq| seq.parse().ok())
+        .expect("checkpoint.<seq>");
+    let (segment_before, checkpoint_before) =
+        (fs::read(&segment).expect("segment"), fs::read(&checkpoint).expect("checkpoint"));
+    assert_eq!(&segment_before[..4], b"SKJ4", "the pre-stretch board carries this build's stamps");
+    assert_eq!(&checkpoint_before[..4], b"SKC4");
+    let dumps = pre_stretch_dumps();
+    let last = *dumps.keys().max().expect("the pre-stretch golden records boundaries");
+
+    let engine = Engine::open(cfg_manual(&case))
+        .unwrap_or_else(|e| panic!("this build does not open the pre-stretch board: {e}"));
+    let recovery = engine.kernel().recovery().expect("a journaled open reports");
+    assert_eq!(recovery.start_point, Seq(0), "no checkpoint survives decode: genesis is the base");
+    assert_eq!(recovery.skipped.len(), 1, "the one checkpoint was passed over: {recovery:?}");
+    assert_eq!(recovery.skipped[0].seq, Seq(checkpoint_seq));
+    assert!(
+        !recovery.skipped[0].why.contains("checksum") && !recovery.skipped[0].why.contains("hash"),
+        "refused at decode, not for damage: {}",
+        recovery.skipped[0].why
+    );
+    assert_eq!(engine.kernel().current_seq(), Seq(last), "the recovered head");
+    assert_eq!(
+        without_the_value_wrapper(engine.world_dump().as_str()),
+        dumps[&last].as_str(),
+        "the recovered world is not the one the pre-stretch golden recorded at its head"
+    );
+    assert_ne!(
+        engine.world_dump().as_str(),
+        dumps[&last],
+        "the rendering did move: M4's entries are tagged values now"
+    );
+    for (seq, dump) in &dumps {
+        let world = engine
+            .world_at(Seq(*seq))
+            .unwrap_or_else(|e| panic!("boundary {seq} of the pre-stretch golden is unanswerable: {e}"));
+        assert_eq!(
+            without_the_value_wrapper(engine.dump_of(&world).as_str()),
+            dump.as_str(),
+            "history at boundary {seq} diverges from what the pre-stretch golden recorded"
+        );
+    }
+    engine.check_hints().expect("the recovered hints equal a from-authoritative rebuild");
+    drop(engine);
+    assert_eq!(fs::read(&segment).expect("segment"), segment_before, "the open cut the segment");
+    assert_eq!(fs::read(&checkpoint).expect("checkpoint"), checkpoint_before);
 }
 
 /// (c) THE STAMP GATE — the golden's files open with this build's own

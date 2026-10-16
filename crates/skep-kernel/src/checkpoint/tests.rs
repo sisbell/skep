@@ -407,6 +407,76 @@ fn a_body_that_survives_its_checksum_and_will_not_decode_is_a_skew() {
     assert_ne!(refusal_for(3), refusal_for(7));
 }
 
+/// The exhausted chain's line over an OLD-FORM base: a checkpoint under this
+/// build's own stamp whose body this build cannot decode — its checksum and
+/// hash intact — is a development board from before a layout change landed
+/// under the no-stamp ruling, and the line appends the ruled remedy after the
+/// serializer's words; where the base refused for DAMAGE the line carries the
+/// damage account alone; and a base the chain passed over while genesis stood
+/// in carries the fact alone, never the remedy (AUTH-2.86).
+#[test]
+fn an_old_form_base_driven_to_the_exhausted_chain_appends_the_ruled_remedy() {
+    use crate::error::OpenError;
+    use crate::replay::{select_base, Unreachable};
+
+    // A body written as one type and loaded as another: the skew `load`
+    // answers with the serializer's own refusal. `Vec<u64>` is a `WorldState`
+    // in the kernel's own suite; a `bool` body is one byte where its count
+    // wants eight.
+    let dir = tempdir().unwrap();
+    write(dir.path(), 3, &true, &CHAIN_HEAD).expect("fixture checkpoint");
+    let skew = list(dir.path()).unwrap()[0].load::<Vec<u64>>().expect_err("a skew");
+    assert!(refused_at_decode(&*skew), "the serializer's refusal is told apart");
+    let damage: LoadRefused = "checkpoint body failed its header checksum".into();
+    assert!(!refused_at_decode(&*damage), "a damage account is not");
+    // Genesis unreachable: a segment list whose first segment opens above 1.
+    fs::write(dir.path().join("seg-5.wal"), b"").unwrap();
+    let segs = crate::journal::list_segments(dir.path()).unwrap();
+    let checkpoints = list(dir.path()).unwrap();
+    let Err(Unreachable { cause: Some(cause), .. }) =
+        select_base::<Vec<u64>>(&checkpoints, &segs, None, &Vec::new())
+    else {
+        panic!("the chain is exhausted: the base refuses and genesis is gone");
+    };
+    let line = OpenError::BadCheckpoint { cause: Some(cause) }.to_string();
+    let serializer = skew.to_string();
+    assert!(
+        line.contains(&format!("checkpoint.3: {serializer}; {NO_MIGRATION_REMEDY}")),
+        "the serializer's words, then the ruled remedy: {line}"
+    );
+
+    // Damage: a body byte flipped, the checksum refusing — no remedy appended.
+    let damaged = tempdir().unwrap();
+    write(damaged.path(), 3, &world(), &CHAIN_HEAD).expect("fixture checkpoint");
+    let path = checkpoint_path(damaged.path(), 3);
+    let mut data = fs::read(&path).unwrap();
+    data[HEADER_LEN] ^= 0xff;
+    fs::write(&path, &data).unwrap();
+    fs::write(damaged.path().join("seg-5.wal"), b"").unwrap();
+    let segs = crate::journal::list_segments(damaged.path()).unwrap();
+    let checkpoints = list(damaged.path()).unwrap();
+    let Err(Unreachable { cause: Some(cause), .. }) =
+        select_base::<Vec<u64>>(&checkpoints, &segs, None, &Vec::new())
+    else {
+        panic!("the chain is exhausted: the base refuses and genesis is gone");
+    };
+    let line = OpenError::BadCheckpoint { cause: Some(cause) }.to_string();
+    assert!(line.contains("checkpoint.3: checkpoint body failed its header checksum"), "{line}");
+    assert!(!line.contains(NO_MIGRATION_REMEDY), "damage names no migration remedy: {line}");
+
+    // Genesis reachable: the old-form base is skipped, and its account is the
+    // fact alone — the board opened whole.
+    let genesis_stands = tempdir().unwrap();
+    write(genesis_stands.path(), 3, &true, &CHAIN_HEAD).expect("fixture checkpoint");
+    let checkpoints = list(genesis_stands.path()).unwrap();
+    let base = select_base::<Vec<u64>>(&checkpoints, &[], None, &Vec::new())
+        .unwrap_or_else(|_| panic!("genesis stands in"));
+    assert_eq!(base.s_load(), 0);
+    let [skipped] = base.skipped() else { panic!("one base passed over") };
+    assert_eq!((skipped.seq, skipped.why.as_str()), (Seq(3), serializer.as_str()));
+    assert!(!skipped.why.contains("delete the data directory"), "the fact alone: {}", skipped.why);
+}
+
 #[test]
 fn a_base_that_cannot_be_read_says_so_rather_than_looking_damaged() {
     // Unreadable is not the same remedy as damaged, and the two were once

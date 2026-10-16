@@ -5,14 +5,16 @@
 //! one value its source gate, existence check and placement each walk.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use skep_address::{Address, Nat};
-use skep_content::{ContentWrite, HasContent};
+use skep_content::{ContentStretch, ContentWrite, HasContent, Piece, Val};
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
 use super::{
-    allocate_for_placement, head_lock_key, Vstream, MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
+    allocate_for_placement, allocate_stretch_for_placement, head_lock_key, Vstream,
+    MAX_PLACED_RUNS, MAX_REINSERTED_VALUES,
 };
 use crate::chain::{published_target, trunk_head, trunk_of};
 use crate::error::PublishError;
@@ -24,10 +26,26 @@ use crate::shot::{run_origin_document, Shot};
 use crate::state::{M5Rec, ShotTerms};
 use crate::HasM5;
 
+/// One part of a draft-native run's re-insert, copied out of the working
+/// slice before the run's first stage: a maximal run of single-byte values —
+/// consecutive `Piece::Bytes`, and every one-byte `Piece::Value` among them
+/// (the length test: the wire canonicalizes a one-byte atom to its per-byte
+/// form, so the member's bytes and positions are unchanged) — or an atom of
+/// two bytes or more, its `Val` cloned (a refcount bump). The walk COMPLETES
+/// into an ordered list of these before anything is staged, because the
+/// pieces borrow `stg.working().content()` and every stage takes `&mut
+/// Staging` and must read the working slice after each push; bounded by the
+/// run's width in bytes plus one `Val` handle per atom, under
+/// `MAX_REINSERTED_VALUES`.
+enum Part {
+    Run(Vec<u8>),
+    Atom(Val),
+}
+
 impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (writes, and the shot's byte reads) + M5
-    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite>, // stages M3Rec + ContentWrite + M5Rec
+    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>, // stages M3Rec + ContentWrite/ContentStretch + M5Rec
 {
     /// PUBLISH — the SHOT (PUB-2.33; PUB round 2, lane 3.2): append the next
     /// member of `doc`'s chain, born PUBLISHED, in ONE commit, its
@@ -64,9 +82,11 @@ where
     /// then `trunk_of`) and the client's stated `origin` must project to. The
     /// document's OWN I-space (its own content chain or any member's) is
     /// placed by reference; the STAGING DRAFT's is RE-INSERTED as fresh
-    /// identity under the document's own I-space, each value through INSERT's
-    /// own allocation step (`allocate_for_placement`), the bytes read at the
-    /// draft's addresses — a byte read, never an arrangement read — so the
+    /// identity under the document's own I-space, each maximal run of
+    /// single-byte values as ONE stretch and each atom as its own value
+    /// through INSERT's own allocation steps (`allocate_stretch_for_placement`,
+    /// `allocate_for_placement`), the bytes read at the draft's addresses by
+    /// M4's run read — a byte read, never an arrangement read — so the
     /// committed member references no address of the draft; any OTHER
     /// document's stays a window, answering its origin. The three families are
     /// disjoint under [`Shot`](crate::Shot)'s REQUIRES on `draft`; a draft
@@ -139,10 +159,11 @@ where
     /// ([`Shot::reinserted_values`](crate::Shot::reinserted_values) against
     /// [`MAX_REINSERTED_VALUES`] — request arithmetic, so it answers before
     /// any address is probed) → existence, `DanglingSource` where an address
-    /// some run names holds no value, each address probed once over the
-    /// union of the runs' I-extents → then the
-    /// placement, RUN BY RUN in the order given: a draft-native run's values
-    /// `Mint` → `Content` apiece, and after each run `TooManyRuns` once the
+    /// some run names holds no value, each run of the union of the runs'
+    /// I-extents read once by M4's run read → then the
+    /// placement, RUN BY RUN in the order given: a draft-native run's maximal
+    /// byte-runs and atoms `Mint` → `Content` apiece, and after each run
+    /// `TooManyRuns` once the
     /// accumulator passes the budget; then `TooManyRuns` as the base's tail is
     /// carried; last the member's own `Mint`. The mints and writes are
     /// defensive (M3's frontier gate, M4's write-once guard), so on a correct
@@ -192,10 +213,13 @@ where
     /// request (to report it, or to ask its address form after the commit) a
     /// clone of every run, for nothing the composite moves.
     ///
-    /// COST, AND WHO OWNS IT. The re-insert pushes a mint and a content write
-    /// per draft-native value — `2n` records for `n` values, INSERT's own
-    /// per-value step — and `n` is capped at [`MAX_REINSERTED_VALUES`],
-    /// counted off the request before any address is probed. Beside them sit
+    /// COST, AND WHO OWNS IT. The re-insert pushes a mint and a content record
+    /// per maximal run of single-byte values and per atom of each
+    /// draft-native run — two records per run or atom, INSERT's own steps, so
+    /// an unscattered draft of `n` typed bytes is two records and a draft of
+    /// `n` atoms `2n` — and `n`, the values, is capped at
+    /// [`MAX_REINSERTED_VALUES`], counted off the request before any address
+    /// is probed. Beside them sit
     /// the member's mint and one placement, whose run count (the client's
     /// runs, coalesced, plus the base's deposit runs) is capped at
     /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured as each run is
@@ -260,11 +284,12 @@ where
             let draft_native = |origin_doc: &Address| draft_doc.as_ref() == Some(origin_doc);
             // The re-insert's size, refused before any address is probed:
             // every address of every draft-native run is re-inserted below,
-            // two staged records apiece, and nothing M2 measures stops the
-            // staging before it is whole. Request arithmetic (`reinserted`,
-            // counted before the transaction opened), so it discloses
-            // nothing — and refused here, it bounds the existence walk over
-            // those runs too.
+            // two staged records per maximal byte-run or atom — two per value
+            // at the worst case, every value an atom — and nothing M2 measures
+            // stops the staging before it is whole. Request arithmetic
+            // (`reinserted`, counted before the transaction opened), so it
+            // discloses nothing — and refused here, it bounds the existence
+            // walk over those runs too.
             if reinserted > Nat::from(MAX_REINSERTED_VALUES) {
                 return Err(PublishError::TooManyValues);
             }
@@ -275,16 +300,18 @@ where
             // (`RunUnion`), which holds every address any run names, each in
             // one of its runs: a value found there is found for every run
             // naming it, and a request naming one stored extent many times
-            // walks it once. And each is asked through `value_at`, the accessor
-            // the re-insert below reads the draft-native bytes with. COPY
-            // places by reference and reads no value back, so presence is the
-            // whole of its question; the shot does read them, and asking with
-            // the read's own accessor makes the answer found here the answer
-            // the re-insert gets — M4's fold only ever adds (S0), so no write
-            // staged in between can take a value away.
+            // walks it once. And each is asked through `pieces`, M4's run
+            // read — one predecessor lookup per run of the union, then a walk
+            // piece by piece, `covered` saying whether every address answered
+            // — the accessor the re-insert below reads the draft-native bytes
+            // with. COPY places by reference and reads no value back, so
+            // presence is the whole of its question; the shot does read them,
+            // and asking with the read's own accessor makes the answer found
+            // here the answer the re-insert gets — M4's fold only ever adds
+            // (S0), so no write staged in between can take a value away.
             let content = stg.working().content();
             for run in RunUnion::of(supplied.iter().map(|settled| settled.run)).runs() {
-                if !run.into_addrs().all(|a| content.value_at(a.tumbler()).is_some()) {
+                if !content.pieces(run.i_start().tumbler(), run.width()).covered() {
                     return Err(PublishError::DanglingSource);
                 }
             }
@@ -300,19 +327,63 @@ where
             let mut placement: Vec<Run> = Vec::new();
             for SettledRun { run, origin_doc } in supplied {
                 if draft_native(&origin_doc) {
-                    for a in run.addrs() {
-                        let value = stg
-                            .working()
-                            .content()
-                            .value_at(a.tumbler())
-                            .cloned()
-                            .expect("the existence check found a value at every address of every run, and M4's fold only adds");
-                        allocate_for_placement::<_, PublishError>(
-                            stg,
-                            &trunk,
-                            value,
-                            &mut placement,
-                        )?;
+                    // THE WALK COMPLETES BEFORE THE FIRST STAGE ([`Part`]):
+                    // the run's pieces, read by M4's run read off the working
+                    // slice, are copied into an owned, ordered list — every
+                    // `Bytes` piece and every one-byte `Value` extending the
+                    // pending byte-run, an atom of two bytes or more closing
+                    // it and taking its `Val` by clone — `covered` is asked,
+                    // the borrow of the working slice ends, and only then is
+                    // each part staged in the list's order: a maximal
+                    // byte-run as ONE stretch under the trunk's chain, an
+                    // atom as today. So a draft typed in bursts and published
+                    // unscattered is ONE stretch in the member, and one whose
+                    // edits scattered its arrangement into K runs costs K.
+                    let parts = {
+                        let content = stg.working().content();
+                        let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
+                        let mut parts: Vec<Part> = Vec::new();
+                        let mut pending: Vec<u8> = Vec::new();
+                        for piece in pieces.by_ref() {
+                            match piece {
+                                Piece::Bytes(bytes) => pending.extend_from_slice(bytes),
+                                // THE LENGTH TEST: a one-byte value is a
+                                // per-byte value, and joins the run.
+                                Piece::Value(v) if v.len() == 1 => {
+                                    pending.extend_from_slice(v.as_bytes());
+                                }
+                                Piece::Value(v) => {
+                                    if !pending.is_empty() {
+                                        parts.push(Part::Run(std::mem::take(&mut pending)));
+                                    }
+                                    parts.push(Part::Atom(v.clone()));
+                                }
+                            }
+                        }
+                        assert!(
+                            pieces.covered(),
+                            "the existence check found a value at every address of every run, and M4's fold only adds"
+                        );
+                        if !pending.is_empty() {
+                            parts.push(Part::Run(pending));
+                        }
+                        parts
+                    };
+                    for part in parts {
+                        match part {
+                            Part::Run(bytes) => allocate_stretch_for_placement::<_, PublishError>(
+                                stg,
+                                &trunk,
+                                Arc::from(bytes),
+                                &mut placement,
+                            )?,
+                            Part::Atom(value) => allocate_for_placement::<_, PublishError>(
+                                stg,
+                                &trunk,
+                                value,
+                                &mut placement,
+                            )?,
+                        }
                     }
                 } else {
                     extend_or_push_run(&mut placement, run.clone());

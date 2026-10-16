@@ -154,7 +154,7 @@ mod rule;
 mod coordinator;
 
 use skep_arrangement::{HasM5, M5Rec};
-use skep_content::{ContentWrite, HasContent};
+use skep_content::{ContentStretch, ContentWrite, HasContent};
 use skep_kernel::WorldState;
 use skep_links::{HasLinks, LinkRec};
 use skep_namespace::{HasM3, M3Rec};
@@ -207,8 +207,9 @@ pub use im;
 /// bound set every `Coordinator` impl block states; a blanket impl, so any
 /// world with the four stores and the four lifts is one.
 pub trait CoordinationWorld:
-    WorldState<Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>>
-    + HasLinks
+    WorldState<
+        Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>,
+    > + HasLinks
     + HasM3
     + HasContent
     + HasM5
@@ -216,8 +217,13 @@ pub trait CoordinationWorld:
 }
 
 impl<W> CoordinationWorld for W where
-    W: WorldState<Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>>
-        + HasLinks
+    W: WorldState<
+            Record: From<LinkRec>
+                        + From<M5Rec>
+                        + From<M3Rec>
+                        + From<ContentWrite>
+                        + From<ContentStretch>,
+        > + HasLinks
         + HasM3
         + HasContent
         + HasM5

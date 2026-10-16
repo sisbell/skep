@@ -35,9 +35,11 @@ fn history_reclaimed_on_the_daemon_keeps_the_file_and_resumes_from_the_floor() {
     let saved = Index::load(&mut &std::fs::read(&file).unwrap()[..], Class::Guest).unwrap().1;
     assert_eq!(saved.ranges[0].held, held, "the saved pair is the `/health` pair read before the draining poll");
     assert!(saved.head.is_some(), "the file carries the newest `H.k` the feed delivered");
-    // The floor rises past `held`: bulk inserts rotate the journal's segment,
-    // then three checkpoints retain two and reclaim below the oldest kept.
-    let bulk = "z".repeat(8192);
+    // The floor rises past `held`: bulk inserts rotate the journal's segment
+    // — each of the codec's cap, 2¹⁸ bytes, since a run of single-byte values
+    // is one stretch record whatever its length — then three checkpoints
+    // retain two and reclaim below the oldest kept.
+    let bulk = "z".repeat(262_144);
     let draft = fx.draft(&token, CLAIMANT, "bulk");
     for round in 0..3 {
         for _ in 0..3 {

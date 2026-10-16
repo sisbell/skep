@@ -637,10 +637,12 @@ fn the_values_a_shot_says_it_reinserts_are_the_values_its_commit_writes() {
         .expect("the shot commits");
     let s = k.snapshot();
     let content = s.world().content();
+    // Two draft-native runs of single-byte values, two stretches: the three
+    // values the shot said it re-inserts, as two entries — one per run.
     assert_eq!(
         content.len() - stored,
-        3,
-        "the commit wrote exactly the values the shot said it re-inserts"
+        2,
+        "the commit wrote one stretch per draft-native run the shot re-inserts"
     );
     assert_eq!(
         s.world().m3().next_content_address(&pdoc()),

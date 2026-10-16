@@ -7,10 +7,11 @@
 //! `transact` returns `TxnError::Rejected(E)` straight out of the closure
 //! phase, discarding the staging, drawing no `Seq` and appending nothing.
 //! Five of the seven ops do reject before staging anything; INSERT and the
-//! publish shot cannot, since each stages a mint and a content write per
-//! fresh value as it goes ([`allocate_for_placement`], J0's one step) and may
-//! reject after them — on a later value, and for the shot on its run budget
-//! or its own version mint as well. VERSION's three pre-transaction refusals
+//! publish shot cannot, since each stages a mint and a content record per
+//! fresh atom or maximal run of single-byte values as it goes
+//! ([`allocate_for_placement`] and [`allocate_stretch_for_placement`], J0's
+//! two steps) and may reject after them — on a later value, and for the shot
+//! on its run budget or its own version mint as well. VERSION's three pre-transaction refusals
 //! (`SourceNotRegistered`, `NotAPrincipal`, `NodeTierCrossOwner`) are
 //! answered off an M2 snapshot before any transaction opens, and so reach M2
 //! not at all. M10 surfaces the rejection as a typed one and acknowledges
@@ -43,8 +44,9 @@
 //! written here.
 //!
 //! Layout: this file is the handle and what its operations share — the three
-//! budgets, J0's allocation step ([`allocate_for_placement`]) and the head
-//! key ([`head_lock_key`]). Each operation is a child module holding one
+//! budgets, J0's two allocation steps ([`allocate_for_placement`] for an atom,
+//! [`allocate_stretch_for_placement`] for a run of single-byte values) and
+//! the head key ([`head_lock_key`]). Each operation is a child module holding one
 //! `impl` block — `ops/insert.rs`, `ops/publish.rs`, `ops/copy.rs`,
 //! `ops/reinstate.rs`, `ops/delete.rs`, `ops/rearrange.rs`, `ops/version.rs`
 //! — and sees this file's private items and none of its siblings'.
@@ -64,10 +66,13 @@
 //! engine reaches.
 
 use std::fmt;
+use std::sync::Arc;
 
 use num_traits::One;
 use skep_address::{Address, Nat};
-use skep_content::{stage_write, ContentError, ContentWrite, HasContent, Val};
+use skep_content::{
+    stage_stretch, stage_write, ContentError, ContentStretch, ContentWrite, HasContent, Val,
+};
 use skep_kernel::{Attestation, Kernel, LockKey, Staging, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 
@@ -154,7 +159,7 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 ///
 /// WHY A COUNT OF ITS OWN. M2 judges a transaction's size only once the
 /// closure has returned, and until then every staged value is live heap: a
-/// mint record and a content write, each carrying an address, and the
+/// mint record and a content record, each carrying an address, and the
 /// working world's new content entry. How many values a shot re-inserts is
 /// [`Shot::reinserted_values`](crate::Shot::reinserted_values), its
 /// draft-native runs' widths summed, and that sum is the REQUEST's to choose
@@ -166,24 +171,30 @@ pub const MAX_PLACED_RUNS: usize = 1 << 16;
 /// The count is request arithmetic, taken before any address is probed, so
 /// it bounds the existence walk over the draft-native runs as well.
 ///
-/// The budget: a re-inserted value stages two records, and M2 charges each
-/// its encoded bytes plus forty of framing — about 290 journal bytes for a
-/// one-byte value at the shallowest content address, so M2's `MAX_TXN_BYTES`
+/// The budget, measured at the worst case that holds: every re-inserted
+/// value an ATOM — a `Piece::Value` of two bytes or more, which stages two
+/// records apiece, a mint and a content write, where a run of single-byte
+/// values re-inserts as ONE range mint and ONE stretch however wide it is
+/// (the re-insert coalesces consecutive bytes, so a draft typed byte by byte
+/// costs a few records, never two per value). M2 charges each record its
+/// encoded bytes plus forty of framing — about 290 journal bytes for a
+/// two-byte atom at the shallowest content address, so M2's `MAX_TXN_BYTES`
 /// (64 MiB) carries some 230,000 of them and no more. `2^17` is the largest
 /// power of two inside that ceiling, so a re-insert at the cap is a
 /// transaction M2 accepts (`the_reinsert_budget_is_a_transaction_m2_accepts`
-/// measures it against M2's own accounting), and the live heap one shot
-/// commands stays on the order of the budget M2 already prices, as
+/// measures it against M2's own accounting, atom by atom), and the live heap
+/// one shot commands stays on the order of the budget M2 already prices, as
 /// [`MAX_PLACED_RUNS`] keeps it for a placement's runs at that depth. The
-/// heap does not grow with a value's LENGTH — a re-inserted value's bytes are
-/// shared with the stored value they are read from, never copied — but it
-/// grows with the address's DEPTH, every staged record and the working
-/// world's new entry holding the fresh address whole; and the journal grows
-/// with both: a longer value, or a deeper document's addresses, makes every
-/// record longer, so there the ceiling holds fewer values and a re-insert
-/// under the cap can still meet M2's own refusal. The cap bounds the VALUES a
-/// shot commands; it does not promise that every staging under it commits,
-/// nor that its heap stays on M2's order past the shallowest address.
+/// heap does not grow with a value's LENGTH — a re-inserted atom's bytes are
+/// shared with the stored value they are read from, never copied, and a
+/// byte-run is copied once into its stretch — but it grows with the
+/// address's DEPTH, every staged record and the working world's new entry
+/// holding the fresh address whole; and the journal grows with both: a
+/// longer value, or a deeper document's addresses, makes every record
+/// longer, so there the ceiling holds fewer values and a re-insert under the
+/// cap can still meet M2's own refusal. The cap bounds the VALUES a shot
+/// commands; it does not promise that every staging under it commits, nor
+/// that its heap stays on M2's order past the shallowest address.
 ///
 /// A shot cannot be split to meet it, any more than it can
 /// [`MAX_PLACED_RUNS`]: the member it produces is born whole, and a retry of
@@ -334,11 +345,13 @@ impl<W: WorldState> Clone for Vstream<'_, W> {
 }
 impl<W: WorldState> Copy for Vstream<'_, W> {}
 
-/// J0 at the composite boundary (content-allocation ⇒ placement): mint one
-/// fresh content address under `home`'s I-space (M3), write `value` there
-/// (M4), stage both records, and accumulate the address into the placement
-/// `runs`. The ONE step INSERT and the publish shot's re-insert share, so
-/// the coupling has one enforcement site: what is allocated here rides the
+/// J0 at the composite boundary (content-allocation ⇒ placement) for an
+/// ATOM: mint one fresh content address under `home`'s I-space (M3), write
+/// `value` there (M4), stage both records, and accumulate the address into
+/// the placement `runs`. The step INSERT and the publish shot's re-insert
+/// share for a value of two bytes or more — a run of single-byte values goes
+/// through [`allocate_stretch_for_placement`], its twin — so the coupling has
+/// one enforcement site per record kind: what is allocated here rides the
 /// transaction the caller's placement record rides, and so cannot commit
 /// unplaced. The mint precedes the write, which is the `Mint` → `Content`
 /// order each of the two ops states for a value.
@@ -346,18 +359,21 @@ impl<W: WorldState> Copy for Vstream<'_, W> {}
 /// Successive calls read `stg.working()`, and under the content key both
 /// callers hold for `home` (`M3State::content_lock_key`) they advance ONE
 /// frontier and hand back I-adjacent addresses, which the accumulator
-/// coalesces. The accumulator is ASKED rather than assumed: were the
-/// frontier ever to hand back a non-adjacent address — a batched or striped
-/// allocator in M3 — the placement would be a correct multi-run one, never a
-/// single run widened over addresses M3 never allocated and M4 never wrote.
+/// coalesces — a range mint advances it by its count, so the next step's
+/// address starts at the range's reach and coalesces the same way. The
+/// accumulator is ASKED rather than assumed: were the frontier ever to hand
+/// back a non-adjacent address — a batched or striped allocator in M3 — the
+/// placement would be a correct multi-run one, never a single run widened
+/// over addresses M3 never allocated and M4 never wrote.
 ///
 /// What the OPS state of their mints rests on M3 and not on this step:
 /// INSERT's one run, and the shot's fresh identity landing at the end of its
 /// trunk's content chain (each stated on its op), hold because M3's content
-/// chain issues each mint at the next ordinal (`M3State::mint_content`).
-/// This step assumes nothing of it, so a placement stays correct where those
-/// statements would need revising — and revising them is owed to their
-/// readers, skep-media's cell index among them.
+/// chain issues each mint at the next ordinal (`M3State::mint_content`,
+/// `M3State::mint_content_range`). This step assumes nothing of it, so a
+/// placement stays correct where those statements would need revising — and
+/// revising them is owed to their readers, skep-media's cell index among
+/// them.
 fn allocate_for_placement<W, E>(
     stg: &mut Staging<W>,
     home: &Address,
@@ -378,6 +394,69 @@ where
         Run {
             i_start: addr,
             width: Nat::one(),
+        },
+    );
+    Ok(())
+}
+
+/// J0 at the composite boundary for a RUN of single-byte values — the twin of
+/// [`allocate_for_placement`]: mint a range of `bytes.len()` fresh content
+/// addresses under `home`'s I-space in one record (M3's
+/// `mint_content_range`), write the bytes there as ONE stretch (M4's
+/// `stage_stretch`, the value at `first ⊕ k` being `bytes[k]`), stage both
+/// records, and accumulate the range into the placement `runs` as one run.
+/// INSERT's coalescing walk and the shot's re-insert call it per maximal
+/// byte-run; the mint precedes the write, as the atom's step keeps it.
+///
+/// ONE NUMBER, TWO RECORDS. The range's `count` and the stretch's length are
+/// one number by construction — both come off `bytes.len()` here, the one
+/// site that stages the pair — and no decode door and no fold sees both
+/// records at once: a stretch longer than its mint would store bytes past the
+/// chain's frontier, so the chain's next mint would hand out an address M4
+/// refuses `AlreadyStored`, and every later insert into the document would
+/// fail for good. So the pair is checked where it is discharged, by the
+/// `debug_assert_eq!` after the two pushes; the engine's fold holds the
+/// stretch to the chain's frontier again at every fold, live and on replay.
+/// Nothing checks them in release, where a `debug_assert` is nothing.
+///
+/// # Panics
+///
+/// In a debug build, where the range minted and the stretch staged carry two
+/// different counts.
+fn allocate_stretch_for_placement<W, E>(
+    stg: &mut Staging<W>,
+    home: &Address,
+    bytes: Arc<[u8]>,
+    runs: &mut Vec<Run>,
+) -> Result<(), E>
+where
+    W: WorldState + HasM3 + HasContent,
+    W::Record: From<M3Rec> + From<ContentStretch>,
+    E: From<MintError> + From<ContentError>,
+{
+    let width = Nat::from(bytes.len());
+    let (first, m3rec) = stg.working().m3().mint_content_range(home, &width)?;
+    // The count the record carries, read before the record is pushed, for
+    // the check below; `M3Rec` is `#[non_exhaustive]`, so the other arms are
+    // spelled by a wildcard a range mint never takes.
+    let minted = match &m3rec {
+        M3Rec::AllocateRange(range) => Some(range.count().clone()),
+        _ => None,
+    };
+    stg.push(m3rec.into());
+    let stretch = stage_stretch(stg.working().content(), first.clone(), bytes)?;
+    let written = Nat::from(stretch.len());
+    stg.push(stretch.into());
+    debug_assert_eq!(
+        minted.as_ref(),
+        Some(&written),
+        "a range mint and its stretch carry one number"
+    );
+    extend_or_push_run(
+        runs,
+        Run {
+            i_start: first,
+            width,
         },
     );
     Ok(())

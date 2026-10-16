@@ -1492,7 +1492,9 @@ fn value_write_forms_round_trip() {
 
 /// The delivery marshal is injective across granularity: N per-byte values
 /// and one N-byte composite render differently, so a client always knows
-/// which world it is looking at.
+/// which world it is looking at — and a byte-run item, M6's `Bytes`, renders
+/// as the per-byte values it stands for, so the store's form never reaches
+/// the wire.
 #[test]
 fn delivery_marshal_distinguishes_granularity() {
     let codec = JsonCodec;
@@ -1502,13 +1504,19 @@ fn delivery_marshal_distinguishes_granularity() {
         ),
         as_of: Seq(9),
     };
+    let run = Response::Delivery {
+        items: Delivery(vec![DeliveryItem::Bytes(b"hello"[..].into())]),
+        as_of: Seq(9),
+    };
     let atom = Response::Delivery {
         items: Delivery(vec![DeliveryItem::Content(Val::new(b"hello".to_vec()))]),
         as_of: Seq(9),
     };
     let per_bytes = codec.marshal(&per_byte);
+    let run_bytes = codec.marshal(&run);
     let atom_bytes = codec.marshal(&atom);
     assert_ne!(per_bytes, atom_bytes, "granularity must survive the marshal");
+    assert_eq!(per_bytes, run_bytes, "a byte-run item renders as its per-byte values");
     let v: Value = serde_json::from_slice(&per_bytes).expect("json");
     assert_eq!(v["items"], serde_json::from_str::<Value>(r#"[{"content":"hello"}]"#).unwrap());
     let v: Value = serde_json::from_slice(&atom_bytes).expect("json");
@@ -1516,11 +1524,16 @@ fn delivery_marshal_distinguishes_granularity() {
 }
 
 /// Delivery runs coalesce maximally and are judged UTF-8 on the whole
-/// concatenation; refs and atoms break runs; non-UTF-8 takes the hex paths.
+/// concatenation; refs and atoms break runs; non-UTF-8 takes the hex paths;
+/// a byte-run item joins the pending run byte by byte, so a run split across
+/// per-byte and byte-run items renders as one, and the mixed insert's three
+/// store entries — a stretch, an atom, a stretch — render as the three items
+/// a per-byte delivery of the same positions renders.
 #[test]
 fn delivery_runs_coalesce_and_split() {
     let codec = JsonCodec;
     let c = |b: u8| DeliveryItem::Content(Val::new(vec![b]));
+    let run = |b: &[u8]| DeliveryItem::Bytes(b.into());
     let items_of = |resp: &Response| -> Value {
         serde_json::from_slice::<Value>(&codec.marshal(resp)).expect("json")["items"].clone()
     };
@@ -1528,9 +1541,43 @@ fn delivery_runs_coalesce_and_split() {
     let utf8 =
         Response::Delivery { items: Delivery(vec![c(b'h'), c(0xc3), c(0xa9)]), as_of: Seq(9) };
     assert_eq!(items_of(&utf8), serde_json::from_str::<Value>(r#"[{"content":"hé"}]"#).unwrap());
+    // …and split across a byte-run item and per-byte items, the same item.
+    let split = Response::Delivery {
+        items: Delivery(vec![run(b"h"), c(0xc3), run(&[0xa9])]),
+        as_of: Seq(9),
+    };
+    assert_eq!(items_of(&split), items_of(&utf8));
     // An invalid concatenation renders the WHOLE run as hex.
     let raw = Response::Delivery { items: Delivery(vec![c(0xc3), c(0x28)]), as_of: Seq(9) };
     assert_eq!(items_of(&raw), serde_json::from_str::<Value>(r#"[{"hex":"c328"}]"#).unwrap());
+    // The seam: `Bytes`, `Content`, `Bytes` renders as the per-byte delivery
+    // of the same seven positions does.
+    let seam = Response::Delivery {
+        items: Delivery(vec![
+            run(b"abc"),
+            DeliveryItem::Content(Val::new(b"XY".to_vec())),
+            run(b"def"),
+        ]),
+        as_of: Seq(9),
+    };
+    let per_byte_seam = Response::Delivery {
+        items: Delivery(vec![
+            c(b'a'),
+            c(b'b'),
+            c(b'c'),
+            DeliveryItem::Content(Val::new(b"XY".to_vec())),
+            c(b'd'),
+            c(b'e'),
+            c(b'f'),
+        ]),
+        as_of: Seq(9),
+    };
+    assert_eq!(items_of(&seam), items_of(&per_byte_seam));
+    assert_eq!(
+        items_of(&seam),
+        serde_json::from_str::<Value>(r#"[{"content":"abc"},{"atom":"XY"},{"content":"def"}]"#)
+            .unwrap()
+    );
     // Refs and atoms break runs; a non-UTF-8 composite is atom_hex.
     let mixed = Response::Delivery {
         items: Delivery(vec![

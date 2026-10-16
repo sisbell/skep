@@ -179,7 +179,10 @@ impl HasIdentity for World {
 /// content values upstream.
 impl Values for World {
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]> {
-        self.content.value_at(at).map(|v| v.as_bytes())
+        // A borrowed piece either way: a value's bytes, or the one byte at a
+        // position inside a stretch — one O(log n) read per position, as
+        // every position cost before.
+        self.content.value_at(at).map(|piece| piece.as_bytes())
     }
 }
 

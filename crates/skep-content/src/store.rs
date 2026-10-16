@@ -1,52 +1,57 @@
 //! §A/§B and the pure half of §C — the slice and its serialized form, the
-//! record, the fold, the two point queries and the one enumeration, and the
-//! composable write step.
+//! two records, the two folds, the two point queries, the one run read and
+//! the one enumeration, and the two composable write steps.
 
 use std::borrow::Borrow;
 use std::fmt;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use skep_address::{Address, Tumbler};
+use skep_address::{ordinal, shift, Address, Nat, Tumbler};
 
 use crate::error::ContentError;
 use crate::routing::debug_assert_content_address_routing;
 use crate::value::Val;
 
 /// M4's authoritative folded slice: `dom(C) ↦ Val` — the only state M4 owns
-/// (§A; §Core data model). The journal of [`ContentWrite`] records (held by
-/// M2) is ground truth; this map is its fold, fully serialized in
-/// checkpoints (no skip-serialize, so the engine's `rebuild_derived` is
-/// identity for M4).
+/// (§A; §Core data model). The journal of [`ContentWrite`] and
+/// [`ContentStretch`] records (held by M2) is ground truth; this map is its
+/// fold, fully serialized in checkpoints (no skip-serialize, so the engine's
+/// `rebuild_derived` is identity for M4). An entry holds one value, or one
+/// stretch — N consecutive single-byte values written by one insert, held
+/// under the first's address; a read inside a stretch finds the entry just
+/// below the address and indexes into its bytes, so every address still
+/// answers by itself.
 ///
 /// Two INVARIANTS are kept of the keys, each at a named gate — the first of
 /// every key, the second of every key a correct caller stages:
 ///
 /// * **T4-valid** (ASN-0093 StoreT4Validity, one premise of SD) — every key
 ///   is an `Address`, held as one, so the walk lends it as one and no reader
-///   validates a key again. Gates: [`stage_write`], which takes an `Address`
-///   on every build, so nothing a build journals or checkpoints holds a key
-///   the decode door refuses; and the two decode paths, a record's and a
-///   slice's, which decode each address through M1's `Address` door
-///   (`validate`), so a journal frame or a checkpoint body carrying any other
-///   key is refused, never folded.
+///   validates a key again. Gates: [`stage_write`] and [`stage_stretch`],
+///   which take an `Address` on every build, so nothing a build journals or
+///   checkpoints holds a key the decode door refuses; and the decode paths, a
+///   record's and a slice's, which decode each address through M1's
+///   `Address` door (`validate`), so a journal frame or a checkpoint body
+///   carrying any other key is refused, never folded.
 /// * **A content-subspace element address** (ASN-0093 C1 and L0 — M4's half
-///   of SD, `dom(C) ∩ dom(L) = ∅`). Gate: [`stage_write`], whose caller owes
-///   it — M3 mints only such addresses for content, and M5 hands only those
-///   to this door — and whose routing assertion checks it in debug builds;
-///   release trusts it and stages a violator as given. Both decode paths
-///   take it on journal and checkpoint integrity: a release build can journal
-///   what its stage door did not check, and a decode that refused it would
-///   leave that build unable to replay its own journal. So no reader of the
-///   keys may assume it: a key a release build staged past its caller's
+///   of SD, `dom(C) ∩ dom(L) = ∅`). Gate: the two stage doors, whose caller
+///   owes it — M3 mints only such addresses for content, and M5 hands only
+///   those to the doors — and whose routing assertion checks it in debug
+///   builds; release trusts it and stages a violator as given. The decode
+///   paths take it on journal and checkpoint integrity: a release build can
+///   journal what its stage door did not check, and a decode that refused it
+///   would leave that build unable to replay its own journal. So no reader of
+///   the keys may assume it: a key a release build staged past its caller's
 ///   routing bug, or one decoded from a body no build serialized, may be
 ///   T4-valid at any level and in any subspace; the walk and a record lend
 ///   each as it was admitted, and a key's `document_of` and `subspace` are
 ///   answers its reader handles, never ones it unwraps.
 ///
-/// Cheap to keep many of: `clone` is O(1), and
-/// [`apply_write`](ContentStore::apply_write) costs O(log n) in the size of
-/// the slice, however long the addresses already stored, and returns a new
+/// Cheap to keep many of: `clone` is O(1), and the two folds,
+/// [`apply_write`](ContentStore::apply_write) and
+/// [`apply_stretch`](ContentStore::apply_stretch), cost O(log n) in the size
+/// of the slice, however long the addresses already stored, and return a new
 /// slice that shares everything the write left alone with the old one, which
 /// stays as it was; so a snapshot pinning an old `World` costs next to
 /// nothing. Its serialized form is canonical, a function of the contents
@@ -55,20 +60,23 @@ use crate::value::Val;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentStore {
     // A persistent ORDERED map — `im::OrdMap`, a B-tree in its keys' `Tumbler`
-    // order — not `im::HashMap`. The reads are point lookups and the writes
-    // single inserts, O(log n) here against the HAMT's O(log₃₂ n), and no
-    // query asks the order of it: no range or prefix scan is built on it
-    // (the allocator's max-under-prefix reads M3's own frontier, never M4:
-    // Conflicts #3), and `ContentStore::iter`, the one enumeration, promises
-    // no order. What the order buys is the checkpoint: a whole-store reader
-    // that needs every entry in `Tumbler` order at every cadence crossing
-    // (the canonical bytes, `in_tumbler_order` below), which the ordered
-    // map's walk gives for free where a hash map's would have to be collected
-    // and sorted at every checkpoint. Its serde form is this crate's, never
-    // `im`'s: `in_tumbler_order` emits it and `entry_by_entry` decodes it,
-    // the two named in the attribute below.
+    // order — not `im::HashMap`. The writes are single inserts, O(log n) here
+    // against the HAMT's O(log₃₂ n), and every read stands on the key order:
+    // the point queries and the run read find the greatest key at or below
+    // an address (`at_or_below`, the one primitive) and index into the
+    // stretch they find there, so a stretch's interior addresses are never
+    // materialized as keys. No prefix scan is built on it (the allocator's
+    // max-under-prefix reads M3's own frontier, never M4: Conflicts #3), and
+    // `ContentStore::iter`, the one enumeration, promises no order. The order
+    // also serves the checkpoint: a whole-store reader that needs every entry
+    // in `Tumbler` order at every cadence crossing (the canonical bytes,
+    // `in_tumbler_order` below), which the ordered map's walk gives for free
+    // where a hash map's would have to be collected and sorted at every
+    // checkpoint. Its serde form is this crate's, never `im`'s:
+    // `in_tumbler_order` emits it and `entry_by_entry` decodes it, the two
+    // named in the attribute below.
     #[serde(serialize_with = "in_tumbler_order", deserialize_with = "entry_by_entry")]
-    map: im::OrdMap<Key, Val>,
+    map: im::OrdMap<Key, Stored>,
 }
 
 /// An address as this crate holds it in memory: the key of the slice's map,
@@ -76,16 +84,20 @@ pub struct ContentStore {
 /// was handed or a decode door admitted, whole, so every key keeps the T4
 /// validity it was admitted with ([`ContentStore`]'s first key invariant),
 /// and the walk lends it as that `Address`, never as a tumbler for its reader
-/// to validate again.
+/// to validate again. A stretch's key is its FIRST address; the addresses
+/// inside it are reached by the ordinal arithmetic every reader of a run
+/// already owns (`shift`), and an address inside a stretch is T4-valid by the
+/// argument M5's `Run::addr_at` makes: an ordinal shift of a valid element
+/// address is valid by construction.
 ///
 /// Behind an `Arc`, as each value's bytes are: a write copies the tree nodes
 /// on its path, up to 64 entries each, and a copy clones one `Arc` per address
 /// where an owned address would be cloned component by component — a cost
 /// set by the longest addresses stored near the write, which an INSERT
-/// multiplies by its value count under M2's applier lock and every replay
-/// pays again. [`stage_write`] moves the address it is handed into the
-/// record's `Arc`, and the fold puts the record's `Arc` into the map — on
-/// commit and on every replay — so neither staging a write nor folding it
+/// multiplies by its entry count under M2's applier lock and every replay
+/// pays again. The stage doors move the address they are handed into the
+/// record's `Arc`, and the folds put the record's `Arc` into the map — on
+/// commit and on every replay — so neither staging a record nor folding it
 /// clones its address component by component.
 ///
 /// Ordered and compared as its `Address`, which orders as its tumbler, and
@@ -93,9 +105,16 @@ pub struct ContentStore {
 /// serialized as the tumbler too — `Debug` as `Tumbler([..])`, the bytes the
 /// bare tumbler an `Address` journals as — and decoded only through M1's
 /// `Address` door (`validate`). So an address has one codec in this crate,
-/// the record's and the slice's alike.
+/// the records' and the slice's alike.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Key(Arc<Address>);
+
+impl Key {
+    /// The key's tumbler — the form the map is ordered and probed by.
+    fn tumbler(&self) -> &Tumbler {
+        self.0.tumbler()
+    }
+}
 
 impl Borrow<Tumbler> for Key {
     fn borrow(&self) -> &Tumbler {
@@ -123,45 +142,135 @@ impl<'de> Deserialize<'de> for Key {
     }
 }
 
+/// What one map entry holds at its key: one value — an atom, or any value
+/// a ContentWrite wrote — or a STRETCH: N consecutive single-byte values,
+/// the value at `key ⊕ k` being `bytes[k]`. Variant ORDER is checkpoint
+/// format (bincode writes the index): Value = 0, Stretch = 1; a variant is
+/// appended, never inserted.
+///
+/// Crate-private: every read — `value_at`, `pieces` and `iter` — lends an
+/// entry or a part of one as the one borrowed [`Piece`], so no crate but this
+/// one names the map's value. A one-byte `Value` is a shape this build never
+/// writes (every one-byte value the codec hands in is a stretch of one, and
+/// the shot's re-insert takes a one-byte value into its pending byte-run) and
+/// still reads: a board whose journal was written before stretches existed
+/// folds its per-byte `ContentWrite` frames into one-byte values, which every
+/// reader serves by the `Value` arm with no second branch.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum Stored {
+    Value(Val),
+    Stretch(Arc<[u8]>),
+}
+
+impl Stored {
+    /// The number of addresses the entry holds: one for a value, the byte
+    /// count for a stretch.
+    fn width(&self) -> usize {
+        match self {
+            Stored::Value(_) => 1,
+            Stored::Stretch(bytes) => bytes.len(),
+        }
+    }
+
+    /// The first address past the entry keyed `key`: `key ⊕ width`, the
+    /// exclusive end of its reach, which the entry has no claim about.
+    fn reach(&self, key: &Tumbler) -> Tumbler {
+        shift(key, &Nat::from(self.width()))
+    }
+
+    /// Whether the entry keyed `key` covers `t` — THE DEFINITION OF "INSIDE A
+    /// STRETCH": the key itself, or for a stretch of N any tumbler `t` with
+    /// `key ≤ t < key ⊕ N` by tumbler order, whatever `t`'s length or chain
+    /// (tumbler-interval containment, the shape M5's `RunList::holds` gives
+    /// the same question of a run). A value covers its own key alone.
+    fn covers(&self, key: &Tumbler, t: &Tumbler) -> bool {
+        key == t || (matches!(self, Stored::Stretch(_)) && key < t && *t < self.reach(key))
+    }
+
+    /// The entry lent whole as a [`Piece`].
+    fn piece(&self) -> Piece<'_> {
+        match self {
+            Stored::Value(v) => Piece::Value(v),
+            Stored::Stretch(bytes) => Piece::Bytes(bytes),
+        }
+    }
+}
+
+/// `Value(3 bytes)` or `Stretch(3 bytes)`: the kind and the length, never a
+/// byte — the slice's derived `Debug` renders each entry through this.
+impl fmt::Debug for Stored {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stored::Value(v) => write!(f, "Value({v:?})"),
+            Stored::Stretch(bytes) => write!(f, "Stretch({} bytes)", bytes.len()),
+        }
+    }
+}
+
+/// Whether `t` lies on the chain of `key`: equal component counts, every
+/// component but the last equal — the test that keeps a stretch from
+/// answering for the next document's addresses, O(#components) compares.
+fn same_chain(key: &Tumbler, t: &Tumbler) -> bool {
+    key.len() == t.len() && key.iter().zip(t.iter()).take(key.len() - 1).all(|(a, b)| a == b)
+}
+
+/// The offset of `t` inside the stretch of `len` bytes keyed `key`, where `t`
+/// is on the stretch's chain at or past its key and short of its reach — the
+/// point read inside a stretch: `ordinal(t) − ordinal(key)`, an index into
+/// the bytes. `None` for a tumbler off the chain (another document's address
+/// whose predecessor is this stretch, or a longer key inside its reach) or
+/// past its bytes.
+fn offset_in(key: &Tumbler, len: usize, t: &Tumbler) -> Option<usize> {
+    if !same_chain(key, t) || ordinal(t) < ordinal(key) {
+        return None;
+    }
+    let k = usize::try_from(ordinal(t) - ordinal(key)).ok()?;
+    (k < len).then_some(k)
+}
+
 /// The `map` field's serde form, emitted: a serde map with its length, its
 /// entries in the map's own walk — `Tumbler` order, the map being ordered by
 /// its key's `Ord` — so the bytes are a function of the contents alone, and
 /// one slice serialized twice, on two processes or two machines, yields one
-/// byte string that M2's checkpoint header can commit to by hash. Spelled by
-/// this crate rather than left to `im`'s own impl, because the form is a
-/// FORMAT (below) and what a dependency emits is its choice; the struct
-/// around the field is the derive's, as every store slice's is, and the
-/// decoding half is [`entry_by_entry`]. Cost: the O(n) walk the checkpoint
-/// already pays, and no sort.
+/// byte string that M2's checkpoint header can commit to by hash. Each entry
+/// is its key, the bare tumbler, then its `Stored` — the variant's index as
+/// a `u32` tag, then the value's or the stretch's bytes as their length and
+/// the raw bytes. Spelled by this crate rather than left to `im`'s own impl,
+/// because the form is a FORMAT (below) and what a dependency emits is its
+/// choice; the struct around the field is the derive's, as every store
+/// slice's is, and the decoding half is [`entry_by_entry`]. Cost: the O(n)
+/// walk the checkpoint already pays, and no sort.
 ///
 /// THE FORM IS A FORMAT, read by three collaborators that no compiler check
 /// ties to it. M2's checkpoint hashes it (above), and decodes it
 /// from bytes it does not trust — so the map's key and value types stay free
 /// of recursion and of sequence elements that decode from zero bytes (M2's
 /// hostile-input obligation on `WorldState`, which `Key`, decoded as a
-/// tumbler, and `Val` meet), the map's own declared count is never trusted
-/// with a reservation, and a body naming one address twice is refused, so the
-/// bytes a hash commits to never leave a decoder a tie to break
-/// ([`entry_by_entry`]). The engine's `World` lays these bytes down as one
-/// slice of its checkpoint layout, so a change to them — a field added to or
-/// removed from [`ContentStore`], an entry encoded differently — owes the
-/// engine's `WORLD_FORMAT` bump; the engine's pin
-/// (`each_slice_serializes_the_fields_the_format_count_names`) sees only the
-/// top-level field set, `map`, and a change beneath it owes the bump by hand.
-/// And the engine's world dump renders the form as M4's authoritative
-/// section, where the daemon's per-reader `/dump` keeps or drops each `map`
-/// entry by its key's document; a field added to [`ContentStore`] would reach
-/// every reader class whole, which
-/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` refuses
-/// until the engine's filter is given a disposition for it. This crate's
-/// suite pins the bytes themselves
+/// tumbler, and `Stored` meet), the map's own declared count is never trusted
+/// with a reservation, and a body naming one address twice, or holding a key
+/// inside a stretch's reach, is refused, so the bytes a hash commits to never
+/// leave a decoder a tie to break ([`entry_by_entry`]). The engine's `World`
+/// lays these bytes down as one slice of its checkpoint layout, so a change
+/// to them — a field added to or removed from [`ContentStore`], an entry
+/// encoded differently — owes the engine's `WORLD_FORMAT` bump; the engine's
+/// pin (`each_slice_serializes_the_fields_the_format_count_names`) sees only
+/// the top-level field set, `map`, and a change beneath it owes the bump by
+/// hand — or, where no served board exists, the owner's no-stamp ruling, which
+/// the engine's `WORLD_FORMAT` doc records. And the engine's world dump
+/// renders the form as M4's authoritative section, where the daemon's
+/// per-reader `/dump` keeps or drops each `map` entry by its key's document —
+/// a stretch's first address, whose document is every byte's document; a
+/// field added to [`ContentStore`] would reach every reader class whole,
+/// which `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name`
+/// refuses until the engine's filter is given a disposition for it. This
+/// crate's suite pins the bytes themselves
 /// (`the_slice_serializes_as_its_map_alone_in_tumbler_order`), so a change to
 /// them fails here first. The field's serialized name is the derive's, its
 /// Rust name, which bincode never emits: a rename of `map` leaves the bytes
 /// alone and unhooks the dump filter's path, which ends in that name; only
 /// the engine's tests that name the field see it.
 fn in_tumbler_order<S: serde::Serializer>(
-    map: &im::OrdMap<Key, Val>,
+    map: &im::OrdMap<Key, Stored>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_map(map.iter())
@@ -176,8 +285,8 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// process, where M2's load must refuse the base and fall back. Inserting each
 /// entry as it arrives reserves nothing the bytes have not carried, so a short
 /// body runs out of input and the decode refuses it; each key re-enters M1's
-/// `Address` door (`validate`), so a body carrying a key no [`stage_write`]
-/// could have staged is refused the same way ([`ContentStore`]'s first key
+/// `Address` door (`validate`), so a body carrying a key no stage door could
+/// have staged is refused the same way ([`ContentStore`]'s first key
 /// invariant; the second, a key's routing, it admits as given); it takes the
 /// entries in whatever order they arrive; and it refuses a body naming one
 /// address twice. No build serializes one — its encoder walks a map whose
@@ -190,33 +299,60 @@ fn in_tumbler_order<S: serde::Serializer>(
 /// address. The refusal names no address: a key can be as long as the body
 /// that carries it, and M2 keeps a refused base's reason.
 ///
+/// Then ONE ordered pass over the finished map checks every consecutive pair
+/// of entries by tumbler order: where an entry is a stretch of N bytes, the
+/// next key must be at or past `key ⊕ N` — so a body in which any key lies
+/// inside a stretch's reach, whatever that key's chain or length, or in which
+/// a stretch overlaps its neighbour, is refused ("a content stretch
+/// overlapping its neighbour") — and a stretch of zero bytes is refused
+/// wherever it stands. Linear after the inserts, no sort. The fold refuses
+/// the same shapes by dropping the record (the stored entry wins); the
+/// decoder refuses them by position — a checkpoint body skipped as a base.
+///
 /// REFUSAL PRECEDENCE — several of these can hold of one body, and the first
 /// fault in reading order speaks. Within an entry, the key is read first and
 /// refused at M1's `Address` door, then the value, and only then is the key
 /// checked against the entries before it; across entries, the earlier
 /// entry's fault speaks; and a declared count the body does not carry is no
 /// fault of its own — the body is refused where it runs out, after any fault
-/// the entries before that point hold. So the reason M2 keeps for a refused
-/// base names the earliest fault the body holds.
+/// the entries before that point hold. The ordered pass runs last, so it
+/// names a fault only when every entry decoded. So the reason M2 keeps for a
+/// refused base names the earliest fault the body holds.
 fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
-) -> Result<im::OrdMap<Key, Val>, D::Error> {
+) -> Result<im::OrdMap<Key, Stored>, D::Error> {
     use serde::de::{Error, MapAccess, Visitor};
 
     struct MapVisitor;
 
     impl<'de> Visitor<'de> for MapVisitor {
-        type Value = im::OrdMap<Key, Val>;
+        type Value = im::OrdMap<Key, Stored>;
 
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a map from content address to value")
+            f.write_str("a map from content address to value or stretch")
         }
 
         fn visit_map<A: MapAccess<'de>>(self, mut entries: A) -> Result<Self::Value, A::Error> {
             let mut map = im::OrdMap::new();
-            while let Some((key, val)) = entries.next_entry::<Key, Val>()? {
-                if map.insert(key, val).is_some() {
+            while let Some((key, stored)) = entries.next_entry::<Key, Stored>()? {
+                if map.insert(key, stored).is_some() {
                     return Err(Error::custom("a content address named twice in one slice"));
+                }
+            }
+            // The ordered pass: each entry against the one after it.
+            let mut walk = map.iter().peekable();
+            while let Some((key, stored)) = walk.next() {
+                if let Stored::Stretch(bytes) = stored {
+                    if bytes.is_empty() {
+                        return Err(Error::custom("a content stretch of zero bytes in one slice"));
+                    }
+                    if let Some((next, _)) = walk.peek() {
+                        if *next.tumbler() < stored.reach(key.tumbler()) {
+                            return Err(Error::custom(
+                                "a content stretch overlapping its neighbour in one slice",
+                            ));
+                        }
+                    }
                 }
             }
             Ok(map)
@@ -227,61 +363,154 @@ fn entry_by_entry<'de, D: serde::Deserializer<'de>>(
 }
 
 impl ContentStore {
-    /// The fold — pure, deterministic, insert-only (§A), on live commit and
-    /// on M2's replay alike (the engine's `World::apply` dispatches its
-    /// `Record::Content` variant here). It returns a new slice and leaves the
-    /// receiver as it was.
+    /// THE ONE NEW PRIMITIVE beneath every read: the entry at the greatest
+    /// key at or below `t`, with its key — `self.map.range(..=t).next_back()`,
+    /// which `im` answers by `path_prev`, a descent that climbs back to the
+    /// parent's separator when the child it reached holds no key below the
+    /// probe, so it is sound across leaves. Never `get_prev`, whose
+    /// `lookup_prev` returns a child's `None` as-is once the map outgrows one
+    /// 64-key leaf (the false `None` skep-namespace's `query.rs` warns of).
+    /// O(log n), as a point `get` is, plus two small path allocations.
+    fn at_or_below(&self, t: &Tumbler) -> Option<(&Key, &Stored)> {
+        self.map.range::<_, Tumbler>(..=t).next_back()
+    }
+
+    /// Whether the first key at or past `from` lies below `reach` — a stored
+    /// entry inside a would-be stretch's window `[from, reach)`.
+    fn holds_a_key_in(&self, from: &Tumbler, reach: &Tumbler) -> bool {
+        self.map.range::<_, Tumbler>(from..).next().is_some_and(|(key, _)| key.tumbler() < reach)
+    }
+
+    /// The fold of a value — pure, deterministic, insert-only (§A), on live
+    /// commit and on M2's replay alike (the engine's `World::apply`
+    /// dispatches its `Record::Content` variant here). It returns a new slice
+    /// and leaves the receiver as it was.
     ///
     /// TOTALITY DOMAIN (M2's total-apply obligation, stated here at the seam
     /// the engine wires): total — deterministic, side-effect-free, panic-free
-    /// — over every record whose address is not stored in the receiver, which
-    /// is every record [`stage_write`] admitted against this very slice,
-    /// folded once. There the result is the receiver's contents with
+    /// — over every record whose address is not covered by the receiver,
+    /// which is every record [`stage_write`] admitted against this very
+    /// slice, folded once. There the result is the receiver's contents with
     /// `r.addr ↦ r.val` added.
     ///
     /// Outside the domain — a record staged against another slice, or folded
     /// twice: a caller's bug, met live or on replaying the journal a release
     /// build wrote past it — a debug build fail-stops on the `debug_assert!`,
     /// and a release build returns a slice equal to the receiver: the STORED
-    /// value wins and the record's write is lost. So no record overwrites the
-    /// permascroll, inside the domain or out of it, on any build: S0(b), and
-    /// with it S0(a)/S1/C0 — `dom(C) ⊆ dom(C')`, and every value in `C` is in
-    /// `C'` unchanged.
+    /// entry wins and the record's write is lost. "Already stored" is the
+    /// predecessor read, the same test as its door ([`contains`]): a record
+    /// at an address inside a stored stretch is dropped as a duplicate is, so
+    /// no value can land at an interior key of a stretch and shadow the bytes
+    /// above it. So no record overwrites the permascroll, inside the domain or
+    /// out of it, on any build: S0(b), and with it S0(a)/S1/C0 — `dom(C) ⊆
+    /// dom(C')`, and every value in `C` is in `C'` unchanged.
+    ///
+    /// # Panics
+    ///
+    /// In a debug build, on a record whose address is already stored or lies
+    /// inside a stored stretch.
+    ///
+    /// [`contains`]: ContentStore::contains
     #[must_use = "apply_write returns the folded slice; it does not modify the receiver"]
     pub fn apply_write(&self, r: &ContentWrite) -> ContentStore {
-        let already_stored = self.map.contains_key(&r.addr);
+        let already_stored = self.contains(r.addr.tumbler());
         debug_assert!(
             !already_stored,
             "S0(b): this record's address is already stored in the slice it is folded \
-             into — it was staged against another slice, or folded twice"
+             into, or inside a stored stretch — it was staged against another slice, or \
+             folded twice"
         );
         if already_stored {
-            // S0(b): the STORED value wins.
+            // S0(b): the STORED entry wins.
             return self.clone();
         }
         ContentStore {
-            map: self.map.update(r.addr.clone(), r.val.clone()),
+            map: self.map.update(r.addr.clone(), Stored::Value(r.val.clone())),
+        }
+    }
+
+    /// The fold of a stretch — the twin of [`apply_write`] for
+    /// [`ContentStretch`], which the engine's `World::apply` dispatches its
+    /// `Record::ContentStretch` variant to. Pure, insert-only; a new slice,
+    /// the receiver as it was.
+    ///
+    /// TOTALITY DOMAIN: every record whose first address is not covered by the
+    /// receiver and whose reach holds no stored key — every record
+    /// [`stage_stretch`] admitted against this very slice, folded once. There
+    /// the result is the receiver's contents with the stretch at its first
+    /// address, the value at `first ⊕ k` being `bytes[k]`.
+    ///
+    /// Outside the domain a debug build fail-stops on the `debug_assert!`,
+    /// and a release build returns a slice equal to the receiver — a record
+    /// whose first address is stored or inside a stretch, or whose range
+    /// overlaps a neighbour, is dropped whole, the stored entry winning: S0(b)
+    /// generalized, no stored byte changes on any build.
+    ///
+    /// # Panics
+    ///
+    /// In a debug build, on a record whose first address is covered by the
+    /// receiver or whose reach holds a stored key.
+    ///
+    /// [`apply_write`]: ContentStore::apply_write
+    #[must_use = "apply_stretch returns the folded slice; it does not modify the receiver"]
+    pub fn apply_stretch(&self, r: &ContentStretch) -> ContentStore {
+        let first = r.first.tumbler();
+        let stored_or_overlapping = self.contains(first) || self.holds_a_key_in(first, &r.reach());
+        debug_assert!(
+            !stored_or_overlapping,
+            "S0(b): this stretch's first address is already stored in the slice it is folded \
+             into, or inside a stored stretch, or its reach holds a stored entry — it was \
+             staged against another slice, or folded twice"
+        );
+        if stored_or_overlapping {
+            // S0(b): the STORED entry wins.
+            return self.clone();
+        }
+        ContentStore {
+            map: self.map.update(r.first.clone(), Stored::Stretch(r.bytes.clone())),
         }
     }
 
     /// The referential-integrity oracle of S3★'s content clause —
-    /// content-presence: is content STORED at `a`, `a ∈ dom(C)` (ASN-0047
-    /// S3★, which supersedes ASN-0036 S3; §B)? Not "allocated" (M3) and not
-    /// "registered" (M3): an allocated address with nothing stored is a ghost
-    /// element (ASN-0034 T8; ASN-0040 B3), and this answers `false` for it.
-    /// M5 calls this on the content side of placement; S3★ maps an arranged
-    /// link position into the link store, never this one.
+    /// content-presence: is content STORED at `a` (ASN-0047 S3★, which
+    /// supersedes ASN-0036 S3; §B)? COVERAGE by tumbler-interval containment:
+    /// the greatest key at or below `a`, and either that key is `a` or the
+    /// entry there is a stretch whose reach holds `a` — `key ≤ a < key ⊕ N`
+    /// by tumbler order, whatever `a`'s length or chain. Not "allocated" (M3)
+    /// and not "registered" (M3): an allocated address with nothing stored is
+    /// a ghost element (ASN-0034 T8; ASN-0040 B3), and this answers `false`
+    /// for it. The one predicate the two stage doors, the two folds and the
+    /// slice's decoder share, so no write can land at any tumbler inside a
+    /// stretch's reach. M5 calls this on the content side of placement; S3★
+    /// maps an arranged link position into the link store, never this one.
+    ///
+    /// Coverage and a value's presence part on one class: a tumbler inside a
+    /// stretch's reach but off its chain — a longer key under one of its
+    /// addresses — is covered and holds no value ([`value_at`] answers `None`
+    /// for it). Arranged positions are chain addresses, where the two agree.
+    ///
+    /// [`value_at`]: ContentStore::value_at
     pub fn contains(&self, a: &Tumbler) -> bool {
-        self.map.contains_key(a)
+        self.at_or_below(a).is_some_and(|(key, stored)| stored.covers(key.tumbler(), a))
     }
 
-    /// `C(a)`: the immutable value at `a`, else `None` (§B). The returned
-    /// borrow lives THROUGH the pinning `Snapshot` — bind the snapshot
-    /// first (`let s = k.snapshot(); s.world().content().value_at(a)`);
-    /// chaining off the temporary won't compile. The design's readers are
-    /// RETRIEVEV (M6, ASN-0115) and predicate-def read-back (M9); any holder
-    /// of a slice may ask it, and the paragraph below says what its answer
-    /// means.
+    /// `C(a)`: the immutable value at `a`, else `None` (§B) — lent as a
+    /// [`Piece`]: `Value` for an entry of its own, a `Bytes` of width one for
+    /// an address inside a stretch. The returned borrow lives THROUGH the
+    /// pinning `Snapshot` — bind the snapshot first (`let s = k.snapshot();
+    /// s.world().content().value_at(a)`); chaining off the temporary won't
+    /// compile. The design's readers are RETRIEVEV (M6, ASN-0115) and
+    /// predicate-def read-back (M9); any holder of a slice may ask it, and
+    /// the paragraph below says what its answer means.
+    ///
+    /// **A point read inside a stretch.** The greatest key at or below `a`
+    /// (`at_or_below`); if the key equals `a`, the entry — a value, or a
+    /// stretch's first byte; else, if the entry is a stretch and `a` lies on
+    /// its chain (equal component counts, every component but the last equal)
+    /// with `ordinal(a) − ordinal(key)` short of its length, that byte; else
+    /// `None`. The chain test keeps a stretch from answering for another
+    /// chain's addresses whose predecessor it happens to be. O(log n), as a
+    /// point `get` is.
     ///
     /// What a `None` MEANS depends on where `a` came from, which the caller
     /// knows and M4 does not. M4 promises only that a stored value is in
@@ -302,11 +531,40 @@ impl ContentStore {
     /// ghost element, or a link, and the caller holding it decides what that
     /// absence means to it: a refusal of its own, an absence it reports, or an
     /// address it passes over.
-    pub fn value_at(&self, a: &Tumbler) -> Option<&Val> {
-        self.map.get(a)
+    pub fn value_at(&self, a: &Tumbler) -> Option<Piece<'_>> {
+        let (key, stored) = self.at_or_below(a)?;
+        match stored {
+            Stored::Value(v) => (key.tumbler() == a).then_some(Piece::Value(v)),
+            Stored::Stretch(bytes) => {
+                let k = offset_in(key.tumbler(), bytes.len(), a)?;
+                Some(Piece::Bytes(&bytes[k..=k]))
+            }
+        }
     }
 
-    /// `|dom(C)|` — diagnostics only (§B).
+    /// THE ONE NEW RANGE READ: the maximal pieces of the I-extent `[start,
+    /// start ⊕ width)`, in I-order — each piece one stored entry clipped to
+    /// the window, a run of single-byte values inside one stretch or one
+    /// value. Stops at the first address no entry covers;
+    /// [`Pieces::covered`] drains what remains and says whether the width was
+    /// reached. The shape every run-walking reader needs — RETRIEVEV's
+    /// delivery, the shot's existence check and re-insert, the attested
+    /// entry's body — and the only range read offered: one predecessor
+    /// lookup at `start`, then a forward walk from that key while each entry
+    /// begins where the last reached and lies inside the window, O(log n +
+    /// pieces), borrowing every byte. A caller that wants the pieces walks
+    /// them `by_ref()` and asks `covered` after; an existence check asks it
+    /// of the fresh walk. A zero `width` yields nothing and is reached at
+    /// once.
+    pub fn pieces(&self, start: &Tumbler, width: &Nat) -> Pieces<'_> {
+        let walk =
+            self.at_or_below(start).map(|(key, _)| self.map.range::<_, Tumbler>(key.tumbler()..));
+        Pieces { walk, cursor: start.clone(), remaining: width.clone() }
+    }
+
+    /// The number of entries — one per value or per stretch, so fewer than
+    /// the addresses that answer where a stretch stands. Diagnostics only
+    /// (§B).
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -316,8 +574,9 @@ impl ContentStore {
         self.map.is_empty()
     }
 
-    /// THE ONE ENUMERATION of the slice: every `(address, value)` pair it
-    /// holds, each exactly once — the whole of its promise. Exact-size;
+    /// THE ONE ENUMERATION of the slice: every entry it holds, each exactly
+    /// once, as its address and a [`Piece`] — a stretch lent whole as one
+    /// `Bytes`, a value as `Value` — the whole of its promise. Exact-size;
     /// `&ContentStore` yields the same [`Iter`], so a `for` loop over
     /// `&store` reads it too. Its ORDER is no part of the promise: the order
     /// the checkpoint's bytes need is the serializer's to keep
@@ -332,16 +591,140 @@ impl ContentStore {
     /// snapshot such as the cell index's walk (`skep-media`); the slice it
     /// walks stays as it was while commits proceed, since every fold returns
     /// a new slice and leaves its receiver alone. A request path asks the
-    /// point queries; no range and no prefix read is offered beside this one.
+    /// point queries and the one run read, [`pieces`](ContentStore::pieces);
+    /// no prefix read is offered beside them.
     pub fn iter(&self) -> Iter<'_> {
         Iter(self.map.iter())
     }
 }
 
-/// Every `(address, value)` pair of one slice, each once — what
-/// [`ContentStore::iter`] lends and what `&ContentStore` yields to a `for`
-/// loop. Opaque, as M1's `Spans` and M5's `Runs` are, so the persistent map
-/// behind the slice stays this crate's own choice.
+/// THE ONE BORROWED ANSWER of every read — a part of a stretch (one byte
+/// under `value_at`, a window's worth under `pieces`, a whole entry under
+/// `iter`) or one value.
+///
+/// Borrowed, never built: a byte inside a stretch is a one-byte slice into
+/// the stretch's own allocation, and a value is lent as the `Val` the slice
+/// holds. A caller that must own a `Val` asks [`to_val`](Piece::to_val) —
+/// a refcount bump for a value, one allocation for a run of bytes — and one
+/// that only looks at bytes asks [`as_bytes`](Piece::as_bytes). `Debug`
+/// renders the kind and the length, never a byte, as `Val`'s does.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Piece<'a> {
+    /// A run of consecutive single-byte values inside one stretch, `bytes[k]`
+    /// the value at the piece's first address `⊕ k`. Never empty.
+    Bytes(&'a [u8]),
+    /// One value, an entry of its own: an atom, or any value a
+    /// [`ContentWrite`] wrote.
+    Value(&'a Val),
+}
+
+impl<'a> Piece<'a> {
+    /// The piece's bytes: the run itself, or the value's bytes. Borrowed from
+    /// the slice, so the borrow lives as long as the piece's.
+    pub fn as_bytes(&self) -> &'a [u8] {
+        match self {
+            Piece::Bytes(bytes) => bytes,
+            Piece::Value(v) => v.as_bytes(),
+        }
+    }
+
+    /// An owned value of the piece's bytes: a clone of the value's `Arc` (a
+    /// refcount bump) or a new `Val` of the run's bytes (one allocation).
+    pub fn to_val(&self) -> Val {
+        match self {
+            Piece::Bytes(bytes) => Val::new(*bytes),
+            Piece::Value(v) => (*v).clone(),
+        }
+    }
+}
+
+/// `Bytes(3 bytes)` or `Value(3 bytes)`: the kind and the length, never a
+/// byte.
+impl fmt::Debug for Piece<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Piece::Bytes(bytes) => write!(f, "Bytes({} bytes)", bytes.len()),
+            Piece::Value(v) => write!(f, "Value({v:?})"),
+        }
+    }
+}
+
+/// The pieces of one I-extent, in I-order — what [`ContentStore::pieces`]
+/// lends. Opaque, as [`Iter`] is, so the map behind the slice stays this
+/// crate's choice; neither `Clone` nor fused, and no walk from the far end.
+///
+/// The walk ends at the window's reach or at the first address no entry
+/// covers, whichever comes first, and [`covered`](Pieces::covered) says
+/// which. The seam between entry kinds inside one run — a value between two
+/// stretches — is where a stop condition's off-by-one would hide: each piece
+/// must begin exactly where the last reached, and a stretch's piece is
+/// clipped to what the window still wants.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct Pieces<'a> {
+    // The forward walk from the predecessor of the window's start; `None`
+    // where no entry lies at or below it, or once an address went uncovered.
+    walk: Option<im::ordmap::Iter<'a, Key, Stored>>,
+    // Where the next piece must begin: the start, then each piece's reach.
+    cursor: Tumbler,
+    // The positions the window still wants.
+    remaining: Nat,
+}
+
+impl<'a> Pieces<'a> {
+    /// Drains the walk and answers whether every address of the window is
+    /// covered — the width reached, no address met that no entry holds.
+    /// Consumes the walk: a caller that wants the pieces too walks them
+    /// `by_ref()` first.
+    pub fn covered(mut self) -> bool {
+        while self.next().is_some() {}
+        self.remaining == Nat::default()
+    }
+}
+
+impl<'a> Iterator for Pieces<'a> {
+    type Item = Piece<'a>;
+
+    fn next(&mut self) -> Option<Piece<'a>> {
+        if self.remaining == Nat::default() {
+            return None;
+        }
+        let Some((key, stored)) = self.walk.as_mut().and_then(Iterator::next) else {
+            self.walk = None;
+            return None;
+        };
+        let covering = match stored {
+            Stored::Value(v) => (key.tumbler() == &self.cursor).then_some((Piece::Value(v), 1)),
+            Stored::Stretch(bytes) => offset_in(key.tumbler(), bytes.len(), &self.cursor).map(|k| {
+                let available = bytes.len() - k;
+                let take = usize::try_from(&self.remaining).map_or(available, |n| n.min(available));
+                (Piece::Bytes(&bytes[k..k + take]), take)
+            }),
+        };
+        let Some((piece, taken)) = covering else {
+            // An address no entry covers: the walk stops here, short of the
+            // width.
+            self.walk = None;
+            return None;
+        };
+        let taken = Nat::from(taken);
+        self.cursor = shift(&self.cursor, &taken);
+        self.remaining -= taken;
+        Some(piece)
+    }
+}
+
+/// `Pieces { .. }`: the walk, never a piece — what is left cannot be shown
+/// without spending it.
+impl fmt::Debug for Pieces<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pieces").finish_non_exhaustive()
+    }
+}
+
+/// Every entry of one slice, each once, as its address and a [`Piece`] —
+/// what [`ContentStore::iter`] lends and what `&ContentStore` yields to a
+/// `for` loop. Opaque, as M1's `Spans` and M5's `Runs` are, so the persistent
+/// map behind the slice stays this crate's own choice.
 ///
 /// Opacity hides the container, never what the walk promises: it knows its
 /// exact length at every step. It offers no walk from the far end — the
@@ -354,13 +737,13 @@ pub struct Iter<'a>(
     // `im`'s map walk: it has a reverse walk, withheld above, and no `Clone`,
     // fused end or `Debug` to forward — so `Iter` forwards the exact length
     // alone.
-    im::ordmap::Iter<'a, Key, Val>,
+    im::ordmap::Iter<'a, Key, Stored>,
 );
 
 impl<'a> Iterator for Iter<'a> {
-    type Item = (&'a Address, &'a Val);
-    fn next(&mut self) -> Option<(&'a Address, &'a Val)> {
-        self.0.next().map(|(key, val)| (&*key.0, val))
+    type Item = (&'a Address, Piece<'a>);
+    fn next(&mut self) -> Option<(&'a Address, Piece<'a>)> {
+        self.0.next().map(|(key, stored)| (&*key.0, stored.piece()))
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.0.size_hint()
@@ -382,16 +765,18 @@ impl fmt::Debug for Iter<'_> {
 }
 
 impl<'a> IntoIterator for &'a ContentStore {
-    type Item = (&'a Address, &'a Val);
+    type Item = (&'a Address, Piece<'a>);
     type IntoIter = Iter<'a>;
     fn into_iter(self) -> Iter<'a> {
         self.iter()
     }
 }
 
-/// M4's sole authoritative journal delta (§A). Carries the [`Address`] it
-/// writes at, journaled as its flat tumbler (M1: the flat tumbler is the
-/// storage/journal key form).
+/// M4's journal delta for one value (§A). Carries the [`Address`] it writes
+/// at, journaled as its flat tumbler (M1: the flat tumbler is the
+/// storage/journal key form). The atom's record: every value of two bytes or
+/// more the codec hands in is written through it, and a run of single-byte
+/// values through [`ContentStretch`] instead.
 ///
 /// Its fields are private, so [`stage_write`] is its one producer; serde's
 /// `Deserialize` — public, as M2's `Record: DeserializeOwned` bound requires —
@@ -413,17 +798,16 @@ impl<'a> IntoIterator for &'a ContentStore {
 /// decodes each back through this type wherever a replay meets it — at
 /// open, and at each historical reconstruction — with no compiler edge to
 /// this crate. So a change to those bytes — a field added, removed or
-/// reordered, the address or the value encoded differently, as Open build
-/// decision #3's batched record would make — leaves every content record
-/// already journaled unreadable: a committed record that does not decode is
-/// `Corruption`, which M2 must not skip. It is a format event by M2's rule
-/// (`ARCHITECTURE.md` §The kernel, "The formats are pinned"), owed the bump
-/// of M2's `SKJ` and `SKC` stamps, so that a journal written before the
-/// change is refused by name at open, never replayed into `Corruption`. M2's
-/// golden journal holds content records, so its pin fails by name when these
-/// bytes move; this crate's suite pins the form a record decodes from
-/// (`raw_record`'s control) and replays records through M2's own codec
-/// (`content_survives_durable_recovery_by_checkpoint_and_replay`).
+/// reordered, the address or the value encoded differently — leaves every
+/// content record already journaled unreadable: a committed record that does
+/// not decode is `Corruption`, which M2 must not skip. It is a format event
+/// by M2's rule (`ARCHITECTURE.md` §The kernel, "The formats are pinned"),
+/// owed the bump of M2's `SKJ` and `SKC` stamps, so that a journal written
+/// before the change is refused by name at open, never replayed into
+/// `Corruption`. M2's golden journal holds content records, so its pin fails
+/// by name when these bytes move; this crate's suite pins the form a record
+/// decodes from (`raw_record`'s control) and replays records through M2's
+/// own codec (`content_survives_durable_recovery_by_checkpoint_and_replay`).
 ///
 /// `#[must_use]`, as the fold is: a record stores nothing until it is
 /// pushed, so one dropped after `stage_write(…)?` — a write that never
@@ -450,11 +834,102 @@ impl ContentWrite {
     }
 }
 
-/// PURE STEP — the storage half of K.α (§C; M2 contract 3). Reads the slice
-/// it is handed and nothing else, returns the record, commits nothing. THIS
-/// is M4's real export: M5's placement composite (and, via M5, M9's
-/// predicate-def creation) calls it and lifts the result with
-/// `stg.push(rec.into())`.
+/// M4's journal delta for a stretch (§A): N consecutive single-byte values
+/// written by one insert under one document's content chain, held as one
+/// record and one map entry. Carries the FIRST address, journaled as its
+/// flat tumbler, then the bytes in order, the value at `first ⊕ k` being
+/// `bytes[k]`; the count is the byte length, so no count rides the record,
+/// and the one M3's range mint carries is the same number by construction —
+/// the one staging site stages both from one `bytes.len()`, and checks it
+/// where it is discharged.
+///
+/// Its fields are private, so [`stage_stretch`] is its one producer; serde's
+/// `Deserialize` is M2's replay, taking the address through M1's `Address`
+/// door as [`ContentWrite`]'s does and refusing a stretch of zero bytes, the
+/// shape the door refuses too. Read access: [`addr`](ContentStretch::addr),
+/// [`bytes`](ContentStretch::bytes) and [`len`](ContentStretch::len); its
+/// `Debug` renders the length, never a byte.
+///
+/// THE FORM IS A FORMAT, as [`ContentWrite`]'s is: the address, then the
+/// bytes as their length and the raw bytes, inside the engine's
+/// `Record::ContentStretch`, and what a change to those bytes owes is what
+/// that record's doc says. `#[must_use]` for the same reason: a record stores
+/// nothing until it is pushed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "StretchShadow")]
+#[must_use = "a record stores nothing until it is pushed: `stg.push(rec.into())`"]
+pub struct ContentStretch {
+    first: Key,
+    bytes: Arc<[u8]>,
+}
+
+/// The decode path of [`ContentStretch`] (the serde `try_from` shadow, as
+/// M5's `Run` carries one): decoded field by field, then re-entered through
+/// the zero-length check, so a stretch of no bytes in a journal frame is a
+/// decode failure M2 reports as corruption rather than an entry the slice's
+/// own decoder would refuse at the next checkpoint. It reads exactly what a
+/// `ContentStretch` writes: the same two fields in the same order.
+#[derive(Deserialize)]
+struct StretchShadow {
+    first: Key,
+    bytes: Arc<[u8]>,
+}
+
+impl TryFrom<StretchShadow> for ContentStretch {
+    type Error = ContentError;
+
+    fn try_from(shadow: StretchShadow) -> Result<ContentStretch, ContentError> {
+        if shadow.bytes.is_empty() {
+            return Err(ContentError::EmptyStretch);
+        }
+        Ok(ContentStretch { first: shadow.first, bytes: shadow.bytes })
+    }
+}
+
+impl ContentStretch {
+    /// The first address the record writes at — an `Address` whether the
+    /// record was staged or decoded, journaled as its flat tumbler. Read-only.
+    pub fn addr(&self) -> &Address {
+        &self.first.0
+    }
+
+    /// The bytes the record writes, in order from [`addr`](ContentStretch::addr).
+    /// Read-only.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The number of addresses the record writes: its byte count, at least
+    /// one — the door and the decode refuse a stretch of no bytes, so there
+    /// is no `is_empty` to ask.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// The first address past the stretch, `first ⊕ len`.
+    fn reach(&self) -> Tumbler {
+        shift(self.first.tumbler(), &Nat::from(self.bytes.len()))
+    }
+}
+
+/// `ContentStretch { first: Tumbler([..]), bytes: 3 bytes }`: the address
+/// and the length, never a byte.
+impl fmt::Debug for ContentStretch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContentStretch")
+            .field("first", &self.first)
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .finish()
+    }
+}
+
+/// PURE STEP — the storage half of K.α for one value (§C; M2 contract 3).
+/// Reads the slice it is handed and nothing else, returns the record, commits
+/// nothing. M5's placement composite (and, via M5, M9's predicate-def
+/// creation) calls it for an atom and lifts the result with
+/// `stg.push(rec.into())`; a run of single-byte values goes through
+/// [`stage_stretch`].
 ///
 /// Takes the address by value, as it takes the value: the record keeps both,
 /// whole. A caller done with its address hands it over, and nothing is
@@ -462,17 +937,24 @@ impl ContentWrite {
 /// cost is in view and in its power to avoid (C-CALLER-CONTROL).
 ///
 /// Refuses a second write at one address: `Err(AlreadyStored(t))`, `t` being
-/// `addr`'s tumbler, if `addr` is stored in `c`. M3 mints fresh and M5 writes
-/// once, so this never fires in correct operation; when an upstream bug does
-/// hand it an address already stored, the caller gets a typed rejection to
-/// refuse its transaction with, instead of a write the fold would silently
-/// drop, leaving the caller with an address that holds another write's value.
-/// It sees only `c`, so hand it the slice the record will be folded into —
-/// `stg.working().content()`, read after every `push`; staged against an
-/// older slice, a second write at one address gets through and the fold keeps
-/// the stored value (a debug build panics there). Otherwise the address is
-/// TRUSTED: minted and validated upstream (M3), T4-valid by M1's standing
-/// invariant.
+/// `addr`'s tumbler, if `addr` is covered in `c` — stored as a key, or inside
+/// a stored stretch ([`ContentStore::contains`]). M3 mints fresh and M5
+/// writes once, so this never fires in correct operation; when an upstream
+/// bug does hand it an address already stored, the caller gets a typed
+/// rejection to refuse its transaction with, instead of a write the fold
+/// would silently drop, leaving the caller with an address that holds
+/// another write's value. It sees only `c`, so hand it the slice the record
+/// will be folded into — `stg.working().content()`, read after every `push`;
+/// staged against an older slice, a second write at one address gets through
+/// and the fold keeps the stored value (a debug build panics there).
+/// Otherwise the address is TRUSTED: minted and validated upstream (M3),
+/// T4-valid by M1's standing invariant.
+///
+/// # Errors
+///
+/// `AlreadyStored(t)` where `c` covers `addr`.
+///
+/// # Panics
 ///
 /// In debug builds a routing assertion (`level == Element ∧ subspace ==
 /// s_C`; Open build decision #4) runs BEFORE the already-stored check, so a
@@ -495,4 +977,57 @@ pub fn stage_write(
         addr: Key(Arc::new(addr)),
         val,
     })
+}
+
+/// PURE STEP — the storage half of K.α for a run of single-byte values (§C):
+/// the twin of [`stage_write`] that stages one [`ContentStretch`] for the N
+/// bytes at `first`, `first ⊕ 1`, …, `first ⊕ (N − 1)`. Reads the slice it
+/// is handed and nothing else, returns the record, commits nothing; M5's
+/// insert and its publish shot call it per maximal byte-run beside the range
+/// mint that issued the N addresses, and lift the result with
+/// `stg.push(rec.into())`.
+///
+/// Takes the first address by value and the bytes as the `Arc` the record
+/// keeps, so nothing is copied: a caller with a `Vec` hands `Arc::from(run)`.
+/// Hand it the slice the record will be folded into, `stg.working().content()`
+/// read after every push, for the reason [`stage_write`] gives.
+///
+/// # Errors
+///
+/// In this order:
+///
+/// 1. `EmptyStretch` — zero bytes: a stretch of nothing.
+/// 2. `AlreadyStored(first)` — `c` covers `first` ([`ContentStore::contains`]):
+///    a key at it, or a stretch reaching past it.
+/// 3. `Overlap { first, reach }` — a stored key lies inside the window
+///    `[first, first ⊕ N)` by tumbler order, whatever its chain or length:
+///    the first key at or past `first` is below the reach.
+///
+/// Two O(log n) lookups where [`stage_write`]'s door is one; "M3 mints fresh
+/// and M5 writes once, so this never fires in correct operation" holds of
+/// both doors.
+///
+/// # Panics
+///
+/// In debug builds the routing assertion on `first` runs after the
+/// zero-length check and before the two stored checks, at the caller's line
+/// (`#[track_caller]`); release compiles it out.
+#[track_caller]
+pub fn stage_stretch(
+    c: &ContentStore,
+    first: Address,
+    bytes: Arc<[u8]>,
+) -> Result<ContentStretch, ContentError> {
+    if bytes.is_empty() {
+        return Err(ContentError::EmptyStretch);
+    }
+    debug_assert_content_address_routing(&first, "stage_stretch");
+    if c.contains(first.tumbler()) {
+        return Err(ContentError::AlreadyStored(Tumbler::from(first)));
+    }
+    let reach = shift(first.tumbler(), &Nat::from(bytes.len()));
+    if c.holds_a_key_in(first.tumbler(), &reach) {
+        return Err(ContentError::Overlap { first: Tumbler::from(first), reach });
+    }
+    Ok(ContentStretch { first: Key(Arc::new(first)), bytes })
 }

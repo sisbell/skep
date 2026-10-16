@@ -6,7 +6,7 @@
 use skep_address::{Address, SpanSet};
 use skep_arrangement::{HasM5, Vstream};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{Delivery, DeliveryItem, OriginError, Query};
+use skep_retrieval::{Delivery, OriginError, Query};
 
 use crate::common::*;
 
@@ -48,12 +48,7 @@ fn a_published_address_answers_from_its_trunk_head_once_it_has_one() {
     // pdoc's name.
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 1, 4))])),
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"c")),
-            DeliveryItem::Content(val(b"z")),
-        ])
+        Delivery(vec![text(b"abc"), text(b"z")])
     );
     // The origins: the head's fourth run was allocated by the fork.
     assert_eq!(
@@ -138,10 +133,7 @@ fn a_published_address_with_an_empty_arrangement_of_its_own_reports_its_head() {
         ok_of(q.doc_vspan(&pdoc())),
         SpanSet::singleton(vspan(1, 1, 1))
     );
-    assert_eq!(
-        ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 1, 1))])),
-        Delivery(vec![DeliveryItem::Content(val(b"z"))])
-    );
+    assert_eq!(ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 1, 1))])), Delivery(vec![text(b"z")]));
     assert_eq!(
         ok_of(q.show_origin_v(&pdoc(), &vspan(1, 1, 1))),
         vec![vdoc()]
@@ -199,11 +191,7 @@ fn a_pinned_member_answers_its_own_arrangement_after_the_head_moves_on() {
     );
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(first.clone(), vspan(1, 1, 4))])),
-        Delivery(vec![
-            DeliveryItem::Content(val(b"a")),
-            DeliveryItem::Content(val(b"b")),
-            DeliveryItem::Content(val(b"c")),
-        ])
+        Delivery(vec![text(b"abc")])
     );
     assert_eq!(
         err_of(q.show_origin_v(&first, &vspan(1, 1, 4))),

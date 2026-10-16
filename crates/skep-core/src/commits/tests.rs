@@ -342,9 +342,10 @@ fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attem
         minted.push(mint_address(&stores, minted.len() + 3));
     }
     let doc = minted[1].clone();
-    // A text value as the wire's codec hands it to the store: one atom per
-    // character, which is what makes an 8 KiB insert a journal's worth of
-    // records.
+    // A text value as the wire's codec hands it to the store: one value per
+    // character, which the store writes as ONE stretch — so an insert costs
+    // the journal its bytes and two records, and the segment rotates only
+    // under inserts of the codec's whole cap.
     let insert = |value: &str| {
         let values: Vec<Val> = value.bytes().map(|b| Val::new([b])).collect();
         let op = Op::Insert {
@@ -367,7 +368,7 @@ fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attem
         };
         commit(op, &run);
     };
-    let bulk = "z".repeat(8192);
+    let bulk = "z".repeat(262_144);
     for _ in 0..6 {
         insert(&bulk);
     }

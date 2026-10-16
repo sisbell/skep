@@ -280,10 +280,12 @@ pub enum SeatError {
 }
 
 // `?`-desugaring conversions the in-closure mint/write calls depend on:
-// `allocate_for_placement`'s `mint_content(home)?` and `stage_write(…)?` —
-// the step INSERT and the shot share, whose bound
-// (`E: From<MintError> + From<ContentError>`) these impls discharge — the
-// shot's own `mint_version(…)?`, and VERSION's
+// `allocate_for_placement`'s `mint_content(home)?` and `stage_write(…)?`, and
+// `allocate_stretch_for_placement`'s `mint_content_range(home, n)?` and
+// `stage_stretch(…)?` — whose `EmptyStretch` and `Overlap` ride the same
+// `From<ContentError>` as `AlreadyStored` — the two steps INSERT and the shot
+// share, whose bound (`E: From<MintError> + From<ContentError>`) these impls
+// discharge — the shot's own `mint_version(…)?`, and VERSION's
 // `mint_version`/`mint_document … ?`.
 
 impl From<MintError> for InsertError {

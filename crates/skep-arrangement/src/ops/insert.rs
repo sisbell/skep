@@ -2,12 +2,14 @@
 //! its writes, its placement and its provenance — and the one insert a
 //! published document admits, a declared deposit at a fresh position.
 
+use std::sync::Arc;
+
 use skep_address::Address;
-use skep_content::{ContentWrite, HasContent, Val};
+use skep_content::{ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
-use super::{allocate_for_placement, head_lock_key, Vstream};
+use super::{allocate_for_placement, allocate_stretch_for_placement, head_lock_key, Vstream};
 use crate::chain::{deposit_surface, published_target};
 use crate::deposit::{deposit_class_types, Deposit};
 use crate::error::InsertError;
@@ -20,23 +22,25 @@ use crate::HasM5;
 impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (writes) + M5
-    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite>, // stages M3Rec + ContentWrite + M5Rec
+    W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>, // stages M3Rec + ContentWrite/ContentStretch + M5Rec
 {
     /// INSERT (ASN-0116; §3): mint n fresh content addresses (M3), write
-    /// their bytes (M4), splice the run at `at` (content subspace), record
-    /// provenance — one M2 composite under
-    /// `M3State::content_lock_key(doc)` and, for a declared deposit, the
-    /// chain's head key (`head_lock_key`: the trunk's `version_lock_key`).
-    /// Returns the inserted run's START address (the predicate-def identity
-    /// for M9) and the commit `Seq`.
+    /// their bytes (M4) — a maximal run of single-byte values as ONE range
+    /// mint and ONE stretch, an atom as its own mint and write — splice the
+    /// run at `at` (content subspace), record provenance — one M2 composite
+    /// under `M3State::content_lock_key(doc)` and, for a declared deposit,
+    /// the chain's head key (`head_lock_key`: the trunk's
+    /// `version_lock_key`). Returns the inserted run's START address (the
+    /// predicate-def identity for M9) and the commit `Seq`.
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
     /// in-txn ω gate) → `PublishedTarget` (below) → `EmptyContent` →
     /// `NotContentSubspace` (`at.subspace ≠ s_C`) → `OutOfBounds` (the
     /// arrangement does not admit `at.ordinal` as a placement boundary —
     /// Valid(First)InsertionPosition, so ordinal = 1 when n_C = 0). Then,
-    /// PER VALUE in the order given, `Mint` (the content mint) → `Content`
-    /// (the byte write), with the FIRST value to fail deciding.
+    /// PER MAXIMAL RUN OF SINGLE-BYTE VALUES OR ATOM in the order given,
+    /// `Mint` (the content mint, a range for a run) → `Content` (the byte
+    /// write, a stretch for a run), with the FIRST to fail deciding.
     ///
     /// Neither per-value verdict is one an honest request can earn on a
     /// correct store: `Mint(MintError::HomeNotRegistered)` cannot arrive past
@@ -118,22 +122,30 @@ where
     /// analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
     /// and none is owed, because the size of an INSERT is the size of the
     /// request that carries it rather than a source document's fragmentation
-    /// multiplied by a spec count. What `n` values cost is `2n + 1` staged
-    /// records — a mint and a content write apiece, plus one placement — and
-    /// `n` content addresses that are allocated permanently, M5 having no
-    /// reclamation path. M2's `MAX_TXN_BYTES` refuses the transaction past its
-    /// own ceiling, but it refuses AFTER the mints and writes are staged, so
-    /// a caller that wants the refusal to arrive before that work owes its own
-    /// cap: M10's codec sets one on the wire route (`MAX_INSERT_VALUES`), and
-    /// a route that carries this op without one owes the number.
+    /// multiplied by a spec count. What the values cost is `2 × (maximal
+    /// single-byte runs + atoms) + 1` staged records — a mint and a content
+    /// record per run or atom, plus one placement; a run of a million typed
+    /// bytes is two records — and `n` content addresses that are allocated
+    /// permanently, M5 having no reclamation path. M2's `MAX_TXN_BYTES`
+    /// refuses the transaction past its own ceiling, but it refuses AFTER the
+    /// mints and writes are staged, so a caller that wants the refusal to
+    /// arrive before that work owes its own cap: M10's codec sets one on the
+    /// wire route (`MAX_INSERT_VALUES`), and a route that carries this op
+    /// without one owes the number.
     ///
     /// J0/J1★ by construction: mint + write + place + provenance ride one
-    /// transaction, each value through `allocate_for_placement` — J0's one
-    /// step, shared with the shot's re-insert, whose own doc states why the
-    /// placement it accumulates is never widened over addresses nobody
-    /// allocated. INSERT's values are minted one after another under the held
-    /// content key, so they are I-adjacent and INSERT places exactly ONE run,
-    /// whose start is the first address minted.
+    /// transaction, each run through `allocate_stretch_for_placement` and
+    /// each atom through `allocate_for_placement` — J0's two steps, shared
+    /// with the shot's re-insert, whose own docs state why the placement they
+    /// accumulate is never widened over addresses nobody allocated. THE
+    /// COALESCING: `values` is walked in order, every one-byte value joining a
+    /// pending byte-run, and the run is flushed as one stretch at the next
+    /// atom and at the end — every one-byte value the codec hands in is a
+    /// per-byte value (the wire canonicalizes a one-byte atom to its per-byte
+    /// form), so one code path stores every per-byte value one way, a run of
+    /// one included. INSERT's runs and atoms are minted one after another
+    /// under the held content key, so they are I-adjacent and INSERT places
+    /// exactly ONE run, whose start is the first address minted.
     pub fn insert(
         &self,
         caller: Caller,
@@ -207,8 +219,28 @@ where
                 return Err(InsertError::OutOfBounds);
             }
             let mut runs: Vec<Run> = Vec::new();
+            // The coalescing walk (the op's doc): a one-byte value joins the
+            // pending run; an atom flushes the run as one stretch, then stages
+            // its own pair; the run left at the end flushes too.
+            let mut pending: Vec<u8> = Vec::new();
             for value in values {
+                if let [byte] = value.as_bytes() {
+                    pending.push(*byte);
+                    continue;
+                }
+                if !pending.is_empty() {
+                    let run = Arc::from(std::mem::take(&mut pending));
+                    allocate_stretch_for_placement::<_, InsertError>(stg, doc, run, &mut runs)?;
+                }
                 allocate_for_placement::<_, InsertError>(stg, doc, value, &mut runs)?;
+            }
+            if !pending.is_empty() {
+                allocate_stretch_for_placement::<_, InsertError>(
+                    stg,
+                    doc,
+                    Arc::from(pending),
+                    &mut runs,
+                )?;
             }
             // The placement's start is the FIRST address minted: the
             // accumulator only ever widens a run rightwards or opens a new

@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{deposit_class_types, Deposit, HasM5, M5Rec, M5State, VPos, VSpec, Vstream};
-use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
     Attestation, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError,
     WorldState,
@@ -40,6 +40,7 @@ enum Record {
     Content(ContentWrite),
     M5(M5Rec),
     Links(LinkRec),
+    Stretch(ContentStretch),
 }
 
 impl WorldState for World {
@@ -48,6 +49,7 @@ impl WorldState for World {
         match r {
             Record::M3(x) => World { m3: self.m3.apply_m3(x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
+            Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
             Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
             Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
         }
@@ -116,6 +118,11 @@ impl From<M3Rec> for Record {
 impl From<ContentWrite> for Record {
     fn from(r: ContentWrite) -> Record {
         Record::Content(r)
+    }
+}
+impl From<ContentStretch> for Record {
+    fn from(r: ContentStretch) -> Record {
+        Record::Stretch(r)
     }
 }
 impl From<M5Rec> for Record {

@@ -45,8 +45,8 @@
 //!   asserted as such, and named in `Kernel::open`'s damage model.
 //!
 //! Two bases are exercised. With the golden's checkpoint REMOVED the open's
-//! base is genesis and every one of the eighteen links is verified, which is
-//! where the mid-history cases live; with it STANDING (`checkpoint.37`) the
+//! base is genesis and every one of the nineteen links is verified, which is
+//! where the mid-history cases live; with it STANDING (`checkpoint.34`) the
 //! open checks the base for a mismatch — the marker closing 37 is in the one
 //! segment — and the two transactions above it, and a `world_at` below it
 //! verifies from genesis — which is what cases 9, 12 and 14 turn on.
@@ -85,8 +85,9 @@ use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 use tempfile::{tempdir, TempDir};
 
 /// The op after which the golden checkpoints — the golden suite's own
-/// constant, restated: `checkpoint.37`, with ops 17 and 18 above it.
-const CHECKPOINT_AFTER_OP: usize = 16;
+/// constant, restated: the pivot, op 17, with ops 18 and 19 above it; the
+/// checkpoint's seq is read off the fixture (`Golden::checkpoint_seq`).
+const CHECKPOINT_AFTER_OP: usize = 17;
 
 /// The chain's genesis value, restated: the value a journal's first
 /// transaction chains from, which the golden's first marker pins. The forger
@@ -111,7 +112,7 @@ fn golden_segment() -> PathBuf {
 }
 
 /// The matrix's fixture: the golden's ops in a temporary directory, its
-/// segment byte-equal to the committed golden's, its eighteen transactions
+/// segment byte-equal to the committed golden's, its nineteen transactions
 /// mapped as the frames lay them down.
 struct Golden {
     tmp: TempDir,
@@ -184,7 +185,7 @@ impl Golden {
     }
 
     /// A case directory: the fixture's files copied, the golden checkpoint
-    /// STANDING — the open's base is `checkpoint.37`.
+    /// STANDING — the open's base is `checkpoint.34`.
     fn case(&self, name: &str) -> PathBuf {
         let dir = self.tmp.path().join(name);
         copy_dir(&self.fixture.dir, &dir);
@@ -192,7 +193,7 @@ impl Golden {
     }
 
     /// A case directory with the checkpoint REMOVED: the open's base is
-    /// genesis, and every link of the eighteen is verified.
+    /// genesis, and every link of the nineteen is verified.
     fn case_from_genesis(&self, name: &str) -> PathBuf {
         let dir = self.case(name);
         fs::remove_file(ckpt_file(&dir, self.checkpoint_seq())).expect("remove the checkpoint");
@@ -888,10 +889,10 @@ fn c05_two_transactions_swapped_break_at_the_first_swapped_position() {
     open_halts_with_chain_break(&case, golden.seq(10), "case 5: ops 9 and 10 swapped");
 
     let case = golden.case("c05-above-base");
-    swap_txns(&seg_file(&case, 1), 17 - 1, 18 - 1);
+    swap_txns(&seg_file(&case, 1), 18 - 1, 19 - 1);
     open_halts_with_chain_break(
         &case,
-        golden.seq(18),
+        golden.seq(19),
         "case 5: the two transactions above the base swapped",
     );
 }
@@ -909,8 +910,8 @@ fn c06_a_transaction_deleted_from_the_middle_breaks_at_the_next() {
     open_halts_with_chain_break(&case, golden.seq(10), "case 6: op 9 deleted, the file closed up");
 
     let case = golden.case("c06-above-base");
-    delete_txn(&seg_file(&case, 1), 17 - 1);
-    open_halts_with_chain_break(&case, golden.seq(18), "case 6: op 17 deleted above the base");
+    delete_txn(&seg_file(&case, 1), 18 - 1);
+    open_halts_with_chain_break(&case, golden.seq(19), "case 6: op 18 deleted above the base");
 }
 
 /// CASE 7 — A CLOSED SEGMENT REPLACED BY AN OLDER COPY OF ITSELF while later
@@ -1244,7 +1245,7 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
         CheckpointAfterForgery::HeadRewritten,
     );
     // The forger's salts are on disk — none of them the seeded stream's —
-    // and every one of the eighteen links verifies over them.
+    // and every one of the nineteen links verifies over them.
     for txn in transactions(&fs::read(seg_file(&case, 1)).expect("segment")) {
         assert_eq!(txn.salt, forger_salt(txn.last_seq), "the forger's own salt at {}", txn.last_seq);
         assert_ne!(txn.salt, seeded_salt(GOLDEN_SALT_SEED, txn.txn));
@@ -1286,14 +1287,14 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     boundaries_answer(&engine, 1, "case 11 (a), over the forger's base");
     drop(engine);
 
-    // (b) FROM ANY POINT: op 4's inserted 'a' becomes 'A', below the
-    //     checkpoint; the links from op 4 on recomputed from op 3's value as
-    //     the golden wrote it; the base removed, so the open replays the
-    //     forged journal from genesis. The boundaries below the forgery
-    //     answer the golden's world, those from it on the forger's, and
-    //     nothing halts.
-    const WRITTEN: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, b'a'];
-    const FORGED: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, b'A'];
+    // (b) FROM ANY POINT: op 4's inserted `ab` — one stretch, its bytes
+    //     behind their length — becomes `Ab`, below the checkpoint; the links
+    //     from op 4 on recomputed from op 3's value as the golden wrote it;
+    //     the base removed, so the open replays the forged journal from
+    //     genesis. The boundaries below the forgery answer the golden's world,
+    //     those from it on the forger's, and nothing halts.
+    const WRITTEN: &[u8] = &[2, 0, 0, 0, 0, 0, 0, 0, b'a', b'b'];
+    const FORGED: &[u8] = &[2, 0, 0, 0, 0, 0, 0, 0, b'A', b'b'];
     let case = golden.case("c11-from-op-4");
     forge_and_rechain(&golden, &case, 4, WRITTEN, FORGED, CheckpointAfterForgery::Removed);
     let engine = timed_open(&case, "case 11: a consistent forgery from op 4");
@@ -1305,8 +1306,8 @@ fn c11_a_consistent_rewrite_from_genesis_or_from_any_point_passes() {
     // (c) …and the checkpoint's `chain_head` is the one anchor the journal
     //     has above its genesis value: the same forgery with the checkpoint
     //     left as the golden wrote it is a BASE MISMATCH — the forger
-    //     re-chained op 16's marker, the header still carries the golden's
-    //     value, and the two disagree at 37 — case 9's door, which a forger
+    //     re-chained op 17's marker, the header still carries the golden's
+    //     value, and the two disagree at 34 — case 9's door, which a forger
     //     who can write the checkpoint file closes with one more write, as
     //     (a) did.
     let case = golden.case("c11-checkpoint-kept");
@@ -1359,7 +1360,7 @@ fn c12_damage_below_a_standing_base_is_unseen_at_open_and_seen_by_a_replay_from_
         "a boundary above the base scans above it only"
     );
     // The chain at and above the base: the base's own (the header's, which
-    // is the golden's marker's at 37) and the two markers above, none of
+    // is the golden's marker's at 34) and the two markers above, none of
     // them consulting the rewritten segment below the base.
     chain_at_is(&engine, ckpt_seq, &golden.txn(CHECKPOINT_AFTER_OP).chain, "case 12: at the base");
     chain_at_is(&engine, above, &golden.txn(CHECKPOINT_AFTER_OP + 1).chain, "case 12: above the base");
@@ -1821,7 +1822,7 @@ fn chain_at_is_reclaimed_below_the_floor_and_answers_from_the_floor_up() {
 }
 
 /// `Kernel::chain_at(N)` — the chain AS OF a boundary, off the same scan as
-/// `world_at` and under its refusals: every one of the golden's eighteen
+/// `world_at` and under its refusals: every one of the golden's nineteen
 /// boundaries answers its marker's chain, from genesis and over the
 /// standing base alike; `0` is the chain's genesis value; the base's own seq
 /// is the header's value; the head equals `chain_head()`, before and after a
@@ -1854,7 +1855,11 @@ fn chain_at_answers_every_boundarys_marker_chain_and_refuses_as_world_at_does() 
     let engine = timed_open(&case, "chain_at over the standing base");
     let ckpt_seq = golden.checkpoint_seq();
     let header = checkpoint_chain_head(&ckpt_file(&case, ckpt_seq));
-    assert_eq!(header, golden.txn(CHECKPOINT_AFTER_OP).chain, "the header is the marker's at 37");
+    assert_eq!(
+        header,
+        golden.txn(CHECKPOINT_AFTER_OP).chain,
+        "the header is the marker's at the checkpoint's own boundary"
+    );
     chain_at_is(&engine, ckpt_seq, &header, "the base's own seq answers the header");
     chain_at_is(&engine, 0, &CHAIN_GENESIS, "genesis, over the standing base");
     for op in 1..=GOLDEN_OPS {

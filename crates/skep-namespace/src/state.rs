@@ -35,7 +35,8 @@ use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumble
 use crate::ghost::{ghost_floor, ghost_home_document};
 use crate::ns::{is_content_or_link_slot, namespace_of, nth_in, NsKey};
 use crate::record::{
-    Allocation, M3Rec, Principal, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
+    Allocation, M3Rec, Principal, PrincipalId, RangeAllocation, BOOTSTRAP_PRINCIPAL,
+    SYSTEM_PRINCIPAL,
 };
 
 /// The `published` an `Allocate` carries OUTSIDE the document tier — an
@@ -571,6 +572,22 @@ impl M3State {
                 if !s.principals.contains_key(prefix) {
                     s.principals.insert(prefix.clone(), *id);
                 }
+            }
+            M3Rec::AllocateRange(RangeAllocation { first, count }) => {
+                let key = namespace_of(first).expect(
+                    "≥ 2 components: AllocateRange's first-address door refuses a parentless address off the journal, and the totality domain asks it of an in-process producer",
+                );
+                let n = ordinal(first.tumbler()).clone();
+                // The same contiguity condition `Allocate` carries, on the
+                // range's FIRST ordinal; the frontier then advances by the
+                // count in one record. No publication write: a range is
+                // minted on a content chain only (the content tier).
+                debug_assert_eq!(
+                    n,
+                    s.effective_frontier(&key) + 1u32,
+                    "a range's first ordinal must equal its namespace's effective frontier + 1"
+                );
+                s.frontiers.insert(key, n + count - 1u32);
             }
         }
         s

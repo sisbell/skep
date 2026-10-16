@@ -19,6 +19,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `(anchor, generator)`: account, document, version, content and link
   addresses are minted as the next ordinal on the chain their anchor
   names, gap-free and monotone behind M1's structural-validity gate.
+  The content chain also mints a RANGE — `count` consecutive addresses
+  in one record, the addresses `count` single mints would have issued,
+  for a run of single-byte values the content store holds as one
+  stretch — and the next single mint issues the address past it.
   Elements come off two chains per document, content and link, and no
   third: an element address in any other subspace — subspace 3, where
   type names are spelled — is never minted, and the allocator refuses

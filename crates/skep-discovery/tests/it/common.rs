@@ -20,7 +20,7 @@ use skep_arrangement::{
     deposit_class_types, reading_surface, Deposit, HasM5, M5Rec, M5State, Run, Shot, ShotRun, VPos,
     VSpec,
 };
-use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
     findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
@@ -51,6 +51,7 @@ pub enum Record {
     Content(ContentWrite),
     M5(M5Rec),
     Links(LinkRec),
+    Stretch(ContentStretch),
 }
 
 impl WorldState for World {
@@ -63,6 +64,10 @@ impl WorldState for World {
             },
             Record::Content(x) => World {
                 content: self.content.apply_write(x),
+                ..self.clone()
+            },
+            Record::Stretch(x) => World {
+                content: self.content.apply_stretch(x),
                 ..self.clone()
             },
             Record::M5(x) => World {
@@ -119,6 +124,11 @@ impl From<M3Rec> for Record {
 impl From<ContentWrite> for Record {
     fn from(r: ContentWrite) -> Record {
         Record::Content(r)
+    }
+}
+impl From<ContentStretch> for Record {
+    fn from(r: ContentStretch) -> Record {
+        Record::Stretch(r)
     }
 }
 impl From<M5Rec> for Record {

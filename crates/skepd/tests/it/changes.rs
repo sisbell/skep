@@ -71,8 +71,8 @@ const SEEDED_ATS: [u64; 5] = [
     CLAIMED_HEAD + 2,
     CLAIMED_HEAD + 3,
     CLAIMED_HEAD + 4,
-    CLAIMED_HEAD + 9,
-    CLAIMED_HEAD + 12,
+    CLAIMED_HEAD + 7,
+    CLAIMED_HEAD + 10,
 ];
 
 /// Every committed position a claimed, seeded board's OWNER (principal 1)
@@ -88,8 +88,8 @@ fn all_ats() -> Vec<u64> {
 /// the home mint 1 (position 23) — MINT-FIRST (RES-26): the account's doc 1
 /// is born published, where bare writes are gated by design, so the flow
 /// writes a SECOND, private document — that mint 1 (position 24), a
-/// two-byte `insert` 5 — two mints, two content writes, one placement —
-/// (position 29), `make_link` 3 — mint, link, seat — (position 32). If an
+/// two-byte `insert` 3 — one range mint, one stretch, one placement —
+/// (position 27), `make_link` 3 — mint, link, seat — (position 30). If an
 /// ack below drifts, a store changed its transaction shape and wire.md
 /// §The change feed must be re-pinned.
 fn seed_flow(port: u16) -> String {
@@ -133,7 +133,9 @@ fn seed_flow(port: u16) -> String {
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"]}}"#
         ),
     );
-    assert_eq!(acked_at(&v), CLAIMED_HEAD + 9, "a 2-value insert is a 5-record commit");
+    // A 2-value per-byte insert is a 3-record commit: one range mint, one
+    // stretch, one placement.
+    assert_eq!(acked_at(&v), CLAIMED_HEAD + 7, "a 2-value insert is a 3-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -148,7 +150,7 @@ fn seed_flow(port: u16) -> String {
     );
     assert_eq!(
         acked_at(&v),
-        CLAIMED_HEAD + 12,
+        CLAIMED_HEAD + 10,
         "make_link is a 3-record commit (mint + link + seat)"
     );
     doc
@@ -319,7 +321,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let times: Vec<u64> =
         entries.iter().map(|e| e["time"].as_u64().expect("live entries carry times")).collect();
     assert!(times.windows(2).all(|w| w[0] <= w[1]), "times monotone in position: {times:?}");
-    assert_eq!(v["last"].as_u64(), Some(b + 12));
+    assert_eq!(v["last"].as_u64(), Some(b + 10));
     assert_eq!(v["more"], Value::Bool(false));
     // …and the whole page against wire.md's own 'feed' example, which is the
     // first thing a client author reads.
@@ -368,20 +370,20 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(true)));
     matches_doc(&v, "feed_page");
     let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 3));
-    assert_eq!(entry_ats(&v), vec![b + 4, b + 9]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 9), Some(true)));
-    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 9));
-    assert_eq!(entry_ats(&v), vec![b + 12]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 12), Some(false)));
+    assert_eq!(entry_ats(&v), vec![b + 4, b + 7]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 7), Some(true)));
+    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 7));
+    assert_eq!(entry_ats(&v), vec![b + 10]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 10), Some(false)));
 
     // `since` is a fence, not a position: an interior number pages cleanly.
     let v = changes_ok(port, owner, &format!("since={}", b + 5));
-    assert_eq!(entry_ats(&v), vec![b + 9, b + 12]);
+    assert_eq!(entry_ats(&v), vec![b + 7, b + 10]);
 
     // since ≥ head: empty, `last` echoes `since`.
-    let v = changes_ok(port, owner, &format!("since={}", b + 12));
+    let v = changes_ok(port, owner, &format!("since={}", b + 10));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 12), Some(false)));
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 10), Some(false)));
     let v = changes_ok(port, owner, "since=999");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!(v["last"].as_u64(), Some(999));
@@ -1485,7 +1487,9 @@ fn pre_feature_positions_answer_bare_entries() {
             ),
         ) {
             Response::AckAddr { at, .. } => {
-                assert_eq!(at.0, 8, "the insert commits at position 8; re-pin wire.md")
+                // Three records — one range mint, one stretch, one placement
+                // — above the mint's three, and no marker between.
+                assert_eq!(at.0, 6, "the insert commits at position 6; re-pin wire.md")
             }
             other => panic!("insert: {}", unexpected(&other)),
         }
@@ -1520,12 +1524,12 @@ fn pre_feature_positions_answer_bare_entries() {
     assert_eq!(st, 200);
     let health = json(&body);
     assert!(health["head_time"].is_null());
-    assert_eq!(health["log_position"].as_u64(), Some(8));
+    assert_eq!(health["log_position"].as_u64(), Some(6));
     // Paging over bare entries behaves like any other page.
     let v = changes_ok(port, None, "since=3&limit=1");
-    assert_eq!(entry_ats(&v), vec![8]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(8), Some(false)));
-    let v = changes_ok(port, None, "since=8");
+    assert_eq!(entry_ats(&v), vec![6]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(6), Some(false)));
+    let v = changes_ok(port, None, "since=6");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     sd.shutdown();
 }
@@ -1561,7 +1565,7 @@ fn reclaim_below_the_head(dir: &Path, head: u64) {
 /// granularity, and a segment has to rotate before anything below it can
 /// be reclaimed at all.
 fn rotate_a_segment(port: u16, session: &str, doc: &str) {
-    let bulk = "z".repeat(8192);
+    let bulk = "z".repeat(262_144);
     for _ in 0..6 {
         // Prepends, so every ordinal is in bounds whatever the doc holds.
         let v = op(

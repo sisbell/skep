@@ -1,5 +1,7 @@
-//! §C — the standalone transact-wrapped write (M2 contract 3's second form),
-//! `test-hooks` builds only.
+//! §C — the standalone transact-wrapped writes (M2 contract 3's second
+//! form), `test-hooks` builds only.
+
+use std::sync::Arc;
 
 use skep_address::{document_of, Address, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
@@ -7,7 +9,7 @@ use skep_namespace::M3State;
 
 use crate::error::ContentError;
 use crate::routing::debug_assert_content_address_routing;
-use crate::store::{stage_write, ContentWrite};
+use crate::store::{stage_stretch, stage_write, ContentStretch, ContentWrite};
 use crate::value::Val;
 use crate::HasContent;
 
@@ -78,5 +80,45 @@ where
         let rec = stage_write(stg.working().content(), addr.clone(), val)?;
         stg.push(rec.into());
         Ok(addr.tumbler().clone())
+    })
+}
+
+/// STANDALONE OP — the twin of [`write`] for a stretch: commits one
+/// [`ContentStretch`] of `bytes` at `first` alone, in one transaction under
+/// the same lock key, through [`stage_stretch`]'s door. ISOLATION/TEST USE
+/// ONLY, for `write`'s reason: a stretch committed alone has no placement
+/// (J0), so production stretches ride M5's composite. Compiled only under
+/// `test-hooks`, `#[doc(hidden)]`, `#[track_caller]`, and bounded as `write`
+/// is — `W::Record: From<ContentStretch>` in place of `From<ContentWrite>`.
+/// The per-byte fixtures of this crate's suite and skep-retrieval's seed
+/// through it, so they hold stretches as a board this build wrote does.
+///
+/// On success returns the first address's flat storage key and the committed
+/// `Seq`. `stage_stretch`'s refusal — `EmptyStretch`, `AlreadyStored`,
+/// `Overlap`, in its order — surfaces verbatim as
+/// `TxnError::Rejected(ContentError)`; every other `TxnError` is M2's own.
+///
+/// # Panics
+///
+/// As [`write`] does: the routing assertion in debug builds, and the
+/// trusted-address `expect` on an address with no document, each at the
+/// caller's line.
+#[doc(hidden)]
+#[track_caller]
+pub fn write_stretch<W>(
+    kernel: &Kernel<W>,
+    first: &Address,
+    bytes: Arc<[u8]>,
+) -> Result<(Tumbler, Seq), TxnError<ContentError>>
+where
+    W: WorldState + HasContent,
+    W::Record: From<ContentStretch>,
+{
+    debug_assert_content_address_routing(first, "write_stretch");
+    let home = document_of(first).expect("content address ⇒ zeros = 3 (trusted-address contract)");
+    kernel.transact(&[M3State::content_lock_key(&home)], |stg| {
+        let rec = stage_stretch(stg.working().content(), first.clone(), bytes.clone())?;
+        stg.push(rec.into());
+        Ok(first.tumbler().clone())
     })
 }

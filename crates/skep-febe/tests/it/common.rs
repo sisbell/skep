@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{deposit_class_types, HasM5, M5Rec, M5State, Run, VPos, VSpec};
-use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
     Base, BirthVersion, Deposit, Disposition, EditionClaim, Op, OpKind, OperationSurface,
@@ -45,6 +45,7 @@ pub enum Record {
     Content(ContentWrite),
     M5(M5Rec),
     Links(LinkRec),
+    Stretch(ContentStretch),
 }
 
 impl WorldState for World {
@@ -53,6 +54,7 @@ impl WorldState for World {
         match r {
             Record::M3(x) => World { m3: self.m3.apply_m3(x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
+            Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
             Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
             Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
         }
@@ -201,6 +203,11 @@ impl From<M3Rec> for Record {
 impl From<ContentWrite> for Record {
     fn from(r: ContentWrite) -> Record {
         Record::Content(r)
+    }
+}
+impl From<ContentStretch> for Record {
+    fn from(r: ContentStretch) -> Record {
+        Record::Stretch(r)
     }
 }
 impl From<M5Rec> for Record {
@@ -713,6 +720,7 @@ pub fn fragmented_doc(fx: &Fixture, run_count: u32) -> Address {
         .iter()
         .flat_map(|item| match item {
             DeliveryItem::Content(v) => v.as_bytes().to_vec(),
+            DeliveryItem::Bytes(run) => run.to_vec(),
             other => panic!("every position is arranged content: {other:?}"),
         })
         .collect();

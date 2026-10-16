@@ -19,7 +19,7 @@ use skep_febe::{
 };
 use skep_links::{enc, View};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
-use skep_retrieval::{RegionSpec, Spec};
+use skep_retrieval::{DeliveryItem, RegionSpec, Spec};
 
 /// A link-subspace element address under `doc` that no MAKELINK ever minted.
 fn ghost_link(doc: &skep_address::Address, ordinal: u32) -> skep_address::Address {
@@ -177,7 +177,12 @@ fn the_document_family_answers_end_to_end() {
         fx.user,
         Op::RetrieveV { specs: vec![Spec { doc: edition.clone(), span: vspan(1, 1, 3) }] },
     ));
-    assert_eq!(items.0.len(), 3);
+    // Three per-byte positions, one deposit: one byte-run item of three.
+    assert_eq!(items.0.len(), 1);
+    assert!(
+        matches!(&items.0[0], DeliveryItem::Bytes(run) if run.len() == 3),
+        "one run of three positions: {items:?}"
+    );
     assert!(as_of >= at, "a later read sees at least the coordinate the write committed at");
 
     let (bound, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: edition.clone() }));

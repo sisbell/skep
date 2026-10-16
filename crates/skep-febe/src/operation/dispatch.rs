@@ -11,7 +11,7 @@
 // is imported here by name.
 use skep_address::{ordinal, shift, validate, Nat};
 use skep_arrangement::{published_target, trunk_of, M5Rec};
-use skep_content::ContentWrite;
+use skep_content::{ContentStretch, ContentWrite};
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
     findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
@@ -35,7 +35,7 @@ use crate::world::FebeWorld;
 impl<W> OperationSurface<W>
 where
     W: FebeWorld,
-    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite> + From<ContentStretch>,
 {
     // ── write dispatch (§1/§3/§4) ──
 
@@ -469,7 +469,15 @@ where
                         // and only grows, and the document prefix is untouched.
                         let addr = validate(at.clone())
                             .expect("a shifted element ordinal stays a T4-valid address");
-                        items.push(IItem { at: addr, value: content.value_at(&at).cloned() });
+                        // M4's point read lends a piece — a value, or the one
+                        // byte at a position inside a stretch — and the item
+                        // owns a `Val`: `to_val` is the one allocation a
+                        // position inside a stretch costs here, beside the
+                        // address the item carries anyway.
+                        items.push(IItem {
+                            at: addr,
+                            value: content.value_at(&at).map(|piece| piece.to_val()),
+                        });
                         at = shift(&at, &one);
                         left -= &one;
                     }

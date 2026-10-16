@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use skep_address::validate;
 use skep_content::Val;
 use skep_links::{Caller, SlotArg};
 
@@ -102,19 +105,19 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
 /// and the next state-contributing store's variant would sit most
 /// naturally in the MIDDLE of this list, which is the edit that costs.
 ///
-/// Three payloads come from their own stores' public steps — M3's
-/// `mint_document`, M4's `stage_write`, M5's `stage_seat_link` — so each
-/// index is read off a record a store really built. M7 seals its
-/// `Deposit` variant, so no crate but M7 can construct a [`LinkRec`] —
-/// the fourth index is pinned by what the decoder REFUSES instead. A bare
-/// tag naming a variant gets past the tag and runs out of payload (an
-/// I/O end-of-file), where one naming none is refused as a value serde
-/// has no variant for. So index 3 NAMES a variant and index 4 names the
-/// end of the list, and with the first three pinned that says `Links` is
-/// at 3.
+/// Four payloads come from their own stores' public steps — M3's
+/// `mint_document`, M4's `stage_write` and `stage_stretch`, M5's
+/// `stage_seat_link` — so each index is read off a record a store really
+/// built. M7 seals its `Deposit` variant, so no crate but M7 can construct
+/// a [`LinkRec`] — its index is pinned by what the decoder REFUSES instead.
+/// A bare tag naming a variant gets past the tag and runs out of payload
+/// (an I/O end-of-file), where one naming none is refused as a value serde
+/// has no variant for. So index 3 NAMES a variant, index 4 is M4's second
+/// record, `ContentStretch`, read off a record, and index 5 names the end
+/// of the list; with the other four pinned that says `Links` is at 3.
 ///
-/// A variant APPENDED after `Links` is byte-safe for replay and still
-/// reddens the second refusal. That is the intent: the enum is expected
+/// A variant APPENDED after `ContentStretch` is byte-safe for replay and
+/// still reddens the last refusal. That is the intent: the enum is expected
 /// to grow, and an addition should be made to state where it landed here
 /// rather than to land anywhere in silence.
 #[test]
@@ -135,6 +138,12 @@ fn the_central_record_lifts_each_store_to_its_own_variant_index() {
         &addr(&[1, 0, 1, 0, 1, 0, 2, 1]),
     )
     .expect("an unseated link of the document stages a seat");
+    let stretch_rec = skep_content::stage_stretch(
+        &ContentStore::default(),
+        addr(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        Arc::from(&b"xy"[..]),
+    )
+    .expect("a fresh content address stages a stretch");
 
     let tag_of = |r: Record| {
         let bytes = bincode::serialize(&r).expect("a record serializes");
@@ -145,6 +154,7 @@ fn the_central_record_lifts_each_store_to_its_own_variant_index() {
     assert_eq!(tag_of(namespace_rec.into()), 0, "Namespace is variant 0");
     assert_eq!(tag_of(content_rec.into()), 1, "Content is variant 1");
     assert_eq!(tag_of(arrangement_rec.into()), 2, "Arrangement is variant 2");
+    assert_eq!(tag_of(stretch_rec.into()), 4, "ContentStretch is variant 4");
 
     let refuses = |tag: u32| -> bincode::ErrorKind {
         *bincode::deserialize::<Record>(&tag.to_le_bytes())
@@ -156,10 +166,103 @@ fn the_central_record_lifts_each_store_to_its_own_variant_index() {
         refuses(3)
     );
     assert!(
-        matches!(refuses(4), bincode::ErrorKind::Custom(_)),
-        "index 4 names a variant, so Links is not the last: {}",
+        matches!(refuses(4), bincode::ErrorKind::Io(_)),
+        "index 4 names no variant, so ContentStretch is not there: {}",
         refuses(4)
     );
+    assert!(
+        matches!(refuses(5), bincode::ErrorKind::Custom(_)),
+        "index 5 names a variant, so ContentStretch is not the last: {}",
+        refuses(5)
+    );
+}
+
+/// ONE NUMBER, TWO RECORDS, the fold-side fence: a range mint of N beside a
+/// stretch of N + 1 — a pair M5's one staging site never produces, so it is
+/// built here by hand through the stores' own public doors, the range off
+/// M3's `mint_content_range` and the stretch off M4's `stage_stretch` —
+/// fail-stops a debug build at `World::apply`'s `ContentStretch` arm, which
+/// holds the stretch to the chain's frontier M3's slice carries, live and on
+/// replay. The pair the staging site DOES produce, N beside N, folds and
+/// answers every byte (the test below).
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a content stretch reaches past its document's content frontier")]
+fn a_stretch_longer_than_its_range_mint_fail_stops_the_fold() {
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let (doc, _) = engine
+        .namespace()
+        .create_new_document(USER, &acct, Some(false))
+        .expect("an explicit-false mint is a draft");
+    let _ = engine.kernel().transact::<_, skep_content::ContentError>(
+        &[M3State::content_lock_key(&doc)],
+        |stg| {
+            let (first, range) = stg
+                .working()
+                .m3()
+                .mint_content_range(&doc, &Nat::from(3u32))
+                .expect("the draft is registered");
+            stg.push(range.into());
+            let stretch =
+                skep_content::stage_stretch(stg.working().content(), first, Arc::from(&b"abcd"[..]))?;
+            // The fold runs at the push: four bytes over a range of three.
+            stg.push(stretch.into());
+            Ok(())
+        },
+    );
+}
+
+/// The pair the staging site produces — a range of N and a stretch of N —
+/// folds through the engine's two arms into a world whose content answers
+/// every byte at the address the range minted, whose frontier stands at the
+/// range's reach, and whose checkpoint bytes carry the one entry.
+#[test]
+fn a_range_mint_and_its_stretch_fold_into_a_world_that_answers_every_byte() {
+    let engine = mem_engine();
+    let acct = delegated_account(&engine, USER);
+    let (doc, _) = engine
+        .namespace()
+        .create_new_document(USER, &acct, Some(false))
+        .expect("an explicit-false mint is a draft");
+    let (first, _) = engine
+        .kernel()
+        .transact::<_, skep_content::ContentError>(&[M3State::content_lock_key(&doc)], |stg| {
+            let (first, range) = stg
+                .working()
+                .m3()
+                .mint_content_range(&doc, &Nat::from(5u32))
+                .expect("the draft is registered");
+            stg.push(range.into());
+            let stretch = skep_content::stage_stretch(
+                stg.working().content(),
+                first.clone(),
+                Arc::from(&b"hello"[..]),
+            )?;
+            stg.push(stretch.into());
+            Ok(first)
+        })
+        .expect("a range and its stretch commit");
+    let snapshot = engine.kernel().snapshot();
+    let world = snapshot.world();
+    for (k, byte) in b"hello".iter().enumerate() {
+        let at = validate(shift(first.tumbler(), &Nat::from(k))).expect("T4-valid");
+        assert_eq!(
+            world.content().value_at(at.tumbler()).map(|piece| piece.as_bytes().to_vec()),
+            Some(vec![*byte])
+        );
+        assert!(world.m3().is_allocated(&at));
+    }
+    assert_eq!(
+        world.m3().next_content_address(&doc),
+        Some(validate(shift(first.tumbler(), &Nat::from(5u32))).expect("T4-valid")),
+        "the frontier stands at the range's reach"
+    );
+    assert_eq!(world.content().len(), 1, "one entry for the five addresses");
+    let decoded: World =
+        bincode::deserialize(&bincode::serialize(world).expect("a world serializes"))
+            .expect("this build's own bytes decode");
+    assert_eq!(decoded.content().len(), 1);
 }
 
 /// The stamp leads the encoding, and it is eight bytes of a value no

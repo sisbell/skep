@@ -4,7 +4,7 @@
 
 use skep_arrangement::VSpec;
 use skep_namespace::PrincipalId;
-use skep_retrieval::{Deletions, DeletionsError, Delivery, DeliveryItem, Query};
+use skep_retrieval::{Deletions, DeletionsError, Delivery, Query};
 
 use crate::common::*;
 
@@ -250,10 +250,7 @@ fn show_deletions_enumerates_the_address_named_and_does_not_float() {
     let q = Query::new(&s);
     // The premise: a floating operation delivers the value at the head's
     // fourth position under pdoc's name.
-    assert_eq!(
-        ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 4, 1))])),
-        Delivery(vec![DeliveryItem::Content(val(b"z"))])
-    );
+    assert_eq!(ok_of(q.retrieve_v(&[spec(pdoc(), vspan(1, 4, 1))])), Delivery(vec![text(b"z")]));
     // Named the head, vca1 is current there and deleted from doc1.
     assert_eq!(
         ok_of(q.show_deletions(&doc1(), &fork)),

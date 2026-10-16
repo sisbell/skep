@@ -5,7 +5,7 @@
 use crate::common::*;
 
 use serde::Serialize;
-use skep_address::{Level, Tumbler};
+use skep_address::{shift, validate, Level, Nat, Tumbler};
 use skep_kernel::Kernel;
 use skep_namespace::{
     ghost_position, head_document, system_account, HasM3, M3Rec, M3State, MintError, Namespace,
@@ -13,6 +13,12 @@ use skep_namespace::{
     SYSTEM_PRINCIPAL,
 };
 use tempfile::tempdir;
+
+/// `AllocateRange(RangeAllocation { first, count })` through the `test-hooks`
+/// constructor, for the fold's totality tests.
+fn alloc_range(first: &[u32], count: u32) -> M3Rec {
+    M3Rec::allocate_range(a(first), Nat::from(count))
+}
 
 /// Outside `apply_m3`'s totality domain (§Core data model): the count
 /// representation cannot hold a gap, so a jumped ordinal would make
@@ -35,6 +41,71 @@ fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
         .apply_m3(&alloc(&[1, 0, 1]))
         .apply_m3(&alloc(&[1, 0, 2]));
     let _ = s.apply_m3(&alloc(&[1, 0, 1]));
+}
+
+/// The range mint's commit half under the same guard: a range whose first
+/// ordinal jumps past the frontier would leave a gap no count can hold (B1),
+/// so the fold fail-stops where debug assertions are compiled in.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a range's first ordinal must equal its namespace's effective frontier + 1")]
+fn a_jumped_range_first_ordinal_fail_stops_the_fold() {
+    let _ = M3State::genesis().apply_m3(&alloc_range(&[1, 0, 1, 0, 1, 0, 1, 5], 3));
+}
+
+/// …and the other direction: a re-staged range would regress the frontier
+/// past addresses already minted and re-hand them.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "a range's first ordinal must equal its namespace's effective frontier + 1")]
+fn a_regressed_range_first_ordinal_fail_stops_the_fold() {
+    let s = M3State::genesis().apply_m3(&alloc_range(&[1, 0, 1, 0, 1, 0, 1, 1], 3));
+    let _ = s.apply_m3(&alloc_range(&[1, 0, 1, 0, 1, 0, 1, 2], 2));
+}
+
+/// RANGE ≡ SINGLES (B2: a mint is a pure function of the frontier): after
+/// `mint_content_range(home, N)` the chain's frontier stands at `first ⊕ (N −
+/// 1)`, the next `mint_content(home)` issues `first ⊕ N`, every address of
+/// the range reads allocated, and the N addresses are byte for byte the N
+/// that N successive single mints off the same state would have issued — so
+/// a stretch's k-th byte sits at the address the k-th per-byte value would
+/// have had. The range mint keeps `mint_content`'s gate too: an unregistered
+/// home is `HomeNotRegistered`.
+#[test]
+fn a_range_mint_issues_the_addresses_n_single_mints_would_and_moves_the_frontier_by_n() {
+    let (k, _acct, doc) = kernel_with_account_and_doc();
+    let base = k.snapshot().world().m3().clone();
+    let n = 5u32;
+    let (first, range) = base.mint_content_range(&doc, &Nat::from(n)).expect("doc is registered");
+    assert_eq!(first, a(&[1, 0, 1, 0, 1, 0, 1, 1]), "the chain's first slot");
+    let M3Rec::AllocateRange(allocation) = &range else { panic!("a range mint returns its record") };
+    assert_eq!((allocation.first(), allocation.count()), (&first, &Nat::from(n)));
+    let after_range = base.apply_m3(&range);
+    // The singles, folded one after another off the same base.
+    let mut after_singles = base.clone();
+    let mut singles = Vec::new();
+    for _ in 0..n {
+        let (addr, rec) = after_singles.mint_content(&doc).expect("doc is registered");
+        after_singles = after_singles.apply_m3(&rec);
+        singles.push(addr);
+    }
+    for (k, single) in singles.iter().enumerate() {
+        let in_range = validate(shift(first.tumbler(), &Nat::from(k))).expect("T4-valid");
+        assert_eq!(single, &in_range, "address {k} of the range is the {k}th single mint's");
+        assert!(after_range.is_allocated(&in_range), "address {k} of the range reads allocated");
+    }
+    assert_eq!(after_range, after_singles, "one range and N singles leave one slice");
+    let (next, _) = after_range.mint_content(&doc).expect("doc is registered");
+    assert_eq!(next, validate(shift(first.tumbler(), &Nat::from(n))).expect("T4-valid"));
+    assert_eq!(after_range.next_content_address(&doc), Some(next.clone()));
+    assert!(!after_range.is_allocated(&next), "the address past the range is not yet minted");
+    // A second range continues the chain where the first reached.
+    let (second, _) = after_range.mint_content_range(&doc, &Nat::from(2u32)).expect("registered");
+    assert_eq!(second, next);
+    assert_eq!(
+        base.mint_content_range(&a(&[1, 0, 1, 0, 9]), &Nat::from(1u32)).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
 }
 
 /// A `RegisterNode` naming an address BELOW the node tier: inside the fold's
@@ -162,6 +233,7 @@ enum RawM3Rec {
     Allocate { addr: Tumbler, published: bool },
     RegisterNode { addr: Tumbler },
     RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
+    AllocateRange { first: Tumbler, count: Nat },
 }
 
 #[test]
@@ -174,6 +246,8 @@ fn journaled_types_survive_serde_round_trips() {
         M3Rec::allocate(a(&[1, 0, 1, 0, 1]), true),
         M3Rec::register_node(a(&[1, 7])),
         M3Rec::register_principal(a(&[1, 0, 1]), ID1),
+        // The range mint: its first address and its count, no bit.
+        M3Rec::allocate_range(a(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(3u32)),
     ];
     for rec in &recs {
         let bytes = bincode::serialize(rec).expect("serialize M3Rec");
@@ -183,7 +257,8 @@ fn journaled_types_survive_serde_round_trips() {
 
     // The Address payloads journal as bare, flat tumblers — the data model's
     // form, not the in-memory type's. A raw record carrying Tumblers encodes
-    // byte-identically, variant for variant.
+    // byte-identically, variant for variant — the range mint at index 3,
+    // appended after the three.
     let raw_recs = [
         RawM3Rec::Allocate {
             addr: t(&[1, 0, 1]),
@@ -198,7 +273,13 @@ fn journaled_types_survive_serde_round_trips() {
             prefix: t(&[1, 0, 1]),
             id: ID1,
         },
+        RawM3Rec::AllocateRange {
+            first: t(&[1, 0, 1, 0, 1, 0, 1, 1]),
+            count: Nat::from(3u32),
+        },
     ];
+    let range_bytes = bincode::serialize(&recs[4]).expect("serialize the range mint");
+    assert_eq!(&range_bytes[..4], &3u32.to_le_bytes(), "AllocateRange is variant 3");
     for (rec, raw) in recs.iter().zip(&raw_recs) {
         assert_eq!(
             bincode::serialize(rec).expect("serialize M3Rec"),
@@ -298,6 +379,55 @@ fn a_journal_frame_re_enters_only_through_its_field_doors() {
         bincode::deserialize::<M3Rec>(&bare_node_frame).expect("a bare node registers"),
         M3Rec::register_node(a(&[7]))
     );
+
+    // A range mint's FIRST address re-enters through `Allocate`'s door and
+    // the element-tier check this kind alone needs: a parentless first is
+    // refused as `Allocate`'s is, and a T4-valid first at any level but the
+    // element's — a range is minted on a content chain only — is refused
+    // too; its COUNT is refused at zero, a range of nothing. The shapes just
+    // inside each door decode: an element first with a count of one.
+    for (what, first) in [
+        ("a parentless first", t(&[7])),
+        ("a node-tier first", t(&[1, 7])),
+        ("an account-tier first", t(&[1, 0, 1])),
+        ("a document-tier first", t(&[1, 0, 1, 0, 1])),
+    ] {
+        let frame = bincode::serialize(&RawM3Rec::AllocateRange {
+            first,
+            count: Nat::from(1u32),
+        })
+        .expect("serialize the raw shape");
+        assert!(
+            bincode::deserialize::<M3Rec>(&frame).is_err(),
+            "{what} decoded into a range mint"
+        );
+    }
+    let zero_count = bincode::serialize(&RawM3Rec::AllocateRange {
+        first: t(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        count: Nat::from(0u32),
+    })
+    .expect("serialize the raw shape");
+    assert!(
+        bincode::deserialize::<M3Rec>(&zero_count).is_err(),
+        "a range of nothing decoded into a record"
+    );
+    let one_element = bincode::serialize(&RawM3Rec::AllocateRange {
+        first: t(&[1, 0, 1, 0, 1, 0, 1, 1]),
+        count: Nat::from(1u32),
+    })
+    .expect("serialize the raw shape");
+    assert_eq!(
+        bincode::deserialize::<M3Rec>(&one_element).expect("an element first with a count of one decodes"),
+        M3Rec::allocate_range(a(&[1, 0, 1, 0, 1, 0, 1, 1]), Nat::from(1u32))
+    );
+    // A link-chain element passes the element-tier check — the door asks the
+    // tier, not the subspace, which M3's own mint never crosses.
+    let link_element = bincode::serialize(&RawM3Rec::AllocateRange {
+        first: t(&[1, 0, 1, 0, 1, 0, 2, 1]),
+        count: Nat::from(2u32),
+    })
+    .expect("serialize the raw shape");
+    assert!(bincode::deserialize::<M3Rec>(&link_element).is_ok());
 
     // A principal seats at an ACCOUNT prefix and nowhere else. `delegate` is
     // the sole producer of this record and its hoisted `NotAccountTier` gate

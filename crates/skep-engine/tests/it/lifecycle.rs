@@ -31,7 +31,9 @@ fn every_home(_: &Address) -> bool {
 #[test]
 fn a_cross_store_lifecycle_survives_a_journal_reopen() {
     let dir = tempdir().expect("tempdir");
-    let expected = vec![b"x".to_vec(), b"y".to_vec(), b"z".to_vec()];
+    // Three per-byte values, one insert: one stretch in M4, delivered as one
+    // byte-run item.
+    let expected = vec![b"xyz".to_vec()];
 
     let (doc, version_member, link, last_seq);
     {

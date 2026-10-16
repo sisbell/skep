@@ -64,7 +64,7 @@ use std::io::{self, Read};
 
 use skep_address::{document_of, Address, Level, Nat};
 use skep_arrangement::M5Rec;
-use skep_content::{ContentWrite, Val};
+use skep_content::{ContentStretch, ContentWrite, Val};
 use skep_febe::{FebeWorld, ISpan, Op, OperationSurface, Rejection, Request, Response, SessionId};
 use skep_links::LinkRec;
 use skep_namespace::M3Rec;
@@ -171,7 +171,7 @@ pub fn fetch<'a, W>(
 ) -> Result<Admitted<'a>, FetchRefusal>
 where
     W: FebeWorld,
-    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite> + From<ContentStretch>,
 {
     // 0 — the shape: an element position of some document, or nothing is
     // asked of any store.
@@ -211,7 +211,7 @@ where
 pub fn gate_admits<W>(febe: &OperationSurface<W>, session: SessionId, i: &Address) -> bool
 where
     W: FebeWorld,
-    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite> + From<ContentStretch>,
 {
     matches!(read_by_identity(febe, session, i), Ok(Some(_)))
 }
@@ -225,7 +225,7 @@ fn read_by_identity<W>(
 ) -> Result<Option<Val>, Rejection>
 where
     W: FebeWorld,
-    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
+    W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite> + From<ContentStretch>,
 {
     let request = Request {
         id: None,

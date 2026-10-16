@@ -501,7 +501,7 @@ fn below_the_floor_is_history_reclaimed_and_a_head_with_no_start_point_refuses_t
         // suite reclaims with).
         let owner = open_session(port, CLAIMANT_PRINCIPAL);
         let draft = acked_addr(&op(port, Some(&owner), &create_frame(CLAIMANT_ACCOUNT, None)));
-        let bulk = "z".repeat(8192);
+        let bulk = "z".repeat(262_144);
         for _ in 0..6 {
             expect_resp(
                 &op(port, Some(&owner), &format!(r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"1"}},"values":["{bulk}"]}}"#)),

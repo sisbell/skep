@@ -901,11 +901,13 @@ fn the_base_is_one_number_across_opens_and_equals_the_journals_own_count() {
 
 /// §3.1 — THE INDEX REBUILD's OPEN COST (`#[ignore]`, the gate's timing
 /// partition; REPORTED, with one interim regression bound): a world of N
-/// per-byte values and K cells — two tiers, N = 10⁶ with K = 10³ and N =
-/// 10⁷ with K = 10⁴ — seeded OVER THE WIRE: long-prose inserts of a
-/// hundred thousand bytes apiece (the request cap bounds one insert) and
-/// the cells a hundred per insert, then a checkpoint, so the reopen loads
-/// it and replays no tail. Not through the engine with the daemon
+/// content ENTRIES and K cells — two tiers, N = 10⁶ with K = 10³ and N =
+/// 10⁷ with K = 10⁴ — seeded OVER THE WIRE: the prose tier as hundred-byte
+/// ATOMS, a thousand per insert (a per-byte insert is ONE entry however
+/// long, a stretch the walk skips in one step, so a walk per entry is
+/// measured over atoms), and the cells a hundred per insert, then a
+/// checkpoint, so the reopen loads it and replays no tail; the tier sizes
+/// are the owner's. Not through the engine with the daemon
 /// stopped: every position so seeded is one the change feed holds no
 /// record of, and the daemon's next open reconstructs each from the
 /// journal — a whole-world replay apiece, a million-value checkpoint
@@ -941,27 +943,31 @@ fn index_rebuild_at_open_scales_with_the_world() {
         let seeding = Instant::now();
         {
             let sd = spawn(dir.path());
-            // The seeding under a byte bound no insert reaches: each 100,000
-            // byte insert is ~28 MB of journal, so the daemon's own bound
-            // (24 MiB) would have its checkpoint thread checkpoint the
-            // growing world after every insert and, in a debug build where
-            // one takes tens of seconds, the backstop run the next inline —
-            // the measure here is the open's cost over ONE checkpoint taken
-            // below, which is the fixture this test was written for.
+            // The seeding under a byte bound no insert reaches: each insert
+            // of a thousand hundred-byte atoms is ~400 KB of journal, so the
+            // daemon's own bound (24 MiB) would have its checkpoint thread
+            // checkpoint the growing world every sixty inserts and, in a
+            // debug build where one takes tens of seconds, the backstop run
+            // the next inline — the measure here is the open's cost over ONE
+            // checkpoint taken below, which is the fixture this test was
+            // written for.
             sd.daemon().set_checkpoint_bytes_bound(1 << 60);
             let port = sd.port();
             let bare = open_session(port, CLAIMANT_PRINCIPAL);
             put_whole(port, &bare, bytes);
-            // The prose: `n` per-byte values, a hundred thousand per insert
-            // into one draft.
+            // The prose: `n` hundred-byte atoms, a thousand per insert into
+            // one draft — one entry apiece, which is what the walk steps
+            // over; a per-byte insert would be one entry however long.
             let prose = owner_draft(port, &bare);
-            let piece = 100_000usize;
-            let text: String = (0..piece).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+            let per_insert = 1_000usize;
+            let atom: String = (0..100).map(|i| (b'a' + (i % 26) as u8) as char).collect();
             let mut placed = 0usize;
             let mut ordinal = 1u64;
             while placed < n {
-                let take = piece.min(n - placed);
-                expect_resp(&insert_text(port, &bare, &prose, ordinal, &text[..take]), "ack_addr");
+                let take = per_insert.min(n - placed);
+                let values: Vec<Value> = (0..take).map(|_| json!({"atom": atom})).collect();
+                let frame = json!({"op": "insert", "doc": prose, "at": {"subspace": "1", "ordinal": ordinal.to_string()}, "values": values}).to_string();
+                expect_resp(&op(port, Some(&bare), &frame), "ack_addr");
                 placed += take;
                 ordinal += take as u64;
             }

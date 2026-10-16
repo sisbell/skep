@@ -16,9 +16,11 @@ use skep_retrieval::{CompareReport, Deletions, Delivery};
 use crate::reject::Rejection;
 
 /// One position of the read by identity's answer ([`Response::IDelivery`];
-/// AUTH-6.38–6.40): the I-address asked and the value M4 holds at it, or
-/// `None` — a position the document never minted, or a link position, M4
-/// holding content-subspace elements alone. Its own shape and not M6's
+/// AUTH-6.38–6.40): the I-address asked and the value M4 holds at it — an
+/// entry's own, or the one byte at a position inside a stretch, owned as a
+/// one-byte `Val` — or `None` — a position the document never minted, or a
+/// link position, M4 holding content-subspace elements alone. Its own shape
+/// and not M6's
 /// [`DeliveryItem`]: that one carries no address and has no absent arm,
 /// its positions being the arrangement's, where these are the request's.
 /// A value, with the response's derives; `Debug` renders the value by its

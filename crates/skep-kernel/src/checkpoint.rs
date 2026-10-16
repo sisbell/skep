@@ -48,9 +48,15 @@ use crate::{Seam, Seq, Step};
 // shot terms): a format event by the marker doc's own definition, landed
 // under the same stamps by the owner's no-stamp ruling — no served board
 // exists, dev boards regenerate, and the golden fixture was regenerated once
-// (`tests/golden/`). A checkpoint under another stamp is refused at `load`
-// naming the stamp found; one written under this stamp before that day
-// fails at the body's decode or at the chain, as corruption.
+// (`tests/golden/`). NOT bumped on 2026-10-15 either, when M4's slice gained
+// the stretch entry (each content entry a tagged value or stretch) and the
+// engine's record its fifth variant: the same ruling renewed, the golden
+// regenerated a second time under the unchanged stamps, the pre-stretch
+// golden kept beside it (`tests/golden-prestretch/`). A checkpoint under
+// another stamp is refused at `load` naming the stamp found; one written
+// under this stamp before either day fails at the body's decode — a skipped
+// base whose account `refused_at_decode` tells from damage — or at the
+// chain, as corruption.
 const MAGIC: [u8; 4] = *b"SKC4";
 /// The checkpoint's FORMAT stamp as a caller above the kernel names it — the
 /// daemon's version line, which says at every open which formats the build
@@ -215,8 +221,42 @@ pub(crate) struct Loaded<W> {
 /// skipped the same way — the caller falls to the next-older retained base —
 /// so this carries no taxonomy to branch on, only the account that says which
 /// REMEDY, at the one point where that matters: the whole fallback chain
-/// exhausted, with nothing else left to tell an operator.
+/// exhausted, with nothing else left to tell an operator. One kind IS told
+/// apart there, by the type the account travels as rather than by a
+/// variant: the serializer's refusal of a body under this build's own stamp
+/// ([`refused_at_decode`]).
 pub(crate) type LoadRefused = Cause;
+
+/// Whether `refused` — a [`LoadRefused`], named on its file or not — is the
+/// serializer's refusal of a checkpoint body under THIS build's own stamp: the
+/// header's stamp was this build's, the file's length agreed with the header,
+/// the body passed its checksum and its hash, and the bytes still did not
+/// decode as `W`. [`CheckpointMeta::load`] lets that one refusal travel as
+/// the serializer's own error, unboxed into the account, so it is the one
+/// kind a reader can tell from `at_file`'s I/O failures, the header's
+/// refusals ([`ForeignStamp`], a seq or a length that disagrees) and the
+/// damage accounts (a checksum, a hash, a short file), none of which is the
+/// serializer's; a base that decoded and could not seed travels as
+/// `RebuildError`. Read along the `source` chain, since a named refusal
+/// ([`RefusedBase`]) carries the account beneath its name.
+///
+/// What it means for the exhausted fallback chain, where
+/// [`crate::OpenError::BadCheckpoint`] reads it: a newest base this build's
+/// stamp decodes nothing of was written by a build that wrote the same stamp
+/// over another body layout — a development board from before a layout
+/// change landed under the owner's no-stamp ruling — whose one remedy is
+/// the ruled one, `NO_MIGRATION_REMEDY`, never a restore of media that was
+/// never damaged.
+pub(crate) fn refused_at_decode(refused: &(dyn std::error::Error + 'static)) -> bool {
+    let mut layer = Some(refused);
+    while let Some(account) = layer {
+        if account.is::<bincode::ErrorKind>() {
+            return true;
+        }
+        layer = account.source();
+    }
+    false
+}
 
 /// A checkpoint's refusal NAMED ON ITS FILE — `checkpoint.{seq}: {refusal}`,
 /// the shape every I/O failure on a journal file already has ([`at_file`]) —

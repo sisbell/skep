@@ -91,15 +91,21 @@ pub fn compare_content(
         Withheld(String),
     }
     let mut raw: Vec<RawSegment> = Vec::new();
+    // Consecutive text glued, whichever item carried it: a per-value item or
+    // a byte-run item — a maximal run of single-byte positions read out of
+    // one stored stretch — spell the same text, so a recording made against
+    // per-value deliveries compares against either.
+    let glue = |raw: &mut Vec<RawSegment>, bytes: &[u8]| {
+        let s = String::from_utf8_lossy(bytes).into_owned();
+        match raw.last_mut() {
+            Some(RawSegment::Text(t)) => t.push_str(&s),
+            _ => raw.push(RawSegment::Text(s)),
+        }
+    };
     for it in actual {
         match it {
-            DeliveryItem::Content(v) => {
-                let s = String::from_utf8_lossy(v.as_bytes()).into_owned();
-                match raw.last_mut() {
-                    Some(RawSegment::Text(t)) => t.push_str(&s),
-                    _ => raw.push(RawSegment::Text(s)),
-                }
-            }
+            DeliveryItem::Content(v) => glue(&mut raw, v.as_bytes()),
+            DeliveryItem::Bytes(run) => glue(&mut raw, run),
             DeliveryItem::Ref(a) => raw.push(RawSegment::Addr(a.clone())),
             DeliveryItem::Withheld { origin, width } => {
                 raw.push(RawSegment::Withheld(format!("«withheld {origin} w{width}»")))
@@ -401,8 +407,16 @@ mod tests {
     use crate::alpha::FindingKind;
     use crate::tum::{addr, tumbler};
 
-    /// One delivered content item per byte, as RetrieveV delivers text.
+    /// Text as RETRIEVEV delivers it from a stretch: one byte-run item for
+    /// the whole string, which the comparator normalizes against the
+    /// recording's per-byte text.
     fn text(s: &str) -> Vec<DeliveryItem> {
+        vec![DeliveryItem::Bytes(s.as_bytes().into())]
+    }
+
+    /// Text as a board written before stretches delivers it, and as a
+    /// recording spells it: one content item per byte.
+    fn per_byte(s: &str) -> Vec<DeliveryItem> {
         s.bytes().map(|b| DeliveryItem::Content(Val::new(vec![b]))).collect()
     }
 
@@ -411,8 +425,9 @@ mod tests {
     }
 
     /// Content agrees only byte for byte once consecutive text is glued on
-    /// both sides: case, length and a withheld run all disagree — a
-    /// withheld run is its own segment, never glued and never dropped.
+    /// both sides — a byte-run item, a per-byte item and a mix of the two
+    /// alike: case, length and a withheld run all disagree — a withheld run
+    /// is its own segment, never glued and never dropped.
     #[test]
     fn content_agrees_only_byte_for_byte_once_text_is_glued() {
         let mut alpha = Alpha::new();
@@ -420,8 +435,11 @@ mod tests {
             compare_content(&strings(want), got, &mut alpha)
         };
         assert_eq!(cmp(&["AB", "CD"], &text("ABCD")), Ok(()));
+        assert_eq!(cmp(&["AB", "CD"], &per_byte("ABCD")), Ok(()));
+        assert_eq!(cmp(&["ABCD"], &[text("AB"), per_byte("C"), text("D")].concat()), Ok(()));
         let crossed = Disagreement { expected: r#"["ABCD"]"#.into(), actual: r#"["ABXD"]"#.into() };
-        assert_eq!(cmp(&["ABCD"], &text("ABXD")), Err(crossed));
+        assert_eq!(cmp(&["ABCD"], &text("ABXD")), Err(crossed.clone()));
+        assert_eq!(cmp(&["ABCD"], &per_byte("ABXD")), Err(crossed));
         assert!(cmp(&["ab"], &text("AB")).is_err());
         assert!(cmp(&["ABCD"], &text("ABC")).is_err());
         let origin = addr(&[1, 0, 1, 0, 3]).expect("valid");

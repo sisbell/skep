@@ -84,8 +84,9 @@ enum ParseFail {
 /// consumes exactly the run (the codec's envelope check), so a resident,
 /// well-formed def is exactly what was encoded.
 fn parse_def(content: &ContentStore, start: &Address) -> Result<SignedTerm, ParseFail> {
-    let val = content.value_at(start.tumbler()).ok_or(ParseFail::NotResident)?;
-    codec::decode(val.as_bytes()).map_err(|_| ParseFail::Malformed)
+    // An atom: the point read finds its own entry and lends it whole.
+    let piece = content.value_at(start.tumbler()).ok_or(ParseFail::NotResident)?;
+    codec::decode(piece.as_bytes()).map_err(|_| ParseFail::Malformed)
 }
 
 /// The direct referents of `t` — the DISTINCT addresses its `Ref` nodes name

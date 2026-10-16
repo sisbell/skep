@@ -224,9 +224,11 @@ enum Named {
     UnknownSchema,
 }
 
-/// The one classification, read for what the door acts on.
-fn names_the_kind(value: &Val) -> Option<Named> {
-    match cell::classify(value.as_bytes()) {
+/// The one classification, read for what the door acts on — over the BYTES,
+/// which is what a request's `Val` and M4's borrowed piece both lend; a
+/// one-byte piece inside a stretch names no kind.
+fn names_the_kind(bytes: &[u8]) -> Option<Named> {
+    match cell::classify(bytes) {
         cell::Class::Picture(Ok(c)) => Some(Named::Cell(c)),
         cell::Class::Blind(Ok(_)) => Some(Named::Blind),
         cell::Class::Picture(Err(_)) | cell::Class::Blind(Err(_)) => Some(Named::UnknownSchema),
@@ -351,7 +353,7 @@ fn insert_arm<W: FebeWorld>(
     if !Caller::Principal(principal).passes_ownership_gate(m3, doc) {
         return None;
     }
-    let mut named = values.iter().filter_map(names_the_kind).peekable();
+    let mut named = values.iter().filter_map(|v| names_the_kind(v.as_bytes())).peekable();
     named.peek()?;
     // Arm 1 — the TARGET's refusal first, whatever the value's form and
     // whatever the declaration: M5's own publication read, projected to the
@@ -369,10 +371,11 @@ fn insert_arm<W: FebeWorld>(
 /// door, in the store's own words, and the door reads no value the caller
 /// may not read. The draft-native runs are walked as the commit re-mints
 /// them ([`Shot::reinserted_runs`], M5's own family rule, in the commit's
-/// order), each position's value read by `value_at`, the accessor the
-/// re-insert reads with; EVERY value naming the kind is judged (M-I1 (a)) —
-/// the owner test once, at the first, then each value's own verdict in
-/// placement order, the first refusal answering.
+/// order), each position read by M4's point read — a one-byte piece inside
+/// a stretch names no kind and is passed over by the classification itself;
+/// EVERY value naming the kind is judged (M-I1 (a)) — the owner test once,
+/// at the first, then each value's own verdict in placement order, the first
+/// refusal answering. Per address still, bounded by the re-insert's cap.
 fn publish_arm<W: FebeWorld>(
     world: &W,
     doc: &Address,
@@ -422,7 +425,9 @@ fn publish_arm<W: FebeWorld>(
         for a in run.addrs() {
             // An address holding no value is the store's `dangling_source`;
             // there is nothing to read.
-            let Some(named) = content.value_at(a.tumbler()).and_then(names_the_kind) else {
+            let Some(named) =
+                content.value_at(a.tumbler()).and_then(|piece| names_the_kind(piece.as_bytes()))
+            else {
                 continue;
             };
             // Arm 2 — the owner test, ω exact, the same predicate as `doc`'s.

@@ -692,11 +692,15 @@ fn j_regions(rs: &[RegionSpec]) -> Value {
 /// place its rule lives: consecutive single-byte values accumulate into a
 /// run rendered as ONE item (UTF-8 judged on the whole run, else
 /// `{"hex"}`); a composite value flushes the run and renders as its own
-/// atom item, never coalesced with a neighbor. Maximal runs are what make
-/// the rendering injective — two distinct position-value sequences never
-/// render alike — and what re-canonicalize the parse-side normalizations
-/// (element boundaries between adjacent per-byte forms, one-byte atoms),
-/// so `parse(marshal_request(r))` reproduces `r`.
+/// atom item, never coalesced with a neighbor; a delivery's byte-run item,
+/// M6's `Bytes` — a maximal run of single-byte positions read out of one
+/// stored stretch — feeds the pending run byte by byte, so the wire item is
+/// the same whether the store held the run as one entry or as one value per
+/// byte. Maximal runs are what make the rendering injective — two distinct
+/// position-value sequences never render alike — and what re-canonicalize
+/// the parse-side normalizations (element boundaries between adjacent
+/// per-byte forms, one-byte atoms), so `parse(marshal_request(r))`
+/// reproduces `r`.
 ///
 /// `utf8` is the ONLY thing the two renderings differ by: a request
 /// `values` element is the bare string, a delivery item is
@@ -722,6 +726,14 @@ impl ValueItems {
             self.flush();
             self.out.push(j_atom(v));
         }
+    }
+
+    /// A run of single-byte positions, as one delivery item: every byte
+    /// joins the pending run — the run a one-byte value joins — so the item
+    /// rendered is the one the per-value delivery rendered, and a run that
+    /// meets a one-byte value at its edge coalesces with it.
+    fn bytes(&mut self, run: &[u8]) {
+        self.byte_run.extend_from_slice(run);
     }
 
     /// A rendered item that is not a content value (a delivery `{"ref"}`):
@@ -818,6 +830,7 @@ fn j_items(items: &[DeliveryItem]) -> Value {
     for it in items {
         match it {
             DeliveryItem::Content(v) => out.value(v),
+            DeliveryItem::Bytes(run) => out.bytes(run),
             DeliveryItem::Ref(a) => out.item(obj(vec![("ref", j_addr(a))])),
             // The withheld arm (lane 3.3, §4; PUB-6.41): one item per masked
             // RUN at its own position, `{"withheld": {"origin", "width"}}` —

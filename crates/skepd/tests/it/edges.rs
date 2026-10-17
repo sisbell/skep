@@ -1,15 +1,15 @@
 //! THE EDGE PAIRS (`operations.md` §1.1 m12; §4 rows 27 and 33; §6's three
 //! rows): the five permit pools — the reconstruction, the class scan, the
-//! fetch, the upload and the write — the live-stream budget, the challenge
-//! store and the workers' `accept` each say their condition at its EDGES,
-//! once per episode, on the operator stream: a `failure:` line when a
-//! request first meets the bound, a `landing:` line at the first act the
-//! bound admits once it has stood clear for `EDGE_HOLD_DOWN`; nothing per
-//! request; nothing on a line but the condition — no count (the upload
-//! pool's landing alone carries the episode's refusals), no path, query,
-//! principal, peer or reader. The refusals themselves — the five `503
-//! …_busy` bodies, the budget's clean close, `/challenge`'s answer — are
-//! the standing suites' and unchanged.
+//! fetch, the upload and the write — the live-stream budget, the live
+//! streams' threads, the challenge store and the workers' `accept` each say
+//! their condition at its EDGES, once per episode, on the operator stream: a
+//! `failure:` line when a request first meets the bound, a `landing:` line
+//! at the first act the bound admits once it has stood clear for
+//! `EDGE_HOLD_DOWN`; nothing per request; nothing on a line but the
+//! condition — no count (the upload pool's landing alone carries the
+//! episode's refusals), no path, query, principal, peer or reader. The
+//! refusals themselves — the five `503 …_busy` bodies, the budget's clean
+//! close, `/challenge`'s answer — are the standing suites' and unchanged.
 //!
 //! Judged through the daemon's own record of its lines (`lines_said`) and
 //! the media gate's (`media_lines_said`), since no suite captures the
@@ -24,6 +24,9 @@
 //!   driver, [`the_pools_pair_is_said_once_per_episode`].
 //! * P2 — the budget's pair at the 65th stream and the first admission a
 //!   hold-down later.
+//! * P2′ — the live streams' thread pair, a stream the budget admits and the
+//!   OS refuses a thread, through the seam that refuses it
+//!   (`refuse_the_next_stream_threads`) in place of exhausting threads.
 //! * P3 — the challenge pair at a live eviction past the cap and a clean
 //!   mint a hold-down later (the store's own claims are
 //!   `auth/session/tests.rs`'s).
@@ -335,9 +338,9 @@ fn the_fetch_pools_pair_is_said_once_per_episode_through_the_gates_door() {
 
 /// P1 — THE UPLOAD POOL (`503 upload_busy`; a bodiless creation, which holds
 /// its permit for the milliseconds its record takes): its pair on the MEDIA
-/// GATE's record, the word `upload` — and its landing the one line of the
-/// eight pairs that carries a count, the episode's refusals (the ruling's
-/// "may carry", taken).
+/// GATE's record, the word `upload` — and its landing the one pool line
+/// that carries a count, the episode's refusals (the ruling's "may carry",
+/// taken).
 #[test]
 fn the_upload_pools_pair_is_said_once_per_episode_and_its_landing_counts_the_refusals() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -461,6 +464,67 @@ fn the_budgets_pair_is_said_at_the_65th_stream_and_at_the_first_admission_a_hold
     );
     assert_classed(&lines());
     assert_no_digit(&lines());
+    sd.shutdown();
+}
+
+/// P2′ — THE LIVE STREAMS' THREAD PAIR (m12's form): the seam refuses the
+/// next two streams the budget admits their thread — each closed before its
+/// head, as a refused spawn closes it — → exactly ONE `failure: live stream:
+/// the OS refused its thread ({e}); …`, the error's own text as the cause,
+/// whole; `/health` serves meanwhile; a stream served inside the hold-down →
+/// no landing; the clock past the hold-down, the next stream served →
+/// `landing: live stream: the OS gives the streams their threads again`,
+/// once; a stream after it → no second landing. The budget's own pair says
+/// nothing throughout: the budget has room.
+#[test]
+fn the_stream_threads_pair_is_said_once_per_episode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let lines = || said(&sd, "live stream:");
+    let text = "Resource temporarily unavailable";
+    let failure = format!(
+        "failure: live stream: the OS refused its thread ({text}); the stream was closed before \
+         its head, and so is every new one while the OS refuses threads; reads, writes and \
+         /health serve; the act: room under the host's thread limit (a container's pids limit, \
+         the user's process limit)"
+    );
+    let landing = "landing: live stream: the OS gives the streams their threads again".to_string();
+
+    sd.daemon().refuse_the_next_stream_threads(2, text);
+    for i in 0..2 {
+        let (_refused, head) = raw_events(port);
+        assert!(
+            head.is_empty(),
+            "stream {i} is closed before its head: {:?}",
+            String::from_utf8_lossy(&head)
+        );
+    }
+    assert_eq!(lines(), [failure.clone()], "FINDING: one line for the episode, the OS's cause");
+    let (st, _) = get(port, "/health");
+    assert_eq!(st, 200, "the daemon serves while the streams are refused");
+
+    let (_inside, head) = raw_events(port);
+    assert!(head.starts_with(b"HTTP/1.1 200 "), "the seam spent: a stream is served");
+    assert_eq!(lines(), [failure.clone()], "inside the hold-down: no landing");
+
+    sd.daemon().advance_edge_clock_ms(PAST_THE_HOLD_DOWN_MS);
+    let (_past, head) = raw_events(port);
+    assert!(head.starts_with(b"HTTP/1.1 200 "), "a stream past the hold-down is served");
+    // The landing is said on the worker beside the spawn, and the head on
+    // the stream's own thread, so the head may come first.
+    wait_until("the landing", || lines().len() == 2);
+    assert_eq!(lines(), [failure.clone(), landing.clone()], "FINDING (m12): the second edge");
+    let (_after, head) = raw_events(port);
+    assert!(head.starts_with(b"HTTP/1.1 200 "));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(lines(), [failure, landing], "FINDING (m12): no second landing");
+    assert_eq!(
+        said(&sd, "live-stream budget"),
+        Vec::<String>::new(),
+        "the budget's pair is not the thread's"
+    );
+    assert_classed(&lines());
     sd.shutdown();
 }
 
@@ -673,6 +737,11 @@ fn no_edge_pair_takes_the_unclassed_door_and_the_write_pool_has_one_door() {
     let budget = section(&listen, "    fn admit(&self, daemon: Arc<Daemon>", "    fn join_all(");
     unclassed("the budget's pair", &budget);
     assert_eq!(budget.matches("daemon.say(edge.class(), BudgetEdgeLine(edge))").count(), 2);
+    assert_eq!(
+        budget.matches("sayer.say(edge.class(), StreamThreadLine::").count(),
+        2,
+        "the live streams' thread pair, each edge under its own class word"
+    );
     let op = read("src/server/op.rs");
     let door =
         section(&op, "    fn take_write_permit(", "    /// The locked state one write sequence");

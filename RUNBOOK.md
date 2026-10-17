@@ -112,9 +112,9 @@ apart.
 2. **Make room first.** Grow the volume, or free space that
    something other than the board holds. Grown room ends the
    floor's refusals at the next upload, which reads the free space
-   each time; the default per-account limit, one part in eight of
-   the volume's capacity, is read once at start (Start, step 3,
-   item 9) and follows a grown volume only at the next start.
+   each time; the default per-account limit, one part in 8 of the
+   volume's capacity, is read once at start (Start, step 3, item 9)
+   and follows a grown volume only at the next start.
    Where the inodes are spent (step 1), only files removed make
    room: grow the volume — an ext4 volume's inodes grow with it —
    or remove files the board does not hold; a large file freed
@@ -232,9 +232,9 @@ apart.
    plus 128 MiB, read again as each checkpoint lands. No deposit
    may take the volume below it, so deposits alone never take the
    room the journal needs to reach its next checkpoint. It holds
-   back nothing else that fills the volume. The open names the
-   floor in force (Start, step 3) but not the free space; each
-   checkpoint's landing line names both:
+   back nothing else that fills the volume. The open names both
+   (Start, step 3, item 9), and so does each checkpoint's landing
+   line:
 
    ```
    landing: checkpoint at position {position} landed ({bytes} bytes) in {ms} ms; {reclaimed}; the cadence's byte bound {bytes}, the media floor in force {floor}, the volume's free space {free}; …
@@ -261,11 +261,38 @@ apart.
    ```
    the write path is halted since position {position} (feed-attest.log)
    the kernel is poisoned
+   a history read found the journal unreadable
    {file} stopped since position {position}
    deposits refused at the floor (free space {free} below the floor in force {floor})
    ```
 
+   The standing line is the checkpoint thread's. Where the stream
+   holds `checkpoint thread ended: …` or `checkpoint thread: the OS
+   refused it …`, no standing line comes until a restart, and its
+   absence says nothing of the board's health; restart soon, since
+   each second crossing's checkpoint then runs on a writer and holds
+   every write for its length.
+
 ## 2. Restore
+
+**A history read can find the damage first**, while the board
+serves. A read of an earlier position (`POST /op-at`, `GET
+/chain?at`, `GET /dump?at`) reads the journal from a base to its
+end, where the write path never reads it back; it is answered
+`500 history_corrupt` or `500 history_io`, and the daemon says so
+once, and in every hourly `standing:` line after it (`a history read
+found the journal unreadable`):
+
+```
+failure: history: journal corrupt at rest; position {position} names the damage: {account}; reads at the head and every write serve on, since neither reads the journal back, but the next start's open reads it all and may refuse on the same file: copy the data directory, run skepd inventory over the copy (its open reads the journal as a start does), and restore what it refuses from a copy before the board restarts; check the volume and its device
+```
+
+An I/O failure reads `history: history read I/O failure: {file}:
+{act}: {error}; …` instead. Take the steps before a restart, not
+after it: the next start's open reads the same journal and may
+refuse at the damage. Copy the data directory, run the inventory
+over the copy (Back up, step 2), and have the act its account names
+ready before you stop the daemon.
 
 **Read the refusal before you restore.** An open the journal's own
 data refuses says so on one line, `skepd: engine open: durable
@@ -516,7 +543,9 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      `detail` `uploads_closed`, and everything else serves.
    - `--origin <ORIGIN>` (`SKEPD_ORIGIN`, comma-separated): an
      origin the board answers for, repeatable. Once the board is
-     claimed, a signed session is accepted from these alone.
+     claimed, a signed session is accepted from these alone. Any
+     `--origin` replaces the variable's list; repeated, the flags add
+     to one another.
    - `--blocked-prefixes <FILE>` (`SKEPD_BLOCKED_PREFIXES`): the
      blocked-prefix list. It is read at every start, where a file
      that cannot be read, or is not a list, stops the start; and
@@ -529,11 +558,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      variable. A served board runs without it.
 
    `skepd --help` prints the whole text. A command line the daemon
-   cannot read is refused with one line and that text, exit 2; for
-   instance:
+   cannot read is refused with one line, exit 2 — and, where stderr
+   is a terminal, the whole text after it. Anywhere else, a service
+   manager's log among them, the one line ends by naming `--help`:
 
    ```
-   skepd: --data-dir (or SKEPD_DATA_DIR) is required
+   skepd: --data-dir (or SKEPD_DATA_DIR) is required; skepd --help prints the usage
    ```
 
 3. **Read the open's report** on stderr. After the prefix and the
@@ -560,12 +590,16 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       skepd: the data directory {path} is mode {mode}: other users of this machine can read the board; chmod 700 {path} and start again
       ```
 
-   3. The build's version and the formats this build reads come
-      first of the open's own lines:
+   3. The build's version and commit, as `skepd --version` names
+      them, and the formats this build reads come first of the
+      open's own lines:
 
       ```
-      open: version {version}; this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001
+      open: version {version} ({commit}); this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001
       ```
+
+      `{commit}` tells two builds of one version apart; a build
+      that named none reads `unknown`.
 
    4. The directory, before anything is read from it:
       `open: data-dir {path}`.
@@ -656,15 +690,21 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       The inventory reports the bytes cut as `journal.tail_cut`
       (Stop, step 2).
 
-   9. The media limits and the floor in force:
+   9. The media limits and the floor in force, then the volume's
+      free space beside it:
 
       ```
       open: media limits: no record installed — the daemon's default stands: per-account {bytes} (one part in 8 of the volume's capacity of {bytes} bytes, never below 268435456 bytes), venue total none, lease interval 604800000 ms, per-file cap 67108864; the floor in force {floor} bytes of the volume's free space (never below the constant 268435456 bytes; twice the newest checkpoint's size plus one maximal segment of 134217728 bytes above it, re-read as each checkpoint lands)
+      open: the volume's free space at start: {free} bytes
       ```
 
       The capacity it names is read once, here: a volume grown or
       shrunk while the daemon runs moves the default per-account
-      limit only at the next start.
+      limit only at the next start. Where the free space stands
+      below the floor, the second line goes on: `…, below the floor
+      in force {floor}: every deposit is refused until room stands;
+      every other write serves` — make room (The full volume,
+      step 2).
 
    10. The upload setting, `{source}` being `the default`, the flag
        as typed, or the variable with its value:
@@ -875,8 +915,15 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 1. **Send the process a signal.** There is no stop command, and the
    daemon handles no signal, so a signal that ends a process,
    SIGTERM from `kill <pid>` or SIGINT from Ctrl-C at a terminal,
-   ends it at once. The daemon says nothing as it stops. The next
-   start recovers, and every write the daemon acknowledged is kept.
+   ends it at once. So does SIGHUP, which many daemons read as a
+   reload: this one reloads nothing on a signal — a changed setting
+   takes a restart, and the blocked-prefix list, the one file it
+   re-reads while it runs, is re-read when it is replaced. The
+   daemon says nothing as it stops. The next start recovers, and
+   every write the daemon acknowledged is kept. Under 9.2's unit,
+   systemd counts a death by SIGHUP, SIGINT or SIGTERM a clean stop
+   and does not start the daemon again: `systemctl --user start
+   skepd`.
 
 2. **Know what a stop leaves**, by what was in flight, and what the
    next open does with it:
@@ -978,10 +1025,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    same directory. An upgrade is a new binary over the same files,
    and their format stamps decide whether it opens; the change
    feed's files and the blob store's two logs carry none (step 5).
-   Its first line names the build and the formats this build reads:
+   Its first line names the build, by version and commit, and the
+   formats this build reads, so the stream says which binary opened
+   the board, and the commit tells it from the one before:
 
    ```
-   open: version {version}; this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001
+   open: version {version} ({commit}); this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001
    ```
 
 3. **A journal of another format is refused by name**, newer or
@@ -1187,11 +1236,15 @@ confirm on the first one. What every unit here shares:
   under a directory at 700. The daemon sets those modes itself
   (Start, step 2); the umask is a second guard beside them.
 - **SIGTERM to stop.** The daemon handles no signal, so SIGTERM
-  ends it at once, and the next start recovers (Stop, step 1).
+  ends it at once, and the next start recovers (Stop, step 1);
+  SIGHUP and SIGINT end it the same way, and 9.2's unit restarts
+  none of the three.
 - **A restart on failure, never after a stop.** An exit other than
   0, or a crash, starts the daemon again; a stop through the
   service manager does not. A start the daemon refuses is retried
-  at the unit's pace, its refusal written to the log each time.
+  at the unit's pace, its refusal written to the log each time —
+  save a command line it cannot read (exit 2), which 9.2's unit
+  leaves failed and 9.1's agent retries.
 - **Room for descriptors.** The unit sets the open-file limit to
   1,024; the daemon sizes its 64 live event streams against a
   limit of 256.
@@ -1255,6 +1308,12 @@ stdout line to `~/Library/Logs/skepd.out.log`. The `Umask` integer's
 encoding is unverified: after the first start, `ls -l` the directory
 and confirm `-rw-------` and `drwx------`.
 
+launchd has no key that spares one exit code: an agent whose
+arguments the daemon cannot read restarts every ten seconds, its
+one-line refusal in `~/Library/Logs/skepd.log` each time, and
+`launchctl print gui/$(id -u)/io.skep.skepd` shows `last exit code =
+2`. `launchctl bootout` it, mend the plist, and load it again.
+
 ### 9.2 Linux: a systemd user unit
 
 Save the unit as `~/.config/systemd/user/skepd.service`; it starts
@@ -1273,8 +1332,9 @@ ExecStart=/usr/local/bin/skepd --data-dir %h/.local/share/skep/board --port 8642
 WorkingDirectory=%h/.local/share/skep
 # every file the daemon creates is 0600 under 0700
 UMask=0077
-# a restart on exit 1 (a refused open, every worker gone) and on a crash; not on `systemctl stop` (SIGTERM is a clean stop to systemd)
+# a restart on exit 1 (a refused open, every worker gone) and on a crash; never on exit 2, a command line the daemon cannot read, which no retry mends — the unit stops, failed, its refusal in the journal once; not on `systemctl stop` (SIGTERM is a clean stop to systemd)
 Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=5
 # the daemon handles no signal: SIGTERM ends it at once, the next open recovers
 KillSignal=SIGTERM

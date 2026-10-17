@@ -38,10 +38,14 @@ use common::{
     spawn_walk_held, spawn_with_workers, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
 };
 
-/// ROW 41's consequence line for the checkpoint thread, with its class word.
+/// ROW 41's consequence line for the checkpoint thread, with its class word:
+/// row 41's words, then the rest of what the board lost and the act.
 const CHECKPOINT_THREAD_ENDED: &str = "failure: checkpoint thread ended: every checkpoint from \
                                        here is the backstop's, unsaid; the byte bound and the \
-                                       floor stay where they were";
+                                       floor stay where they were; until a restart re-spawns \
+                                       it, the change feed's files are not compacted and no \
+                                       standing line will come: each state is said at its \
+                                       transition alone";
 
 /// ROW 41's consequence line for the pruner, with its class word.
 const PRUNER_THREAD_ENDED: &str = "failure: pruner thread ended: no pass runs until a restart; \
@@ -199,7 +203,9 @@ fn the_kernels_halt_is_said_at_the_handlers_catch_after_a_panic_on_a_write() {
 /// the consequence line ONCE and sets the flag; the flag the crossing set
 /// stands unserviced; a further crossing runs inline as the kernel's
 /// backstop — the count moves — and the dead thread adds no landing line
-/// and no backstop line; the stop still joins (the shutdown returns).
+/// and no backstop line; with a state standing and the tick shortened, no
+/// standing line comes, as the consequence line says — the thread was its
+/// carrier; the stop still joins (the shutdown returns).
 #[test]
 fn the_checkpoint_threads_death_is_said_once_with_what_is_lost_and_the_backstop_runs_on() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -237,6 +243,16 @@ fn the_checkpoint_threads_death_is_said_once_with_what_is_lost_and_the_backstop_
         sd.daemon().checkpoint_lines()
     );
     assert_eq!(said(&sd, CHECKPOINT_THREAD_ENDED), 1, "said once");
+    // The floor bound and the tick shortened: a live thread would say the
+    // floor's clause within a few ticks; the dead one says nothing.
+    sd.daemon().set_media_free_space(Some(1));
+    sd.daemon().set_standing_interval_millis(40);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        standing_lines(&sd),
+        Vec::<String>::new(),
+        "FINDING (row 41): a standing line came with its carrier gone"
+    );
     sd.shutdown();
 }
 

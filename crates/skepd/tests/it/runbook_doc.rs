@@ -8,7 +8,9 @@
 //! The setup a kept notebook runs under is pinned the same way, read at
 //! runtime: §3 step 2's command, §7's synced-folder sentence, and §9's two
 //! service units and its Windows question. The units are WORDS here — no
-//! test loads one.
+//! test loads one. So are the figures the binary's constants supply, read
+//! through those constants, and §2's line for the journal damage a history
+//! read meets.
 
 use std::path::Path;
 
@@ -128,6 +130,13 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
         "the beginning follows the landing it qualifies"
     );
     classed("media limits:", Class::Open);
+    // The volume's free space, after the media limits' line that names the
+    // floor it is read beside (m4).
+    classed("the volume's free space at start:", Class::Open);
+    assert!(
+        at("media limits:") < at("the volume's free space at start:"),
+        "the volume's line follows the floor's"
+    );
     classed("H.1 written at open", Class::Landing);
     classed("pruner: the OS refused its thread (", Class::Failure);
     classed("cell index rebuilt at open:", Class::Landing);
@@ -263,9 +272,68 @@ fn runbook_carries_a_launchd_agent_and_a_systemd_user_unit_closed() {
     for arg in ["--data-dir %h/.local/share/skep/board", "--origin http://127.0.0.1:8642", "--no-local-trust"] {
         assert!(exec.contains(arg), "the unit's ExecStart passes {arg}: {exec}");
     }
-    for line in ["UMask=0077", "Restart=on-failure", "KillSignal=SIGTERM"] {
+    // Exit 2 is a command line the daemon cannot read, which no restart
+    // mends: the unit stops on it, failed, rather than looping.
+    for line in [
+        "UMask=0077",
+        "Restart=on-failure",
+        "RestartPreventExitStatus=2",
+        "KillSignal=SIGTERM",
+    ] {
         assert!(unit.lines().any(|l| l.trim() == line), "the unit sets {line}:\n{unit}");
     }
+}
+
+/// THE FIGURES THE CONSTANTS SUPPLY, quoted from them (`operations.md` §2.3
+/// F1 and F4; §1.1 row 7): §3 step 2's worker count — the default and the
+/// minimum, which moves by itself with the permit pools — and the default
+/// per-account limit's share and floor where §1 step 2 and §3 step 3's media
+/// line name them, each read here through the library's own constants and
+/// never a literal, as the binary's help renders them, so a figure that
+/// moves fails here rather than leaving the runbook naming the old one.
+#[test]
+fn runbook_quotes_the_figures_the_constants_supply() {
+    use skepd::{DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_WORKERS, MIN_WORKERS};
+
+    let text = collapsed(&runbook_md());
+    for figure in [
+        format!("request threads. Default {DEFAULT_WORKERS}, minimum {MIN_WORKERS}."),
+        format!(
+            "the default per-account limit, one part in {DEFAULT_LIMIT_SHARE} of the volume's \
+             capacity"
+        ),
+        format!(
+            "(one part in {DEFAULT_LIMIT_SHARE} of the volume's capacity of {{bytes}} bytes, \
+             never below {DEFAULT_LIMIT_FLOOR_BYTES} bytes)"
+        ),
+    ] {
+        assert!(text.contains(&figure), "RUNBOOK.md quotes the constants' figure {figure:?}");
+    }
+}
+
+/// §2 RESTORE's LEAD AND §1 STEP 8 — THE JOURNAL DAMAGE A HISTORY READ MEETS
+/// (RUNBOOK §2): the lead quotes the line the daemon says once, under
+/// `failure:`, and the steps it asks before a restart; and the standing
+/// line's list carries its clause.
+#[test]
+fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause() {
+    let lead = passage(
+        "\n## 2. Restore",
+        "**A history read can find the damage first**",
+        &["**Read the refusal before you restore.**"],
+    );
+    let (line, after) = fenced(&lead);
+    let opening = format!("{}: history: journal corrupt at rest;", Class::Failure);
+    assert!(
+        line.trim_start().starts_with(&opening),
+        "the lead quotes the damage's line under its class word: {line}"
+    );
+    assert!(collapsed(after).contains("before a restart, not after it"), "{after}");
+    let list = passage("\n## 1. The full volume", "8. **Watch between the lines.**", &["\n## 2."]);
+    assert!(
+        list.lines().any(|l| l.trim() == "a history read found the journal unreadable"),
+        "the standing line's list carries the damage's clause: {list}"
+    );
 }
 
 /// §9.3 WINDOWS — A QUESTION, NO COMMAND (the runbook states only what this

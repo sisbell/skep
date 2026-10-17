@@ -18,7 +18,7 @@
 //! same way, the one line a release's check holds the shipped binaries to.
 
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
@@ -188,6 +188,22 @@ fn refuse(line: fmt::Arguments<'_>) {
     let _ = writeln!(io::stderr(), "{line}");
 }
 
+/// Returns the refusal of a command line the binary cannot read, `e` its cause.
+///
+/// At a terminal the usage text follows the line, for the person who typed
+/// it. Anywhere else — a service manager's log, a pipe — the line ends by
+/// naming `--help` instead: a unit that restarts on failure writes the
+/// refusal at every attempt, and the usage text there is a hundred lines a
+/// try. The binary exits 2 behind it. Pure, so the unit suite pins both
+/// arms; [`main`] asks stderr whether it is a terminal.
+fn usage_refusal(e: &str, at_a_terminal: bool) -> String {
+    if at_a_terminal {
+        format!("skepd: {e}\n\n{}", usage())
+    } else {
+        format!("skepd: {e}; skepd --help prints the usage")
+    }
+}
+
 /// The loose data directory's refusal.
 ///
 /// A data directory that stands and that other users of this machine can
@@ -312,7 +328,8 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
   --origin <ORIGIN>  a canonical origin this board answers for, e.g.
                      https://board.example — repeatable; the signed
                      session arm accepts ONLY these once the board is
-                     claimed (env: SKEPD_ORIGIN, comma-separated)
+                     claimed (env: SKEPD_ORIGIN, comma-separated; any
+                     --origin replaces the variable's list)
   --blocked-prefixes <FILE>
                      the blocked-prefix list the operator maintains
                      (env: SKEPD_BLOCKED_PREFIXES): one JSON object,
@@ -466,8 +483,9 @@ struct Args {
 /// It is seeded from its variable, then overwritten by its flag — so the
 /// source is known where the value is decided, and not lost at the
 /// `unwrap_or` that resolves the default. The three settings the open's
-/// report names with their source ride this; the rest keep their bare
-/// `Option`.
+/// report names with their source ride this, and so does the origin list,
+/// whose first flag replaces the variable's list as every flag beats its
+/// variable ([`Sourced::push_by_flag`]); the rest keep their bare `Option`.
 struct Sourced<T> {
     value: Option<T>,
     source: Source,
@@ -497,6 +515,21 @@ impl<T> Sourced<T> {
     fn set_by_flag(&mut self, value: T) {
         self.value = Some(value);
         self.source = Source::Flag;
+    }
+}
+
+impl<T> Sourced<Vec<T>> {
+    /// Adds one element of a list setting by its flag, the source the flag's.
+    ///
+    /// A list's flags beat its variable as every flag does, and repeat to
+    /// name several values: the first flag given starts the list afresh,
+    /// whatever the variable seeded, and each later one adds to it.
+    fn push_by_flag(&mut self, item: T) {
+        if self.source != Source::Flag {
+            self.value = None;
+            self.source = Source::Flag;
+        }
+        self.value.get_or_insert_with(Vec::new).push(item);
     }
 }
 
@@ -628,20 +661,24 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     // rules that helper holds are restated here and nowhere else: a
     // variable set to bytes that are not text is refused rather than read
     // as absent, and each element goes through [`Origin`]'s own `FromStr`.
-    let mut origins: Vec<Origin> = match std::env::var(SKEPD_ORIGIN) {
-        Err(std::env::VarError::NotPresent) => Vec::new(),
+    // The flags replace the variable's list, as every flag beats its
+    // variable; repeated, they add to one another
+    // ([`Sourced::push_by_flag`]).
+    let mut origins: Sourced<Vec<Origin>> = match std::env::var(SKEPD_ORIGIN) {
+        Err(std::env::VarError::NotPresent) => Sourced { value: None, source: Source::Default },
         Err(std::env::VarError::NotUnicode(_)) => {
             return Err(format!("{}: the value is not UTF-8 text", SKEPD_ORIGIN))
         }
-        Ok(v) => v
-            .split(',')
-            .filter(|s| !s.is_empty())
-            .map(|s| {
-                s.parse::<Origin>().map_err(|e| {
-                    format!("{}: '{s}' is {e}", SKEPD_ORIGIN)
+        Ok(v) => {
+            let list = v
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.parse::<Origin>().map_err(|e| format!("{}: '{s}' is {e}", SKEPD_ORIGIN))
                 })
-            })
-            .collect::<Result<_, _>>()?,
+                .collect::<Result<_, _>>()?;
+            Sourced { value: Some(list), source: Source::Env }
+        }
     };
     let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
     let mut node_prefix: Sourced<NodePrefix> = Sourced::from_env(SKEPD_NODE_PREFIX)?;
@@ -676,7 +713,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             "--allow-preview-keys" => allow_preview_keys = true,
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
-                origins.push(
+                origins.push_by_flag(
                     v.parse::<Origin>().map_err(|e| format!("--origin: '{v}' is {e}"))?,
                 );
             }
@@ -739,7 +776,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         uploads: uploads.value.unwrap_or(true),
         uploads_source: uploads.source,
         allow_preview_keys,
-        origins,
+        origins: origins.value.unwrap_or_default(),
         blocked_prefixes,
         node_prefix: node_prefix.value,
         node_prefix_source: node_prefix.source,
@@ -786,7 +823,7 @@ fn main() {
             exit(0);
         }
         Err(e) => {
-            refuse(format_args!("skepd: {e}\n\n{}", usage()));
+            refuse(format_args!("{}", usage_refusal(&e, io::stderr().is_terminal())));
             exit(2);
         }
     };

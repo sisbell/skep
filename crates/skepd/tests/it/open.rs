@@ -8,10 +8,11 @@
 //! * A HELD PORT refuses before the open: the bind line, exit 1, in
 //!   milliseconds, and the data directory is never created — no
 //!   `kernel.lock`, nothing read, nothing written.
-//! * THE OPEN's THREE LINES, in order: `open: version {v}; this build reads
-//!   journal format {SKJ4}, checkpoint format {SKC4} and world format
-//!   {0x…}` is the first line on stderr — the build's version and the
-//!   three format stamps, each from its crate's constant — `open: data-dir
+//! * THE OPEN's THREE LINES, in order: `open: version {v} ({commit}); this
+//!   build reads journal format {SKJ4}, checkpoint format {SKC4} and world
+//!   format {0x…}` is the first line on stderr — the build's version and
+//!   commit as `skepd --version` names them, and the three format stamps,
+//!   each from its crate's constant — `open: data-dir
 //!   {path}` the second, and `open: recovered from {checkpoint.n |
 //!   genesis}, {k} commits replayed, in {d} ms` stands on stderr before the
 //!   serving line — `{k}` the kernel's count across a reopen with no
@@ -29,6 +30,9 @@
 //!   serving line and never the daemon, which serves on; a stderr with no
 //!   reader costs a refusal's line and never its exit code — 2 stays 2, 1
 //!   stays 1, never 101.
+//! * A COMMAND LINE THE BINARY CANNOT READ, on a stderr that is no
+//!   terminal, is one line naming the cause and `--help`, exit 2 — never the
+//!   usage text a unit restarting on failure would write at every attempt.
 //! * THE OPEN's-REPORT `auth:` LINE (`operations.md` §1.1 m14): after the
 //!   bind and the warnings, `open: auth: {mode} (--local-trust {on|off},
 //!   {source}); configured origins {list | none}; signed origins {list}` on
@@ -558,12 +562,33 @@ fn the_version_line_is_one_line_on_stdout_under_any_environment() {
     }
 }
 
+/// A COMMAND LINE THE BINARY CANNOT READ, OFF A TERMINAL: the real binary's
+/// stderr, piped as a service manager's log is, carries ONE line naming the
+/// cause and `--help` — never the usage text, which a unit that restarts on
+/// failure would write at every attempt — and stdout nothing; exit 2.
+#[test]
+fn a_refused_command_line_off_a_terminal_is_one_line_naming_help() {
+    let out = Command::new(env!("CARGO_BIN_EXE_skepd"))
+        .arg("--frobnicate")
+        .env_clear()
+        .output()
+        .expect("run the binary");
+    assert_eq!(out.status.code(), Some(2), "a refused command line: {out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "skepd: unknown argument '--frobnicate'; skepd --help prints the usage\n",
+        "one line on a stderr that is no terminal"
+    );
+    assert!(out.stdout.is_empty(), "nothing on stdout: {:?}", String::from_utf8_lossy(&out.stdout));
+}
+
 /// §3.4 STEP 6's GAP, CLOSED — THE VERSION LINE FIRST: the child's FIRST
-/// stderr line is `open: version {v}; this build reads journal format
-/// {SKJ4}, checkpoint format {SKC4} and world format {0x…}` — `{v}` this
-/// build's `CARGO_PKG_VERSION` and the three stamps spelled FROM THE
-/// CRATES' CONSTANTS, the kernel's two as text and the engine's as its
-/// refusal renders it — `open: data-dir {path}` the second, and `open:
+/// stderr line is `open: version {v} ({commit}); this build reads journal
+/// format {SKJ4}, checkpoint format {SKC4} and world format {0x…}` — `{v}`
+/// this build's `CARGO_PKG_VERSION` and `{commit}` its `SKEP_GIT_SHA`, the
+/// two exactly as `skepd --version` names them, and the three stamps spelled
+/// FROM THE CRATES' CONSTANTS, the kernel's two as text and the engine's as
+/// its refusal renders it — `open: data-dir {path}` the second, and `open:
 /// recovered from …` after both; the same three, in the same order, on the
 /// board's reopen. Each child killed by the test.
 #[test]
@@ -571,12 +596,20 @@ fn the_open_says_its_version_and_the_formats_it_reads_first_then_its_directory()
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("data");
     let expected = format!(
-        "version {}; this build reads journal format {}, checkpoint format {} and world format \
-         {:#018x}",
+        "version {} ({}); this build reads journal format {}, checkpoint format {} and world \
+         format {:#018x}",
         env!("CARGO_PKG_VERSION"),
+        option_env!("SKEP_GIT_SHA").unwrap_or("unknown"),
         skep_kernel::JOURNAL_FORMAT.escape_ascii(),
         skep_kernel::CHECKPOINT_FORMAT.escape_ascii(),
         skep_engine::WORLD_FORMAT
+    );
+    let version = Command::new(env!("CARGO_BIN_EXE_skepd")).arg("--version").output();
+    let version = String::from_utf8_lossy(&version.expect("run --version").stdout).to_string();
+    let named = version.trim_end().strip_prefix("skepd ").expect("the --version line");
+    assert!(
+        expected.starts_with(&format!("version {named}; ")),
+        "the open names the build as `skepd --version` does: {named:?}"
     );
     for life in ["first", "second"] {
         let mut served = serve_and_read_the_open(&dir, &[]);

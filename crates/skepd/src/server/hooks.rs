@@ -179,6 +179,26 @@ struct AcceptFaults {
     workers: Vec<ThreadId>,
 }
 
+/// The live streams' thread seam: the test seam behind
+/// [`Daemon::refuse_the_next_stream_threads`].
+///
+/// The next `remaining` streams the budget admits are refused their thread
+/// before any spawn, with an `io::Error` whose text is `text` in place of the
+/// OS's — no thread made, the socket dropped, the clean close a refused spawn
+/// gives — so a suite drives the live streams' thread pair without exhausting
+/// the process's threads. Per daemon, so no other daemon's streams meet it.
+pub(super) struct StreamThreadFaults {
+    remaining: usize,
+    text: String,
+}
+
+impl StreamThreadFaults {
+    /// Returns the seam unarmed.
+    pub(super) fn new() -> StreamThreadFaults {
+        StreamThreadFaults { remaining: 0, text: String::new() }
+    }
+}
+
 /// The seam's one arm.
 static ACCEPT_FAULTS: Mutex<AcceptFaults> = Mutex::new(AcceptFaults {
     remaining: 0,
@@ -773,16 +793,17 @@ impl Daemon {
     /// Advances the edge clock by `ms`.
     ///
     /// **Test hook** (the same standing). The clock is the one reading the
-    /// eight edge pairs judge their hold-down against
+    /// nine edge pairs judge their hold-down against
     /// (`skep_util::permits::edge_clock_now`;
     /// `skep_core::limits::EDGE_HOLD_DOWN`) — so a suite drives a pair's
     /// second line through a seam rather than a `sleep`, as
     /// [`Daemon::advance_media_clock_ms`] drives an expiry. The clock is the
     /// *process's* and not this daemon's: one offset every holder in the
-    /// process reads, which is what makes it one clock for the eight pairs —
-    /// the five pools', the live-stream budget's, the accept loop's and the
-    /// challenge store's, whose mint reads it for the nonces' time to live
-    /// as well, so an expiry and the hold-down move together.
+    /// process reads, which is what makes it one clock for the nine pairs —
+    /// the five pools', the live-stream budget's, the live streams' threads',
+    /// the accept loop's and the challenge store's, whose mint reads it for
+    /// the nonces' time to live as well, so an expiry and the hold-down move
+    /// together.
     #[doc(hidden)]
     pub fn advance_edge_clock_ms(&self, ms: u64) {
         skep_util::permits::advance_edge_clock_ms(ms);
@@ -812,6 +833,34 @@ impl Daemon {
     #[doc(hidden)]
     pub fn accept_faults_remaining() -> usize {
         ACCEPT_FAULTS.lock().remaining
+    }
+
+    /// Refuses the next `k` live streams their thread, `text` the error.
+    ///
+    /// **Test hook** (the same standing). Each of the next `k` streams the
+    /// budget admits meets, in place of the OS's spawn, an `io::Error` whose
+    /// text is `text`: no thread is made and the socket is dropped, the clean
+    /// close a refused thread gives — so a suite drives the live streams'
+    /// thread pair (`listen.rs`'s `Subscribers::admit`) without exhausting
+    /// the process's threads. Per daemon; arming again replaces the arm.
+    #[doc(hidden)]
+    pub fn refuse_the_next_stream_threads(&self, k: usize, text: &str) {
+        let mut faults = self.stream_thread_faults.lock();
+        faults.remaining = k;
+        faults.text = text.to_string();
+    }
+
+    /// Takes one armed refusal of a stream's thread: the admission's side.
+    ///
+    /// It answers the error the seam names in place of the spawn, one arm
+    /// spent, or `None` where the seam is unarmed and the stream is spawned.
+    pub(super) fn take_a_stream_thread_fault(&self) -> Option<io::Error> {
+        let mut faults = self.stream_thread_faults.lock();
+        if faults.remaining == 0 {
+            return None;
+        }
+        faults.remaining -= 1;
+        Some(io::Error::other(faults.text.clone()))
     }
 
     /// Returns how many accepts the seam has failed, and on how many workers.

@@ -525,6 +525,79 @@ fn the_bind_variable_seeds_the_flag_and_a_bad_one_is_refused_not_defaulted() {
     }
 }
 
+/// THE ORIGIN LIST's FLAGS BEAT ITS VARIABLE, as every flag beats its
+/// variable: `SKEPD_ORIGIN` seeds the list where no `--origin` is given;
+/// the first `--origin` replaces it whole, so a stale variable's origin
+/// never widens the signed set a flag names; and repeated `--origin`s add to
+/// one another, in order. Judged in a CHILD of this test binary, as the bind
+/// variable's claims are, because the variable is process-wide.
+#[test]
+fn the_origin_flags_replace_the_variables_list_and_add_to_one_another() {
+    const CHILD: &str = "SKEPD_TEST_ORIGIN_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        // THE CHILD: the parent set `SKEPD_ORIGIN=https://old.example`.
+        let origins = |line: &[&str]| -> Vec<String> {
+            let parsed = parse_args(argv(line)).expect("valid").expect("a run");
+            parsed.origins.iter().map(|o| o.as_str().to_string()).collect()
+        };
+        assert_eq!(
+            origins(&["--data-dir", "/tmp/x"]),
+            ["https://old.example"],
+            "the variable seeds the list"
+        );
+        assert_eq!(
+            origins(&["--data-dir", "/tmp/x", "--origin", "https://new.example"]),
+            ["https://new.example"],
+            "the first flag replaces the variable's list"
+        );
+        assert_eq!(
+            origins(&[
+                "--origin",
+                "https://a.example",
+                "--data-dir",
+                "/tmp/x",
+                "--origin",
+                "https://b.example",
+            ]),
+            ["https://a.example", "https://b.example"],
+            "repeated flags add to one another, in order"
+        );
+        return;
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    let out = std::process::Command::new(exe)
+        .args([
+            "tests::the_origin_flags_replace_the_variables_list_and_add_to_one_another",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env(SKEPD_ORIGIN, "https://old.example")
+        .output()
+        .expect("run the child");
+    assert!(
+        out.status.success(),
+        "the child's claims failed:\n{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A COMMAND LINE THE BINARY CANNOT READ, REFUSED (exit 2): at a terminal,
+/// the line and then the usage text, for the person who typed it; anywhere
+/// else — a service manager's log, a pipe — the one line, naming `--help`,
+/// so a unit that restarts on failure writes one line an attempt and never
+/// the usage text at each. The real binary's piped stderr is the
+/// child-process suite's (`tests/it/open.rs`).
+#[test]
+fn a_refused_command_line_carries_the_usage_text_at_a_terminal_alone() {
+    let e = "unknown argument '--frobnicate'";
+    assert_eq!(usage_refusal(e, true), format!("skepd: {e}\n\n{}", usage()));
+    assert_eq!(usage_refusal(e, false), format!("skepd: {e}; skepd --help prints the usage"));
+    assert!(!usage_refusal(e, false).contains('\n'), "one line off a terminal");
+}
+
 /// REG-1.69's `--node-prefix 1.N`: an address under the root `1`, read
 /// as given and optional; the root itself, an address under another
 /// first component, and an account address are refused at the parse

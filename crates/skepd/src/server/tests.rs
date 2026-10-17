@@ -459,21 +459,24 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
 
 /// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
 /// pinned whole: the build's version — the workspace's one,
-/// `CARGO_PKG_VERSION` — and the three format stamps this build reads, the
-/// kernel's two as text and the engine's as its refusal renders it. The
-/// stamps are SPELLED here, and the literals asserted to be the crates'
-/// constants beside the line, so a stamp that moves re-spells this pin
-/// rather than passing a line that names the old one — and a render from a
-/// literal in the daemon, one byte off its constant, fails on the first
-/// assertion.
+/// `CARGO_PKG_VERSION` — and its commit, `SKEP_GIT_SHA`'s at build time and
+/// `unknown` where the build set none, as `skepd --version` names them, so
+/// two builds of one version are told apart on the stream; and the three
+/// format stamps this build reads, the kernel's two as text and the engine's
+/// as its refusal renders it. The stamps are SPELLED here, and the literals
+/// asserted to be the crates' constants beside the line, so a stamp that
+/// moves re-spells this pin rather than passing a line that names the old
+/// one — and a render from a literal in the daemon, one byte off its
+/// constant, fails on the first assertion.
 #[test]
 fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
     assert_eq!(
         VersionLine.to_string(),
         format!(
-            "version {}; this build reads journal format SKJ4, checkpoint format SKC4 and world \
-             format 0x534b505700000001",
-            env!("CARGO_PKG_VERSION")
+            "version {} ({}); this build reads journal format SKJ4, checkpoint format SKC4 and \
+             world format 0x534b505700000001",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
         )
     );
     assert_eq!(
@@ -496,8 +499,9 @@ fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
 /// THE CLASSED DOOR for the open's own lines (CUT 1 (a)): every line of the
 /// open's report said from `open_under` under the report's own class — the
 /// version's, the directory's, the recovery's, the beginning's, the stray
-/// `checkpoint.tmp`'s, the tail cut's, the media limits' and the upload
-/// setting's — goes out through `say_open_line`, which emits under
+/// `checkpoint.tmp`'s, the tail cut's, the media limits', the volume's free
+/// space and the upload setting's — goes out through `say_open_line`, which
+/// emits under
 /// `Class::Open`, and no site in the open spells that class itself — read
 /// off the source, since no suite captures the stream in-process; the class
 /// word on the stream itself is pinned by the child-process suite
@@ -514,10 +518,10 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        8,
-        "the eight lines — the version, the directory, the recovery, the beginning, the stray \
-         checkpoint.tmp, the tail cut, the media limits, the upload setting — each through the \
-         door"
+        9,
+        "the nine lines — the version, the directory, the recovery, the beginning, the stray \
+         checkpoint.tmp, the tail cut, the media limits, the volume's free space, the upload \
+         setting — each through the door"
     );
     assert!(
         open_under.contains("say_open_line(BeganLine)"),
@@ -545,6 +549,11 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     assert!(
         open_under.contains("say_open_line(UploadsLine {"),
         "the upload setting's line is a rendered value through the door"
+    );
+    assert!(
+        open_under.find("say_open_line(media.startup_line())").expect("the media limits' line")
+            < open_under.find("say_open_line(VolumeLine {").expect("the volume's line"),
+        "the volume's free space follows the media limits' line, which names the floor"
     );
     let door = source.find("fn say_open_line(").expect("the door");
     assert!(
@@ -1390,9 +1399,10 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
 
 /// THE STANDING LINE's WORDS at fixed reads (`operations.md` §1 THE RATES;
 /// §1.1 m11): every clause standing, each in THE RATES' words with its
-/// position or file, in THE RATES' order, joined by `; ` — the sixth, the
-/// cell index's, with its place held; one clause alone; and no clause,
-/// which is no line at all (`stands` false).
+/// position or file, in THE RATES' order, joined by `; ` — the cell index's
+/// with its place held, and the journal damage a history read met after the
+/// kernel's poison (RUNBOOK §2); each of the two flag clauses alone; and no
+/// clause, which is no line at all (`stands` false).
 #[test]
 fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     use skep_core::commits::StoppedFile;
@@ -1400,6 +1410,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     let every = StandingLine {
         halted_at: Some(Seq(17)),
         poisoned: true,
+        history_damaged: true,
         stopped_files: vec![
             StoppedFile { name: "commits.log", since: 9 },
             StoppedFile { name: "feed-index.log", since: 12 },
@@ -1414,14 +1425,16 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     assert_eq!(
         every.to_string(),
         "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned; \
-         commits.log stopped since position 9; feed-index.log stopped since position 12; the \
-         pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
-         uncovered; the cell index failed to build; deposits refused at the floor (free space \
-         1000 below the floor in force 268435456); CLAIMED-PERMISSIVE"
+         a history read found the journal unreadable; commits.log stopped since position 9; \
+         feed-index.log stopped since position 12; the pruner's thread is gone; the feed \
+         walk's thread is gone; positions (20, 48] stay uncovered; the cell index failed to \
+         build; deposits refused at the floor (free space 1000 below the floor in force \
+         268435456); CLAIMED-PERMISSIVE"
     );
     let one = StandingLine {
         halted_at: None,
         poisoned: false,
+        history_damaged: false,
         stopped_files: Vec::new(),
         pruner_gone: true,
         feed_walk_gone: None,
@@ -1431,9 +1444,13 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     };
     assert!(one.stands());
     assert_eq!(one.to_string(), "the pruner's thread is gone");
+    let damaged = StandingLine { history_damaged: true, pruner_gone: false, ..one };
+    assert!(damaged.stands(), "the journal damage alone stands");
+    assert_eq!(damaged.to_string(), "a history read found the journal unreadable");
     let none = StandingLine {
         halted_at: None,
         poisoned: false,
+        history_damaged: false,
         stopped_files: Vec::new(),
         pruner_gone: false,
         feed_walk_gone: None,
@@ -1447,7 +1464,10 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
 
 /// m10's WORDS and ROW 41's TWO CONSEQUENCE LINES at fixed inputs: the
 /// kernel's halt with its position, the class of its three causes and the
-/// act; the checkpoint thread's and the pruner's, verbatim.
+/// act; the pruner's verbatim; and the checkpoint thread's opening on row
+/// 41's words, verbatim, then what the board lost beside them and the act —
+/// the feed's compaction, the standing line, a restart — as row 22's line
+/// says them for the thread refused at start.
 #[test]
 fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
     use skep_core::commits::KernelHaltLine;
@@ -1460,14 +1480,135 @@ fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
          barrier, or the sequence order exhausted; check the volume and the device, then \
          restart"
     );
+    let ended = CheckpointThreadEndedLine.to_string();
+    assert!(
+        ended.starts_with(
+            "checkpoint thread ended: every checkpoint from here is the backstop's, unsaid; the \
+             byte bound and the floor stay where they were"
+        ),
+        "row 41's ruled words open the line: {ended}"
+    );
     assert_eq!(
-        CheckpointThreadEndedLine.to_string(),
+        ended,
         "checkpoint thread ended: every checkpoint from here is the backstop's, unsaid; the \
-         byte bound and the floor stay where they were"
+         byte bound and the floor stay where they were; until a restart re-spawns it, the \
+         change feed's files are not compacted and no standing line will come: each state is \
+         said at its transition alone"
     );
     assert_eq!(
         PrunerThreadEndedLine.to_string(),
         "pruner thread ended: no pass runs until a restart; the blob logs' compaction and the \
          lapsed tail's reclaim stop"
+    );
+}
+
+/// THE JOURNAL DAMAGE's LINE (RUNBOOK §2) at fixed inputs: the kernel's own
+/// words for the damage — corruption at rest naming its position, an I/O
+/// failure naming its file, its act and the OS's cause — then what serves
+/// on, why the next start may refuse, and the act.
+#[test]
+fn the_history_damage_line_names_the_kernels_account_what_serves_and_the_act() {
+    let after = "; reads at the head and every write serve on, since neither reads the journal \
+                 back, but the next start's open reads it all and may refuse on the same file: \
+                 copy the data directory, run skepd inventory over the copy (its open reads the \
+                 journal as a start does), and restore what it refuses from a copy before the \
+                 board restarts; check the volume and its device";
+    let corrupt = HistoryError::Corruption { at: Seq(9), cause: None };
+    assert_eq!(
+        HistoryDamageLine(&corrupt).to_string(),
+        format!("history: journal corrupt at rest; position 9 names the damage{after}")
+    );
+    let unreadable =
+        HistoryError::Io(std::io::Error::other("seg-3.wal: read: Input/output error"));
+    assert_eq!(
+        HistoryDamageLine(&unreadable).to_string(),
+        format!("history: history read I/O failure: seg-3.wal: read: Input/output error{after}")
+    );
+}
+
+/// A HISTORY READ THAT MEETS THE JOURNAL's DAMAGE SAYS SO ONCE (RUNBOOK §2):
+/// the reader is answered as before — `500 history_corrupt` — and the
+/// operator stream says ONE `failure: history: …` line for the uptime, never
+/// one per read; a refusal that is no damage — the saturation, a segment a
+/// reclamation removed, a position beyond the head — says nothing; and the
+/// standing line re-says the damage at its tick, alone on a board with
+/// nothing else standing.
+#[test]
+fn a_history_read_that_meets_the_journals_damage_says_so_once_and_is_re_said_while_it_stands() {
+    use crate::history::Unavailable;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let daemon = Daemon::open(dir.path()).expect("genesis open");
+    daemon.set_media_free_space(Some(u64::MAX));
+    let said = |prefix: &str| -> Vec<String> {
+        daemon.lines_said().into_iter().filter(|l| l.starts_with(prefix)).collect()
+    };
+    for no_damage in [
+        Unavailable::Busy,
+        Unavailable::Journal(HistoryError::Io(std::io::Error::from(ErrorKind::NotFound))),
+        Unavailable::Journal(HistoryError::BeyondHead { head: Seq(3) }),
+    ] {
+        let _ = daemon.refuse_history(no_damage);
+    }
+    assert_eq!(said("failure: history: "), Vec::<String>::new(), "no damage, nothing said");
+    daemon.say_the_standing_line();
+    assert_eq!(said("standing: "), Vec::<String>::new(), "nothing stands before the damage");
+    let corrupt = || HistoryError::Corruption { at: Seq(9), cause: None };
+    for _ in 0..2 {
+        let reply = daemon.refuse_history(Unavailable::Journal(corrupt()));
+        let v: Value = serde_json::from_slice(reply.bytes()).expect("json");
+        assert_eq!((reply.status, v["error"].as_str()), (500, Some("history_corrupt")), "{v}");
+    }
+    let unreadable =
+        HistoryError::Io(std::io::Error::other("seg-3.wal: read: Input/output error"));
+    let _ = daemon.refuse_history(Unavailable::Journal(unreadable));
+    assert_eq!(
+        said("failure: history: "),
+        [format!("failure: {}", HistoryDamageLine(&corrupt()))],
+        "the first damage said once for the uptime, never per read"
+    );
+    daemon.say_the_standing_line();
+    assert_eq!(said("standing: "), ["standing: a history read found the journal unreadable"]);
+}
+
+/// THE VOLUME's LINE (m4) at fixed figures: the free space at start in
+/// bytes, and, where it stands below the floor in force — the creation's own
+/// test, so at the floor exactly a deposit is admitted — the floor beside
+/// it, what is refused and what serves.
+#[test]
+fn the_volume_line_names_the_free_space_and_where_the_floor_binds_what_it_refuses() {
+    assert_eq!(
+        VolumeLine { free_space: 9_000_000_000, floor: 268_435_456 }.to_string(),
+        "the volume's free space at start: 9000000000 bytes"
+    );
+    assert_eq!(
+        VolumeLine { free_space: 268_435_456, floor: 268_435_456 }.to_string(),
+        "the volume's free space at start: 268435456 bytes",
+        "at the floor exactly, deposits are admitted"
+    );
+    assert_eq!(
+        VolumeLine { free_space: 1_000, floor: 268_435_456 }.to_string(),
+        "the volume's free space at start: 1000 bytes, below the floor in force 268435456: \
+         every deposit is refused until room stands; every other write serves"
+    );
+}
+
+/// THE LIVE STREAMS' THREAD PAIR's WORDS at fixed inputs: the OS's refusal
+/// in its own text, what it costs, what serves and the act; and the landing.
+/// The edges themselves are the edge suite's (`tests/it/edges.rs`), driven
+/// through the daemon's seam.
+#[test]
+fn the_stream_thread_pair_says_the_oss_cause_what_serves_the_act_and_the_landing() {
+    let refused = std::io::Error::new(ErrorKind::WouldBlock, "Resource temporarily unavailable");
+    assert_eq!(
+        StreamThreadLine::Refused(&refused).to_string(),
+        "live stream: the OS refused its thread (Resource temporarily unavailable); the stream \
+         was closed before its head, and so is every new one while the OS refuses threads; \
+         reads, writes and /health serve; the act: room under the host's thread limit (a \
+         container's pids limit, the user's process limit)"
+    );
+    assert_eq!(
+        StreamThreadLine::Again.to_string(),
+        "live stream: the OS gives the streams their threads again"
     );
 }

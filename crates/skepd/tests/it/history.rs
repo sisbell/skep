@@ -810,3 +810,82 @@ fn dump_at_is_deterministic_and_head_matches_live() {
 
     sd.shutdown();
 }
+
+/// JOURNAL DAMAGE A HISTORY READ MEETS IS SAID, ONCE, AND RE-SAID WHILE IT
+/// STANDS (RUNBOOK §2): a byte of the journal's first frame flipped while
+/// the board serves — the write path never reads it back, and every history
+/// read scans the journal from its base to its end — and `/op-at` answers
+/// `500 history_corrupt`, its reply what it was, `/chain?at` too, while the
+/// operator stream says ONE `failure: history: journal corrupt at rest; …`
+/// line naming the damage, what serves and the act, and no second at the
+/// next read; a read at the head and a write serve throughout; and the
+/// standing line re-says the damage at its tick.
+#[test]
+fn journal_damage_a_history_read_meets_is_said_once_and_re_said_while_it_stands() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let scenario = seed(port);
+    let lines = |prefix: &str| -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.starts_with(prefix)).collect()
+    };
+    let damage = || lines("failure: history: ");
+    assert_eq!(damage(), Vec::<String>::new(), "a sound journal: nothing said");
+
+    // The fifth byte of the first frame's payload, past its 12-byte header
+    // (`[magic][len][crc]`): the frame's crc no longer validates, and intact
+    // frames follow it.
+    let segment = dir.path().join("seg-1.wal");
+    let mut bytes = std::fs::read(&segment).expect("the journal's first segment");
+    bytes[16] ^= 0xFF;
+    std::fs::write(&segment, &bytes).expect("rewrite the segment in place");
+
+    let read = retrieve(&scenario.doc1, 5);
+    let (st, v) = op_at(port, Some(&scenario.token), scenario.at_i1, &read);
+    assert_eq!((st, v["error"].as_str()), (500, Some("history_corrupt")), "{v}");
+    let said = damage();
+    assert_eq!(said.len(), 1, "FINDING (RUNBOOK §2): the damage is said, once: {said:?}");
+    assert!(
+        said[0].starts_with("failure: history: journal corrupt at rest; position "),
+        "the kernel's own account of the damage: {said:?}"
+    );
+    assert!(
+        said[0].ends_with(
+            "; reads at the head and every write serve on, since neither reads the journal \
+             back, but the next start's open reads it all and may refuse on the same file: copy \
+             the data directory, run skepd inventory over the copy (its open reads the journal \
+             as a start does), and restore what it refuses from a copy before the board \
+             restarts; check the volume and its device"
+        ),
+        "the line says what serves and the act: {said:?}"
+    );
+
+    let (st, body) = get(port, &format!("/chain?at={}", scenario.at_i1));
+    assert_eq!((st, json(&body)["error"].as_str()), (500, Some("history_corrupt")));
+    assert_eq!(damage().len(), 1, "FINDING (the rates): a second read says nothing more");
+
+    // The head's reads and the write path serve on.
+    let v = op(port, Some(&scenario.token), &retrieve(&scenario.doc1, 3));
+    assert_eq!(v["resp"].as_str(), Some("delivery"), "a read at the head serves: {v}");
+    let v = op(
+        port,
+        Some(&scenario.token),
+        &format!(
+            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
+            scenario.doc2
+        ),
+    );
+    assert!(v["at"].is_u64(), "a write serves: {v}");
+
+    sd.daemon().set_standing_interval_millis(40);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let standing = lines("standing: ");
+        if standing.iter().any(|l| l.contains("a history read found the journal unreadable")) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "no standing line re-said it: {standing:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    sd.shutdown();
+}

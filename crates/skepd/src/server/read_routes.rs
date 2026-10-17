@@ -3,12 +3,14 @@
 //! The endpoints are `/op-at`, `/health`, `/chain`, `/changes` and `/dump`.
 
 use std::num::NonZeroUsize;
+use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use skep_febe::{consult_read, Response};
 use skep_identity::HasIdentity;
 use skep_kernel::Seq;
 use skep_util::json::obj;
+use skep_util::notice::Class;
 
 use super::actor::Resolved;
 use super::reply::{
@@ -17,7 +19,8 @@ use super::reply::{
     TransportError,
 };
 use super::request::{at_most_once, query_pairs, sole_param};
-use super::Daemon;
+use super::{Daemon, HistoryDamageLine};
+use crate::history::Unavailable;
 use skep_core::auth::key_set_of;
 use skep_core::codec::{check_keys, key_set_reply, DaemonOp};
 use crate::limits::{DEFAULT_CHANGES_LIMIT, MAX_CHANGES_LIMIT};
@@ -80,7 +83,7 @@ impl Daemon {
                     Ok((_permit, world)) => {
                         op_answer(key_set_reply(at, key_set_of(&world, &account)))
                     }
-                    Err(e) => refuse_unavailable(e),
+                    Err(e) => self.refuse_history(e),
                 }
             }
             DaemonOp::Febe { request: frame, .. } => {
@@ -102,10 +105,32 @@ impl Daemon {
                 }
                 match self.history.read_at(&self.engine, at, *frame, principal, &head) {
                     Ok(resp) => self.op_reply(&resp),
-                    Err(e) => refuse_unavailable(e),
+                    Err(e) => self.refuse_history(e),
                 }
             }
         }
+    }
+
+    /// Answers a refused historical read, saying the journal's damage once.
+    ///
+    /// The reply is [`refuse_unavailable`]'s, the reader's answer unchanged.
+    /// Beside it, where the refusal is the journal's damage
+    /// ([`Unavailable::journal_damage`]), the first such refusal of this
+    /// uptime says [`HistoryDamageLine`] under `Class::Failure` and sets the
+    /// flag the standing line reads: a history read scans the journal from
+    /// its base to its end, so it is the first reader to meet damage in a
+    /// segment the write path never reads back — damage the next start's
+    /// open reads and may refuse on, which the operator can still mend while
+    /// the board serves (RUNBOOK §2). Once per uptime and never per request,
+    /// and the line names no reader (D9). `/op-at`, `/chain?at` and
+    /// `/dump?at` answer every refusal through it.
+    pub(super) fn refuse_history(&self, e: Unavailable) -> Reply {
+        if let Some(damage) = e.journal_damage() {
+            if !self.history_damage_said.swap(true, Ordering::AcqRel) {
+                self.say(Class::Failure, HistoryDamageLine(damage));
+            }
+        }
+        refuse_unavailable(e)
     }
 
     pub(super) fn get_health(&self) -> Reply {
@@ -192,8 +217,8 @@ impl Daemon {
     /// `/health` reading, a published head's members — checks against the
     /// board's recomputation rather than the board's stored claim (wire.md
     /// §The other endpoints): a re-chained journal answers the forgery here,
-    /// which the saved pair contradicts. The refusals are `/op-at`'s through
-    /// [`refuse_unavailable`] — `beyond_head`, `not_a_position`,
+    /// which the saved pair contradicts. The refusals are `/op-at`'s, through
+    /// [`Daemon::refuse_history`] — `beyond_head`, `not_a_position`,
     /// `history_reclaimed`, `history_busy`, `history_io`/`history_corrupt`,
     /// `no_journal` — and a malformed or absent `at` is `malformed_at`, the
     /// `/dump` query's own refusal.
@@ -210,7 +235,7 @@ impl Daemon {
                     ("chain", Value::String(skep_util::json::hex_string(&chain))),
                 ]),
             ),
-            Err(e) => refuse_unavailable(e),
+            Err(e) => self.refuse_history(e),
         }
     }
 
@@ -294,7 +319,7 @@ impl Daemon {
                 let reader = head.world().reader_class(principal);
                 match self.history.dump_at(&self.engine, at, |doc| reader.readable(doc)) {
                     Ok(d) => d,
-                    Err(e) => return refuse_unavailable(e),
+                    Err(e) => return self.refuse_history(e),
                 }
             }
         };

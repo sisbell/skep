@@ -84,6 +84,31 @@ pub(crate) enum Unavailable {
     Journal(HistoryError),
 }
 
+impl Unavailable {
+    /// Returns the journal's damage, where this refusal is one.
+    ///
+    /// Damage is at-rest corruption, or an I/O failure reading the journal
+    /// other than `NotFound`, which the kernel answers for a segment a
+    /// concurrent reclamation removed between its listing and its read, and
+    /// which a retry clears. It is what a history read meets in a segment the
+    /// write path never reads back, and what the next start's open reads and
+    /// may refuse on (RUNBOOK §2). The saturation is no damage, nor is any
+    /// verdict on the position asked: beyond the head, between two commits,
+    /// reclaimed, no journal.
+    pub(crate) fn journal_damage(&self) -> Option<&HistoryError> {
+        let Unavailable::Journal(e) = self else { return None };
+        let damage = match e {
+            HistoryError::Corruption { .. } => true,
+            HistoryError::Io(io) => io.kind() != std::io::ErrorKind::NotFound,
+            HistoryError::BeyondHead { .. }
+            | HistoryError::NotABoundary { .. }
+            | HistoryError::Reclaimed { .. }
+            | HistoryError::Unjournaled => false,
+        };
+        damage.then_some(e)
+    }
+}
+
 /// The history surface: the budget, and the three questions asked of it.
 ///
 /// They are a read as of a position ([`History::read_at`]), the world's dump
@@ -548,5 +573,32 @@ mod tests {
             ),
             "admitted, the chain read meets the journal's own verdict"
         );
+    }
+
+    /// Checks which refusals are the journal's damage (RUNBOOK §2).
+    ///
+    /// At-rest corruption is, and so is an I/O failure reading the journal,
+    /// save `NotFound` — the segment a concurrent reclamation removed, which
+    /// a retry clears. The saturation is not, nor is any verdict on the
+    /// position asked.
+    #[test]
+    fn corruption_and_every_io_failure_but_a_removed_segment_are_the_journals_damage() {
+        let journal = Unavailable::Journal;
+        for damage in [
+            journal(HistoryError::Corruption { at: Seq(9), cause: None }),
+            journal(HistoryError::Io(std::io::Error::other("seg-3.wal: read: EIO"))),
+        ] {
+            assert!(damage.journal_damage().is_some(), "{damage:?}");
+        }
+        for refusal in [
+            Unavailable::Busy,
+            journal(HistoryError::Io(std::io::Error::from(std::io::ErrorKind::NotFound))),
+            journal(HistoryError::BeyondHead { head: Seq(3) }),
+            journal(HistoryError::NotABoundary { nearest: Seq(2) }),
+            journal(HistoryError::Reclaimed { floor: Some(Seq(1)), cause: None }),
+            journal(HistoryError::Unjournaled),
+        ] {
+            assert!(refusal.journal_damage().is_none(), "{refusal:?}");
+        }
     }
 }

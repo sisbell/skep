@@ -31,6 +31,7 @@ use super::request::HttpRequest;
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{
     AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine, Daemon,
+    StreamThreadLine,
 };
 use skep_core::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
@@ -1081,11 +1082,24 @@ struct Subscribers {
     /// hold-down past its last refusal — once per episode and nothing per
     /// stream.
     edge: EdgeTracker,
+    /// The live streams' thread pair (m12's form).
+    ///
+    /// It is the tracker the admission tells of every stream the OS refused
+    /// a thread and every stream given one, whose edges it says at once
+    /// through the daemon's classed door ([`StreamThreadLine`]) — the OS's
+    /// refusal at the first of an episode, `the OS gives the streams their
+    /// threads again` at the first thread given a hold-down past the last
+    /// refusal. The budget's pair cannot carry it: the budget has room.
+    threads: EdgeTracker,
 }
 
 impl Subscribers {
     fn new() -> Subscribers {
-        Subscribers { live: Mutex::new(Vec::new()), edge: EdgeTracker::new(EDGE_HOLD_DOWN) }
+        Subscribers {
+            live: Mutex::new(Vec::new()),
+            edge: EdgeTracker::new(EDGE_HOLD_DOWN),
+            threads: EdgeTracker::new(EDGE_HOLD_DOWN),
+        }
     }
 
     /// Admits one stream and gives it its own thread, or refuses it.
@@ -1094,7 +1108,9 @@ impl Subscribers {
     /// which is the same end a subscriber meets at shutdown and the one a
     /// reconnecting client already handles — each edge of the budget's pair
     /// said once per episode (m12): the first refusal, and the first
-    /// admission a hold-down after the last refusal.
+    /// admission a hold-down after the last refusal. A stream the budget
+    /// admits and the OS refuses a thread is dropped the same way, its own
+    /// pair said the same way ([`StreamThreadLine`]).
     fn admit(&self, daemon: Arc<Daemon>, stream: TcpStream, closed: bool) {
         let mut live = self.live.lock();
         // Reap finished threads so the registry tracks live streams, not
@@ -1127,11 +1143,36 @@ impl Subscribers {
         // listener still bound and no line but the panic hook's. A refusal
         // must cost one stream, never a worker; the failed spawn drops the
         // closure and with it the socket, which is the clean close above.
-        let spawned = thread::Builder::new()
-            .name("skepd-events".into())
-            .spawn(move || serve_events(&daemon, stream, closed));
-        if let Ok(h) = spawned {
-            live.push(h);
+        // The spawn's refusal (test seam): the next streams a suite armed
+        // meet the seam's error in place of the OS's spawn, no thread made.
+        #[cfg(any(test, feature = "test-hooks"))]
+        let refused_by_the_seam = daemon.take_a_stream_thread_fault();
+        #[cfg(not(any(test, feature = "test-hooks")))]
+        let refused_by_the_seam: Option<io::Error> = None;
+        // The daemon moves into the closure; this handle says the pair.
+        let sayer = Arc::clone(&daemon);
+        let spawned = match refused_by_the_seam {
+            Some(e) => Err(e),
+            None => thread::Builder::new()
+                .name("skepd-events".into())
+                .spawn(move || serve_events(&daemon, stream, closed)),
+        };
+        // The thread pair (m12's form): the first refusal of an episode says
+        // the OS's cause and the act, once; the first thread given a whole
+        // hold-down after the episode's last refusal says the streams have
+        // their threads again.
+        match spawned {
+            Ok(h) => {
+                if let Some(edge) = self.threads.admitted(edge_clock_now()) {
+                    sayer.say(edge.class(), StreamThreadLine::Again);
+                }
+                live.push(h);
+            }
+            Err(e) => {
+                if let Some(edge) = self.threads.refused(edge_clock_now()) {
+                    sayer.say(edge.class(), StreamThreadLine::Refused(&e));
+                }
+            }
         }
     }
 

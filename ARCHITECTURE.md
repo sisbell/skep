@@ -2998,14 +2998,15 @@ the store's install — nothing above their own layer.
    bound and the media floor re-read from that checkpoint's size and the
    change feed's five files compacted to the journal's reclaim floor; its
    wait on the signal TIMED, so that once an hour, while any standing bad
-   state stands — the eight, in the order the line says them: the write
-   path's halt, the kernel's poison, a stopped feed file, the pruner's
-   thread gone, the feed walk's thread gone, the cell index failed, the
-   floor binding, CLAIMED-PERMISSIVE — it says ONE `standing:` line naming
-   each with its position or file, and nothing on a healthy board; its
-   loop under the same catch, which says what is lost with it (every
-   checkpoint the
-   backstop's, unsaid; the bound and the floor frozen); and the kernel's
+   state stands — the nine, in the order the line says them: the write
+   path's halt, the kernel's poison, the journal damage a history read
+   met, a stopped feed file, the pruner's thread gone, the feed walk's
+   thread gone, the cell index failed, the floor binding,
+   CLAIMED-PERMISSIVE — it says ONE `standing:` line naming each with its
+   position or file, and nothing on a healthy board; its loop under the
+   same catch, which says what is lost with it (every checkpoint the
+   backstop's, unsaid; the bound and the floor frozen; the feed's files
+   uncompacted and no standing line, until a restart); and the kernel's
    own halt said once, at the write path's door where a write answers
    `poisoned` or at the handler's catch after a panic on a write (a write
    that committed before it panicked already recorded and announced by

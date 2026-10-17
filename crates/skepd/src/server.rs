@@ -655,6 +655,16 @@ pub struct Daemon {
     /// unlink's own answer and nothing else. Set, read and cleared at one
     /// site, under no lock: the atomic is what makes the field `Sync`.
     aside_fault_said: AtomicBool,
+    /// The journal damage's once-flag (RUNBOOK §2).
+    ///
+    /// It holds whether a history read has met the journal's damage this
+    /// uptime ([`crate::history::Unavailable::journal_damage`]), set where
+    /// [`Daemon::refuse_history`] says [`HistoryDamageLine`], once,
+    /// and read by the standing line, which re-says the damage at every tick.
+    /// Never cleared while the daemon runs: the line's act — a copy, the
+    /// inventory over it, a restore — is finished by a restart, whose open
+    /// reads the journal whole.
+    history_damage_said: AtomicBool,
     /// The dirty-crash harness's one seam into the claim's step.
     ///
     /// It is armed through `Daemon::hold_between_the_claim_and_its_head`:
@@ -674,6 +684,14 @@ pub struct Daemon {
     /// without the `test-hooks` feature has no such field.
     #[cfg(any(test, feature = "test-hooks"))]
     faults: ThreadFaults,
+    /// The live streams' thread seam ([`hooks::StreamThreadFaults`]).
+    ///
+    /// **Test seam.** The next streams a suite armed are refused their
+    /// thread with the seam's error in place of the OS's spawn. Unarmed until
+    /// a suite arms it, and a build without the `test-hooks` feature has no
+    /// such field.
+    #[cfg(any(test, feature = "test-hooks"))]
+    stream_thread_faults: Mutex<hooks::StreamThreadFaults>,
     /// Every line said through this daemon's own classed door this uptime.
     ///
     /// **Test seam.** The door is [`Daemon::say`] and [`Daemon::say_lines`],
@@ -1012,6 +1030,10 @@ impl Daemon {
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
         media.note_checkpoint(start_point_len);
         say_open_line(media.startup_line());
+        // The volume's free space beside the floor just named (m4): a start
+        // below the floor says so here, where the floor's own line waits for
+        // the first refused upload and the standing line for the first tick.
+        say_open_line(VolumeLine { free_space: media.free_space(), floor: media.floor() });
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let commits = Commits::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
@@ -1069,6 +1091,7 @@ impl Daemon {
                 checkpointer_ended: AtomicBool::new(false),
             },
             aside_fault_said: AtomicBool::new(false),
+            history_damage_said: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -1077,6 +1100,8 @@ impl Daemon {
                 pruner: AtomicBool::new(false),
                 unlink: AtomicBool::new(false),
             },
+            #[cfg(any(test, feature = "test-hooks"))]
+            stream_thread_faults: Mutex::new(hooks::StreamThreadFaults::new()),
             #[cfg(any(test, feature = "test-hooks"))]
             said,
         };
@@ -1581,25 +1606,28 @@ impl Daemon {
     /// Says the standing line (`operations.md` §1, the rates; §1.1 m11).
     ///
     /// It is what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the eight reads —
+    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the nine reads —
     /// each atomic loads or one lock, save the floor's fresh read of the
     /// volume, and none under the serialization guard — in the order the
     /// line says them: (1) the write path's halt with its position, (2) the
-    /// kernel's poison, (3) the feed's stopped files with theirs, (4) the
-    /// pruner's liveness flag, (5) the feed walk's liveness flag with the
-    /// region its death left uncovered, (6) the cell index's failed state,
-    /// the media gate's (`operations.md` §4 row 26), (7) the media gate's
-    /// floor binding — its free space below its floor in force, the
-    /// creation's own test (`MediaGate::floor_binding`, both figures read
-    /// fresh, so the floor's clause stops by itself once room stands) — and
-    /// (8) the `CLAIMED-PERMISSIVE` bit as `log_config_warnings` reads the
-    /// claim; and one line, [`StandingLine`], under `Class::Standing`, where
-    /// at least one clause stands; nothing otherwise. No clause for the
-    /// checkpoint thread's own death — it is the carrier.
+    /// kernel's poison, (3) the journal damage a history read met this
+    /// uptime (`Daemon::history_damage_said`; RUNBOOK §2), (4) the feed's
+    /// stopped files with theirs, (5) the pruner's liveness flag, (6) the
+    /// feed walk's liveness flag with the region its death left uncovered,
+    /// (7) the cell index's failed state, the media gate's (`operations.md`
+    /// §4 row 26), (8) the media gate's floor binding — its free space below
+    /// its floor in force, the creation's own test
+    /// (`MediaGate::floor_binding`, both figures read fresh, so the floor's
+    /// clause stops by itself once room stands) — and (9) the
+    /// `CLAIMED-PERMISSIVE` bit as `log_config_warnings` reads the claim; and
+    /// one line, [`StandingLine`], under `Class::Standing`, where at least
+    /// one clause stands; nothing otherwise. No clause for the checkpoint
+    /// thread's own death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let line = StandingLine {
             halted_at: self.commits.halted_at(),
             poisoned: self.engine.kernel().is_poisoned(),
+            history_damaged: self.history_damage_said.load(Ordering::Acquire),
             stopped_files: self.commits.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
             feed_walk_gone: self.commits.feed_walk_gone(),
@@ -1638,8 +1666,9 @@ impl Daemon {
     /// (`operations.md` §1.1 row 41; §4 row 25) — the liveness flag, then
     /// the consequence line ([`CheckpointThreadEndedLine`]) under
     /// `Class::Failure`. The hook's line has said the panic and its site;
-    /// this says what the board lost. The standing line ends with its
-    /// carrier: no cure here.
+    /// this says what the board lost — the standing line among it, which
+    /// ends with its carrier — and that a restart is the cure, which nothing
+    /// here runs.
     pub(crate) fn the_checkpoint_thread_ended(&self) {
         self.threads.checkpointer_ended.store(true, Ordering::Release);
         self.say(Class::Failure, CheckpointThreadEndedLine);
@@ -2350,28 +2379,33 @@ impl fmt::Display for Base {
 ///
 /// The gap reads "no line names the binary's version or the formats it
 /// reads at start; the stamp is said only on refusal". The line is
-/// `version {v}; this build reads journal format {SKJ4}, checkpoint format
-/// {SKC4} and world format {0x…}` — the build's version
-/// (`CARGO_PKG_VERSION`, the workspace's one) and the three format stamps
-/// this build opens under, each from its constant and never a literal here:
-/// the kernel's journal and checkpoint stamps ([`JOURNAL_FORMAT`],
-/// [`CHECKPOINT_FORMAT`]) as the kernel's own refusal spells a stamp, four
-/// ASCII bytes, and the engine's World stamp ([`WORLD_FORMAT`]) as the
-/// engine's refusal renders it, `{:#018x}`. Said before [`DataDirLine`] and
-/// so before anything is read from the directory: an open refused at a
-/// stamp has, above its refusal, the line that says which stamps this build
-/// reads, and an operator reading a board's stream after an upgrade reads
-/// which binary opened it. A pure value the unit suite pins by
-/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
+/// `version {v} ({commit}); this build reads journal format {SKJ4},
+/// checkpoint format {SKC4} and world format {0x…}` — the build's version
+/// and commit as `skepd --version` names them (`CARGO_PKG_VERSION`, the
+/// workspace's one, which every build between two releases shares, and the
+/// commit the build named through `SKEP_GIT_SHA`, `unknown` where it named
+/// none), and the three format stamps this build opens under, each from its
+/// constant and never a literal here: the kernel's journal and checkpoint
+/// stamps ([`JOURNAL_FORMAT`], [`CHECKPOINT_FORMAT`]) as the kernel's own
+/// refusal spells a stamp, four ASCII bytes, and the engine's World stamp
+/// ([`WORLD_FORMAT`]) as the engine's refusal renders it, `{:#018x}`. Said
+/// before [`DataDirLine`] and so before anything is read from the
+/// directory: an open refused at a stamp has, above its refusal, the line
+/// that says which stamps this build reads, and an operator reading a
+/// board's stream after an upgrade reads which binary opened it, its commit
+/// telling two builds of one version apart. A pure value the unit suite
+/// pins by `to_string()`; emitted under `Class::Open` through
+/// [`say_open_line`].
 struct VersionLine;
 
 impl fmt::Display for VersionLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "version {}; this build reads journal format {}, checkpoint format {} and world \
+            "version {} ({}); this build reads journal format {}, checkpoint format {} and world \
              format {:#018x}",
             env!("CARGO_PKG_VERSION"),
+            option_env!("SKEP_GIT_SHA").unwrap_or("unknown"),
             JOURNAL_FORMAT.escape_ascii(),
             CHECKPOINT_FORMAT.escape_ascii(),
             WORLD_FORMAT
@@ -2573,8 +2607,9 @@ impl fmt::Display for TailCutLine {
 /// It is the one classed door for every line of the open's report said from
 /// `open_under` under the report's own class — the version's, the
 /// directory's, the recovery's landing, the beginning's, the stray
-/// `checkpoint.tmp`'s, the tail cut's, the media gate's limits and the
-/// upload setting's, the eight the unit suite pins as this door's callers —
+/// `checkpoint.tmp`'s, the tail cut's, the media gate's limits, the
+/// volume's free space and the upload setting's, the nine the unit suite
+/// pins as this door's callers —
 /// each rendered here under `Class::Open`, the fixed-form lines as pure
 /// values and the conditional or borrowed ones built as they are said, so
 /// no site in the open spells the class. The tail cut's failure arm is said
@@ -2582,6 +2617,37 @@ impl fmt::Display for TailCutLine {
 /// queue, as every notice is.
 fn say_open_line(line: impl fmt::Display) {
     notice::emit(Class::Open, line);
+}
+
+/// The volume's free space at start (`operations.md` §1.1 m4).
+///
+/// It reads `the volume's free space at start: {f} bytes`, and where that
+/// stands below the floor in force `…, below the floor in force {F}: every
+/// deposit is refused until room stands; every other write serves` — the
+/// figure the floor's refusal reads (`MediaGate::free_space`, one reading's)
+/// beside the floor the open has just set, said after the media limits'
+/// line that names the floor. A start below the floor says so here: the
+/// floor's own line comes at the first refused upload, and the standing
+/// line at its first tick, an hour on. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
+struct VolumeLine {
+    free_space: u64,
+    floor: u64,
+}
+
+impl fmt::Display for VolumeLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the volume's free space at start: {} bytes", self.free_space)?;
+        if self.free_space < self.floor {
+            write!(
+                f,
+                ", below the floor in force {}: every deposit is refused until room stands; \
+                 every other write serves",
+                self.floor
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Line 8, the upload setting (`operations.md` §1.1 row 8).
@@ -2689,15 +2755,47 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
     }
 }
 
+/// The journal damage a history read met (RUNBOOK §2).
+///
+/// It says, in the operator stream's words, the damage as the kernel renders
+/// it — `HistoryError`'s own `Display`, naming the damage's position and its
+/// account, or the file, the act and the OS's cause, and never the position
+/// the reader asked for (D9) — then what serves on, why the next start may
+/// refuse, and the act that keeps it from refusing: a copy, the inventory
+/// over the copy, whose open reads the journal as a start does, and a
+/// restore of what it refuses. A history read scans the journal from its
+/// base to its end, so it is the one reader that meets the damage of a
+/// segment the write path never reads back, which the next start's open
+/// does read. Said once per uptime, by [`Daemon::refuse_history`], and
+/// re-said by the standing line. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Failure`.
+pub(super) struct HistoryDamageLine<'a>(pub(super) &'a HistoryError);
+
+impl fmt::Display for HistoryDamageLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "history: {}; reads at the head and every write serve on, since neither reads the \
+             journal back, but the next start's open reads it all and may refuse on the same \
+             file: copy the data directory, run skepd inventory over the copy (its open reads \
+             the journal as a start does), and restore what it refuses from a copy before the \
+             board restarts; check the volume and its device",
+            self.0
+        )
+    }
+}
+
 /// The standing line (`operations.md` §1, the rates; §1.1 m11).
 ///
 /// It is in the operator stream's words: one clause per standing bad state,
 /// each by name with its position or file, joined by `; ` in the rates'
 /// order — `the write path is halted since position {p} (feed-attest.log)`;
-/// `the kernel is poisoned`; `{file} stopped since position {p}` once per
-/// stopped file; `the pruner's thread is gone`; `the feed walk's thread is
-/// gone; positions ({low}, {head}] stay uncovered` (the walk behind the
-/// listener dead on a caught panic, its region pending for the uptime —
+/// `the kernel is poisoned`; `a history read found the journal unreadable`
+/// (the damage [`HistoryDamageLine`] said, which the next open reads;
+/// RUNBOOK §2); `{file} stopped since position {p}` once per stopped file;
+/// `the pruner's thread is gone`; `the feed walk's thread is gone;
+/// positions ({low}, {head}] stay uncovered` (the walk behind the listener
+/// dead on a caught panic, its region pending for the uptime —
 /// `operations.md` §3.3 step 2; row 41); `the cell index failed to
 /// build`; `deposits refused at the floor (free space {f} below the floor
 /// in force {F})`; `CLAIMED-PERMISSIVE`. A pure value over the reads
@@ -2712,6 +2810,11 @@ pub(super) struct StandingLine {
     pub(super) halted_at: Option<Seq>,
     /// `Kernel::is_poisoned`.
     pub(super) poisoned: bool,
+    /// Whether a history read met the journal's damage this uptime.
+    ///
+    /// It is the flag [`Daemon::refuse_history`] sets as it says
+    /// [`HistoryDamageLine`].
+    pub(super) history_damaged: bool,
     /// The feed's stopped files, each with its position.
     pub(super) stopped_files: Vec<StoppedFile>,
     /// The pruner's liveness flag.
@@ -2746,6 +2849,7 @@ impl StandingLine {
     pub(super) fn stands(&self) -> bool {
         self.halted_at.is_some()
             || self.poisoned
+            || self.history_damaged
             || !self.stopped_files.is_empty()
             || self.pruner_gone
             || self.feed_walk_gone.is_some()
@@ -2763,6 +2867,9 @@ impl fmt::Display for StandingLine {
         }
         if self.poisoned {
             clauses.push("the kernel is poisoned".to_string());
+        }
+        if self.history_damaged {
+            clauses.push("a history read found the journal unreadable".to_string());
         }
         for file in &self.stopped_files {
             clauses.push(format!("{} stopped since position {}", file.name, file.since));
@@ -2793,21 +2900,29 @@ impl fmt::Display for StandingLine {
 
 /// The checkpoint thread's consequence line.
 ///
-/// Its words (`operations.md` §1.1 row 41; §4 row 25), verbatim, say what
-/// the board lost with the thread — every checkpoint from here is the
-/// kernel's backstop's, run inline on a writer and said by nothing, and the
-/// byte bound and the media floor stand frozen at the last landing's
-/// figures, or the open's where none landed (the re-reads are the
-/// thread's). A pure value pinned by `to_string()`; emitted under
-/// `Class::Failure` by [`Daemon::the_checkpoint_thread_ended`], once, after
-/// the hook's line has said the panic itself.
+/// It opens on row 41's words (`operations.md` §1.1 row 41), verbatim — every
+/// checkpoint from here is the kernel's backstop's, run inline on a writer
+/// and said by nothing, and the byte bound and the media floor stand frozen
+/// at the last landing's figures, or the open's where none landed (the
+/// re-reads are the thread's) — and goes on with the rest of what the board
+/// lost with the thread, as row 22's line says it for the thread refused at
+/// start ([`CheckpointThreadRefusedLine`]), and with the act (§4 row 25's,
+/// a restart): the change feed's files are compacted by the thread alone,
+/// and the standing line rides its timed wait, so from here each standing
+/// state is said at its transition and never again, and a stream with no
+/// `standing:` line says nothing of the board's health. A pure value pinned
+/// by `to_string()`; emitted under `Class::Failure` by
+/// [`Daemon::the_checkpoint_thread_ended`], once, after the hook's line has
+/// said the panic itself.
 pub(super) struct CheckpointThreadEndedLine;
 
 impl fmt::Display for CheckpointThreadEndedLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
             "checkpoint thread ended: every checkpoint from here is the backstop's, unsaid; the \
-             byte bound and the floor stay where they were",
+             byte bound and the floor stay where they were; until a restart re-spawns it, the \
+             change feed's files are not compacted and no standing line will come: each state \
+             is said at its transition alone",
         )
     }
 }
@@ -2871,14 +2986,15 @@ impl fmt::Display for ClaimLine<'_> {
 
 // ── the edge pairs' words ────────────────────────────────────────────────
 //
-// What the eight pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
+// What the nine pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
 // §6's three rows): the five pools in one form — `skep_util::permits`'s
 // `PoolEdgeLine`, under the word each pool names itself by — the live-stream
-// budget in that form too, the challenge store and the accept loop in their
-// own words. Each a pure value whose words the edge suite pins as said
-// (`tests/it/edges.rs`), said under the edge's class word through the
-// classed door and never the un-classed one; nothing on a line but the
-// condition — no count (the upload pool's landing and the accept loop's
+// budget in that form too, the live streams' threads, the challenge store
+// and the accept loop in their own words. Each a pure value whose words the
+// edge suite pins as said (`tests/it/edges.rs`), said under the edge's class
+// word through the classed door and never the un-classed one; nothing on a
+// line but the condition and, where the OS refused, its own words for the
+// cause — no count (the upload pool's landing and the accept loop's
 // recovery alone carry one), no path, query, principal, peer, position or
 // reader.
 
@@ -2915,6 +3031,43 @@ impl fmt::Display for BudgetEdgeLine {
             Edge::Failure => "the live-stream budget is saturated",
             Edge::Landing { .. } => "the live-stream budget has room again",
         })
+    }
+}
+
+/// The live streams' thread pair (m12's form).
+///
+/// A stream the budget admits is served on a thread of its own, and where the
+/// OS refuses that thread the stream is closed before its head, as the 65th
+/// is. The first refusal of an episode says so in the OS's words, with what
+/// serves and the act — `live stream: the OS refused its thread ({e}); …`;
+/// every later refusal inside it says nothing; and the first stream given
+/// its thread a hold-down after the last refusal says `live stream: the OS
+/// gives the streams their threads again`. Without it every client's live
+/// view closes, reconnects and closes again, the budget's own pair says
+/// nothing — the budget has room — and nothing on the stream names the
+/// host's thread limit. No count, no peer. Said from `listen.rs`'s
+/// `Subscribers::admit` through [`Daemon::say`].
+pub(super) enum StreamThreadLine<'a> {
+    /// The first refusal of an episode, with the OS's own error.
+    Refused(&'a std::io::Error),
+    /// The first stream given its thread a hold-down after the last refusal.
+    Again,
+}
+
+impl fmt::Display for StreamThreadLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StreamThreadLine::Refused(e) => write!(
+                f,
+                "live stream: the OS refused its thread ({e}); the stream was closed before its \
+                 head, and so is every new one while the OS refuses threads; reads, writes and \
+                 /health serve; the act: room under the host's thread limit (a container's pids \
+                 limit, the user's process limit)"
+            ),
+            StreamThreadLine::Again => {
+                f.write_str("live stream: the OS gives the streams their threads again")
+            }
+        }
     }
 }
 

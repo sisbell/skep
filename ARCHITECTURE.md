@@ -1175,7 +1175,10 @@ each ceremony:
   `merge/compose.rs` the PURE CORE, `compose_runs` over three run lists
   with the gap report and the counts, `base_of` and the draft's in-place
   `script`; `merge/reads.rs` the READS of the record's §1.3 in order —
-  `compose` over a board, every `image` and `retrieve_v` in parts past its
+  `compose` over a board, a fork side's base read off its `doc_metadata`
+  `source` (the member of the document it was born sharing; a bare source
+  and a base the caller names for a fork are refused), every `image` and
+  `retrieve_v` in parts past its
   budget, each origin the bare document (`origin_of`), the head member's
   feed-walk fallback `head_of`, the refusals — writing nothing;
   `merge/land.rs` the LANDING — the cap before any frame, the one `publish`
@@ -2193,8 +2196,10 @@ allocator.
 
 `skep-arrangement` owns what a document holds: per document a content and a
 link run-list (its arrangement), the provenance relation R (every content
-address a document has ever held), and two per-member facts — the birth
-extent and the shot terms — all in one slice, `M5State`. It is the one place
+address a document has ever held), and three per-member facts — the birth
+extent, the shot terms and the fork source, the member or bare document a
+`version`-minted document was born sharing, which `doc_metadata` serves as
+`source` to every reader of that document — all in one slice, `M5State`. It is the one place
 in the workspace where state is destroyed: `delete` removes positions and
 `rearrange` reorders them, in place, and R keeps every address a delete
 removed. Its modules are declared in `src/lib.rs` in dependency order, each
@@ -2216,7 +2221,7 @@ Rules that hold across its files:
 
 - **One fold.** A committed `M5State` comes only from `apply_m5` over an
   `M5Rec`, and inside this crate only `state.rs` builds one: three of its
-  four fields are private there, the arrangement map among them, so every
+  five fields are private there, the arrangement map among them, so every
   other module reaches an arrangement through `state.rs`'s `arrangement_of`
   and the absent-⇒-empty convention it applies. The fold reaches one the
   same way and calls nothing defined in `reads.rs` or `shot.rs`, the other

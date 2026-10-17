@@ -982,6 +982,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 owner: Some(a(&[1, 0, 1])),
                 birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
                 terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
+                source: None,
                 as_of: Seq(9),
             },
         ),
@@ -993,6 +994,21 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 owner: Some(a(&[1, 0, 1])),
                 birth: None,
                 terms: None,
+                source: None,
+                as_of: Seq(9),
+            },
+        ),
+        // A cross-owner fork: a fresh private document in another account,
+        // born sharing the member `1.0.1.0.1.1` — its `source`.
+        (
+            "doc_metadata_fork",
+            Response::DocMetadata {
+                doc: a(&[1, 0, 2, 0, 1]),
+                published: false,
+                owner: Some(a(&[1, 0, 2])),
+                birth: None,
+                terms: None,
+                source: Some(a(&[1, 0, 1, 0, 1, 1])),
                 as_of: Seq(9),
             },
         ),
@@ -1052,6 +1068,31 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             JsonCodec.unparseable(ParseError { detail: Some("unknown op 'frobnicate'".into()) }),
         ),
     ]
+}
+
+/// The doc-metadata answer's `source` member (the fork-source design record's
+/// arm A): a payload option, always present — the address a `version` minted
+/// the document sharing, in the wire's dotted spelling, and `null` where no
+/// `version` minted it. Pinned here as a member beside `placed` and
+/// `base_extent`, which the same fixtures carry, so a marshal that dropped
+/// or renamed it fails by name rather than only in wire.md's examples.
+#[test]
+fn doc_metadata_marshals_its_source_as_an_address_or_null() {
+    let codec = JsonCodec;
+    let marshaled = |name: &str| -> Value {
+        let (_, resp) =
+            all_responses().into_iter().find(|(n, _)| *n == name).expect("a fixture by name");
+        serde_json::from_slice(&codec.marshal(&resp)).expect("marshal emits JSON")
+    };
+    let fork = marshaled("doc_metadata_fork");
+    assert_eq!(fork["source"], Value::String("1.0.1.0.1.1".into()), "{fork}");
+    assert_eq!(fork["doc"], Value::String("1.0.2.0.1".into()), "the fork's own document: {fork}");
+    assert!(fork["placed"].is_null() && fork["base_extent"].is_null(), "no shot terms: {fork}");
+    for name in ["doc_metadata", "doc_metadata_unborn"] {
+        let v = marshaled(name);
+        assert!(v.get("source").is_some(), "{name}: the member is present");
+        assert!(v["source"].is_null(), "{name}: null where no `version` minted it: {v}");
+    }
 }
 
 /// Marshal determinism: same value twice → byte-equal; two independent

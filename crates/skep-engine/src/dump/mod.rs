@@ -174,11 +174,14 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// What each entry carries is that slice's checkpoint form and nothing else:
 /// M3's four serde fields (the node registry, the principals, the
 /// per-namespace frontier counts and the publication map), M4's content map,
-/// M5's three — its arrangements, whose resident form IS the canonical
+/// M5's five — its arrangements, whose resident form IS the canonical
 /// maximally-merged decomposition maintained by M5's fold; its provenance R;
-/// and its birth memo, each birth member's content count at its mint, frozen
+/// its birth memo, each birth member's content count at its mint, frozen
 /// there and checkpointed because nothing else M5 holds can recompute it,
-/// which the per-class filter keeps whole — and M7's link store. M7's
+/// which the per-class filter keeps whole; its shot terms, kept whole on the
+/// same ground; and its fork sources, each `version`-minted document's
+/// source, kept so the reclaim floor cannot lose it and reduced by the fork's
+/// readability — and M7's link store. M7's
 /// `#[serde(skip)]` hints are thereby excluded, exactly as
 /// this section demands: they are the [`hints_tree`] section's
 /// subject, and rendering them here would compare a derived structure against

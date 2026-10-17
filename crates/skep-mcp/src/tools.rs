@@ -31,6 +31,7 @@ const DISPATCH_OPS: &[&str] = &[
     "fork",
     "next_account_prefix",
     "principal_prefix",
+    "doc_metadata",
     // Arrangement.
     "insert",
     "delete",
@@ -399,11 +400,13 @@ mod tests {
     }
 
     /// The dispatch table is distinct, and its size is pinned here and
-    /// nowhere else: mapping or dropping a wire op changes this number.
+    /// nowhere else: mapping or dropping a wire op changes this number —
+    /// forty since `doc_metadata` joined (the fork-source design record,
+    /// decision 10).
     #[test]
     fn dispatch_ops_are_distinct_and_counted() {
         let set: std::collections::BTreeSet<_> = DISPATCH_OPS.iter().collect();
         assert_eq!(set.len(), DISPATCH_OPS.len());
-        assert_eq!(DISPATCH_OPS.len(), 39);
+        assert_eq!(DISPATCH_OPS.len(), 40);
     }
 }

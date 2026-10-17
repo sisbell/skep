@@ -9,7 +9,10 @@
 //! against another member; `current` returns the record; a second `compose`
 //! reports it as prior; a second `land` writes nothing; `head_of` follows
 //! the trunk; and `in_claims` at the daughter answers what this wire admits —
-//! no claim over version members (the landing's doc).
+//! no claim over version members (the landing's doc). And ONE CROSS-ACCOUNT
+//! FORK merged back (case (j)): a second account's private fork of a
+//! published version, its base the source the board serves for it, composed
+//! and landed.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -17,8 +20,8 @@ use skep_client::address::{document_of, parse_address};
 use skep_client::board::{acked_addr, frames, Answer, Board, Scope, Token};
 use skep_client::ceremony::handshake::{handshake, Session, Site};
 use skep_client::merge::{
-    compose, current, head_of, land, verify, Inputs, Landed, Landing, Merger, RecordLanding, Run,
-    RunCounts, Side, Verdict,
+    compose, current, head_of, land, verify, Inputs, Landed, Landing, Merger, RecordLanding,
+    Refusal, Role, Run, RunCounts, Side, Verdict,
 };
 use skep_client::sign::{sig_hex, Signer};
 use skep_identity::{
@@ -27,11 +30,19 @@ use skep_identity::{
 };
 use skep_signature::HybridSigner;
 
-use crate::common::{bare, board, claim, insert_text, keygen, mint, spawn};
+use crate::common::{
+    bare, board, claim, insert_text, keygen, mint, spawn, wire_delegate, wire_session,
+};
 
 /// The claimant's account and principal on a notebook.
 const ACCOUNT: &str = "1.0.1";
 const PRINCIPAL: u64 = 1;
+
+/// THE FORKER: principal 2 at a sub-account delegated under the claimant's,
+/// so the claimant — its ancestor — may read the forker's drafts (PUB-1.33)
+/// and merge one back. `1.0.1.2`: the claim ceremony seats `1.0.1.1`.
+const FORKER_ACCOUNT: &str = "1.0.1.2";
+const FORKER: u64 = 2;
 
 fn addr(text: &str) -> Address {
     parse_address(text).expect("an address")
@@ -383,5 +394,134 @@ fn one_whole_merge_lands_on_the_trunk_with_its_record() {
         Some(member),
         "the trunk's head is the merge"
     );
+    session.close().expect("close");
+}
+
+/// CASE (j) ON THE REAL DAEMON — a cross-account fork of a PUBLISHED version
+/// merged back (the merge record's §1.2 shape (4); the fork-source design
+/// record's arm A). The forker's account `1.0.1.1` is delegated under the
+/// claimant's, so the claimant, its ancestor, may read the fork; the forker
+/// forks the base version `D.1` privately — a fresh document of its own
+/// account, born sharing `D.1`, which the board serves as its `source` — and
+/// removes " sat", while the head has added "big ". The library reads that
+/// source off the fork's `doc_metadata`, takes it as the base, never named
+/// (a base named beside the fork is refused), composes "the big cat", lands
+/// it as the trunk's next member with its record found from the fork, and
+/// `verify` recomputes the record against the served source.
+#[test]
+fn a_cross_account_fork_of_a_published_version_merges_from_its_served_source() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(&dir.path().join("board"), true);
+    let board = board(sd.port());
+    let store = skep_client::store::FileStore::open(dir.path().join("store"));
+    let fp = keygen(&store, "notebook");
+    claim(&board, &store, &dir.path().join("anchors"));
+    let device = store.load(&store.key_path(&fp)).expect("the device key").signer();
+    let session = handshake(&board, Scope::Content, &device, PRINCIPAL, Site::Session)
+        .expect("a content session");
+    let token = session.token().clone();
+    let bare_token = bare(&board, PRINCIPAL);
+
+    // The document, its base version and the head.
+    let d = published_document(&board, &session, &device);
+    let base = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        None,
+        &[Staged::Fresh { text: "the cat sat" }],
+    );
+    let head = shot(
+        &board,
+        &session,
+        &device,
+        &bare_token,
+        &d,
+        Some((&base, 11)),
+        &[
+            Staged::Own { from: 1, text: "the " },
+            Staged::Fresh { text: "big " },
+            Staged::Own { from: 5, text: "cat sat" },
+        ],
+    );
+    assert_eq!((base.to_string(), head.to_string()), (format!("{d}.1"), format!("{d}.2")));
+
+    // THE FORK: the forker's account delegated from the claimant's
+    // full-scope session, then its bare session's private `version` of the
+    // base member — a fresh document of its own, born sharing `D.1`.
+    let as_owner = wire_session(&board, PRINCIPAL, &device);
+    wire_delegate(&board, &as_owner, FORKER_ACCOUNT, FORKER).expect("the forker delegated");
+    board.session_close(&as_owner).expect("closed");
+    let forker = bare(&board, FORKER);
+    // Its home first: a mint into an account without one is `mint_home_first`.
+    assert_eq!(mint(&board, &forker, FORKER_ACCOUNT, false), format!("{FORKER_ACCOUNT}.0.1"));
+    let fork_frame = json!({"op": "version", "d_src": base.to_string(), "published": false});
+    let fork = addr(acked_addr(&acked(board.op(Some(&forker), &fork_frame))).expect("the fork"));
+    assert!(fork.to_string().starts_with(&format!("{FORKER_ACCOUNT}.0.")), "{fork}");
+    let meta = read(&board, Some(&token), &frames::doc_metadata(&fork.to_string()));
+    assert_eq!(meta["source"].as_str(), Some(base.to_string().as_str()), "the served source: {meta}");
+    assert_eq!(meta["published"].as_bool(), Some(false), "{meta}");
+    // The forker removes " sat" — positions 8–11 of its own draft.
+    acked(board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, None)));
+    assert_eq!(
+        image(&board, &token, &fork, 7),
+        vec![(format!("{d}.0.1.1"), 7)],
+        "the fork, read by the claimant as the forker's ancestor"
+    );
+    let kind = addr(&mint(&board, &bare_token, ACCOUNT, false));
+
+    // COMPOSE from the served source: the base is `D.1`, derived and never
+    // named; a base named beside the fork is refused before any read.
+    let before = board.health().unwrap().log_position();
+    let inputs = Inputs {
+        doc: d.clone(),
+        head: head.clone(),
+        base: None,
+        sides: vec![Side::Fork(fork.clone())],
+        options: Default::default(),
+        kind: kind.clone(),
+    };
+    let merged = compose(&board, Some(&token), &inputs).expect("composed");
+    assert_eq!(
+        merged.composed.runs.iter().map(|p| p.run.clone()).collect::<Vec<_>>(),
+        vec![rd(&d, 1, 4), rd(&d, 12, 4), rd(&d, 5, 3)],
+        "the big cat"
+    );
+    assert_eq!(merged.key.base, base, "the fork's served source is the base");
+    assert!(merged.composed.gaps.is_empty(), "{:?}", merged.composed.gaps);
+    assert_eq!(merged.composed.counts, RunCounts { a: 3, b: 1, m: 3 });
+    assert_eq!(
+        merged.record.sides.iter().map(|s| s.role()).collect::<Vec<_>>(),
+        [Role::Head, Role::Fork]
+    );
+    assert_eq!(board.health().unwrap().log_position(), before, "compose writes nothing");
+    let named = Inputs { base: Some(base.clone()), ..inputs.clone() };
+    assert_eq!(
+        compose(&board, Some(&token), &named),
+        Err(Refusal::ForkBaseNamed { fork: fork.clone(), base: base.clone() })
+    );
+
+    // LAND as the shot: the trunk's next member holds M, the record is found
+    // FROM the fork by the kind, and verifies against the served source.
+    let merger = Merger { token: session.token(), account: session.account(), signer: &device };
+    let landed = land(&board, &merged, Landing::Shot { merger, draft: None, journal: None })
+        .expect("landed");
+    let Landed::Member { address: member, record: link, .. } = landed else { panic!("{landed:?}") };
+    assert_eq!(member.to_string(), format!("{d}.3"), "the trunk's next member");
+    assert_eq!(
+        image(&board, &token, &member, 11),
+        vec![(format!("{d}.0.1.1"), 4), (format!("{d}.0.1.12"), 4), (format!("{d}.0.1.5"), 3)]
+    );
+    let found =
+        read(&board, Some(&token), &frames::find_links_ftt(&kind.to_string(), &fork.to_string()));
+    assert_eq!(found["addrs"], json!([link.to_string()]), "the record is found FROM the fork");
+    let record = current(&board, Some(&token), &kind, &merged.key)
+        .expect("the lookup")
+        .expect("a current record");
+    assert_eq!(record.base, base);
+    assert_eq!(record.link, Some(link));
+    assert_eq!(verify(&board, Some(&token), &record).expect("verified"), Verdict::Equal);
     session.close().expect("close");
 }

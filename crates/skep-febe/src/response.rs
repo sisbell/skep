@@ -250,13 +250,22 @@ pub enum Response {
     /// its copy took — answered for a version member the shot minted, and
     /// absent otherwise: for the trunk document itself, for a birth version an
     /// owned `version` minted, and for a member minted before the record
-    /// carried them.
+    /// carried them. `source` is THE FORK SOURCE of the address named (the
+    /// fork-source design record's arm A, owner-ruled 2026-10-17): the member
+    /// or bare document whose arrangement a `version` snapshotted into it —
+    /// answered for every document a `version` minted, an owned member and a
+    /// cross-owner fork alike, and absent for every other: the trunk, a shot
+    /// member, a `fork`-minted or created document. It is served to every
+    /// reader of the address named and gated by nothing of the source's: an
+    /// address is not secret, and the fork's readers already hold the
+    /// source's I-addresses through `image`.
     DocMetadata {
         doc: Address,
         published: bool,
         owner: Option<Address>,
         birth: Option<BirthVersion>,
         terms: Option<ShotTerms>,
+        source: Option<Address>,
         as_of: Seq,
     },
     /// edition_claims (PUB-8.46): the audit-view lookup of the edition-claim

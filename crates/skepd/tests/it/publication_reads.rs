@@ -9,7 +9,7 @@
 use crate::common;
 
 use common::*;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// The EDITION class type address (commons-seeding.md `3.14 | edition`) as a
 /// client names it — the type an edition claim's link carries.
@@ -206,6 +206,132 @@ fn doc_metadata_projects_a_version_member_to_its_document() {
         Some(member.as_str()),
         "the trunk and the member name one birth version: {v}"
     );
+    sd.shutdown();
+}
+
+/// THE FORK SOURCE (the fork-source design record's arm A, its ten decisions
+/// owner-ruled 2026-10-17): `doc_metadata`'s `source` is the member or bare
+/// document the address named was born sharing — the `version` snapshot's
+/// own source, kept in the board's state — answered OF THE ADDRESS NAMED to
+/// whoever may read it. An owned version answers the surface its `version`
+/// took (the bare document for `D.1`, the head member for `D.2`); a
+/// cross-owner fork answers the member it was taken from; the trunk, a
+/// `fork`-minted document and a shot member answer `null`; `/op-at` at the
+/// mint's position and after answer the same, and before it the fork is no
+/// document; and a reader who may read the fork but NOT its source still
+/// gets the address (decision 2): the forker, its share of the source since
+/// revoked, reads its own fork's source and is withheld the source itself.
+#[test]
+fn doc_metadata_serves_the_source_a_fork_was_born_sharing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let (b_account, b) = stranger(port, 914);
+    // The stranger's HOME first: a mint into an account without one — the
+    // fork's included — is refused `mint_home_first`.
+    let b_home = acked_addr(&op(
+        port,
+        Some(&b),
+        &format!(r#"{{"op":"create_new_document","account":"{b_account}"}}"#),
+    ));
+    assert_eq!(b_home, format!("{b_account}.0.1"));
+    let source_of = |v: &Value| -> Value { expect_resp(v, "doc_metadata")["source"].clone() };
+    let version = |token: &str, d_src: &str, flag: &str| -> String {
+        acked_addr(&op(port, Some(token), &format!(r#"{{"op":"version","d_src":"{d_src}"{flag}}}"#)))
+    };
+
+    // The trunk: minted by no `version`, so the member is present and null.
+    let v = doc_metadata(port, Some(&signed), CLAIMANT_DOC1);
+    assert!(source_of(&v).is_null(), "the trunk answers null: {v}");
+
+    // An OWNED version of the memberless home is born sharing the bare
+    // document — what its snapshot took; a second one, the chain having a
+    // head, is born sharing that member. Each keeps its own for good, and
+    // the trunk answers null still, never a member's.
+    let d1 = version(&signed, CLAIMANT_DOC1, "");
+    assert_eq!(d1, "1.0.1.0.1.1");
+    assert_eq!(source_of(&doc_metadata(port, Some(&signed), &d1)), json!(CLAIMANT_DOC1));
+    let d2 = version(&signed, CLAIMANT_DOC1, "");
+    assert_eq!(d2, "1.0.1.0.1.2");
+    assert_eq!(
+        source_of(&doc_metadata(port, Some(&signed), &d2)),
+        json!(d1),
+        "an owned version answers the member it was minted against"
+    );
+    assert_eq!(source_of(&doc_metadata(port, Some(&signed), &d1)), json!(CLAIMANT_DOC1), "noted once");
+    let v = doc_metadata(port, Some(&signed), CLAIMANT_DOC1);
+    assert!(source_of(&v).is_null(), "the trunk still answers null: {v}");
+
+    // A `fork` mints empty and shares nothing; a shot member is minted off
+    // no source: each null.
+    let forked = acked_addr(&op(port, Some(&owner), r#"{"op":"fork"}"#));
+    let v = doc_metadata(port, Some(&owner), &forked);
+    assert!(source_of(&v).is_null(), "a `fork`-minted document: {v}");
+    let staged = private_draft(port, &owner, "ab");
+    let edition = published_edition(port, &signed);
+    let e1 = acked_addr(&op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"publish","doc":"{edition}","draft":"{staged}","runs":[{{"origin":"{staged}","i_start":"{staged}.0.1.1","width":"2"}}]}}"#
+        ),
+    ));
+    assert_eq!(e1, format!("{edition}.1"));
+    let v = doc_metadata(port, Some(&signed), &e1);
+    assert_eq!(expect_resp(&v, "doc_metadata")["placed"].as_str(), Some("2"), "a shot member: {v}");
+    assert!(source_of(&v).is_null(), "…minted off no source: {v}");
+
+    // A CROSS-OWNER fork of the published home by the stranger — a private
+    // document of its own account — is born sharing the chain's head `D.2`,
+    // and says so to its reader: `doc` the fork itself, `source` the member.
+    let before = head(port);
+    let f = version(&b, CLAIMANT_DOC1, r#","published":false"#);
+    assert!(f.starts_with(&format!("{b_account}.0.")), "a fresh document of the forker's: {f}");
+    let born_at = head(port);
+    let v = doc_metadata(port, Some(&b), &f);
+    let meta = expect_resp(&v, "doc_metadata");
+    assert_eq!(meta["doc"].as_str(), Some(f.as_str()), "the fork is its own trunk: {v}");
+    assert_eq!(meta["owner"].as_str(), Some(b_account.as_str()), "{v}");
+    assert_eq!(meta["source"], json!(d2), "born sharing the head member at the mint: {v}");
+    assert!(meta["birth"].is_null() && meta["placed"].is_null(), "no member, no shot: {v}");
+    // The same at every position from the mint on — the trunk's chain
+    // moving afterwards moves nothing — and before it, no document.
+    let d3 = version(&signed, CLAIMANT_DOC1, "");
+    assert_eq!(d3, "1.0.1.0.1.3");
+    let after = head(port);
+    assert!(after > born_at, "the third version committed");
+    let frame = format!(r#"{{"op":"doc_metadata","doc":"{f}"}}"#);
+    for at in [born_at, after] {
+        let v = op_at_ok(port, Some(&b), at, &frame);
+        assert_eq!(source_of(&v), json!(d2), "as of {at}: {v}");
+    }
+    let (st, v) = op_at(port, Some(&b), before, &frame);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(
+        expect_resp(&v, "rejected")["code"].as_str(),
+        Some("doc_not_registered"),
+        "before the mint the fork is no document: {v}"
+    );
+    assert_eq!(source_of(&doc_metadata(port, Some(&b), &f)), json!(d2), "live, the trunk moved on");
+    // The fork's OWN gate decides who reads it: the guest is withheld the
+    // private fork, source and all.
+    assert_withheld(&doc_metadata(port, None, &f), &f);
+
+    // DECISION 2 — served to every reader of the fork, ungated by the
+    // source's readability. A private draft of the claimant's, shared with
+    // the stranger, forked by the stranger — a private source has no member,
+    // so the source is the bare draft — and the share then REVOKED: the
+    // forker is withheld the source and still reads its own fork's source.
+    let secret = private_draft(port, &owner, "s");
+    let grant = deposit_grant(port, &signed, CLAIMANT_DOC1, &secret, Some(&b_account));
+    let f2 = version(&b, &secret, "");
+    assert_eq!(source_of(&doc_metadata(port, Some(&b), &f2)), json!(secret), "the bare draft");
+    revoke_grant(port, &signed, &grant);
+    assert_withheld(&doc_metadata(port, Some(&b), &secret), &secret);
+    let v = doc_metadata(port, Some(&b), &f2);
+    assert_eq!(source_of(&v), json!(secret), "the fact is the fork's own, kept past the revoke: {v}");
     sd.shutdown();
 }
 

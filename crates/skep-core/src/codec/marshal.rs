@@ -492,8 +492,11 @@ pub(super) fn j_response(r: &Response) -> Value {
         // over the terms: both null where the address named carries none (a
         // trunk, a version-minted birth, a pre-terms member); `placed`
         // carried and `base_extent` null for a member the birth shape minted
-        // — the null IS the birth bit there; both carried otherwise.
-        Response::DocMetadata { doc, published, owner, birth, terms, as_of } => (
+        // — the null IS the birth bit there; both carried otherwise. `source`
+        // (the fork-source design record's arm A) is a payload option over
+        // the fork source of the address named: the member or bare document a
+        // `version` snapshotted into it, null where no `version` minted it.
+        Response::DocMetadata { doc, published, owner, birth, terms, source, as_of } => (
             "doc_metadata",
             vec![
                 ("doc", j_addr(doc)),
@@ -510,6 +513,7 @@ pub(super) fn j_response(r: &Response) -> Value {
                         .map(j_nat)
                         .unwrap_or(Value::Null),
                 ),
+                ("source", source.as_ref().map(j_addr).unwrap_or(Value::Null)),
                 ("as_of", j_seq(*as_of)),
             ],
         ),

@@ -431,6 +431,35 @@ impl M5State {
         out
     }
 
+    /// THE FORK SOURCE of `doc` — the address `doc` was born sharing: the
+    /// `source` of the [`VersionSnapshot`](crate::M5Rec::VersionSnapshot)
+    /// that minted it, which is the reading surface `version` resolved at
+    /// the mint — a version member where the source had a chain (its head,
+    /// pinned then, or the member named), the bare document otherwise — and
+    /// which the doc-metadata read serves as `source` to every reader of the
+    /// fork (the fork-source design record, arm A; owner-ruled 2026-10-17).
+    ///
+    /// THE INVARIANT it answers under is SOURCE★, stated on [`M5State`]:
+    /// the entry is written by the `version` record alone, once, at the
+    /// mint, and never moved — not by a shot, which mints its member off no
+    /// source, not by a placement, not by a `fork`, which reaches this slice
+    /// with no record. So `Some` exactly for a document a `version` minted,
+    /// an owned member and a cross-owner fork alike, and `None` for every
+    /// other address: a trunk document, a shot member, a `fork`-minted or
+    /// created document, and an address never minted. The answer is ONE HOP
+    /// — a fork of a fork answers the fork it was taken from, never the
+    /// line's root — and it is the same at every position from the mint on,
+    /// the fact being immutable.
+    ///
+    /// Answers the address named, as every read here does: a trunk whose
+    /// chain a `version` opened answers `None`, never its member's source;
+    /// a member answers its own. One map lookup, reading no run; the address
+    /// is lent, as [`shot_terms`](M5State::shot_terms) lends the terms, and a
+    /// caller keeping it clones it.
+    pub fn fork_source(&self, doc: &Address) -> Option<&Address> {
+        self.fork_sources.get(doc)
+    }
+
     /// R⁻¹ candidate documents (§9; Conflicts #6) — every document with a
     /// recorded span NOT `Separated` from a span of `coverage`, distinct and
     /// in deterministic Tumbler order. A CANDIDATE SUPERSET of ASN-0124's

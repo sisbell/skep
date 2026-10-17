@@ -308,6 +308,7 @@ fn fixture(name: &str) -> Response {
             owner: Some(a(&[1, 0, 1])),
             birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
             terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
+            source: None,
             as_of: Seq(9),
         },
         // A private draft with no chain member yet: birth/birth_extent null,
@@ -318,6 +319,21 @@ fn fixture(name: &str) -> Response {
             owner: Some(a(&[1, 0, 1])),
             birth: None,
             terms: None,
+            source: None,
+            as_of: Seq(9),
+        },
+        // A cross-owner FORK (the fork-source design record's arm A): a
+        // private document of another account, minted by `version` off the
+        // member `1.0.1.0.1.1`, which it was born sharing — its `source`. Its
+        // own chain has no member and no shot minted it, so the other
+        // per-member facts are null.
+        "doc_metadata_fork" => Response::DocMetadata {
+            doc: a(&[1, 0, 2, 0, 1]),
+            published: false,
+            owner: Some(a(&[1, 0, 2])),
+            birth: None,
+            terms: None,
+            source: Some(a(&[1, 0, 1, 0, 1, 1])),
             as_of: Seq(9),
         },
         "edition_claims" => Response::EditionClaims {

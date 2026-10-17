@@ -16,11 +16,17 @@
 //! anything is written (§3, idempotence). Every `image` past the run budget
 //! is re-asked in halves and the parts re-joined by I-adjacency (§8: "a
 //! region past the budget can be asked in parts"), every `retrieve_v` past
-//! the delivery budget likewise. A side whose base the library cannot read
-//! — a fork, a member of another document or the bare document itself, a
-//! draft of an account other than the trunk owner's, a draft with no named
-//! base (decision 15) — refuses before the first `image`; a side the reader
-//! may not read refuses at its own read.
+//! the delivery budget likewise. A fork side's base is the SOURCE the board
+//! serves for it — `doc_metadata`'s `source`, the member the fork was born
+//! sharing (the fork-source design record, arm A; the merge record's case
+//! (j)) — read before the head's extent and never named by the caller. A
+//! side whose base the library cannot read — a member of another document
+//! or the bare document itself, a draft of an account other than the trunk
+//! owner's, a draft with no named base, a fork no `version` minted or one
+//! taken from another document (decision 15) — refuses before the first
+//! `image`, as does a fork of a BARE source, a fork taken from the document
+//! before its first version, whose base is history the board does not
+//! serve; a side the reader may not read refuses at its own read.
 //!
 //! The reads go through [`Board::op`] under the caller's token, or with no
 //! token where none is given, and [`Board::op_at`] for a draft at a
@@ -110,9 +116,17 @@ pub enum Side {
         /// The commit position the draft is read at; `None` the head.
         position: Option<u64>,
     },
-    /// A cross-owner fork: not offered until the fork-source read lands.
+    /// A cross-owner fork of one of the document's published versions (§1.2
+    /// shape (4), case (j)).
     ///
-    /// It is refused [`Refusal::BaseUnknown`] before any read (decision 15).
+    /// Its base is the source the board serves for it — the `source` member
+    /// of its `doc_metadata`, the version member the fork was born sharing —
+    /// and never the caller's to name ([`Refusal::ForkBaseNamed`]). A fork
+    /// whose source is the bare document, taken before its first version,
+    /// is refused [`Refusal::BareSource`]; one no `version` minted, or one
+    /// taken from another document, [`Refusal::BaseUnknown`]. Read as named:
+    /// a published fork with members of its own would float to its head, so
+    /// the caller names the member of it it means.
     Fork(Address),
 }
 
@@ -251,11 +265,36 @@ pub struct Merged {
 pub enum Refusal {
     /// A side whose base the library cannot read, refused before any `image`.
     ///
-    /// It is a fork, a member of another document or the bare document
-    /// itself, a draft of an account other than the trunk owner's, a draft
-    /// with no named base, or a side no base can be derived with (decision
-    /// 15; no interim).
+    /// It is a member of another document or the bare document itself, a
+    /// draft of an account other than the trunk owner's, a draft with no
+    /// named base, a fork no `version` minted or one taken from another
+    /// document, or a side no base can be derived with (decision 15; no
+    /// interim).
     BaseUnknown(Side),
+    /// A fork side whose source is the bare document: a fork taken before
+    /// the document's first version, refused before any `image`.
+    ///
+    /// Its base is the document's arrangement as it stood at the fork's
+    /// mint — history the board does not serve as a base (the fork-source
+    /// design record, decision 4) — so merging it is not offered.
+    BareSource {
+        /// The fork side.
+        side: Side,
+        /// The source the board serves for it: the bare document.
+        source: Address,
+    },
+    /// A base the caller named for a fork side, refused before any read.
+    ///
+    /// A fork's base is the source the board serves for it, never the
+    /// caller's to name (the fork-source design record, decision 8): a named
+    /// one contradicts the substrate's fact and is refused rather than
+    /// honoured.
+    ForkBaseNamed {
+        /// The fork side's address.
+        fork: Address,
+        /// The base the caller named.
+        base: Address,
+    },
     /// Two draft sides: not a merge shape.
     ///
     /// The shot admits one draft, so the way out is to shoot one (§1.2 shape
@@ -315,7 +354,9 @@ impl From<Halt> for Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Refusal::BaseUnknown(side) => write!(f, "the base of the side {} cannot be read: a cross-account side is not offered until the fork-source read lands", side.address()),
+            Refusal::BaseUnknown(side) => write!(f, "the base of the side {} cannot be read: a side is a version of the document, a draft of the document owner's account with its base named, or a fork of one of the document's versions", side.address()),
+            Refusal::BareSource { side, source } => write!(f, "the fork {} was taken from {source} itself, before it had a version (a bare source): its base is history the board does not serve, and merging it is not offered", side.address()),
+            Refusal::ForkBaseNamed { fork, base } => write!(f, "the base {base} was named for the fork {fork}: a fork's base is the source the board serves for it (doc_metadata's source), never the caller's to name — leave base unset"),
             Refusal::TwoDrafts => f.write_str("two drafts off one head are no merge shape: shoot one first"),
             Refusal::Unreadable(doc) => write!(f, "{doc} is not readable to this reader (withheld); nothing was composed"),
             Refusal::NoSuchDocument(doc) => write!(f, "{doc} is not registered at this board"),
@@ -850,9 +891,17 @@ pub(super) struct Readings {
 
 /// Makes the reads of §1.3 in order, then the core's walk.
 ///
-/// The reads are the document's metadata, the head's extent, the base
-/// imaged, the head and each side imaged, the composition with the values
-/// read through the sides.
+/// The reads are the document's metadata, each fork side's metadata for
+/// the source it was born sharing, the head's extent, the base imaged, the
+/// head and each side imaged, the composition with the values read through
+/// the sides.
+///
+/// A fork side's ANCHOR along the base derivation is its source — the
+/// version member the board serves as its `doc_metadata` `source` (the
+/// merge record's case (j); the fork-source design record, arm A) — where a
+/// member's is itself. A base handed in beside a fork side is the record's
+/// own at `verify`, never a caller's ([`compose`] refuses one): it must be
+/// the base the sources derive, else the record contradicts the board.
 ///
 /// # Errors
 ///
@@ -860,14 +909,20 @@ pub(super) struct Readings {
 ///
 /// - a head that is no trunk member of `doc`, faced;
 /// - two drafts, [`Refusal::TwoDrafts`];
-/// - a fork side, a member of another document or the bare document
-///   itself, or a draft with no named base, [`Refusal::BaseUnknown`];
+/// - a member of another document or the bare document itself, or a draft
+///   with no named base, [`Refusal::BaseUnknown`];
 /// - the metadata read's refusals;
 /// - a draft of an account other than the trunk owner's,
 ///   [`Refusal::BaseUnknown`];
+/// - for each fork side in order: its metadata read's refusals — the fork
+///   unreadable, [`Refusal::Unreadable`]; a fork no `version` minted, or one
+///   taken from another document, [`Refusal::BaseUnknown`]; a fork of the
+///   bare document, [`Refusal::BareSource`];
 /// - the head's extent read's refusals;
 /// - a base that cannot be derived, [`Refusal::BaseUnknown`] — every
 ///   `BaseUnknown` decided before any `image`;
+/// - a named base beside a fork side that is not the one the sources
+///   derive, faced;
 /// - a base that is no member of `doc`'s chain, faced;
 /// - then each image and value read's own refusals, and an `image` run that
 ///   is no content I-address.
@@ -892,7 +947,9 @@ pub(super) fn read_shape(
     }
     for side in sides {
         match side {
-            Side::Fork(_) => return Err(Refusal::BaseUnknown(side.clone())),
+            // A fork's base is read off the board below, after the trunk's
+            // own metadata.
+            Side::Fork(_) => {}
             Side::Member(m) => {
                 if trunk_of(m).as_ref() != Some(doc) || version_components(doc, m).is_none() {
                     return Err(Refusal::BaseUnknown(side.clone()));
@@ -914,20 +971,40 @@ pub(super) fn read_shape(
             }
         }
     }
+    // Each side's anchor along the base derivation: a fork's is the source
+    // the board serves for it, read now; every other side's is itself.
+    let mut anchors: Vec<Address> = Vec::with_capacity(sides.len());
+    for side in sides {
+        anchors.push(match side {
+            Side::Fork(fork) => fork_source(reader, doc, side, fork)?,
+            other => other.address().clone(),
+        });
+    }
     let head_extent = reader.extent(head, None)?;
     // Step 2: the base, named or derived along the anchor chains.
+    let derived = || -> Result<Address, Refusal> {
+        let mut b = head.clone();
+        for (side, anchor) in sides.iter().zip(&anchors) {
+            b = base_of(&b, anchor).ok_or_else(|| Refusal::BaseUnknown(side.clone()))?;
+        }
+        Ok(b)
+    };
+    let has_fork = sides.iter().any(|s| matches!(s, Side::Fork(_)));
     let base = match base {
-        Some(b) => b,
-        None => {
-            let mut b = head.clone();
-            for side in sides {
-                b = match base_of(&b, side.address()) {
-                    Some(b) => b,
-                    None => return Err(Refusal::BaseUnknown(side.clone())),
-                };
+        Some(b) if has_fork => {
+            let served = derived()?;
+            if served != b {
+                return Err(Halt::face(
+                    format!("the base {b} is not the base {served} the board serves for the fork side"),
+                    "a fork's base is the source its `doc_metadata` names, which this record contradicts",
+                    "this record is not one this library would write against this board; nothing was written",
+                )
+                .into());
             }
             b
         }
+        Some(b) => b,
+        None => derived()?,
     };
     if trunk_of(&base).as_ref() != Some(doc) || version_components(doc, &base).is_none() {
         return Err(Halt::face(
@@ -970,6 +1047,38 @@ pub(super) fn read_shape(
     }
     let families = composed.runs.iter().map(|p| family_of(&p.run.origin, doc, sides)).collect();
     Ok(Readings { base, base_image, maps, head_extent, owner: meta.owner, composed, families })
+}
+
+/// Reads the source a fork side was born sharing, checked as the fork's base.
+///
+/// It is the fork's `doc_metadata` `source` (the fork-source design record,
+/// arm A), and it is the base where it is a version member of `doc` (the
+/// merge record's case (j)): the three checks in order — present, of this
+/// document, a member.
+///
+/// # Errors
+///
+/// [`Reader::metadata`]'s errors on the fork — the fork unreadable,
+/// [`Refusal::Unreadable`]; a fork no `version` minted (no source), or one
+/// whose source lies in another document, [`Refusal::BaseUnknown`]; a fork
+/// of the bare document, [`Refusal::BareSource`].
+fn fork_source(
+    reader: &Reader<'_>,
+    doc: &Address,
+    side: &Side,
+    fork: &Address,
+) -> Result<Address, Refusal> {
+    let meta = reader.metadata(fork)?;
+    let Some(source) = meta.source.as_deref().and_then(parse_address) else {
+        return Err(Refusal::BaseUnknown(side.clone()));
+    };
+    if trunk_of(&source).as_ref() != Some(doc) {
+        return Err(Refusal::BaseUnknown(side.clone()));
+    }
+    if version_components(doc, &source).is_none() {
+        return Err(Refusal::BareSource { side: side.clone(), source });
+    }
+    Ok(source)
 }
 
 /// Returns a run's family by its origin.
@@ -1176,8 +1285,19 @@ fn compare_parts(
 ///
 /// # Errors
 ///
-/// `read_shape`'s, then a halt reading the prior records.
+/// A base named beside a fork side, [`Refusal::ForkBaseNamed`], before any
+/// read — a fork's base is the board's to serve (the fork-source design
+/// record, decision 8); then `read_shape`'s, then a halt reading the prior
+/// records.
 pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<Merged, Refusal> {
+    if let Some(base) = &inputs.base {
+        if let Some(fork) = inputs.sides.iter().find_map(|s| match s {
+            Side::Fork(f) => Some(f),
+            _ => None,
+        }) {
+            return Err(Refusal::ForkBaseNamed { fork: fork.clone(), base: base.clone() });
+        }
+    }
     let reader = Reader::new(board, token);
     let readings = read_shape(
         &reader,

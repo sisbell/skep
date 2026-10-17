@@ -5,8 +5,10 @@
 //! content — this one does, which is why the library's `merge` feature is
 //! on for the `skep` command alone). The board, the document and one side
 //! are named — an alternative member, a draft with the member it was staged
-//! from, or a fork, which is refused with the reason until the fork-source
-//! read lands (decision 15) — and the head where the feed walk should not
+//! from, or a fork of one of the document's published versions, whose base
+//! is the source the board serves for it (`doc_metadata`'s `source`; a fork
+//! taken from the bare document before its first version is refused with
+//! that reason) — and the head where the feed walk should not
 //! supply it; the command composes the merge under the rules and prints the
 //! `Merged` report as ONE JSON document on stdout, exit 0. With `--publish`
 //! it lands the merge as the document's next version with its record, with
@@ -298,12 +300,15 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
 /// The stop a library refusal comes to (§2.3's exit 1, "the board refused"):
 /// a halt the library faced keeps its own code; every typed refusal is the
 /// board's verdict under the wire code the refusal is named for, its detail
-/// the refusal's own words — the fork and the second draft, which the
-/// library refuses before any frame, among them, under their own names.
+/// the refusal's own words — the side whose base cannot be read, the second
+/// draft, a fork's bare source and a base named for a fork, which the
+/// library refuses before any image, among them, under their own names.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
         Refusal::BaseUnknown(_) => "base_unknown",
+        Refusal::BareSource { .. } => "bare_source",
+        Refusal::ForkBaseNamed { .. } => "fork_base_named",
         Refusal::TwoDrafts => "two_drafts",
         Refusal::Unreadable(_) | Refusal::WindowWithheld(_) => "withheld",
         Refusal::NoSuchDocument(_) => "doc_not_registered",

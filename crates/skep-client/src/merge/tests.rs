@@ -307,10 +307,10 @@ fn case_i_prime_an_atom_replaced_on_both_sides_is_a_collision() {
     assert_eq!(gap_runs(&c), vec![vec![(0, rd(12, 1)), (1, rd(13, 1))]]);
 }
 
-/// (j) a fork merged back, as the composition it will serve: A's "big " at
+/// (j) a fork merged back, as the composition serves it: A's "big " at
 /// `D·4|D·5`, F's "dog" for `5–7` — an `anchor` for A's, its right anchor
-/// gone, settled; F's group last, not in the chain. The refusal of the
-/// shape until the fork-source read lands is the reads', not the core's.
+/// gone, settled; F's group last, not in the chain. The fork's base is the
+/// reads' to find (its served source); the core composes the pair as any.
 #[test]
 fn case_j_a_fork_merged_back_composes_with_the_fork_last() {
     let dog = Run::new(f(), 1, 3);
@@ -991,6 +991,9 @@ mod scripted {
         owner: String,
         placed: Option<u64>,
         base_extent: Option<u64>,
+        /// The source a `version` minted the document sharing — its
+        /// `doc_metadata` `source`; `None` where none did.
+        source: Option<String>,
         /// The arrangement as of each position it changed at, for `/op-at`.
         history: BTreeMap<u64, Vec<Run>>,
     }
@@ -1085,6 +1088,7 @@ mod scripted {
                     owner: owner.to_string(),
                     placed: None,
                     base_extent: None,
+                    source: None,
                     history,
                 },
             );
@@ -1101,6 +1105,21 @@ mod scripted {
             self.rows.push(FeedRow {
                 at: self.position,
                 op: "publish",
+                docs: vec![text.to_string()],
+            });
+        }
+
+        /// A cross-owner FORK: a private document of `owner`'s account that a
+        /// `version` minted off `source` — the member or bare document it
+        /// was born sharing, its `doc_metadata` `source` — arranged as
+        /// `runs` since, with its `version` row on the feed.
+        fn fork(&mut self, text: &str, owner: &str, source: &str, runs: Vec<Run>) {
+            self.doc(text, false, owner, runs);
+            self.docs.get_mut(text).unwrap().source = Some(source.to_string());
+            self.position += 1;
+            self.rows.push(FeedRow {
+                at: self.position,
+                op: "version",
                 docs: vec![text.to_string()],
             });
         }
@@ -1255,7 +1274,7 @@ mod scripted {
                         return Ok(rejected("withheld"));
                     }
                     let Some(d) = self.docs.get(doc) else { return Ok(rejected("doc_not_registered")) };
-                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string())})))
+                    Ok(reply(200, json!({"resp": "doc_metadata", "as_of": position, "doc": doc, "published": d.published, "owner": d.owner, "placed": d.placed.map(|p| p.to_string()), "base_extent": d.base_extent.map(|e| e.to_string()), "source": d.source})))
                 }
                 "retrieve_doc_v_span_set" => {
                     let doc = frame["doc"].as_str().unwrap();
@@ -1787,45 +1806,76 @@ mod scripted {
         assert_eq!(merged.as_of, w.position);
     }
 
-    /// The fence on cross-account sides: a `Fork`, a member of another
-    /// document and a draft of another account each refuse `BaseUnknown`
-    /// before any `image`; two drafts refuse `TwoDrafts`; a draft with no
-    /// named base refuses `BaseUnknown`.
+    /// The fence on sides whose base the board does not serve: a member of
+    /// another document and a draft of another account each refuse
+    /// `BaseUnknown` before any `image`; two drafts refuse `TwoDrafts`; a
+    /// draft with no named base refuses `BaseUnknown`. A FORK is read before
+    /// it is judged — its `doc_metadata`, for the source it was born sharing
+    /// — and refuses, still before any `image`: `BaseUnknown` where no
+    /// `version` minted it (no source) or where its source lies in another
+    /// document; `BareSource`, with its own reason, where its source is the
+    /// bare document — a fork taken before the document's first version;
+    /// `Unreadable` where the merger may not read the fork at all. A base
+    /// the caller names beside a fork side refuses `ForkBaseNamed` before
+    /// any read.
     #[test]
-    fn a_fork_or_a_foreign_side_refuses_before_any_image() {
-        let (dialer, board, _) = open(World::race());
+    fn a_foreign_side_or_a_fork_without_a_served_base_refuses_before_any_image() {
+        let mut w = World::race();
+        // Another published document `Z` with a member, and four forks in
+        // another account: one no `version` minted, one of `Z`'s member, one
+        // of the bare `D`, and one the merger may not read.
+        let (unminted, of_z, of_bare, hidden) = ("1.0.2.0.3", "1.0.2.0.4", "1.0.2.0.5", "1.0.2.0.6");
+        w.text(Z, 1, "hello");
+        w.doc(Z, true, ACCOUNT, vec![run(Z, 1, 5)]);
+        w.member(&format!("{Z}.1"), vec![run(Z, 1, 5)], None);
+        w.doc(unminted, false, "1.0.2", Vec::new());
+        w.fork(of_z, "1.0.2", &format!("{Z}.1"), vec![run(Z, 1, 5)]);
+        w.fork(of_bare, "1.0.2", D, vec![run(D, 1, 11)]);
+        w.fork(hidden, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+        w.withheld.insert(hidden.to_string());
+        let (dialer, board, _) = open(w);
         let with =
             |sides: Vec<Side>, base: Option<Address>| Inputs { sides, base, ..race_inputs() };
-        let fork = Side::Fork(a(F));
+        let refuses = |side: Side, base: Option<Address>, want: Refusal| {
+            dialer.clear();
+            assert_eq!(compose(&board, Some(&token()), &with(vec![side], base)), Err(want));
+            assert!(
+                !dialer.ops().iter().any(|o| o == "image"),
+                "no image before the refusal: {:?}",
+                dialer.ops()
+            );
+        };
+        let fork = |text: &str| Side::Fork(a(text));
+        refuses(fork(unminted), None, Refusal::BaseUnknown(fork(unminted)));
         assert_eq!(
-            compose(&board, Some(&token()), &with(vec![fork.clone()], None)),
-            Err(Refusal::BaseUnknown(fork))
+            dialer.ops(),
+            ["doc_metadata", "doc_metadata"],
+            "the trunk's metadata, then the fork's for its source, and nothing after"
         );
-        assert!(dialer.ops().is_empty(), "no read at all for a fork: {:?}", dialer.ops());
-        let foreign = Side::Member(a(&format!("{Z}.1")));
-        assert_eq!(
-            compose(&board, Some(&token()), &with(vec![foreign.clone()], None)),
-            Err(Refusal::BaseUnknown(foreign))
-        );
-        let other_account = Side::Draft { at: a("1.0.2.0.3"), position: None };
-        assert_eq!(
-            compose(
-                &board,
-                Some(&token()),
-                &with(vec![other_account.clone()], Some(a(&format!("{D}.1"))))
-            ),
-            Err(Refusal::BaseUnknown(other_account))
+        assert_eq!(dialer.frames("doc_metadata")[1]["doc"], unminted);
+        refuses(fork(of_z), None, Refusal::BaseUnknown(fork(of_z)));
+        refuses(fork(of_bare), None, Refusal::BareSource { side: fork(of_bare), source: a(D) });
+        refuses(fork(hidden), None, Refusal::Unreadable(a(hidden)));
+        refuses(
+            fork(F),
+            Some(a(&format!("{D}.1"))),
+            Refusal::ForkBaseNamed { fork: a(F), base: a(&format!("{D}.1")) },
         );
         assert!(
-            !dialer.ops().iter().any(|o| o == "image"),
-            "no image before the refusal: {:?}",
+            dialer.ops().is_empty(),
+            "no read at all for a base named beside a fork: {:?}",
             dialer.ops()
         );
-        let unbased = Side::Draft { at: a(S), position: None };
-        assert_eq!(
-            compose(&board, Some(&token()), &with(vec![unbased.clone()], None)),
-            Err(Refusal::BaseUnknown(unbased))
+        let foreign = Side::Member(a(&format!("{Z}.1")));
+        refuses(foreign.clone(), None, Refusal::BaseUnknown(foreign));
+        let other_account = Side::Draft { at: a("1.0.2.0.9"), position: None };
+        refuses(
+            other_account.clone(),
+            Some(a(&format!("{D}.1"))),
+            Refusal::BaseUnknown(other_account),
         );
+        let unbased = Side::Draft { at: a(S), position: None };
+        refuses(unbased.clone(), None, Refusal::BaseUnknown(unbased));
         let two = vec![
             Side::Draft { at: a(S), position: None },
             Side::Draft { at: a("1.0.1.0.5"), position: None },
@@ -1834,6 +1884,113 @@ mod scripted {
             compose(&board, Some(&token()), &with(two, Some(a(&format!("{D}.1"))))),
             Err(Refusal::TwoDrafts)
         );
+    }
+
+    /// CASE (j): a cross-owner fork of a PUBLISHED version merges from the
+    /// source the board serves for it. The fork `F`, another account's
+    /// private document minted by `version` off the base `D.1` ("the cat
+    /// sat"), has removed " sat"; the head added "big ". The reads, in
+    /// order: the trunk's metadata, THE FORK'S METADATA for its `source`,
+    /// the head's extent, the base's extent and image — the base `D.1`,
+    /// derived from the source and never named — the head's image, the
+    /// fork's extent and image, the prior records. M is the race shape's
+    /// "the big cat", the fork's role `fork`, the merge lands as the trunk's
+    /// next member, and `verify` recomputes its record against the source
+    /// the board serves.
+    #[test]
+    fn case_j_a_fork_of_a_published_version_merges_from_the_source_the_board_serves() {
+        let mut w = World::race();
+        w.fork(F, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 7)]);
+        let (dialer, board, signer) = open(w);
+        let inputs = Inputs { sides: vec![Side::Fork(a(F))], ..race_inputs() };
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        assert_eq!(
+            dialer.ops(),
+            [
+                "doc_metadata",
+                "doc_metadata",
+                "retrieve_doc_v_span_set",
+                "retrieve_doc_v_span_set",
+                "image",
+                "image",
+                "retrieve_doc_v_span_set",
+                "image",
+                "find_links_ftt",
+                "find_links_ftt"
+            ]
+        );
+        let metadata: Vec<String> = dialer
+            .frames("doc_metadata")
+            .iter()
+            .map(|f| f["doc"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(metadata, [D.to_string(), F.to_string()], "the trunk's, then the fork's");
+        let imaged: Vec<String> =
+            dialer.frames("image").iter().map(|f| f["d"].as_str().unwrap().to_string()).collect();
+        assert_eq!(
+            imaged,
+            [format!("{D}.1"), format!("{D}.2"), F.to_string()],
+            "the base the source names, the head, the fork"
+        );
+        assert_eq!(m_runs(&merged), vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)], "the big cat");
+        assert_eq!(merged.composed.counts, RunCounts { a: 3, b: 1, m: 3 });
+        assert!(merged.composed.gaps.is_empty(), "{:?}", merged.composed.gaps);
+        assert_eq!(merged.families, vec![Family::Own, Family::Own, Family::Own]);
+        assert_eq!(merged.key.base, a(&format!("{D}.1")), "the base is the fork's source");
+        assert_eq!(merged.key.sides, vec![a(&format!("{D}.2")), a(F)]);
+        assert_eq!(
+            merged.record.sides.iter().map(SideAt::role).collect::<Vec<_>>(),
+            [Role::Head, Role::Fork]
+        );
+        assert_eq!(merged.record.base, a(&format!("{D}.1")));
+        assert_eq!(dialer.world().rows.len(), 4, "nothing written");
+        // LANDED as the shot: the fork's runs are all the document's own, so
+        // nothing is windowed, and the member is the trunk's next.
+        let session = sign_in(&board, &signer);
+        let landed = land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let Landed::Member { address, record: link, .. } = &landed else { panic!("{landed:?}") };
+        assert_eq!(address.to_string(), format!("{D}.3"));
+        let member = dialer.world().docs.get(&format!("{D}.3")).unwrap().clone();
+        assert_eq!(member.runs, vec![run(D, 1, 4), run(D, 12, 4), run(D, 5, 3)]);
+        // The record names the fork's base — the served source — and
+        // `verify` re-reads it off the board and recomputes M.
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("a current record");
+        assert_eq!(record.base, a(&format!("{D}.1")));
+        assert_eq!(record.link.as_ref(), Some(link));
+        assert_eq!(verify(&board, Some(&token()), &record).expect("verified"), Verdict::Equal);
+    }
+
+    /// Case (j) with the fork's OWN text: the fork typed "fat " where the
+    /// head typed "big ", both at `D·4|D·5` — an `order` gap, unsettled, as
+    /// between two members (§9 (b)) — and the fork's fresh run is a WINDOW
+    /// onto the fork in M: the owner's shot keeps it by reference, and
+    /// `show_origin` names the forker for those bytes.
+    #[test]
+    fn a_forks_own_text_is_a_window_in_the_merge() {
+        let mut w = World::race();
+        let f2 = "1.0.2.0.8";
+        w.text(f2, 1, "fat ");
+        w.fork(f2, "1.0.2", &format!("{D}.1"), vec![run(D, 1, 4), run(f2, 1, 4), run(D, 5, 7)]);
+        let (_dialer, board, _) = open(w);
+        let inputs = Inputs { sides: vec![Side::Fork(a(f2))], ..race_inputs() };
+        let merged = compose(&board, Some(&token()), &inputs).expect("composed");
+        assert_eq!(
+            m_runs(&merged),
+            vec![run(D, 1, 4), run(D, 12, 4), run(f2, 1, 4), run(D, 5, 7)],
+            "the big fat cat sat"
+        );
+        assert_eq!(
+            merged.families,
+            vec![Family::Own, Family::Own, Family::Window, Family::Own],
+            "the fork's fresh text is a window onto the fork"
+        );
+        assert_eq!(
+            merged.composed.gaps.iter().map(|g| (g.kind, g.settled)).collect::<Vec<_>>(),
+            vec![(GapKind::Order, false)]
+        );
+        assert_eq!(merged.key.base, a(&format!("{D}.1")));
     }
 
     /// `image` IN PARTS: a head of three runs refused `image_too_large`

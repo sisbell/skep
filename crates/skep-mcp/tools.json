@@ -97,6 +97,22 @@
       }
     },
     {
+      "name": "doc_metadata",
+      "description": "A document's publication metadata: doc (the trunk a version member projects to), published, owner, birth and birth_extent (its first version and the content it was born with; null before any version), placed and base_extent (the publish shot's terms of the address named; null where no shot minted it), and source (the version member or bare document the address named was born sharing, where a version minted it — a fork's parent, read by whoever may read the fork; null otherwise). Response: doc_metadata; an unreadable document answers withheld, an unregistered one doc_not_registered.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The document or version member asked about."
+          }
+        },
+        "required": ["doc"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "insert",
       "description": "Insert content into doc at V-position at; each element of values is one write form. A bare string mints one single-byte value per UTF-8 byte (per-byte text, the substrate's text discipline); {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at one position whose interior is permanently unaddressable. Mixed arrays concatenate in order; an insert totalling zero values is rejected empty_content. Response: ack_addr with the first minted I-address.",
       "inputSchema": {

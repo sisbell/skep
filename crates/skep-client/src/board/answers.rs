@@ -261,9 +261,11 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
 
 /// A `doc_metadata` answer's terms (wire.md §The response envelope).
 ///
-/// They are the publication bit, the owner account, and the shot terms a
+/// They are the publication bit, the owner account, the shot terms a
 /// member carries — `placed`, the positions the client's runs cover, and
-/// `base_extent` — each `None` where the address carries none.
+/// `base_extent` — and `source`, the address a `version`-minted document
+/// was born sharing (the member or bare document its snapshot took), each
+/// `None` where the address carries none.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
@@ -271,12 +273,15 @@ pub(crate) struct Metadata {
     pub(crate) owner: String,
     pub(crate) placed: Option<u64>,
     pub(crate) base_extent: Option<u64>,
+    pub(crate) source: Option<String>,
 }
 
 /// Decodes a `doc_metadata` answer.
 ///
 /// `None` for a document that is no such answer — a rejection among them —
-/// or one without its owner or its `published` bit.
+/// or one without its owner or its `published` bit. A `source` that is
+/// neither a string nor absent reads as absent: the merge checks the address
+/// it names itself.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
@@ -288,6 +293,7 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
         owner: v["owner"].as_str()?.to_string(),
         placed: count("placed"),
         base_extent: count("base_extent"),
+        source: v["source"].as_str().map(str::to_string),
     })
 }
 

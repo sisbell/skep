@@ -8,7 +8,10 @@ the ceremonies `enroll`, `recover`, `retire`, `rotate`, `handoff`,
 touches content: it composes the merge and prints the report as one JSON
 document, `--publish` lands it as the next version with its record,
 `--into` lands it in a draft, a daughter is reported and never retried,
-and a side of another account is refused — and `share`, over the
+a fork of one of the document's published versions (`--fork`) is merged
+from the source the board serves for it, and a side whose base the board
+does not serve — a fork of the bare document before its first version, a
+draft of another account — is refused with the reason — and `share`, over the
 library's `share` module: a draft (`--doc`) or the caller's whole account
 (`--whole-account`, every draft under it, those written later included)
 shared with ONE account (`--to`); a draft PRIVASHED (`--privash`, Nelson's

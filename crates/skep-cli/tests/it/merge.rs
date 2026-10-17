@@ -17,8 +17,11 @@
 //! draft; A DAUGHTER — the head moved before `--publish`, the shot landing
 //! as the head's daughter, reported with the re-run line and never retried,
 //! one `publish` in the feed, and the re-run with `--retries 1` landing on
-//! the new head with the count in its record; and `--fork`, refused with
-//! the reason, exit 1, nothing on stdout.
+//! the new head with the count in its record; and `--fork` ADMITTED — a
+//! second account's fork of a published version merged from the source the
+//! board serves for it and published — while a fork of the bare document,
+//! taken before its first version, is refused with its own reason, exit 1,
+//! nothing on stdout.
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +52,12 @@ use crate::common::{origin, s, skep, spawn, Run};
 /// The claimant's account and principal on a notebook.
 const ACCOUNT: &str = "1.0.1";
 const PRINCIPAL: u64 = 1;
+
+/// THE FORKER: principal 2 at a sub-account delegated under the claimant's,
+/// so the claimant — its ancestor — may read the forker's drafts (PUB-1.33).
+/// `1.0.1.2`: the claim ceremony seats `1.0.1.1`.
+const FORKER_ACCOUNT: &str = "1.0.1.2";
+const FORKER: u64 = 2;
 
 /// A port nothing listens at: a run that reaches it is exit 4, so a usage
 /// refusal judged ahead of it is seen to open no socket.
@@ -173,6 +182,31 @@ impl Rig {
     fn draft(&self) -> Address {
         let v = Rig::acked(self.board.op(Some(&self.bare), &json!({"op": "create_new_document", "account": ACCOUNT})));
         addr(acked_addr(&v).expect("a minted address"))
+    }
+
+    /// The forker's bare session: its account delegated from the claimant's
+    /// full-scope session first.
+    fn forker(&self) -> Token {
+        let full = handshake(&self.board, Scope::Full, &self.device, PRINCIPAL, Site::Session)
+            .expect("a full session");
+        let v = Rig::acked(full.op(&frames::delegate(FORKER_ACCOUNT, FORKER, None)));
+        assert_eq!(acked_addr(&v), Some(FORKER_ACCOUNT), "the forker's account: {v}");
+        full.close().expect("closed");
+        let token = match self.board.session_open(SessionBody::Bare { principal: FORKER }).expect("a bare session") {
+            Opened::Token(t) => t,
+            other => panic!("the bare bind answered {other:?}"),
+        };
+        // Its home first: a mint into an account without one is `mint_home_first`.
+        let v = Rig::acked(self.board.op(Some(&token), &json!({"op": "create_new_document", "account": FORKER_ACCOUNT})));
+        assert_eq!(acked_addr(&v), Some(format!("{FORKER_ACCOUNT}.0.1").as_str()), "the forker's home: {v}");
+        token
+    }
+
+    /// A private cross-owner fork of `source` by `forker`: the fresh document
+    /// of the forker's account, born sharing `source`.
+    fn fork(&self, forker: &Token, source: &Address) -> Address {
+        let frame = json!({"op": "version", "d_src": source.to_string(), "published": false});
+        addr(acked_addr(&Rig::acked(self.board.op(Some(forker), &frame))).expect("the fork's address"))
     }
 
     /// A published document minted into the account from `session`, attested.
@@ -483,25 +517,68 @@ fn a_daughter_is_reported_with_its_retry_count_and_never_retried() {
     session.close().expect("close");
 }
 
-/// `--fork` IS REFUSED WITH THE REASON (decision 15; the fence): the library
-/// cannot read a cross-account side's base until the fork-source read
-/// lands, so the command answers exit 1 naming the side and the reason,
-/// nothing on stdout, nothing written.
+/// `--fork` IS ADMITTED (the fork-source design record's arm A; the merge
+/// record's case (j)): the forker's account, delegated under the claimant's,
+/// forks the base version `D.1` privately and removes " sat"; the command
+/// reads the fork's served source off the board, composes "the big cat" over
+/// the base `D.1` — never named — with the fork's role `fork`, and
+/// `--publish` lands the trunk's next member with its record found from the
+/// fork. A fork of the BARE document, taken before its first version, is
+/// refused with its own reason, exit 1, nothing on stdout, nothing written.
 #[test]
-fn a_fork_side_is_refused_with_the_reason() {
+fn a_fork_of_a_published_version_is_merged_from_its_served_source() {
     let dir = tempfile::tempdir().unwrap();
     let rig = Rig::new(dir.path());
     let session = rig.session();
+    let token = session.token().clone();
     let kind = rig.draft().to_string();
     let d = rig.document(&session);
     let base = rig.shot(&session, &d, None, &[Staged::Fresh { text: "the cat sat" }]);
-    let fork = rig.draft();
+    let head = rig.shot(&session, &d, Some((&base, 11)), &[Staged::Own { from: 1, text: "the " }, Staged::Fresh { text: "big " }, Staged::Own { from: 5, text: "cat sat" }]);
+    let forker = rig.forker();
+    let fork = rig.fork(&forker, &base);
+    Rig::acked(rig.board.op(Some(&forker), &frames::delete(&fork.to_string(), 8, 4, None)));
+    let meta = rig.read(&token, &frames::doc_metadata(&fork.to_string()));
+    assert_eq!(meta["source"].as_str(), Some(base.to_string().as_str()), "the premise — the board serves the fork's source: {meta}");
+    let (d_s, fork_s, head_s) = (d.to_string(), fork.to_string(), head.to_string());
+
+    // COMPOSE AND PRINT: the base off the served source, never named.
     let before = rig.board.health().unwrap().log_position();
-    let r = rig.merge(&["--doc", &d.to_string(), "--fork", &fork.to_string(), "--kind", &kind]);
+    let r = rig.merge(&["--doc", &d_s, "--fork", &fork_s, "--kind", &kind]);
+    let v = report(&r);
+    assert_eq!(v["head"].as_str(), Some(head_s.as_str()), "the head off the feed walk");
+    assert_eq!(v["base"].as_str(), Some(base.to_string().as_str()), "the fork's served source");
+    assert_eq!(runs_of(&v), vec![(format!("{d}.0.1.1"), "4".into()), (format!("{d}.0.1.12"), "4".into()), (format!("{d}.0.1.5"), "3".into())], "the big cat");
+    assert_eq!(v["sides"], json!([{"at": head_s, "role": "head"}, {"at": fork_s, "role": "fork"}]));
+    assert_eq!(v["gaps"], json!([]));
+    assert!(v["landed"].is_null(), "{v}");
+    assert_eq!(rig.board.health().unwrap().log_position(), before, "composing writes nothing");
+    assert!(r.err.contains(&format!("merging the fork {fork} with {head}, the head of {d}")), "{}", r.err);
+    assert!(r.err.contains(&format!("composed over the base {base}: 3 runs from the head's 3 and the side's 1, 0 gaps")), "{}", r.err);
+
+    // PUBLISHED: the trunk's next member holds M; the record is found FROM
+    // the fork by the kind.
+    let r = rig.merge(&["--doc", &d_s, "--fork", &fork_s, "--kind", &kind, "--publish"]);
+    let v = report(&r);
+    let member = v["landed"]["member"].as_str().expect("the member").to_string();
+    assert_eq!(member, format!("{d}.3"), "the trunk's next member");
+    assert_eq!(rig.image(&token, &addr(&member), 11), runs_of(&v), "the member's image over its placed positions is M");
+    let link = v["landed"]["record"].as_str().expect("the record's link").to_string();
+    assert_eq!(rig.read(&token, &frames::find_links_ftt(&kind, &fork_s))["addrs"], json!([link]), "the record is found FROM the fork");
+    assert!(r.err.contains(&format!("published {member} at position")), "{}", r.err);
+
+    // A FORK OF THE BARE DOCUMENT — a second document, forked before its
+    // first version — is refused with its own reason once the document has
+    // a head to merge with.
+    let d2 = rig.document(&session);
+    let bare_fork = rig.fork(&forker, &d2);
+    let base2 = rig.shot(&session, &d2, None, &[Staged::Fresh { text: "the cat sat" }]);
+    let before = rig.board.health().unwrap().log_position();
+    let r = rig.merge(&["--doc", &d2.to_string(), "--fork", &bare_fork.to_string(), "--kind", &kind]);
     assert_eq!(r.code, 1, "{r:?}");
     assert!(r.out.is_empty(), "nothing on stdout: {}", r.out);
-    assert!(r.err.contains(&format!("the board refused: base_unknown:the base of the side {fork} cannot be read: a cross-account side is not offered until the fork-source read lands")), "{}", r.err);
-    assert!(r.err.contains(&format!("merging the fork {fork} with {base}, the head of {d}")), "the entry line, the head off the feed: {}", r.err);
+    assert!(r.err.contains(&format!("the board refused: bare_source:the fork {bare_fork} was taken from {d2} itself, before it had a version (a bare source)")), "{}", r.err);
+    assert!(r.err.contains(&format!("merging the fork {bare_fork} with {base2}, the head of {d2}")), "the entry line, the head off the feed: {}", r.err);
     assert_eq!(rig.board.health().unwrap().log_position(), before, "nothing written");
     session.close().expect("close");
 }

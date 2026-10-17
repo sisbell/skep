@@ -50,7 +50,12 @@
 //! fixture gained one op, the atom at 16, so the records the per-byte inserts
 //! no longer reach stay under the pin, and every record position, the
 //! checkpoint's seq and every dump moved. The artifacts of the first
-//! regeneration stand under `tests/golden-prestretch/`.
+//! regeneration stand under `tests/golden-prestretch/`. And 2026-10-17, when
+//! M5's slice gained its fork sources — each `version`-minted document's
+//! source, noted off the snapshot the fixture's cross-owner version already
+//! journals — under the same ruling renewed once more: the checkpoint's body
+//! and every dump moved (the new map renders in each), the segment and the
+//! fixture's ops did not.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -328,10 +333,14 @@ fn pre_stretch_dumps() -> BTreeMap<u64, String> {
 }
 
 /// A dump of this build over the pre-stretch board, as the pre-stretch build
-/// rendered it: the one difference between the two is M4's entry form — a
-/// bare value then, `Value([..])` now, every entry of an opened old board
-/// being a one-byte value — so the `Value(` … `)` wrapper is taken off each
-/// content entry and nothing else moves.
+/// rendered it. Two differences between the two, and nothing else moves:
+/// M4's entry form — a bare value then, `Value([..])` now, every entry of an
+/// opened old board being a one-byte value — so the `Value(` … `)` wrapper
+/// is taken off each content entry; and M5's fifth map, `fork_sources`,
+/// which the pre-stretch build did not hold and this build renders in every
+/// dump — empty before the fixture's cross-owner version, one entry from it
+/// on — so that entry is taken out of M5's rendering whole
+/// ([`without_the_fork_sources`]).
 fn without_the_value_wrapper(dump: &str) -> String {
     let mut out = String::with_capacity(dump.len());
     let mut rest = dump;
@@ -343,20 +352,43 @@ fn without_the_value_wrapper(dump: &str) -> String {
         assert!(inner[close..].starts_with(')'), "the wrapper closes after the list");
         rest = &inner[close + 1..];
     }
-    out.push_str(rest);
-    out
+    without_the_fork_sources(&format!("{out}{rest}"))
+}
+
+/// `dump` with M5's `fork_sources` entry taken out of the arrangement slice:
+/// the key, its map — addresses render as nested lists and never as a brace,
+/// so the first `}` after the key closes it — and the separator that
+/// follows, since the entry is never the slice's last (`provenance` and
+/// `shot_terms` sort after it). Asserted PRESENT: a dump without the entry
+/// would be a build that stopped rendering the map, which this comparison
+/// must not quietly admit.
+fn without_the_fork_sources(dump: &str) -> String {
+    const KEY: &str = "\"fork_sources\": {";
+    let at = dump.find(KEY).expect("this build renders M5's fork sources in every dump");
+    let after_key = &dump[at + KEY.len()..];
+    let close = after_key.find('}').expect("the fork sources map closes");
+    let rest = &after_key[close + 1..];
+    let rest = rest.strip_prefix(", ").expect("the entry is followed by its sibling");
+    assert!(!rest.contains(KEY), "M5's fork sources render once");
+    format!("{}{rest}", &dump[..at])
 }
 
 /// (b′) THE PRE-STRETCH READER PIN — this build opens the one committed
 /// pre-stretch board FROM GENESIS: its checkpoint, written under this build's
-/// own stamps over the bare-value content form, refuses at decode and is
-/// passed over (the open's report says so, and says why), the journal still
-/// reaches genesis, every per-byte frame replays into a one-byte value
-/// entry, and the board answers its head and every recorded boundary — the
-/// dumps differing from the pre-stretch build's in nothing but the content
-/// entry's rendering — writing nothing to the files. The open is the class
-/// an existing development board meets under the no-stamp ruling renewed;
-/// such a board is correct data, served as it stands until it is re-seeded.
+/// own stamps over the bare-value content form and without M5's fork
+/// sources, refuses at decode and is passed over (the open's report says so,
+/// and says why), the journal still reaches genesis, every per-byte frame
+/// replays into a one-byte value entry, the fork sources are recomputed from
+/// the replayed `version` record, and the board answers its head and every
+/// recorded boundary — the dumps differing from the pre-stretch build's in
+/// nothing but the content entry's rendering and the new map's lines —
+/// writing nothing to the files. The open is the class an existing
+/// development board meets under the no-stamp ruling renewed; such a board
+/// is correct data, served as it stands until it is re-seeded. What the
+/// refusal proves for the new map in particular: an old checkpoint never
+/// decodes as "no source" — the field carries no default — so a fork on such
+/// a board answers its source off the replay rather than `null` off a
+/// defaulted map.
 #[test]
 fn the_pre_stretch_golden_opens_from_genesis_and_answers_every_boundary() {
     let tmp = tempdir().expect("tempdir");

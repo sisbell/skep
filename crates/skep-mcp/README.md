@@ -7,7 +7,12 @@ lets agent tooling speak to a board.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **Model Context Protocol server** — exposes board operations as
-  MCP tools for agent runtimes.
+  MCP tools for agent runtimes: forty wire operations, each tool's
+  name the frame's `op` and its arguments the frame (`tools.json`
+  beside `Cargo.toml` is the catalog, checked against the dispatch
+  table at startup), `doc_metadata` among them — a document's
+  publication state and the `source` a fork was made from — and one
+  apparatus tool, `session_info`.
 - **Deliberately dependency-light** — a written-out HTTP/1.1 client
   and stdio framing; JSON is the one thing taken from a library.
 

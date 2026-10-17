@@ -613,19 +613,33 @@ where
             // could describe it. The argument projects to its trunk (PUB-2.15)
             // and every document field is read off that one address: M5's own
             // `published_target` (the bit every gate keys on), M3's ω, and the
-            // birth version. The SHOT TERMS alone are read off the address
-            // NAMED (D25's (c′), served as a member read): a version member
-            // the shot minted answers its own, and everything else — the trunk
-            // included — answers none.
+            // birth version. The SHOT TERMS and the FORK SOURCE are read off
+            // the address NAMED (D25's (c′), and the fork-source record's arm
+            // A, each served as a member read): a version member the shot
+            // minted answers its own terms, a document a `version` minted
+            // answers its own source, and everything else — the trunk
+            // included — answers none. The source takes no gate of its own:
+            // whoever may read the fork reads the address it was born sharing
+            // (the record's decision 2), and nothing else of the source rides
+            // with it.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
                 let terms = world.m5().shot_terms(&doc).cloned();
+                let source = world.m5().fork_source(&doc).cloned();
                 let trunk = trunk_of(&doc);
                 let published = published_target(m3, &trunk);
                 let owner = m3.effective_owner_prefix(&trunk).cloned();
                 let birth = birth_version(m3, world.m5(), &trunk);
-                Ok(Response::DocMetadata { doc: trunk, published, owner, birth, terms, as_of })
+                Ok(Response::DocMetadata {
+                    doc: trunk,
+                    published,
+                    owner,
+                    birth,
+                    terms,
+                    source,
+                    as_of,
+                })
             }
             // PUB-8.46: the world answers the class unfiltered, in
             // link-address order; the home rule (PUB-6.13) keeps each row whose

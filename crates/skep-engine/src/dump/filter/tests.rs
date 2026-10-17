@@ -9,10 +9,15 @@ use skep_namespace::PrincipalId;
 
 use crate::dump::tests::{populated_world, render_of, vspec};
 use crate::dump::{dump, dump_tree, dump_visible, BANNER};
-use crate::testkit::{a_published_home_and_a_private_draft, element, USER};
+use crate::testkit::{a_published_home_and_a_private_draft, delegated_account, element, USER};
 use crate::world::World;
 
 use super::*;
+
+/// A second principal, the cross-owner FORKER of [`USER`]'s draft: its
+/// `version` is the one record that writes M5's fork sources, and the fork
+/// it mints is a private document of its own account.
+const FORKER: PrincipalId = PrincipalId(8);
 
 /// The SHAPE a reduction expects at its path. [`retain_map`] and
 /// [`retain_seq`] do nothing where the node is not theirs, so a builder
@@ -60,6 +65,7 @@ fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
         (vec!["authoritative", "content", "map"], Shape::Map),
         (vec!["authoritative", "arrangement", "arrangements"], Shape::Map),
         (vec!["authoritative", "arrangement", "provenance"], Shape::Map),
+        (vec!["authoritative", "arrangement", "fork_sources"], Shape::Map),
         (vec!["authoritative", "links", "links"], Shape::Map),
         (vec!["publication"], Shape::Seq),
     ];
@@ -227,9 +233,13 @@ fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
         // statement — listed so a fifth is a decision and not a default.
         ("namespace", &["frontiers", "nodes", "principals", "publication"][..]),
         ("content", &["map"]),
-        // M5's two keyed fields reduced, and its birth memo and shot terms
-        // kept WHOLE with the reason in `filter_tree`'s statement.
-        ("arrangement", &["arrangements", "birth_extents", "provenance", "shot_terms"]),
+        // M5's three keyed fields reduced — the fork sources by the fork,
+        // the key — and its birth memo and shot terms kept WHOLE with the
+        // reason in `filter_tree`'s statement.
+        (
+            "arrangement",
+            &["arrangements", "birth_extents", "fork_sources", "provenance", "shot_terms"],
+        ),
         // M7's skip-serialized hints occupy no bytes and so no key.
         ("links", &["links"]),
     ] {
@@ -431,15 +441,24 @@ fn every_birth_memo_key_is_a_version_member_whose_state_the_guest_reads() {
 /// Built on [`populated_world`]'s account, draft, content, arrangement and
 /// link, which cover the authoritative maps and the two publication
 /// families; this adds the link population the shipped classes and the
-/// predicate projections need. The links carry ADDRESS-form slots under
-/// never-minted types in the draft's own subspace 3, so each lands in an
-/// unregistered coverage class and the shipped slices hold exactly the
-/// tuples deposited under them.
+/// predicate projections need, and the one record that populates M5's fork
+/// sources. The links carry ADDRESS-form slots under never-minted types in
+/// the draft's own subspace 3, so each lands in an unregistered coverage
+/// class and the shipped slices hold exactly the tuples deposited under
+/// them. The fork is [`FORKER`]'s cross-owner `version` of the draft — the
+/// one version a draft admits (PUB-2.9, PUB-2.18) — a PRIVATE document of
+/// the forker's account, so the entry it writes is keyed by a document a
+/// guest cannot read, as everything else here is homed in one it cannot.
 fn every_reduced_family_in_a_draft() -> World {
     let (engine, world) = populated_world();
     let draft = the_one_draft(&world);
     let caller = Caller::Principal(USER);
     let visibility = World::visible_to(caller);
+    delegated_account(&engine, FORKER);
+    engine
+        .vstream()
+        .version(FORKER, &draft, None)
+        .expect("the forker's cross-owner version of the draft, a private fork of its own");
     let writer = engine.linkstore(&visibility);
     let ordinary_link = |n: u32| {
         writer

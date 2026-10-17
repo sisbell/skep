@@ -752,11 +752,16 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
     });
     // The premise: every collection the slice decodes holds an entry, so the
     // sweep writes over each one's count and over the counts within it.
-    assert_eq!(s.arrangements.len(), 3);
+    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+        source: doc1(),
+        new: doc2(),
+    });
+    assert_eq!(s.arrangements.len(), 4);
     assert_eq!(s.link_run_count(&doc1()), 1);
     assert_eq!(s.recorded_span_count(&doc1()), 1);
     assert_eq!(s.birth_extents.len(), 2);
     assert_eq!(s.shot_terms.len(), 2);
+    assert_eq!(s.fork_sources.len(), 1);
     let bytes = bincode::serialize(&s).expect("state serializes");
     assert_eq!(
         bincode::deserialize::<M5State>(&bytes).expect("state deserializes"),
@@ -781,6 +786,150 @@ fn the_slice_decodes_or_refuses_whatever_count_its_bytes_declare() {
         Some(&0),
         "the arrangement map's count, the body's first eight bytes, is refused"
     );
+}
+
+/// Another account's document, `[1,0,2,0,1]`: where a cross-owner fork of
+/// `doc1` is minted.
+fn fork_doc() -> Address {
+    a(&[1, 0, 2, 0, 1])
+}
+
+/// A second document of that account, `[1,0,2,0,2]`: a fork of the fork.
+fn fork_of_fork_doc() -> Address {
+    a(&[1, 0, 2, 0, 2])
+}
+
+#[test]
+fn a_version_minted_document_is_noted_with_the_source_it_was_born_sharing() {
+    // SOURCE★, the noting half: the `VersionSnapshot` arm writes `new →
+    // source` for an OWNED version — the member minted against its bare
+    // memberless document — and for a CROSS-OWNER fork alike, and the
+    // source noted is the record's `source`, the surface the op resolved:
+    // a bare document here, and a MEMBER where the source had a chain. The
+    // source itself answers none: the read answers the address named.
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+    let owned = s.apply_m5(&M5Rec::VersionSnapshot {
+        source: doc1(),
+        new: vdoc(),
+    });
+    assert_eq!(owned.fork_source(&vdoc()), Some(&doc1()), "the owned version's source");
+    assert_eq!(owned.fork_source(&doc1()), None, "the trunk answers none, never its member's");
+    // A cross-owner fork taken off the chain's member: the surface a bare
+    // published source with members resolves to is its head, and the record
+    // names that member, so the fork's source IS the member.
+    let forked = owned.apply_m5(&M5Rec::VersionSnapshot {
+        source: vdoc(),
+        new: fork_doc(),
+    });
+    assert_eq!(forked.fork_source(&fork_doc()), Some(&vdoc()), "the member, not its trunk");
+    assert_eq!(forked.fork_source(&vdoc()), Some(&doc1()), "the member keeps its own");
+    // The arrangement shared and the source noted come from one record, so
+    // the fork reads as the member did and names it.
+    assert_eq!(
+        forked.content_runs(&fork_doc()).collect::<Vec<_>>(),
+        forked.content_runs(&vdoc()).collect::<Vec<_>>()
+    );
+    // Purity: the receiver was untouched.
+    assert_eq!(owned.fork_source(&fork_doc()), None);
+}
+
+#[test]
+fn a_fork_of_an_empty_source_is_noted_all_the_same() {
+    // SOURCE★: the fact is the source, not the content — the empty arm
+    // installs no arrangement and appends no provenance, and writes the one
+    // entry a snapshot writes whatever the surface holds.
+    let s = M5State::genesis().apply_m5(&M5Rec::VersionSnapshot {
+        source: doc2(),
+        new: fork_doc(),
+    });
+    assert!(s.arrangements.get(&fork_doc()).is_none(), "nothing shared");
+    assert!(!s.provenance.is_recorded(&fork_doc()), "no R entry");
+    assert_eq!(s.fork_source(&fork_doc()), Some(&doc2()), "noted, an empty surface included");
+}
+
+#[test]
+fn only_a_version_record_notes_a_fork_source() {
+    // SOURCE★, the silence half: a shot's member is minted off no source
+    // and notes none, a placement mints nothing, a `fork`-minted document
+    // reaches this slice with no record at all — so each answers `None`,
+    // as does a document nothing has touched and the trunk the version
+    // chain belongs to.
+    let shot = M5State::genesis().apply_m5(&M5Rec::ShotPlace {
+        doc: vdoc(),
+        runs: vec![run(&ca(1), 2)],
+        terms: ShotTerms { placed: n(2), base_extent: None },
+    });
+    assert_eq!(shot.fork_source(&vdoc()), None, "a shot member");
+    assert_eq!(shot.birth_extent(&vdoc()), Some(&n(2)), "…minted all the same");
+    let placed = place(&shot, &doc2(), 1, vec![run(&ca(1), 1)]);
+    assert_eq!(placed.fork_source(&doc2()), None, "a placement mints nothing");
+    // A `fork` stages M3's record alone: the slice sees nothing, so the
+    // document it minted is, here, an untouched one.
+    assert_eq!(placed.fork_source(&fork_doc()), None, "a `fork`-minted or untouched document");
+    assert_eq!(placed.fork_source(&doc1()), None, "the trunk");
+    assert!(placed.fork_sources.is_empty(), "and the map holds no entry for any of them");
+}
+
+#[test]
+fn a_fork_of_a_fork_answers_its_own_source_one_hop() {
+    // SOURCE★: the fact as journaled, one hop — the second fork names the
+    // first, never the line's root; the whole line is read by iterating,
+    // each hop under its own document's gate.
+    let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
+    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+        source: doc1(),
+        new: fork_doc(),
+    });
+    let s = s.apply_m5(&M5Rec::VersionSnapshot {
+        source: fork_doc(),
+        new: fork_of_fork_doc(),
+    });
+    assert_eq!(s.fork_source(&fork_of_fork_doc()), Some(&fork_doc()), "one hop");
+    assert_eq!(s.fork_source(&fork_doc()), Some(&doc1()), "the hop before it");
+    assert_eq!(s.fork_source(&doc1()), None, "the root");
+}
+
+#[test]
+fn the_fork_sources_ride_the_checkpoint_and_replay_re_derives_them() {
+    // The map is carried by every checkpoint as its four siblings are, and
+    // a replay of the same records folds to the same map and the same
+    // bytes — so a board opened from a checkpoint and one replayed from
+    // genesis answer one source. A source the fork has since edited away
+    // from is still its source: the fact is the mint's, not the content's.
+    let build = || {
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 3)]);
+        let s = s.apply_m5(&M5Rec::VersionSnapshot {
+            source: doc1(),
+            new: fork_doc(),
+        });
+        s.apply_m5(&M5Rec::ContentRemove {
+            doc: fork_doc(),
+            from: n(1),
+            width: n(3),
+        })
+    };
+    let live = build();
+    assert_eq!(live.content_count(&fork_doc()), n(0), "the fork edited away every shared run");
+    assert_eq!(live.fork_source(&fork_doc()), Some(&doc1()), "…and keeps its source");
+    let bytes = bincode::serialize(&live).expect("state serializes");
+    let back: M5State = bincode::deserialize(&bytes).expect("state deserializes");
+    assert_eq!(back, live);
+    assert_eq!(back.fork_source(&fork_doc()), Some(&doc1()), "the checkpoint carries it");
+    assert_eq!(back.clone().rebuild_derived(), back);
+    let replayed = build();
+    assert_eq!(bincode::serialize(&replayed).expect("serializes"), bytes, "replay equals live");
+    // The map is the slice's LAST field: a checkpoint written before it ends
+    // where it would begin, and decodes no default (the engine's World door
+    // holds that refusal; the field order is pinned here).
+    let fields = bincode::serialize(&(
+        &live.arrangements,
+        &live.provenance,
+        &live.birth_extents,
+        &live.shot_terms,
+        &live.fork_sources,
+    ))
+    .expect("the fields serialize");
+    assert_eq!(fields, bytes, "`fork_sources` is written after `shot_terms`, last");
 }
 
 #[test]

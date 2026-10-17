@@ -789,6 +789,46 @@ fn the_health_read_carries_no_token_and_is_reported_whole() {
     assert_eq!(session_of(&r[4]), None, "a held token rode GET /health: {}", r[4]);
 }
 
+/// `doc_metadata` IS DISPATCHED (the fork-source design record, decision 10:
+/// forty ops), the first rule holding — the name the frame's `op`, the
+/// arguments the frame — and its answer carries the `source` a fork was born
+/// sharing. Principal 1 forks the claimant's published doc 1 through the
+/// adapter (a cross-owner `version`, private, into its own account), then
+/// reads the fork's metadata: `doc` the fork itself, `owner` its account,
+/// `source` the document forked; the document forked answers `source` null;
+/// and an unregistered document is the daemon's own rejection, verbatim.
+#[test]
+fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
+    /// The claimant's published doc 1, the ceremony's home mint.
+    const CLAIMANT_DOC1: &str = "1.0.1.0.1";
+    let dir = TempDir::new("doc-metadata");
+    let daemon = spawn_daemon(dir.path(), 0);
+    let port = daemon.port();
+    let account = provision_principal_1(port);
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    let forked = mcp.call_json("version", json!({"d_src": CLAIMANT_DOC1, "published": false}));
+    assert_eq!(forked["resp"], "ack_addr", "the fork minted: {forked}");
+    let fork = forked["addr"].as_str().expect("the fork's address").to_string();
+    assert!(fork.starts_with(&format!("{account}.0.")), "a document of principal 1's own: {fork}");
+    let meta = mcp.call_json("doc_metadata", json!({"doc": fork}));
+    assert_eq!(meta["resp"], "doc_metadata", "{meta}");
+    assert_eq!(meta["doc"], json!(fork), "the fork is its own trunk: {meta}");
+    assert_eq!(meta["owner"], json!(account), "{meta}");
+    assert_eq!(meta["published"], json!(false), "{meta}");
+    assert_eq!(meta["source"], json!(CLAIMANT_DOC1), "born sharing the document forked: {meta}");
+    assert!(meta["birth"].is_null() && meta["placed"].is_null(), "no member, no shot: {meta}");
+    let meta = mcp.call_json("doc_metadata", json!({"doc": CLAIMANT_DOC1}));
+    assert_eq!(meta["resp"], "doc_metadata", "{meta}");
+    assert!(meta["source"].is_null(), "the document forked was minted by no `version`: {meta}");
+    assert_eq!(meta["published"], json!(true), "{meta}");
+    let v = mcp.call_json("doc_metadata", json!({"doc": "1.0.1.0.9.0.1.7"}));
+    assert_eq!(v["resp"], "rejected", "{v}");
+    assert_eq!(v["code"], "doc_not_registered", "the daemon's own rejection, verbatim: {v}");
+    assert_eq!(v["op"], "doc_metadata", "{v}");
+    mcp.finish();
+}
+
 /// The account read is a query: principal_prefix's maybe_addr, its null
 /// the wire's "absent" — and an answer that is no well-formed maybe_addr is
 /// neither an account nor its absence. A rejection — `unauthenticated`

@@ -3,18 +3,21 @@
 //! M5 owns every document's **mutable V→I arrangement** (the POOM — a content
 //! subspace and a link subspace per document), the **append-only
 //! content-provenance relation R**, each trunk's **birth extent** — the
-//! content count its birth version `D.1` was minted with (PUB-3.19) — and
-//! each shot-minted member's **shot terms** — the count the client placed and
+//! content count its birth version `D.1` was minted with (PUB-3.19) — each
+//! shot-minted member's **shot terms** — the count the client placed and
 //! the base extent its copy took (the signed-ops design record's D25, arm
-//! (c′)) — and it is the *only* place in the system where destructive change
+//! (c′)) — and each `version`-minted document's **fork source** — the member
+//! or bare document it was born sharing (the fork-source design record, arm
+//! A) — and it is the *only* place in the system where destructive change
 //! lives (ASN-0047 P3). It provides the editing/versioning operations (INSERT
 //! [ASN-0116], DELETE [ASN-0117], COPY [ASN-0118], REINSTATE [the write by
 //! identity, the replacement act's record], REARRANGE [ASN-0119/0084],
 //! CREATENEWVERSION [ASN-0123], and the publish SHOT [PUB-2.33]), a
 //! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
 //! resolution and reverse I→V projection for readers, the R reads for
-//! provenance queries, the birth-extent and shot-terms reads the doc-metadata
-//! read serves ([`M5State::birth_extent`], [`M5State::shot_terms`]), and the
+//! provenance queries, the birth-extent, shot-terms and fork-source reads the
+//! doc-metadata read serves ([`M5State::birth_extent`],
+//! [`M5State::shot_terms`], [`M5State::fork_source`]), and the
 //! ADDRESS FORM a shot's entry signature is made over, on both of its sides
 //! ([`Shot::address_form`] for the request, [`M5State::address_form_of`] for
 //! the member it minted). Every mutation funnels through one M2
@@ -33,9 +36,10 @@
 //! skip-serialized hints, so [`M5State::rebuild_derived`] is the identity.
 //! The birth extents are derived by the fold from the records that MINT a
 //! member — the shot's for every member it mints, an empty placement
-//! included, and an owned version's snapshot — and the shot terms are
-//! journaled in the shot's own record; both are carried by the checkpoint,
-//! never rebuilt, and [`M5State`] states why.
+//! included, and an owned version's snapshot — the shot terms are
+//! journaled in the shot's own record, and the fork sources are noted off
+//! the snapshot's `source`; all three are carried by the checkpoint, never
+//! rebuilt, and [`M5State`] states why.
 //!
 //! ## Failure channels
 //!
@@ -212,7 +216,7 @@ mod chain;
 // (`birth_extent`, `shot_terms`) of the fields only the fold writes.
 mod state;
 // The reads on the slice: resolve, point, project, deletions, the counts,
-// and the admission predicates the ops ask.
+// the fork source, and the admission predicates the ops ask.
 mod reads;
 // The publish shot: its request values, the runs and values it re-inserts,
 // and its address form, both sides.

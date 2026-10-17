@@ -1312,18 +1312,46 @@ runs and its address they are everything a reader needs to re-compose
 the `publish` signature's frame (§Arrangement, `publish`): `base` is
 derived from the member's address — a trunk member `D.k+1` was minted
 against `D.k`, a daughter `X.m` against `X`, `D.1` against the memberless
-document or, with `base_extent` `null`, against nothing. This example is
-asked of the birth version `1.0.1.0.1.1`, which a shot placing five
-positions minted from the memberless document taken at three:
+document or, with `base_extent` `null`, against nothing.
+
+`source` is THE FORK SOURCE OF THE ADDRESS NAMED: the address whose
+arrangement a `version` snapshotted into it at the mint — the version
+member where `d_src` had a chain (its head, pinned then, or the member
+`d_src` named), the bare document where it had none — and `null` where
+no `version` minted the address named: the trunk document itself, a
+member a `publish` shot minted, a document `create_new_document` or
+`fork` minted. It is answered for an owned version and a cross-owner
+fork alike, ONE HOP — a fork of a fork names the fork it was taken from
+— and the same at every position from the mint on. It is kept in the
+board's state, so it outlives the journal entry that recorded it, and it
+is served to every reader who may read the address named, whether or not
+they may read the source: an address is not secret, and a reader who
+wants more of the source asks the source under its own gate. A merge of
+a cross-account fork takes it as the fork's base (the merge record's
+case (j)) where it names a member of the trunk being merged.
+
+This example is asked of the birth version `1.0.1.0.1.1`, which a shot
+placing five positions minted from the memberless document taken at
+three — a shot member, so `source` is `null`:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata"}
+{"as_of":9,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null}
 ```
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata"}
+{"as_of":9,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":null}
+```
+
+A cross-owner fork — a private document of another account, minted by
+`version` off `1.0.1.0.1` while `1.0.1.0.1.1` headed its chain, so born
+sharing that member, which is its `source`; its own chain has no member
+and no shot minted it:
+
+<!-- wire: response doc_metadata_fork -->
+```json
+{"as_of":9,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1"}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -2359,7 +2387,10 @@ content over positions `1` through `birth_extent` of the birth version
 to decide admission, and reads nothing else here. That extent is what
 the edition was BORN with: a deposit the edition took while its birth
 version was still the head lies past it and is no part of what a claim
-is compared against, so a deposited edition still matches. `doc` is
+is compared against, so a deposited edition still matches. `source` is
+the address the document named was born sharing — the member or bare
+document a `version` snapshotted into it — and `null` where no `version`
+minted it, served to whoever may read the address named. `doc` is
 a document argument (unreadable → `withheld`; unregistered →
 `doc_not_registered`); a version member answers its DOCUMENT's state.
 → `doc_metadata`.

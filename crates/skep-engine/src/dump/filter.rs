@@ -21,9 +21,9 @@
 //!   root sections, the hint family names, [`super::shipped_label`]'s
 //!   strings. A TRAILING component inside an authoritative slice is that
 //!   STORE's own serde field, and a private one: `map` is M4's,
-//!   `arrangements` and `provenance` are M5's (its third and fourth,
-//!   `birth_extents` and `shot_terms`, are kept whole by name and end no
-//!   path), `links` is M7's. So a store
+//!   `arrangements`, `provenance` and `fork_sources` are M5's (its third and
+//!   fourth, `birth_extents` and `shot_terms`, are kept whole by name and end
+//!   no path), `links` is M7's. So a store
 //!   author renaming a field it never published has no reason to look here,
 //!   and the rename would leave the filter silently filtering nothing — which
 //!   is why every path is asserted to name a place in the tree.
@@ -128,6 +128,16 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///   count the client placed and the base extent its copy took — is what the
 ///   member's `doc_metadata` serves to every reader who may read the member.
 ///   The same test holds this key set beside the memo's.
+/// * `authoritative.arrangement.fork_sources` — the ENTRIES keyed by an
+///   unreadable document leave (the fork-source design record's arm A, its
+///   decision 2 and its reverse-read polarity). The map is keyed by the
+///   FORK — the document a `version` minted — and a private fork's
+///   EXISTENCE is its owner's to keep (PUB-1.33), so an entry stays exactly
+///   where the reader class reads the fork: the test `doc_metadata` serves
+///   `source` under. The VALUE, the source's address, takes no test of its
+///   own — an address is not secret (PUB-1.13), the fork's readers already
+///   hold the source's I-addresses through `image`, and nothing else of the
+///   source rides with it.
 /// * `authoritative.links.links` — a LINK homed in an unreadable document
 ///   leaves.
 /// * `publication` — the SECTION reduced per entry to the readable drafts:
@@ -234,6 +244,7 @@ pub(super) fn filter_tree(
     retain_map(&mut root, &["authoritative", "content", "map"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_serde_form);
+    retain_map(&mut root, &["authoritative", "arrangement", "fork_sources"], &keep_serde_form);
     retain_map(&mut root, &["authoritative", "links", "links"], &keep_serde_form);
 
     retain_seq(&mut root, &["publication"], &keep_dotted);

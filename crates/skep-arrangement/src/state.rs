@@ -100,6 +100,22 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 /// nothing the arrangement holds afterwards could re-derive `placed`. Nothing
 /// reads them to decide a write.
 ///
+/// THE FORK SOURCES (`fork_sources`; the fork-source design record's arm A,
+/// owner-ruled 2026-10-17) are the fifth field, and the one that is NOTED
+/// off a record already journaled: for every document a `version` minted —
+/// an owned member and a cross-owner fork alike — the SOURCE it was born
+/// sharing, the [`VersionSnapshot`](M5Rec::VersionSnapshot)'s `source`: the
+/// reading surface the op resolved, a version member where the source had a
+/// chain, the bare document otherwise. The record carried the fact from the
+/// first, and the fold shared the arrangement it names; what it did not do
+/// was KEEP the address, so the fact lived in the journal alone and died at
+/// the reclaim floor. Noted here it is what every other fact of a member's
+/// minting already is — carried whole by every checkpoint, answered the same
+/// at every position by [`fork_source`](M5State::fork_source), which the
+/// doc-metadata read serves as `source` to every reader of the fork and a
+/// merge takes as a cross-owner fork's base. Nothing reads them to decide a
+/// write.
+///
 /// CLASS INVARIANTS, relating the fields. The reads state what they
 /// answer; these are what makes those answers mean it.
 ///
@@ -166,6 +182,24 @@ static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangemen
 ///   [`address_form_of`](M5State::address_form_of) reads that prefix back.
 ///   On the DECODE path, as BIRTH★: carried whole, re-established by no
 ///   door.
+/// * **SOURCE★ — a document's fork source is the source of the `version`
+///   that minted it, noted once and never moved.** `fork_sources` gains
+///   `new`'s entry at `new`'s own [`VersionSnapshot`](M5Rec::VersionSnapshot)
+///   — on BOTH branches of that arm, an EMPTY surface included, since the
+///   fact is the source and not the content shared — and at no other record:
+///   a [`ShotPlace`](M5Rec::ShotPlace) mints a member off no source and notes
+///   none, a placement mints nothing, and a `fork`'s mint reaches this slice
+///   with no record at all. A `version`-minted document is minted once, so
+///   its entry is written once; `source` is the surface that record named at
+///   its commit position and no later state of the source moves it. So
+///   [`fork_source`](M5State::fork_source) answers exactly the documents a
+///   `version` minted — an owned member and a cross-owner fork alike — and
+///   `None` for every other address: a trunk, a shot member, a `fork`-minted
+///   or created document. A fork of a fork answers its own source and no
+///   further: one hop, the fact as journaled. On the DECODE path, as BIRTH★:
+///   carried whole, re-established by no door — and an older checkpoint that
+///   lacks the field fails to decode rather than answering `None` for a fork,
+///   the map carrying no default (the engine's World door states the rule).
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
@@ -226,6 +260,14 @@ pub struct M5State {
     birth_extents: im::OrdMap<Address, Nat>,
     #[serde(deserialize_with = "entry_by_entry")]
     shot_terms: im::OrdMap<Address, ShotTerms>,
+    // Each `version`-minted document → the source it was born sharing
+    // (SOURCE★). `pub(crate)` for the one read `reads.rs` holds; written by
+    // the fold alone. NO `#[serde(default)]`, by design: a checkpoint written
+    // before this field must fail to decode and hand the open to the journal,
+    // which recomputes the map — never decode as "no source" and answer
+    // `None` for a fork.
+    #[serde(deserialize_with = "entry_by_entry")]
+    pub(crate) fork_sources: im::OrdMap<Address, Address>,
 }
 
 /// THE SHOT'S TWO CLIENT TERMS, per member the shot minted (the signed-ops
@@ -341,6 +383,14 @@ pub enum M5Rec {
     /// and its commit); any future M2 concurrency realization that lets
     /// disjoint-key commits land in that window MUST re-examine this record
     /// first (or move to the explicit-runs form, Open decision #4).
+    ///
+    /// `source` IS A FACT THE RECORD MUST KEEP, whatever form it takes (the
+    /// fork-source design record, decision 9, owner-ruled 2026-10-17): the
+    /// fold notes `new → source` in `fork_sources` (SOURCE★), and that map is
+    /// the one place the fact survives the reclaim floor. The explicit-runs
+    /// migration of Open decision #4 carries the runs beside `source`, never
+    /// in place of it — a record that named the runs alone would leave every
+    /// fork minted after it answering no source.
     #[non_exhaustive]
     VersionSnapshot { source: Address, new: Address },
     /// THE PUBLISH SHOT's placing record (PUB-2.33; the signed-ops design
@@ -361,8 +411,8 @@ pub enum M5Rec {
 
 impl M5State {
     /// Σ₀ for M5: `{}` arrangements, `{}` provenance, `{}` birth extents,
-    /// `{}` shot terms. Deterministic, per M2's byte-identical-genesis caller
-    /// contract.
+    /// `{}` shot terms, `{}` fork sources. Deterministic, per M2's
+    /// byte-identical-genesis caller contract.
     pub fn genesis() -> M5State {
         M5State::default()
     }
@@ -530,6 +580,7 @@ impl M5State {
                 provenance: self.provenance.append(doc, runs),
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
+                fork_sources: self.fork_sources.clone(),
             },
             // THE SHOT's placement (D25 (c′)): `ContentPlace` at ordinal 1 —
             // the same splice, the same R-append — and the member's TERMS
@@ -544,7 +595,8 @@ impl M5State {
             // member holding, as the snapshot arm below counts the list it
             // shares. An empty placement leaves the arrangement ABSENT under
             // the lazy convention (≡ empty), as the snapshot arm leaves an
-            // empty source's `new`, and appends no provenance.
+            // empty source's `new`, and appends no provenance. NO FORK SOURCE
+            // is noted: the shot mints its member off no source (SOURCE★).
             M5Rec::ShotPlace { doc, runs, terms } => {
                 let content = self.content_list(doc).splice_in(&Nat::one(), runs.iter().cloned());
                 let birth_extents = self.birth_extents_noting(doc, || content.total_width());
@@ -555,6 +607,7 @@ impl M5State {
                         provenance: self.provenance.clone(),
                         birth_extents,
                         shot_terms,
+                        fork_sources: self.fork_sources.clone(),
                     }
                 } else {
                     M5State {
@@ -562,6 +615,7 @@ impl M5State {
                         provenance: self.provenance.append(doc, runs),
                         birth_extents,
                         shot_terms,
+                        fork_sources: self.fork_sources.clone(),
                     }
                 }
             }
@@ -574,6 +628,7 @@ impl M5State {
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
+                fork_sources: self.fork_sources.clone(),
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
@@ -582,6 +637,7 @@ impl M5State {
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
+                fork_sources: self.fork_sources.clone(),
             },
             // §8 fold: append `link` after the link subspace's arranged
             // positions, coalescing with the prior link run if I-adjacent
@@ -606,6 +662,7 @@ impl M5State {
                 provenance: self.provenance.clone(),
                 birth_extents: self.birth_extents.clone(),
                 shot_terms: self.shot_terms.clone(),
+                fork_sources: self.fork_sources.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
@@ -644,15 +701,24 @@ impl M5State {
             // the empty arm writes — and every birth version holds its entry
             // however it was born. A cross-owner fork's `new` is a fresh
             // document, no birth version, and notes nothing.
+            //
+            // THE FORK SOURCE is noted on BOTH branches (SOURCE★): `new` was
+            // born sharing `source`, whatever `source` held — an empty
+            // surface shares nothing and is a source all the same — and this
+            // record is the one that says so. The entry is `new → source` as
+            // the record carries it: the surface the op resolved, a member or
+            // a bare document, and never a reading of it made here.
             M5Rec::VersionSnapshot { source, new } => {
                 let content = self.content_list(source).clone();
                 let birth_extents = self.birth_extents_noting(new, || content.total_width());
+                let fork_sources = self.fork_sources.update(new.clone(), source.clone());
                 if content.is_empty() {
                     M5State {
                         arrangements: self.arrangements.clone(),
                         provenance: self.provenance.clone(),
                         birth_extents,
                         shot_terms: self.shot_terms.clone(),
+                        fork_sources,
                     }
                 } else {
                     let provenance = self.provenance.append(new, content.iter());
@@ -665,6 +731,7 @@ impl M5State {
                         provenance,
                         birth_extents,
                         shot_terms: self.shot_terms.clone(),
+                        fork_sources,
                     }
                 }
             }

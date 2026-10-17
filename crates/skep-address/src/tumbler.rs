@@ -1,4 +1,4 @@
-//! §A — tumbler value, identity, order (ASN-0034: T0–T3, TA-PosDom).
+//! The tumbler value, identity and order (§A; ASN-0034: T0–T3, TA-PosDom).
 
 use std::cmp::Ordering;
 use std::error::Error;
@@ -6,28 +6,35 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// ℕ. Unbounded component magnitude is T0(a) and non-negotiable: a fixed-width
+/// ℕ, the type of a tumbler component.
+///
+/// Unbounded component magnitude is T0(a) and non-negotiable: a fixed-width
 /// component would be a spec violation absent a discharged finite-model proof
 /// (the reference design's recorded digit-overflow wrap). `⊕` touches exactly
 /// one component — no carry propagation — so arbitrary precision is paid at
 /// one position, not across the address.
 pub type Nat = num_bigint::BigUint;
 
-/// 1-based component index, matching the spec's `t₁..t_{#t}` (implemented over
-/// 0-based storage). T0(b) leaves the component *count* unbounded in
-/// principle, but 2⁶⁴ components is unreachable, so `usize` is safe without
-/// violating the spec (unlike a fixed component-magnitude width, which would).
+/// A 1-based component index, matching the spec's `t₁..t_{#t}`.
+///
+/// It is implemented over 0-based storage. T0(b) leaves the component *count*
+/// unbounded in principle, but 2⁶⁴ components is unreachable, so `usize` is
+/// safe without violating the spec (unlike a fixed component-magnitude width,
+/// which would).
 pub type Pos = usize;
 
-/// True iff a component is the ℕ zero (allocation- and trait-free:
-/// `bits() == 0 ⟺ value = 0`).
+/// Returns `true` iff the component `c` is the ℕ zero.
+///
+/// The test is allocation- and trait-free: `bits() == 0 ⟺ value = 0`.
 pub(crate) fn nat_is_zero(c: &Nat) -> bool {
     c.bits() == 0
 }
 
-/// [`Tumbler::new`] on the empty sequence — T0's carrier is the *nonempty*
-/// finite sequences over ℕ (resolves ASN-0045's empty-tumbler question
-/// upstream: `[]` is not a tumbler at all, so the classifier never sees it).
+/// The [`Tumbler::new`] rejection of the empty sequence.
+///
+/// T0's carrier is the *nonempty* finite sequences over ℕ. This resolves
+/// ASN-0045's empty-tumbler question upstream: `[]` is not a tumbler at all,
+/// so the classifier never sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmptySequence;
 
@@ -38,11 +45,12 @@ impl fmt::Display for EmptySequence {
 }
 impl Error for EmptySequence {}
 
-/// A tumbler: an immutable, **nonempty** sequence of ℕ components with zeros
-/// stored explicitly — the literal component sequence (T0). Canonical identity
-/// (T3) holds **by construction**: no mantissa/exponent, no normalization map,
-/// no quotient — the representation admits no aliases, deleting the reference
-/// design's leading-zero alias bug class outright.
+/// A tumbler: an immutable, **nonempty** sequence of ℕ components (T0).
+///
+/// Zeros are stored explicitly — the value is the literal component sequence.
+/// Canonical identity (T3) holds **by construction**: no mantissa/exponent, no
+/// normalization map, no quotient — the representation admits no aliases,
+/// deleting the reference design's leading-zero alias bug class outright.
 ///
 /// Zero and leading-zero sequences are legal *carrier* elements (span
 /// sentinels and displacement values — TA6), but they are not addresses;
@@ -54,7 +62,7 @@ impl Error for EmptySequence {}
 /// the trust boundary (design preamble: validating deserialization, never a
 /// bare derive).
 ///
-/// OPEN DECISION: storage is a plain contiguous `Vec<Nat>` — the simplest
+/// **Open decision.** Storage is a plain contiguous `Vec<Nat>` — the simplest
 /// contiguous form, which the `&[Nat]` field projections (§B) rely on. The
 /// design's small-length inline-buffer refinement and the `im::Vector`
 /// alternative are profiling-gated options, not defaults; `im` earns its keep
@@ -65,9 +73,14 @@ pub struct Tumbler(Vec<Nat>);
 
 #[allow(clippy::len_without_is_empty)] // len ≥ 1 by invariant: is_empty would be constantly false, and the interface does not declare it
 impl Tumbler {
-    /// Carrier admission only (T0): rejects the empty sequence; admits zero
-    /// and leading-zero sequences (legal carrier elements and legal span
-    /// sentinels — NOT addresses).
+    /// Admits `comps` as a tumbler — carrier admission only (T0).
+    ///
+    /// It admits zero and leading-zero sequences (legal carrier elements and
+    /// legal span sentinels — not addresses).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmptySequence`] when `comps` is the empty sequence.
     pub fn new(comps: impl IntoIterator<Item = Nat>) -> Result<Tumbler, EmptySequence> {
         let comps: Vec<Nat> = comps.into_iter().collect();
         if comps.is_empty() {
@@ -77,60 +90,70 @@ impl Tumbler {
         }
     }
 
-    /// `#t` — the component count.
+    /// Returns `#t`, the component count.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// `tᵢ`, **1-based** (the spec's indexing) and **total**: `None` for
-    /// `i = 0` and for `i > #t`. Out of range is an answer, not a fault, so
-    /// nothing has to establish `#t` before it asks — and a caller that HAS
-    /// established it discharges that fact at the read, with an `expect` whose
-    /// message names the obligation relied on. Fallible like every other `get`
-    /// in std.
+    /// Returns `tᵢ`, **1-based** (the spec's indexing) and **total**.
+    ///
+    /// It answers `None` for `i = 0` and for `i > #t`. Out of range is an
+    /// answer, not a fault, so nothing has to establish `#t` before it asks —
+    /// and a caller that *has* established it discharges that fact at the
+    /// read, with an `expect` whose message names the obligation relied on.
+    /// Fallible like every other lookup `get` in std.
     pub fn get(&self, i: Pos) -> Option<&Nat> {
         i.checked_sub(1).and_then(|z| self.0.get(z))
     }
 
-    /// The component sequence in order, `t₁..t_{#t}` — the walk every
-    /// rendering, encoding and prefix-reconstruction path needs. Borrowing,
-    /// because a tumbler is a value (T0) rather than a container to dismantle:
-    /// the way to a new one is [`Tumbler::new`].
+    /// Returns the component sequence in order, `t₁..t_{#t}`.
+    ///
+    /// It is the walk every rendering, encoding and prefix-reconstruction path
+    /// needs. Borrowing, because a tumbler is a value (T0) rather than a
+    /// container to dismantle: the way to a new one is [`Tumbler::new`].
     pub fn iter(&self) -> Components<'_> {
         Components(self.0.iter())
     }
 
-    /// Internal 0-based view of the component sequence.
+    /// Returns the internal 0-based view of the component sequence.
     pub(crate) fn comps(&self) -> &[Nat] {
         &self.0
     }
 
-    /// Internal constructor for sequences a call site has already established
-    /// nonempty — by the arithmetic (`⊕` writes at least the action point,
-    /// `⊖` at least one padded position) or by a T4 clause (the peel in
-    /// [`crate::parent`] survives because no valid address leads with a zero).
+    /// Builds a tumbler from a sequence its call site has established nonempty.
     ///
-    /// The check runs in EVERY build, not only under debug assertions: T0 is
-    /// what the validating scan's first- and last-component reads and
-    /// [`crate::ordinal`]'s last-component read stand on, so a call site whose
-    /// premise moved is named here rather than surfacing as an anonymous index
-    /// panic two functions away. One branch, beside an allocation already paid
-    /// for.
+    /// The call site establishes it by the arithmetic (`⊕` writes at least the
+    /// action point, `⊖` at least one padded position, [`crate::inc`] and
+    /// [`crate::shift`] start from their operand's components), by a T4 clause
+    /// (the peel in [`crate::parent`] and the cut in [`crate::document_of`]
+    /// survive because no valid address leads with a zero), or by construction
+    /// ([`crate::elem_addr`] appends three components to a document's).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `comps` is empty. The check runs in *every* build, not only
+    /// under debug assertions: T0 is what the validating scan's first- and
+    /// last-component reads and [`crate::ordinal`]'s last-component read stand
+    /// on, so a call site whose premise moved is named here rather than
+    /// surfacing as an anonymous panic two functions away. One branch, beside
+    /// an allocation already paid for.
     pub(crate) fn from_vec(comps: Vec<Nat>) -> Tumbler {
         assert!(!comps.is_empty(), "internal tumbler construction must be nonempty");
         Tumbler(comps)
     }
 }
 
-/// The component sequence of a [`Tumbler`], in order. Opaque, so the storage
-/// decision above stays open: the sequence is what a caller walks, and the
-/// container it is walked out of is the tumbler's own business.
+/// The component sequence of a [`Tumbler`], in order.
+///
+/// Opaque, so the storage decision above stays open: the sequence is what a
+/// caller walks, and the container it is walked out of is the tumbler's own
+/// business.
 ///
 /// Opacity hides the *container*, never the walk's capabilities: the reverse
 /// walk, the exact length and the fused guarantee are all forwarded below,
 /// because the tail of a tumbler is where the meaning is — `sig` is an
 /// `rposition`, `ordinal` is a `last`, and a caller that could not reach
-/// backwards would have to clone every component to read the final two.
+/// backwards would have to walk every component to read the final two.
 #[derive(Debug, Clone)]
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Components<'a>(std::slice::Iter<'a, Nat>);
@@ -167,8 +190,14 @@ impl<'a> IntoIterator for &'a Tumbler {
     }
 }
 
-/// Deserialization mint path: `Vec<Nat>` → `Tumbler` through [`Tumbler::new`]
-/// (T0), so no journal replay can mint an empty tumbler.
+/// The deserialization mint path, routed through [`Tumbler::new`] (T0).
+///
+/// It takes `Vec<Nat>` → `Tumbler`, so no journal replay can mint an empty
+/// tumbler.
+///
+/// # Errors
+///
+/// Returns [`EmptySequence`] when the vector is empty.
 impl TryFrom<Vec<Nat>> for Tumbler {
     type Error = EmptySequence;
     fn try_from(comps: Vec<Nat>) -> Result<Tumbler, EmptySequence> {
@@ -176,13 +205,15 @@ impl TryFrom<Vec<Nat>> for Tumbler {
     }
 }
 
-/// T1/T2 — the intrinsic lexicographic total order, **prefix-smaller**,
-/// defined over *all* of carrier T including zero tumblers (TA-PosDom:
+/// The intrinsic lexicographic total order of T1/T2, **prefix-smaller**.
+///
+/// It is defined over *all* of carrier T including zero tumblers (TA-PosDom:
 /// positive > zero), with no special-casing of zero separators. This
 /// zero-agnostic flatness is load-bearing: it is why an all-zero sequence
-/// sorts below everything and can serve as a span lower-bound sentinel, and
-/// hierarchy is projected on top (§B), never baked into the comparator.
-/// `Vec`'s slice ordering is exactly this order; the delegation is deliberate.
+/// sorts below every positive tumbler and can serve as a span lower-bound
+/// sentinel, and hierarchy is projected on top (§B), never baked into the
+/// comparator. `Vec`'s slice ordering is exactly this order; the delegation is
+/// deliberate.
 impl Ord for Tumbler {
     fn cmp(&self, other: &Tumbler) -> Ordering {
         self.0.cmp(&other.0)
@@ -197,6 +228,7 @@ impl PartialOrd for Tumbler {
 }
 
 /// The canonical rendering: components in order, `.`-separated (`1.0.2.0.5`).
+///
 /// Lossless and unambiguous by T3 — the representation admits no aliases, so
 /// the text and the value determine each other. This is the dotted-decimal
 /// form the daemon puts on the wire and the conformance harness compares
@@ -214,7 +246,7 @@ impl fmt::Display for Tumbler {
     }
 }
 
-/// `p ≼ q` — `p` is a (possibly improper) prefix of `q`.
+/// Returns whether `p ≼ q`: `p` is a (possibly improper) prefix of `q`.
 pub fn is_prefix(p: &Tumbler, q: &Tumbler) -> bool {
     p.len() <= q.len() && p.comps() == &q.comps()[..p.len()]
 }

@@ -1,4 +1,4 @@
-//! # skep-address — M1: Address & Span Algebra
+//! skep-address — M1: Address & Span Algebra.
 //!
 //! The pure, stateless value-level calculus of the address space: tumbler
 //! identity and total order (ASN-0034: T0–T3), T4 field structure —
@@ -40,12 +40,13 @@
 //! trip is inherited. [`CanonicalForm`] carries no serde at all; what a future
 //! one would have to re-establish is recorded on the type.
 //!
-//! ## Boundary — deliberately NOT owned here
+//! ## Boundary — deliberately not owned here
 //!
 //! * the **allocator** — durable monotone frontier, active-allocator set,
 //!   journaling, crash recovery (M3): M1 supplies only the pure [`inc`] and
-//!   the TA5a gate predicate [`inc_preserves_t4`]; enforcing the gate and
-//!   persisting the frontier is M3's obligation;
+//!   [`shift`], and the TA5a gate predicate [`inc_preserves_t4`] (with
+//!   [`checked_inc`], which applies it); enforcing the gate and persisting
+//!   the frontier is M3's obligation;
 //! * the **inverse coverage index** ("which spans cover *t*", the spanfilade)
 //!   and any scale-up interval index (M7/M8) — M1 hands up span *values*;
 //! * the **content↔byte mapping** (M4/M5);
@@ -70,14 +71,15 @@
 //! contract), so it depends on nothing in the workspace; in particular it
 //! carries no edge to `skep-kernel` (M2). M1 holds no persistent state:
 //! "authoritative vs hint" collapses to "primary value vs derived value", and
-//! every value is immutable — recovery logic exists nowhere in this crate.
+//! every value but [`ElemPos`], a packaging whose fields are public, is
+//! immutable — recovery logic exists nowhere in this crate.
 //!
 //! The one obligation M1 carries without any signature stating it is the auto
 //! traits: the stores above hold these values inside a world that is required
-//! to be `Send + Sync + 'static`, so every value type here owes those, and
-//! owes them by what its private fields contain rather than by anything a
-//! caller can see. The block below the re-exports discharges that obligation
-//! in the build that ships.
+//! to be `Send + Sync + 'static`, so every value type here owes those, and the
+//! opaque ones owe them by what their private fields contain rather than by
+//! anything a caller can see. The block below the re-exports discharges that
+//! obligation in the build that ships.
 
 mod address;
 mod arithmetic;
@@ -106,12 +108,13 @@ pub use spanset::{
 };
 pub use tumbler::{is_prefix, Components, EmptySequence, Nat, Pos, Tumbler};
 
-/// The auto traits every M1 value promises without saying. The store crates
-/// above hold these values inside a world whose trait bound is
-/// `Send + Sync + 'static`, so the promise reaches back here through types no
-/// signature in this crate mentions — and it is kept by what the private
+/// The auto traits every M1 value promises without saying.
+///
+/// The store crates above hold these values inside a world whose trait bound
+/// is `Send + Sync + 'static`, so the promise reaches back here through types
+/// no signature in this crate mentions — and it is kept by what the private
 /// fields contain, so a backing swap (`im` for the `Rc`-backed `im-rc`, say)
-/// would revoke it with no signature changing and nothing in this crate
+/// would revoke it with no signature changing and nothing else in this crate
 /// failing to build. Asserted in the library rather than the suite, because
 /// that is the build a dependency change is made in.
 const _: fn() = || {

@@ -219,9 +219,9 @@ impl Daemon {
     /// read runs — every link from the base it selects at or below `N` to
     /// the journal's end, save where `N` is that base's own position, which
     /// answers the base's own chain with the journal unread — and under the
-    /// same reconstruction permit, with no world folded and none kept. At the
-    /// committed head it is the value `/health` serves as `chain_head` beside
-    /// `log_position`; at `0` the genesis seed.
+    /// same reconstruction permit, its base loaded and dropped unfolded
+    /// (`History::chain_at`). At the committed head it is the value `/health`
+    /// serves as `chain_head` beside `log_position`; at `0` the genesis seed.
     /// Token-blind and class-invariant like `/health`: a hash over the whole
     /// journal discloses no byte, and `/health` already serves it to
     /// everyone. What a peer holding a saved `(position, chain)` pair — a

@@ -445,8 +445,9 @@ fn runbook_says_what_ends_each_standing_clause() {
 ///
 /// The probe's `head_time` is read behind the change feed's lock, which a
 /// write holds across the attest store's sync, so a device that stops
-/// answering mid-sync holds the probe; the step says so, that no line says
-/// it, and that a restart does not help while the device does not answer.
+/// answering mid-sync holds the probe; the step says so, the line the
+/// stream says once the probes have taken every worker, and that a restart
+/// does not help while the device does not answer.
 #[test]
 fn runbook_says_a_health_probe_that_hangs_waits_on_the_volume() {
     let step = collapsed(&passage(
@@ -457,7 +458,7 @@ fn runbook_says_a_health_probe_that_hangs_waits_on_the_volume() {
     for fact in [
         "A `/health` that does not answer once the open is done points to the volume",
         "behind the change feed's lock",
-        "No line says so",
+        "the stream then says `failure: the worker pool is saturated`",
         "A restart does not help while the device does not answer",
     ] {
         assert!(step.contains(fact), "§3 step 6 says {fact:?}: {step}");

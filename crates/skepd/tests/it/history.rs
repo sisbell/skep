@@ -598,6 +598,73 @@ fn op_at_reconstruction_is_permit_bounded() {
     sd.shutdown();
 }
 
+/// EACH HISTORICAL ANSWER LOADS ONE BASE, AND A REFUSAL AHEAD OF THE REPLAY
+/// NONE — the history surface's cost in the kernel's own unit
+/// (`Daemon::bases_loaded`, counting each base a history read selects: a
+/// whole checkpoint deserialized and seeded, or genesis). An `/op-at` read,
+/// an `/op-at` `key_set`, a `/chain?at` and (in `observe` builds) a
+/// `/dump?at` each move the count by ONE — the chain read included, which
+/// folds no world and loads its base all the same (`Kernel::chain_at`'s
+/// card) — and `history_busy` with the pool held, `beyond_head`, and the
+/// guest's `withheld` at the head's check (PUB-6.49) move it by none. The
+/// cadence is parked, so no landing's reclaim-floor probe moves the count
+/// between two answers.
+#[test]
+fn each_historical_answer_loads_one_base_and_a_refusal_ahead_of_the_replay_none() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    sd.daemon().park_the_cadence();
+    let port = sd.port();
+    let scenario = seed(port);
+    let owner = Some(scenario.token.as_str());
+    let at = scenario.at_i1;
+    let cost = |answer: &dyn Fn()| {
+        let before = sd.daemon().bases_loaded();
+        answer();
+        sd.daemon().bases_loaded() - before
+    };
+    let read = || {
+        op_at_ok(port, owner, at, &retrieve(&scenario.doc1, 5));
+    };
+    assert_eq!(cost(&read), 1, "an /op-at read");
+    let key_set = || {
+        let frame = format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#);
+        let (st, v) = op_at(port, owner, at, &frame);
+        assert_eq!(st, 200, "{v}");
+    };
+    assert_eq!(cost(&key_set), 1, "an /op-at key_set");
+    let chain = || {
+        let (st, body) = get(port, &format!("/chain?at={at}"));
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    };
+    assert_eq!(cost(&chain), 1, "a /chain?at: no world folded, its base loaded all the same");
+    #[cfg(feature = "observe")]
+    {
+        let dump = || assert_eq!(get(port, &format!("/dump?at={at}")).0, 200);
+        assert_eq!(cost(&dump), 1, "a /dump?at");
+    }
+    let held: Vec<_> =
+        (0..2).map(|_| sd.daemon().try_hold_reconstruction_permit().expect("a permit")).collect();
+    let busy = || {
+        let (st, v) = op_at(port, owner, at, &retrieve(&scenario.doc1, 5));
+        assert_eq!((st, v["error"].as_str()), (503, Some("history_busy")), "{v}");
+    };
+    assert_eq!(cost(&busy), 0, "history_busy: the permit before the journal");
+    drop(held);
+    let head = head_of(port);
+    let beyond = || {
+        let (st, v) = op_at(port, owner, head + 1_000, &retrieve(&scenario.doc1, 5));
+        assert_eq!((st, v["error"].as_str()), (400, Some("beyond_head")), "{v}");
+    };
+    assert_eq!(cost(&beyond), 0, "beyond_head: refused ahead of the base");
+    let withheld = || {
+        let (st, v) = op_at(port, None, at, &retrieve(&scenario.doc1, 5));
+        assert_eq!((st, v["code"].as_str()), (200, Some("withheld")), "{v}");
+    };
+    assert_eq!(cost(&withheld), 0, "the guest's withheld, at the head's check (PUB-6.49)");
+    sd.shutdown();
+}
+
 /// The reconstruction permit is taken AFTER the frame is classified and
 /// BEFORE the journal sees `at` — `Unavailable::Busy`, `History::reconstruct`
 /// and `refuse_unavailable` each say so, and the order decides what

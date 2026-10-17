@@ -4251,7 +4251,8 @@ any committed position, RECOMPUTED by the kernel off its own journal
 under the verification a historical read runs — every link from the
 checkpoint it selects at or below `at` to the journal's END, so a
 position below the newest checkpoint verifies the whole surviving
-journal from the base it selects — with no world materialized.
+journal from the base it selects — that base loaded, as a historical
+read loads it, and no world folded from it.
 Token-blind and class-invariant like `/health`: every link's preimage
 carries a per-transaction SALT — thirty-two random bytes stored in the
 commit marker (`SKJ4`) and served by no route — so a served chain value

@@ -808,17 +808,17 @@ impl Daemon {
     /// Advances the edge clock by `ms`.
     ///
     /// **Test hook** (the same standing). The clock is the one reading the
-    /// nine edge pairs judge their hold-down against
+    /// ten edge pairs judge their hold-down against
     /// (`skep_util::permits::edge_clock_now`;
     /// `skep_core::limits::EDGE_HOLD_DOWN`) — so a suite drives a pair's
     /// second line through a seam rather than a `sleep`, as
     /// [`Daemon::advance_media_clock_ms`] drives an expiry. The clock is the
     /// *process's* and not this daemon's: one offset every holder in the
-    /// process reads, which is what makes it one clock for the nine pairs —
-    /// the five pools', the live-stream budget's, the live streams' threads',
-    /// the accept loop's and the challenge store's, whose mint reads it for
-    /// the nonces' time to live as well, so an expiry and the hold-down move
-    /// together.
+    /// process reads, which is what makes it one clock for the ten pairs —
+    /// the five permit pools', the worker pool's, the live-stream budget's,
+    /// the live streams' threads', the accept loop's and the challenge
+    /// store's, whose mint reads it for the nonces' time to live as well, so
+    /// an expiry and the hold-down move together.
     #[doc(hidden)]
     pub fn advance_edge_clock_ms(&self, ms: u64) {
         skep_util::permits::advance_edge_clock_ms(ms);

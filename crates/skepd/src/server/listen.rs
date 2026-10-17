@@ -6,7 +6,7 @@
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use skep_media::serve::Progress;
 #[cfg(feature = "test-hooks")]
 use skep_media::serve::STREAM_HOLD;
 use skep_util::notice::{self, Class, Moment};
-use skep_util::permits::{edge_clock_now, Edge, EdgeTracker};
+use skep_util::permits::{edge_clock_now, Edge, EdgeTracker, PoolEdgeLine};
 
 use super::blob_routes;
 use super::http::{
@@ -31,7 +31,7 @@ use super::request::HttpRequest;
 use super::scan::MAX_CONCURRENT_CLASS_SCANS;
 use super::{
     AcceptFailedLine, AcceptRecoveredLine, BudgetEdgeLine, CheckpointThreadRefusedLine, Daemon,
-    StreamThreadLine,
+    StreamThreadLine, WORKER_POOL,
 };
 use skep_core::auth::session::Peer;
 use crate::limits::{BLOB_CHUNK, BLOB_IDLE_BOUND, BLOB_TRANSFER_BOUND, PRUNE_INTERVAL};
@@ -438,6 +438,15 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     // the first success a hold-down after the last failure says the
     // recovery once, with that count.
     let accepts = Arc::new(EdgeTracker::new(EDGE_HOLD_DOWN));
+    // The worker pool's pair (m12's form): the workers free to take a
+    // connection — every live worker but those serving one — counted across
+    // the pool, and one tracker for the pool's edges, so the connection that
+    // takes the LAST free worker says the pool saturated once across the
+    // workers: the next connection waits in the listen backlog until one
+    // frees. Every worker is free from its spawn; a refused spawn retires the
+    // whole start below, so no count is judged on a pool short of `workers`.
+    let free = Arc::new(AtomicUsize::new(workers));
+    let worker_edges = Arc::new(EdgeTracker::new(EDGE_HOLD_DOWN));
     // Spawned fallibly, and named: `thread::spawn` panics when the OS
     // refuses a thread, and a panic here would unwind out of a half-built
     // handle vector — detaching the workers that did start, with the
@@ -458,6 +467,8 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
         let stop = Arc::clone(&stop);
         let subscribers = Arc::clone(&subscribers);
         let accepts = Arc::clone(&accepts);
+        let free = Arc::clone(&free);
+        let worker_edges = Arc::clone(&worker_edges);
         let spawned = thread::Builder::new().name("skepd-worker".into()).spawn(move || loop {
             if stop.load(Ordering::Acquire) {
                 break;
@@ -493,6 +504,13 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
             if stop.load(Ordering::Acquire) {
                 break;
             }
+            // The worker pool's edges (m12's form), told after the stop's
+            // check, so the stop's wake connects say nothing: this worker
+            // serves a connection from here, and where it was the last free
+            // one every worker is busy. It counts among the free until it
+            // takes itself out, so the count it takes from is never zero.
+            let free_after = free.fetch_sub(1, Ordering::AcqRel) - 1;
+            say_the_worker_pools_edge(&daemon, &worker_edges, free_after);
             serve_connection(&daemon, &subscribers, stream);
             // The fault door's outside arm (test seam): a panic here, after
             // the reply is written and outside the handler's catch, is the
@@ -500,6 +518,9 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
             // and when the last is gone `wait` returns to the binary.
             #[cfg(any(test, feature = "test-hooks"))]
             super::hooks::fire_the_worker_fault_outside_the_catch();
+            // Free again — after the fault door, so a worker that dies there
+            // is never counted free.
+            free.fetch_add(1, Ordering::AcqRel);
         });
         match spawned {
             Ok(h) => handles.push(h),
@@ -1082,6 +1103,32 @@ fn say_accept_failed_once(daemon: &Daemon, accepts: &EdgeTracker, e: &io::Error)
 fn say_accept_recovered_if_due(daemon: &Daemon, accepts: &EdgeTracker) {
     if let Some(Edge::Landing { refusals }) = accepts.admitted(edge_clock_now()) {
         daemon.say(Class::Landing, AcceptRecoveredLine { failures: refusals });
+    }
+}
+
+/// Tells the worker pool's edges (`operations.md` §1.1 m12's form).
+///
+/// The pool is the request workers, the budget [`DEFAULT_WORKERS`] sizes
+/// the five permit pools against, and what fills it is unpooled as often as
+/// pooled: a slow peer holds a worker to its transfer deadlines, a `/health`
+/// probe or a `/changes` page waits on the change feed's lock while a sync
+/// holds it, and in an `observe` build a plain `/dump` walks the whole world
+/// under no permit. A connection that took the LAST free worker —
+/// `free_after` zero, every live worker serving, so the next connection
+/// waits in the listen backlog, `/health` among them — is the pool's
+/// refusal: the first of an episode says `the worker pool is saturated`
+/// through the daemon's classed door, and every later one inside it
+/// restarts the hold-down and says nothing. Any other connection is an
+/// admission, the first a whole hold-down after the episode's last
+/// saturation saying `the worker pool has room again`. No count: a
+/// connection is any route's, a read's among them (D9). A connection that
+/// takes a free worker with others free costs a clock reading and one
+/// atomic load here, and says nothing.
+fn say_the_worker_pools_edge(daemon: &Daemon, workers: &EdgeTracker, free_after: usize) {
+    let now = edge_clock_now();
+    let edge = if free_after == 0 { workers.refused(now) } else { workers.admitted(now) };
+    if let Some(edge) = edge {
+        daemon.say(edge.class(), PoolEdgeLine::new(WORKER_POOL, edge));
     }
 }
 

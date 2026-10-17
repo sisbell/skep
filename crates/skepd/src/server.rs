@@ -1766,10 +1766,11 @@ impl Daemon {
     /// queue because they hold no door: `History` and `ClassScans` know
     /// nothing of the daemon, and the challenge store is the session layer's.
     /// The write pool's door is the daemon's own (`op.rs`'s
-    /// `Daemon::take_write_permit`), the live-stream budget and the accept
-    /// loop hold the daemon (`listen.rs`), and the two media pools hold the
-    /// media gate's door: those five say their edges at the edge. A routing
-    /// that crossed no edge costs three atomic loads here.
+    /// `Daemon::take_write_permit`), the live-stream budget, the live
+    /// streams' threads, the accept loop and the worker pool hold the daemon
+    /// (`listen.rs`), and the two media pools hold the media gate's door:
+    /// those seven say their edges at the edge. A routing that crossed no
+    /// edge costs three atomic loads here.
     fn say_the_edges_crossed(&self) {
         self.history
             .edge()
@@ -1957,26 +1958,30 @@ impl Daemon {
     /// noted (`MediaGate::note_checkpoint`), then the change feed's five
     /// files compacted to the journal's reclaim floor
     /// (`Commits::compact_feed_below_reclaim_floor`) — the fence below which
-    /// `/changes` answers `410` — and beside them the volume's free space as
-    /// the floor's refusal reads it, through the gate's one door, and a
-    /// reading of the resident set. One function, so the three arms cannot
-    /// disagree about what follows a landing, and the answer is what each
-    /// arm's line says of it ([`AfterLanding`]): no figure a landing moves
-    /// moves unsaid. The newest header is the caller's one read of it, its
-    /// length handed in. Where the floor has not moved — a reclamation that
-    /// failed, a landing below the retained window — the compaction finds
-    /// nothing below the floor and writes nothing.
+    /// `/changes` answers `410` — timed by the daemon's own `Instant`, the
+    /// one span of a landing that holds a lock every write takes, and beside
+    /// them the volume's free space as the floor's refusal reads it, through
+    /// the gate's one door, and a reading of the resident set. One function,
+    /// so the three arms cannot disagree about what follows a landing, and
+    /// the answer is what each arm's line says of it ([`AfterLanding`]): no
+    /// figure a landing moves moves unsaid. The newest header is the
+    /// caller's one read of it, its length handed in. Where the floor has not
+    /// moved — a reclamation that failed, a landing below the retained window
+    /// — the compaction finds nothing below the floor and writes nothing.
     fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> AfterLanding {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
         let floor = self.media.note_checkpoint(newest_len);
+        let began = Instant::now();
         let compaction = self.commits.compact_feed_below_reclaim_floor(&self.engine);
+        let compaction_ms = began.elapsed().as_millis();
         AfterLanding {
             bytes_bound: bytes_bound.get(),
             floor,
             free_space: self.media.free_space(),
             resident: self.resident.read(),
             compaction,
+            compaction_ms,
         }
     }
 
@@ -2234,15 +2239,17 @@ impl fmt::Display for Reclaimed {
 /// ([`Daemon::re_read_after_a_landing`]): the cadence's byte bound and the
 /// media floor in force, the volume's free space as the floor reads it, a
 /// reading of the resident set, and the change feed's compaction — the fence
-/// below which `/changes` answers `410 history_reclaimed`, with each file
-/// that stood named. Line 25 carries them, and so do the backstop's line
-/// where its wake took the re-reads and a failure after a base landed
-/// (`operations.md` §1.1 rows 25 and 26; m13; §6), so no figure a landing
-/// moves — the floor a deposit is refused at, the fence a mirror is refused
-/// below — moves with no line naming it. It renders `the cadence's byte
-/// bound {b}, the media floor in force {F}, the volume's free space {f};
-/// {resident}; the change feed's files {compacted below position {p} | hold
-/// nothing below the reclaim floor}`.
+/// below which `/changes` answers `410 history_reclaimed`, how long the
+/// compaction held the change feed's lock, with each file that stood named.
+/// Line 25 carries them, and so do the backstop's line where its wake took
+/// the re-reads and a failure after a base landed (`operations.md` §1.1 rows
+/// 25 and 26; m13; §6), so no figure a landing moves — the floor a deposit
+/// is refused at, the fence a mirror is refused below — moves with no line
+/// naming it, and the one span of a landing that holds a lock every write
+/// takes is timed where it happens. It renders `the cadence's byte bound
+/// {b}, the media floor in force {F}, the volume's free space {f};
+/// {resident}; the change feed's files {compacted below position {p} in {d}
+/// ms | hold nothing below the reclaim floor}`.
 struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
@@ -2254,6 +2261,16 @@ struct AfterLanding {
     resident: ResidentRead,
     /// The feed's compaction: the fence, and the files that stood.
     compaction: FeedCompaction,
+    /// The compaction's duration, whole milliseconds, the daemon's own
+    /// `Instant` around `Commits::compact_feed_below_reclaim_floor`.
+    ///
+    /// It spans the reclaim floor's probe, the wait to take the change
+    /// feed's lock and the rewrites under it — five files rendered whole,
+    /// each made durable by one `sync_all` — so it is an upper bound on how
+    /// long a write's record step, a `/health` probe or a `/changes` page
+    /// waited on that lock at this landing. Said beside the fence alone:
+    /// where nothing lay below the floor, nothing was rewritten.
+    compaction_ms: u128,
 }
 
 impl fmt::Display for AfterLanding {
@@ -2266,7 +2283,12 @@ impl fmt::Display for AfterLanding {
         )?;
         match self.compaction.fence {
             Some(fence) => {
-                write!(f, "compacted below position {}", fence.saturating_add(1))?;
+                write!(
+                    f,
+                    "compacted below position {} in {} ms",
+                    fence.saturating_add(1),
+                    self.compaction_ms
+                )?;
                 for file in &self.compaction.standing {
                     write!(f, ", {file} standing as it was")?;
                 }
@@ -3380,17 +3402,18 @@ impl fmt::Display for HeadAtOpenLine {
 
 // ── the edge pairs' words ────────────────────────────────────────────────
 //
-// What the nine pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
-// §6's three rows): the five pools in one form — `skep_util::permits`'s
-// `PoolEdgeLine`, under the word each pool names itself by — the live-stream
-// budget in that form too, the live streams' threads, the challenge store
-// and the accept loop in their own words. Each a pure value whose words the
-// edge suite pins as said (`tests/it/edges.rs`), said under the edge's class
-// word through the classed door and never the un-classed one; nothing on a
-// line but the condition and, where the OS refused, its own words for the
-// cause — no count (the upload and write pools' landings and the accept
-// loop's recovery alone carry one, the episode's refusals, which count no
-// reader), no path, query, principal, peer, position or reader.
+// What the ten pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
+// §6's three rows): the five permit pools and the worker pool in one form —
+// `skep_util::permits`'s `PoolEdgeLine`, under the word each pool names
+// itself by — the live-stream budget in that form too, the live streams'
+// threads, the challenge store and the accept loop in their own words. Each
+// a pure value whose words the edge suite pins as said (`tests/it/edges.rs`),
+// said under the edge's class word through the classed door and never the
+// un-classed one; nothing on a line but the condition and, where the OS
+// refused, its own words for the cause — no count (the upload and write
+// pools' landings and the accept loop's recovery alone carry one, the
+// episode's refusals, which count no reader), no path, query, principal,
+// peer, position or reader.
 
 /// The word the reconstruction pool's two lines name it by.
 ///
@@ -3407,6 +3430,15 @@ pub(super) const SCAN_POOL: &str = "scan";
 ///
 /// It is the refusal's own, `write_busy`.
 pub(super) const WRITE_POOL: &str = "write";
+
+/// The word the worker pool's two lines name it by.
+///
+/// The pool is the request workers, the budget the five permit pools are
+/// sized against (`listen.rs`'s `DEFAULT_WORKERS`). Nothing is refused at
+/// it — a connection that finds every worker busy waits in the listen
+/// backlog — so its word is no refusal's but the threads' own,
+/// `skepd-worker`, which the accept pair's lines carry too.
+pub(super) const WORKER_POOL: &str = "worker";
 
 /// The live-stream budget's two lines, in the pools' form (m12; §6's row).
 ///

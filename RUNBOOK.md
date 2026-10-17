@@ -281,7 +281,12 @@ apart.
    `; checkpoint.{n} removed ({bytes} bytes)`. The daemon keeps two;
    the one removed is the older past them, or a checkpoint the open
    passed over (Start, step 3, item 5), whose file this is the last
-   word on.
+   word on. Further on, the line's `the change feed's files compacted
+   below position {position} in {ms} ms` is how long that landing
+   held the change feed's lock: every write, `/health` probe and
+   `/changes` page that came meanwhile waited behind it, so a figure
+   that grows from landing to landing is the volume's syncs slowing
+   (Start, step 6).
 
 7. **Know what no act clears.** `feed-attest.log` gains a line for
    every attested commit and is never compacted; nothing the daemon
@@ -632,7 +637,14 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      JSON before any other check, at about twenty times its size:
      about 160 MiB of transient memory per worker reading a body at
      the cap, so a count raised for more concurrent clients raises
-     the daemon's peak with it.
+     the daemon's peak with it. `failure: the worker pool is
+     saturated` says every worker was busy at once and new
+     connections, `/health` among them, waited until one freed;
+     `landing: the worker pool has room again`, that they have stood
+     free a hold-down. A count raised gives more connections a
+     worker, at the memory figure above; where the line comes with a
+     `/health` that hangs on the volume (step 6), more workers park
+     as the rest did.
    - `--local-trust` or `--no-local-trust`
      (`SKEPD_LOCAL_TRUST=true|false`): whether bare, unsigned
      sessions from this machine are honoured once the board is
@@ -1000,10 +1012,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    checkpoint thread holds across the feed's compaction; so a device
    that stops answering mid-sync holds every probe and every
    `/changes` page, each on a worker of its own, until no worker is
-   left for the reads at the head, which read no file. No line says
-   so. Read the OS's log for the device (`dmesg`). A restart does not
-   help while the device does not answer, since the open reads and
-   writes it first.
+   left for the reads at the head, which read no file; the stream then
+   says `failure: the worker pool is saturated`, and nothing of why.
+   Read the OS's log for the device (`dmesg`). A restart does not help
+   while the device does not answer, since the open reads and writes
+   it first.
 
 7. **Claim it, the first time.** While `auth.claimant` is `null`,
    any process that can reach the port can claim the board, so claim

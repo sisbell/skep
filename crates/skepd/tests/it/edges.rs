@@ -1,11 +1,11 @@
 //! THE EDGE PAIRS (`operations.md` §1.1 m12; §4 rows 27 and 33; §6's three
 //! rows): the five permit pools — the reconstruction, the class scan, the
-//! fetch, the upload and the write — the live-stream budget, the live
-//! streams' threads, the challenge store and the workers' `accept` each say
-//! their condition at its EDGES, once per episode, on the operator stream: a
-//! `failure:` line when a request first meets the bound, a `landing:` line
-//! at the first act the bound admits once it has stood clear for
-//! `EDGE_HOLD_DOWN`; nothing per request; nothing on a line but the
+//! fetch, the upload and the write — the worker pool, the live-stream
+//! budget, the live streams' threads, the challenge store and the workers'
+//! `accept` each say their condition at its EDGES, once per episode, on the
+//! operator stream: a `failure:` line when a request first meets the bound,
+//! a `landing:` line at the first act the bound admits once it has stood
+//! clear for `EDGE_HOLD_DOWN`; nothing per request; nothing on a line but the
 //! condition — no count (the upload and write pools' landings alone carry
 //! the episode's refusals, and the accept loop's recovery its failures), no
 //! path, query, principal, peer or reader. The
@@ -34,6 +34,9 @@
 //! * P4 — the accept pair, one line across two workers, `{n}` counted.
 //! * P5 — the door: every line captured opens with its class word, and no
 //!   pair's site takes the un-classed door — read off the sources.
+//! * P6 — the worker pool's pair, as the last free worker is taken by a
+//!   connection whose head never ends and a hold-down after the last
+//!   saturation.
 
 use crate::common;
 
@@ -43,7 +46,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::*;
-use skepd::{Daemon, Permit, Skepd};
+use skepd::{Daemon, Permit, Skepd, MIN_WORKERS};
 
 /// `EDGE_HOLD_DOWN`, 15 s, restated here on purpose — the discipline
 /// `events.rs` applies to the budget: a constant that moves is a visible
@@ -737,6 +740,7 @@ fn no_edge_pair_takes_the_unclassed_door_and_the_write_pool_has_one_door() {
     assert!(
         accept.contains("daemon.say(Class::Landing, AcceptRecoveredLine { failures: refusals })")
     );
+    assert!(accept.contains("daemon.say(edge.class(), PoolEdgeLine::new(WORKER_POOL, edge))"));
     let budget = section(&listen, "    fn admit(&self, daemon: Arc<Daemon>", "    fn join_all(");
     unclassed("the budget's pair", &budget);
     assert_eq!(budget.matches("daemon.say(edge.class(), BudgetEdgeLine(edge))").count(), 2);
@@ -760,4 +764,69 @@ fn no_edge_pair_takes_the_unclassed_door_and_the_write_pool_has_one_door() {
         3,
         "the three sequences take the one door"
     );
+}
+
+// ── P6: the worker pool ──────────────────────────────────────────────────
+
+/// P6 — THE WORKER POOL'S PAIR (m12's form): a daemon of `MIN_WORKERS`
+/// workers, each taken by a connection whose request head never ends — its
+/// worker blocked in the read, as a slow peer holds one. One worker free,
+/// nothing is said; the last one taken, ONE `failure: the worker pool is
+/// saturated`; a connection behind them waits in the backlog and is answered
+/// once a worker frees, saying nothing (a saturation inside the episode, or
+/// an admission inside the hold-down). The clock past the hold-down, the
+/// first connection a worker takes with another still free says ONE
+/// `landing: the worker pool has room again`, and the next says nothing. No
+/// digit on either line, each under its class word.
+#[test]
+fn the_worker_pools_pair_is_said_as_the_last_worker_is_taken_and_after_the_hold_down() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_with_workers(dir.path(), MIN_WORKERS);
+    let port = sd.port();
+    let lines = || said(&sd, "the worker pool");
+    let failure = "failure: the worker pool is saturated";
+    let hold = || {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+        s.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n").expect("a head, unfinished");
+        s
+    };
+    // The spawn's own requests (the claim's) have returned their workers; a
+    // moment for the last of them to count itself free again.
+    std::thread::sleep(Duration::from_millis(100));
+    let mut held: Vec<TcpStream> = (1..MIN_WORKERS).map(|_| hold()).collect();
+    // Every worker but one taken: nothing said. The accepts land in
+    // microseconds; the wait gives a judgment that fires a worker early the
+    // time to say its line.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(lines(), Vec::<String>::new(), "one worker free: nothing said");
+    held.push(hold());
+    wait_until("the last worker taken", || !lines().is_empty());
+    assert_eq!(lines(), [failure], "FINDING (m12): the saturation, once, its text whole");
+
+    // Behind them, in the backlog: answered once a worker frees, unsaid.
+    let mut behind = TcpStream::connect(("127.0.0.1", port)).expect("the backlog takes it");
+    behind.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("a request");
+    drop(held);
+    behind.set_read_timeout(Some(Duration::from_secs(20))).expect("timeout");
+    let mut answer = Vec::new();
+    behind.read_to_end(&mut answer).expect("answered once a worker frees");
+    assert!(answer.starts_with(b"HTTP/1.1 200 "), "{}", String::from_utf8_lossy(&answer));
+    assert_eq!(lines(), [failure], "inside the episode: no second line");
+
+    // Past the hold-down, the landing — the clock advanced at each try, since
+    // a try that takes the last free worker restarts the hold-down.
+    wait_until("the landing", || {
+        sd.daemon().advance_edge_clock_ms(PAST_THE_HOLD_DOWN_MS);
+        get(port, "/health").0 == 200 && lines().len() == 2
+    });
+    let (st, _) = get(port, "/health");
+    assert_eq!(st, 200);
+    assert_eq!(
+        lines(),
+        [failure, "landing: the worker pool has room again"],
+        "FINDING (m12): the worker pool's pair, once per episode"
+    );
+    assert_classed(&lines());
+    assert_no_digit(&lines());
+    sd.shutdown();
 }

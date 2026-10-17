@@ -1190,7 +1190,7 @@ fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_
 /// What a landing moved, at fixed figures, as the three lines after a
 /// landing carry it: both bounds, the volume's free space, a reading of the
 /// resident set beside the largest of the uptime's, and the feed's
-/// compaction, its fence named or nothing below the floor.
+/// compaction, its fence and its duration named, or nothing below the floor.
 fn after_a_landing(fence: Option<u64>) -> AfterLanding {
     AfterLanding {
         bytes_bound: 25_165_824,
@@ -1198,6 +1198,7 @@ fn after_a_landing(fence: Option<u64>) -> AfterLanding {
         free_space: 9_000_000_000,
         resident: ResidentRead { now: Some(412_000_256), most: Some(1_180_000_256) },
         compaction: FeedCompaction { fence, standing: vec![] },
+        compaction_ms: 38,
     }
 }
 
@@ -1213,12 +1214,12 @@ const AFTER_A_LANDING: &str = "the cadence's byte bound 25165824, the media floo
 /// retention removed, by its name and its length, both bounds, the volume's
 /// free space, a reading of the resident set beside the largest of the
 /// uptime's readings — never called the process's peak — the compaction's
-/// fence with each file that stood named, and the inline clause present
-/// only where the count moved. A header that did not answer reads "size
-/// unread"; a resident set never read reads "unread", and a reading the
-/// crate could not make reads "unread" beside the largest one it made; a
-/// landing with nothing below the floor says so, and one that removed no
-/// checkpoint names none.
+/// fence and its duration, with each file that stood named, and the inline
+/// clause present only where the count moved. A header that did not answer
+/// reads "size unread"; a resident set never read reads "unread", and a
+/// reading the crate could not make reads "unread" beside the largest one
+/// it made; a landing with nothing below the floor says so, and names no
+/// duration, and one that removed no checkpoint names none.
 #[test]
 fn the_landing_line_carries_row_25s_figures_in_its_words() {
     let full = LandingLine {
@@ -1245,8 +1246,8 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
          bytes); the cadence's byte bound 25165824, the media floor in force 268435456, the \
          volume's free space 9000000000; the process's resident set 412000256 bytes, the \
          largest of this uptime's readings 1180000256 bytes; the change feed's files compacted \
-         below position 4096, commits.log standing as it was, feed-index.log standing as it \
-         was; 2 checkpoints ran inline on a writer since position 3100"
+         below position 4096 in 38 ms, commits.log standing as it was, feed-index.log standing \
+         as it was; 2 checkpoints ran inline on a writer since position 3100"
     );
     let quiet = LandingLine {
         position: Seq(7),
@@ -1259,6 +1260,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
             free_space: 0,
             resident: ResidentRead { now: None, most: None },
             compaction: FeedCompaction::default(),
+            compaction_ms: 0,
         },
         inline: None,
     };
@@ -1348,7 +1350,7 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
             format!(
                 "a checkpoint landed at position 96 (1048576 bytes) in 1200 ms but {words} \
                  failed: the volume is full (No space left on device); {AFTER_A_LANDING}\
-                 compacted below position 96{retry}"
+                 compacted below position 96 in 38 ms{retry}"
             ),
             "{step:?}"
         );
@@ -1407,7 +1409,7 @@ fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_las
         format!(
             "{head}; the newest checkpoint at position 1026 (1048576 bytes): 2097152 journal \
              bytes reclaimed; checkpoint.0 removed (4096 bytes); {AFTER_A_LANDING}compacted \
-             below position 1026"
+             below position 1026 in 38 ms"
         )
     );
     let failed = |newest| BackstopLine {

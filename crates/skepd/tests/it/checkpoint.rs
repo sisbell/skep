@@ -160,7 +160,8 @@ fn newest_clause(line: &str) -> (&str, &str) {
 /// held above it; the resident set's reading is above zero and never above
 /// the largest of the uptime's readings beside it, that one is the daemon's
 /// high-water and never decreases across two landings; both bounds are the
-/// small board's, and the compaction fence is the reclaim floor.
+/// small board's, and the compaction fence is the reclaim floor, its
+/// duration whole milliseconds.
 #[test]
 fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_the_resident_peak() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -221,13 +222,18 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     let (_, largest) = resident_figures(line);
     assert_eq!(largest, peak, "the largest reading is the daemon's high-water: {line}");
     assert!(!line.contains("peaked"), "the largest reading is no peak of the process's: {line}");
+    let compacted = ms_read_out(
+        line,
+        &format!("; the change feed's files compacted below position {} in ", landed.seq.0),
+        " ms",
+    );
     assert!(
-        line.ends_with(&format!(
-            "; the change feed's files compacted below position {}",
+        compacted.ends_with(&format!(
+            "; the change feed's files compacted below position {} in N ms",
             landed.seq.0
         )),
-        "the fence is the reclaim floor — the oldest kept base — and no file stood, no inline \
-         run moved: {line}"
+        "the fence is the reclaim floor — the oldest kept base — the hold in whole milliseconds, \
+         and no file stood, no inline run moved: {line}"
     );
 
     // THE SECOND LANDING, at the same head with nothing committed between:
@@ -333,10 +339,15 @@ fn a_landing_line_names_the_file_that_stood_beside_the_fence() {
     assert_eq!(said.len(), 1, "{said:?}");
     let line = &said[0];
     let landed = sd.daemon().newest_checkpoint().expect("the landing").seq.0;
+    let compacted = ms_read_out(
+        line,
+        &format!("; the change feed's files compacted below position {landed} in "),
+        " ms, ",
+    );
     assert!(
-        line.ends_with(&format!(
-            "; the change feed's files compacted below position {landed}, feed-index.log \
-             standing as it was"
+        compacted.ends_with(&format!(
+            "; the change feed's files compacted below position {landed} in N ms, \
+             feed-index.log standing as it was"
         )),
         "the one file that stood is named, and no other: {line}"
     );

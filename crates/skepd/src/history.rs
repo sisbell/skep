@@ -4,7 +4,7 @@
 //! answer spends, the throwaway kernel a historical world is read through,
 //! the `as_of` stamping that makes the answer say which position it is
 //! *of*, and the commit chain's value there (`/chain?at`), which spends the
-//! same budget and folds no world.
+//! same budget and loads the same base, folding none.
 //!
 //! The mechanism is the engine's bounded replay (`Engine::world_at`):
 //! checkpoint-or-genesis base plus journal fold, per call, uncached. That
@@ -48,12 +48,18 @@ use skep_core::limits::EDGE_HOLD_DOWN;
 ///
 /// A reconstruction is `Engine::world_at` behind `/op-at` and `/dump?at`,
 /// and the chain read behind `/chain?at` spends a permit of this pool for
-/// the span of its scan, folding no world. Each reconstruction is a
-/// whole-checkpoint deserialize plus journal fold, per call, uncached, and
-/// each leaves a whole second world resident for as long as its answer is
-/// being built — two keeps history panes serviceable without letting
-/// core-bound replay occupy the worker pool or letting reconstructed worlds
-/// accumulate one per worker.
+/// the span of its call. Each is per call and uncached, and each LOADS A
+/// WHOLE BASE — the newest retained checkpoint at or below the position,
+/// read whole, deserialized and seeded, or genesis — reads every journal
+/// segment above it to the journal's end, and holds the records between the
+/// base and the position before the fold begins (`Kernel::world_at`'s cost
+/// card). A reconstruction folds them and leaves that second world resident
+/// for as long as its answer is being built; the chain read drops it
+/// unfolded (`Kernel::chain_at`'s card). So a permit's peak is one whole
+/// world and a window's records whichever route holds it, and the pool's is
+/// two of each beside the live world. Two keeps history panes serviceable
+/// without letting core-bound replay occupy the worker pool or letting
+/// reconstructed worlds accumulate one per worker.
 pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 
 /// Why a historical answer is unavailable.
@@ -283,14 +289,18 @@ impl History {
     /// Returns the commit chain's value as of `at`, for `GET /chain?at=N`.
     ///
     /// It is the kernel's own recomputation off its journal
-    /// (`Kernel::chain_at`), under this pool's permit, conservatively: the
-    /// kernel selects the base and reads every segment above it exactly as a
-    /// reconstruction does (the corrupt-run sweep and the chain's
-    /// verification run to the journal's end), so it is the same core-bound
-    /// I/O, with no world folded and none resident — the permit spans the
-    /// call alone and returns with it. A lighter pool of its own is a later
-    /// refinement; sharing this one keeps the bound the wire promises for
-    /// historical work one number.
+    /// (`Kernel::chain_at`), under this pool's permit: the kernel selects the
+    /// base and LOADS it — read whole, deserialized and seeded, its body hash
+    /// being the base's door — collects the records above it to `at` and
+    /// reads every segment to the journal's end (the corrupt-run sweep and
+    /// the chain's verification), exactly as a reconstruction does, and drops
+    /// the world unfolded. So its cost and its peak are a reconstruction's
+    /// minus the fold — one whole world and a window's records for the span
+    /// of the call — and the permit spans the call alone and returns with
+    /// it. A pool of its own would be lighter by the fold alone and would add
+    /// its permits' worlds to this pool's peak, so sharing this one keeps the
+    /// bound the wire promises for historical work, and the memory it costs,
+    /// one number.
     ///
     /// # Errors
     ///

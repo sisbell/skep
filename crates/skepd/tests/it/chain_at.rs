@@ -1,7 +1,8 @@
 //! `GET /chain?at=N` (the chain's open items, item 7; QUEUE item 10): the
 //! commit chain's value AS OF a committed position — the board's
 //! RECOMPUTATION off its own journal, under the verification a historical
-//! read runs and the same reconstruction permit, with no world materialized.
+//! read runs and the same reconstruction permit, its base loaded and no world
+//! folded from it.
 //! What a peer holding a saved `(position, chain)` pair checks against, where
 //! the published head's byte compare (`head.rs`) checks the board's stored
 //! CLAIM. Token-blind like `/health`, whose `chain_head` it equals at the

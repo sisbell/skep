@@ -17,8 +17,8 @@
 //! the gap report and the counts come back before anything is written.
 //!
 //! THIS BUILD holds the library whole but its surfaces: [`compose_runs`], the
-//! pure core, with [`base_of`] and [`script`] beside it; [`compose`], the
-//! reads of §1.3 in order over a board, writing nothing; [`land`] and
+//! pure core, with [`base_of`] and [`script`] beside it; [`compose()`], the
+//! reads of §1.3 in order over a board, writing nothing; [`land()`] and
 //! [`resume`], the one `publish` of the merged list from the head with its
 //! signed body, the claim's read, the record in a merge journal with its
 //! public link, the draft landing, and the residue walk over a lost

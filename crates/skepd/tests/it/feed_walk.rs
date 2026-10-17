@@ -209,22 +209,20 @@ fn lines_with(sd: &Skepd, prefix: &str) -> Vec<String> {
 /// THE WALK's LANDING LINES and no other subsystem's: the daemon's record
 /// is shared (`operations.md` §1.1) — the pruner's pass says its own
 /// `landing: pruner: …` (row 34) on it as soon as the cell index is ready,
-/// on a thread of its own, ahead of the walk's `landing: {b} walked, {k}
-/// of them bare, in {d} ms` (m15) — so a claim counting the walk's landing
-/// takes it by its own shape, the figures `landing_figures` reads
-/// (`hazard.rs`'s walk-landing claim names it the same way), rather than
-/// by the pruner's prefix dropped: a landing line a later subsystem puts
-/// on the record cannot re-break these claims.
+/// on a thread of its own, ahead of the walk's `landing: commits.log
+/// re-covered positions ({low}, {head}]: {b} boundaries walked, …` (m15) —
+/// so a claim counting the walk's landing takes it by its own subject, the
+/// figures `landing_figures` reads (`hazard.rs`'s walk-landing claim names
+/// it the same way), rather than by the pruner's prefix dropped: a landing
+/// line a later subsystem puts on the record cannot re-break these claims.
 fn walk_landings(sd: &Skepd) -> Vec<String> {
     lines_with(sd, "landing: ").into_iter().filter(|l| is_the_walks_landing(l)).collect()
 }
 
-/// Whether a `landing:` line is the walk's: a count, then ` walked, `,
-/// opens its figures.
+/// Whether a `landing:` line is the walk's: it names `commits.log` and the
+/// positions it re-covered.
 fn is_the_walks_landing(line: &str) -> bool {
-    line.strip_prefix("landing: ")
-        .and_then(|rest| rest.split_once(" walked, "))
-        .is_some_and(|(walked, _)| !walked.is_empty() && walked.bytes().all(|b| b.is_ascii_digit()))
+    line.starts_with("landing: commits.log re-covered positions (")
 }
 
 /// Wait for the pruner's first pass to have said its line — row 34, on the
@@ -247,14 +245,33 @@ fn await_the_open_line(sd: &Skepd) -> String {
     open[0].clone()
 }
 
-/// The figures off a `landing:` line — `{b} walked, {k} of them bare, in
-/// {d} ms` — as (walked, bare, ms).
+/// The figures off the walk's `landing:` line — `commits.log re-covered
+/// positions ({low}, {head}]: {b} boundaries walked, {k} of them
+/// unclassifiable and served to every class, in {d} ms; the landing held
+/// the change feed's lock {r} ms` — as (walked, unclassified, ms), the lock's
+/// span checked to be a count of milliseconds, and the fence's clause, where
+/// the line carries one, left to the claim that reads it.
 fn landing_figures(line: &str) -> (u64, u64, u64) {
-    let rest = line.strip_prefix("landing: ").unwrap_or_else(|| panic!("{line:?}"));
-    let (walked, rest) = rest.split_once(" walked, ").unwrap_or_else(|| panic!("{line:?}"));
-    let (bare, rest) = rest.split_once(" of them bare, in ").unwrap_or_else(|| panic!("{line:?}"));
-    let ms = rest.strip_suffix(" ms").unwrap_or_else(|| panic!("{line:?}"));
-    (walked.parse().expect("walked"), bare.parse().expect("bare"), ms.parse().expect("ms"))
+    let rest = line
+        .strip_prefix("landing: commits.log re-covered positions (")
+        .unwrap_or_else(|| panic!("{line:?}"));
+    let (_region, rest) = rest.split_once("]: ").unwrap_or_else(|| panic!("{line:?}"));
+    let (walked, rest) =
+        rest.split_once(" boundaries walked, ").unwrap_or_else(|| panic!("{line:?}"));
+    let (unclassified, rest) = rest
+        .split_once(" of them unclassifiable and served to every class, in ")
+        .unwrap_or_else(|| panic!("{line:?}"));
+    let (ms, held) = rest
+        .split_once(" ms; the landing held the change feed's lock ")
+        .unwrap_or_else(|| panic!("{line:?}"));
+    let held = held.split_once("; ").map_or(held, |(held, _fence)| held);
+    let held = held.strip_suffix(" ms").unwrap_or_else(|| panic!("{line:?}"));
+    assert!(held.parse::<u64>().is_ok(), "the lock's span in milliseconds: {line:?}");
+    (
+        walked.parse().expect("walked"),
+        unclassified.parse().expect("unclassified"),
+        ms.parse().expect("ms"),
+    )
 }
 
 /// The position off a `progress:` line — `the walk at position {p} of
@@ -361,8 +378,17 @@ fn the_walk_runs_behind_the_listener_and_the_landing_restores_the_feed() {
     let landed_in = began.elapsed();
     let landing = walk_landings(&sd);
     assert_eq!(landing.len(), 1, "the walk's landing line once: {landing:?}");
-    let (walked, bare, ms) = landing_figures(&landing[0]);
-    assert_eq!((walked, bare), (6, 0), "six boundaries proved, every one classified: {landing:?}");
+    let (walked, unclassified, ms) = landing_figures(&landing[0]);
+    assert_eq!(
+        (walked, unclassified),
+        (6, 0),
+        "six boundaries proved, every one classified: {landing:?}"
+    );
+    assert!(
+        landing[0]
+            .starts_with(&format!("landing: commits.log re-covered positions ({low}, {head}]: ")),
+        "the landing names its file and the region it re-covered: {landing:?}"
+    );
     let size = std::fs::metadata(dir.path().join("commits.log")).expect("metadata").len();
     println!(
         "feed walk: {walked} boundaries in {ms} ms ({:.2} ms per boundary); the landing rewrite \
@@ -438,8 +464,8 @@ fn the_three_lines_come_at_the_cadence() {
     assert_eq!(ps, [low + 2, low + 4, low + 6], "every second boundary, ascending to the head: {progress:?}");
     let landing = walk_landings(&sd);
     assert_eq!(landing.len(), 1, "the walk's landing line once: {landing:?}");
-    let (walked, bare, ms) = landing_figures(&landing[0]);
-    assert_eq!((walked, bare), (6, 0), "{landing:?}");
+    let (walked, unclassified, ms) = landing_figures(&landing[0]);
+    assert_eq!((walked, unclassified), (6, 0), "{landing:?}");
     println!("feed walk at cadence 2: {walked} boundaries in {ms} ms; lines: {progress:?}");
     sd.shutdown();
 
@@ -540,7 +566,9 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     let ended = format!(
         "failure: the feed walk ended: the test seam's fault in the feed walk; positions ({low}, \
          {head}] stay uncovered — /changes refuses pages into them until a restart, which walks \
-         again"
+         again; until that restart commits.log takes no line: every write since this open is \
+         held in memory alone, and the restart's walk re-covers each as a bare entry, its key and \
+         its time lost — restart soon"
     );
     wait_until("the catch's line", || !lines_with(&sd, "failure: the feed walk ended").is_empty());
     assert_eq!(lines_with(&sd, "failure: the feed walk ended"), [ended.clone()], "FINDING (row 41)");
@@ -581,8 +609,8 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     assert_eq!(open, [format!("open: commits.log covers to position {low}; walking 7 boundaries to position {at}")]);
     // The spawn waited on the landing; the pruner's line beside it before the count.
     after_the_first_pass(&sd);
-    let (walked, bare, _) = landing_figures(&walk_landings(&sd)[0]);
-    assert_eq!((walked, bare), (7, 0));
+    let (walked, unclassified, _) = landing_figures(&walk_landings(&sd)[0]);
+    assert_eq!((walked, unclassified), (7, 0));
     let after = json(&owner_feed_bytes(sd.port(), 0));
     let mut want = positions(&before);
     want.push(at);
@@ -681,8 +709,20 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
     after_the_first_pass(&sd);
     release_and_land(&sd);
     let landing = walk_landings(&sd);
-    let (walked, bare, ms) = landing_figures(&landing[0]);
-    assert_eq!(bare, 1, "B, the floor's own boundary, is proved from the base embodying it and unclassifiable: {landing:?}");
+    let (walked, unclassified, ms) = landing_figures(&landing[0]);
+    assert_eq!(
+        unclassified, 1,
+        "B, the floor's own boundary, is proved from the base embodying it and unclassifiable: \
+         {landing:?}"
+    );
+    assert!(
+        landing[0].ends_with(&format!(
+            "; the fence stands at position {}: /changes answers 410 history_reclaimed for every \
+             since below it",
+            b - 1
+        )),
+        "the landing says the fence the checkpoint moved inside the region: {landing:?}"
+    );
     // B, the three mints above it and the cadence head the checkpoint
     // triggered (its draft insert and its publish): six boundaries, no
     // more than the positions from B to the head.

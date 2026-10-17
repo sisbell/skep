@@ -123,12 +123,13 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::ops::Bound;
 use std::path::Path;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{is_prefix, parent, Address, Tumbler};
 use skep_engine::{Engine, IssuerGrantIndexRow, ReaderClass, World};
-use skep_kernel::{Attestation, Kernel, Seq, Snapshot};
+use skep_kernel::{Attestation, HistoryError, Kernel, Seq, Snapshot};
 use skep_namespace::{HasM3, PrincipalId};
 use skep_util::notice::Class;
 
@@ -139,8 +140,8 @@ use self::derived::{
 };
 use super::sidecar::{
     reclaim_floor, reclaim_floor_of, reconstruct, report_malformed_names, Carrier, CommitMeta,
-    CommitsLog, Cut, CutHead, JournalTerms, OpTerms, Recorded, RewriteFail, WalkControl,
-    WalkLandingLine, WalkOutcome,
+    CommitsLog, Cut, CutHead, IoCause, JournalTerms, OpTerms, Recorded, RewriteFail, WalkControl,
+    WalkLandingLine, WalkOutcome, WalkRefusedLine,
 };
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::{Lines, Signed};
@@ -170,8 +171,8 @@ use crate::serial::SerialGuard;
 /// of thousands of narrow grants would otherwise buy an O(union) scan per
 /// candidate on every page, under the lock [`crate::commits::Commits`]
 /// takes to record a commit. The number is M3's `MAX_PRINCIPAL_COMPONENTS`,
-/// which is that depth bound.
-const MAX_FILTERED_PREFIXES: usize = 64;
+/// which is that depth bound, taken from M3 so the two cannot part.
+const MAX_FILTERED_PREFIXES: usize = skep_namespace::MAX_PRINCIPAL_COMPONENTS;
 
 /// The requester's FEED CLASS, resolved by the route off ONE head snapshot
 /// (PUB-6.40) and threaded down: the read predicate at the requester's
@@ -546,18 +547,20 @@ impl Feed {
         // retention, compacted below when the log was, and the offset array's
         // agreement test reads every entry, the ones the log no longer holds
         // included. A cut is each file's own to say: re-derived, below.
-        let (mut f_index, index_entries, cut) =
+        // A derived file's lines past the head are re-derived too, so the
+        // replay's report of them is not said.
+        let (mut f_index, index_entries, replayed) =
             LineFile::open(dir, INDEX_FILE, head, |_| true, lines)?;
-        say_derived_cut(lines, INDEX_FILE, cut);
-        let (mut f_offsets, offset_entries, cut) =
+        say_derived_cut(lines, INDEX_FILE, replayed.cut);
+        let (mut f_offsets, offset_entries, replayed) =
             LineFile::open(dir, OFFSETS_FILE, head, |_| true, lines)?;
-        say_derived_cut(lines, OFFSETS_FILE, cut);
-        let (mut f_masked, masked_entries, cut) =
+        say_derived_cut(lines, OFFSETS_FILE, replayed.cut);
+        let (mut f_masked, masked_entries, replayed) =
             LineFile::open(dir, MASKED_FILE, head, |_| true, lines)?;
-        say_derived_cut(lines, MASKED_FILE, cut);
-        let (mut f_streams, stream_entries, cut) =
+        say_derived_cut(lines, MASKED_FILE, replayed.cut);
+        let (mut f_streams, stream_entries, replayed) =
             LineFile::open(dir, STREAMS_FILE, head, |_| true, lines)?;
-        say_derived_cut(lines, STREAMS_FILE, cut);
+        say_derived_cut(lines, STREAMS_FILE, replayed.cut);
 
         // ── the classification map: the index file's entries for positions
         //    the log holds, then this open's walk, then the index's tail ──
@@ -603,7 +606,23 @@ impl Feed {
         if let Some((positions, first)) = malformed {
             report_malformed_names(lines, INDEX_FILE, positions, first);
         }
-        for (&at, meta) in log.entries().range(f_index.first_uncovered()..) {
+        // The bare positions the index lost are classified from the journal
+        // before the board serves, at two world reconstructions each — said
+        // ahead of the cost, so a slow open is told from a hung one.
+        let tail = f_index.first_uncovered()..;
+        let unclassified = log
+            .entries()
+            .range(tail.clone())
+            .filter(|(at, meta)| matches!(meta, CommitMeta::Bare { .. }) && !docs.contains_key(at))
+            .count();
+        if unclassified > 0 {
+            let coverage = f_index.coverage();
+            lines.say(Class::Open, BareClassificationLine { coverage, positions: unclassified });
+        }
+        // The journal's refusals of that classification: counted, the first
+        // kept in the kernel's words, said once after the walk.
+        let mut refused: Option<(usize, u64, String)> = None;
+        for (&at, meta) in log.entries().range(tail) {
             if let std::collections::btree_map::Entry::Vacant(vacant) = docs.entry(at) {
                 let addrs: Vec<Address> = match meta {
                     // Every name reads: `CommitsLog` demoted the recorded
@@ -615,7 +634,16 @@ impl Feed {
                     // one pair of world reconstructions per such position,
                     // the per-position cost the walk's landing never pays
                     // (it classifies off the worlds it already holds).
-                    CommitMeta::Bare { .. } => classify_bare(engine, &log, at).unwrap_or_default(),
+                    CommitMeta::Bare { .. } => match classify_bare(engine, &log, at) {
+                        Ok(addrs) => addrs,
+                        Err(e) => {
+                            refused = Some(match refused {
+                                None => (1, at, e.to_string()),
+                                Some((n, first, account)) => (n + 1, first, account),
+                            });
+                            Vec::new()
+                        }
+                    },
                 };
                 if !addrs.is_empty() {
                     vacant.insert(classify(world, addrs));
@@ -626,6 +654,9 @@ impl Feed {
                     .append(at, vec![(INDEX_DOCS, doc_strings(ds))])
                     .map_err(with_file(INDEX_FILE))?;
             }
+        }
+        if let Some((positions, first, account)) = refused {
+            lines.say(Class::Failure, ClassificationRefusedLine { positions, first, account });
         }
         f_index.fence(covered).map_err(with_file(INDEX_FILE))?;
 
@@ -773,7 +804,22 @@ impl Feed {
         if let Some((name, failed)) = failures.into_iter().next() {
             return Err(with_file(name)(failed.into_io()));
         }
+        if let Some((floor, dropped)) = inner.log.compacted_at_open() {
+            lines.say(Class::Open, OpenCompactionLine { floor, dropped });
+        }
         Ok((Feed { inner: Mutex::new(inner) }, pending.map(|_| snap)))
+    }
+
+    /// Returns the attest store's file size in bytes — `feed-attest.log`.
+    ///
+    /// The file is never compacted, so this is what the board's signatures
+    /// cost on disk; under the feed's lock and no guard.
+    ///
+    /// # Errors
+    ///
+    /// The file's metadata could not be read.
+    pub(super) fn attest_store_bytes(&self) -> io::Result<u64> {
+        self.inner.lock().attest.bytes()
     }
 
     /// THE REGION PENDING, as a read — `CommitsLog::pending_region`, under
@@ -834,6 +880,7 @@ impl Feed {
         // The floor as it stands now, off the lock: one probe, free.
         let floor_fence = reclaim_floor_of(kernel).map(|floor| floor.saturating_sub(1));
         let mut inner = self.inner.lock();
+        let held = Instant::now();
         if control.stop.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
@@ -846,7 +893,9 @@ impl Feed {
         // (`at_or_above`'s `partition_point` reads it), restored here as
         // the open restores the replayed streams'.
         inner.sort_the_lists();
+        let region = inner.log.pending_region();
         let landed = inner.log.land(&outcome.boundaries, outcome.min_since, floor_fence);
+        let in_memory_alone = matches!(landed, Err(RewriteFail::BeforeRename(_)));
         let fence = match landed {
             Ok(fence) => fence,
             // Said at the log: before its rename as the landing's own
@@ -861,18 +910,28 @@ impl Feed {
                 lines.say(
                     Class::Failure,
                     format_args!(
-                        "{name}: the walk's landing rewrite failed before its rename: {e}; the \
-                         file stands fenced below the region, and the next open re-derives it"
+                        "{name}: the walk's landing rewrite failed before its rename: {}; the \
+                         file stands fenced below the region, and the next open re-derives it",
+                        IoCause(&e)
                     ),
                 );
             }
         }
+        let (low, head) = region.unwrap_or((fence, fence));
+        if let Some(refusal) = &outcome.refusal {
+            lines.say(Class::Failure, WalkRefusedLine { refusal, fence });
+        }
         lines.say(
             Class::Landing,
             WalkLandingLine {
+                low,
+                head,
                 walked: outcome.boundaries.len(),
-                bare: outcome.bare(),
+                unclassified: outcome.unclassified(),
                 elapsed_ms: outcome.started.elapsed().as_millis(),
+                held_ms: held.elapsed().as_millis(),
+                fence: (fence > low).then_some(fence),
+                in_memory_alone,
             },
         );
     }
@@ -960,9 +1019,10 @@ impl Feed {
                 lines.say(
                     Class::Failure,
                     format_args!(
-                        "{name} compaction below the reclaim floor failed before its rename: {e}; \
+                        "{name} compaction below the reclaim floor failed before its rename: {}; \
                          the file stands as it was, and the next checkpoint's compaction tries \
-                         again"
+                         again",
+                        IoCause(&e)
                     ),
                 );
                 standing.push(name);
@@ -1256,6 +1316,76 @@ struct DerivedCutLine {
 impl std::fmt::Display for DerivedCutLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}; the cut part is re-derived", CutHead { name: self.name, cut: self.cut })
+    }
+}
+
+/// The open's line ahead of the bare positions it classifies from the
+/// journal before the board serves.
+///
+/// The words: `feed-index.log covers to position {c}: {n} bare positions
+/// are classified from the journal before the board serves, two world
+/// reconstructions each` — the cost said ahead of paying it. A pure value,
+/// pinned by `to_string()` in the unit suite; emitted under `Class::Open`
+/// by [`Feed::open`].
+struct BareClassificationLine {
+    coverage: u64,
+    positions: usize,
+}
+
+impl std::fmt::Display for BareClassificationLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{INDEX_FILE} covers to position {}: {} bare positions are classified from the \
+             journal before the board serves, two world reconstructions each",
+            self.coverage, self.positions
+        )
+    }
+}
+
+/// The journal's refusals of the open's bare classification, said once.
+///
+/// The words: `feed-index.log: the journal refused to classify {n} bare
+/// positions, the first at position {p} ({account}): each is served to
+/// every class, its position alone` — `{account}` the first refusal's, in
+/// the kernel's words. A pure value, pinned by `to_string()` in the unit
+/// suite; emitted under `Class::Failure` by [`Feed::open`].
+struct ClassificationRefusedLine {
+    positions: usize,
+    first: u64,
+    account: String,
+}
+
+impl std::fmt::Display for ClassificationRefusedLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{INDEX_FILE}: the journal refused to classify {} bare positions, the first at \
+             position {} ({}): each is served to every class, its position alone",
+            self.positions, self.first, self.account
+        )
+    }
+}
+
+/// The open's line for what its compaction dropped below the reclaim floor.
+///
+/// The words: `the change feed's files compacted below the reclaim floor at
+/// position {f}: {k} entries dropped`. A pure value, pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Open` by
+/// [`Feed::open`] once the derived files follow the log.
+struct OpenCompactionLine {
+    floor: u64,
+    dropped: usize,
+}
+
+impl std::fmt::Display for OpenCompactionLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the change feed's files compacted below the reclaim floor at position {}: {} \
+             entries dropped",
+            self.floor, self.dropped
+        )
     }
 }
 
@@ -1771,15 +1901,21 @@ fn elements_of(v: Option<&Value>) -> &[Value] {
     v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
 
-/// A bare position the index lost: the journal's classification, from the
-/// world at the boundary below it (the previous entry, or genesis) and its
-/// own — `None` where either cannot be answered (reclaimed), the module's
-/// unclassifiable residue.
-fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Address>> {
+/// Returns the journal's classification of a bare position the index lost.
+///
+/// It is read from the world at the boundary below it (the previous entry,
+/// or genesis) and its own.
+///
+/// # Errors
+///
+/// The journal's refusal of either world (reclaimed, corrupt, I/O): the
+/// position is then the module's unclassifiable residue, served to every
+/// class, and the caller says the refusal.
+fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Result<Vec<Address>, HistoryError> {
     let prev = log.entries().range(..at).next_back().map(|(k, _)| *k).unwrap_or(0);
-    let below = engine.world_at(Seq(prev)).ok()?;
-    let above = engine.world_at(Seq(at)).ok()?;
-    Some(derived_docs(&below, &above))
+    let below = engine.world_at(Seq(prev))?;
+    let above = engine.world_at(Seq(at))?;
+    Ok(derived_docs(&below, &above))
 }
 
 /// The K-way merge of ascending position sources, deduplicated by
@@ -1900,5 +2036,34 @@ mod tests {
         let refused = with_file(MASKED_FILE)(io::Error::new(io::ErrorKind::StorageFull, "no room"));
         assert_eq!(refused.kind(), io::ErrorKind::StorageFull, "the kind is kept");
         assert_eq!(refused.to_string(), "feed-masked.log: no room");
+    }
+
+    /// The open's own three lines at fixed figures: the bare positions it
+    /// classifies before the board serves, the journal's refusal of that
+    /// classification in the kernel's words, and what its compaction dropped
+    /// below the reclaim floor.
+    #[test]
+    fn the_opens_classification_and_compaction_lines_render_the_ruled_words() {
+        assert_eq!(
+            BareClassificationLine { coverage: 12, positions: 3 }.to_string(),
+            "feed-index.log covers to position 12: 3 bare positions are classified from the \
+             journal before the board serves, two world reconstructions each"
+        );
+        let refused = ClassificationRefusedLine {
+            positions: 3,
+            first: 13,
+            account: "journal corrupt at rest".into(),
+        };
+        assert_eq!(
+            refused.to_string(),
+            "feed-index.log: the journal refused to classify 3 bare positions, the first at \
+             position 13 (journal corrupt at rest): each is served to every class, its position \
+             alone"
+        );
+        assert_eq!(
+            OpenCompactionLine { floor: 2049, dropped: 7 }.to_string(),
+            "the change feed's files compacted below the reclaim floor at position 2049: 7 \
+             entries dropped"
+        );
     }
 }

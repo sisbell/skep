@@ -608,8 +608,9 @@ fn the_bind_variable_seeds_the_flag_and_a_bad_one_is_refused_not_defaulted() {
 /// variable: `SKEPD_ORIGIN` seeds the list where no `--origin` is given;
 /// the first `--origin` replaces it whole, so a stale variable's origin
 /// never widens the signed set a flag names; and repeated `--origin`s add to
-/// one another, in order. Judged in a CHILD of this test binary, as the bind
-/// variable's claims are, because the variable is process-wide.
+/// one another, in order — the list carrying the arm that set it. Judged in
+/// a CHILD of this test binary, as the bind variable's claims are, because
+/// the variable is process-wide.
 #[test]
 fn the_origin_flags_replace_the_variables_list_and_add_to_one_another() {
     const CHILD: &str = "SKEPD_TEST_ORIGIN_CHILD";
@@ -640,6 +641,16 @@ fn the_origin_flags_replace_the_variables_list_and_add_to_one_another() {
             ]),
             ["https://a.example", "https://b.example"],
             "repeated flags add to one another, in order"
+        );
+        // The list carries the arm that set it, which the `auth:` line
+        // names beside the set (§1.1 m14).
+        let source =
+            |line: &[&str]| parse_args(argv(line)).expect("valid").expect("a run").origins_source;
+        assert_eq!(source(&["--data-dir", "/tmp/x"]), Source::Env, "the variable's list");
+        assert_eq!(
+            source(&["--data-dir", "/tmp/x", "--origin", "https://new.example"]),
+            Source::Flag,
+            "the flag's list"
         );
         return;
     }

@@ -245,11 +245,20 @@ fn the_checkpoint_signal_keeps_a_raise_coalesces_a_burst_and_stops_every_wait_fo
 #[test]
 fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
     assert_eq!(
-        FeedWalkEndedLine { payload: "the test seam's fault in the feed walk".into(), low: 24, head: 30 }
+        FeedWalkEndedLine { payload: "the test seam's fault in the feed walk", low: 24, head: 30 }
             .to_string(),
         "the feed walk ended: the test seam's fault in the feed walk; positions (24, 30] stay \
-         uncovered — /changes refuses pages into them until a restart, which walks again"
+         uncovered — /changes refuses pages into them until a restart, which walks again; until \
+         that restart commits.log takes no line: every write since this open is held in memory \
+         alone, and the restart's walk re-covers each as a bare entry, its key and its time lost \
+         — restart soon"
     );
+    // A formatted payload's text may have been made from a record's values,
+    // so only a literal rides the line.
+    let literal: Box<dyn std::any::Any + Send> = Box::new("a literal the code wrote");
+    let formatted: Box<dyn std::any::Any + Send> = Box::new(format!("made from {}", "a value"));
+    assert_eq!(payload_text(literal.as_ref()), "a literal the code wrote");
+    assert_eq!(payload_text(formatted.as_ref()), "a panic", "a formatted payload never rides");
     let e = io::Error::other("Resource temporarily unavailable");
     assert_eq!(
         FeedWalkRefusedLine { error: &e, low: 24, head: 30 }.to_string(),
@@ -258,23 +267,175 @@ fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
     );
 }
 
+/// m1's TWO LINES AND THEIR CLOSE (`operations.md` §1.1 m1; §4 row 1), in
+/// the ruled words: a full volume's with the kernel's account after the
+/// position; every other kind's with its cause and the acts that clear it;
+/// the account left out where the refusal carried none; the kernel's halt
+/// with its own cause, and with the three classes where it kept none; and
+/// the stretch's close with the landed position, the count and the first
+/// refused one. The door they go through keeps them in the record under
+/// their class words.
 #[test]
-fn the_full_volume_line_renders_the_ruled_words_and_the_door_records_it() {
+fn the_durability_and_halt_lines_render_the_ruled_words_and_the_door_records_them() {
+    let refused = |full, detail| DurabilityRefusedLine { at: Seq(1204), full, detail }.to_string();
+    let room = "no write lands until room is freed on the volume; reads serve; the next write \
+                succeeds by itself once room stands, and no restart is owed";
     assert_eq!(
-        FullVolumeLine { at: Seq(1204) }.to_string(),
-        "a write was refused at a full volume at position 1204: no write lands until room is \
-         freed on the volume; reads serve; the next write succeeds by itself once room stands, \
-         and no restart is owed"
+        refused(true, Some("seg-3.wal: append: No space left on device (os error 28)")),
+        format!(
+            "a write was refused at a full volume at position 1204 (seg-3.wal: append: No space \
+             left on device (os error 28)): {room}"
+        )
+    );
+    assert_eq!(
+        refused(true, None),
+        format!("a write was refused at a full volume at position 1204: {room}")
+    );
+    assert_eq!(
+        refused(false, Some("seg-3.wal: append: Disk quota exceeded (os error 69)")),
+        "a write was refused durability at position 1204 (seg-3.wal: append: Disk quota exceeded \
+         (os error 69)): no write lands until its cause clears; reads serve; check the volume, \
+         its device and the board user's quota — the next write succeeds by itself once the \
+         cause clears"
+    );
+    assert_eq!(
+        WritesLandAgainLine { at: Seq(1206), refused: 3, since: Seq(1204) }.to_string(),
+        "writes land again at position 1206, 3 refused since position 1204"
+    );
+    let halt = |cause| KernelHaltLine { at: Seq(1203), cause }.to_string();
+    assert_eq!(
+        halt(Some("the commit of position 1204 failed (seg-3.wal: barrier: Input/output error)")),
+        "the kernel halted its write paths at position 1203: the commit of position 1204 failed \
+         (seg-3.wal: barrier: Input/output error); every write is refused poisoned until a \
+         restart; reads serve; check the volume and the device, then restart",
+        "the kernel's own cause rides the line"
+    );
+    assert_eq!(
+        halt(None),
+        "the kernel halted its write paths at position 1203: every write is refused poisoned \
+         until a restart; reads serve. The cause is one of three the kernel did not report — a \
+         commit that could not be rolled back durably, an unwind past the durability barrier, or \
+         the sequence order exhausted; check the volume and the device, then restart",
+        "with no cause kept, the three classes"
     );
     let lines = Lines::new();
     let shared = lines.clone();
-    lines.say(Class::Failure, FullVolumeLine { at: Seq(7) });
+    lines.say(Class::Failure, DurabilityRefusedLine { at: Seq(7), full: true, detail: None });
     assert_eq!(
         shared.said().lock().as_slice(),
-        ["failure: a write was refused at a full volume at position 7: no write lands until \
-          room is freed on the volume; reads serve; the next write succeeds by itself once room \
-          stands, and no restart is owed"],
+        [format!("failure: a write was refused at a full volume at position 7: {room}")],
         "a clone shares the one record, the class word ahead of the line"
+    );
+}
+
+/// m1 AT THE DOOR: durability refusals through the session door — a full
+/// volume, a quota, the full volume again — say each kind's line once, the
+/// position the first refused write would have taken named, and nothing
+/// for a kind already said in the stretch; an idempotency replay between
+/// them lands nothing and closes nothing; the write that lands next closes
+/// the stretch with ONE landing line counting all three; and a refusal
+/// after it is news again. The refusals are M10's own lowering of
+/// the kernel's `TxnError::Durability`, so `io_kind` and `detail` ride as a
+/// real refusal's do.
+#[test]
+fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch() {
+    use skep_arrangement::InsertError;
+    use skep_febe::lower_txn;
+    use skep_kernel::{
+        BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, TxnError,
+    };
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
+        salt: SaltSource::Os,
+    })
+    .expect("a fresh engine");
+    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
+    let stores = engine.stores();
+    let account = system_account();
+    let mint_meta = || {
+        let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+        write_meta(&op).expect("a write").attributed("bare".to_string(), None)
+    };
+    let refuse = |kind: io::ErrorKind, words: &str| {
+        let serial = wp.serial_lock();
+        let error = io::Error::new(kind, words.to_string());
+        let refusal = lower_txn::<InsertError>(OpKind::Insert, TxnError::Durability(error));
+        let resp = wp.commit_under(&serial, mint_meta(), || Response::Rejected(refusal));
+        assert!(matches!(resp, Response::Rejected(_)), "the refusal is answered as it came");
+    };
+    let mint = || {
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, mint_meta(), || {
+            let (addr, at) = stores
+                .namespace()
+                .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
+                .expect("the mint commits");
+            Response::AckAddr { addr, at }
+        });
+        assert!(matches!(resp, Response::AckAddr { .. }), "the mint is acked");
+    };
+    let durability_lines = || -> Vec<String> {
+        wp.lines_said()
+            .lock()
+            .iter()
+            .filter(|l| l.contains("a write was refused") || l.contains("writes land again"))
+            .cloned()
+            .collect()
+    };
+    let first = engine.kernel().current_seq().0 + 1;
+    refuse(io::ErrorKind::StorageFull, "no room");
+    refuse(io::ErrorKind::QuotaExceeded, "over quota");
+    // An idempotency replay's ack names an old position and lands nothing:
+    // the kernel's seq, not the answer, is what closes the stretch.
+    let replayed = {
+        let serial = wp.serial_lock();
+        let at = engine.kernel().current_seq();
+        wp.commit_under(&serial, mint_meta(), || Response::AckAddr { addr: account.clone(), at })
+    };
+    assert!(matches!(replayed, Response::AckAddr { .. }), "the replay is answered as it came");
+    refuse(io::ErrorKind::StorageFull, "no room");
+    let said = durability_lines();
+    let all = said.join("\n");
+    assert_eq!(said.len(), 2, "one line per kind, and no landing for a replay:\n{all}");
+    assert!(said[0].starts_with(&format!(
+        "failure: a write was refused at a full volume at position {first} (no room): "
+    )));
+    assert!(said[1].starts_with(&format!(
+        "failure: a write was refused durability at position {first} (over quota): "
+    )));
+    mint();
+    let landed = engine.kernel().current_seq().0;
+    let said = durability_lines();
+    assert_eq!(
+        said[2..],
+        [format!(
+            "landing: writes land again at position {landed}, 3 refused since position {first}"
+        )],
+        "the stretch closes once, counting every refusal in it"
+    );
+    mint();
+    assert_eq!(durability_lines().len(), 3, "a landing with no stretch standing says nothing");
+    let again = engine.kernel().current_seq().0 + 1;
+    refuse(io::ErrorKind::StorageFull, "no room");
+    assert_eq!(
+        durability_lines().last().map(String::as_str),
+        Some(
+            format!(
+                "failure: a write was refused at a full volume at position {again} (no room): no \
+                 write lands until room is freed on the volume; reads serve; the next write \
+                 succeeds by itself once room stands, and no restart is owed"
+            )
+            .as_str()
+        ),
+        "a refusal after the landing is a fresh stretch, said again"
     );
 }
 
@@ -292,7 +453,8 @@ fn the_full_volume_line_renders_the_ruled_words_and_the_door_records_it() {
 /// system principal through the session door — each recorded in the feed
 /// — rotating the journal's segment so the first checkpoint reclaims below
 /// it and the compaction has a floor; the checkpoint and the compaction
-/// run here as the checkpoint thread runs them.
+/// run here as the checkpoint thread runs them. The next open, the obstacle
+/// gone, compacts what the landings could not and says what it dropped.
 #[test]
 fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attempt() {
     use skep_address::Nat;
@@ -434,6 +596,30 @@ fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attem
         again.join("\n")
     );
     assert_eq!(again[2..], first[..], "the same two lines, again");
+
+    // THE NEXT OPEN, the obstacle gone, compacts what the two landings
+    // could not, and says the floor and the entries the file still held
+    // below it.
+    let fence = compacted.fence.expect("the floor moved: a fence to compact to");
+    let below = std::fs::read_to_string(dir.path().join("commits.log"))
+        .expect("the log")
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v.get("at").and_then(serde_json::Value::as_u64))
+        .filter(|&at| at <= fence)
+        .count();
+    assert!(below > 0, "the premise: the file still holds entries below the floor");
+    std::fs::remove_dir(dir.path().join("commits.log.compact")).expect("the obstacle goes");
+    std::fs::remove_dir(dir.path().join("feed-index.log.compact")).expect("the obstacle goes");
+    drop(wp);
+    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("reopen");
+    let floor = fence + 1;
+    let line = format!(
+        "open: the change feed's files compacted below the reclaim floor at position {floor}: \
+         {below} entries dropped"
+    );
+    let said = wp.lines_said().lock().clone();
+    assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{}", said.join("\n"));
 }
 
 /// The address of the system account's `n`th document, as the mint lands
@@ -553,15 +739,166 @@ fn commits_log_entry(dir: &std::path::Path, at: u64) -> Option<serde_json::Value
 /// Holds the head writer's row 40 to the classed door.
 ///
 /// `ensure_draft`'s line — the draft minted elsewhere — goes out through
-/// `notice::emit` with its class word, never the un-classed `line`, read
-/// off the source since no suite captures the stream in-process; the class
-/// it is emitted under is pinned through the daemon's `lines_said` by the
-/// integration suites.
+/// the door the head writer holds, under `failure:`, into the record the
+/// daemon shares: a published document at the staging draft's address
+/// moves the head writer's mint to the next, and the line names both.
 #[test]
 fn the_head_writers_row_40_goes_through_the_classed_door() {
-    let head = include_str!("head.rs");
-    let draft = head.find("    fn ensure_draft(").expect("ensure_draft");
-    let draft = &head[draft..head[draft..].find("    fn commit_insert(").expect("the next fn") + draft];
-    assert!(draft.contains("notice::emit(") && draft.contains("DraftMintedElsewhere {"));
-    assert!(!draft.contains("notice::line("), "row 40 through the classed door");
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
+        salt: SaltSource::Os,
+    })
+    .expect("a fresh engine");
+    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
+    let stores = engine.stores();
+    let account = system_account();
+    // Another writer takes the staging draft's address with a PUBLISHED
+    // document, which the head writer's resume never takes for its draft.
+    let op = Op::CreateNewDocument { account: account.clone(), published: Some(true) };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let serial = wp.serial_lock();
+    let resp = wp.commit_under(&serial, meta, || {
+        let (addr, at) = stores
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &account, Some(true))
+            .expect("the mint commits");
+        Response::AckAddr { addr, at }
+    });
+    assert!(matches!(resp, Response::AckAddr { .. }), "the mint is acked");
+    wp.write_first_head(&serial);
+    drop(serial);
+    let row_40 = "failure: head writer: the staging draft minted at 1.1.0.1.0.4, not at \
+                  1.1.0.1.0.3 — another writer minted under the system account; the head goes \
+                  on with the draft it minted";
+    let said = wp.lines_said().lock().clone();
+    assert_eq!(
+        said.iter().filter(|l| l.as_str() == row_40).count(),
+        1,
+        "row 40 through the classed door, into the one record:\n{}",
+        said.join("\n")
+    );
+}
+
+/// Holds the feed's three journal reads to their refusal lines, end to end.
+///
+/// A kernel that keeps no journal refuses every history read, so one open
+/// over commits the feed never saw meets all three: the bare positions the
+/// index lost (`commits.log` holds two, `feed-index.log` nothing), the attest
+/// store's rebuild above its empty file, and the walk of the region the log
+/// does not cover. Each is said once in the kernel's words, the walk's at its
+/// landing beside the fence the refusal moved — and `/changes` answers 410
+/// below that fence, as the line says. A second open over what the first
+/// wrote has nothing uncovered and says none of the three; its report names
+/// the attest store's size, the figure `Commits::attest_store_bytes` reads.
+#[test]
+fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
+    use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    let account = system_account();
+    while engine.kernel().current_seq().0 < 5 {
+        engine
+            .stores()
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
+            .expect("the mint commits");
+    }
+    let head = engine.kernel().current_seq().0;
+    std::fs::write(dir.path().join("commits.log"), "{\"at\":1}\n{\"at\":2}\n").expect("the log");
+    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while wp.feed_pending_region().is_some() {
+        assert!(Instant::now() < deadline, "the walk lands");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let refused = HistoryError::Unjournaled.to_string();
+    let fence = head - 1;
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    for line in [
+        "open: feed-index.log covers to position 0: 2 bare positions are classified from the \
+         journal before the board serves, two world reconstructions each"
+            .to_string(),
+        format!(
+            "failure: feed-index.log: the journal refused to classify 2 bare positions, the \
+             first at position 1 ({refused}): each is served to every class, its position alone"
+        ),
+        format!(
+            "failure: feed-attest.log: the journal refused the rebuild above position 0 \
+             ({refused}): any attested commit in (0, {head}] serves attest: null, its line LOST \
+             at this store and not retried — restore this file and the segment the account \
+             names from a copy taken before this open (RUNBOOK §2)"
+        ),
+        format!(
+            "failure: commits.log's walk: the journal refused the boundaries above position 2 \
+             ({refused}): the change feed answers 410 history_reclaimed for every since below \
+             position {fence} — restore the segment the account names from a copy (RUNBOOK §2)"
+        ),
+    ] {
+        assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{all}");
+    }
+    let landing = format!(
+        "landing: commits.log re-covered positions (2, {head}]: 1 boundaries walked, 1 of them \
+         unclassifiable and served to every class, in "
+    );
+    let fenced = format!(
+        "; the fence stands at position {fence}: /changes answers 410 history_reclaimed for \
+         every since below it"
+    );
+    assert!(
+        said.iter().any(|l| l.starts_with(&landing) && l.ends_with(&fenced)),
+        "the landing names the region and the fence:\n{all}"
+    );
+    let snap = engine.kernel().snapshot();
+    let class = FeedClass::of(snap.world(), None);
+    let query = |since| ChangesQuery {
+        since,
+        limit: std::num::NonZeroUsize::new(16).expect("non-zero"),
+        under: None,
+        drafts_only: false,
+    };
+    let below = wp.changes(&class, &query(0));
+    assert!(
+        matches!(below, ChangesAnswer::Reclaimed { floor: Some(f) } if f == head),
+        "below the fence, 410: {below:?}"
+    );
+    let at = wp.changes(&class, &query(fence));
+    assert!(
+        matches!(&at, ChangesAnswer::Page { entries, .. } if entries.len() == 1),
+        "at the fence, the head's row: {at:?}"
+    );
+    drop(wp);
+
+    let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("reopen");
+    assert_eq!(wp.feed_pending_region(), None, "the log covers the head");
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    assert!(
+        !said.iter().any(|l| l.contains("the journal refused") || l.contains("bare positions")),
+        "nothing uncovered, nothing asked:\n{all}"
+    );
+    let bytes = wp.attest_store_bytes().expect("the store's size");
+    let on_disk = std::fs::metadata(dir.path().join("feed-attest.log")).expect("the store").len();
+    assert_eq!(bytes, on_disk, "the size is the file's");
+    let report = format!(
+        "open: feed-attest.log: {bytes} bytes, never compacted; 0 lines rebuilt from the \
+         journal's markers, in "
+    );
+    assert!(said.iter().any(|l| l.starts_with(&report)), "the open's report:\n{all}");
 }

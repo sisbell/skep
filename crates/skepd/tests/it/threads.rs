@@ -4,13 +4,18 @@
 //!
 //! * m10 AT THE DOOR: a commit's barrier failed and its repair failed — the
 //!   kernel poisoned, the write answered `poisoned` — the ruled line ONCE,
-//!   with the position the kernel halted at; a second refused write adds
-//!   none; `writes.halted` true; the next tick says `the kernel is
+//!   with the position the kernel halted at and the kernel's own cause; a
+//!   second refused write adds none; `writes.halted` true; the next tick says `the kernel is
 //!   poisoned`.
+//! * m10 AT THE HEAD WRITER's OWN COMMIT: the claim's `H.1` refused, owed at
+//!   the next turn — a write refused ahead of the store takes it, the
+//!   barrier and the repair armed to fail — the head's own commit poisons
+//!   the kernel: row 38's line, then the ruled line at once, the kernel read
+//!   at the door rather than the answer the head writer swallowed.
 //! * m10 AT THE CATCH: the journal's append PANICKED and the repair failed
 //!   — the kernel poisoned and the panic re-raised, the write answered `500
-//!   internal_panic` — the ruled line is in the record BEFORE any further
-//!   write, read at the handler's catch; a later refused write adds none.
+//!   internal_panic` — the ruled line, its cause the unwind's, is in the
+//!   record BEFORE any further write; a later refused write adds none.
 //! * ROW 25: the checkpoint thread's seam armed, a crossing wakes it — the
 //!   consequence line ONCE, the flag; a further crossing runs inline as the
 //!   backstop and adds no landing line; the stop still joins.
@@ -34,8 +39,10 @@ use skepd::Skepd;
 
 use crate::common;
 use common::{
-    acked_at, blob_deposit_read, get, http, json, op, open_session, release_the_walk, spawn,
-    spawn_walk_held, spawn_with_workers, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
+    acked_at, blob_deposit_read, board_term, ceremony_before_the_claim, claim_frame, device_key,
+    get, http, json, op, op_as_written, open_session, open_signed_session, release_the_walk, spawn,
+    spawn_unclaimed, spawn_walk_held, spawn_with_workers, typed_link_frame, verdict,
+    CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, T_GRANT,
 };
 
 /// ROW 41's consequence line for the checkpoint thread, with its class word:
@@ -51,15 +58,18 @@ const CHECKPOINT_THREAD_ENDED: &str = "failure: checkpoint thread ended: every c
 const PRUNER_THREAD_ENDED: &str = "failure: pruner thread ended: no pass runs until a restart; \
                                    the blob logs' compaction and the lapsed tail's reclaim stop";
 
-/// m10's line at position `at`, with its class word.
-fn halt_line(at: u64) -> String {
-    format!(
-        "failure: the kernel halted its write paths at position {at}: every write is refused \
-         poisoned until a restart; reads serve. The cause is one of three the kernel does not \
-         report — a commit that could not be rolled back durably, an unwind past the \
-         durability barrier, or the sequence order exhausted; check the volume and the device, \
-         then restart"
-    )
+/// How many of the daemon's lines are m10's at position `at`, with its
+/// class word, carrying the kernel's own cause — read by the fragment of
+/// it that names which unrecoverable failure it was.
+fn halt_lines(sd: &Skepd, at: u64, cause: &str) -> usize {
+    let head = format!("failure: the kernel halted its write paths at position {at}: ");
+    let tail = "; every write is refused poisoned until a restart; reads serve; check the volume \
+                and the device, then restart";
+    sd.daemon()
+        .lines_said()
+        .iter()
+        .filter(|l| l.starts_with(&head) && l.ends_with(tail) && l.contains(cause))
+        .count()
 }
 
 /// How many times the daemon's record holds `line`.
@@ -131,9 +141,9 @@ fn the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted(
         "the kernel poisoned on the unrepaired barrier: {v}"
     );
     assert_eq!(
-        said(&sd, &halt_line(at)),
+        halt_lines(&sd, at, "), and the truncation that repairs it failed too ("),
         1,
-        "FINDING (m10): the ruled line, once, at the door:\n{}",
+        "FINDING (m10): the ruled line, once, at the door, the kernel's cause riding it:\n{}",
         sd.daemon().lines_said().join("\n")
     );
     let v = op(port, Some(&owner), &create_frame());
@@ -153,6 +163,53 @@ fn the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted(
         format!("standing: the kernel is poisoned since position {at}; CLAIMED-PERMISSIVE"),
         "the poison re-said at the tick, at the position the halt line named"
     );
+    sd.shutdown();
+}
+
+/// m10 — THE HALT LINE AT THE HEAD WRITER's OWN COMMIT (§4 row 29): the
+/// claim's `H.1` refused at the seam, the head is owed at the next turn; the
+/// journal's next barrier armed to fail on a full volume and its repair to
+/// fail, an attested write refused ahead of the store — no board term to
+/// name — gives the head writer its turn, and the head's own commit poisons
+/// the kernel. The head writer turns its refusal into its own line (row 38,
+/// `poisoned`), and the ruled line follows it ONCE, before any further
+/// write: the door reads the kernel after every execute, not the answer the
+/// head writer swallowed.
+#[test]
+fn the_kernels_halt_is_said_when_the_head_writers_own_commit_poisons_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    ceremony_before_the_claim(port);
+    sd.daemon().refuse_the_next_head_once();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let claim = op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT));
+    let at = acked_at(&claim);
+    assert!(board_term(port).is_none(), "the premise: the claim stands, its H.1 refused");
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalBarrier, ErrorKind::StorageFull);
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalRepair, ErrorKind::Other);
+    let grant = typed_link_frame(CLAIMANT_DOC1, &[CLAIMANT_ACCOUNT], &[], T_GRANT);
+    let v = op_as_written(port, Some(&signed), &grant);
+    assert_eq!(
+        verdict(&v),
+        "credential_refused:attestation_invalid:board_unavailable",
+        "the write itself is refused ahead of the store: {v}"
+    );
+    assert!(writes_halted(port), "the head's own commit poisoned the kernel");
+    assert_eq!(head(port), at, "nothing committed");
+    let cause = "), and the truncation that repairs it failed too (";
+    assert_eq!(
+        halt_lines(&sd, at, cause),
+        1,
+        "FINDING (m10): the head writer's own poisoned commit says the halt at once:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    let said = sd.daemon().lines_said();
+    let row_38 = format!("failure: head writer: the head at position {at} was refused (poisoned)");
+    let refused = said.iter().position(|l| l.starts_with(&row_38));
+    let halted = said.iter().position(|l| l.contains("the kernel halted its write paths"));
+    let all = said.join("\n");
+    assert!(refused.is_some() && refused < halted, "row 38's line, then the halt:\n{all}");
     sd.shutdown();
 }
 
@@ -180,7 +237,7 @@ fn the_kernels_halt_is_said_at_the_handlers_catch_after_a_panic_on_a_write() {
         String::from_utf8_lossy(&body)
     );
     assert_eq!(
-        said(&sd, &halt_line(at)),
+        halt_lines(&sd, at, "a panic unwound out of the commit of "),
         1,
         "FINDING (m10): the ruled line is not in the record right after the caught panic — \
          the quiet-board gap stands:\n{}",

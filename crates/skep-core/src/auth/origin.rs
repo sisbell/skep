@@ -247,13 +247,19 @@ pub enum Warning {
 impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // The warning form (§1): the setting, the consequence, the act.
             Warning::ClaimedWithLocalTrust => f.write_str(
                 "board is claimed with --local-trust still on: any loopback \
-                 party may write as any principal (CLAIMED-PERMISSIVE)",
+                 party may write as any principal (CLAIMED-PERMISSIVE); where \
+                 that is not meant, restart with --no-local-trust \
+                 (SKEPD_LOCAL_TRUST=false)",
             ),
             Warning::ClaimedWithEmptyConfigured => f.write_str(
                 "board is claimed with no configured origin: signed_origins \
-                 is empty and every signed session will be refused",
+                 is empty and every signed session will be refused — with \
+                 --local-trust off, every bare one too, so no session can \
+                 write; restart with --origin <ORIGIN> (or SKEPD_ORIGIN) \
+                 naming the origin this board is reached at",
             ),
             // The origin consequence alone (AUTH-4.9 as RES-206 amends it):
             // no key strands at an origin change — the frontend's keys are
@@ -417,6 +423,25 @@ mod tests {
         );
         // A hosted board configured with its public origin alone is silent.
         assert!(startup_warnings(&cfg_with(443, false, &["https://b.example"]), false).is_empty());
+        // The two claimed arms name the act that clears them (the warning
+        // form: the setting, the consequence, the act).
+        let permissive = Warning::ClaimedWithLocalTrust.to_string();
+        assert!(
+            permissive.ends_with(
+                "(CLAIMED-PERMISSIVE); where that is not meant, restart with --no-local-trust \
+                 (SKEPD_LOCAL_TRUST=false)"
+            ),
+            "{permissive}"
+        );
+        let unconfigured = Warning::ClaimedWithEmptyConfigured.to_string();
+        assert!(
+            unconfigured.ends_with(
+                "every signed session will be refused — with --local-trust off, every bare one \
+                 too, so no session can write; restart with --origin <ORIGIN> (or SKEPD_ORIGIN) \
+                 naming the origin this board is reached at"
+            ),
+            "{unconfigured}"
+        );
     }
 
     /// Checks the dev setting's arm (m5).

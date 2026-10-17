@@ -467,7 +467,8 @@ fn three_unreadable_slots_are_said_once_with_the_count_and_the_rows_render_null(
     assert_eq!(
         said,
         [format!(
-            "failure: feed-attest.log: 3 slots this daemon cannot read, the first at position {}",
+            "failure: feed-attest.log: 3 slots this daemon cannot read, the first at position {}; \
+             their rows serve attest: null, the lines kept as written",
             ats[0]
         )],
         "FINDING (row 10): one line with the count and the first position:\n{}",
@@ -510,6 +511,11 @@ fn three_unreadable_slots_are_said_once_with_the_count_and_the_rows_render_null(
 /// before, the floor's own slot stays LOST, and the reopen loads ONE base
 /// more than the reopen after it — the refusal loads none, the floor's
 /// list one.
+///
+/// THE ABSENCE IS SAID: each open over the lost store says it was begun
+/// afresh, with the floor and the count rebuilt, every signature at or
+/// below the floor LOST — and its report names the store's size and the
+/// positions rebuilt.
 ///
 /// THE CUT IS SAID, LOST (`operations.md` §1.1 row 9; §3.6 step 3; §4 row
 /// 17): the store torn into the line at the floor, trust ends at the early
@@ -629,6 +635,25 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         );
         assert_absent(e, &["key"], "the entry IS signed; only its hand is out of reach");
         assert!(attest_store_lines(dir.path()).is_empty(), "nothing was rebuilt: the journal refused the slot");
+        // The open says the absence and what it costs, once: the store is the
+        // only copy below the floor.
+        let afresh: Vec<String> = sd
+            .daemon()
+            .lines_said()
+            .into_iter()
+            .filter(|l| l.contains("was absent at this open"))
+            .collect();
+        assert_eq!(
+            afresh,
+            [format!(
+                "failure: feed-attest.log was absent at this open and is begun afresh: the \
+                 attested commits above the reclaim floor at position {last_at} are rebuilt from \
+                 the journal (0 lines); every signature this board kept at or below position \
+                 {last_at} is LOST unless the board directory's backup is restored"
+            )],
+            "FINDING: an absent store at a reclaimed journal is said, with the floor:\n{}",
+            sd.daemon().lines_said().join("\n")
+        );
         sd.shutdown();
     }
     // The floor arm with a tail to rebuild: two attested commits above the
@@ -658,6 +683,27 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
             above,
             "the two above the floor are rebuilt — the list asked again at the floor the refusal \
              named — and the floor's own slot is not"
+        );
+        // The open says the absence with the count rebuilt, and its report of
+        // the store: the size, never compacted, the positions rebuilt.
+        let said = sd.daemon().lines_said();
+        let afresh = format!(
+            "failure: feed-attest.log was absent at this open and is begun afresh: the attested \
+             commits above the reclaim floor at position {last_at} are rebuilt from the journal (2 \
+             lines); every signature this board kept at or below position {last_at} is LOST \
+             unless the board directory's backup is restored"
+        );
+        assert!(said.contains(&afresh), "the absence said, the two counted:\n{}", said.join("\n"));
+        let bytes = std::fs::metadata(&store).expect("the store").len();
+        let report = format!(
+            "open: feed-attest.log: {bytes} bytes, never compacted; 2 lines rebuilt from the \
+             journal's markers (positions {}–{}), in ",
+            above[0], above[1]
+        );
+        assert!(
+            said.iter().any(|l| l.starts_with(&report) && l.ends_with(" ms")),
+            "the store's report, its size and the positions rebuilt:\n{}",
+            said.join("\n")
         );
         let page = changes_ok(port, Some(&bare), &format!("since={}", last_at - 1));
         let rows = page["changes"].as_array().expect("changes");

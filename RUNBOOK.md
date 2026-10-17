@@ -40,10 +40,19 @@ apart.
    says so:
 
    - A write is refused with the code `durability`. The daemon says
-     so once, and again only after a write has landed in between:
+     so once, and again only after a write has landed in between,
+     `{detail}` being the kernel's account of the file, the act and the
+     OS's words (`seg-{n}.wal: append: No space left on device …`):
 
      ```
-     failure: a write was refused at a full volume at position {position}: no write lands until room is freed on the volume; reads serve; the next write succeeds by itself once room stands, and no restart is owed
+     failure: a write was refused at a full volume at position {position} ({detail}): no write lands until room is freed on the volume; reads serve; the next write succeeds by itself once room stands, and no restart is owed
+     ```
+
+     The first write that lands after it says so once, with the
+     refusals it ends:
+
+     ```
+     landing: writes land again at position {position}, {n} refused since position {position}
      ```
 
    - A checkpoint fails. It is said at each attempt:
@@ -60,17 +69,26 @@ apart.
      failure: feed-attest.log: position {position}'s line is not durable ({error}); every later write is refused until a restart, whose open rebuilds the line from the journal
      ```
 
+     On a full volume `{error}` reads `the volume is full (…)`, and the
+     line goes on: `; free room on the volume first: the restart's open
+     writes the line back and syncs it, and on a full volume it refuses
+     and reads stop with it`.
+
    - A change-feed file stops taking lines, and the board serves on
      from what it holds in memory. `{file}` is one of the four index
      files: `feed-index.log`, `feed-offsets.log`, `feed-masked.log`
      or `feed-streams.log`.
 
      ```
-     failure: commits.log append failed at position {position}: {error}; this file takes no further line, so the next open re-derives from {position} as bare entries
-     failure: {file} append failed at position {position}: {error}
+     failure: commits.log append failed at position {position}: {error}; this file takes no further line, so the next open re-derives from {position} as bare entries; every write until then is held in memory alone, its key and its time lost at that open — restart soon
+     failure: {file} append failed at position {position}: {error}; this file takes no further line until a restart, whose open re-derives it — the board serves from memory, and nothing is lost
      failure: commits.log rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives from its fence as bare entries
      failure: {file} rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives from its fence
      ```
+
+     A full volume's `{error}` reads `the volume is full ({the OS's
+     text})`, and an append's line then goes on `; free room before
+     that restart: its open writes this file`.
 
    - An upload is answered `500 blob_io`, its detail naming the
      file, the act and the OS's cause, and the pruner's hourly line
@@ -94,8 +112,14 @@ apart.
      `poisoned`, and the daemon says once:
 
      ```
-     failure: the kernel halted its write paths at position {position}: every write is refused poisoned until a restart; reads serve. The cause is one of three the kernel does not report — a commit that could not be rolled back durably, an unwind past the durability barrier, or the sequence order exhausted; check the volume and the device, then restart
+     failure: the kernel halted its write paths at position {position}: {cause}; every write is refused poisoned until a restart; reads serve; check the volume and the device, then restart
      ```
+
+     `{cause}` is the kernel's own account: which of its three
+     unrecoverable failures it was — a commit that could not be rolled
+     back durably, an unwind past the durability barrier, or the
+     sequence order exhausted — the transaction by its positions, and
+     each failure's file, act and OS words.
 
    A volume can be full of files while it holds bytes to spare.
    Every deposited file takes one inode, however few its bytes, and
@@ -109,22 +133,25 @@ apart.
    checkpoint's landing names gigabytes free, and `df -h` agrees;
    `df -i` shows the inodes spent.
 
-   A write can be refused for a cause other than room, and then no
-   line says so. The full volume's line answers the OS's no-space
-   answer alone. A journal write refused for any other cause — the
-   board's user over its quota (`Disk quota exceeded`), or the device
+   A write can be refused for a cause other than room, and it is said
+   by its own line. A journal write refused for any other cause — the
+   board's user over its quota (`Disk quota exceeded`), the device
    answering `Input/output error` where the journal's own repair
-   still succeeds — is rolled back and refused `durability`,
-   disposition `retry`, as at a full volume. But nothing is said, at
-   that write or any after it; no commit lands, so no checkpoint line
-   comes either; `writes.halted` stays `false`; and the floor never
-   binds, since the free space it reads counts no user's quota, and
-   `df -h` shows room. The refusal's `detail`, which its client is
-   answered, names the cause, the OS's own words last:
-   `seg-{n}.wal: append: {error}`. Where clients are refused
-   `durability` and the stream is quiet, read a refused write's
-   detail: for a quota, `quota -v`, run as the board's user, shows it
-   spent; for the device, read the OS's own log (`dmesg`).
+   still succeeds, a volume remounted read-only — is rolled back and
+   refused `durability`, disposition `retry`, as at a full volume, and
+   the daemon says so once per cause until a write lands, the cause
+   in the kernel's account, the OS's own words last
+   (`seg-{n}.wal: append: {error}`):
+
+   ```
+   failure: a write was refused durability at position {position} ({detail}): no write lands until its cause clears; reads serve; check the volume, its device and the board user's quota — the next write succeeds by itself once the cause clears
+   ```
+
+   No commit lands, so no checkpoint line comes; `writes.halted`
+   stays `false`; and the floor never binds, since the free space it
+   reads counts no user's quota, and `df -h` shows room. For a quota,
+   `quota -v`, run as the board's user, shows it spent; for the
+   device, read the OS's own log (`dmesg`).
 
 2. **Make room first.** Grow the volume, or free space that
    something other than the board holds. Grown room ends the
@@ -200,8 +227,10 @@ apart.
    waits for the pruner's pass, which runs only once the open is
    done. Each rewrite needs room for a second copy of the file it
    rewrites. The pruner's last line gives the blob store's two
-   logs' sizes (`blobs/uploads.log {n} lines ({n} bytes)`); no line
-   gives the change feed's files' sizes.
+   logs' sizes (`blobs/uploads.log {n} lines ({n} bytes)`); the open's
+   report gives `feed-attest.log`'s, the one change-feed file never
+   compacted (Start, step 3, item 11), and no line gives the other
+   five's.
 
 5. **Then act on the line you saw.**
 
@@ -220,9 +249,9 @@ apart.
      whichever comes first.
    - The write refused at a full volume: make room. The next write
      succeeds by itself, and no restart is owed.
-   - A write refused `durability` and said by nothing (step 1): act
-     on its detail's cause — a quota as step 2 says, `Input/output
-     error` as `500 blob_io`'s does below.
+   - A write refused `durability` for a cause but room (step 1): act
+     on the cause its line names — a quota as step 2 says,
+     `Input/output error` as `500 blob_io`'s does below.
    - `500 blob_io`, or a log the pruner names `STOPPED`: act on the
      words its detail or its cause carries.
      - `the volume is full (No space left on device …)`: make room.
@@ -446,26 +475,44 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    nothing of this.
 
 5. **Read the open's report** (Start, step 3), and look for a cut
-   line for `feed-attest.log`. It ends one of two ways. This ending
+   line for `feed-attest.log`. It ends one of three ways. This ending
    owes nothing, since the open rebuilt what it cut:
 
    ```
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; every cut line lies above the reclaim floor at position {floor} and is rebuilt from the journal
    ```
 
-   This ending means signatures held nowhere else are gone from the
-   file:
+   These two mean signatures held nowhere else are gone from the
+   file — below the floor, or above it where the journal refused the
+   rebuild, which a line of its own names:
 
    ```
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; the lines between position {last} and the reclaim floor at position {floor} are LOST unless the board directory's backup is restored
+   failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; every cut line lies above the reclaim floor at position {floor}, but the journal refused their rebuild: they are LOST unless the board directory's backup is restored
+   failure: feed-attest.log: the journal refused the rebuild above position {last} ({account}): any attested commit in ({last}, {head}] serves attest: null, its line LOST at this store and not retried — restore this file and the segment the account names from a copy taken before this open (RUNBOOK §2)
    ```
 
    Stop the daemon, put back `feed-attest.log` from a copy that
    holds it whole and took it after its journal (Back up, step 1),
    and start again. The same line on a board you did not restore,
    after a disk fault, calls for the same act. A copy with no
-   `feed-attest.log` at all opens without a word: the lines above
-   the reclaim floor are rebuilt, and those below it are gone.
+   `feed-attest.log` at all is begun afresh: the lines above the
+   reclaim floor are rebuilt, those below it are gone, and where the
+   journal has reclaimed, the open says so:
+
+   ```
+   failure: feed-attest.log was absent at this open and is begun afresh: the attested commits above the reclaim floor at position {floor} are rebuilt from the journal ({n} lines); every signature this board kept at or below position {floor} is LOST unless the board directory's backup is restored
+   ```
+
+   A copy taken while the daemon ran may hold lines past its own
+   journal's head. The open drops them, and says so for the two files
+   whose lines it does not re-derive; after a journal tail cut that
+   took intact frames, they are the cut commits' own, which a copy
+   taken before this open still holds:
+
+   ```
+   open: {file} held {n} lines past the journal's head at position {head} (positions {first}–{last}): dropped — a live copy taken after its journal holds them; after a journal tail cut that took intact frames they are the cut commits' {testimony | signatures}, which a copy taken before this open still holds
+   ```
 
 6. **Put back one deposited file**, a hole the inventory lists,
    with the pull:
@@ -850,8 +897,38 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        said once per open:
 
        ```
-       failure: feed-attest.log: {n} slots this daemon cannot read, the first at position {position}
+       failure: feed-attest.log: {n} slots this daemon cannot read, the first at position {position}; their rows serve attest: null, the lines kept as written
        failure: {file}: {n} positions carry malformed document names, the first at position {position}
+       ```
+
+       For `commits.log` the second goes on `; those positions serve
+       as bare entries`. Lines a file holds past the journal's head
+       are dropped, `commits.log`'s and `feed-attest.log`'s said
+       (Restore, step 5). Where the open's compaction dropped entries
+       below the journal's reclaim floor, and before the open
+       classifies, from the journal, the positions `feed-index.log`
+       lost — two world reconstructions each, before the board serves:
+
+       ```
+       open: the change feed's files compacted below the reclaim floor at position {floor}: {n} entries dropped
+       open: feed-index.log covers to position {covered}: {n} bare positions are classified from the journal before the board serves, two world reconstructions each
+       ```
+
+       Where the journal refuses that classification, each position
+       is served to every class; where it refuses `feed-attest.log`'s
+       rebuild, the second (Restore, step 5):
+
+       ```
+       failure: feed-index.log: the journal refused to classify {n} bare positions, the first at position {position} ({account}): each is served to every class, its position alone
+       failure: feed-attest.log: the journal refused the rebuild above position {covered} ({account}): …
+       ```
+
+       Last of the change feed's, `feed-attest.log`'s size — the one
+       change-feed file never compacted, a line per attested commit
+       for the life of the board — and what the open wrote back to it:
+
+       ```
+       open: feed-attest.log: {bytes} bytes, never compacted; {n} lines rebuilt from the journal's markers (positions {first}–{last}), in {ms} ms
        ```
 
        Where `commits.log` was lost or torn, the open also starts a
@@ -868,25 +945,26 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        Where the head writer refuses it, the open goes on and says:
 
        ```
-       failure: head writer: the head at position {position} was refused ({cause}); no head written this cycle
+       failure: head writer: the head at position {position} was refused ({cause}); no head written this cycle; no head stands yet, so a claimed board refuses every attested write attestation_invalid:board_unavailable until one lands — tried again at every write's turn
        ```
 
    13. With the open done, the configuration warnings, each where
        it applies:
 
        ```
-       warning (at start): board is claimed with --local-trust still on: any loopback party may write as any principal (CLAIMED-PERMISSIVE)
-       warning (at start): board is claimed with no configured origin: signed_origins is empty and every signed session will be refused
+       warning (at start): board is claimed with --local-trust still on: any loopback party may write as any principal (CLAIMED-PERMISSIVE); where that is not meant, restart with --no-local-trust (SKEPD_LOCAL_TRUST=false)
+       warning (at start): board is claimed with no configured origin: signed_origins is empty and every signed session will be refused — with --local-trust off, every bare one too, so no session can write; restart with --origin <ORIGIN> (or SKEPD_ORIGIN) naming the origin this board is reached at
        warning (at start): configured origin {origin} names a loopback host at a port this daemon is not bound to; re-issue the origin for the bound port
        warning (at start): the dev setting --allow-preview-keys is on: the enrollment of a preview key (the tag-3 row, fndsa512-preview-ed25519) is admitted, a genesis included — a served board runs without it; drop the flag and restart
        ```
 
    14. The board's mode and its origins, `{mode}` being
        `unclaimed`, `CLAIMED-ENFORCING` or `CLAIMED-PERMISSIVE`,
-       and an empty list reading `none`:
+       an empty list reading `none`, and the configured set's
+       `{source}` being `--origin`, `SKEPD_ORIGIN` or `the default`:
 
        ```
-       open: auth: {mode} (--local-trust {on|off}, {source}); configured origins {origins}; signed origins {origins}
+       open: auth: {mode} (--local-trust {on|off}, {source}); configured origins {origins} ({source}); signed origins {origins}
        ```
 
    15. The node prefix, or its absence:
@@ -1141,19 +1219,35 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    ```
    open: commits.log covers to position {covered}; walking {n} boundaries to position {head}
    progress: the walk at position {position} of {head}, {ms} ms in
-   landing: {n} walked, {k} of them bare, in {ms} ms
+   landing: commits.log re-covered positions ({covered}, {head}]: {n} boundaries walked, {k} of them unclassifiable and served to every class, in {ms} ms; the landing held the change feed's lock {ms} ms
+   ```
+
+   `{k}` counts the boundaries whose world below the journal could not
+   answer: each is served to every class, its position alone. Where
+   the landing's fence stands inside the region — a checkpoint
+   reclaimed below it while the walk ran, or the journal refused a
+   boundary — the line goes on `; the fence stands at position {fence}:
+   /changes answers 410 history_reclaimed for every since below it`;
+   where the landing's rewrite failed, the region is re-covered `in
+   memory alone`. A refusal by the journal is said before the landing,
+   `the boundaries above position {position}` where it refused the list
+   itself:
+
+   ```
+   failure: commits.log's walk: the journal refused position {position} ({account}): the change feed answers 410 history_reclaimed for every since below position {fence} — restore the segment the account names from a copy (RUNBOOK §2)
    ```
 
    Where the walk's thread dies, the positions stay uncovered until
    a restart:
 
    ```
-   failure: the feed walk ended: {cause}; positions ({low}, {head}] stay uncovered — /changes refuses pages into them until a restart, which walks again
+   failure: the feed walk ended: {cause}; positions ({low}, {head}] stay uncovered — /changes refuses pages into them until a restart, which walks again; until that restart commits.log takes no line: every write since this open is held in memory alone, and the restart's walk re-covers each as a bare entry, its key and its time lost — restart soon
    ```
 
-   Restart soon: until then every write is held in memory alone, as
-   after `commits.log`'s stop (The full volume, step 5), and the next
-   open's walk re-covers each as a bare entry.
+   Restart soon, as the line says: every write meanwhile is held in
+   memory alone, as after `commits.log`'s stop (The full volume, step
+   5). `{cause}` is the panic's words where the code wrote them, else
+   `a panic`.
 
 4. **Read the report as at a start.** A restart under a new
    `--node-prefix` moves the blocked-prefix list's off-board test,

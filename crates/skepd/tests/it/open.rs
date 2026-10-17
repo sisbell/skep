@@ -41,8 +41,8 @@
 //!   line naming the variable, before the data directory is touched.
 //! * THE OPEN's-REPORT `auth:` LINE (`operations.md` §1.1 m14): after the
 //!   bind and the warnings, `open: auth: {mode} (--local-trust {on|off},
-//!   {source}); configured origins {list | none}; signed origins {list}` on
-//!   every start — an unclaimed board under the defaults, a board claimed
+//!   {source}); configured origins {list | none} ({source}); signed origins
+//!   {list}` on every start — an unclaimed board under the defaults, a board claimed
 //!   in a prior run started ENFORCING by flag, and the same board started
 //!   PERMISSIVE by its variable.
 //! * ROWS 8 AND 19 NAME THEIR SOURCE: `media uploads: … ({source})` and
@@ -978,13 +978,13 @@ fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean
 
 /// m14 — THE OPEN's-REPORT `auth:` LINE AT EVERY START, on the real binary:
 /// a fresh UNCLAIMED board under the defaults says `open: auth: unclaimed
-/// (--local-trust on, the default); configured origins none; signed origins
-/// {the bound port's three loopback defaults}` — the bare set, since
-/// unclaimed the signed set is the bare one; the board CLAIMED over the
-/// wire in that life and started again `--no-local-trust --origin
+/// (--local-trust on, the default); configured origins none (the default);
+/// signed origins {the bound port's three loopback defaults}` — the bare
+/// set, since unclaimed the signed set is the bare one; the board CLAIMED
+/// over the wire in that life and started again `--no-local-trust --origin
 /// http://127.0.0.1:{port}` says `CLAIMED-ENFORCING (--local-trust off,
-/// --no-local-trust); configured origins {that origin}; signed origins
-/// {that origin}` — the configured set ALONE once claimed, the mode derived
+/// --no-local-trust); configured origins {that origin} (--origin); signed
+/// origins {that origin}` — the configured set ALONE once claimed, the mode derived
 /// from the pair as AUTH-5.86 derives it — with no warning, since the origin
 /// names the bound port, and before the node prefix's line; and the same
 /// board started with `SKEPD_LOCAL_TRUST=true` on the command says
@@ -1006,8 +1006,9 @@ fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets_at_eve
     assert_eq!(
         await_said(&mut first.stderr, "open", "auth: "),
         format!(
-            "auth: unclaimed (--local-trust on, the default); configured origins none; signed \
-             origins http://127.0.0.1:{port}, http://[::1]:{port}, http://localhost:{port}"
+            "auth: unclaimed (--local-trust on, the default); configured origins none (the \
+             default); signed origins http://127.0.0.1:{port}, http://[::1]:{port}, \
+             http://localhost:{port}"
         ),
         "FINDING (m14): the unclaimed board's auth line"
     );
@@ -1026,7 +1027,7 @@ fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets_at_eve
         await_said(&mut stderr, "open", "auth: "),
         format!(
             "auth: CLAIMED-ENFORCING (--local-trust off, --no-local-trust); configured origins \
-             {o}; signed origins {o}",
+             {o} (--origin); signed origins {o}",
             o = origin(port)
         ),
         "FINDING (m14): the enforcing board's auth line"
@@ -1057,7 +1058,7 @@ fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets_at_eve
         await_said(&mut stderr, "open", "auth: "),
         format!(
             "auth: CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true); configured \
-             origins {o}; signed origins {o}",
+             origins {o} (--origin); signed origins {o}",
             o = origin(port)
         ),
         "FINDING (m14): the permissive board's auth line"

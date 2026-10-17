@@ -1488,14 +1488,17 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     assert_eq!(head_position(port), claim_at, "the refused head landed nothing");
     // ROW 38 ON THE STREAM (H4): the refused `H.1` said ONCE, naming the
     // claim's position — the one the head would have named — and the seam's
-    // refusal as the wire renders a rejection, the code and the detail; no
-    // clearing yet, no head having landed.
+    // refusal as the wire renders a rejection, the code and the detail, then
+    // what no head standing costs and when it is tried again; no clearing
+    // yet, no head having landed.
     let head_lines = |sd: &Skepd| -> Vec<String> {
         sd.daemon().lines_said().into_iter().filter(|l| l.contains("head writer:")).collect()
     };
     let refused = format!(
         "failure: head writer: the head at position {claim_at} was refused (durability: the \
-         test seam's refusal); no head written this cycle"
+         test seam's refusal); no head written this cycle; no head stands yet, so a claimed \
+         board refuses every attested write attestation_invalid:board_unavailable until one \
+         lands — tried again at every write's turn"
     );
     assert_eq!(head_lines(&sd), [refused.clone()], "the refused H.1, said once with its position");
 

@@ -7,13 +7,15 @@
 //!   through the write-fault seam, the write is refused `durability`,
 //!   disposition `retry`, the I/O text as `detail`; the record holds the
 //!   ruled line ONCE, `{p}` the position the refused write would have
-//!   taken; the arm set again and a second write refused: no second line;
-//!   a write LANDS, the arm again, the line is said AGAIN; `writes.halted`
-//!   stays `false` throughout — the condition clears by itself; nothing
-//!   refused commits.
+//!   taken and the refusal's detail after it; the arm set again and a
+//!   second write refused: no second line; a write LANDS, said once with
+//!   the refusals it ends; the arm again, the line is said AGAIN;
+//!   `writes.halted` stays `false` throughout — the condition clears by
+//!   itself; nothing refused commits.
 //! * A write refused for a cause but room — the append armed
 //!   `QuotaExceeded` — is refused `durability`, `retry`, as at a full
-//!   volume, and said by nothing, as RUNBOOK §1 step 1 says.
+//!   volume, and said by its own line, naming the cause and the acts that
+//!   clear it, as RUNBOOK §1 step 1 says.
 //! * ROW 2 — A REFUSED OPEN NAMES ITS FILE: a data directory whose
 //!   `feed-attest.log` (then `commits.log`) is unreadable refuses the open
 //!   `change-feed sidecar: feed-attest.log: Permission denied (os error
@@ -34,12 +36,13 @@ use common::{
     ALLOW_PREVIEW_KEYS_IN_FIXTURES, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
 };
 
-/// m1's line at position `at`, with its class word.
-fn full_volume_line(at: u64) -> String {
+/// m1's line at position `at` with the refusal's `detail`, and its class
+/// word.
+fn full_volume_line(at: u64, detail: &str) -> String {
     format!(
-        "failure: a write was refused at a full volume at position {at}: no write lands until \
-         room is freed on the volume; reads serve; the next write succeeds by itself once room \
-         stands, and no restart is owed"
+        "failure: a write was refused at a full volume at position {at} ({detail}): no write \
+         lands until room is freed on the volume; reads serve; the next write succeeds by itself \
+         once room stands, and no restart is owed"
     )
 }
 
@@ -77,8 +80,9 @@ fn health(port: u16) -> (bool, u64) {
 /// One write refused by the volume at `step`: the arm, the write, and the
 /// refusal's shape — `durability`, `retry`, and as `detail` the segment the
 /// write met, the act that failed and the seam's text, as the kernel names
-/// every failure on a journal file.
-fn refuse_at(sd: &Skepd, session: &str, step: Step) {
+/// every failure on a journal file. Answers the detail, which m1's line
+/// carries after its position.
+fn refuse_at(sd: &Skepd, session: &str, step: Step) -> String {
     let port = sd.port();
     sd.daemon().fail_the_next_checkpoint_step(step, ErrorKind::StorageFull);
     let v = op(port, Some(session), &create_frame());
@@ -104,6 +108,7 @@ fn refuse_at(sd: &Skepd, session: &str, step: Step) {
         format!("{act}: injected StorageFull at {step:?}"),
         "the act and the I/O text as detail: {v}"
     );
+    detail.to_string()
 }
 
 /// m1 at `step`: the line once, the second refusal silent, the clearing at
@@ -118,10 +123,10 @@ fn the_full_volume_is_said_once_and_cleared_by_a_landing(step: Step) {
     assert!(full_volume_lines(&sd).is_empty(), "nothing said on a healthy board");
 
     // The first refusal: the line, once, at the position the write would
-    // have taken.
-    refuse_at(&sd, &owner, step);
+    // have taken, the kernel's account after it.
+    let detail = refuse_at(&sd, &owner, step);
     assert_eq!(
-        said(&sd, &full_volume_line(head + 1)),
+        said(&sd, &full_volume_line(head + 1, &detail)),
         1,
         "FINDING (m1): the ruled line, once, at head + 1:\n{}",
         sd.daemon().lines_said().join("\n")
@@ -138,16 +143,27 @@ fn the_full_volume_is_said_once_and_cleared_by_a_landing(step: Step) {
     );
     assert_eq!(health(port), (false, head), "still no halt, still nothing committed");
 
-    // Room stands: a write LANDS, by itself, and clears the condition.
+    // Room stands: a write LANDS, by itself, clears the condition, and says
+    // so once, counting the two refusals it ends.
     let landed = acked_at(&op(port, Some(&owner), &create_frame()));
     assert!(landed > head, "the next write succeeds by itself: {landed} > {head}");
-    assert_eq!(full_volume_lines(&sd).len(), 1, "a landing says nothing");
+    assert_eq!(full_volume_lines(&sd).len(), 1, "a landing says no full volume");
+    let first = head + 1;
+    let land_again = format!(
+        "landing: writes land again at position {landed}, 2 refused since position {first}"
+    );
+    assert_eq!(
+        said(&sd, &land_again),
+        1,
+        "the landing that ends the refusals is said once:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
     let (_, head) = health(port);
 
     // The volume full again: a fresh condition, said again at its position.
-    refuse_at(&sd, &owner, step);
+    let detail = refuse_at(&sd, &owner, step);
     assert_eq!(
-        said(&sd, &full_volume_line(head + 1)),
+        said(&sd, &full_volume_line(head + 1, &detail)),
         1,
         "FINDING (m1): the clearing at the landed commit did not take — the line is not said \
          again for the new condition:\n{}",
@@ -175,17 +191,17 @@ fn a_barrier_refused_at_a_full_volume_is_said_the_same_way() {
     the_full_volume_is_said_once_and_cleared_by_a_landing(Step::JournalBarrier);
 }
 
-/// Checks that a write refused for a cause but room is said by nothing.
+/// Checks that a write refused for a cause but room is said by its own line.
 ///
 /// The journal's next append is armed `QuotaExceeded`, the board's user
 /// over its quota: the write is refused `durability`, `retry`, its detail
 /// the segment, the act and the cause, nothing committed and
-/// `writes.halted` false, as at a full volume — and no `failure:` line is
-/// said, m1 answering the OS's no-space kind alone. RUNBOOK §1 step 1 says
-/// so (`runbook_doc.rs` holds the sentence); the day skep-core's m1 answers
-/// every kind, this test and that sentence change together.
+/// `writes.halted` false, as at a full volume — and ONE `failure:` line
+/// names it, its position and detail, what serves and the acts that clear
+/// it, and none of the full volume's room. RUNBOOK §1 step 1 quotes it
+/// (`runbook_doc.rs` holds the sentence).
 #[test]
-fn a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_nothing() {
+fn a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_its_own_line() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -207,7 +223,16 @@ fn a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_nothin
         .filter(|l| l.starts_with("failure:"))
         .cloned()
         .collect();
-    assert!(failures.is_empty(), "RUNBOOK §1 step 1: said by nothing: {failures:?}");
+    assert_eq!(
+        failures,
+        [format!(
+            "failure: a write was refused durability at position {} ({detail}): no write lands \
+             until its cause clears; reads serve; check the volume, its device and the board \
+             user's quota — the next write succeeds by itself once the cause clears",
+            head + 1
+        )],
+        "RUNBOOK §1 step 1: one line, its own cause and acts"
+    );
     sd.shutdown();
 }
 

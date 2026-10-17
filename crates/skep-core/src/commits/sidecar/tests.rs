@@ -562,9 +562,11 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     assert!(
         said[0].ends_with(
             "; this file takes no further line, so the next open re-derives from 10 as bare \
-             entries"
+             entries; every write until then is held in memory alone, its key and its time lost \
+             at that open — restart soon"
         ),
-        "the stop and the recovery: {}",
+        "the stop, the recovery and what it costs until the restart; no full volume, no room \
+         clause: {}",
         said[0]
     );
 
@@ -665,11 +667,15 @@ fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_
     assert!(log.entries().keys().eq([26, 28, 30, 31].iter()));
 }
 
-/// THE WORDS of the walk's three lines and the landing's refusal, each a
-/// pure value: `open:` with the covered edge, the count and the head;
+/// THE WORDS of the walk's three lines, its refusal and the landing's, each
+/// a pure value: `open:` with the covered edge, the count and the head;
 /// `progress:` with the position, the head and the elapsed milliseconds;
-/// `landing:` with the walked, the bare and the elapsed; and the rewrite
-/// refused before its rename, naming the edge the next open walks from.
+/// `landing:` with the file and the region, the walked, the unclassified,
+/// the elapsed and the lock held, the fence where it stands inside the
+/// region and `in memory alone` where the rewrite was refused; the
+/// journal's refusal with its account and the fence it moved; and the
+/// rewrite refused before its rename, naming the edge the next open walks
+/// from, a full volume in the operator's words.
 #[test]
 fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
     assert_eq!(
@@ -680,15 +686,139 @@ fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
         WalkProgressLine { position: 26, head: 30, elapsed_ms: 1_204 }.to_string(),
         "the walk at position 26 of 30, 1204 ms in"
     );
+    let landing = |fence, in_memory_alone| {
+        WalkLandingLine {
+            low: 24,
+            head: 30,
+            walked: 6,
+            unclassified: 1,
+            elapsed_ms: 2_500,
+            held_ms: 40,
+            fence,
+            in_memory_alone,
+        }
+        .to_string()
+    };
+    let figures = "6 boundaries walked, 1 of them unclassifiable and served to every class, in \
+                   2500 ms; the landing held the change feed's lock 40 ms";
     assert_eq!(
-        WalkLandingLine { walked: 6, bare: 1, elapsed_ms: 2_500 }.to_string(),
-        "6 walked, 1 of them bare, in 2500 ms"
+        landing(None, false),
+        format!("commits.log re-covered positions (24, 30]: {figures}")
+    );
+    assert_eq!(
+        landing(Some(27), true),
+        format!(
+            "commits.log re-covered positions (24, 30] in memory alone: {figures}; the fence \
+             stands at position 27: /changes answers 410 history_reclaimed for every since below it"
+        )
+    );
+    let refusal = WalkRefusal { at: 26, list: false, account: "journal corrupt at rest".into() };
+    let restore = "the change feed answers 410 history_reclaimed for every since below position \
+                   26 — restore the segment the account names from a copy (RUNBOOK §2)";
+    assert_eq!(
+        WalkRefusedLine { refusal: &refusal, fence: 26 }.to_string(),
+        format!(
+            "commits.log's walk: the journal refused position 26 (journal corrupt at rest): \
+             {restore}"
+        )
+    );
+    let refusal = WalkRefusal { list: true, ..refusal };
+    assert_eq!(
+        WalkRefusedLine { refusal: &refusal, fence: 26 }.to_string(),
+        format!(
+            "commits.log's walk: the journal refused the boundaries above position 26 (journal \
+             corrupt at rest): {restore}"
+        )
     );
     let e = io::Error::new(io::ErrorKind::StorageFull, "no room");
     assert_eq!(
         LandingRefusedLine { low: 24, error: &e }.to_string(),
-        "commits.log: the walk's landing rewrite failed before its rename: no room; the file stands \
-         as it was and takes no further line, so the next open walks again from position 24"
+        "commits.log: the walk's landing rewrite failed before its rename: the volume is full (no \
+         room); the file stands as it was and takes no further line, so the next open walks \
+         again from position 24"
+    );
+}
+
+/// THE CAUSE AND THE FOREIGN LINES, each a pure value: a full volume in
+/// the operator's words with the act a stopped file's line ends with, any
+/// other kind in the error's own words and no act; and the lines past the
+/// head an open dropped, counted with their positions and what they carry.
+#[test]
+fn the_cause_and_the_foreign_lines_render_the_ruled_words() {
+    let full = io::Error::new(io::ErrorKind::StorageFull, "No space left on device (os error 28)");
+    let cause = IoCause(&full);
+    assert_eq!(cause.to_string(), "the volume is full (No space left on device (os error 28))");
+    assert_eq!(
+        cause.free_room_first(),
+        "; free room before that restart: its open writes this file"
+    );
+    let other = io::Error::other("Input/output error (os error 5)");
+    assert_eq!(IoCause(&other).to_string(), "Input/output error (os error 5)");
+    assert_eq!(IoCause(&other).free_room_first(), "");
+    let foreign = [31, 29, 33].into_iter().fold(None, |held, at| Some(Foreign::with(held, at)));
+    assert_eq!(foreign, Some(Foreign { lines: 3, first: 29, last: 33 }));
+    let line = ForeignLinesLine {
+        name: SIDECAR_FILE,
+        foreign: foreign.expect("three"),
+        head: 28,
+        what: "testimony",
+    };
+    assert_eq!(
+        line.to_string(),
+        "commits.log held 3 lines past the journal's head at position 28 (positions 29–33): \
+         dropped — a live copy taken after its journal holds them; after a journal tail cut that \
+         took intact frames they are the cut commits' testimony, which a copy taken before this \
+         open still holds"
+    );
+}
+
+/// THE LINES PAST THE HEAD LEAVE THE FILE at the open that drops them, and
+/// the open says so: a `commits.log` naming positions a fresh journal never
+/// reached replays without them, is rewritten without them — so a later
+/// commit at one of their positions cannot replay as theirs — and says the
+/// count and the positions once, under `open:`.
+#[test]
+fn the_lines_past_the_head_leave_the_file_and_are_said_once() {
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
+        salt: SaltSource::Os,
+    })
+    .expect("a fresh engine");
+    let head = engine.kernel().current_seq().0;
+    let path = dir.path().join(SIDECAR_FILE);
+    let past = [head + 3, head + 1];
+    let lines_past: Vec<u8> = past
+        .iter()
+        .flat_map(|&at| entry_line(at, &recorded("insert", &["1.0.1.0.1"], 1, Some("bare"))))
+        .collect();
+    std::fs::write(&path, &lines_past).expect("a copy taken after its journal");
+    let lines = Lines::new();
+    let log = CommitsLog::open(dir.path(), &engine, &lines).expect("the open");
+    assert!(log.entries().is_empty(), "never served");
+    let (records, _) = parse_records(&std::fs::read(&path).expect("read"));
+    assert!(
+        records.iter().all(|(_, r)| !matches!(r, Record::Entry(..))),
+        "the file holds none of them: {records:?}"
+    );
+    assert_eq!(
+        lines.said().lock().as_slice(),
+        [format!(
+            "open: commits.log held 2 lines past the journal's head at position {head} (positions \
+             {}–{}): dropped — a live copy taken after its journal holds them; after a journal \
+             tail cut that took intact frames they are the cut commits' testimony, which a copy \
+             taken before this open still holds",
+            head + 1,
+            head + 3
+        )],
+        "said once, with the count and the positions"
     );
 }
 
@@ -711,7 +841,13 @@ fn the_cut_and_the_malformed_names_render_the_ruled_words() {
     );
     assert_eq!(
         MalformedNamesLine { file: SIDECAR_FILE, positions: 3, first: 24 }.to_string(),
-        "commits.log: 3 positions carry malformed document names, the first at position 24"
+        "commits.log: 3 positions carry malformed document names, the first at position 24; \
+         those positions serve as bare entries"
+    );
+    assert_eq!(
+        MalformedNamesLine { file: "feed-index.log", positions: 3, first: 24 }.to_string(),
+        "feed-index.log: 3 positions carry malformed document names, the first at position 24",
+        "the index's read answers from the log's own testimony: no bare entry is made"
     );
 }
 
@@ -735,7 +871,7 @@ fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
     assert_eq!(
         lines.said().lock().as_slice(),
         ["failure: commits.log: 3 positions carry malformed document names, the first at \
-          position 24"],
+          position 24; those positions serve as bare entries"],
         "one line for the three"
     );
     for at in [24, 29, 32] {

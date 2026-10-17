@@ -1,13 +1,14 @@
 use super::*;
 
-/// [`LineFile::open`] over a door of the test's own, the cut beside the
-/// entries — what every claim below reads a replay through.
+/// [`LineFile::open`] over a door of the test's own, what the replay cut
+/// and dropped beside the entries — what every claim below reads a replay
+/// through.
 fn open(
     dir: &Path,
     name: &'static str,
     head: u64,
     keep: impl Fn(u64) -> bool,
-) -> io::Result<(LineFile, Entries, Option<Cut>)> {
+) -> io::Result<(LineFile, Entries, Replayed)> {
     LineFile::open(dir, name, head, keep, &Lines::new())
 }
 
@@ -25,9 +26,14 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     let dir = tempfile::tempdir().expect("tempdir");
     let head = 20;
     {
-        let (mut f, replayed, cut) = open(dir.path(), MASKED_FILE, head, |_| true).expect("open");
+        let (mut f, replayed, answered) =
+            open(dir.path(), MASKED_FILE, head, |_| true).expect("open");
         assert!(replayed.is_empty());
-        assert_eq!(cut, None, "a file read whole answers no cut");
+        assert_eq!(
+            answered,
+            Replayed::default(),
+            "a file read whole answers no cut, no foreign line"
+        );
         assert_eq!(f.coverage(), 0);
         f.append(3, vec![]).expect("append");
         f.append(7, vec![("docs", Value::Array(vec![Value::String("1.0.2.0.2".into())]))])
@@ -48,13 +54,14 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     // cut answered — the bytes, and the last trusted position, which is the
     // fence's 9 and not the torn line's 11.
     std::fs::write(&path, format!("{contents}{{\"at\":11,\"do")).expect("tear");
-    let (f, replayed, cut) = open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
+    let (f, replayed, answered) = open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
     assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
     assert_eq!(f.coverage(), 9);
     assert_eq!(std::fs::read_to_string(&path).expect("read"), contents, "the tail is cut");
     let whole = contents.len() as u64;
+    assert_eq!(answered.foreign, None, "a torn line is no foreign one");
     assert_eq!(
-        cut,
+        answered.cut,
         Some(Cut { valid_end: whole, len: whole + 12, trusted: 9 }),
         "the cut names the trusted end, the length before it (the 12-byte fragment after the \
          whole lines) and the last trusted position"
@@ -64,9 +71,14 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     // and purged from the file.
     std::fs::write(&path, format!("{contents}{{\"at\":99}}\n{{\"covered\":999}}\n"))
         .expect("foreign lines");
-    let (f, replayed, cut) = open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
+    let (f, replayed, answered) = open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
     assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
-    assert_eq!(cut, None, "foreign lines are whole lines: no cut");
+    assert_eq!(answered.cut, None, "foreign lines are whole lines: no cut");
+    assert_eq!(
+        answered.foreign,
+        Some(Foreign { lines: 1, first: 99, last: 99 }),
+        "the entry line past the head is answered, with its position; a fence names none"
+    );
     assert_eq!(f.coverage(), 9, "a foreign fence does not raise coverage");
     let purged = std::fs::read_to_string(&path).expect("read");
     assert!(!purged.contains("99"), "the foreign lines are gone: {purged}");
@@ -284,6 +296,14 @@ fn a_failed_append_is_said_once_through_the_door_and_the_stop_is_silent_after() 
     assert!(
         said[0].starts_with("failure: feed-masked.log append failed at position 7: "),
         "the class word, the file, the position, then the cause: {}",
+        said[0]
+    );
+    assert!(
+        said[0].ends_with(
+            "; this file takes no further line until a restart, whose open re-derives it — the \
+             board serves from memory, and nothing is lost"
+        ),
+        "the stop, what serves and that nothing is lost; no full volume, no room clause: {}",
         said[0]
     );
     f.append_or_report(8, vec![]);

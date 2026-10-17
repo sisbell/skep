@@ -78,7 +78,7 @@ use serde_json::{Map, Value};
 use skep_util::json::obj;
 use skep_util::notice::Class;
 
-use super::super::sidecar::{line_bytes, Cut, RewriteFail};
+use super::super::sidecar::{line_bytes, Cut, Foreign, IoCause, RewriteFail};
 use super::super::Lines;
 
 // Each file below is named BESIDE the field its records carry, because this
@@ -185,6 +185,20 @@ pub(super) struct LineFile {
 /// coverage.
 pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 
+/// What a line file's replay cut and dropped, each its caller's to say.
+///
+/// [`LineFile::open`] answers it beside the entries: the [`Cut`] where trust
+/// ended before the file's end, and the [`Foreign`] entry lines past the
+/// head it purged. A derived file re-derives both; the attest store says
+/// each, its lines being primary below the reclaim floor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Replayed {
+    /// The cut, or `None` for a file read whole.
+    pub cut: Option<Cut>,
+    /// The entry lines past the head, or `None` where the file named none.
+    pub foreign: Option<Foreign>,
+}
+
 impl LineFile {
     /// Replay `name` in `dir` a line at a time: truncate at the first line
     /// that is torn or does not parse — ANSWERING THE CUT to the caller
@@ -193,9 +207,12 @@ impl LineFile {
     /// here, since the case is the caller's: a derived file re-derives the
     /// cut part, the attest store says which side of the reclaim floor it
     /// lies on — drop what describes another journal (rewriting the file
-    /// without it), and hand back the entries at or below `head` that `keep`
-    /// admits, with the file's coverage — which counts every trusted line,
-    /// kept or not. `None` for the cut is a file read whole.
+    /// without it, and answering the entry lines dropped, [`Foreign`]), and
+    /// hand back the entries at or below `head` that `keep` admits, with the
+    /// file's coverage — which counts every trusted line, kept or not. Both
+    /// answers ride [`Replayed`]: `None` for the cut is a file read whole,
+    /// and `None` for the foreign lines a file naming no position past the
+    /// head.
     ///
     /// Every failure NAMES THIS FILE, the kind kept (`operations.md` §1.1
     /// row 2): one closure wraps each `?` the open takes on the file — the
@@ -215,13 +232,14 @@ impl LineFile {
         head: u64,
         keep: impl Fn(u64) -> bool,
         lines: &Lines,
-    ) -> io::Result<(LineFile, Entries, Option<Cut>)> {
+    ) -> io::Result<(LineFile, Entries, Replayed)> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{name}: {e}"));
         let path = dir.join(name);
         let file = open_line_file(&path).map_err(with_file)?;
         let mut coverage = 0u64;
         let mut entries = Vec::new();
         let mut foreign = false;
+        let mut foreign_entries = None;
         let mut valid_end = 0u64;
         let mut reader = BufReader::new(&file);
         let mut line = Vec::new();
@@ -240,7 +258,11 @@ impl LineFile {
                         entries.push((at, m));
                     }
                 }
-                Record::Fence(_) | Record::Entry(..) => foreign = true,
+                Record::Entry(at, _) => {
+                    foreign = true;
+                    foreign_entries = Some(Foreign::with(foreign_entries, at));
+                }
+                Record::Fence(_) => foreign = true,
             }
         }
         drop(reader);
@@ -269,7 +291,16 @@ impl LineFile {
             // Purge what is not this journal's, once, so it cannot come back.
             this.purge_foreign(head).map_err(with_file)?;
         }
-        Ok((this, entries, cut))
+        Ok((this, entries, Replayed { cut, foreign: foreign_entries }))
+    }
+
+    /// Returns the file's length in bytes, as its handle reads it.
+    ///
+    /// # Errors
+    ///
+    /// The handle's metadata could not be read.
+    pub(crate) fn len(&self) -> io::Result<u64> {
+        self.file.metadata().map(|m| m.len())
     }
 
     /// Every position at or below this is processed into the file.
@@ -322,15 +353,25 @@ impl LineFile {
     ///
     /// The line names THIS file, from the name this handle already holds, so
     /// no caller pairs a handle with a file-name constant, and goes through
-    /// the classed door this file holds (`operations.md` §1.1 row 32). ONE
-    /// per file per uptime: [`LineFile::stopped`] answers `Ok` and writes
-    /// nothing after the first failure, so a busy board's stream carries it
-    /// alone, and that field's own card says what the stop buys.
+    /// the classed door this file holds (`operations.md` §1.1 row 32): the
+    /// position, the cause ([`IoCause`]), the stop, that the board serves
+    /// from memory and loses nothing, and on a full volume that the
+    /// restart's open writes the file. ONE per file per uptime:
+    /// [`LineFile::stopped`] answers `Ok` and writes nothing after the first
+    /// failure, so a busy board's stream carries it alone, and that field's
+    /// own card says what the stop buys.
     pub(crate) fn append_or_report(&mut self, at: u64, fields: Vec<(&'static str, Value)>) {
         if let Err(e) = self.append(at, fields) {
+            let cause = IoCause(&e);
             self.lines.say(
                 Class::Failure,
-                format_args!("{} append failed at position {at}: {e}", self.name),
+                format_args!(
+                    "{} append failed at position {at}: {cause}; this file takes no further line \
+                     until a restart, whose open re-derives it — the board serves from memory, \
+                     and nothing is lost{}",
+                    self.name,
+                    cause.free_room_first()
+                ),
             );
         }
     }
@@ -485,9 +526,10 @@ impl LineFile {
                     self.lines.say(
                         Class::Failure,
                         format_args!(
-                            "{} rewrite failed past its rename: {e}; this file takes no further \
+                            "{} rewrite failed past its rename: {}; this file takes no further \
                              line, so the next open re-derives from its fence",
-                            self.name
+                            self.name,
+                            IoCause(&e)
                         ),
                     );
                 }

@@ -663,6 +663,11 @@ struct Args {
     /// on in silence from the image's environment.
     allow_preview_keys: bool,
     origins: Vec<Origin>,
+    /// Where `origins` came from: the default, the flag or the variable.
+    ///
+    /// The open's `auth:` line names it beside the configured set
+    /// (`operations.md` §1.1 m14).
+    origins_source: Source,
     blocked_prefixes: Option<PathBuf>,
     node_prefix: Option<NodePrefix>,
     /// Where `node_prefix` came from, which line 19 names (§1.1 row 19).
@@ -972,6 +977,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         uploads_source: uploads.source,
         allow_preview_keys,
         origins: origins.value.unwrap_or_default(),
+        origins_source: origins.source,
         blocked_prefixes,
         node_prefix: node_prefix.value,
         node_prefix_source: node_prefix.source,
@@ -1081,6 +1087,7 @@ fn main() {
     // the flag says otherwise; a served board is launched without it.
     opts.allow_preview_keys = args.allow_preview_keys;
     opts.configured = args.origins;
+    opts.configured_source = args.origins_source;
     // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
     // read inside the open, and one that is not a list stops the start.
     opts.blocked_supply_path = args.blocked_prefixes;

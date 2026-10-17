@@ -779,7 +779,10 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
         said.join("\n")
     );
     assert!(
-        said.iter().any(|l| l.starts_with(&format!("landing: {uncovered} walked, 0 of them bare, in "))),
+        said.iter().any(|l| l.starts_with(&format!(
+            "landing: commits.log re-covered positions ({low}, {admitted}]: {uncovered} boundaries \
+             walked, 0 of them unclassifiable and served to every class, in "
+        ))),
         "landed:\n{}",
         said.join("\n")
     );

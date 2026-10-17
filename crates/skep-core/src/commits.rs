@@ -284,27 +284,27 @@ pub struct Commits {
     halted_at: AtomicU64,
     /// THE KERNEL's HALT LINE's ONCE-FLAG (m10): whether
     /// [`KernelHaltLine`] has been said this uptime, by either of its two
-    /// sites — [`Commits::commit_recorded`], where `execute` answers
-    /// `Rejected` coded `Poisoned` with the halt above unset, and the
-    /// transport's handler catch after a caught panic on a write — both
-    /// through [`Commits::say_the_kernels_halt_once`]. Poison does not
-    /// persist across a restart, and neither does this.
+    /// sites — [`Commits::commit_recorded`], after every execute that leaves
+    /// the kernel poisoned, and the transport's handler catch after a caught
+    /// panic on a write — both through [`Commits::say_the_kernels_halt_once`].
+    /// Poison does not persist across a restart, and neither does this.
     kernel_halt_said: AtomicBool,
-    /// THE FULL VOLUME's ONCE-FLAG (`operations.md` §1.1 m1; §4 row 1):
-    /// whether [`FullVolumeLine`] has been said for the condition that
-    /// stands — set where `execute` answers `Rejected` coded `Durability`
-    /// whose I/O kind is `StorageFull`, and CLEARED where a commit lands
-    /// ([`Commits::record`] answers a position), so the next refusal at a
-    /// full volume is a fresh condition and says the line again. Set, read
-    /// and cleared under the serialization guard at the door, so no
-    /// ordering is needed on the atomic; it is one so the field is `Sync`.
-    volume_full_said: AtomicBool,
+    /// THE DURABILITY REFUSALS since the last write that landed
+    /// (`operations.md` §1.1 m1; §4 row 1): the I/O kinds already said in
+    /// this stretch, and the refusals counted with the position the first
+    /// would have taken — each kind's line said once per stretch
+    /// ([`DurabilityRefusedLine`]), a new kind being a new condition, and the
+    /// stretch closed by the next write that lands, said once
+    /// ([`WritesLandAgainLine`]). Set, read and cleared under the
+    /// serialization guard at the door; the lock is what makes it `Sync`.
+    refused: Mutex<RefusedStretch>,
     /// THE CLASSED DOOR WITH ITS RECORD ([`Lines`]): every line said from
     /// this card and the feed beneath it goes through it — the feed files'
     /// open-time lines (a cut, the unreadable slots, the malformed names),
     /// the files' once-per-uptime stops and their failed appends, the
     /// compaction's per-attempt failures, the head writer's refused head
-    /// and its clearing, the kernel's halt and the full volume — and, under
+    /// and its clearing, the kernel's halt and the durability refusals with
+    /// their close — and, under
     /// the test seam, into the one record the daemon above shares
     /// (`LinesSaid`), in order with the lines the daemon says itself. Made
     /// BEFORE the feed opens and handed down, which is what lets a suite pin
@@ -375,7 +375,7 @@ impl Commits {
             halted: AtomicBool::new(false),
             halted_at: AtomicU64::new(0),
             kernel_halt_said: AtomicBool::new(false),
-            volume_full_said: AtomicBool::new(false),
+            refused: Mutex::new(RefusedStretch::default()),
             said,
             checkpoint_signal: CheckpointSignal::new(),
             inline_runs_seen: AtomicU64::new(0),
@@ -428,44 +428,83 @@ impl Commits {
         self.halted.load(Ordering::Acquire).then(|| Seq(self.halted_at.load(Ordering::Acquire)))
     }
 
-    /// THE KERNEL's HALT LINE (`operations.md` §1.1 m10; §4 row 29), said
-    /// ONCE per uptime — by the once-flag this card holds — from whichever of
-    /// its two sites reaches it first: `Commits::commit_recorded`, where
-    /// `execute` answered `Rejected` coded `Poisoned` with the write path's
-    /// own halt unset (the order exhausted, or a commit's repair that could
-    /// not complete), and the transport's handler catch, after a caught panic
-    /// on a write found the kernel poisoned (an unwind whose repair failed or
-    /// that passed the barrier — the poison that no `Rejected` carries until
-    /// the next write, hours away on a quiet board). `{p}` is the kernel's
+    /// Says the kernel's halt line, once per uptime, where the kernel halted.
+    ///
+    /// The line is `operations.md` §1.1 m10's (§4 row 29), said by the
+    /// once-flag this card holds from whichever of its two sites reaches it
+    /// first: `Commits::commit_recorded`, after every execute — a session
+    /// write's and the head writer's own, whose refusal its line names first
+    /// — and the transport's handler catch, after a caught panic on a write
+    /// (an unwind whose repair failed or that passed the barrier, the poison
+    /// no `Rejected` carries until the next write, hours away on a quiet
+    /// board). It asks the kernel itself, one atomic load, so a call on a
+    /// kernel that has not halted says nothing. `{p}` is the kernel's
     /// installed head at the site (`Kernel::current_seq`), an ordering: no
-    /// write lands past it until a restart. Through the classed door under
+    /// write lands past it until a restart; the cause is the kernel's own
+    /// (`Kernel::poison_cause`), naming the failure, its positions and the
+    /// segment and act each failure met. Through the classed door under
     /// `Class::Failure`, and — under the test seam — into the daemon's
     /// record, so a suite pins the words and the class. A second call says
     /// nothing: the state is standing, and the standing line re-says it.
     pub fn say_the_kernels_halt_once(&self) {
-        if self.kernel_halt_said.swap(true, Ordering::AcqRel) {
+        let kernel = self.stores.kernel();
+        if !kernel.is_poisoned() || self.kernel_halt_said.swap(true, Ordering::AcqRel) {
             return;
         }
-        self.said.say(Class::Failure, KernelHaltLine { at: self.stores.kernel().current_seq() });
+        let line = KernelHaltLine { at: kernel.current_seq(), cause: kernel.poison_cause() };
+        self.said.say(Class::Failure, line);
     }
 
-    /// THE FULL VOLUME's LINE (`operations.md` §1.1 m1; §4 row 1), said ONCE
-    /// PER CONDITION from [`Commits::commit_recorded`], where `execute`
-    /// answered `Rejected` coded `Durability` whose I/O kind is `StorageFull`
-    /// — the journal's append or its barrier refused by the volume's room, a
-    /// true no-op, the seqs rolled back. `{p}` is `Kernel::current_seq() + 1`,
-    /// the first position the refused write would have taken: its boundary,
-    /// for a multi-record write, lies that many seqs higher, which the answer
-    /// does not carry, and what the operator reads is the ordering — no write
-    /// lands past the head until room stands. The once-flag is cleared by
-    /// the next LANDED commit, so a volume that fills again is said again;
-    /// a second refusal under one condition says nothing.
-    fn say_the_full_volume_once(&self) {
-        if self.volume_full_said.swap(true, Ordering::Relaxed) {
+    /// Says a durability refusal's line, once per kind per stretch.
+    ///
+    /// It is `operations.md` §1.1 m1's line (§4 row 1), said from
+    /// [`Commits::commit_recorded`] where `execute` answered `Rejected` coded
+    /// `Durability` — the journal's append or barrier, its segment rotation
+    /// or the salt's entropy refused, a true no-op, the seqs rolled back.
+    /// The I/O kind is M10's unmarshaled `io_kind`, and the detail the
+    /// kernel's account of the file, the act and the OS's words: a full
+    /// volume (`StorageFull`) keeps m1's words, every other kind names its
+    /// cause and the acts that clear it ([`DurabilityRefusedLine`]). `{p}` is
+    /// `Kernel::current_seq() + 1`, the first position the refused write
+    /// would have taken: its boundary, for a multi-record write, lies that
+    /// many seqs higher, which the answer does not carry, and what the
+    /// operator reads is the ordering — no write lands past the head until
+    /// the cause clears. A kind already said in the stretch says nothing; the
+    /// refusal is counted all the same, for the landing that closes it.
+    fn say_the_durability_refusal(&self, kind: io::ErrorKind, detail: Option<&str>) {
+        let at = Seq(self.stores.kernel().current_seq().0.saturating_add(1));
+        let mut stretch = self.refused.lock();
+        stretch.refused += 1;
+        stretch.since.get_or_insert(at);
+        if stretch.kinds.contains(&kind) {
             return;
         }
-        let at = Seq(self.stores.kernel().current_seq().0.saturating_add(1));
-        self.said.say(Class::Failure, FullVolumeLine { at });
+        stretch.kinds.push(kind);
+        drop(stretch);
+        let full = kind == io::ErrorKind::StorageFull;
+        self.said.say(Class::Failure, DurabilityRefusedLine { at, full, detail });
+    }
+
+    /// Closes the refused stretch where a write landed since `pre`.
+    ///
+    /// The kernel's position past `pre` is the arbiter, not the answer — an
+    /// idempotency replay's ack lands nothing. A write that landed after
+    /// durability refusals says so once, with the position it landed at, the
+    /// refusals counted and the first refused position
+    /// ([`WritesLandAgainLine`]), and the kinds are forgotten, so the next
+    /// refusal is news again. Free where no refusal stands: one lock, one
+    /// look.
+    fn close_the_refused_stretch_where_landed(&self, pre: Seq) {
+        let at = self.stores.kernel().current_seq();
+        if at <= pre {
+            return;
+        }
+        let mut stretch = self.refused.lock();
+        let Some(since) = stretch.since.take() else { return };
+        let refused = std::mem::take(&mut stretch.refused);
+        stretch.kinds.clear();
+        drop(stretch);
+        self.said.say(Class::Landing, WritesLandAgainLine { at, refused, since });
     }
 
     /// THE CLASSED DOOR, for a line of the daemon's whose site lies ABOVE
@@ -517,6 +556,21 @@ impl Commits {
     #[doc(hidden)]
     pub fn fail_the_feeds_next_rewrite_past_rename(&self) {
         self.feed.fail_next_rewrite_past_rename();
+    }
+
+    /// Returns `feed-attest.log`'s size in bytes, for a line of the daemon's.
+    ///
+    /// The attest store is never compacted — below the reclaim floor its
+    /// lines are an entry signature's only copy — so the file grows by one
+    /// line (~6.9 KB under tag 1) per attested commit for the life of the
+    /// board; the open says its size once, and this reads it whenever the
+    /// daemon's own lines would. Under the feed's lock and no guard.
+    ///
+    /// # Errors
+    ///
+    /// The file's metadata could not be read.
+    pub fn attest_store_bytes(&self) -> io::Result<u64> {
+        self.feed.attest_store_bytes()
     }
 
     /// THE STOPPED FEED FILES, as a read: of `commits.log` and the four
@@ -707,18 +761,20 @@ impl Commits {
     ///
     /// AND THE KERNEL's OWN HALT (m10), told from the write path's by the
     /// arm it comes through: the attest halt returns above, before
-    /// `execute`, said once at its transition; a `Rejected` coded `Poisoned`
-    /// that `execute` ANSWERS, with the halt above unset, is the kernel's —
-    /// M10 lowers `TxnError::Poisoned` to that code — and this door is the
-    /// first site of the kernel's halt line, said once by
-    /// [`Commits::say_the_kernels_halt_once`]. AND THE FULL VOLUME (m1): a
-    /// `Rejected` coded `Durability` whose I/O kind — M10's unmarshaled
-    /// `io_kind`, set where it lowers `TxnError::Durability` — is
-    /// `StorageFull` is the volume refusing the journal's append or barrier,
-    /// said once per condition by [`Commits::say_the_full_volume_once`]
-    /// and cleared by the next commit that lands; any other `Durability`
-    /// kind takes no line here. One match on the answer per write, and
-    /// nothing on an ack but the clearing.
+    /// `execute`, said once at its transition; a kernel that `execute` left
+    /// poisoned — a session write's refusal coded `Poisoned`, or the head
+    /// writer's own commit, whose refusal it answers in its own line — is
+    /// the kernel's, and this door is the first site of the kernel's halt
+    /// line, said once by [`Commits::say_the_kernels_halt_once`], one atomic
+    /// load per write. AND THE DURABILITY REFUSALS (m1): a `Rejected` coded
+    /// `Durability` is the journal refusing the write's append, barrier,
+    /// rotation or salt, said once per I/O kind per stretch by
+    /// [`Commits::say_the_durability_refusal`] — M10's unmarshaled
+    /// `io_kind`, set where it lowers `TxnError::Durability`, telling a full
+    /// volume (`StorageFull`) from every other cause — and the stretch
+    /// closed, said once, by the next write that lands
+    /// ([`Commits::close_the_refused_stretch_where_landed`]). One match on the
+    /// answer per write, and on an ack one lock and one look.
     ///
     /// AND THE PANIC PAST THE COMMIT (the module doc; `operations.md` §4 row
     /// 34): `execute` runs under a catch, with the kernel's snapshot from
@@ -757,22 +813,21 @@ impl Commits {
             // at the panic site, and `resume_unwind` runs none.
             Err(payload) => {
                 self.record_the_commit_an_unwind_left(serial, meta, &pre);
+                self.say_the_kernels_halt_once();
                 resume_unwind(payload);
             }
         };
+        self.say_the_kernels_halt_once();
         if let Response::Rejected(rejection) = &resp {
-            if rejection.code == RejectCode::Poisoned {
-                self.say_the_kernels_halt_once();
-            }
-            if rejection.code == RejectCode::Durability
-                && rejection.io_kind == Some(io::ErrorKind::StorageFull)
-            {
-                self.say_the_full_volume_once();
+            if rejection.code == RejectCode::Durability {
+                let kind = rejection.io_kind.unwrap_or(io::ErrorKind::Other);
+                self.say_the_durability_refusal(kind, rejection.detail.as_deref());
             }
         }
         if let Some(at) = self.record(serial, meta, &resp) {
-            self.landed(at);
+            self.commit_stream.announce(at);
         }
+        self.close_the_refused_stretch_where_landed(pre.seq());
         self.wake_the_checkpoint_thread_where_due();
         // The superseded root's last reference may be this one (the hold
         // above): released after the record step, as the hold promises.
@@ -827,17 +882,11 @@ impl Commits {
         if recorded.is_err() {
             self.halt_at(at);
         }
-        self.landed(at);
-        self.wake_the_checkpoint_thread_where_due();
-    }
-
-    /// A commit LANDED at `at` and its record is made: the volume took it,
-    /// so a full volume said before this is a condition that cleared and
-    /// the next is new; and the position is answerable, so it is announced
-    /// — behind its record, which is the module doc's STEP.
-    fn landed(&self, at: Seq) {
-        self.volume_full_said.store(false, Ordering::Relaxed);
+        // The position is answerable, so it is announced — behind its
+        // record, which is the module doc's STEP — and the volume took it.
         self.commit_stream.announce(at);
+        self.close_the_refused_stretch_where_landed(pre.seq());
+        self.wake_the_checkpoint_thread_where_due();
     }
 
     /// THE HALT, SET (the module doc; SO-I5 (d)): the attest store has said
@@ -1137,28 +1186,31 @@ impl FeedWalk {
     }
 }
 
-/// A caught panic's payload as text — the literal where it is one (the
-/// words the code wrote, which the hook carries too), a formatted message
-/// where it is a `String`, and the class alone otherwise: nothing of a
-/// request can ride it.
-fn payload_text(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(text) = payload.downcast_ref::<&'static str>() {
-        return (*text).to_string();
-    }
-    if let Some(text) = payload.downcast_ref::<String>() {
-        return text.clone();
-    }
-    "a panic".to_string()
+/// Returns a caught panic's payload as the operator stream may carry it.
+///
+/// It is the literal where the payload is one, the words the code wrote,
+/// which the hook carries too; any other payload — a formatted message
+/// among them, whose text a record's values may have made — reads `a
+/// panic`, so nothing of a request can ride it.
+fn payload_text(payload: &(dyn std::any::Any + Send)) -> &'static str {
+    payload.downcast_ref::<&'static str>().copied().unwrap_or("a panic")
 }
 
 /// THE WALK THREAD's CONSEQUENCE LINE (`operations.md` §1.1 row 41; §3.3
-/// step 2), the ruled words: `the feed walk ended: {payload}; positions
-/// ({low}, {head}] stay uncovered — /changes refuses pages into them until
-/// a restart, which walks again`. A pure value, pinned by `to_string()` in
-/// the unit suite; emitted under `Class::Failure` by the thread's catch,
-/// once, after the hook's line has said the panic itself.
+/// step 2), the ruled words, then what the dead walk costs every write.
+///
+/// The words: `the feed walk ended: {payload}; positions ({low}, {head}]
+/// stay uncovered — /changes refuses pages into them until a restart, which
+/// walks again; until that restart commits.log takes no line: every write
+/// since this open is held in memory alone, and the restart's walk
+/// re-covers each as a bare entry, its key and its time lost — restart
+/// soon`. With the region pending for the uptime, `CommitsLog::admit` holds
+/// every write in memory, so the cost grows with each write until the
+/// restart. A pure value, pinned by `to_string()` in the unit suite;
+/// emitted under `Class::Failure` by the thread's catch, once, after the
+/// hook's line has said the panic itself.
 pub(crate) struct FeedWalkEndedLine {
-    pub(crate) payload: String,
+    pub(crate) payload: &'static str,
     pub(crate) low: u64,
     pub(crate) head: u64,
 }
@@ -1168,7 +1220,9 @@ impl fmt::Display for FeedWalkEndedLine {
         write!(
             f,
             "the feed walk ended: {}; positions ({}, {}] stay uncovered — /changes refuses pages \
-             into them until a restart, which walks again",
+             into them until a restart, which walks again; until that restart commits.log takes \
+             no line: every write since this open is held in memory alone, and the restart's \
+             walk re-covers each as a bare entry, its key and its time lost — restart soon",
             self.payload, self.low, self.head
         )
     }
@@ -1197,61 +1251,130 @@ impl fmt::Display for FeedWalkRefusedLine<'_> {
 }
 
 /// THE KERNEL's HALT LINE (`operations.md` §1.1 m10; §4 row 29), in the
-/// operator stream's ruled words: the position the kernel halted at — the
-/// installed head at the site, an ordering — what is refused and what
-/// serves, and the CLASS of the three causes, which the kernel does not
-/// report (`CommitFail::Unrepaired` carries none and `is_poisoned` is a
-/// bool): a commit's repair that could not complete durably, an unwind past
-/// the durability barrier, or the sequence order exhausted; then the act. A
-/// pure value, pinned by `to_string()` in the unit suite; emitted under
-/// `Class::Failure` through [`Commits::say_the_kernels_halt_once`], once an
-/// uptime, and re-said by the standing line as `the kernel is poisoned since
-/// position {p}`, the position this line names — no commit lands past it.
-/// Here and not in `server.rs` beside the daemon's other lines because its
-/// first site is this card's, below the daemon, and imports point down.
-pub struct KernelHaltLine {
+/// operator stream's words: the position the kernel halted at, its cause,
+/// what is refused and what serves, and the act.
+///
+/// The position is the installed head at the site, an ordering. The cause
+/// is the kernel's own account (`Kernel::poison_cause`): which of the three
+/// unrecoverable failures it was — a commit's repair that could not complete
+/// durably, an unwind past the durability barrier, or the sequence order
+/// exhausted — the transaction by its positions, and each failure's segment,
+/// act and OS words. Where the kernel kept none, the line names the three
+/// classes instead. A pure value, pinned by `to_string()` in the unit suite;
+/// emitted under `Class::Failure` through
+/// [`Commits::say_the_kernels_halt_once`], once an uptime, and re-said by
+/// the standing line as `the kernel is poisoned since position {p}`, the
+/// position this line names — no commit lands past it. Here and not in
+/// `server.rs` beside the daemon's other lines because its first site is
+/// this card's, below the daemon, and imports point down.
+pub struct KernelHaltLine<'a> {
     /// `Kernel::current_seq` at the site.
     pub at: Seq,
+    /// `Kernel::poison_cause` at the site, or `None` where it kept none.
+    pub cause: Option<&'a str>,
 }
 
-impl fmt::Display for KernelHaltLine {
+impl fmt::Display for KernelHaltLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "the kernel halted its write paths at position {}: every write is refused poisoned \
-             until a restart; reads serve. The cause is one of three the kernel does not report \
-             — a commit that could not be rolled back durably, an unwind past the durability \
-             barrier, or the sequence order exhausted; check the volume and the device, then \
-             restart",
-            self.at
-        )
+        match self.cause {
+            Some(cause) => write!(
+                f,
+                "the kernel halted its write paths at position {}: {cause}; every write is \
+                 refused poisoned until a restart; reads serve; check the volume and the device, \
+                 then restart",
+                self.at
+            ),
+            None => write!(
+                f,
+                "the kernel halted its write paths at position {}: every write is refused \
+                 poisoned until a restart; reads serve. The cause is one of three the kernel did \
+                 not report — a commit that could not be rolled back durably, an unwind past the \
+                 durability barrier, or the sequence order exhausted; check the volume and the \
+                 device, then restart",
+                self.at
+            ),
+        }
     }
 }
 
-/// THE FULL VOLUME's LINE (`operations.md` §1.1 m1; §4 row 1), in the
-/// operator stream's ruled words: a write refused at a full volume, the
-/// position it would have taken, what lands and what serves, and the act —
-/// none, the condition clearing by itself once room stands. A pure value,
-/// pinned by `to_string()` in the unit suite; emitted under `Class::Failure`
-/// through [`Commits::say_the_full_volume_once`], once per condition. Here
-/// beside [`KernelHaltLine`] for its reason: the site is this card's, below
-/// the daemon.
-pub(crate) struct FullVolumeLine {
+/// THE DURABILITY REFUSAL's LINE (`operations.md` §1.1 m1; §4 row 1): a
+/// write the journal refused, the position it would have taken and the
+/// kernel's account, what lands and what serves, and the act.
+///
+/// A full volume keeps m1's words, the account after the position: `a write
+/// was refused at a full volume at position {p} ({detail}): no write lands
+/// until room is freed on the volume; reads serve; the next write succeeds
+/// by itself once room stands, and no restart is owed`. Every other kind —
+/// a quota, the device's `Input/output error` where the repair succeeded, a
+/// read-only remount, the OS refusing entropy for the salt — is a write
+/// refused `durability`: `… at position {p} ({detail}): no write lands until
+/// its cause clears; reads serve; check the volume, its device and the
+/// board user's quota — the next write succeeds by itself once the cause
+/// clears`. A pure value, pinned by `to_string()` in the unit suite; emitted
+/// under `Class::Failure` through [`Commits::say_the_durability_refusal`],
+/// once per kind per stretch. Here beside [`KernelHaltLine`] for its
+/// reason: the site is this card's, below the daemon.
+pub(crate) struct DurabilityRefusedLine<'a> {
     /// `Kernel::current_seq() + 1` at the site — the first position the
     /// refused write would have taken.
     pub(crate) at: Seq,
+    /// Whether the I/O kind is `StorageFull`, the volume's room.
+    pub(crate) full: bool,
+    /// The refusal's detail, the kernel's account: the file, the act and
+    /// the OS's words.
+    pub(crate) detail: Option<&'a str>,
 }
 
-impl fmt::Display for FullVolumeLine {
+impl fmt::Display for DurabilityRefusedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let what = if self.full { "at a full volume" } else { "durability" };
+        write!(f, "a write was refused {what} at position {}", self.at)?;
+        if let Some(detail) = self.detail {
+            write!(f, " ({detail})")?;
+        }
+        f.write_str(if self.full {
+            ": no write lands until room is freed on the volume; reads serve; the next write \
+             succeeds by itself once room stands, and no restart is owed"
+        } else {
+            ": no write lands until its cause clears; reads serve; check the volume, its device \
+             and the board user's quota — the next write succeeds by itself once the cause \
+             clears"
+        })
+    }
+}
+
+/// THE STRETCH's CLOSE (`operations.md` §1.1 m1): writes land again after
+/// durability refusals.
+///
+/// The words: `writes land again at position {p}, {n} refused since
+/// position {q}` — `{p}` the position the landed write committed at, `{n}`
+/// the refusals the stretch counted and `{q}` the position the first would
+/// have taken, which its failure line named. A pure value, pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Landing` through
+/// [`Commits::close_the_refused_stretch_where_landed`], once per stretch.
+pub(crate) struct WritesLandAgainLine {
+    pub(crate) at: Seq,
+    pub(crate) refused: u64,
+    pub(crate) since: Seq,
+}
+
+impl fmt::Display for WritesLandAgainLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "a write was refused at a full volume at position {}: no write lands until room is \
-             freed on the volume; reads serve; the next write succeeds by itself once room \
-             stands, and no restart is owed",
-            self.at
+            "writes land again at position {}, {} refused since position {}",
+            self.at, self.refused, self.since
         )
     }
+}
+
+/// The durability refusals of one stretch: the I/O kinds said, and the
+/// refusals counted with the position the first would have taken.
+#[derive(Debug, Default)]
+struct RefusedStretch {
+    kinds: Vec<io::ErrorKind>,
+    refused: u64,
+    since: Option<Seq>,
 }
 
 /// THE CLASSED DOOR WITH ITS RECORD — `notice::emit` under a class word
@@ -1260,8 +1383,9 @@ impl fmt::Display for FullVolumeLine {
 /// handed down to every site below the daemon that says a line — the feed's
 /// open, each line file's and `commits.log`'s rewrite, the attest store's
 /// open — so the open-time lines (a cut, the unreadable slots, the malformed
-/// names) and the uptime lines (a file's stop, the kernel's halt, the full
-/// volume) stand in one record, in order, and a suite pins them in-process.
+/// names) and the uptime lines (a file's stop, the kernel's halt, the
+/// durability refusals) stand in one record, in order, and a suite pins
+/// them in-process.
 /// A clone shares the record; outside the test seam it holds nothing and
 /// the door is `notice::emit` alone.
 #[derive(Clone)]
@@ -1300,9 +1424,9 @@ impl Lines {
 /// `skepd::Daemon::lines_said` answers. Behind an `Arc` and owned by the
 /// write path ([`Commits`]'s `said`, a [`Lines`]), which the daemon above
 /// shares, because lines of the daemon's are said from below it — the feed
-/// files' at their open, their stops, the kernel's halt and the full volume
-/// at [`Commits::commit_recorded`] — and a suite pins them in the one
-/// record, in order with the rest. Not a stable API.
+/// files' at their open, their stops, the kernel's halt and the durability
+/// refusals at [`Commits::commit_recorded`] — and a suite pins them in the
+/// one record, in order with the rest. Not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub type LinesSaid = Arc<Mutex<Vec<String>>>;

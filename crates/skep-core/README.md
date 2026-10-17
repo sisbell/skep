@@ -49,12 +49,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   with `of`), `head_time`, `next_step` (`StreamStep`), `announced`,
   `halted_at`, `say_the_kernels_halt_once`, `feed_walk_gone`,
   `compact_feed_below_reclaim_floor` (`FeedCompaction`),
-  `stopped_feed_files` (`StoppedFile`), `checkpoint_signal`
+  `stopped_feed_files` (`StoppedFile`), `attest_store_bytes`, the never
+  compacted `feed-attest.log`'s size, `checkpoint_signal`
   (`CheckpointSignal`: `wait`, `stop`, `is_stopped`, `Woken`), `shutdown`
   and `lines`, the classed door `Lines` (`say`) a line of the daemon's
   goes through to stand in the one record; `write_meta` (`FrameMeta`,
   `attributed`, `WriteMeta`, `Signed`), what the feed will say of a write;
-  and `KernelHaltLine` (`at`), the kernel's halt line as a value.
+  and `KernelHaltLine` (`at`, `cause`), the kernel's halt line as a
+  value.
 - **The codec**, `codec` — `JsonCodec` (`marshal_request`, `unparseable`,
   `parse_daemon`, `parse_daemon_value`) answering a `DaemonOp`;
   `to_bytes`, the one marshal door; `op_name`, `check_keys`,

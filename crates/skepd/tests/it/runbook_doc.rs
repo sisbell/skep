@@ -11,7 +11,8 @@
 //! test loads one. So are the figures the binary's constants supply, read
 //! through those constants, §3 step 2's variables, read off the binary's
 //! own help, §2's line for the journal damage a history read meets, §1's
-//! write refused for a cause but room, and §1 step 8's standing clauses.
+//! line for a write refused for a cause but room, and §1 step 8's standing
+//! clauses.
 
 use std::path::Path;
 
@@ -465,20 +466,26 @@ fn runbook_says_a_health_probe_that_hangs_waits_on_the_volume() {
     }
 }
 
-/// Checks that §1 says a write refused for a cause but room is unsaid.
+/// Checks that §1 says a write refused for a cause but room has its line.
 ///
-/// Step 1 says such a write is refused `durability` and said by nothing —
-/// `volume.rs` holds the binary to it — and names the quota and the device
-/// and where the cause is read; step 5 acts on it.
+/// Step 1 says such a write is refused `durability` and said by its own
+/// line, which it quotes as the binary writes it — `volume.rs` holds the
+/// binary to the words — and names the quota and the device and where the
+/// cause is read; the landing that ends a refused stretch is quoted too;
+/// step 5 acts on the line.
 #[test]
-fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_nothing() {
+fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_its_own_line() {
     let step = collapsed(&passage(
         "\n## 1. The full volume",
         "1. **Tell the two states apart.**",
         &["2. **Make room first.**"],
     ));
     for fact in [
-        "A write can be refused for a cause other than room, and then no line says so",
+        "A write can be refused for a cause other than room, and it is said by its own line",
+        "failure: a write was refused durability at position {position} ({detail}): no write \
+         lands until its cause clears; reads serve; check the volume, its device and the board \
+         user's quota — the next write succeeds by itself once the cause clears",
+        "landing: writes land again at position {position}, {n} refused since position {position}",
         "`Disk quota exceeded`",
         "`Input/output error`",
         "`writes.halted` stays `false`",
@@ -490,7 +497,7 @@ fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_nothing() {
         "5. **Then act on the line you saw.**",
         &["6. **Know what the floor keeps meanwhile.**"],
     ));
-    assert!(acts.contains("A write refused `durability` and said by nothing"), "{acts}");
+    assert!(acts.contains("A write refused `durability` for a cause but room"), "{acts}");
 }
 
 /// §9.3 WINDOWS — A QUESTION, NO COMMAND (the runbook states only what this

@@ -75,6 +75,14 @@ pub struct AuthOptions {
     /// defaults — so copying that field back into this one re-admits the
     /// defaults the claim-time drop exists to remove.
     pub configured: Vec<Origin>,
+    /// Where `configured` came from, as the binary's parse recorded it.
+    ///
+    /// It is the default (no origin configured), the flag (`--origin`) or the
+    /// variable (`SKEPD_ORIGIN`), which the open's `auth:` line names beside
+    /// the set (§1.1 m14): the one line that tells a stale variable's origin
+    /// from the flag's. `Source::Default` from a caller that sets the set and
+    /// names no source, which the line then says.
+    pub configured_source: Source,
     /// The blocked-prefix list's supply (AUTH-1.44, AUTH-4.70).
     ///
     /// It is the file the operator maintains from the standing takedown
@@ -141,6 +149,7 @@ impl Default for AuthOptions {
             local_trust: true,
             local_trust_source: Source::Default,
             configured: Vec::new(),
+            configured_source: Source::Default,
             blocked_supply_path: None,
             node_prefix: None,
             node_prefix_source: Source::Default,
@@ -179,6 +188,10 @@ pub struct AuthConfig {
     local_trust_source: Source,
     /// The configured origin set, as the options named it; fixed at open.
     pub configured: BTreeSet<Origin>,
+    /// [`AuthOptions::configured_source`], as supplied.
+    ///
+    /// It is what the `auth:` line reads beside the configured set.
+    configured_source: Source,
     port: OnceLock<u16>,
     /// The list in force.
     ///
@@ -211,6 +224,7 @@ impl AuthConfig {
             local_trust: opts.local_trust,
             local_trust_source: opts.local_trust_source,
             configured: opts.configured.into_iter().collect(),
+            configured_source: opts.configured_source,
             port: OnceLock::new(),
             // Empty until [`AuthState::open`] installs the start-up supply.
             blocked: parking_lot::RwLock::new(Arc::new(BlockedPrefixes::default())),
@@ -265,17 +279,21 @@ impl AuthConfig {
     /// convention `auth/` keeps for everything it publishes, the `/health`
     /// object included: `auth: {unclaimed | CLAIMED-ENFORCING |
     /// CLAIMED-PERMISSIVE} (--local-trust {on|off}, {source}); configured
-    /// origins {list | none}; signed origins {list}` — the mode derived from
-    /// the pair as AUTH-5.86 derives it ([`Mode::of`]), the flag's value and
-    /// its source beside it, the configured set, and the signed set as the
-    /// handshake admits it at this claim (`signed_origins`: the configured
-    /// set alone once claimed, else the bare set — the loopback defaults of
-    /// the bound port with the configured). Each set in one spelling: the
+    /// origins {list | none} ({source}); signed origins {list}` — the mode
+    /// derived from the pair as AUTH-5.86 derives it ([`Mode::of`]), the
+    /// flag's value and its source beside it, the configured set with its
+    /// source, and the signed set as the handshake admits it at this claim
+    /// (`signed_origins`: the configured set alone once claimed, else the
+    /// bare set — the loopback defaults of the bound port with the
+    /// configured). Each set in one spelling: the
     /// origins' canonical text, in the set's order, `none` where the set is
     /// empty — a claimed board with no configured origin has an empty signed
-    /// set, which row 17's warning names the consequence of. The one line
-    /// that names a mistyped `--origin` on an `Enforcing` board, where every
-    /// signed session is otherwise refused in silence.
+    /// set, which row 17's warning names the consequence of — and the
+    /// configured set's source beside it, `(--origin)`, `(SKEPD_ORIGIN)` or
+    /// `(the default)`, so a stale variable's origin is told from the
+    /// flag's. The one line that names a mistyped `--origin` on an
+    /// `Enforcing` board, where every signed session is otherwise refused in
+    /// silence.
     pub fn auth_line(&self, claimed: bool) -> String {
         let (flag, variable) = if self.local_trust {
             ("--local-trust", "SKEPD_LOCAL_TRUST=true")
@@ -290,11 +308,12 @@ impl AuthConfig {
             }
         };
         format!(
-            "auth: {} (--local-trust {}, {}); configured origins {}; signed origins {}",
+            "auth: {} (--local-trust {}, {}); configured origins {} ({}); signed origins {}",
             Mode::of(self, claimed),
             if self.local_trust { "on" } else { "off" },
             self.local_trust_source.words(flag, variable),
             list(&self.configured),
+            self.configured_source.words("--origin", "SKEPD_ORIGIN"),
             list(&signed_origins(self, claimed)),
         )
     }
@@ -488,15 +507,18 @@ mod tests {
     /// one claimed with the flag on by its variable names
     /// `CLAIMED-PERMISSIVE`; and a claimed board with no configured origin
     /// says `none` for both sets. The source's words are the setting's,
-    /// `(--local-trust {on|off}, {source})` as m14 spells them.
+    /// `(--local-trust {on|off}, {source})` as m14 spells them, and the
+    /// configured set's beside it — the flag, the variable by its name, the
+    /// default where none was configured.
     #[test]
     fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets() {
         let cfg = AuthConfig::new(AuthOptions::default());
         cfg.bind_port(8642).expect("binds once");
         assert_eq!(
             cfg.auth_line(false),
-            "auth: unclaimed (--local-trust on, the default); configured origins none; signed \
-             origins http://127.0.0.1:8642, http://[::1]:8642, http://localhost:8642"
+            "auth: unclaimed (--local-trust on, the default); configured origins none (the \
+             default); signed origins http://127.0.0.1:8642, http://[::1]:8642, \
+             http://localhost:8642"
         );
         let configured = |s: &str| Origin::parse(s).expect("canonical");
         let enforcing = AuthConfig::new(AuthOptions {
@@ -506,26 +528,28 @@ mod tests {
                 configured("https://board.example"),
                 configured("http://127.0.0.1:8642"),
             ],
+            configured_source: Source::Flag,
             ..AuthOptions::default()
         });
         enforcing.bind_port(8642).expect("binds once");
         assert_eq!(
             enforcing.auth_line(true),
             "auth: CLAIMED-ENFORCING (--local-trust off, --no-local-trust); configured origins \
-             http://127.0.0.1:8642, https://board.example; signed origins http://127.0.0.1:8642, \
-             https://board.example"
+             http://127.0.0.1:8642, https://board.example (--origin); signed origins \
+             http://127.0.0.1:8642, https://board.example"
         );
         let permissive = AuthConfig::new(AuthOptions {
             local_trust: true,
             local_trust_source: Source::Env,
             configured: vec![configured("https://board.example")],
+            configured_source: Source::Env,
             ..AuthOptions::default()
         });
         permissive.bind_port(443).expect("binds once");
         assert_eq!(
             permissive.auth_line(true),
             "auth: CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true); configured \
-             origins https://board.example; signed origins https://board.example"
+             origins https://board.example (SKEPD_ORIGIN); signed origins https://board.example"
         );
         let unconfigured = AuthConfig::new(AuthOptions {
             local_trust: false,
@@ -536,7 +560,7 @@ mod tests {
         assert_eq!(
             unconfigured.auth_line(true),
             "auth: CLAIMED-ENFORCING (--local-trust off, SKEPD_LOCAL_TRUST=false); configured \
-             origins none; signed origins none"
+             origins none (the default); signed origins none"
         );
     }
 

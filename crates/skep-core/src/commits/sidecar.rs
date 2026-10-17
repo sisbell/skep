@@ -589,9 +589,20 @@ pub(super) struct CommitsLog {
     /// new commit and is never re-recorded.
     open_head: u64,
     /// Whether this open REWROTE the file — compaction to the journal's
-    /// retention, or the purge of a foreign fence — so every offset moved
-    /// and the derived offset array must be rewritten with it.
+    /// retention, or the purge of a foreign fence or of entries past the
+    /// head — so every offset moved and the derived offset array must be
+    /// rewritten with it.
     rewritten: bool,
+    /// What this open's compaction dropped below the reclaim floor: the
+    /// floor and the count of entries, or `None` where it dropped none —
+    /// what the feed's open says once its derived files follow.
+    compacted_at_open: Option<(u64, usize)>,
+    /// The reclaim floor this open probed ([`reclaim_floor`]), or `None`
+    /// where the journal still answered genesis — the one probe the feed's
+    /// open pays, read again by the attest store's open, which runs before
+    /// the listener and the checkpoint thread, so the floor cannot move
+    /// between the two.
+    floor_at_open: Option<u64>,
     /// THE REGION PENDING — `(low, head]`, the positions the file did not
     /// cover at open, which the walk behind the listener re-covers
     /// ([`reconstruct`]) and the landing writes ([`CommitsLog::land`]);
@@ -700,9 +711,11 @@ impl CommitsLog {
     ///
     /// `lines` is the classed door: a torn tail is said through it once
     /// ([`LogCutLine`]) — at the open, BEFORE the walk, with the walk's own
-    /// fence `low` as the last trusted position — and the malformed names
-    /// once with their count ([`demote_malformed_names`]); the log keeps a
-    /// clone for its stop and its landing.
+    /// fence `low` as the last trusted position — the entries past the head
+    /// once with their count and positions ([`ForeignLinesLine`]), the file
+    /// rewritten without them, and the malformed names once with their
+    /// count ([`demote_malformed_names`]); the log keeps a clone for its
+    /// stop and its landing.
     pub(super) fn open(dir: &Path, engine: &Engine, lines: &Lines) -> io::Result<CommitsLog> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{SIDECAR_FILE}: {e}"));
         let path = dir.join(SIDECAR_FILE);
@@ -734,14 +747,21 @@ impl CommitsLog {
             }
         }
         let head = engine.kernel().current_seq().0;
-        // Entries beyond this journal's head describe a different journal
-        // (an operator swapped files under the sidecar); never serve them.
-        if head < u64::MAX {
+        // Entries beyond this journal's head describe a different journal —
+        // a live copy taken after its journal, an operator's swap, or the
+        // testimony of commits a journal tail cut took — and are never
+        // served. They leave the file too (the rewrite below is forced by
+        // them), or a later commit at one of their positions whose own line
+        // a crash ate would replay as theirs.
+        let foreign = if head < u64::MAX {
             let dropped = entries.split_off(&(head + 1));
             for at in dropped.keys() {
                 offsets.remove(at);
             }
-        }
+            dropped.keys().fold(None, |held, &at| Some(Foreign::with(held, at)))
+        } else {
+            None
+        };
         // A fence above the head describes that other journal too, and is
         // the half the entry clamp above does not reach. Left standing it
         // makes `(min_since, head]` empty, so `changes` refuses every
@@ -775,7 +795,8 @@ impl CommitsLog {
         // the feed's memory that does not depend on the journal, and
         // discarding it over a floor nobody can locate would lose the only
         // record of those commits that still exists.
-        let floor_fence = reclaim_floor(engine).map(|floor| floor.saturating_sub(1));
+        let floor_at_open = reclaim_floor(engine);
+        let floor_fence = floor_at_open.map(|floor| floor.saturating_sub(1));
         // Built with no region, so the open's own compaction below REWRITES
         // the file — it is the open's to write, before the listener — where
         // the same method defers its rewrite while a region is pending.
@@ -787,6 +808,8 @@ impl CommitsLog {
             min_since,
             open_head: head,
             rewritten: false,
+            compacted_at_open: None,
+            floor_at_open,
             pending: None,
             last_time: 0,
             len,
@@ -803,10 +826,20 @@ impl CommitsLog {
         // unconditional under a discarded fence, so a journal that later
         // grows past that number cannot resurrect it from the file — the one
         // forcing the thread's compaction never makes, since a fence above
-        // the head is a thing only an open meets. It writes the file WITHOUT
-        // the region, which is what the file held: the region is the walk's.
-        log.compact_inner(floor_fence.unwrap_or(0), stale_fence)
+        // the head is a thing only an open meets — and so is it under the
+        // entries dropped past the head. It writes the file WITHOUT the
+        // region, which is what the file held: the region is the walk's.
+        let held = log.entries.len();
+        log.compact_inner(floor_fence.unwrap_or(0), stale_fence || foreign.is_some())
             .map_err(|failed| with_file(failed.into_io()))?;
+        if let Some(foreign) = foreign {
+            let what = "testimony";
+            lines.say(Class::Open, ForeignLinesLine { name: SIDECAR_FILE, foreign, head, what });
+        }
+        let dropped = held - log.entries.len();
+        if let (Some(fence), true) = (floor_fence, dropped > 0) {
+            log.compacted_at_open = Some((fence.saturating_add(1), dropped));
+        }
         // The region's lower edge is the fence in force where the compaction
         // passed it — a position at or below the fence answers 410 before
         // any page reaches it — and a fence past the head leaves no region.
@@ -977,9 +1010,10 @@ impl CommitsLog {
                     self.lines.say(
                         Class::Failure,
                         format_args!(
-                            "commits.log rewrite failed past its rename: {e}; this file takes no \
+                            "commits.log rewrite failed past its rename: {}; this file takes no \
                              further line, so the next open re-derives from its fence as bare \
-                             entries"
+                             entries",
+                            IoCause(&e)
                         ),
                     );
                 }
@@ -1110,18 +1144,24 @@ impl CommitsLog {
         // stops this file, so the next open's walk starts below the gap
         // instead of above it. The failure is REPORTED through the classed
         // door (`operations.md` §1.1 row 31) — once, since the stop takes
-        // every later line — which states why a notice may not panic.
+        // every later line — which states why a notice may not panic. The
+        // line names what the stop costs until the restart, and on a full
+        // volume that the restart's open writes this file.
         let line = entry_line(at, &meta);
         if self.stopped.is_none() {
             match self.file.write_all(&line) {
                 Ok(()) => self.len += line.len() as u64,
                 Err(e) => {
                     self.stopped = Some(at);
+                    let cause = IoCause(&e);
                     self.lines.say(
                         Class::Failure,
                         format_args!(
-                            "commits.log append failed at position {at}: {e}; this file takes no \
-                             further line, so the next open re-derives from {at} as bare entries"
+                            "commits.log append failed at position {at}: {cause}; this file \
+                             takes no further line, so the next open re-derives from {at} as \
+                             bare entries; every write until then is held in memory alone, its \
+                             key and its time lost at that open — restart soon{}",
+                            cause.free_room_first()
                         ),
                     );
                 }
@@ -1250,6 +1290,20 @@ impl CommitsLog {
     pub(crate) fn rewritten(&self) -> bool {
         self.rewritten
     }
+
+    /// Returns what this open's compaction dropped below the reclaim floor.
+    ///
+    /// It is the floor and the count of entries, or `None` where the
+    /// compaction dropped none.
+    pub(crate) fn compacted_at_open(&self) -> Option<(u64, usize)> {
+        self.compacted_at_open
+    }
+
+    /// Returns the reclaim floor this open probed, or `None` where the
+    /// journal still answered genesis.
+    pub(crate) fn floor_at_open(&self) -> Option<u64> {
+        self.floor_at_open
+    }
 }
 
 /// THE RECLAIM FLOOR — the oldest position the journal can still answer, or
@@ -1305,6 +1359,103 @@ impl Cut {
     /// The bytes after the trusted end — what was cut.
     fn after(&self) -> u64 {
         self.len.saturating_sub(self.valid_end)
+    }
+}
+
+/// The entry lines a feed file's replay dropped as another journal's.
+///
+/// They are the lines past the head this open read: a live copy taken
+/// after its journal holds them, and
+/// after a journal tail cut that took intact frames they are the cut
+/// commits' own. Answered beside the [`Cut`] by each replay, and said by
+/// the two files whose lines no open re-derives — `commits.log`'s testimony
+/// and `feed-attest.log`'s signatures ([`ForeignLinesLine`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Foreign {
+    /// How many entry lines were dropped.
+    pub lines: usize,
+    /// The lowest position they named.
+    pub first: u64,
+    /// The highest position they named.
+    pub last: u64,
+}
+
+impl Foreign {
+    /// Returns the report `held` with one more dropped line, at `at`.
+    pub(super) fn with(held: Option<Foreign>, at: u64) -> Foreign {
+        match held {
+            None => Foreign { lines: 1, first: at, last: at },
+            Some(f) => Foreign { lines: f.lines + 1, first: f.first.min(at), last: f.last.max(at) },
+        }
+    }
+}
+
+/// The open's line for the lines past the head it dropped.
+///
+/// The words: `{file} held {n} lines past the journal's head at position
+/// {h} (positions {a}–{b}): dropped — a live copy taken after its journal
+/// holds them; after a journal tail cut that took intact frames they are
+/// the cut commits' {what}, which a copy taken before this open still
+/// holds`. A pure value, pinned by `to_string()` in the unit suite;
+/// emitted under `Class::Open` by `commits.log`'s open and the attest
+/// store's.
+pub(super) struct ForeignLinesLine {
+    pub name: &'static str,
+    pub foreign: Foreign,
+    pub head: u64,
+    /// What the lines carry: `testimony` or `signatures`.
+    pub what: &'static str,
+}
+
+impl std::fmt::Display for ForeignLinesLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Foreign { lines, first, last } = self.foreign;
+        write!(
+            f,
+            "{} held {lines} lines past the journal's head at position {} (positions \
+             {first}–{last}): dropped — a live copy taken after its journal holds them; after a \
+             journal tail cut that took intact frames they are the cut commits' {}, which a \
+             copy taken before this open still holds",
+            self.name, self.head, self.what
+        )
+    }
+}
+
+/// An I/O failure as the operator stream words its cause.
+///
+/// A full volume reads `the volume is full ({e})`, the words the
+/// checkpoint's line and the blob store's use (`operations.md` §1.1 m1);
+/// every other kind reads as the error's own words. Every feed file's
+/// failure line renders its cause through this.
+pub(super) struct IoCause<'a>(pub &'a io::Error);
+
+impl IoCause<'_> {
+    /// Returns whether the cause is a full volume.
+    pub(super) fn is_full(&self) -> bool {
+        self.0.kind() == io::ErrorKind::StorageFull
+    }
+
+    /// Returns the act a stopped file's line ends with on a full volume.
+    ///
+    /// The restart that re-derives the file writes it first, so on a
+    /// volume still full that open refuses and reads stop with it; the
+    /// clause is empty for every other cause.
+    pub(super) fn free_room_first(&self) -> &'static str {
+        if self.is_full() {
+            "; free room before that restart: its open writes this file"
+        } else {
+            ""
+        }
+    }
+}
+
+impl std::fmt::Display for IoCause<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_full() {
+            write!(f, "the volume is full ({})", self.0)
+        } else {
+            write!(f, "{}", self.0)
+        }
     }
 }
 
@@ -1391,21 +1542,84 @@ impl std::fmt::Display for WalkProgressLine {
     }
 }
 
-/// THE WALK's LANDING LINE (m15): `{b} walked, {k} of them bare, in {d}` —
-/// `{b}` the boundaries the walk proved, `{k}` those it could not classify
-/// (the world below them unanswerable: served to every class, the module
-/// doc's residue), `{d}` from the walk's start to the landing's rewrite,
-/// in milliseconds. A pure value, pinned by `to_string()`; emitted under
-/// `Class::Landing` by the feed's landing.
+/// THE WALK's LANDING LINE (m15), naming its file and its region.
+///
+/// The words: `commits.log re-covered positions ({low}, {head}]: {b}
+/// boundaries walked, {k} of them unclassifiable and served to every class,
+/// in {d} ms; the landing held the change feed's lock {r} ms` — `{b}` the
+/// boundaries the walk proved, `{k}` those it could not classify (the world
+/// below them unanswerable: served to every class, the module doc's
+/// residue), `{d}` from the walk's start to the landing's rewrite and `{r}`
+/// the landing's own span under the lock every write's record and every
+/// page waits on, in milliseconds. Where the landing's fence stands inside
+/// the region it adds `; the fence stands at position {f}: /changes answers
+/// 410 history_reclaimed for every since below it`, and where its rewrite
+/// failed before the rename the region is re-covered `in memory alone`. A
+/// pure value, pinned by `to_string()`; emitted under `Class::Landing` by
+/// the feed's landing.
 pub(super) struct WalkLandingLine {
+    pub low: u64,
+    pub head: u64,
     pub walked: usize,
-    pub bare: usize,
+    pub unclassified: usize,
     pub elapsed_ms: u128,
+    pub held_ms: u128,
+    /// The landing's fence, where it stands above `low`.
+    pub fence: Option<u64>,
+    /// Whether the rewrite failed before its rename, the file unwritten.
+    pub in_memory_alone: bool,
 }
 
 impl std::fmt::Display for WalkLandingLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} walked, {} of them bare, in {} ms", self.walked, self.bare, self.elapsed_ms)
+        write!(
+            f,
+            "commits.log re-covered positions ({}, {}]{}: {} boundaries walked, {} of them \
+             unclassifiable and served to every class, in {} ms; the landing held the change \
+             feed's lock {} ms",
+            self.low,
+            self.head,
+            if self.in_memory_alone { " in memory alone" } else { "" },
+            self.walked,
+            self.unclassified,
+            self.elapsed_ms,
+            self.held_ms
+        )?;
+        match self.fence {
+            Some(fence) => write!(
+                f,
+                "; the fence stands at position {fence}: /changes answers 410 \
+                 history_reclaimed for every since below it"
+            ),
+            None => Ok(()),
+        }
+    }
+}
+
+/// THE WALK's REFUSAL by the journal (`operations.md` §3.3 step 2).
+///
+/// The words: `commits.log's walk: the journal refused position {at}
+/// ({account}): the change feed answers 410 history_reclaimed for every
+/// since below position {m} — restore the segment the account names from a
+/// copy (RUNBOOK §2)`. `{account}` is the kernel's own, and `{m}` the fence
+/// the refusal moved the walk to. Said once per walk, at its landing, the
+/// first refusal standing for the rest. A pure value, pinned by
+/// `to_string()`; emitted under `Class::Failure` by the feed's landing.
+pub(super) struct WalkRefusedLine<'a> {
+    pub refusal: &'a WalkRefusal,
+    pub fence: u64,
+}
+
+impl std::fmt::Display for WalkRefusedLine<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let refused = if self.refusal.list { "the boundaries above position" } else { "position" };
+        write!(
+            f,
+            "commits.log's walk: the journal refused {refused} {} ({}): the change feed answers \
+             410 history_reclaimed for every since below position {} — restore the segment the \
+             account names from a copy (RUNBOOK §2)",
+            self.refusal.at, self.refusal.account, self.fence
+        )
     }
 }
 
@@ -1426,7 +1640,8 @@ impl std::fmt::Display for LandingRefusedLine<'_> {
             "commits.log: the walk's landing rewrite failed before its rename: {}; the file \
              stands as it was and takes no further line, so the next open walks again from \
              position {}",
-            self.error, self.low
+            IoCause(self.error),
+            self.low
         )
     }
 }
@@ -1471,21 +1686,39 @@ impl WalkControl {
 /// What one walk came to ([`reconstruct`]): the boundaries proved, each
 /// with its classification, in position order; the smallest `since` the
 /// feed can honor from here on where the journal stopped answering
-/// ([`CommitsLog::min_since`]'s number); how many of the proved are bare;
-/// and the walk's start, which the landing line's duration is measured
-/// from.
+/// ([`CommitsLog::min_since`]'s number) and the first refusal that moved
+/// it; how many of the proved are unclassified; and the walk's start,
+/// which the landing line's duration is measured from.
 pub(super) struct WalkOutcome {
     pub boundaries: Vec<Walked>,
     pub min_since: Option<u64>,
+    pub refusal: Option<WalkRefusal>,
     pub started: Instant,
 }
 
 impl WalkOutcome {
-    /// The boundaries proved but not classified — the world below them
-    /// unanswerable — which the landing line counts as bare.
-    pub(super) fn bare(&self) -> usize {
+    /// Returns the boundaries proved but not classified.
+    ///
+    /// The world below each was unanswerable, so each is served to every
+    /// class — what the landing line counts as unclassifiable.
+    pub(super) fn unclassified(&self) -> usize {
         self.boundaries.iter().filter(|w| w.docs.is_none()).count()
     }
+}
+
+/// The journal's first refusal the walk met, in the kernel's own words.
+///
+/// It is a refusal that moved the walk's fence: at-rest damage, an I/O
+/// failure, or a base that would not load — never the reclamation a
+/// checkpoint landing behind the listener makes, which moves the fence the
+/// compaction would.
+pub(super) struct WalkRefusal {
+    /// The position refused, or the one above which the list was refused.
+    pub at: u64,
+    /// Whether the list of boundaries above `at` was refused.
+    pub list: bool,
+    /// The refusal's `HistoryError`, as its `Display` words it.
+    pub account: String,
 }
 
 /// The line the feed walk's hold writes on the operator stream as it parks
@@ -1598,8 +1831,8 @@ impl RewriteFail {
 impl std::fmt::Display for RewriteFail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RewriteFail::BeforeRename(e) => write!(f, "before its rename: {e}"),
-            RewriteFail::PastRename(e) => write!(f, "past its rename: {e}"),
+            RewriteFail::BeforeRename(e) => write!(f, "before its rename: {}", IoCause(e)),
+            RewriteFail::PastRename(e) => write!(f, "past its rename: {}", IoCause(e)),
         }
     }
 }
@@ -1772,8 +2005,9 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines
 /// skipped, those the walk had proved below it dropped by the landing's
 /// compaction; any other refusal (corrupt, I/O, a listed boundary the
 /// replay will not prove) — the feed reaches down to the boundary above
-/// it and no further. `None` where the stop was asked before the walk
-/// completed: nothing is landed.
+/// it and no further, the first such refusal kept in the kernel's words
+/// for the landing to say ([`WalkRefusal`]). `None` where the stop was
+/// asked before the walk completed: nothing is landed.
 ///
 /// THE HOLD AND THE FAULT (test seams): the walk parks after its `open:`
 /// line and before its first boundary while the hold is armed, and fires
@@ -1788,7 +2022,7 @@ pub(super) fn reconstruct(
     control: &WalkControl,
 ) -> Option<WalkOutcome> {
     let started = Instant::now();
-    let (listed, mut min_since) = list_boundaries(kernel, low, head);
+    let (listed, mut min_since, mut refusal) = list_boundaries(kernel, low, head);
     lines.say(Class::Open, WalkOpenLine { covered: low, boundaries: listed.len(), head });
     #[cfg(any(test, feature = "test-hooks"))]
     {
@@ -1836,8 +2070,9 @@ pub(super) fn reconstruct(
                     below = None;
                     continue;
                 }
-                Err(_) => {
+                Err(e) => {
                     min_since = Some(min_since.map_or(at, |m| m.max(at)));
+                    refusal.get_or_insert(WalkRefusal { at, list: false, account: e.to_string() });
                     below = None;
                     continue;
                 }
@@ -1858,33 +2093,49 @@ pub(super) fn reconstruct(
             last_said = (boundaries.len(), Instant::now());
         }
     }
-    Some(WalkOutcome { boundaries, min_since, started })
+    Some(WalkOutcome { boundaries, min_since, refusal, started })
 }
 
-/// The boundaries the walk proves, `(low, head]` ascending, in ONE scan —
-/// and where the scan refused below `low`, the fence the feed honors from
-/// there: `Reclaimed` naming a floor above `low` is the base below `low`
-/// gone, so the list is asked again AT the floor — the floor's own boundary,
-/// which the base embodying it answers, leads the list — and the fence is
-/// one below it; a refusal naming no floor, or at-rest damage, leaves the
-/// head alone to prove, the fence one below it, as the probe-by-probe walk
-/// ended at its first refusal. A floor past the head names an empty list:
-/// everything the region held is reclaimed.
-fn list_boundaries(kernel: &Kernel<World>, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
+/// The boundaries the walk proves, `(low, head]` ascending, in ONE scan.
+///
+/// Where the scan refused below `low`, it answers the fence the feed honors
+/// from there too: `Reclaimed` naming a floor above `low` is the base below
+/// `low` gone, so the list is asked again AT the floor — the floor's own
+/// boundary, which the base embodying it answers, leads the list — and the
+/// fence is one below it; a refusal naming no floor, at-rest damage, or the
+/// list at the floor refused in turn leaves the head alone to prove, the
+/// fence one below it, as the probe-by-probe walk ended at its first
+/// refusal, and that refusal is answered beside them ([`WalkRefusal`]). A
+/// floor past the head names an empty list: everything the region held is
+/// reclaimed.
+fn list_boundaries(
+    kernel: &Kernel<World>,
+    low: u64,
+    head: u64,
+) -> (Vec<u64>, Option<u64>, Option<WalkRefusal>) {
     let at_or_below_head = |list: Vec<(Seq, Option<Attestation>)>| -> Vec<u64> {
         list.into_iter().map(|(seq, _)| seq.0).filter(|&at| at > low && at <= head).collect()
     };
+    let refused = |at: u64, e: HistoryError| {
+        let refusal = WalkRefusal { at, list: true, account: e.to_string() };
+        (vec![head], Some(head.saturating_sub(1)), Some(refusal))
+    };
     match kernel.boundaries_above(Seq(low)) {
-        Ok(list) => (at_or_below_head(list), None),
+        Ok(list) => (at_or_below_head(list), None, None),
         Err(HistoryError::Reclaimed { floor: Some(floor), .. }) if floor.0 > low => {
-            let mut list = Vec::new();
-            if floor.0 <= head {
-                list.push(floor.0);
-                list.extend(at_or_below_head(kernel.boundaries_above(floor).unwrap_or_default()));
+            if floor.0 > head {
+                return (Vec::new(), Some(floor.0 - 1), None);
             }
-            (list, Some(floor.0 - 1))
+            match kernel.boundaries_above(floor) {
+                Ok(above) => {
+                    let mut list = vec![floor.0];
+                    list.extend(at_or_below_head(above));
+                    (list, Some(floor.0 - 1), None)
+                }
+                Err(e) => refused(floor.0, e),
+            }
         }
-        Err(_) => (vec![head], Some(head.saturating_sub(1))),
+        Err(e) => refused(low, e),
     }
 }
 
@@ -2066,8 +2317,11 @@ pub(super) fn report_malformed_names(lines: &Lines, file: &'static str, position
 }
 
 /// Row 11's words: `{file}: {n} positions carry malformed document names,
-/// the first at position {p}` — one line per file per open. A pure value,
-/// pinned by `to_string()` in the unit suite.
+/// the first at position {p}` — one line per file per open.
+///
+/// For `commits.log` the line adds what still serves: `; those positions
+/// serve as bare entries`, the demotion [`demote_malformed_names`] makes. A
+/// pure value, pinned by `to_string()` in the unit suite.
 pub(super) struct MalformedNamesLine {
     pub file: &'static str,
     pub positions: usize,
@@ -2080,7 +2334,11 @@ impl std::fmt::Display for MalformedNamesLine {
             f,
             "{}: {} positions carry malformed document names, the first at position {}",
             self.file, self.positions, self.first
-        )
+        )?;
+        if self.file == SIDECAR_FILE {
+            f.write_str("; those positions serve as bare entries")?;
+        }
+        Ok(())
     }
 }
 
@@ -2111,6 +2369,8 @@ impl CommitsLog {
             min_since: 0,
             open_head,
             rewritten: false,
+            compacted_at_open: None,
+            floor_at_open: None,
             pending: None,
             last_time: 0,
             len: 0,
@@ -2138,6 +2398,8 @@ impl CommitsLog {
             min_since: 0,
             open_head: head,
             rewritten: false,
+            compacted_at_open: None,
+            floor_at_open: None,
             pending: Some((low, head)),
             last_time: 0,
             len,

@@ -1227,7 +1227,7 @@ fn a_position_carrying_a_malformed_document_name_answers_bare() {
     };
     let log_line = format!(
         "failure: commits.log: 3 positions carry malformed document names, the first at \
-         position {first}"
+         position {first}; those positions serve as bare entries"
     );
     let index_line = format!(
         "failure: feed-index.log: 3 positions carry malformed document names, the first at \

@@ -1707,8 +1707,9 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
 }
 
 /// m10's WORDS and ROW 41's TWO CONSEQUENCE LINES at fixed inputs: the
-/// kernel's halt with its position, the class of its three causes and the
-/// act; the pruner's verbatim; and the checkpoint thread's opening on row
+/// kernel's halt with its position, the kernel's own cause — or the class
+/// of its three causes where it kept none — and the act; the pruner's
+/// verbatim; and the checkpoint thread's opening on row
 /// 41's words, verbatim, then what the board lost beside them and the act —
 /// the feed's compaction, the standing line, a restart — as row 22's line
 /// says them for the thread refused at start.
@@ -1716,13 +1717,24 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
 fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
     use skep_core::commits::KernelHaltLine;
 
+    let cause = "the commit of position 1204 failed (seg-3.wal: barrier: Input/output error), \
+                 and the truncation that repairs it failed too (seg-3.wal: truncate: Input/output \
+                 error): its frames may stand on disk, so the next open decides whether it stands";
     assert_eq!(
-        KernelHaltLine { at: Seq(1203) }.to_string(),
+        KernelHaltLine { at: Seq(1203), cause: Some(cause) }.to_string(),
+        format!(
+            "the kernel halted its write paths at position 1203: {cause}; every write is refused \
+             poisoned until a restart; reads serve; check the volume and the device, then restart"
+        ),
+        "the kernel's own cause rides the line"
+    );
+    assert_eq!(
+        KernelHaltLine { at: Seq(1203), cause: None }.to_string(),
         "the kernel halted its write paths at position 1203: every write is refused poisoned \
-         until a restart; reads serve. The cause is one of three the kernel does not report — \
-         a commit that could not be rolled back durably, an unwind past the durability \
-         barrier, or the sequence order exhausted; check the volume and the device, then \
-         restart"
+         until a restart; reads serve. The cause is one of three the kernel did not report — a \
+         commit that could not be rolled back durably, an unwind past the durability barrier, or \
+         the sequence order exhausted; check the volume and the device, then restart",
+        "with no cause kept, the three classes"
     );
     let ended = CheckpointThreadEndedLine.to_string();
     assert!(

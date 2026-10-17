@@ -474,14 +474,27 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
 /// asserted to be the crates' constants beside the line, so a stamp that
 /// moves re-spells this pin rather than passing a line that names the old
 /// one — and a render from a literal in the daemon, one byte off its
-/// constant, fails on the first assertion.
+/// constant, fails on the first assertion. Last, the clause `built with
+/// {features}`: the optional features this build carries — `observe`,
+/// `client`, `test-hooks`, in that order — transcribed here from the build's
+/// own cfgs rather than read through the daemon's function, or `no optional
+/// feature`, the hosted image's.
 #[test]
 fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
+    let built: Vec<&str> = [
+        ("observe", cfg!(feature = "observe")),
+        ("client", cfg!(feature = "client")),
+        ("test-hooks", cfg!(feature = "test-hooks")),
+    ]
+    .into_iter()
+    .filter_map(|(feature, on)| on.then_some(feature))
+    .collect();
+    let built = if built.is_empty() { "no optional feature".to_string() } else { built.join(", ") };
     assert_eq!(
         VersionLine.to_string(),
         format!(
             "version {} ({}); this build reads journal format SKJ4, checkpoint format SKC4 and \
-             world format 0x534b505700000001",
+             world format 0x534b505700000001; built with {built}",
             env!("CARGO_PKG_VERSION"),
             option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
         )

@@ -369,6 +369,73 @@ const SKEPD_NODE_PREFIX: EnvSetting =
 const NODE_PREFIX_FORM: &str =
     "a node prefix of the form 1.N — the board's node address under the root 1, never the root itself";
 
+/// Every variable the daemon reads, by name.
+///
+/// It is the one list [`refuse_unknown_variables`] reads, built from the
+/// settings' own constants so the two cannot part. The unit suite holds the
+/// help's `SKEPD_` names to it, so a setting the help documents and this
+/// list omits fails there, and one the parse reads and this list omits is
+/// refused the first time anyone sets it.
+const VARIABLES: [&str; 9] = [
+    SKEPD_DATA_DIR,
+    SKEPD_PORT.var,
+    SKEPD_BIND.var,
+    SKEPD_WORKERS.var,
+    SKEPD_LOCAL_TRUST.var,
+    SKEPD_UPLOADS.var,
+    SKEPD_ORIGIN,
+    SKEPD_BLOCKED_PREFIXES,
+    SKEPD_NODE_PREFIX.var,
+];
+
+/// The `SKEPD_` variables another program of the workspace reads.
+///
+/// They pass unread: `SKEPD_URL` is the daemon's origin as `skep-mcp` dials
+/// it, and one shell may export it for both programs.
+const OTHER_PROGRAMS_VARIABLES: [&str; 1] = ["SKEPD_URL"];
+
+/// Refuses every `SKEPD_` variable the daemon does not read.
+///
+/// A misspelled name would otherwise leave its setting at the default and
+/// let the start go on (`operations.md` §2, validated at start). The
+/// blocked-prefix list's is the worst: an absent list is said nowhere at
+/// the open (§1.1 row 20), so a takedown the operator wrote would not be in
+/// force and nothing would say so. A misspelled flag is refused as an
+/// unknown argument, and this is its variable's twin. The daemon's parse
+/// and a tool's both call it first, and a tool counts the daemon's own
+/// variables as known, so an image's baked settings never stop `skepd
+/// inventory`. A test build passes the `SKEPD_TEST_` seams (the worker
+/// fault, the feed walk's hold, the unit suite's child markers); a shipped
+/// build reads none of them, and refuses them too.
+///
+/// # Errors
+///
+/// Every unknown name, sorted, beside the names the daemon reads.
+fn refuse_unknown_variables() -> Result<(), String> {
+    let seam =
+        |name: &str| cfg!(any(test, feature = "test-hooks")) && name.starts_with("SKEPD_TEST_");
+    let mut unknown: Vec<String> = std::env::vars_os()
+        .map(|(name, _)| name)
+        .filter(|name| name.as_encoded_bytes().starts_with(b"SKEPD_"))
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| {
+            !VARIABLES.contains(&name.as_str())
+                && !OTHER_PROGRAMS_VARIABLES.contains(&name.as_str())
+                && !seam(name)
+        })
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort();
+    let what = if unknown.len() == 1 { "no such variable" } else { "no such variables" };
+    Err(format!(
+        "{}: the daemon reads {what} — it reads {}",
+        unknown.join(", "),
+        VARIABLES.join(", ")
+    ))
+}
+
 /// Returns the help text, every default a constant supplies read from it.
 ///
 /// So the program cannot describe a default it does not use, wherever a
@@ -387,12 +454,14 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
   --data-dir <DIR>   the board's directory (env: SKEPD_DATA_DIR): the
                      journal and its checkpoints, the blob store under
                      blobs/, and the change feed's files — commits.log,
-                     the four feed-*.log files and feed-attest.log;
-                     created if absent, recovered if populated. Created
-                     owner-only — the directory 0700 and every file in
-                     it 0600, set at creation whatever the umask — and a
-                     directory other users of this machine can read is
-                     refused at start: chmod 700 it and start again
+                     the four index files feed-index.log, feed-offsets.log,
+                     feed-masked.log and feed-streams.log, and
+                     feed-attest.log; created if absent, recovered if
+                     populated. Created owner-only — the directory 0700
+                     and every file in it 0600, set at creation whatever
+                     the umask — and a directory other users of this
+                     machine can read is refused at start: chmod 700 it
+                     and start again
   --port <PORT>      TCP port on the address --bind names (env: SKEPD_PORT;
                      default {DEFAULT_PORT}; 0 picks an ephemeral port)
   --bind <ADDR>      the address to listen on (env: SKEPD_BIND; default
@@ -409,9 +478,10 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
   --uploads          admit the blob upload family (the default), under a
                      per-account limit of one part in {DEFAULT_LIMIT_SHARE} of
                      the volume's capacity, never below \
-{DEFAULT_LIMIT_FLOOR_BYTES} bytes, until
-                     a limits record is installed; echoed on /health as
-                     media.uploads
+{DEFAULT_LIMIT_FLOOR_BYTES} bytes, the
+                     capacity read once at start; this build installs no
+                     limits record, so no setting moves the limit or sets
+                     a venue total; echoed on /health as media.uploads
   --no-uploads       refuse the upload's creation and resume before any
                      body byte (403 upload_refused, detail uploads_closed);
                      the reads, the termination, the door and the pruner
@@ -456,6 +526,10 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
                      hosted board must supply one
   --help             this text
   --version          this binary's version and the commit it was built from
+
+Every line but --version refuses a SKEPD_ variable this binary does not
+read, naming it beside the ones it reads, so a misspelled one never leaves
+its setting at the default.
 
 The operator's two tools run over a board directory with NO server — no
 port, no session — and write no log line of the daemon's:
@@ -699,11 +773,13 @@ fn parse_command(argv: impl Iterator<Item = String>) -> Result<Option<Command>, 
 ///
 /// # Errors
 ///
-/// As the arguments are read: a flag with no value; an unknown argument — a
-/// flag of the other tool's among them — refused naming this tool; then a
-/// missing data directory, refused naming this tool, and, for the pull, a
-/// missing file.
+/// First, a `SKEPD_` variable the daemon does not read
+/// ([`refuse_unknown_variables`]); then, as the arguments are read: a flag
+/// with no value; an unknown argument — a flag of the other tool's among
+/// them — refused naming this tool; then a missing data directory, refused
+/// naming this tool, and, for the pull, a missing file.
 fn parse_tool(mut it: impl Iterator<Item = String>, tool: Tool) -> Result<Option<Command>, String> {
+    refuse_unknown_variables()?;
     let verb = tool.verb();
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
     let mut check = tools::HoleCheck::Rehash;
@@ -742,12 +818,14 @@ fn parse_tool(mut it: impl Iterator<Item = String>, tool: Tool) -> Result<Option
 ///
 /// # Errors
 ///
-/// In order, each as its message: a variable that is not text or does not
-/// parse; then, as the arguments are read, a flag with no value, a flag
-/// value that does not parse, `--version` past the first argument, or an
-/// unknown argument; then a worker count under [`MIN_WORKERS`]; then a
+/// In order, each as its message: a `SKEPD_` variable the daemon does not
+/// read ([`refuse_unknown_variables`]); then a variable that is not text or
+/// does not parse; then, as the arguments are read, a flag with no value, a
+/// flag value that does not parse, `--version` past the first argument, or
+/// an unknown argument; then a worker count under [`MIN_WORKERS`]; then a
 /// missing data directory.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
+    refuse_unknown_variables()?;
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
     let mut bind: Option<Ipv4Addr> = from_env(SKEPD_BIND)?;
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;

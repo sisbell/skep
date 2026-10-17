@@ -169,7 +169,10 @@ skep-hosted .` cross-builds under emulation — and every base image is
 pinned by digest. `scripts/docker-smoke.sh` builds all three and proves
 the image on the machine it runs on; run it after every build.
 
-**Run.** Every setting, named once. Baked into the image:
+**Run.** Every setting, named once. A `SKEPD_` name the daemon does not
+read stops the start, exit 2, with one line naming it beside the names it
+reads — `docker logs` shows it, `docker ps` the container restarting —
+since a run line's `-e` checks no name. Baked into the image:
 `SKEPD_DATA_DIR=/var/lib/skepd/board` (one level below the volume's
 root), `SKEPD_LOCAL_TRUST=false`, `SKEPD_BIND=0.0.0.0` and
 `SKEPD_PORT=8642`; the daemon runs as the numeric user `10001:10001`,
@@ -261,9 +264,15 @@ a container's namespace (`docker run --rm --network container:alice
 --entrypoint /busybox/wget skep-hosted:debug -qO-
 http://127.0.0.1:8642/health`). It never runs behind a customer route.
 
-**On a host.** Without the image, run the daemon as a user of its own
-and let it create the data directory: it sets the directory `0700` and
-every file `0600` itself, whatever the umask, and refuses at start a data
+**On a host.** Without the image, build the daemon as the image does,
+`cargo build --release -p skepd --no-default-features`, and never serve a
+board others reach with the release archive's `skepd` or RUNBOOK.md's
+default build: both carry `observe` and answer `GET /dump`, a walk of the
+whole world holding no permit, to every guest. The open's first line says
+which build is running: the image's ends
+`built with no optional feature`. Run the daemon as a user of its own and
+let it create the data directory: it sets the directory `0700` and every
+file `0600` itself, whatever the umask, and refuses at start a data
 directory other users can read (RUNBOOK.md, Start, step 2, and §9's
 dedicated-user option). The volume is the same shape: the daemon creates
 `board/` one level below the mount and never the mount itself, whose

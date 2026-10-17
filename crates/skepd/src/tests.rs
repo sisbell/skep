@@ -63,7 +63,9 @@ fn version_is_an_answer_not_an_exit() {
 /// {DEFAULT_LIMIT_SHARE} of the volume's capacity, never below
 /// {DEFAULT_LIMIT_FLOOR_BYTES} bytes" — read here through the constants and
 /// never a literal, so the help describes no default the daemon does not
-/// use; no word table ("one eighth", "256 MiB") anywhere in it.
+/// use; no word table ("one eighth", "256 MiB") anywhere in it. And the
+/// sentence says that this build installs no limits record, so an operator
+/// looking for the setting that moves the limit learns there is none.
 #[test]
 fn the_upload_setting_is_open_unless_closed() {
     let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
@@ -85,13 +87,24 @@ fn the_upload_setting_is_open_unless_closed() {
     );
     assert!(folded.contains(&sentence), "the --uploads sentence renders the constants: {folded}");
     assert!(!text.contains("one eighth") && !text.contains("256 MiB"), "no word table: {text}");
+    assert!(
+        folded.contains(
+            "the capacity read once at start; this build installs no limits record, so no setting \
+             moves the limit or sets a venue total"
+        ),
+        "the --uploads sentence says nothing moves the limit: {folded}"
+    );
 }
 
 /// THE DATA DIRECTORY's SENTENCE (the register's F14): the help names
 /// what the daemon writes under `--data-dir` — not the journal and its
 /// checkpoints alone, but the blob store and the change feed's files
 /// beside them, the attest store by name — so an operator sizing or
-/// backing up the directory is not undersold.
+/// backing up the directory is not undersold. The four index files are
+/// named one by one and never by a glob such as `feed-*.log`, which matches
+/// `feed-attest.log` too: removing what that glob names, to force the index
+/// files' rebuild, would delete the only copy of each signature the attest
+/// store holds below the reclaim floor.
 #[test]
 fn the_usage_names_what_the_data_directory_holds() {
     let text = usage();
@@ -100,9 +113,21 @@ fn the_usage_names_what_the_data_directory_holds() {
         .nth(1)
         .and_then(|rest| rest.split("\n  --port <PORT>").next())
         .expect("the --data-dir sentence");
-    for named in ["journal", "checkpoints", "blobs/", "commits.log", "feed-*.log", "feed-attest.log", "SKEPD_DATA_DIR"] {
+    for named in [
+        "journal",
+        "checkpoints",
+        "blobs/",
+        "commits.log",
+        "feed-index.log",
+        "feed-offsets.log",
+        "feed-masked.log",
+        "feed-streams.log",
+        "feed-attest.log",
+        "SKEPD_DATA_DIR",
+    ] {
         assert!(sentence.contains(named), "the --data-dir sentence names {named}: {sentence:?}");
     }
+    assert!(!sentence.contains('*'), "no glob names the index files: {sentence:?}");
 }
 
 /// THE LOOSE DIRECTORY's LINE at fixed inputs: the directory as named,
@@ -636,6 +661,104 @@ fn the_origin_flags_replace_the_variables_list_and_add_to_one_another() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Checks that an unknown `SKEPD_` variable is refused, named.
+///
+/// A misspelled `SKEPD_BLOCKED_PREFIX` stops the daemon's parse and a
+/// tool's, naming it beside the variables the daemon reads, where it would
+/// otherwise start the board with no list and say nothing (`operations.md`
+/// §2, validated at start); two unknown names are both named, sorted;
+/// `--version` still answers; and `SKEPD_URL`, skep-mcp's, passes. Judged in
+/// children of this test binary, as the bind variable's claims are, since
+/// the environment is process-wide.
+#[test]
+fn an_unknown_skepd_variable_is_refused_by_name() {
+    const CHILD: &str = "SKEPD_TEST_UNKNOWN_VARIABLE_CHILD";
+    let reads = VARIABLES.join(", ");
+    match std::env::var(CHILD).as_deref() {
+        Ok("misspelled") => {
+            let refused =
+                format!("SKEPD_BLOCKED_PREFIX: the daemon reads no such variable — it reads {reads}");
+            assert_eq!(parse_args(argv(&["--data-dir", "/tmp/x"])).err(), Some(refused.clone()));
+            assert_eq!(parse_args(argv(&["--help"])).err(), Some(refused.clone()), "--help too");
+            assert_eq!(
+                parse_command(argv(&["inventory", "--data-dir", "/tmp/x"])).err(),
+                Some(refused),
+                "a tool's line too"
+            );
+            assert!(
+                matches!(parse_command(argv(&["--version"])), Ok(Some(Command::Version))),
+                "the version line consults no environment"
+            );
+            return;
+        }
+        Ok("two") => {
+            assert_eq!(
+                parse_args(argv(&["--data-dir", "/tmp/x"])).err(),
+                Some(format!(
+                    "SKEPD_PORTS, SKEPD_UPLOAD: the daemon reads no such variables — it reads \
+                     {reads}"
+                )),
+                "every unknown name, sorted"
+            );
+            return;
+        }
+        Ok("another_programs") => {
+            assert!(parse_args(argv(&["--data-dir", "/tmp/x"])).is_ok(), "SKEPD_URL is skep-mcp's");
+            return;
+        }
+        _ => {}
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    for (arm, set) in [
+        ("misspelled", &[("SKEPD_BLOCKED_PREFIX", "/etc/skepd/blocked.json")][..]),
+        ("two", &[("SKEPD_UPLOAD", "false"), ("SKEPD_PORTS", "8642")][..]),
+        ("another_programs", &[("SKEPD_URL", "http://127.0.0.1:8642")][..]),
+    ] {
+        let out = std::process::Command::new(&exe)
+            .args([
+                "tests::an_unknown_skepd_variable_is_refused_by_name",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, arm)
+            .envs(set.iter().copied())
+            .output()
+            .expect("run the child");
+        assert!(
+            out.status.success(),
+            "the {arm} child's claims failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// Checks that the help names every variable the daemon reads, and no other.
+///
+/// Its `SKEPD_` names are exactly [`VARIABLES`], the list the
+/// unknown-variable refusal reads, so a setting documented and not listed
+/// fails here rather than being refused when an operator sets it.
+#[test]
+fn the_help_names_exactly_the_variables_the_daemon_reads() {
+    let text = usage();
+    let mut named: Vec<&str> = text
+        .match_indices("SKEPD_")
+        .map(|(at, _)| {
+            let rest = &text[at..];
+            let end =
+                rest.find(|c: char| !(c.is_ascii_uppercase() || c == '_')).unwrap_or(rest.len());
+            &rest[..end]
+        })
+        .filter(|name| name.len() > "SKEPD_".len())
+        .collect();
+    named.sort_unstable();
+    named.dedup();
+    let mut reads = VARIABLES.to_vec();
+    reads.sort_unstable();
+    assert_eq!(named, reads, "the help's variables are the ones the daemon reads");
 }
 
 /// A COMMAND LINE THE BINARY CANNOT READ, REFUSED (exit 2): at a terminal,

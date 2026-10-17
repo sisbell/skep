@@ -3209,12 +3209,13 @@ confirmed at the media round (the board's sm-Q8):
 * the floor, 256 MiB of the volume's free space as its CONSTANT HALF, the
   floor IN FORCE the larger of that and twice the newest checkpoint's size
   plus one maximal segment (128 MiB, the journal's reader ceiling), re-read
-  as each checkpoint lands — read once at the open off the newest checkpoint
-  on disk, named on the startup line beside the default limit — at the
-  creation on no length and per chunk; a guarantee that the journal stays
-  writable through its next checkpoint beside the cadence's byte bound (a
-  quarter of the newest checkpoint and no less than 24 MiB, with one window
-  of grace), which the daemon carries;
+  as each checkpoint lands — read once at the open off the start point's
+  checkpoint, the base the open loaded the world from (never a skipped
+  base's claimed size), named on the startup line beside the default limit
+  — at the creation on no length and per chunk; a guarantee that the
+  journal stays writable through its next checkpoint beside the cadence's
+  byte bound (a quarter of the newest checkpoint and no less than 24 MiB,
+  with one window of grace), which the daemon carries;
 * the default per-account limit, one eighth of the volume's capacity read
   once at start and never below 256 MiB, the venue total unset; the
   deposit read's `per_account`; the limits record's install channel

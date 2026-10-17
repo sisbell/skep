@@ -1,6 +1,7 @@
 //! `skep/README.md` is tested where it tells a frontend developer how to run
-//! the daemon: the section is read at test RUNTIME from the repo root — a
-//! changed sentence needs no rebuild — as `runbook_doc.rs` reads the
+//! the daemon, and where it tells an operator hosting boards how to build
+//! and start one: each section is read at test RUNTIME from the repo root —
+//! a changed sentence needs no rebuild — as `runbook_doc.rs` reads the
 //! runbook.
 
 use std::path::Path;
@@ -39,4 +40,33 @@ fn readme_runs_a_throwaway_board_for_the_dev_provider_with_local_trust_on() {
         .unwrap_or_else(|| panic!("the recipe says local trust stays on: {recipe}"));
     assert!(trust.contains("bare session"), "the local-trust sentence gives its reason: {trust}");
     assert!(!recipe.contains("--no-local-trust"), "the throwaway keeps local trust on: {recipe}");
+}
+
+/// Checks that a board hosted without the image is built as the image is.
+///
+/// The image's daemon is built `--no-default-features` (`operations.md`
+/// §3.9 item 8), since the default build's `observe` serves `GET /dump`, a
+/// whole-world walk holding no permit, to every guest. The hosted section's
+/// paragraph for a host without the image gives the same build and names
+/// the end of the open's first line that shows which build runs; and its
+/// run paragraph says that a `SKEPD_` name the daemon does not read stops
+/// the start, since a run line's `-e` checks no name.
+#[test]
+fn readme_builds_a_hosts_daemon_as_the_image_does_and_names_the_refused_variable() {
+    let hosted = section("\n## Running the hosted image");
+    let host = hosted
+        .split("**On a host.**")
+        .nth(1)
+        .and_then(|rest| rest.split("**Rehearsing").next())
+        .unwrap_or_else(|| panic!("the hosted section keeps its host paragraph: {hosted}"));
+    for named in [
+        "`cargo build --release -p skepd --no-default-features`",
+        "`built with no optional feature`",
+    ] {
+        assert!(host.contains(named), "the host paragraph names {named}: {host}");
+    }
+    assert!(
+        hosted.contains("A `SKEPD_` name the daemon does not read stops the start, exit 2"),
+        "the run paragraph says an unknown variable stops the start: {hosted}"
+    );
 }

@@ -9,8 +9,8 @@
 //! runtime: §3 step 2's command, §7's synced-folder sentence, and §9's two
 //! service units and its Windows question. The units are WORDS here — no
 //! test loads one. So are the figures the binary's constants supply, read
-//! through those constants, and §2's line for the journal damage a history
-//! read meets.
+//! through those constants, §3 step 2's variables, read off the binary's
+//! own help, and §2's line for the journal damage a history read meets.
 
 use std::path::Path;
 
@@ -291,13 +291,31 @@ fn runbook_carries_a_launchd_agent_and_a_systemd_user_unit_closed() {
 /// line name them, each read here through the library's own constants and
 /// never a literal, as the binary's help renders them, so a figure that
 /// moves fails here rather than leaving the runbook naming the old one.
+/// Beside the worker count, what each worker can hold: one frame body at
+/// the frame routes' cap, parsed whole at about twenty times its size, the
+/// multiple `skep_core::limits::MAX_REQUEST_BODY`'s own card prices.
 #[test]
 fn runbook_quotes_the_figures_the_constants_supply() {
+    use skep_core::limits::MAX_REQUEST_BODY;
     use skepd::{DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_WORKERS, MIN_WORKERS};
 
+    /// The JSON tree's multiple over the body it is parsed from.
+    ///
+    /// `MAX_REQUEST_BODY`'s card gives it: "roughly twenty times its size in
+    /// transient heap".
+    const TREE_PER_BODY_BYTE: usize = 20;
+    let mib = |bytes: usize| bytes / (1024 * 1024);
     let text = collapsed(&runbook_md());
     for figure in [
         format!("request threads. Default {DEFAULT_WORKERS}, minimum {MIN_WORKERS}."),
+        format!(
+            "Each worker can hold one request body of up to {} MiB on `/op` and `/op-at`",
+            mib(MAX_REQUEST_BODY)
+        ),
+        format!(
+            "about {} MiB of transient memory per worker reading a body at the cap",
+            mib(TREE_PER_BODY_BYTE * MAX_REQUEST_BODY)
+        ),
         format!(
             "the default per-account limit, one part in {DEFAULT_LIMIT_SHARE} of the volume's \
              capacity"
@@ -309,6 +327,39 @@ fn runbook_quotes_the_figures_the_constants_supply() {
     ] {
         assert!(text.contains(&figure), "RUNBOOK.md quotes the constants' figure {figure:?}");
     }
+}
+
+/// Checks that §3 step 2 names every variable the binary reads.
+///
+/// The names are the ones the binary's own `--help` prints, which the
+/// binary's unit suite holds to the parse's list; and the step says that a
+/// `SKEPD_` name the daemon does not read is refused at start, so a reader
+/// of the runbook learns that a misspelled variable never passes as unset.
+#[test]
+fn runbook_names_every_variable_the_daemon_reads_and_refuses_any_other() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_skepd"))
+        .arg("--help")
+        .env_clear()
+        .output()
+        .expect("run --help");
+    assert!(out.status.success(), "--help exits 0: {out:?}");
+    let help = String::from_utf8(out.stdout).expect("UTF-8 help");
+    let step = passage("\n## 3. Start", "2. **Run it**", &["\n3. **Read the open's report**"]);
+    let mut named = 0;
+    for (at, _) in help.match_indices("SKEPD_") {
+        let rest = &help[at..];
+        let end = rest.find(|c: char| !(c.is_ascii_uppercase() || c == '_')).unwrap_or(rest.len());
+        let name = &rest[..end];
+        if name.len() > "SKEPD_".len() {
+            assert!(step.contains(name), "RUNBOOK §3 step 2 names {name}:\n{step}");
+            named += 1;
+        }
+    }
+    assert!(named > 0, "the help names its variables: {help}");
+    assert!(
+        collapsed(&step).contains("A `SKEPD_` variable the daemon does not read is refused at start"),
+        "…and the refusal of any other: {step}"
+    );
 }
 
 /// §2 RESTORE's LEAD AND §1 STEP 8 — THE JOURNAL DAMAGE A HISTORY READ MEETS

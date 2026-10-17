@@ -533,6 +533,10 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
    The other settings follow, these two among them, each with its
    environment variable where it has one; a flag beats its variable.
+   A `SKEPD_` variable the daemon does not read is refused at start,
+   named beside the ones it does, exit 2: a misspelled
+   `SKEPD_BLOCKED_PREFIX` would otherwise start the board with no
+   list and say nothing.
 
    - `--port <PORT>` (`SKEPD_PORT`): the TCP port, on the address
      `--bind <ADDR>` (`SKEPD_BIND`) names — 127.0.0.1 by default, the
@@ -540,7 +544,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      boundary (the hosted image: `README.md`, Running the hosted
      image). Default 8642; `0` picks a free port.
    - `--workers <N>` (`SKEPD_WORKERS`): request threads. Default
-     16, minimum 15.
+     16, minimum 15. Each worker can hold one request body of up to
+     8 MiB on `/op` and `/op-at`, which the daemon parses whole as
+     JSON before any other check, at about twenty times its size:
+     about 160 MiB of transient memory per worker reading a body at
+     the cap, so a count raised for more concurrent clients raises
+     the daemon's peak with it.
    - `--local-trust` or `--no-local-trust`
      (`SKEPD_LOCAL_TRUST=true|false`): whether bare, unsigned
      sessions from this machine are honoured once the board is
@@ -600,15 +609,19 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       ```
 
    3. The build's version and commit, as `skepd --version` names
-      them, and the formats this build reads come first of the
-      open's own lines:
+      them, the formats this build reads and the features it was
+      built with come first of the open's own lines:
 
       ```
-      open: version {version} ({commit}); this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001
+      open: version {version} ({commit}); this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001; built with {features}
       ```
 
       `{commit}` tells two builds of one version apart; a build
-      that named none reads `unknown`.
+      that named none reads `unknown`. `{features}` names the
+      optional features the binary was built with — `observe`,
+      `client`, `test-hooks`, in that order — or reads
+      `no optional feature`: step 1's build reads `observe`, and a
+      binary you run never names `test-hooks` (step 1).
 
    4. The directory, before anything is read from it:
       `open: data-dir {path}`.
@@ -710,11 +723,15 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
       The capacity it names is read once, here: a volume grown or
       shrunk while the daemon runs moves the default per-account
-      limit only at the next start. Where the free space stands
-      below the floor, the second line goes on: `…, below the floor
-      in force {floor}: every deposit is refused until room stands;
-      every other write serves` — make room (The full volume,
-      step 2).
+      limit only at the next start. No setting of this build moves
+      the per-account limit, the venue total, the lease interval or
+      the per-file cap: the limits record that would is installed
+      through a channel this build does not carry (AUTH-4.70), so
+      every board runs at the figures this line names. Where the
+      free space stands below the floor, the second line goes on:
+      `…, below the floor in force {floor}: every deposit is refused
+      until room stands; every other write serves` — make room (The
+      full volume, step 2).
 
    10. The upload setting, `{source}` being `the default`, the flag
        as typed, or the variable with its value:
@@ -1042,7 +1059,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    the board, and the commit tells it from the one before:
 
    ```
-   open: version {version} ({commit}); this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001
+   open: version {version} ({commit}); this build reads journal format SKJ4, checkpoint format SKC4 and world format 0x534b505700000001; built with {features}
    ```
 
 3. **A journal of another format is refused by name**, newer or
@@ -1101,8 +1118,9 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    - a copy with the daemon stopped;
    - a live copy, in this order: first the journal, its
      `checkpoint.<n>` files and then its `seg-<n>.wal` files; then
-     the daemon's own files, `commits.log`, the four `feed-*.log`
-     index files and `feed-attest.log`; then `blobs/`, its
+     the daemon's own files, `commits.log`, the four index files
+     `feed-index.log`, `feed-offsets.log`, `feed-masked.log` and
+     `feed-streams.log`, and `feed-attest.log`; then `blobs/`, its
      designation directories (`blobs/blake3/`) first, then
      `blobs/uploads.log`, then `blobs/leases.log`. Once the
      journal's files are copied, check that no checkpoint landed

@@ -10,9 +10,10 @@
 //!   `kernel.lock`, nothing read, nothing written.
 //! * THE OPEN's THREE LINES, in order: `open: version {v} ({commit}); this
 //!   build reads journal format {SKJ4}, checkpoint format {SKC4} and world
-//!   format {0x…}` is the first line on stderr — the build's version and
-//!   commit as `skepd --version` names them, and the three format stamps,
-//!   each from its crate's constant — `open: data-dir
+//!   format {0x…}; built with {features}` is the first line on stderr — the
+//!   build's version and commit as `skepd --version` names them, the three
+//!   format stamps, each from its crate's constant, and the optional
+//!   features the binary was built with — `open: data-dir
 //!   {path}` the second, and `open: recovered from {checkpoint.n |
 //!   genesis} to position {head}, {k} commits replayed, in {d} ms` stands on
 //!   stderr before the serving line — `{head}` the position the board was
@@ -34,6 +35,8 @@
 //! * A COMMAND LINE THE BINARY CANNOT READ, on a stderr that is no
 //!   terminal, is one line naming the cause and `--help`, exit 2 — never the
 //!   usage text a unit restarting on failure would write at every attempt.
+//! * A misspelled `SKEPD_` variable stops the start the same way, its one
+//!   line naming the variable, before the data directory is touched.
 //! * THE OPEN's-REPORT `auth:` LINE (`operations.md` §1.1 m14): after the
 //!   bind and the warnings, `open: auth: {mode} (--local-trust {on|off},
 //!   {source}); configured origins {list | none}; signed origins {list}` on
@@ -542,7 +545,8 @@ fn a_held_port_refuses_in_milliseconds_with_the_bind_line_and_creates_no_directo
 /// own `CARGO_PKG_VERSION` and the commit `SKEP_GIT_SHA` named at build
 /// time, `unknown` where it named none, which the gate's build never does
 /// — nothing on stderr, exit 0; and it answers under a variable the
-/// daemon's own line refuses (`SKEPD_PORT` set to no port), consulting no
+/// daemon's own line refuses (`SKEPD_PORT` set to no port) and under
+/// `SKEPD_PORTS`, a name the daemon does not read, consulting no
 /// environment, so a release's check runs in whatever environment a person
 /// has.
 #[test]
@@ -554,9 +558,9 @@ fn the_version_line_is_one_line_on_stdout_under_any_environment() {
     );
     for refused_port in [None, Some("no port")] {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_skepd"));
-        cmd.arg("--version").env_remove("SKEPD_PORT");
+        cmd.arg("--version").env_remove("SKEPD_PORT").env_remove("SKEPD_PORTS");
         if let Some(value) = refused_port {
-            cmd.env("SKEPD_PORT", value);
+            cmd.env("SKEPD_PORT", value).env("SKEPD_PORTS", "8642");
         }
         let out = cmd.output().expect("run --version");
         assert_eq!(out.status.code(), Some(0), "exit 0 (SKEPD_PORT {refused_port:?}): {out:?}");
@@ -585,27 +589,82 @@ fn a_refused_command_line_off_a_terminal_is_one_line_naming_help() {
     assert!(out.stdout.is_empty(), "nothing on stdout: {:?}", String::from_utf8_lossy(&out.stdout));
 }
 
+/// Checks that a misspelled variable stops the start, touching nothing.
+///
+/// The real binary under `SKEPD_BLOCKED_PREFIX`, its last letter dropped,
+/// writes one line naming it beside the variables the daemon reads, exit 2,
+/// and creates nothing under the data directory (`operations.md` §2,
+/// validated at start), where it would otherwise start the board with no
+/// blocked-prefix list and say nothing. The child runs under the
+/// [`Spawned`] guard on an ephemeral port, so a binary that starts after
+/// all fails this claim at [`PATIENCE`] and is killed, never left serving.
+#[test]
+fn a_misspelled_variable_stops_the_start_before_the_directory_is_touched() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("board");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skepd"));
+    cmd.args(["--port", "0"])
+        .env_clear()
+        .env("SKEPD_DATA_DIR", &dir)
+        .env("SKEPD_BLOCKED_PREFIX", tmp.path().join("blocked.json"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = Spawned::launch(&mut cmd);
+    let status = child.wait_within(PATIENCE);
+    let mut stderr = String::new();
+    child.child.stderr.take().expect("piped").read_to_string(&mut stderr).expect("read stderr");
+    let mut stdout = String::new();
+    child.child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("read stdout");
+    assert_eq!(status.code(), Some(2), "a refused variable; stderr: {stderr:?}");
+    let line = stderr.strip_suffix('\n').unwrap_or(&stderr);
+    assert!(!line.contains('\n'), "one line on a stderr that is no terminal: {stderr:?}");
+    assert!(
+        line.starts_with(
+            "skepd: SKEPD_BLOCKED_PREFIX: the daemon reads no such variable — it reads "
+        ),
+        "the line names the variable: {line:?}"
+    );
+    assert!(
+        line.contains(" SKEPD_BLOCKED_PREFIXES,") && line.ends_with("; skepd --help prints the usage"),
+        "…beside the names the daemon reads, the list's own among them: {line:?}"
+    );
+    assert!(stdout.is_empty(), "nothing on stdout: {stdout:?}");
+    assert!(!dir.exists(), "nothing created under the data directory");
+}
+
 /// §3.4 STEP 6's GAP, CLOSED — THE VERSION LINE FIRST: the child's FIRST
 /// stderr line is `open: version {v} ({commit}); this build reads journal
-/// format {SKJ4}, checkpoint format {SKC4} and world format {0x…}` — `{v}`
-/// this build's `CARGO_PKG_VERSION` and `{commit}` its `SKEP_GIT_SHA`, the
-/// two exactly as `skepd --version` names them, and the three stamps spelled
-/// FROM THE CRATES' CONSTANTS, the kernel's two as text and the engine's as
-/// its refusal renders it — `open: data-dir {path}` the second, and `open:
+/// format {SKJ4}, checkpoint format {SKC4} and world format {0x…}; built
+/// with {features}` — `{v}` this build's `CARGO_PKG_VERSION` and `{commit}`
+/// its `SKEP_GIT_SHA`, the two exactly as `skepd --version` names them, the
+/// three stamps spelled FROM THE CRATES' CONSTANTS, the kernel's two as text
+/// and the engine's as its refusal renders it, and `{features}` the optional
+/// features the binary under test was built with: `observe` and `client` as
+/// this build's cfgs say, and `test-hooks`, which every test build compiles
+/// the binary with — `open: data-dir {path}` the second, and `open:
 /// recovered from …` after both; the same three, in the same order, on the
 /// board's reopen. Each child killed by the test.
 #[test]
 fn the_open_says_its_version_and_the_formats_it_reads_first_then_its_directory() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("data");
+    let features: Vec<&str> = [
+        ("observe", cfg!(feature = "observe")),
+        ("client", cfg!(feature = "client")),
+        ("test-hooks", true),
+    ]
+    .into_iter()
+    .filter_map(|(feature, on)| on.then_some(feature))
+    .collect();
     let expected = format!(
         "version {} ({}); this build reads journal format {}, checkpoint format {} and world \
-         format {:#018x}",
+         format {:#018x}; built with {}",
         env!("CARGO_PKG_VERSION"),
         option_env!("SKEP_GIT_SHA").unwrap_or("unknown"),
         skep_kernel::JOURNAL_FORMAT.escape_ascii(),
         skep_kernel::CHECKPOINT_FORMAT.escape_ascii(),
-        skep_engine::WORLD_FORMAT
+        skep_engine::WORLD_FORMAT,
+        features.join(", ")
     );
     let version = Command::new(env!("CARGO_BIN_EXE_skepd")).arg("--version").output();
     let version = String::from_utf8_lossy(&version.expect("run --version").stdout).to_string();

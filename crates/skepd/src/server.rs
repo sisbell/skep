@@ -2644,22 +2644,27 @@ impl fmt::Display for Base {
 /// The gap reads "no line names the binary's version or the formats it
 /// reads at start; the stamp is said only on refusal". The line is
 /// `version {v} ({commit}); this build reads journal format {SKJ4},
-/// checkpoint format {SKC4} and world format {0x…}` — the build's version
-/// and commit as `skepd --version` names them (`CARGO_PKG_VERSION`, the
-/// workspace's one, which every build between two releases shares, and the
-/// commit the build named through `SKEP_GIT_SHA`, `unknown` where it named
-/// none), and the three format stamps this build opens under, each from its
-/// constant and never a literal here: the kernel's journal and checkpoint
-/// stamps ([`JOURNAL_FORMAT`], [`CHECKPOINT_FORMAT`]) as the kernel's own
-/// refusal spells a stamp, four ASCII bytes, and the engine's World stamp
-/// ([`WORLD_FORMAT`]) as the engine's refusal renders it, `{:#018x}`. Said
-/// before [`DataDirLine`] and so before anything is read from the
-/// directory: an open refused at a stamp has, above its refusal, the line
-/// that says which stamps this build reads, and an operator reading a
-/// board's stream after an upgrade reads which binary opened it, its commit
-/// telling two builds of one version apart. A pure value the unit suite
-/// pins by `to_string()`; emitted under `Class::Open` through
-/// [`say_open_line`].
+/// checkpoint format {SKC4} and world format {0x…}; built with {features}`
+/// — the build's version and commit as `skepd --version` names them
+/// (`CARGO_PKG_VERSION`, the workspace's one, which every build between two
+/// releases shares, and the commit the build named through `SKEP_GIT_SHA`,
+/// `unknown` where it named none), the three format stamps this build opens
+/// under, each from its constant and never a literal here — the kernel's
+/// journal and checkpoint stamps ([`JOURNAL_FORMAT`], [`CHECKPOINT_FORMAT`])
+/// as the kernel's own refusal spells a stamp, four ASCII bytes, and the
+/// engine's World stamp ([`WORLD_FORMAT`]) as the engine's refusal renders
+/// it, `{:#018x}` — and the optional features it was built with
+/// ([`built_with`]). A build's routes are its features': `observe` serves
+/// `GET /dump` to every guest, which the hosted image is built without
+/// (`operations.md` §3.9 item 8), and the configuration register leaves
+/// features to whoever builds (its §4), so this clause is where a running
+/// board says which build serves it. Said before [`DataDirLine`] and so
+/// before anything is read from the directory: an open refused at a stamp
+/// has, above its refusal, the line that says which stamps this build
+/// reads, and an operator reading a board's stream after an upgrade reads
+/// which binary opened it, its commit telling two builds of one version
+/// apart. A pure value the unit suite pins by `to_string()`; emitted under
+/// `Class::Open` through [`say_open_line`].
 struct VersionLine;
 
 impl fmt::Display for VersionLine {
@@ -2667,13 +2672,36 @@ impl fmt::Display for VersionLine {
         write!(
             f,
             "version {} ({}); this build reads journal format {}, checkpoint format {} and world \
-             format {:#018x}",
+             format {:#018x}; built with {}",
             env!("CARGO_PKG_VERSION"),
             option_env!("SKEP_GIT_SHA").unwrap_or("unknown"),
             JOURNAL_FORMAT.escape_ascii(),
             CHECKPOINT_FORMAT.escape_ascii(),
-            WORLD_FORMAT
+            WORLD_FORMAT,
+            built_with()
         )
+    }
+}
+
+/// Returns the optional features this binary was built with, as words.
+///
+/// They are `observe` (the `GET /dump` route), `client` (the guest reader
+/// at `GET /`) and `test-hooks` (the test seams, which a binary you run
+/// never carries), in `Cargo.toml`'s order and joined by `, `, or `no
+/// optional feature` where the build carries none — the hosted image's.
+fn built_with() -> String {
+    let built: Vec<&str> = [
+        (cfg!(feature = "observe"), "observe"),
+        (cfg!(feature = "client"), "client"),
+        (cfg!(feature = "test-hooks"), "test-hooks"),
+    ]
+    .into_iter()
+    .filter_map(|(on, feature)| on.then_some(feature))
+    .collect();
+    if built.is_empty() {
+        "no optional feature".to_string()
+    } else {
+        built.join(", ")
     }
 }
 

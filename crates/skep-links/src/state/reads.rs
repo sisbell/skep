@@ -1,8 +1,9 @@
-//! §E/§F/§G — the pure read surface on [`LinkState`]: raw reads (READLINK /
-//! FOLLOWLINK), the typed-relation observers (Observe + the default
-//! predicates + BH1–BH4), ASN-0125 currency, and the discovery primitives
-//! for M8 (`stab` / `match_links` / `type_slice`). All `&self` over any M2
-//! `Snapshot`; nothing here writes.
+//! The pure read surface on [`LinkState`] (§E/§F/§G).
+//!
+//! It holds the raw reads (READLINK / FOLLOWLINK), the typed-relation
+//! observers (Observe + the default predicates + BH1–BH4), ASN-0125
+//! currency, and the discovery primitives for M8 (`stab` / `match_links` /
+//! `type_slice`). All `&self` over any M2 `Snapshot`; nothing here writes.
 
 use im::OrdSet;
 use skep_address::{
@@ -16,20 +17,26 @@ use crate::endset::{Endset, Link};
 use crate::error::{Invalid, NotBh4};
 use crate::registry::{registry, Behavior, ShippedType};
 
-/// Read view (ASN-0128). `Default` (active ∖ filtered) is meaningful only on
+/// A read view (ASN-0128).
+///
+/// `Default` (active ∖ filtered) is meaningful only on
 /// `members`/`targets_of`; on `observe` and the §G index primitives it reads
 /// as `Active` (result-side BH1 filtering is undefined for a raw index
 /// probe).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
+    /// Every resident link, nullified or not.
     Audit,
+    /// The audit view less every nullified link.
     Active,
+    /// Active less filtered results, on `members`/`targets_of`.
     Default,
 }
 
-/// `View::Default` — the std name for the variant this module already calls
-/// the default view (not derived: `Audit` is declared first, and declaration
-/// order here is the design's).
+/// The std default is `View::Default`, the module's own default view.
+///
+/// Written by hand rather than derived; declaration order here is the
+/// design's, `Audit` first.
 impl Default for View {
     fn default() -> View {
         View::Default
@@ -39,50 +46,64 @@ impl Default for View {
 /// One observed typed-relation tuple — endsets are M7's readable [`Endset`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tuple {
+    /// The tuple's own address.
     pub addr: Address,
+    /// Its `FROM` endset, as stored.
     pub from: Endset,
+    /// Its `TO` endset, as stored.
     pub to: Endset,
 }
 
-/// ASN-0086's pattern pair for [`LinkState::observe`] — the F-side and G-side
-/// probes, named so the two same-typed tumbler slices cannot trade places at
-/// a call. Each side is an AND of coverage probes; an empty side is no
-/// constraint, so `Default` is the unconstrained pattern `(⟨⟩, ⟨⟩)` matching
-/// the whole typed slice.
+/// ASN-0086's pattern pair for [`LinkState::observe`].
+///
+/// They are the F-side and G-side probes, named so the two same-typed
+/// tumbler slices cannot trade places at a call. Each side is an AND of
+/// coverage probes; an empty side is no constraint, so `Default` is the
+/// unconstrained pattern `(⟨⟩, ⟨⟩)` matching the whole typed slice.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pattern<'a> {
-    /// Tumblers every match's F must COVER.
+    /// Tumblers every match's F must cover.
     pub from: &'a [Tumbler],
-    /// Tumblers every match's G must COVER.
+    /// Tumblers every match's G must cover.
     pub to: &'a [Tumbler],
 }
 
-/// BH2 head: `Sink` at a successor-free node, `Indeterminate` (⊥) at a
-/// branch or cycle.
+/// The BH2 head: what a supersession walk halts at.
+///
+/// `Sink` at a successor-free node, `Indeterminate` (⊥) at a branch or cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tip {
+    /// The walk halted at this successor-free node.
     Sink(Address),
+    /// ⊥ — a branch or a cycle, or a `ty` the walk does not serve.
     Indeterminate,
 }
 
-/// EL14 disclosure-not-decision: the operative sink, its OWN activity (a
-/// member can be a current sink yet itself nullified — EL14e), and `claims` =
-/// the FULL operative `out(sink)` — every operative `[K_sup]` claim whose
-/// `new` endpoint is this sink, including one asserted from outside
-/// `reach_o(y)`. Homes recoverable by M1's `document_of` (EL8b). The reader
-/// applies narrowing; M7 decides nothing.
+/// One current member (EL14 disclosure-not-decision): an operative sink.
+///
+/// It carries the sink, its own activity (a member can be a current sink yet
+/// itself nullified — EL14e), and `claims` = the full operative `out(sink)` —
+/// every operative `[K_sup]` claim whose `new` endpoint is this sink,
+/// including one asserted from outside `reach_o(y)`. Homes recoverable by
+/// M1's `document_of` (EL8b). The reader applies narrowing; M7 decides
+/// nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentMember {
+    /// The operative sink.
     pub member: Address,
+    /// Whether the sink is itself active.
     pub active: bool,
+    /// Every operative claim naming the sink as `new`, by claim address.
     pub claims: Vec<Address>,
 }
 
-/// Overlap for the spanfilade (§6): `ProperOverlap | Containment | Equal` —
-/// NOT `Adjacent` (abutting spans share no tumbler; matching them would
-/// false-positive every link whose slot coverage merely abuts the query) and
-/// never M1's `intersect` (which faults on the mixed-length endpoints M5's
-/// resolve runs routinely produce).
+/// Returns whether two spans overlap, as the spanfilade counts it (§6).
+///
+/// Overlap is `ProperOverlap | Containment | Equal` — not `Adjacent`
+/// (abutting spans share no tumbler; matching them would false-positive every
+/// link whose slot coverage merely abuts the query) and never M1's
+/// `intersect` (which faults on the mixed-length endpoints M5's resolve runs
+/// routinely produce).
 fn overlaps(a: &Span, b: &Span) -> bool {
     matches!(
         classify_spans(a, b),
@@ -90,30 +111,39 @@ fn overlaps(a: &Span, b: &Span) -> bool {
     )
 }
 
-/// The spanfilade's per-link predicate: `link`'s coverage at `slot` overlaps
-/// `query`. Absent slot ⇒ no match. The ONE statement of the test, so
-/// [`LinkState::stab`] and every later conjunct of
+/// Returns whether `link`'s coverage at `slot` overlaps `query`.
+///
+/// It is the spanfilade's per-link predicate. Absent slot ⇒ no match. The one
+/// statement of the test, so [`LinkState::stab`] and every later conjunct of
 /// [`LinkState::match_links`] cannot answer differently.
 fn slot_overlaps(link: &Link, slot: usize, query: &Endset) -> bool {
     link.slot(slot)
         .is_some_and(|endset| query.spans().any(|q| endset.spans().any(|s| overlaps(q, s))))
 }
 
-/// `Tumbler → Address` lift of a DENOTED address, T4-valid on either of two
-/// grounds. A tumbler read back out of a stored slot rests on the slot's
-/// construction: every slot a deposit path builds comes from [`enc`], whose
-/// spans start at an `Address`'s tumbler, or from M5's `Run::iextent`, whose
-/// start is the run's `i_start` `Address`. A tumbler the walk family hands
-/// back may instead be the CALLER'S OWN ARGUMENT — `chain` seeds its path
-/// with it, `tip` reports a successor-free node as its own sink, and
-/// `current` reaches `y` when nothing supersedes it — and there the ground is
-/// stronger still: the caller held an `Address`. Named apart from the store's
-/// own [`lift`] so the two families of obligation can be audited separately.
+/// Lifts a denoted address from `Tumbler` to `Address`.
 ///
-/// CONSUMES its argument: a denoted address is read out of a slot into a set
+/// Named apart from the store's own [`lift`] so the two families of
+/// obligation can be audited separately.
+///
+/// Consumes its argument: a denoted address is read out of a slot into a set
 /// or a path the read owns and is about to drop, so the caller hands it over
-/// rather than making `validate` copy a `Vec<Nat>` per component. The one
-/// caller still holding a borrow clones at its own site.
+/// rather than making `validate` copy its `Vec<Nat>` and every component in
+/// it. The one caller still holding a borrow clones at its own site.
+///
+/// # Panics
+///
+/// Panics if `t` is not T4-valid, which a denoted address is on either of
+/// two grounds. A tumbler read back out of a stored slot rests on the slot's
+/// construction: every slot a deposit path builds comes from
+/// [`enc`](crate::enc), whose spans start at an `Address`'s tumbler, or from
+/// M5's `Run::iextent`, whose start is the run's `i_start` `Address`; an
+/// `editlink` successor's slots are its caller's to build, and M10 builds
+/// them the same way. A tumbler the walk family hands back may instead be
+/// the caller's own argument — `chain` seeds its path with it, `tip` reports
+/// a successor-free node as its own sink, and `current` reaches `y` when
+/// nothing supersedes it — and there the ground is stronger still: the
+/// caller held an `Address`.
 fn lift_denoted(t: Tumbler) -> Address {
     validate(t).expect(
         "a denoted address is T4-valid: it is either a slot start (enc or a Run's iextent) \
@@ -121,10 +151,12 @@ fn lift_denoted(t: Tumbler) -> Address {
     )
 }
 
-/// BH1's test against a root set: PREFIX-CLOSURE over the roots — some root
-/// is a prefix of the probe. The ONE statement of it, so the single-probe read
-/// and the result-side subtraction cannot answer differently. The probe ranges
-/// over all of carrier T, roots or not.
+/// Returns whether some root is a prefix of the probe — BH1's test.
+///
+/// It is that test against a root set: prefix-closure over the roots. The
+/// one statement of it, so the single-probe read and the result-side
+/// subtraction cannot answer differently. The probe ranges over all of
+/// carrier T, roots or not.
 ///
 /// On roots denoted out of an `enc`-built endset this reproduces exactly that
 /// endset's coverage, which is why the prefix form and a whole-endset `covers`
@@ -133,7 +165,7 @@ fn under_any<'a>(roots: impl IntoIterator<Item = &'a Tumbler>, probe: &Tumbler) 
     roots.into_iter().any(|root| is_prefix(root, probe))
 }
 
-/// `Default → Active` for the surfaces where `Default` is undefined.
+/// Maps `Default` to `Active`, for the surfaces where `Default` is undefined.
 fn default_to_active(view: View) -> View {
     match view {
         View::Default => View::Active,
@@ -144,10 +176,12 @@ fn default_to_active(view: View) -> View {
 impl LinkState {
     // ───────────────────────── §E — raw reads ─────────────────────────
 
-    /// READLINK (ASN-0111): `Σ.L(a)` verbatim (readable endsets), or `None`
-    /// (= ⊥) on absence. Total; recorded, never resolved; never dereferences
-    /// covered links (RL4/RL6). The persistent map is already the positive
-    /// cache (immutability ⇒ never stale).
+    /// READLINK (ASN-0111): returns `Σ.L(a)` verbatim, or `None` (= ⊥).
+    ///
+    /// The endsets come back readable, and `None` means absence. Total;
+    /// recorded, never resolved; never dereferences covered links (RL4/RL6).
+    /// The persistent map is already the positive cache (immutability ⇒ never
+    /// stale).
     ///
     /// Borrows out of the snapshot, `get`-shaped, so a caller that only tests
     /// residence or reads one slot pays nothing and a caller that keeps the
@@ -158,11 +192,16 @@ impl LinkState {
         self.links.get(a.tumbler())
     }
 
-    /// FOLLOWLINK (ASN-0114): the recorded slot's coverage as a `SpanSet`
-    /// (the verbatim endset folded — F1/F3 by construction). `Ok(spans)`
-    /// coverage-exact to `slot`; `Ok(SpanSet::empty())` = ⟨⟩
-    /// (valid-but-empty success); `Err(Invalid)` = ⊥ (link or slot absent).
-    /// The Result/Ok-empty shape makes ⟨⟩ ≠ ⊥ unforgeable (F7).
+    /// FOLLOWLINK (ASN-0114): returns the recorded slot's coverage.
+    ///
+    /// The coverage comes as a `SpanSet` (the verbatim endset folded — F1/F3
+    /// by construction). `Ok(spans)` coverage-exact to `slot`;
+    /// `Ok(SpanSet::empty())` = ⟨⟩ (valid-but-empty success). The
+    /// Result/Ok-empty shape makes ⟨⟩ ≠ ⊥ unforgeable (F7).
+    ///
+    /// # Errors
+    ///
+    /// `Err(Invalid)` = ⊥ (link or slot absent).
     pub fn followlink(&self, a: &Address, slot: usize) -> Result<SpanSet, Invalid> {
         let link = self.links.get(a.tumbler()).ok_or(Invalid)?;
         let endset = link.slot(slot).ok_or(Invalid)?;
@@ -171,17 +210,21 @@ impl LinkState {
 
     // ─────────────── §F — typed reads & the PL surface ────────────────
 
-    /// Observe (ASN-0086): exact ⊆-coverage match over the `view` typed slice
-    /// — every [`Pattern`] tumbler COVERED by the tuple's F (resp. G); an
-    /// empty pattern side is no constraint. The pattern domain is ALL of
-    /// carrier T (ASN-0086): membership rides [`Endset::covers`], total on T,
-    /// so ghost (unallocated) addresses and the non-T4 tumblers inside a
-    /// non-unit span's coverage are honest probes. `Default → Active` (raw
-    /// Observe never filters — ASN-0128). Matches come back in ASCENDING
-    /// TUPLE-ADDRESS order, the typed slice's own.
+    /// Observe (ASN-0086): returns the typed slice's tuples `pattern` matches.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// The match is exact ⊆-coverage over the `view` typed slice — every
+    /// [`Pattern`] tumbler covered by the tuple's F (resp. G); an empty
+    /// pattern side is no constraint. The pattern domain is all of carrier T
+    /// (ASN-0086): membership rides [`Endset::covers`], total on T, so ghost
+    /// (unallocated) addresses and the non-T4 tumblers inside a non-unit
+    /// span's coverage are honest probes. `Default → Active` (raw Observe
+    /// never filters — ASN-0128). Matches come back in ascending
+    /// tuple-address order, the typed slice's own.
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn observe(&self, ty: &Endset, pattern: Pattern<'_>, view: View) -> Vec<Tuple> {
@@ -201,13 +244,17 @@ impl LinkState {
         out
     }
 
-    /// D2: exact ACTIVE coverage-membership — some active type-`ty` tuple's
-    /// F COVERS the probe, which ranges over all of carrier T (`observe`'s
-    /// pattern domain). Never a `stab` overlap call (an ancestor pattern
-    /// would over-match) and never BH1-filtered (BH1 Rewrite scope).
+    /// Returns whether some active type-`ty` tuple's F covers the probe.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// This is ASN-0128 D2: exact active coverage-membership, the probe
+    /// ranging over all of carrier T (`observe`'s pattern domain). Never a
+    /// `stab` overlap call (an ancestor pattern would over-match) and never
+    /// BH1-filtered (BH1 Rewrite scope).
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn is_k(&self, ty: &Endset, probe: &Tumbler) -> bool {
@@ -216,14 +263,18 @@ impl LinkState {
             .any(|(_, link)| link.from_slot().covers(probe))
     }
 
-    /// D1: the denoted member set (F.addrs() over the slice), deduplicated,
-    /// in Tumbler order. Alone with [`LinkState::targets_of`] honors
+    /// Returns the denoted member set of the `view` typed slice.
+    ///
+    /// This is ASN-0128 D1: `F.addrs()` over the slice, deduplicated, in
+    /// Tumbler order. Alone with [`LinkState::targets_of`] it honors
     /// `View::Default` = active ∖ filtered — result-side, lazily, honoring
-    /// the `J ≠ K'` exclusion (no self-subtraction when `ty` IS the shipped
+    /// the `J ≠ K'` exclusion (no self-subtraction when `ty` is the shipped
     /// Retired class).
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
@@ -235,14 +286,18 @@ impl LinkState {
         self.subtract_filtered(&class, view, members)
     }
 
-    /// D3: the denoted targets (G.addrs()) of tuples whose F COVERS `x`,
-    /// deduplicated, in Tumbler order; `View::Default` subtracts filtered
-    /// results (with the `J ≠ K'` exclusion, as `members`). The source
-    /// argument is matched by COVERAGE here; [`LinkState::target_of`] and the
-    /// walk family match a source vertex by DENOTATION instead.
+    /// Returns the denoted targets of the tuples whose F covers `x`.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// This is ASN-0128 D3: `G.addrs()`, deduplicated, in Tumbler order;
+    /// `View::Default` subtracts filtered results (with the `J ≠ K'`
+    /// exclusion, as `members`). The source argument is matched by coverage
+    /// here; [`LinkState::target_of`] and the walk family match a source
+    /// vertex by denotation instead.
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
@@ -255,52 +310,58 @@ impl LinkState {
         self.subtract_filtered(&class, view, targets)
     }
 
-    /// Tuple status by address: resident and not nullified.
+    /// Returns whether the tuple at `a` is active: resident and not nullified.
     pub fn is_active(&self, a: &Address) -> bool {
         self.resident(a.tumbler()) && !self.nullified(a.tumbler())
     }
 
-    /// Tuple status by address: a resident retraction root (the tombstone
-    /// set; monotone — R3/R6a). EXACT membership: `a` is nullified iff `a`
-    /// itself is a retraction root, so nullifying a document or an account
-    /// address tombstones that address alone and no link beneath it. The
-    /// module's other suppression mechanism reads the opposite way —
-    /// [`LinkState::is_filtered`] is prefix-closed over BH1's retired roots
-    /// — so the two are not interchangeable at a probe.
+    /// Returns whether `a` is a resident retraction root — the tombstone set.
+    ///
+    /// The tombstone set is monotone (R3/R6a). Exact membership: `a` is
+    /// nullified iff `a` itself is a retraction root, so nullifying a
+    /// document or an account address tombstones that address alone and no
+    /// link beneath it. The module's other suppression mechanism reads the
+    /// opposite way — [`LinkState::is_filtered`] is prefix-closed over BH1's
+    /// retired roots — so the two are not interchangeable at a probe.
     pub fn is_nullified(&self, a: &Address) -> bool {
         self.nullified(a.tumbler())
     }
 
-    /// BH1 read-filter (§7): `∃ x ∈ addrs(F) : x ≼ probe` over the active
-    /// shipped `Retired` slice — some address a retired tuple's F DENOTES is
-    /// a prefix of the probe, computed lazily (the filtered subtree is never
+    /// Returns whether the probe falls under BH1's read-filter (§7).
+    ///
+    /// The filter is `∃ x ∈ addrs(F) : x ≼ probe` over the active shipped
+    /// `Retired` slice — some address a retired tuple's F denotes is a prefix
+    /// of the probe, computed lazily (the filtered subtree is never
     /// materialized). The probe ranges over all of carrier T: every tumbler
     /// under a denoted retired root is filtered, addresses or not.
     ///
     /// Equal to [`Endset::covers`] on an address-denoting F — a unit-depth
-    /// span's coverage IS its start's prefix set — hence on every `Retired`
-    /// tuple `emit` can build, `emit` forcing `enc({from})`. STRICTLY NARROWER
+    /// span's coverage is its start's prefix set — hence on every `Retired`
+    /// tuple `emit` can build, `emit` forcing `enc({from})`. Strictly narrower
     /// on an F carrying a non-unit-depth span, which the open surface can
     /// deposit and which denotes nothing: such a span contributes no root and
-    /// filters nothing, where its coverage is non-empty. NOT
+    /// filters nothing, where its coverage is non-empty. Not
     /// [`LinkState::is_k`]'s regime, which is `covers` outright.
     ///
-    /// Correct TYPE-LESS because exactly one BH1 type is registered — the
+    /// Correct type-less because exactly one BH1 type is registered — the
     /// registry's population is the compiled shipped table and `Retired` is
     /// its one `ReadFilter` (§B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
         under_any(self.retired_roots(), probe)
     }
 
-    /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
-    /// filtered to claims ∉ nullified — deduplicated, Tumbler order. v1
-    /// serves the walk family ONLY for the shipped `Supersedes` class (the
-    /// registry's population is the compiled shipped table, so no second BH2
-    /// declaration exists — §B); any other REGISTERED `ty` yields the empty
-    /// vec (the service-scope guard).
+    /// Returns the operative successors of `x` — BH2's forward step (§5).
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — the walk-scope test classifies it, so a
+    /// They are `sup_fwd[x]` filtered to claims ∉ nullified — deduplicated,
+    /// Tumbler order. v1 serves the walk family only for the shipped
+    /// `Supersedes` class (the registry's population is the compiled shipped
+    /// table, so no second BH2 declaration exists — §B); any other registered
+    /// `ty` yields the empty vec (the service-scope guard).
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. The walk-scope test classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality) rather than reading as out-of-scope.
     pub fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
@@ -313,14 +374,17 @@ impl LinkState {
             .collect()
     }
 
-    /// BH2 chain: the bounded iterative walk over operative successors from
-    /// `x` (inclusive), halting at sink (no successor), branch (≥ 2), or
-    /// cycle (revisit) — the finite link set is the termination bound. Empty
-    /// for a registered `ty` other than `Supersedes` (v1 serving scope, as
-    /// `succs`).
+    /// Returns the BH2 chain: the walk over operative successors from `x`.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — the walk-scope test classifies it, so a
+    /// The walk is bounded and iterative, from `x` (inclusive), halting at
+    /// sink (no successor), branch (≥ 2), or cycle (revisit) — the finite
+    /// link set is the termination bound. Empty for a registered `ty` other
+    /// than `Supersedes` (v1 serving scope, as `succs`).
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. The walk-scope test classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality) rather than reading as out-of-scope.
     pub fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
@@ -331,22 +395,32 @@ impl LinkState {
         path.into_iter().map(lift_denoted).collect()
     }
 
-    /// BH2 chain membership: `target ∈ chain(ty, addr)` — membership in the
-    /// walk's result list, never a coverage test. Inherits `chain`'s halting
-    /// rule (branch/cycle truncate the path), its v1 serving scope — a
-    /// registered `ty` other than `Supersedes` has an empty chain, so nothing
-    /// is a member — and its `ty` precondition.
+    /// Returns whether `target` is in `chain(ty, addr)` — BH2 chain membership.
+    ///
+    /// Membership in the walk's result list, never a coverage test. Inherits
+    /// `chain`'s halting rule (branch/cycle truncate the path) and its v1
+    /// serving scope — a registered `ty` other than `Supersedes` has an empty
+    /// chain, so nothing is a member.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`LinkState::chain`] does: it inherits `chain`'s `ty`
+    /// precondition.
     pub fn is_in_chain(&self, ty: &Endset, addr: &Address, target: &Address) -> bool {
         self.chain(ty, addr).contains(target)
     }
 
-    /// BH2 head: `Sink(head)` when the walk halts at a successor-free node;
+    /// Returns the BH2 head of the walk from `x`.
+    ///
+    /// `Sink(head)` when the walk halts at a successor-free node;
     /// `Indeterminate` (⊥) at a branch or cycle — and for a registered `ty`
     /// other than `Supersedes` (v1 serving scope: no positive head is
     /// fabricated).
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — the walk-scope test classifies it, so a
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. The walk-scope test classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality) rather than reading as out-of-scope.
     pub fn tip(&self, ty: &Endset, x: &Address) -> Tip {
@@ -359,17 +433,21 @@ impl LinkState {
         }
     }
 
-    /// BH3 reverse (§7): sources of active type-`ty` tuples whose G COVERS
-    /// `target` (AM's reverse-lookup rule — the one member of the family
-    /// matched by coverage rather than denotation), collecting each match's
-    /// F.addrs() — deduplicated, in Tumbler order, as `members`/`targets_of`.
-    /// The active typed slice is the domain and `covers` is the whole test —
-    /// the store-wide span scan [`LinkState::stab`] performs would read every
-    /// link in the docuverse to narrow a set that is a hint lookup away and
-    /// already a subset of what it scanned.
+    /// Returns the sources of active type-`ty` tuples whose G covers `target`.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// This is BH3's reverse (§7), AM's reverse-lookup rule — the one member
+    /// of the family matched by coverage rather than denotation — collecting
+    /// each match's `F.addrs()`, deduplicated, in Tumbler order, as
+    /// `members`/`targets_of`. The active typed slice is the domain and
+    /// `covers` is the whole test — the store-wide span scan
+    /// [`LinkState::stab`] performs would read every link in the docuverse to
+    /// narrow a set that is a hint lookup away and already a subset of what it
+    /// scanned.
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
@@ -382,23 +460,28 @@ impl LinkState {
         sources.into_iter().map(lift_denoted).collect()
     }
 
-    /// BH3 forward projection (§7): ⊥ unless EXACTLY ONE active type-`ty`
-    /// tuple denotes `source` in F (denotation match — `source ∈ F.addrs()`,
-    /// AM's source-vertex rule) with a single-address-denoting G; returns
-    /// that single target. Restricting to the ACTIVE typed slice is what
-    /// makes "exactly one active K-tuple" exact.
+    /// Returns the single target of `source` — BH3's forward projection (§7).
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// It is ⊥ unless exactly one active type-`ty` tuple denotes `source` in F
+    /// (denotation match — `source ∈ F.addrs()`, AM's source-vertex rule) with
+    /// a single-address-denoting G, whose one address it returns. Restricting
+    /// to the active typed slice is what makes "exactly one active K-tuple"
+    /// exact.
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
         self.target_of_class(&coverage_class(ty), source)
     }
 
-    /// BH3 join (§7): [`LinkState::target_of`] across every class the
-    /// registry's
-    /// [`TypeRegistry::reverse_lookup_classes`](crate::TypeRegistry::reverse_lookup_classes)
+    /// Returns [`LinkState::target_of`] across the BH3 join's classes (§7).
+    ///
+    /// Those classes are the ones the registry's
+    /// [`reverse_lookup_classes`](crate::TypeRegistry::reverse_lookup_classes)
     /// names — the registered Binary classes declaring BH3 — each answered
     /// over its own active typed slice and keyed by its class. Which classes
     /// those are is the registry's rule, read here rather than restated; in
@@ -413,17 +496,24 @@ impl LinkState {
         out
     }
 
-    /// BH4 age (§7): `f_d^Σ − ordinal(a)` at `a`'s own home, for a resident
-    /// link, else `None` — a raw distance back along the home's ALLOCATION
-    /// chain (`chain_d`, ordinal time, no clock — never BH2's supersession
-    /// chain), meaningful as staleness only for an idem⊥ BH4 type (under
-    /// idem⊤ a renewal dedups to the incumbent and age never resets — which
-    /// is exactly why R-C0 forces BH4 ⇒ idem⊥).
+    /// Returns BH4 age (§7): `f_d^Σ − ordinal(a)` at `a`'s own home.
     ///
-    /// `None` means NON-RESIDENCE and nothing else — an exactness M9 already
-    /// builds on. The home and the ordinal are facts about a key of `links`
-    /// that this module has already committed to elsewhere, so each
-    /// fail-stops rather than answering `None` and reading as absence.
+    /// It answers for a resident link, else `None` — a raw distance back along
+    /// the home's allocation chain (`chain_d`, ordinal time, no clock — never
+    /// BH2's supersession chain), meaningful as staleness only for an idem⊥
+    /// BH4 type (under idem⊤ a renewal dedups to the incumbent and age never
+    /// resets — which is exactly why R-C0 forces BH4 ⇒ idem⊥).
+    ///
+    /// `None` means non-residence and nothing else — an exactness M9 already
+    /// builds on.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resident key has no home, if its ordinal is outside
+    /// `u64`, or if the ordinal is past its home's frontier. The home and the
+    /// ordinal are facts about a key of `links` that this module has already
+    /// committed to elsewhere, so each fail-stops rather than answering `None`
+    /// and reading as absence.
     pub fn age(&self, a: &Address) -> Option<u64> {
         if !self.resident(a.tumbler()) {
             return None;
@@ -440,7 +530,7 @@ impl LinkState {
         // The subtraction cannot underflow for the same reason it is exact:
         // the mint allocates at `1 + f_d^Σ` and the fold that indexes the
         // deposit increments that same frontier, in one transaction, so a
-        // resident link's ordinal runs `1..f` and the newest link's IS `f`.
+        // resident link's ordinal runs `1..=f` and the newest link's is `f`.
         // An ordinal past the frontier is corruption, and fail-stops here
         // rather than reporting 0 — which means "deposited just now", the one
         // wrong answer `stale` would propagate as freshness.
@@ -452,25 +542,33 @@ impl LinkState {
         ))
     }
 
-    /// BH4 stale set (§7): active type-`ty` tuples older than `horizon`, in
-    /// ASCENDING ADDRESS ORDER — the active typed slice's own order — served
-    /// only where declared: `Err(NotBh4)` unless the in-contract `ty` is
-    /// registered with BH4 (Age). The typed rejection keeps `Ok(vec![])` a
-    /// truthful freshness answer (never conflated with "not a BH4 type") and
-    /// IS the fence: `retract_stale` builds its batch from this call, so a
-    /// refusal here is the batch's refusal, and the nullifier can never be
-    /// aimed at an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims).
+    /// Returns the active type-`ty` tuples older than `horizon` (BH4, §7).
     ///
-    /// The ORDER is load-bearing, not incidental: `retract_stale` issues one
+    /// This is the stale set, in ascending address order — the active typed
+    /// slice's own order — served only where declared. The typed rejection
+    /// keeps `Ok(vec![])` a truthful freshness answer (never conflated with
+    /// "not a BH4 type") and is the fence: `retract_stale` builds its batch
+    /// from this call, so a refusal here is the batch's refusal, and the
+    /// nullifier can never be aimed at an idem⊤ class (e.g. mass-nullifying
+    /// old `[K_sup]` claims).
+    ///
+    /// The order is load-bearing, not incidental: `retract_stale` issues one
     /// `nullify` per element in it, and its published guarantee that a batch
     /// halted by a foreign-owned tuple halts at the same point on every
     /// re-run is exactly this determinism.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it BEFORE the BH4
-    /// lookup, so a hand-built non-level-uniform `ty` panics naming that
+    /// # Errors
+    ///
+    /// `Err(NotBh4)` unless the in-contract `ty` is registered with BH4 (Age).
+    ///
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it before the
+    /// BH4 lookup, so a hand-built non-level-uniform `ty` panics naming that
     /// precondition (§Core data model totality) rather than reaching the
-    /// typed refusal.
+    /// typed refusal. It also fail-stops where [`LinkState::age`] does, and on
+    /// a typed-slice key that names no resident link.
     pub fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
         if !registry().declares(&class, Behavior::Age) {
@@ -481,7 +579,7 @@ impl LinkState {
             .filter_map(|t| {
                 let a = lift(t);
                 // A typed-slice key is a key of `links`, so `age` is `Some`.
-                // `None` there means NON-RESIDENCE and nothing else, which for
+                // `None` there means non-residence and nothing else, which for
                 // an index key is corruption — fail-stop rather than read it
                 // as freshness and silently shrink the batch `retract_stale`
                 // builds from this list.
@@ -494,24 +592,26 @@ impl LinkState {
             .collect())
     }
 
-    /// ASN-0125 currency (EL14, hardwired to `[K_sup]`): the operative sinks
-    /// reachable from `y` via `succ_o` (the `reach_o(y)` fixpoint within the
-    /// finite link set), returned ENTIRE — linear → 1, forked → ≥ 2,
-    /// mutual-supersession standoff → 0, all legitimate. Each sink carries
-    /// its OWN activity and the FULL operative `out(sink)`, read from the
-    /// inbound claim relation in ONE walk for all sinks at once, rather than
-    /// accumulated during the walk — accumulation would
-    /// drop an operative claim asserted on the sink from outside the closure.
-    /// M7 discloses; the consumer narrows — no single "latest" is fabricated.
+    /// Returns the operative sinks reachable from `y` — ASN-0125 currency.
     ///
-    /// Members come back ASCENDING by address, and each member's `claims`
+    /// Currency is EL14, hardwired to `[K_sup]`: the sinks reachable via
+    /// `succ_o` (the `reach_o(y)` fixpoint within the finite link set),
+    /// returned entire — linear → 1, forked → ≥ 2, mutual-supersession
+    /// standoff → 0, all legitimate. Each sink carries its own activity and
+    /// the full operative `out(sink)`, read from the inbound claim relation in
+    /// one walk for all sinks at once, rather than accumulated during the walk
+    /// — accumulation would drop an operative claim asserted on the sink from
+    /// outside the closure. M7 discloses; the consumer narrows — no single
+    /// "latest" is fabricated.
+    ///
+    /// Members come back ascending by address, and each member's `claims`
     /// ascending by claim address.
     pub fn current(&self, y: &Address) -> Vec<CurrentMember> {
         let mut reach: OrdSet<Tumbler> = OrdSet::unit(y.tumbler().clone());
         let mut stack = vec![y.tumbler().clone()];
         while let Some(x) = stack.pop() {
             // The successor set is built fresh for this call, so it is
-            // CONSUMED: a newly-reached node moves onto the stack rather than
+            // consumed: a newly-reached node moves onto the stack rather than
             // being cloned out of a set about to be dropped.
             for succ in self.succs_operative(&x) {
                 if !reach.contains(&succ) {
@@ -520,7 +620,7 @@ impl LinkState {
                 }
             }
         }
-        // The sinks, an ordered set as `reach` is — then ONE walk of the
+        // The sinks, an ordered set as `reach` is — then one walk of the
         // active claim slice for all of them together.
         let sinks: OrdSet<Tumbler> = reach.into_iter().filter(|t| self.is_sink(t)).collect();
         self.out_claims(sinks)
@@ -536,9 +636,11 @@ impl LinkState {
             .collect()
     }
 
-    /// The format-fixed endset of a shipped class — for a caller holding the
-    /// SLICE: M8's lineage reads name `Supersedes` this way, and the engine's
-    /// observe dump names all five. A caller holding the registry itself asks
+    /// Returns the format-fixed endset of a shipped class.
+    ///
+    /// It is for a caller holding the slice: M8's lineage reads name
+    /// `Supersedes` this way, and the engine's observe dump names all five. A
+    /// caller holding the registry itself asks
     /// [`TypeRegistry::reserved_type`](crate::TypeRegistry::reserved_type),
     /// which is public and is where this delegates; the answer is the same
     /// value either way, the registry being the module's format constant.
@@ -548,65 +650,68 @@ impl LinkState {
 
     // ─────────────── §G — discovery primitives for M8 ────────────────
 
-    /// Spanfilade primitive: links whose coverage at `slot` OVERLAPS `query`
-    /// (overlap = `ProperOverlap | Containment | Equal` — NOT `Adjacent`).
-    /// `query` is M7's READABLE `Endset` (M8 builds it via `enc`/
-    /// `Endset::from_spans`). `view ∈ {Audit, Active}` only (`Default` reads
-    /// as `Active`).
+    /// Returns the links whose coverage at `slot` overlaps `query`.
     ///
-    /// WHAT THIS COSTS, because the query family reaches the wire and no
-    /// budget refuses one: the v1 bootstrap is a brute scan of `links`
+    /// It is the spanfilade primitive; overlap is
+    /// `ProperOverlap | Containment | Equal` — not `Adjacent`. `query` is
+    /// M7's readable `Endset` (M8 builds it via `enc`/`Endset::from_spans`).
+    /// `view ∈ {Audit, Active}` only (`Default` reads as `Active`).
+    ///
+    /// **What this costs.** Stated because the query family reaches the wire
+    /// and no budget refuses one: the v1 bootstrap is a brute scan of `links`
     /// reading each endset's spans — trivially correct, and
     /// `Θ(|links| × |query spans| × |slot spans|)`. The store walk is linear,
-    /// and each link is tested by a DOUBLE disjunction
+    /// and each link is tested by a double disjunction
     /// ([`Endset::covers`]' structural cousin — some query span overlapping
-    /// some slot span), so the CALLER's query span count and the STORED
+    /// some slot span), so the caller's query span count and the stored
     /// slot's multiply the store size. Two of those three factors are bounded
     /// at [`MAX_SLOT_SPANS`](crate::MAX_SLOT_SPANS) — the stored slot by this
-    /// module's deposit budget, the query by M10 reusing the same number as
-    /// its wire list cap — and the third, the store size, is bounded by
-    /// nothing and chosen by no caller. The deferred interval index swaps in
-    /// behind the same signature and overlap predicate (Open build
-    /// decisions); its absence is load-bearing rather than a performance
-    /// matter.
+    /// module's deposit budget, the query by skepd's codec, M10's production
+    /// `Codec`, reusing the same number as its wire list cap — and the third,
+    /// the store size, is bounded by nothing and chosen by no caller. The
+    /// deferred interval index swaps in behind the same signature and overlap
+    /// predicate (Open build decisions); its absence is load-bearing rather
+    /// than a performance matter.
     ///
-    /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
+    /// Every returned address is a key of `links`, so [`LinkState::readlink`]
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
     pub fn stab(&self, slot: usize, query: &Endset, view: View) -> OrdSet<Address> {
         self.scan(view, |link| slot_overlaps(link, slot, query))
     }
 
-    /// The AND-of-(per-slot overlap) combiner — findlinks' core, factored
-    /// into M7 (Conflicts §6). `constraints` lists ONLY constrained slots —
-    /// an unconstrained slot is OMITTED, never an empty `Endset`
+    /// Returns the links that satisfy every per-slot overlap constraint.
+    ///
+    /// It is the AND-of-(per-slot overlap) combiner — findlinks' core,
+    /// factored into M7 (Conflicts §6). `constraints` lists only constrained
+    /// slots — an unconstrained slot is omitted, never an empty `Endset`
     /// (`stab(slot, ⟨⟩, ·) = ∅` would empty the AND); empty `constraints` ⇒
     /// the whole `view` slice. `view ∈ {Audit, Active}` only (`Default` reads
     /// as `Active`).
     ///
-    /// The first constraint scans `links`; every later one NARROWS the
+    /// The first constraint scans `links`; every later one narrows the
     /// accumulator with the same per-link predicate [`stab`](LinkState::stab)
     /// applies, rather than scanning the store again and intersecting
     /// afterwards. Both read the store through the same per-link overlap test,
-    /// so the AND cannot come apart from
-    /// its own conjuncts — and a caller's constraint count multiplies the
-    /// surviving set instead of the whole store, which matters because the
-    /// query is caller-supplied and the constraint count with it.
+    /// so the AND cannot come apart from its own conjuncts — and a caller's
+    /// constraint count multiplies the surviving set instead of the whole
+    /// store, which matters because the query is caller-supplied and the
+    /// constraint count with it.
     ///
-    /// It carries [`stab`](LinkState::stab)'s cost, and the UNCONSTRAINED
-    /// branch carries a second: with no constraint to narrow it, every active
-    /// link is lifted into the returned set, one `Tumbler` clone apiece,
-    /// before any caller-side filter or window applies. That branch is
+    /// It carries [`stab`](LinkState::stab)'s cost, and the unconstrained
+    /// branch carries a second: with no constraint to narrow it, every link
+    /// the view admits is lifted into the returned set, one `Tumbler` clone
+    /// apiece, before any caller-side filter or window applies. That branch is
     /// reachable from a descriptor naming only non-slot fields — `home` is
     /// not a link slot — so a request that constrains nothing this module can
     /// index still materializes an address per link in the store.
     ///
-    /// Each query is BORROWED, as [`stab`](LinkState::stab) borrows its own:
+    /// Each query is borrowed, as [`stab`](LinkState::stab) borrows its own:
     /// a constraint is read and dropped, never kept, so a caller assembling
     /// its list out of a request it already holds hands over references
     /// rather than a copy per constrained slot.
     ///
-    /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
+    /// Every returned address is a key of `links`, so [`LinkState::readlink`]
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
     pub fn match_links(&self, constraints: &[(usize, &Endset)], view: View) -> OrdSet<Address> {
@@ -627,15 +732,18 @@ impl LinkState {
         acc
     }
 
-    /// `L_K` (Audit) / `A_K` (Active) — the typed slice.
+    /// Returns the typed slice: `L_K` (Audit) or `A_K` (Active).
+    ///
     /// `view ∈ {Audit, Active}` only (`Default` reads as `Active`).
     ///
-    /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
+    /// Every returned address is a key of `links`, so [`LinkState::readlink`]
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
     ///
-    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
-    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// # Panics
+    ///
+    /// `ty`'s precondition is address-denoting (a registered or reserved
+    /// type) or `iextent`-built. [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
     pub fn type_slice(&self, ty: &Endset, view: View) -> OrdSet<Address> {
@@ -645,12 +753,14 @@ impl LinkState {
 
     // ───────────────────────── internal helpers ─────────────────────────
 
-    /// The whole-store scan under a view: every link `keep` admits, as
-    /// addresses in M1's order. The ONE place `links` is walked end to end,
-    /// and the ONE place a STORE SCAN turns `Default` into `Active`, so
-    /// [`LinkState::stab`] and [`LinkState::match_links`]' unconstrained
-    /// branch cannot answer differently about a view. (The typed reads make
-    /// the same conversion at their own one place, the slice walk.)
+    /// Scans the whole store under a view, keeping every link `keep` admits.
+    ///
+    /// They come back as addresses in M1's order. The one place a read walks
+    /// `links` end to end, and the one place a store scan turns `Default`
+    /// into `Active`, so [`LinkState::stab`] and [`LinkState::match_links`]'
+    /// unconstrained branch cannot answer differently about a view. (The
+    /// typed reads make the same conversion at their own one place, the slice
+    /// walk.)
     fn scan(&self, view: View, keep: impl Fn(&Link) -> bool) -> OrdSet<Address> {
         let active = default_to_active(view) == View::Active;
         let mut out = OrdSet::new();
@@ -665,18 +775,21 @@ impl LinkState {
         out
     }
 
-    /// The typed slice by class, as a LAZY walk of the audit hint: active =
-    /// audit ∖ nullified, decided per element at query time (the indexes are
-    /// append-only — Active/audit indexing open decision, default taken).
+    /// Walks the typed slice of a class, lazily, over the audit hint.
+    ///
+    /// Active = audit ∖ nullified, decided per element at query time (the
+    /// indexes are append-only — the default of the Active/audit indexing
+    /// open decision).
     ///
     /// Lazy because nearly every caller wants a walk or a boolean, not a
     /// container: materializing the `Active` view means a fresh persistent
-    /// tree plus a deep clone of every `Tumbler` in it, and `is_filtered`
-    /// pays that once per result element of `members`/`targets_of` under
-    /// `View::Default`. The one caller that genuinely returns a set —
-    /// [`LinkState::type_slice`] — collects here, where the copy is visible.
+    /// tree plus a deep clone of every `Tumbler` in it, which every
+    /// `is_filtered` probe and every `View::Default` read of
+    /// `members`/`targets_of` would pay. The one caller that genuinely
+    /// returns a set — [`LinkState::type_slice`] — collects here, where the
+    /// copy is visible.
     ///
-    /// Takes `view` RAW and applies [`default_to_active`] here — the one
+    /// Takes `view` raw and applies [`default_to_active`] here — the one
     /// place a slice read turns `Default` into `Active`, so a caller that
     /// also honors `Default` result-side (`members`/`targets_of`) reads its
     /// own `view` for that and hands this the same value unaltered.
@@ -699,12 +812,13 @@ impl LinkState {
             .filter(move |t| !(active && self.nullified(t)))
     }
 
-    /// The typed slice AS LINKS: each index key of
-    /// [`type_slice_class`](LinkState::type_slice_class) paired with the value
-    /// it names — the one place the slice walk meets [`LinkState::link_at`],
-    /// so a read that wants the value rather than the key discharges the
-    /// index-key obligation here once. Lazy, as the slice walk is, and taking
-    /// `view` raw as it does.
+    /// Walks the typed slice as links: each index key with the value it names.
+    ///
+    /// The keys are [`type_slice_class`](LinkState::type_slice_class)'s — the
+    /// one place the slice walk meets [`LinkState::link_at`], so a read that
+    /// wants the value rather than the key discharges the index-key
+    /// obligation here once. Lazy, as the slice walk is, and taking `view`
+    /// raw as it does.
     fn typed_links<'a>(
         &'a self,
         class: &CoverageClass,
@@ -714,13 +828,15 @@ impl LinkState {
             .map(move |t| (t, self.link_at(t)))
     }
 
-    /// BH1's filter DOMAIN: the addresses every active shipped `Retired`
-    /// tuple's F DENOTES. Denotation, so a non-unit-depth span in a `Retired`
-    /// F contributes no root — the managed surface cannot build one (`emit`
-    /// forces `enc({from})`), the open surface can.
+    /// Returns BH1's filter domain.
+    ///
+    /// It is the addresses every active shipped `Retired` tuple's F denotes.
+    /// Denotation, so a non-unit-depth span in a `Retired` F contributes no
+    /// root — the managed surface cannot build one (`emit` forces
+    /// `enc({from})`), the open surface can.
     ///
     /// Lazy, so a single probe still short-circuits at the first root that
-    /// covers it; collectable, so a read that filters MANY probes derives the
+    /// covers it; collectable, so a read that filters many probes derives the
     /// domain once instead of re-walking the slice — and re-deriving each
     /// root's span — per result element.
     fn retired_roots(&self) -> impl Iterator<Item = &Tumbler> + '_ {
@@ -729,15 +845,16 @@ impl LinkState {
             .flat_map(|(_, link)| link.from_slot().addrs())
     }
 
-    /// The result-side BH1 rewrite, whole: a denoted result set lifted to
-    /// addresses, minus the filtered ones under `View::Default`. Two rules and
-    /// one judgement, stated once for the two reads (`members`/`targets_of`)
-    /// that honor them.
+    /// Applies the result-side BH1 rewrite, whole, to a denoted result set.
+    ///
+    /// The set is lifted to addresses, minus the filtered ones under
+    /// `View::Default`. Two rules and one judgement, stated once for the two
+    /// reads (`members`/`targets_of`) that honor them.
     ///
     /// The rules are BH1's Rewrite scope, which confines `Default` = active ∖
     /// filtered to those two reads, and the `J ≠ K'` exclusion, which stops
     /// the shipped filter class from subtracting itself. The judgement is that
-    /// the filter DOMAIN is derived ONCE for the whole result rather than once
+    /// the filter domain is derived once for the whole result rather than once
     /// per element: [`LinkState::is_filtered`] re-walks the active `Retired`
     /// slice per probe, which is right for a single probe and quadratic across
     /// a result set.
@@ -761,25 +878,32 @@ impl LinkState {
             .collect()
     }
 
-    /// The v1 walk-serving scope (§5): the walk family serves the shipped
+    /// Returns whether the walk family serves `ty` — the v1 scope (§5).
+    ///
+    /// The v1 walk-serving scope: the walk family serves the shipped
     /// `Supersedes` class and no other — the one statement of the rule
     /// `succs`/`chain`/`tip` apply. With the registry's population fixed to
     /// the compiled shipped table, no second BH2 declaration can exist to be
     /// unserved; this scope test lifts when the parameterized multi-BH2 path
     /// lands.
     ///
-    /// Also the walk family's ONE classification site, so their shared `ty`
-    /// precondition has one origin: [`coverage_class`] is total on the
-    /// address-denoting and `iextent`-built endsets those ops document, and
-    /// panics naming that precondition on anything else.
+    /// Also the walk family's one classification site, so their shared `ty`
+    /// precondition has one origin.
+    ///
+    /// # Panics
+    ///
+    /// [`coverage_class`] is total on the address-denoting and
+    /// `iextent`-built endsets those ops document, and panics naming that
+    /// precondition on a non-level-uniform one.
     fn serves_walk(&self, ty: &Endset) -> bool {
         coverage_class(ty) == *registry().shipped_class(ShippedType::Supersedes)
     }
 
-    /// Whether `x` is a SINK — successor-free in the operative graph: `x` has
-    /// no edges at all, or every edge out of it carries a nullified claim.
-    /// Answered without building `succ_o(x)`: the Df-SUCC filter is the same
-    /// one [`LinkState::succs_operative`] applies, and deduplicating the
+    /// Returns whether `x` is a sink — successor-free in the operative graph.
+    ///
+    /// `x` has no edges at all, or every edge out of it carries a nullified
+    /// claim. Answered without building `succ_o(x)`: the Df-SUCC filter is the
+    /// same one [`LinkState::succs_operative`] applies, and deduplicating the
     /// survivors over `new` cannot change whether there are any, so the raw
     /// edge set decides it. [`LinkState::current`] asks only whether a
     /// reached node is a sink; the walk, which needs the successors
@@ -791,8 +915,10 @@ impl LinkState {
             .is_none_or(|edges| edges.iter().all(|e| self.nullified(&e.claim)))
     }
 
-    /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to edges
-    /// whose CLAIM is unnullified (Df-SUCC), deduplicated over `new`.
+    /// Returns the operative successor set `succ_o(x)`.
+    ///
+    /// It is `sup_fwd[x]` filtered to edges whose claim is unnullified
+    /// (Df-SUCC), deduplicated over `new`.
     fn succs_operative(&self, x: &Tumbler) -> OrdSet<Tumbler> {
         match self.hints.sup_fwd.get(x) {
             None => OrdSet::new(),
@@ -804,17 +930,18 @@ impl LinkState {
         }
     }
 
-    /// Operative `out(x)` for EVERY vertex `x` in `vertices`, paired with it
-    /// and in claim-address order — the reverse of
-    /// [`LinkState::succs_operative`], which reads the forward `sup_fwd` hint.
-    /// This direction has no hint, so it is answered for a SET in one walk of
-    /// the active claim slice rather than re-walked per vertex:
+    /// Returns operative `out(x)` for every vertex `x` in `vertices`.
+    ///
+    /// Each comes paired with its vertex and in claim-address order — the
+    /// reverse of [`LinkState::succs_operative`], which reads the forward
+    /// `sup_fwd` hint. This direction has no hint, so it is answered for a set
+    /// in one walk of the active claim slice rather than re-walked per vertex:
     /// [`LinkState::current`] asks it of every sink it reaches, and a
     /// per-vertex form makes that quadratic in a store whose claim count a
     /// caller chooses.
     ///
-    /// Matched by DENOTATION, the claim schema's own regime — a claim's `new`
-    /// is a single denoted address (Df-DISC(ii)), so `g == x` IS the
+    /// Matched by denotation, the claim schema's own regime — a claim's `new`
+    /// is a single denoted address (Df-DISC(ii)), so `g == x` is the
     /// relation, total over every argument and needing no precondition. The
     /// vertices are link addresses, never coverage probes: the spanfilade's
     /// overlap would agree on one, where the `dom(L)` prefix antichain (R0a)
@@ -839,9 +966,10 @@ impl LinkState {
         out
     }
 
-    /// The visited-set-bounded forward walk: the traversed path (from `x`,
-    /// inclusive) and `Some(sink)` iff halted at a successor-free node
-    /// (branch and cycle yield `None`).
+    /// Walks forward from `x`, bounded by a visited set.
+    ///
+    /// It returns the traversed path (from `x`, inclusive) and `Some(sink)`
+    /// iff halted at a successor-free node (branch and cycle yield `None`).
     fn walk_sup(&self, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
@@ -852,7 +980,7 @@ impl LinkState {
                 0 => return (path, Some(node)),
                 1 => {
                     // Consumed, as in `current`: the set is this call's own,
-                    // so the sole successor MOVES out of it.
+                    // so the sole successor moves out of it.
                     let next = succs.into_iter().next().expect("len == 1");
                     if visited.contains(&next) {
                         return (path, None); // cycle
@@ -866,12 +994,13 @@ impl LinkState {
         }
     }
 
-    /// `target_of` by class (shared with `targets_keyed`, whose registry walk
-    /// has classes, not endsets). Walks the active typed slice and applies
-    /// the denotation test directly: "exactly one" is a property of the set,
-    /// not of the iteration order, so no prefilter is wanted — and a
-    /// whole-store span scan to narrow a hint lookup would cost more than the
-    /// walk it replaced.
+    /// Answers `target_of` by class.
+    ///
+    /// Shared with `targets_keyed`, whose registry walk has classes, not
+    /// endsets. Walks the active typed slice and applies the denotation test
+    /// directly: "exactly one" is a property of the set, not of the iteration
+    /// order, so no prefilter is wanted — and a whole-store span scan to
+    /// narrow a hint lookup would cost more than the walk it replaced.
     fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
         let mut survivor: Option<&Link> = None;
         for (_, link) in self.typed_links(class, View::Active) {

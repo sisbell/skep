@@ -1,16 +1,20 @@
-//! The typed rejections of M7's write surface (§C/§D) and its staleness
-//! family (§7 — [`NotBh4`], [`RetractStaleError`]), plus FOLLOWLINK's ⊥
-//! marker [`Invalid`].
+//! The typed rejections of M7's write surface, and FOLLOWLINK's ⊥ marker.
 //!
-//! Variant declaration order is each op's PRECEDENCE: where an input
+//! They cover the write surface (§C/§D) and its staleness family (§7 —
+//! [`NotBh4`], [`RetractStaleError`]); FOLLOWLINK's ⊥ marker is
+//! [`Invalid`].
+//!
+//! Variant declaration order is each op's precedence: where an input
 //! satisfies several rejections at once, the earlier-declared one speaks.
-//! Three hoists put a check ahead of its declared neighbours, and each is
-//! declared where it fires:
+//! Three hoists put a check ahead of other verdicts. The first overrides
+//! that order in [`EditLinkError`], which declares `OriginalNotResident`
+//! ahead of the home pair, and the second in [`EmitError`]; the third keeps
+//! it, its variant declared first:
 //!
 //! * the home/ω pair runs ahead of every other in-transaction verdict — each
 //!   gate, each dedup short-circuit, and each op's own residence and
 //!   well-formedness checks — so an unregistered or unowned home is refused
-//!   on hit AND miss, whatever else the input violates (Conflicts §8);
+//!   on hit and miss, whatever else the input violates (Conflicts §8);
 //! * [`EmitError::NonAddressDenotingType`], [`EmitError::SupersessionClass`],
 //!   [`EmitError::ReplacesClass`] and [`EmitError::SlotTooLarge`] are
 //!   pre-transact — in that firing order — so all four outrank every
@@ -25,12 +29,12 @@ use skep_address::Address;
 use skep_arrangement::SeatError;
 use skep_namespace::MintError;
 
-// Ownership (as amended 2026-08-16): every op that deposits into a home
-// document's link subspace carries a `NotOwner(Address)` rejection — the
-// in-txn ω gate on that home (and, for nullify, on the target link's own
-// address) — checked after home registration, before every other gate. The
-// payload is the address that failed the check (M10 threads it into the
-// rejection's fault site); carrying it costs these enums their `Copy`.
+// Ownership: every op that deposits into a home document's link subspace
+// carries a `NotOwner(Address)` rejection — the in-txn ω gate on that home
+// (and, for nullify, on the target link's own address) — checked after home
+// registration, before every other gate. The payload is the address that
+// failed the check (M10 threads it into the rejection's fault site); because
+// they carry it, these enums are not `Copy`.
 
 /// MAKELINK rejection (ASN-0120; §C/§2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,38 +43,48 @@ pub enum MakeLinkError {
     HomeNotRegistered,
     /// The caller is not `home`'s effective owner (ω, exact account match).
     NotOwner(Address),
-    /// A `Resolve` V-spec fails wf: unregistered source, or not a depth-2
-    /// content V-position with ordinal displacement (`#start = 2 ∧ start₁ =
-    /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
-    /// ASN-0120's `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
+    /// A `Resolve` V-spec fails wf.
+    ///
+    /// Its source is unregistered, or it is not a depth-2 content V-position
+    /// with ordinal displacement (`#start = 2 ∧ start₁ = s_C ∧ #width = 2 ∧
+    /// width₁ = 0`) — the deliberate depth-2 narrowing of ASN-0120's
+    /// `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
-    /// A slot is over one of the two per-slot budgets: more than
-    /// [`crate::MAX_SLOT_SPANS`] spans in whichever form built it — a
-    /// `Resolve` slot resolved past the budget, or an `Addrs` list naming
-    /// more addresses than it — or, for a `Resolve` slot, specs commanding
-    /// more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list steps. One
-    /// rejection for both, because both are the same answer to the caller —
-    /// this slot asks for more than a slot may have — told apart by the
-    /// `Display` text. Why the request that carried a slot bounds neither is
-    /// the two constants' own account.
+    /// A slot is over one of the two per-slot budgets.
+    ///
+    /// It holds more than [`crate::MAX_SLOT_SPANS`] spans in whichever form
+    /// built it — a `Resolve` slot resolved past the budget, or an `Addrs`
+    /// list naming more addresses than it — or, for a `Resolve` slot, its
+    /// specs command more than [`crate::MAX_SLOT_RESOLVE_STEPS`] run-list
+    /// steps. One rejection for both, because both are the same answer to
+    /// the caller — this slot asks for more than a slot may have — and one
+    /// `Display` text, which names both numbers. Why the request that carried
+    /// a slot bounds neither is the two constants' own account.
     SlotTooLarge,
-    /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
-    /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
+    /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`).
+    ///
+    /// The `Resolve` spec-set resolved to `⟨⟩`, or the `Addrs` name list was
+    /// empty.
     EmptyTypeResolution,
-    /// The resolved type slot lands in the `[R]` class — retraction writes
-    /// only through `nullify` (K ≁ R). The hint fold recognizes a deposit by
-    /// its type slot's CLASS, never by the surface it arrived through, so an
-    /// `[R]`-classed link deposited here would tombstone every address its
-    /// TO slot denotes; this is the same sole-writer fence `emit` states.
+    /// The resolved type slot lands in the `[R]` class.
+    ///
+    /// Retraction writes only through `nullify` (K ≁ R). The hint fold
+    /// recognizes a deposit by its type slot's class, never by the surface it
+    /// arrived through, so an `[R]`-classed link deposited here would
+    /// tombstone every address its `TO` slot denotes; this is the same
+    /// sole-writer fence `emit` states.
     RetractionClass,
-    /// The resolved type slot lands in the `[K_sup]` class — supersession
-    /// writes only through `assert_sup`/`editlink`, the two paths that
-    /// establish the Df-DISC(ii) schema (resident endpoints, single denoted
-    /// addresses, irreflexivity) the walk family reads back as fact.
+    /// The resolved type slot lands in the `[K_sup]` class.
+    ///
+    /// Supersession writes only through `assert_sup`/`editlink`, the two
+    /// paths that establish the Df-DISC(ii) schema (resident endpoints,
+    /// single denoted addresses, irreflexivity) the walk family reads back as
+    /// fact.
     SupersessionClass,
-    /// The resolved type slot lands in the `replaces` class
-    /// ([`crate::replaces_type`]; PUB-5.15, RES-309/310) — the authority
-    /// successor, whose ONE writer is
+    /// The resolved type slot lands in the `replaces` class.
+    ///
+    /// That class ([`crate::replaces_type`]; PUB-5.15, RES-309/310) is the
+    /// authority successor, whose one writer is
     /// [`crate::LinkWriter::makelink_replacing`], minting it in its record's
     /// own transaction. The grant fold reads a record's `replaces` as the link
     /// deposited at the record's own next address, so a `replaces` link put
@@ -81,53 +95,65 @@ pub enum MakeLinkError {
     ReplacesClass,
     /// M3's mint failed structurally.
     Mint(MintError),
-    /// M5's seat step refused (CL-OWN/CL-UNIQ) — unreachable for a freshly
-    /// minted home link, kept typed per the design.
+    /// M5's seat step refused (CL-OWN/CL-UNIQ).
+    ///
+    /// Unreachable for a freshly minted home link, kept typed per the design.
     Seat(SeatError),
 }
 
-/// Emit_K rejection (ASN-0086/0126/0128; §D). `SupersessionClass` is the
-/// `[K_sup]` write fence (Conflicts §10) — the exact parallel of the `[R]`
-/// fence, making `assert_sup`/`editlink` the sole `[K_sup]`-writers so every
-/// stored claim is schema-conformant, which the walk family leans on.
-/// `ReplacesClass` is the `replaces` class's fence, making
-/// [`crate::LinkWriter::makelink_replacing`] that class's sole writer.
+/// Emit_K rejection (ASN-0086/0126/0128; §D).
+///
+/// `SupersessionClass` is the `[K_sup]` write fence (Conflicts §10) — the
+/// exact parallel of the `[R]` fence, making `assert_sup`/`editlink` the sole
+/// `[K_sup]`-writers so every stored claim is schema-conformant, which the
+/// walk family leans on. `ReplacesClass` is the `replaces` class's fence,
+/// making [`crate::LinkWriter::makelink_replacing`] that class's sole writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
-    /// `home` is not a registered Document (P0; enforced on hit AND miss —
-    /// Conflicts §8).
+    /// `home` is not a registered Document (P0).
+    ///
+    /// Enforced on hit and miss — Conflicts §8.
     HomeNotRegistered,
-    /// The caller is not `home`'s effective owner (ω) — enforced on hit AND
-    /// miss, like the home check it follows.
+    /// The caller is not `home`'s effective owner (ω).
+    ///
+    /// Enforced on hit and miss, like the home check it follows.
     NotOwner(Address),
     /// `ty`'s coverage class is not registered (Managed gate (i)).
     NotRegistered,
-    /// `ty ~ [R]` — retraction writes only through `nullify` (K ≁ R). Ahead
-    /// of `ShapeViolation`: an `[R]`-typed emit with a non-conforming `|G|`
-    /// satisfies both, and the fence speaks (design's K ≁ R before Sh-conf).
+    /// `ty ~ [R]` — retraction writes only through `nullify` (K ≁ R).
+    ///
+    /// Ahead of `ShapeViolation`: an `[R]`-typed emit with a non-conforming
+    /// `|G|` satisfies both, and the fence speaks (design's K ≁ R before
+    /// Sh-conf).
     RetractionClass,
-    /// Span counts violate the registered shape (P3 Sh-conf): one FROM span
-    /// always, and no TO span under Unary, exactly one under Binary, any
-    /// finite number under Multi.
+    /// Span counts violate the registered shape (P3 Sh-conf).
+    ///
+    /// One `FROM` span always, and no `TO` span under Unary, exactly one
+    /// under Binary, any finite number under Multi.
     ShapeViolation,
-    /// `ty ~ [K_sup]` — supersession writes only through
-    /// `assert_sup`/`editlink` (Conflicts §10). Pre-transact.
+    /// `ty ~ [K_sup]` — a class only `assert_sup` and `editlink` write.
+    ///
+    /// The fence is Conflicts §10's. Pre-transact.
     SupersessionClass,
-    /// `ty ~ replaces` — the authority successor writes only through
-    /// [`crate::LinkWriter::makelink_replacing`] (PUB-5.15, RES-309/310).
-    /// Pre-transact, and independent of the registry: the class is a commons
-    /// VALUE no registration holds, so the Managed gate's `NotRegistered`
-    /// would refuse it today — the fence is what keeps refusing it once a
-    /// registration could name it.
+    /// `ty ~ replaces` — the authority successor's class, which has one writer.
+    ///
+    /// That writer is [`crate::LinkWriter::makelink_replacing`] (PUB-5.15,
+    /// RES-309/310). Pre-transact, and independent of the registry: the class
+    /// is a commons value no registration holds, so without the fence the
+    /// Managed gate's `NotRegistered` would refuse it — the fence is what
+    /// keeps it refused if a registration ever names it.
     ReplacesClass,
-    /// `ty` is not address-denoting — rejected before any class computation
-    /// (§Core data model totality). Pre-transact.
+    /// `ty` is not address-denoting.
+    ///
+    /// Rejected before any class computation (§Core data model totality).
+    /// Pre-transact.
     NonAddressDenotingType,
-    /// One of the two caller-sized slots is over the per-slot span budget
-    /// [`crate::MAX_SLOT_SPANS`] — `to`'s address count or `ty`'s own span
-    /// count — as [`crate::emit_tuple`] holds it, which also says why `ty` is
-    /// held to it as squarely as `to`. Pre-transact, and so ahead of
-    /// `ShapeViolation`.
+    /// One of the two caller-sized slots is over the per-slot span budget.
+    ///
+    /// The budget is [`crate::MAX_SLOT_SPANS`] — `to`'s address count or
+    /// `ty`'s own span count — as [`crate::emit_tuple`] holds it, which also
+    /// says why `ty` is held to it as squarely as `to`. Pre-transact, and so
+    /// ahead of `ShapeViolation`.
     SlotTooLarge,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -138,15 +164,17 @@ pub enum EmitError {
 pub enum NullifyError {
     /// `home` (`d_retr`) is not a registered Document (P0).
     HomeNotRegistered,
-    /// The caller is not the effective owner (ω) of the address carried:
-    /// `home`, or the TARGET link's own address (self-retraction only —
-    /// the v1 nullify target policy; owning the retraction's home does not
-    /// license retracting someone else's link). `home` is checked FIRST, so
-    /// a caller owning neither is told about `home`.
+    /// The caller is not the effective owner (ω) of the address carried.
+    ///
+    /// That is `home`, or the target link's own address (self-retraction only
+    /// — the v1 nullify target policy; owning the retraction's home does not
+    /// license retracting someone else's link). `home` is checked first, so a
+    /// caller owning neither is told about `home`.
     NotOwner(Address),
-    /// P-tgt: `target` is neither a resident link nor the address this call's
-    /// own retraction tuple would occupy (`a_emit`) — sterilization made
-    /// unreachable through the surface (DR).
+    /// P-tgt: `target` is neither a resident link nor this call's `a_emit`.
+    ///
+    /// `a_emit` is the address this call's own retraction tuple would occupy
+    /// — sterilization made unreachable through the surface (DR).
     BadTarget,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -174,48 +202,59 @@ pub enum EditLinkError {
     OriginalNotResident,
     /// `d_s` or `d_a` is not a registered Document.
     HomeNotRegistered,
-    /// The caller is not the effective owner (ω) of the carried home —
-    /// `d_s` or `d_a`, whichever failed.
+    /// The caller is not the effective owner (ω) of the carried home.
+    ///
+    /// That home is `d_s` or `d_a`, whichever failed.
     NotOwner(Address),
-    /// A successor slot carries more than [`crate::MAX_SLOT_SPANS`] spans, the
-    /// budget every caller-shaped slot is held to. Checked ahead of
-    /// `IllFormedSuccessor`, because every per-span step below it runs inside
-    /// the transact.
+    /// A successor slot carries more than [`crate::MAX_SLOT_SPANS`] spans.
+    ///
+    /// That is the budget every caller-shaped slot is held to. Checked ahead
+    /// of `IllFormedSuccessor`, because every per-span step below it runs
+    /// inside the transact.
     SlotTooLarge,
-    /// The supplied successor has arity ≠ 3 (the deliberate narrowing of
-    /// EDITop's N ≥ 3 — Conflicts §11), an empty type slot, or a
-    /// non-level-uniform span in ANY slot (keeps `coverage_class` total for
-    /// the DC guard, which reads the type slot, and for the hint fold's
-    /// dedup key, which reads all three).
+    /// The supplied successor is ill-formed.
+    ///
+    /// It has arity ≠ 3 (the deliberate narrowing of EDITop's N ≥ 3 —
+    /// Conflicts §11), an empty type slot, or a non-level-uniform span in any
+    /// slot (keeps `coverage_class` total for the DC guard, which reads the
+    /// type slot, and for the hint fold's dedup key, which reads all three).
     IllFormedSuccessor,
-    /// DC: the successor is retraction-typed, `replaces`-typed (that class's
-    /// one writer being [`crate::LinkWriter::makelink_replacing`] — PUB-5.15,
-    /// RES-309), or `[K_sup]`-typed without the Df-DISC(ii) schema (unit-depth
+    /// DC: the successor fails the DC guard.
+    ///
+    /// It is retraction-typed, `replaces`-typed (that class's one writer
+    /// being [`crate::LinkWriter::makelink_replacing`] — PUB-5.15, RES-309),
+    /// or `[K_sup]`-typed without the Df-DISC(ii) schema (unit-depth
     /// single-addr F/G, resident endpoints, irreflexive).
     DcViolation,
     /// M3's mint failed structurally.
     Mint(MintError),
 }
 
-/// The staleness family's served-only-where-declared rejection (§7): `ty` is
-/// not registered with BH4 (Age), so `stale` does not serve it. A typed
-/// refusal, never `Ok(vec![])` — so a caller reading an empty stale set is
-/// reading a truthful freshness answer, never "this type does not do
+/// The staleness family's served-only-where-declared rejection (§7).
+///
+/// `ty` is not registered with BH4 (Age), so `stale` does not serve it. A
+/// typed refusal, never `Ok(vec![])` — so a caller reading an empty stale
+/// set is reading a truthful freshness answer, never "this type does not do
 /// staleness".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotBh4;
 
-/// retract_stale rejection (§7): the pre-transact BH4 fence, or a
-/// constituent nullify's own rejection lifted into the batch. (`Copy`
-/// dropped with `NullifyError`'s — its `NotOwner` carries an `Address`.)
+/// retract_stale rejection (§7).
+///
+/// It is the pre-transact BH4 fence, or a constituent nullify's own
+/// rejection lifted into the batch. Not `Copy`, as `NullifyError` is not:
+/// its `NotOwner` carries an `Address`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetractStaleError {
-    /// `ty` is not registered with BH4 (Age) — rejected before any
-    /// transaction is opened (served only where declared; the fence that
-    /// keeps the batch nullifier off idem⊤ classes).
+    /// `ty` is not registered with BH4 (Age).
+    ///
+    /// Rejected before any transaction is opened (served only where declared;
+    /// the fence that keeps the batch nullifier off idem⊤ classes).
     NotBh4,
-    /// A constituent `nullify` transact rejected; earlier nullifies in the
-    /// batch stay committed (append-only, no rollback).
+    /// A constituent `nullify` transact rejected.
+    ///
+    /// Earlier nullifies in the batch stay committed (append-only, no
+    /// rollback).
     Nullify(NullifyError),
 }
 
@@ -225,8 +264,10 @@ impl From<NullifyError> for RetractStaleError {
     }
 }
 
-/// FOLLOWLINK's ⊥: link or slot absent (§E). Distinct from `Ok(⟨⟩)` — a
-/// valid-but-empty endset — so `⟨⟩ ≠ ⊥` is unforgeable (F7).
+/// FOLLOWLINK's ⊥: link or slot absent (§E).
+///
+/// Distinct from `Ok(⟨⟩)` — a valid-but-empty endset — so `⟨⟩ ≠ ⊥` is
+/// unforgeable (F7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Invalid;
 

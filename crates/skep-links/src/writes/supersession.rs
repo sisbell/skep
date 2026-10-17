@@ -1,8 +1,10 @@
-//! The `[K_sup]` writers (ASN-0125): [`LinkWriter::assert_sup`], the claim
-//! alone, and [`LinkWriter::editlink`], a fresh successor and its claim in one
-//! composite — the two paths that establish the Df-DISC(ii) schema every
-//! stored claim holds — with [`supersession_claim`], the claim both deposit,
-//! and [`Edit`], the pair an edit deposits.
+//! The `[K_sup]` writers (ASN-0125): `assert_sup` and `editlink`.
+//!
+//! [`LinkWriter::assert_sup`] deposits the claim alone, and
+//! [`LinkWriter::editlink`] a fresh successor and its claim in one composite
+//! — the two paths that establish the Df-DISC(ii) schema every stored claim
+//! holds — with [`supersession_claim`], the claim both deposit, and [`Edit`],
+//! the pair an edit deposits.
 
 use skep_address::Address;
 use skep_arrangement::Caller;
@@ -18,38 +20,48 @@ use crate::registry::{registry, ShippedType};
 use crate::state::{LinkRec, SupSchemaFault};
 use crate::LinkWorld;
 
-/// What an edit deposited (ASN-0125 EDITop): the fresh successor, and the
-/// `[K_sup]` claim asserting it supersedes the original. Two same-typed
-/// addresses, NAMED — the pair is permanently distinguishable only by which
-/// home's link chain each landed on, the successor in `d_s` and the claim in
-/// `d_a`, so a positional pair would carry that distinction in a convention
-/// rather than in the value. M10 puts the two on the wire under these same
-/// names.
+/// What an edit deposited (ASN-0125 EDITop): a successor and its claim.
+///
+/// They are the fresh successor, and the `[K_sup]` claim asserting it
+/// supersedes the original. Two same-typed addresses, named — as addresses,
+/// which is which shows only in where each landed, the successor on `d_s`'s
+/// link chain and the claim on `d_a`'s (the later of the two where `d_s` and
+/// `d_a` are one home), so a positional pair would carry that distinction in
+/// a convention rather than in the value. M10 puts the two on the wire under
+/// these same names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
     /// The fresh successor, deposited in `d_s`.
     pub successor: Address,
-    /// The `[K_sup]` claim that `original` is superseded by `successor`,
-    /// deposited in `d_a`.
+    /// The `[K_sup]` claim that `original` is superseded by `successor`.
+    ///
+    /// It is deposited in `d_a`.
     pub claim: Address,
 }
 
-/// The `[K_sup]` claim that `old` is superseded by `new` —
-/// `(enc({old}), enc({new}), [K_sup])`: F the superseded link and G its
-/// successor (Conflicts §2), one denoted address a side by construction. What
-/// [`LinkWriter::assert_sup`] deposits, and the claim [`LinkWriter::editlink`]
-/// deposits beside its successor (`old` the original, `new` the successor it
-/// minted). PUBLIC as [`slot_endset`](crate::slot_endset) is: both writers
-/// build through it and so does the daemon's entry-frame composer for an
-/// `assert_sup` (signed ops), so the row an attestation covers and the link
-/// the store deposits agree by construction.
+/// Builds the `[K_sup]` claim that `old` is superseded by `new`.
+///
+/// The claim is `(enc({old}), enc({new}), [K_sup])`: F the superseded link
+/// and G its successor (Conflicts §2), one denoted address a side by
+/// construction. What [`LinkWriter::assert_sup`] deposits, and the claim
+/// [`LinkWriter::editlink`] deposits beside its successor (`old` the
+/// original, `new` the successor it minted). Public as
+/// [`slot_endset`](crate::slot_endset) is: both writers build through it and
+/// so does the daemon's entry-frame composer for an `assert_sup` (signed
+/// ops), so the row an attestation covers and the link the store deposits
+/// agree by construction.
 pub fn supersession_claim(old: &Address, new: &Address) -> Link {
     let sup = registry().reserved_type(ShippedType::Supersedes).clone();
     Link::triple(enc([old]), enc([new]), sup)
 }
 
-/// The claim schema's verdict in `assert_sup`'s vocabulary: residence, then
-/// irreflexivity, the two rejections its contract orders. Its claim is built
+/// Translates the claim schema's verdict into `assert_sup`'s vocabulary.
+///
+/// Residence, then irreflexivity: the two rejections its contract orders.
+///
+/// # Panics
+///
+/// Panics on `SupSchemaFault::NotSingleDenoted`. `assert_sup`'s claim is built
 /// by [`supersession_claim`], one denoted address a side, so the denotation
 /// clause cannot fail there.
 impl From<SupSchemaFault> for AssertSupError {
@@ -69,29 +81,39 @@ where
     W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
-    /// assert_sup (ASN-0125/0128): emit "old is superseded by new"
-    /// ([`supersession_claim`]) — `F = enc({old})`, `G = enc({new})`, type
-    /// `[K_sup]` (slot convention per Conflicts §2: F holds the OLD/superseded
-    /// link; edges run old → new). Idem⊤ keyed on `([K_sup], {old}, {new})` —
-    /// home excluded, so a duplicate `(old, new)` even from a different home
-    /// dedups to the first claim (Conflicts §9) — WITHIN THE CALLER'S
-    /// VISIBILITY CLASS (PUB-6.25): a claim homed in a document the caller
-    /// cannot read is invisible to the dedup, and the caller's own claim is
-    /// minted beside it. Requires `home` registered, then the Df-DISC(ii) claim
-    /// schema as `LinkState` answers it — both endpoints resident, then
-    /// `old ≠ new`; checked in that order.
+    /// assert_sup (ASN-0125/0128): emits the claim "old is superseded by new".
     ///
-    /// RETURNS `(claim, seq)`: the address of the `[K_sup]` claim — never an
+    /// The claim is [`supersession_claim`]'s — `F = enc({old})`,
+    /// `G = enc({new})`, type `[K_sup]` (slot convention per Conflicts §2: F
+    /// holds the old/superseded link; edges run old → new). Idem⊤ keyed on
+    /// `([K_sup], {old}, {new})` — home excluded, so a duplicate `(old, new)`
+    /// even from a different home dedups to the T1-least active claim
+    /// (Conflicts §9) — within the caller's visibility class (PUB-6.25): a
+    /// claim homed in a document the caller cannot read is invisible to the
+    /// dedup, and the caller's own claim is minted beside it.
+    ///
+    /// Returns `(claim, seq)`: the address of the `[K_sup]` claim — never an
     /// endpoint — or, on a dedup hit, the incumbent claim's, with the base
     /// `Seq`.
     ///
-    /// OWNERSHIP is required on `home` and on NOTHING ELSE: the caller need
+    /// Ownership is required on `home` and on nothing else: the caller need
     /// not own `old` or `new`, so a claim may be asserted over links owned by
     /// others, and the walk family and M8's lineage reads then report it as
-    /// fact. Retracting it needs ω on the CLAIM, whose home is the asserter's
+    /// fact. Retracting it needs ω on the claim, whose home is the asserter's
     /// — so the endpoints' owner cannot retract a foreign claim about their
     /// own links. The wider question this belongs to (moderation, viewer-side
     /// filtering) is the deferred scope decision `nullify` names.
+    ///
+    /// # Errors
+    ///
+    /// Each refusal comes as `TxnError::Rejected`, checked in this order
+    /// against the txn base: `home` unregistered (`HomeNotRegistered`), then
+    /// not the caller's (`NotOwner`), then the Df-DISC(ii) claim schema as
+    /// `LinkState` answers it — both endpoints resident
+    /// (`EndpointNotResident`), then `old ≠ new` (`SelfSupersession`); then
+    /// `Mint` where the mint fails. The kernel's own failures — `Durability`,
+    /// `Unencodable`, `OverBudget`, `Poisoned` — come back as `transact`
+    /// returns them.
     pub fn assert_sup(
         &self,
         caller: Caller,
@@ -115,44 +137,52 @@ where
         })
     }
 
-    /// editlink (ASN-0125 EDITop): ONE composite over the two home alloc
-    /// keys — sorted and deduped before the transact, so the pair reaches M2
-    /// in a canonical order rather than the caller's, and `d_s == d_a`
-    /// collapses `[k, k]` to `[k]` (M2's `transact(keys)` promises nothing
-    /// about order or duplicates, and this is the only op handing it two keys
-    /// of one space) — inlining two `emit_core` calls (the public
-    /// `assert_sup` CANNOT be called: M2 is non-reentrant). Allocates the
-    /// fresh successor (value supplied — M10 builds it via M5 `iter_resolve` +
+    /// editlink (ASN-0125 EDITop): deposits a successor and its claim.
+    ///
+    /// One composite over the two home alloc keys — sorted and deduped before
+    /// the transact, so the pair reaches M2 in a canonical order rather than
+    /// the caller's, and `d_s == d_a` collapses `[k, k]` to `[k]` (M2's
+    /// `transact(keys)` reads its keys as a set, order and duplicates the
+    /// kernel's to normalize, and this is the only op handing it two keys of
+    /// one space) — inlining two `emit_core` calls (the public `assert_sup`
+    /// cannot be called: M2 is non-reentrant). It allocates the fresh
+    /// successor (value supplied — M10 builds it via M5 `iter_resolve` +
     /// `Run::iextent` + `Endset::from_spans`/`enc` + `Link::triple`, off any
     /// prior snapshot — ML8/EL0), then asserts it supersedes `original` with
-    /// [`supersession_claim`]`(original, successor)`. Successor born UNSEATED;
-    /// both writes commit atomically (EL7); `original` untouched (L12).
+    /// [`supersession_claim`]`(original, successor)`. Successor born
+    /// unseated; both writes commit atomically (EL7); `original` untouched
+    /// (L12). The claim's dedup check is a guaranteed miss (its key carries
+    /// the fresh successor), so no claim dedup lock is taken (§3).
     ///
-    /// RETURNS `(edit, seq)`, where [`Edit`] carries the successor's address
+    /// Returns `(edit, seq)`, where [`Edit`] carries the successor's address
     /// and the claim's each under its own name — the successor deposited in
     /// `d_s`, the claim in `d_a` — so the two cannot trade places at a call.
     ///
-    /// OWNERSHIP is required on `d_s` and `d_a` and on NOTHING ELSE: the
+    /// Ownership is required on `d_s` and `d_a` and on nothing else: the
     /// caller need not own `original`, so an edit may claim to supersede a
     /// link owned by another account, exactly as `assert_sup` may. What the
     /// operation deposits lands in the caller's own homes; what it asserts
     /// about `original` is retractable only by ω on the claim, which is
     /// `d_a`'s.
     ///
-    /// Rejects (against the txn base): unregistered `d_s`/`d_a`;
-    /// non-resident `original`; a successor slot past [`MAX_SLOT_SPANS`]
-    /// spans (`SlotTooLarge`, ahead of every per-span verdict below); a
-    /// successor of arity ≠ 3 (Conflicts §11),
-    /// empty type slot, or a non-level-uniform span in any slot
-    /// (`IllFormedSuccessor` — the last keeps `coverage_class` total for
-    /// both the DC guard and the fold's dedup key); DC — a
-    /// retraction-typed successor, a `replaces`-typed one (that class's one
-    /// writer is [`LinkWriter::makelink_replacing`], so an edit mints no
-    /// authority successor — PUB-5.15, RES-309), or a `[K_sup]`-typed one
-    /// without the Df-DISC(ii) schema (unit-depth single-addr F/G, resident
-    /// endpoints, irreflexive) (`DcViolation`). The claim's dedup check is a guaranteed
-    /// miss (its key carries the fresh successor), so no claim dedup lock is
-    /// taken (§3).
+    /// # Errors
+    ///
+    /// Each refusal comes as `TxnError::Rejected`, in this order, against the
+    /// txn base: unregistered `d_s`/`d_a` (`HomeNotRegistered`), then either
+    /// not the caller's (`NotOwner`, carrying the home that failed);
+    /// non-resident `original` (`OriginalNotResident`); a successor slot past
+    /// [`MAX_SLOT_SPANS`] spans (`SlotTooLarge`, ahead of every per-span
+    /// verdict below); a successor of arity ≠ 3 (Conflicts §11), empty type
+    /// slot, or a non-level-uniform span in any slot (`IllFormedSuccessor` —
+    /// the last keeps `coverage_class` total for both the DC guard and the
+    /// fold's dedup key); DC — a retraction-typed successor, a
+    /// `replaces`-typed one (that class's one writer is
+    /// [`LinkWriter::makelink_replacing`], so an edit mints no authority
+    /// successor — PUB-5.15, RES-309), or a `[K_sup]`-typed one without the
+    /// Df-DISC(ii) schema (unit-depth single-addr F/G, resident endpoints,
+    /// irreflexive) (`DcViolation`); then `Mint` where the mint fails. The
+    /// kernel's own failures — `Durability`, `Unencodable`, `OverBudget`,
+    /// `Poisoned` — come back as `transact` returns them.
     pub fn editlink(
         &self,
         caller: Caller,
@@ -161,13 +191,14 @@ where
         d_s: &Address,
         d_a: &Address,
     ) -> Result<(Edit, Seq), TxnError<EditLinkError>> {
-        // The one op that hands M2 two keys of ONE space, so the one whose
+        // The one op that hands M2 two keys of one space, so the one whose
         // relative order would otherwise be the caller's: two concurrent
         // edits over the same pair of homes, named in opposite orders, would
         // present them in opposite orders. Emitted in M2's own bytewise
         // order, so the pair is the same set in the same sequence however it
         // was written, whatever the applier does with it. `dedup` behind the
-        // sort subsumes `d_s == d_a` (M2 promises nothing about duplicates).
+        // sort subsumes `d_s == d_a` (M2 reads its keys as a set, duplicates
+        // included).
         //
         // No dedup section, so `deposit_lock_set` is not the shape here: the
         // successor takes the Open gate, which runs no dedup check, and the
@@ -192,13 +223,13 @@ where
                 }
                 // The successor's span budget, ahead of every per-span
                 // verdict: the level-uniformity walk below, the DC guard's
-                // `coverage_class`, and the fold's dedup key over ALL THREE
+                // `coverage_class`, and the fold's dedup key over all three
                 // slots are each linear in this count, and all three run
                 // inside the transact under M2's applier lock.
                 if successor_value.slots().any(|e| e.len() > MAX_SLOT_SPANS) {
                     return Err(EditLinkError::SlotTooLarge);
                 }
-                // Level-uniformity is required of EVERY slot, not just the
+                // Level-uniformity is required of every slot, not just the
                 // one the DC guard classifies: a deposit of a registered
                 // idem⊤ class folds a dedup key over all three slots
                 // ([`crate::LinkState::apply_link`]), and `coverage_class`
@@ -206,10 +237,11 @@ where
                 // slot would leave a caller-supplied F or G reaching that
                 // abort from inside the transact.
                 //
-                // `e₃ ≠ ∅` is NOT restated here: it is the deposit gate's
+                // `e₃ ≠ ∅` is not restated here: it is the deposit gate's
                 // check, and `⟨⟩` classifies as the empty denoted antichain —
-                // neither shipped class — so it passes the DC guard untouched
-                // and comes back from the gate as `IllFormedSuccessor`.
+                // none of the three classes the guard refuses — so it passes
+                // the DC guard untouched and comes back from the gate as
+                // `IllFormedSuccessor`.
                 let well_formed = successor_value.arity() == 3
                     && successor_value.slots().all(Endset::is_level_uniform);
                 if !well_formed {

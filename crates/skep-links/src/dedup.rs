@@ -1,16 +1,18 @@
-//! §3 — the idempotence identity: [`DedupKey`], which knows what dedup class
-//! a link value lands in and how that class serializes into M2's opaque
-//! `LockKey`.
+//! The idempotence identity (§3) and the lock section it encodes.
+//!
+//! [`DedupKey`] knows what dedup class a link value lands in and how that
+//! class serializes into M2's opaque `LockKey`.
 
 use skep_kernel::{LockKey, Space};
 
 use crate::class::{coverage_class, CoverageClass};
 use crate::endset::Link;
 
-/// The idempotence identity `I0 = (cov(F), cov(G))` within a type class
-/// (ASN-0128 I0/I1) — the dedup hint key, the in-txn check's lookup and,
-/// serialized, the `LockKey`'s payload. Crate-internal: it never crosses a
-/// seam (the interface exposes only the opaque `LockKey` bytes). Its fields
+/// The idempotence identity `I0 = (cov(F), cov(G))` within a type class.
+///
+/// It is ASN-0128's I0/I1 key: the dedup hint key, the in-txn check's lookup
+/// and, serialized, the `LockKey`'s payload. Crate-internal: it never crosses
+/// a seam (the interface exposes only the opaque `LockKey` bytes). Its fields
 /// are private to this file, so [`DedupKey::of`] is the only way to make one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DedupKey {
@@ -20,10 +22,17 @@ pub(crate) struct DedupKey {
 }
 
 impl DedupKey {
-    /// I0 of a link value — the ONE derivation. The pre-transact lock, the
-    /// in-txn incumbent lookup and the hint fold all state the identity
-    /// through this constructor, so the section M2 serializes is BY
-    /// CONSTRUCTION the section the check reads and the fold indexes.
+    /// Returns the I0 of a link value — the one derivation.
+    ///
+    /// The pre-transact lock, the in-txn incumbent lookup and the hint fold
+    /// all state the identity through this constructor, so the section M2
+    /// serializes is by construction the section the check reads and the
+    /// fold indexes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a slot of `value` holds a span that is not level-uniform:
+    /// [`coverage_class`] classifies all three slots.
     pub(crate) fn of(value: &Link) -> DedupKey {
         DedupKey {
             ty: coverage_class(value.type_slot()),
@@ -32,11 +41,17 @@ impl DedupKey {
         }
     }
 
-    /// The idem⊤ key as M2's opaque `LockKey`: the `Space::CoverageClass` tag
-    /// byte, then the three classes as length-prefixed minimal antichains.
-    /// Same I0-class ⇒ same bytes ⇒ M2 serializes the check-and-deposit
-    /// (I1a/I4); different class ⇒ no contention. Partitioned BY CLASS, never
-    /// by home (§3).
+    /// Returns the idem⊤ key as M2's opaque `LockKey`.
+    ///
+    /// The key is the `Space::CoverageClass` tag byte, then the three classes
+    /// as length-prefixed minimal antichains. Same I0-class ⇒ same bytes ⇒ M2
+    /// serializes the check-and-deposit (I1a/I4); different class ⇒ no
+    /// contention. Partitioned by class, never by home (§3).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any of the three classes is a content-extent class: the lock
+    /// format serializes denoted classes only (`push_class`).
     pub(crate) fn lock_key(&self) -> LockKey {
         let mut buf = Vec::new();
         push_class(&mut buf, &self.ty);
@@ -46,17 +61,24 @@ impl DedupKey {
     }
 }
 
-/// One class as the lock's payload: the ≼-minimal denoted antichain, length-
-/// prefixed. The format serializes DENOTED CLASSES ONLY, and an extent class
-/// reaching it FAIL-STOPS rather than being skipped — a skipped slot would
-/// collapse two distinct I0 identities onto one section, silently voiding the
-/// check-and-deposit serialization (I1a/I4) the section exists to provide.
+/// Appends one class to the lock's payload, length-prefixed.
+///
+/// What it appends is the class's ≼-minimal denoted antichain.
+///
+/// # Panics
+///
+/// Panics if `class` is a content-extent class. The format serializes
+/// denoted classes only, and an extent class reaching it fail-stops rather
+/// than being skipped — a skipped slot would collapse two distinct I0
+/// identities onto one section, silently voiding the check-and-deposit
+/// serialization (I1a/I4) the section exists to provide.
 ///
 /// What keeps an extent class out is the construction of the three ops that
 /// take a section — `emit`, `nullify` and `assert_sup` build F and G through
-/// `enc` and validate `ty` address-denoting — asserted at
+/// `enc`; `emit` validates `ty` address-denoting, and the other two type
+/// their tuples with a shipped class's `enc`-built endset — asserted at
 /// `deposit_lock_set`, which is where the decision to take one is made. It is
-/// NOT the registered-idem⊤ test beside that assertion, which reads the type
+/// not the registered-idem⊤ test beside that assertion, which reads the type
 /// slot alone: the open surface does deposit extent-classed F and G into
 /// registered idem⊤ classes, and the hint fold keys those values as it keys
 /// any other, so extent-classed dedup keys are live in the hint map. They
@@ -104,7 +126,7 @@ mod tests {
         let a = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
         let b = addr(&[1, 0, 1, 0, 1, 0, 1, 2]);
         let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 1, 1]); // pred_def's ghost tumbler
-        // Span ORDER is decomposition, never identity: two structurally
+        // Span order is decomposition, never identity: two structurally
         // distinct values of one coverage are one I0 class, and — because
         // the lock is derived from the key — one M2 section.
         let ab = link([&a], [&a, &b], [&ty]);
@@ -124,13 +146,15 @@ mod tests {
         assert_ne!(DedupKey::of(&ab).lock_key(), DedupKey::of(&swapped).lock_key());
     }
 
-    /// The I0 lock format serializes denoted classes only, and an extent class
-    /// reaching it FAIL-STOPS. The tempting repair — skipping such a slot, or
-    /// dropping the section — is what this refuses: an extent-classed key is
-    /// a live entry in the dedup HINT map (the open surface deposits
-    /// extent-classed F and G into registered idem⊤ classes), so a skip would
-    /// collapse two distinct I0 identities onto one section and silently void
-    /// the check-and-deposit serialization the section exists to provide.
+    /// An extent class reaching the I0 lock format fail-stops.
+    ///
+    /// The format serializes denoted classes only. The tempting repair —
+    /// skipping such a slot, or dropping the section — is what this refuses:
+    /// an extent-classed key is a live entry in the dedup hint map (the open
+    /// surface deposits extent-classed F and G into registered idem⊤
+    /// classes), so a skip would collapse two distinct I0 identities onto one
+    /// section and silently void the check-and-deposit serialization the
+    /// section exists to provide.
     #[test]
     #[should_panic(expected = "denoted classes only")]
     fn a_lock_key_over_an_extent_classed_slot_fail_stops() {

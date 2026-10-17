@@ -1,7 +1,9 @@
-//! §Core data model — M7's readable carrier types: [`Endset`] (the verbatim
-//! span decomposition), [`Link`] (a positional sequence of endsets) and the
-//! canonical address-set encoding [`enc`]. Their type identity — the class
-//! every type, dedup and fence question compares — is `class.rs`'s.
+//! M7's readable carrier types (§Core data model): endsets, links and `enc`.
+//!
+//! [`Endset`] is the verbatim span decomposition, [`Link`] a positional
+//! sequence of endsets and [`enc`] the canonical address-set encoding. Their
+//! type identity — the class every type, dedup and fence question compares —
+//! is `class.rs`'s.
 
 use std::fmt;
 
@@ -9,22 +11,24 @@ use im::Vector;
 use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, Address, Span, SpanSet, Tumbler};
 
-/// M7-OWNED endset — a READABLE finite span sequence, the as-created
-/// decomposition held VERBATIM (observable via raw read-back — ML2/RL1). NOT
-/// M1's `SpanSet`, which is read-opaque to M7. Coverage is a query-time
-/// projection ([`Endset::covers`]); the sequence is read through
-/// [`Endset::spans`]/[`Endset::addrs`] and folds to a `SpanSet` only at an
-/// M1-call boundary — the crate-internal whole-endset fold FOLLOWLINK's read
-/// and [`coverage_class`](crate::coverage_class)'s content-extent partition perform.
+/// An M7-owned endset: a readable finite span sequence, held verbatim.
 ///
-/// Derived `PartialEq`/`Eq`/`Hash` are STRUCTURAL (decomposition- and
-/// span-order-sensitive) — serde/container plumbing only, NEVER identity
-/// (§Core data model structural-derives contract): link identity is the store
-/// address (L11b), type/dedup identity is [`coverage_class`](crate::coverage_class). They are VALUE
-/// identity — same spans, same order — which is the right relation for
-/// deduplicating stored endset values; they are not TYPE identity, so nothing
-/// that means a type (a registration, a type index, a catalog key) may key on
-/// them.
+/// What it holds is the as-created decomposition (observable via raw
+/// read-back — ML2/RL1). Not M1's `SpanSet`, which is read-opaque to M7.
+/// Coverage is a query-time projection ([`Endset::covers`]); the sequence is
+/// read through [`Endset::spans`]/[`Endset::addrs`] and folds to a `SpanSet`
+/// only at an M1-call boundary — the crate-internal whole-endset fold
+/// FOLLOWLINK's read and [`coverage_class`](crate::coverage_class)'s
+/// content-extent partition perform.
+///
+/// Derived `PartialEq`/`Eq`/`Hash` are structural (decomposition- and
+/// span-order-sensitive) — serde/container plumbing only, never link or type
+/// identity (§Core data model structural-derives contract): link identity is
+/// the store address (L11b), type/dedup identity is
+/// [`coverage_class`](crate::coverage_class). They are value identity — same
+/// spans, same order — which is the right relation for deduplicating stored
+/// endset values; they are not type identity, so nothing that means a type
+/// (a registration, a type index, a catalog key) may key on them.
 ///
 /// A span collection: `Default` is `⟨⟩`, `FromIterator<Span>` is the same
 /// verbatim construction [`Endset::from_spans`] performs, so a span pipeline
@@ -34,7 +38,7 @@ use skep_address::{subtree_of, Address, Span, SpanSet, Tumbler};
 /// with, so `Endset::from_spans(e)` costs no `Tumbler` copies).
 ///
 /// `Extend` is the one collection trait deliberately absent: it is a
-/// `&mut self` mutator, and an endset is VERBATIM AT REST (ML2/RL1) — the
+/// `&mut self` mutator, and an endset is verbatim at rest (ML2/RL1) — the
 /// decomposition a write deposited is the decomposition a read gets back.
 /// Growing one means building the new sequence and constructing from it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -47,89 +51,111 @@ impl FromIterator<Span> for Endset {
 }
 
 impl Endset {
-    /// `⟨⟩` — the empty endset (distinct from any zero-width span, which M1's
-    /// span constructor rejects outright).
+    /// Returns `⟨⟩`, the empty endset.
+    ///
+    /// It is distinct from any zero-width span, which M1's span constructor
+    /// rejects outright.
     pub fn empty() -> Endset {
         Endset(Vector::new())
     }
 
-    /// Verbatim construction — the spans are stored exactly as given, never
-    /// normalized at rest (ML2/RL1): M1's canonical form is a query-time key
+    /// Builds an endset from `spans`, verbatim.
+    ///
+    /// The spans are stored exactly as given, never normalized at rest
+    /// (ML2/RL1): M1's canonical form is a query-time key
     /// ([`coverage_class`](crate::coverage_class)), never the stored shape.
     /// MAKELINK and M10 content successors build here.
     pub fn from_spans(spans: impl IntoIterator<Item = Span>) -> Endset {
         Endset(spans.into_iter().collect())
     }
 
-    /// The readable decomposition (L5 reads an endset by membership, not
-    /// position — this iterator is a representation view, not a positional
-    /// contract). The same walk `&Endset` yields.
+    /// Returns the readable decomposition.
+    ///
+    /// L5 reads an endset by membership, not position — this iterator is a
+    /// representation view, not a positional contract. The same walk
+    /// `&Endset` yields.
     pub fn spans(&self) -> Spans<'_> {
         Spans(self.0.iter())
     }
 
-    /// The number of spans in the stored SEQUENCE — what the managed
-    /// surface's [`Shape`](crate::Shape) gate counts. ASN-0126's `|F|` and
-    /// `|G|` are set cardinalities, and the two agree exactly on a
-    /// duplicate-free decomposition: every [`enc`]-built endset is one unless
-    /// the caller names an address twice, and every `iextent`-built one is by
-    /// M5's construction. A repeated span counts twice here and once there.
+    /// Returns the number of spans in the stored sequence.
+    ///
+    /// It is what the managed surface's [`Shape`](crate::Shape) gate counts.
+    /// ASN-0126's `|F|` and `|G|` are set cardinalities, and the two agree
+    /// exactly on a duplicate-free decomposition: every [`enc`]-built endset
+    /// is one unless the caller names an address twice, and an
+    /// `iextent`-built one (M5's construction) is one unless its resolution
+    /// meets one I-extent twice — two specs naming one span, or content
+    /// transcluded twice into what they name. A repeated span counts twice
+    /// here and once there.
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    /// `== ⟨⟩` — the `e₃ ≠ ∅` write-boundary check (L3/ML6) reads this.
+    /// Returns whether the endset is `⟨⟩`.
+    ///
+    /// The `e₃ ≠ ∅` write-boundary check (L3/ML6) reads this.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// `t ∈ coverage(e)`: `∃ s ∈ spans : s.contains(t)` — total over all of
-    /// carrier T (the membership projection ASN-0086's pattern domain rides).
-    /// COVERAGE, the coarser of the module's two matching regimes: every
-    /// tumbler a span reaches, not just the addresses it denotes. The finer
-    /// one — AD denotation, `x ∈ addrs(e)` — is [`Endset::addrs`].
+    /// Returns whether some span of the endset contains `t`.
+    ///
+    /// That is `t ∈ coverage(e)`: `∃ s ∈ spans : s.contains(t)` — total over
+    /// all of carrier T (the membership projection ASN-0086's pattern domain
+    /// rides). Coverage, the coarser of the module's two matching regimes:
+    /// every tumbler a span reaches, not just the addresses it denotes. The
+    /// finer one — AD denotation, `x ∈ addrs(e)` — is [`Endset::addrs`].
     pub fn covers(&self, t: &Tumbler) -> bool {
         self.0.iter().any(|s| s.contains(t))
     }
 
-    /// AD readback — DENOTATION, the finer regime: the start of each
-    /// unit-depth span (a span `s` with `s == subtree_of(s.start())`);
-    /// non-unit spans contribute nothing. `enc(X).addrs() = X`.
+    /// Returns the addresses the endset denotes (AD readback).
+    ///
+    /// Denotation, the finer regime: the start of each unit-depth span (a
+    /// span `s` with `s == subtree_of(s.start())`); non-unit spans contribute
+    /// nothing. `enc(X).addrs() = X`.
     pub fn addrs(&self) -> impl Iterator<Item = &Tumbler> {
         self.0.iter().filter(|s| is_unit_depth(s)).map(|s| s.start())
     }
 
-    /// Every span unit-depth — the address-denoting test, vacuously true for
-    /// `⟨⟩`. Selects [`coverage_class`](crate::coverage_class)'s exact denoted branch, and is
-    /// verbatim the admission rule of the managed surface's `ty`
+    /// Returns whether every span is unit-depth — the address-denoting test.
+    ///
+    /// Vacuously true for `⟨⟩`. Selects
+    /// [`coverage_class`](crate::coverage_class)'s exact denoted branch, and
+    /// is verbatim the admission rule of the managed surface's `ty`
     /// (`NonAddressDenotingType`), so a caller can ask before it is refused.
-    /// STRICTLY STRONGER than [`Endset::is_level_uniform`], which is what
+    /// Strictly stronger than [`Endset::is_level_uniform`], which is what
     /// [`coverage_class`](crate::coverage_class) itself requires.
     pub fn is_address_denoting(&self) -> bool {
         self.spans().all(is_unit_depth)
     }
 
-    /// Every span level-uniform (`#start = #width`) — EXACTLY
-    /// [`coverage_class`](crate::coverage_class)'s precondition, and the test a
-    /// caller applies to an endset of its own making. Implied by
-    /// [`Endset::is_address_denoting`] (a unit-depth span is its own start's
-    /// subtree, so start and width share a length) and strictly weaker than
-    /// it: a content endset of M5 `Run::iextent`s passes this and fails that,
-    /// and is a legal `coverage_class` input.
+    /// Returns whether every span is level-uniform (`#start = #width`).
+    ///
+    /// That is exactly [`coverage_class`](crate::coverage_class)'s
+    /// precondition, and the test a caller applies to an endset of its own
+    /// making. Implied by [`Endset::is_address_denoting`] (a unit-depth span
+    /// is its own start's subtree, so start and width share a length) and
+    /// strictly weaker than it: a content endset of M5 `Run::iextent`s passes
+    /// this, fails that wherever a run is wider than one position, and is a
+    /// legal `coverage_class` input.
     pub fn is_level_uniform(&self) -> bool {
         self.spans().all(Span::is_level_uniform)
     }
 
-    /// The "unit-depth single-addr" slot test (ASN-0125 Df-DISC(ii) schema;
-    /// the BH3 `target_of` single-address-G rule): every span unit-depth AND
-    /// exactly one distinct denoted address — returns it. A pure question
+    /// Returns the one address the endset denotes, if it denotes exactly one.
+    ///
+    /// It is the "unit-depth single-addr" slot test (ASN-0125 Df-DISC(ii)
+    /// schema; the BH3 `target_of` single-address-G rule): every span
+    /// unit-depth and exactly one distinct denoted address. A pure question
     /// about this endset, so it sits beside the module's other projections.
     ///
-    /// This is what the `[K_sup]` SOLE-WRITER FENCES establish of every stored
+    /// This is what the `[K_sup]` sole-writer fences establish of every stored
     /// claim, and the test a reader of one applies to read its endpoints back
     /// — never [`Shape`](crate::Shape), whose span-count conformance is a gate
-    /// on the managed surface and says nothing about denotation. STRICTLY
-    /// STRONGER than `addrs().next()`, which takes the first unit-depth start
+    /// on the managed surface and says nothing about denotation. Strictly
+    /// stronger than `addrs().next()`, which takes the first unit-depth start
     /// where this refuses a slot naming several distinct addresses; the two
     /// agree on every claim the fences admit.
     pub fn single_denoted(&self) -> Option<&Tumbler> {
@@ -144,19 +170,22 @@ impl Endset {
         Some(first)
     }
 
-    /// INTERNAL — the one WHOLE-ENDSET fold to a `SpanSet` (concatenation,
-    /// order-preserving, exactly M1's singleton+union): where an endset meets
-    /// M1's set algebra — FOLLOWLINK's (F1/F3) read and
-    /// [`coverage_class`](crate::coverage_class)'s partition of a content extent.
+    /// Returns the endset folded whole into a `SpanSet` — the one such fold.
+    ///
+    /// Crate-internal: concatenation, order-preserving, exactly M1's
+    /// singleton+union, where an endset meets M1's set algebra — FOLLOWLINK's
+    /// (F1/F3) read and [`coverage_class`](crate::coverage_class)'s partition
+    /// of a content extent.
     pub(crate) fn to_spanset(&self) -> SpanSet {
         self.0.iter().cloned().collect()
     }
 }
 
-/// The borrowed component spans of an [`Endset`], in stored order — what
-/// [`Endset::spans`] lends and what `&Endset` yields. Opaque, so the storage
-/// decision stays M7's: the sequence is what a caller walks, and the
-/// container it is walked out of is the endset's own business.
+/// The borrowed component spans of an [`Endset`], in stored order.
+///
+/// They are what [`Endset::spans`] lends and what `&Endset` yields. Opaque,
+/// so the storage decision stays M7's: the sequence is what a caller walks,
+/// and the container it is walked out of is the endset's own business.
 ///
 /// Opacity hides the *container*, never the walk's capabilities: the reverse
 /// walk, the exact length and the fused guarantee are forwarded below, so a
@@ -191,9 +220,11 @@ impl ExactSizeIterator for Spans<'_> {
 
 impl std::iter::FusedIterator for Spans<'_> {}
 
-/// The cursor, not the spans: the backing's iterator is neither `Clone` nor
-/// `Debug`, so there is no way to show what is left without consuming it, and
-/// the endset it came from is `Debug` already.
+/// Prints the cursor, not the spans.
+///
+/// The backing's iterator is neither `Clone` nor `Debug`, so there is no way
+/// to show what is left without consuming it, and the endset it came from is
+/// `Debug` already.
 impl fmt::Debug for Spans<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Spans").finish_non_exhaustive()
@@ -208,12 +239,14 @@ impl<'a> IntoIterator for &'a Endset {
     }
 }
 
-/// The owned component spans of an [`Endset`], in stored order — the
-/// decomposition moved out of an endset the caller is finished with, so a
-/// re-collection need not clone each one: `Endset::from_spans(e)` and
-/// `enc(x).into_iter()` cost no `Tumbler` copies. Carries the same reverse
-/// walk, exact length and fused guarantee as [`Spans`], and withholds `Clone`
-/// for the same reason: the backing's consuming iterator is not cloneable.
+/// The owned component spans of an [`Endset`], in stored order.
+///
+/// They are the decomposition moved out of an endset the caller is finished
+/// with, so a re-collection need not clone each one: `Endset::from_spans(e)`
+/// and `enc(x).into_iter()` cost no `Tumbler` copies. Carries the same
+/// reverse walk, exact length and fused guarantee as [`Spans`], and withholds
+/// `Clone` for the same reason: the backing's consuming iterator is not
+/// cloneable.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct IntoSpans(<Vector<Span> as IntoIterator>::IntoIter);
 
@@ -241,7 +274,7 @@ impl ExactSizeIterator for IntoSpans {
 
 impl std::iter::FusedIterator for IntoSpans {}
 
-/// The cursor, not the spans — as for [`Spans`].
+/// Prints the cursor, not the spans — as for [`Spans`].
 impl fmt::Debug for IntoSpans {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IntoSpans").finish_non_exhaustive()
@@ -256,17 +289,21 @@ impl IntoIterator for Endset {
     }
 }
 
-/// A span is unit-depth (address-denoting) iff it is exactly its own start's
-/// subtree span: `s == subtree_of(s.start())` (§Core data model).
+/// Returns whether a span is unit-depth (address-denoting).
+///
+/// A span is unit-depth iff it is exactly its own start's subtree span:
+/// `s == subtree_of(s.start())` (§Core data model).
 fn is_unit_depth(s: &Span) -> bool {
     *s == subtree_of(s.start())
 }
 
-/// A link value: a positional sequence of endsets, arity = `slots.len() ≥ 3`
-/// (ASN-0043 L3 *capacity*; every creation op realizes exactly 3 — the
-/// arity-3 store, §Core data model). Positional accessors only (L6: slot
-/// index is a primitive). Derived `Eq` is STRUCTURAL, never link-value
-/// identity — identity is the store address (L11b).
+/// A link value: a positional sequence of at least three endsets.
+///
+/// Its arity is `slots.len() ≥ 3` (ASN-0043 L3 *capacity*; every creation op
+/// realizes exactly 3 — the arity-3 store, §Core data model). Positional
+/// accessors (L6: slot index is a primitive), and one whole-value walk,
+/// [`Link::slots`]. Derived `Eq` is structural, never link-value identity —
+/// identity is the store address (L11b).
 ///
 /// Serde: a **symmetric shadow pair** — the derived `Serialize` emits the one
 /// named `slots` field and `Deserialize` reads that same shape back through a
@@ -281,15 +318,20 @@ pub struct Link {
     slots: Vector<Endset>,
 }
 
-/// Deserialization shadow: the one `slots` field, in the shape the derived
-/// `Serialize` writes.
+/// The deserialization shadow: the one `slots` field.
+///
+/// Its shape is the one the derived `Serialize` writes.
 #[derive(Deserialize)]
 struct LinkShadow {
     slots: Vector<Endset>,
 }
 
-/// Deserialization mint path: routes through [`Link::new`], so no decoded
-/// checkpoint can smuggle in a link below the L3 arity floor.
+/// The deserialization mint path, routed through [`Link::new`].
+///
+/// # Errors
+///
+/// Refuses a shadow of fewer than three slots, so no decoded checkpoint can
+/// smuggle in a link below the L3 arity floor.
 impl TryFrom<LinkShadow> for Link {
     type Error = &'static str;
     fn try_from(shadow: LinkShadow) -> Result<Link, &'static str> {
@@ -298,19 +340,23 @@ impl TryFrom<LinkShadow> for Link {
 }
 
 impl Link {
-    /// The standard triple `[e₁, e₂, e₃]` — the one shape every creation op
-    /// realizes (the arity-3 store, §Core data model). Infallible, so a write
-    /// path states the shape instead of discharging an arity `Option` that
-    /// cannot be `None`; [`Link::new`] covers the general L3 capacity case.
+    /// Builds the standard triple `[e₁, e₂, e₃]`.
+    ///
+    /// It is the one shape every creation op realizes (the arity-3 store,
+    /// §Core data model). Infallible, so a write path states the shape instead
+    /// of discharging an arity `Option` that cannot be `None`; [`Link::new`]
+    /// covers the general L3 capacity case.
     pub fn triple(from: Endset, to: Endset, ty: Endset) -> Link {
         Link {
             slots: [from, to, ty].into_iter().collect(),
         }
     }
 
-    /// The general L3-capacity constructor: `None ⇔ arity < 3` — the type
-    /// floor only. `e₃ ≠ ∅` (L3) is a WRITE-boundary check (`emit_core`'s
-    /// gate / MAKELINK's ML6), not the type's (Conflicts §3).
+    /// Builds a link of arity ≥ 3 — the general L3-capacity constructor.
+    ///
+    /// `None ⇔ arity < 3` — the type floor only. `e₃ ≠ ∅` (L3) is a
+    /// write-boundary check (`emit_core`'s gate / MAKELINK's ML6), not the
+    /// type's (Conflicts §3).
     pub fn new(slots: impl IntoIterator<Item = Endset>) -> Option<Link> {
         let slots: Vector<Endset> = slots.into_iter().collect();
         if slots.len() < 3 {
@@ -320,24 +366,26 @@ impl Link {
         }
     }
 
-    /// `|L| ≥ 3`.
+    /// Returns the arity, `|L| ≥ 3`.
     pub fn arity(&self) -> usize {
         self.slots.len()
     }
 
-    /// The slot sequence, in order — a representation view, not a positional
-    /// contract: [`Link::slot`] stays the 1-based primitive (L6), and this is
-    /// for the reads that are about the WHOLE value rather than about a
-    /// position in it. [`Endset::spans`] is its counterpart one level down.
-    /// A caller that walks every slot asks here instead of indexing over
-    /// `1..=arity()` and then discharging an `Option` the bound has already
-    /// made `Some`.
+    /// Returns the slot sequence, in order.
+    ///
+    /// It is a representation view, not a positional contract: [`Link::slot`]
+    /// stays the 1-based primitive (L6), and this is for the reads that are
+    /// about the whole value rather than about a position in it.
+    /// [`Endset::spans`] is its counterpart one level down. A caller that
+    /// walks every slot asks here instead of indexing over `1..=arity()` and
+    /// then discharging an `Option` the bound has already made `Some`.
     pub fn slots(&self) -> impl Iterator<Item = &Endset> {
         self.slots.iter()
     }
 
-    /// 1-based slot lookup; `None` iff `slot < 1 ∨ slot > arity`
-    /// (FOLLOWLINK's post-lookup arity bound).
+    /// Looks up a 1-based slot: `None` iff `slot < 1 ∨ slot > arity`.
+    ///
+    /// That is FOLLOWLINK's post-lookup arity bound.
     pub fn slot(&self, slot: usize) -> Option<&Endset> {
         if (1..=self.slots.len()).contains(&slot) {
             self.slots.get(slot - 1)
@@ -346,27 +394,28 @@ impl Link {
         }
     }
 
-    /// `e₁` (FROM = 1).
+    /// Returns `e₁` (`FROM` = 1).
     pub fn from_slot(&self) -> &Endset {
         &self.slots[0]
     }
 
-    /// `e₂` (TO = 2).
+    /// Returns `e₂` (`TO` = 2).
     pub fn to_slot(&self) -> &Endset {
         &self.slots[1]
     }
 
-    /// `e₃` (TYPE = 3).
+    /// Returns `e₃` (`TYPE` = 3).
     pub fn type_slot(&self) -> &Endset {
         &self.slots[2]
     }
 }
 
-/// Canonical address-set encoding (AD): one unit-depth span per address —
-/// `⟨subtree_of(x) : x ∈ X⟩`, in `X`'s order and one span per element, a
-/// sequence map rather than a set, so a repeated address is a repeated span
-/// (which is what the managed shape gate counts) — exactly what the managed
-/// surface (Emit_K/Nullify/assert_sup/claims) emits, with
+/// Encodes an address set canonically (AD): one unit-depth span per address.
+///
+/// The encoding is `⟨subtree_of(x) : x ∈ X⟩`, in `X`'s order and one span per
+/// element, a sequence map rather than a set, so a repeated address is a
+/// repeated span (which is what the managed shape gate counts) — exactly what
+/// the managed surface (Emit_K/Nullify/assert_sup/claims) emits, with
 /// `enc(X).addrs() = X`. "Canonical" in AD's sense — the standard encoding
 /// of a name — and not in M1's: the spans are never normalized, so
 /// `enc([doc, elem])` keeps a span inside another. Takes anything that

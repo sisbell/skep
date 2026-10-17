@@ -1,28 +1,28 @@
-//! §C/§D — the transact-driving write surface: [`LinkWriter`] (the kernel
-//! handle), the shared single choke point [`emit_core`] with its
-//! two-disciplines gate (§2), the M2 keyed dedup sections (§3), and the seven
-//! public ops (six deposits — MAKELINK in its two forms — plus the BH4
-//! batch), with the `replaces` class ([`replaces_type`]) whose one writer is
-//! the second MAKELINK.
+//! The transact-driving write surface (§C/§D): its handle, gate and ops.
 //!
-//! Concurrency belongs to the kernel: nothing here locks, threads, or caches.
-//! The type registry every gate reads is the module's compiled format
-//! constant, so no handle carries one.
+//! [`LinkWriter`] is the kernel handle and [`emit_core`] the shared single
+//! choke point, with its two-disciplines gate (§2); beside them sit the M2
+//! keyed dedup sections (§3) and the seven public ops (six deposits —
+//! MAKELINK in its two forms — plus the BH4 batch), with the `replaces` class
+//! ([`replaces_type`]) whose one writer is the second MAKELINK.
 //!
-//! Ownership (as amended 2026-08-16): every op that deposits into a home
-//! document's link subspace takes a [`Caller`] and requires
-//! `caller.is_owner(m3, home)` — the in-txn ω gate, enforced at
-//! [`emit_core`] (hit AND miss) with per-op hoists pinning error order;
-//! `nullify` additionally requires owning the TARGET link (self-retraction
-//! only in v1).
+//! Concurrency belongs to the kernel: nothing here locks, threads, or caches
+//! world state. The type registry every gate reads is the module's compiled
+//! format constant, so no handle carries one.
 //!
-//! Visibility (PUB round 2, lane 3.3b; PUB-6.25–6.27): the value-keyed gates
-//! — `emit`'s idempotency lookup and `assert_sup`'s dedup, both the one
-//! incumbent question [`emit_core`] asks of the world — run over the type
-//! class FILTERED by the caller's [`Visibility`] predicate at link-HOME
-//! identity, inside the write transaction. The predicate is THREADED FROM THE
-//! CALLER at construction ([`LinkWriter::new`]): M7 fetches nothing from the
-//! engine and learns nothing about principals.
+//! Ownership: every op that deposits into a home document's link subspace
+//! takes a [`Caller`] and requires `caller.is_owner(m3, home)` — the in-txn ω
+//! gate, enforced at [`emit_core`] (hit and miss) with per-op hoists pinning
+//! error order; `nullify` additionally requires owning the target link
+//! (self-retraction only in v1).
+//!
+//! Visibility (PUB-6.25–6.27): the value-keyed gates — `emit`'s idempotency
+//! lookup and `assert_sup`'s dedup, both the one incumbent question
+//! [`emit_core`] asks of the world — run over the type class filtered by the
+//! caller's [`Visibility`] predicate at link-home identity, inside the write
+//! transaction. The predicate is threaded from the caller at construction
+//! ([`LinkWriter::new`]): M7 fetches nothing from the engine and learns
+//! nothing about principals.
 //!
 //! Layout: this file is the handle and what its ops share — the visibility
 //! class, the deposit gate [`emit_core`] with its two disciplines and its §2
@@ -71,57 +71,60 @@ pub use makelink::{slot_endset, SlotArg};
 pub use nullify::retraction_tuple;
 pub use supersession::{supersession_claim, Edit};
 
-/// The caller's VISIBILITY CLASS (PUB round 2, lane 3.3b; PUB-6.25): `true`
-/// iff the caller a [`LinkWriter`] writes for may READ the document `doc` of
-/// the world `w` — the read predicate `readable(doc, principal)` of PUB-1.31,
-/// closed over the caller by whoever holds the caller: M10 over the
-/// session's principal, M9 over the engine-injected GUEST class
-/// (PUB-6.28), an engine-direct caller over its own. M7 names no principal
-/// and no publication state; it applies the closure at link-HOME identity to
-/// decide which incumbents a value-keyed gate may SEE.
+/// The caller's visibility class (PUB-6.25): its read predicate on documents.
 ///
-/// CALLER'S OBLIGATION: the closure is a PURE, DETERMINISTIC function of
+/// It answers `true` iff the caller a [`LinkWriter`] writes for may read the
+/// document `doc` of the world `w` — the read predicate
+/// `readable(doc, principal)` of PUB-1.31, closed over the caller by whoever
+/// holds the caller: M10 over the session's principal, M9 over the
+/// engine-injected guest class (PUB-6.28), an engine-direct caller over its
+/// own. M7 names no principal and no publication state; it applies the
+/// closure at link-home identity to decide which incumbents a value-keyed
+/// gate may see.
+///
+/// **Caller's obligation.** The closure is a pure, deterministic function of
 /// `(world, doc)` — the same answer for the same pair, no interior state.
 /// The published determinism of the value-keyed gates rests on it and on
 /// nothing else: [`emit`](LinkWriter::emit)'s "deterministic given the
 /// visibility class" and [`assert_sup`](LinkWriter::assert_sup)'s
-/// earliest-readable incumbent are the T1-least of the incumbent set THIS
-/// predicate admits, so
-/// a stateful predicate makes two value-identical writes disagree, silently.
-/// `Fn` does not forbid interior mutability, and no check in this crate can
-/// stand in for the obligation — it is the caller's, stated here and
-/// enforced nowhere.
+/// earliest-readable incumbent are the T1-least of the incumbent set this
+/// predicate admits, so a stateful predicate makes two value-identical writes
+/// disagree, silently. `Fn` does not forbid interior mutability, and no check
+/// in this crate can stand in for the obligation — it is the caller's, stated
+/// here and enforced nowhere.
 ///
-/// A second property is a CONDITION, not an obligation: a read predicate
+/// A second property is a condition, not an obligation: a read predicate
 /// admits the homes its caller ω-owns (an owner reads its own documents),
 /// and that is the step `emit_core`'s claim that `nullify`'s dedup is
 /// vacuous borrows. A predicate blind to the home the caller writes to —
-/// the GUEST class over a private draft — costs `nullify` a fresh
+/// the guest class over a private draft — costs `nullify` a fresh
 /// retraction tuple where a hit would have been zero-step, and costs its
 /// postcondition nothing: the target is tombstoned either way. The engine's
 /// predicates are pure, and a principal's visibility class admits its own
 /// homes.
 ///
-/// The world handed in is the TRANSACTION's working world (`stg.working()`),
+/// The world handed in is the transaction's working world (`stg.working()`),
 /// never a snapshot pinned before the transaction: the incumbent set is the
 /// staged world's, and so is each home's publication state. The one
-/// question this predicate answers is asked of a REGISTERED home — every
-/// incumbent's home is a document a deposit landed in — so the registered-
-/// only evaluation PUB-6.37 pins holds at every consult.
+/// question this predicate answers is asked of a registered home — every
+/// incumbent's home is a document a deposit landed in — so the
+/// registered-only evaluation PUB-6.37 pins holds at every consult.
 ///
 /// The same shape the coordinator holds its guest predicate in
-/// (`Box<dyn Fn(&W, &Address) -> bool + Send + Sync>`), BORROWED: a writer is
+/// (`Box<dyn Fn(&W, &Address) -> bool + Send + Sync>`), borrowed: a writer is
 /// built per operation and lends the very closure its caller holds, so the
 /// pass-through is a borrow with no adapter, and a closure may capture the
 /// request it serves (`'a` is that borrow, not `'static`).
 pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 
-/// M7's single writer of link values — the transact-driving handle: the
-/// kernel it deposits through and the caller's [`Visibility`] class, both
-/// borrowed for the handle's lifetime. The registration and reserved-class
-/// reads of §3's pre-transact steps go to the module's format registry
-/// ([`registry`]) — the compiled constant `emit_core` reads inside the
-/// transaction, so the two reads cannot disagree.
+/// M7's single writer of link values — the transact-driving handle.
+///
+/// It holds the kernel it deposits through, the caller's [`Visibility`] class
+/// and, where it carries one, the attestation its link writes commit under —
+/// each borrowed for the handle's lifetime. The registration and
+/// reserved-class reads of §3's pre-transact steps go to the module's format
+/// registry ([`registry`]) — the compiled constant `emit_core` reads inside
+/// the transaction, so the two reads cannot disagree.
 ///
 /// The handle holds no links either. `Σ.L` — the append-only store itself —
 /// is [`crate::LinkState`]'s map, reached through [`crate::HasLinks`], and
@@ -131,32 +134,35 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 /// visibility class are composed over `LinkState` outside this crate — M8's
 /// `*_on` reads, each naming its reader, and M9's guest-class look.
 ///
-/// A `LinkWriter` with NO visibility class does not exist: every
+/// A `LinkWriter` with no visibility class does not exist: every
 /// construction names the visibility class its writes run at
-/// ([`LinkWriter::new`]), and
-/// the value-keyed gates read the store through it, at the one choke point
-/// every deposit passes (`emit_core`).
+/// ([`LinkWriter::new`]), and the value-keyed gates read the store through
+/// it, at the one choke point every deposit passes (`emit_core`).
 pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     visibility: &'k Visibility<'k, W>,
-    /// THE ATTESTATION this handle's link writes commit under (signed ops):
-    /// handed to the kernel's `transact_attested` arm at the one transaction
-    /// each of the five publish-class link writes opens — `makelink` in both
-    /// forms, `emit`, `nullify`, `assert_sup`, `editlink` — filling THAT
-    /// commit marker's signature slot; `None` — the plain handle — leaves it
-    /// empty. A borrow, held beside the visibility class for the one call
-    /// this handle serves: a handle serves exactly one call, which is exactly
-    /// one transaction, so one admitted value fills one slot. The BH4 batch
-    /// (`retract_stale`) drives `nullify` once per target and would fill
-    /// each of its commits under one value, which no caller does: it is
+    /// The attestation this handle's link writes commit under (signed ops).
+    ///
+    /// It is handed to the kernel's `transact_attested` arm at the one
+    /// transaction each of the five publish-class link writes opens —
+    /// `makelink` in both forms, `emit`, `nullify`, `assert_sup`, `editlink` —
+    /// filling that commit marker's signature slot; `None` — the plain
+    /// handle — leaves it empty. A borrow, held beside the visibility class
+    /// for the one call this handle serves: a handle serves exactly one call
+    /// (its caller's obligation, since the write methods take `&self`), which
+    /// is exactly one transaction, so one admitted value fills one slot. The
+    /// BH4 batch (`retract_stale`) drives `nullify` once per target and would
+    /// fill each of its commits under one value, which no caller does: it is
     /// reached by no dispatched write and served under no shipped
     /// registration, and the handles that could reach it are plain.
     attest: Option<&'k Attestation>,
 }
 
-/// The handle prints as itself: `Kernel` is deliberately opaque, so it is not
-/// worth rendering — and asking for no `W: Debug` keeps this type from being
-/// the reason a consumer's own derive fails.
+/// Prints the handle as itself.
+///
+/// `Kernel`'s own `Debug` deliberately leaves out the world it holds, so it is
+/// not worth rendering — and asking for no `W: Debug` keeps this type from
+/// being the reason a consumer's own derive fails.
 impl<W: WorldState> fmt::Debug for LinkWriter<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkWriter").finish_non_exhaustive()
@@ -167,19 +173,22 @@ impl<'k, W> LinkWriter<'k, W>
 where
     W: WorldState,
 {
-    /// Construct the writer handle: it holds the two borrows and nothing
-    /// else — no snapshot, no state — exactly as `Namespace::new` and
-    /// `Vstream::new` hold theirs (§C), plus the caller's [`Visibility`]
-    /// class, which is a REQUIRED constructor parameter rather than a
-    /// builder step so that a writer whose gates run at no stated
-    /// visibility class cannot be built at all (lane 3.3b §2).
+    /// Constructs the writer handle.
+    ///
+    /// It holds the kernel borrow, no attestation and nothing else — no
+    /// snapshot, no state — exactly as `Namespace::new` and `Vstream::new`
+    /// hold theirs (§C), plus the caller's [`Visibility`] class, which is a
+    /// required constructor parameter rather than a builder step so that a
+    /// writer whose gates run at no stated visibility class cannot be built
+    /// at all.
     pub fn new(kernel: &'k Kernel<W>, visibility: &'k Visibility<'k, W>) -> LinkWriter<'k, W> {
         LinkWriter::attested(kernel, visibility, None)
     }
 
-    /// THE ATTESTED CONSTRUCTOR (signed ops; the confirmed placement): a
-    /// writer whose link writes commit under `attest`. Its callers are the
-    /// slot's producer set — M10's dispatch, with a value the daemon's check
+    /// Constructs the attested writer (signed ops).
+    ///
+    /// Its link writes commit under `attest`. Its callers are the slot's
+    /// producer set — M10's dispatch, with a value the daemon's check
     /// admitted — and nothing else; `None` is [`LinkWriter::new`].
     pub fn attested(
         kernel: &'k Kernel<W>,
@@ -190,39 +199,47 @@ where
     }
 }
 
-/// The WHOLE M2 lock set a deposit needs: the I0 section iff the value's
-/// class is a REGISTERED idem⊤ one — the registry's `is_idempotent`, the
-/// one statement of that predicate, which the hint fold applies to decide
-/// what it indexes and `emit_core` reads as the `idem` flag of the
-/// registration it already holds, so the section is taken exactly when the
-/// check reads one — then the home's alloc key, always. A caller hands the
-/// result to `transact` entire and adds nothing.
+/// Returns the whole M2 lock set a deposit of `value` into `home` needs.
 ///
-/// One derivation of the dedup DECISION, beside [`DedupKey::of`]'s one
+/// That is the I0 section iff the value's class is a registered idem⊤ one —
+/// the registry's `is_idempotent`, the one statement of that predicate,
+/// which the hint fold applies to decide what it indexes and `emit_core`
+/// reads as the `idem` flag of the registration it already holds, so the
+/// section is taken exactly when the check reads one — then the home's alloc
+/// key, always. A caller hands the result to `transact` entire and adds
+/// nothing.
+///
+/// One derivation of the dedup decision, beside [`DedupKey::of`]'s one
 /// derivation of the key, so "the section M2 serializes is the section the
 /// check reads" covers taking a section at all and not merely which bytes
 /// it carries.
 ///
 /// A free function beside the gate it mirrors, taking no handle, because the
-/// set is a function of the VALUE and its home: the class comes from the
-/// module's format registry and the keys from M3's spelling, so there is no
-/// world to read and no kernel to hold.
+/// set is a function of the value and its home: the class comes from
+/// [`coverage_class`] and its idem⊤ flag from the module's format registry,
+/// the I0 key from `DedupKey::of` and the alloc key from M3's spelling, so
+/// there is no world to read and no kernel to hold.
 ///
-/// The two ops that deliberately take NO dedup section say so at their own
+/// The two ops that deliberately take no dedup section say so at their own
 /// key sets: MAKELINK, whose open surface faces no dedup check (ML0), and
 /// `editlink`'s claim, whose check is a guaranteed miss. Costs `emit` a
 /// second classification of its `ty` — one ascending pass over a type
 /// slot's denoted addresses, on a path that already pays one.
 ///
-/// The I0 lock format serializes DENOTED classes only, so taking a section
-/// carries a second precondition beside the registered-idem⊤ one: ALL THREE
-/// slots address-denoting. The registration test does not imply it — it reads
-/// the type slot alone, and a registered idem⊤ class holds extent-classed F
-/// and G whenever the open surface deposits into it — so the full condition
-/// is asserted here, at the decision, naming the format constraint that
-/// requires it. Every op that takes a section meets it by construction: `emit`
-/// validates `ty` and [`emit_tuple`] builds F and G through `enc`, and
-/// [`retraction_tuple`] and [`supersession_claim`] build all three that way.
+/// # Panics
+///
+/// Panics if the type slot is not level-uniform ([`coverage_class`]'s
+/// precondition), or if the class is registered idem⊤ and a slot is not
+/// address-denoting. The I0 lock format serializes denoted classes only, so
+/// taking a section carries a second precondition beside the registered-idem⊤
+/// one: all three slots address-denoting. The registration test does not
+/// imply it — it reads the type slot alone, and a registered idem⊤ class
+/// holds extent-classed F and G wherever the open surface deposits them into
+/// it — so the full condition is asserted here, at the decision, naming the
+/// format constraint that requires it. Every op that takes a section meets it
+/// by construction: `emit` validates `ty` and [`emit_tuple`] builds F and G
+/// through `enc`, and [`retraction_tuple`] and [`supersession_claim`] build
+/// all three that way.
 fn deposit_lock_set(value: &Link, home: &Address) -> Vec<LockKey> {
     let mut keys: Vec<LockKey> = Vec::with_capacity(2);
     let class = coverage_class(value.type_slot());
@@ -238,50 +255,68 @@ fn deposit_lock_set(value: &Link, home: &Address) -> Vec<LockKey> {
     keys
 }
 
-/// Admission DISCIPLINE selector — never the value (effect-identity: the gate
-/// adds preconditions only and never alters `value`, ASN-0126 π).
+/// The admission discipline selector — never the value.
+///
+/// Effect-identity: the gate adds preconditions only and never alters
+/// `value` (ASN-0126 π).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Gate {
-    /// MAKELINK / editlink successor: `e₃ ≠ ∅` only — and the ONE statement
-    /// of it. Neither open-surface caller repeats the test; each states the
-    /// obligation in its contract and reads the verdict back through its own
-    /// `From<EmitCoreError>` (§2), so no deposited link can carry an empty
-    /// type slot however it arrived. Runs NO dedup, so this gate always
-    /// answers [`Deposited::Fresh`]: it is what MAKELINK's seat step rests on.
+    /// MAKELINK / editlink successor: `e₃ ≠ ∅` only.
+    ///
+    /// It is the one statement of `e₃ ≠ ∅`. Neither open-surface caller
+    /// repeats the test; each states the obligation in its contract and reads
+    /// the verdict back through its own `From<EmitCoreError>` (§2), so no
+    /// deposited link can carry an empty type slot however it arrived. Runs
+    /// no dedup, so this gate always answers [`Deposited::Fresh`]: it is what
+    /// MAKELINK's seat step rests on.
     Open,
-    /// Emit_K / assert_sup / editlink claim: registered ∧ shape-conformant ∧
-    /// K ≁ R; idem⊤ ⇒ active-view dedup check.
+    /// The Managed discipline: registered ∧ shape-conformant ∧ K ≁ R.
+    ///
+    /// Emit_K, assert_sup and the editlink claim take it; idem⊤ ⇒ active-view
+    /// dedup check.
     Managed,
-    /// Nullify: the Managed discipline with the `[R]` class ADMITTED rather
-    /// than refused — the one clause that separates the two.
+    /// Nullify: the Managed discipline with the `[R]` class admitted.
+    ///
+    /// It admits that class rather than refusing it — the one clause that
+    /// separates the two.
     Retraction,
 }
 
-/// What [`emit_core`] did — two words, because the choke point has two
-/// outcomes and an `Address` alone names both.
+/// What [`emit_core`] did, in two words.
+///
+/// Two, because the choke point has two outcomes and an `Address` alone
+/// names both.
 enum Deposited {
     /// Freshly minted: the M3 allocation and the `LinkRec` are staged.
     Fresh(Address),
-    /// The active incumbent of an idem⊤ class: NOTHING staged.
+    /// The active incumbent of an idem⊤ class: nothing staged.
     Incumbent(Address),
 }
 
 impl Deposited {
-    /// The address, whichever outcome — for a caller that stages nothing
-    /// downstream naming it, and reports it as "the address of the tuple of
-    /// this identity" (`emit`, `nullify`, `assert_sup`).
+    /// Returns the address, whichever outcome.
+    ///
+    /// It is for a caller that stages nothing downstream naming it, and
+    /// reports it as "the address of the tuple of this identity" (`emit`,
+    /// `nullify`, `assert_sup`).
     fn address(self) -> Address {
         match self {
             Deposited::Fresh(addr) | Deposited::Incumbent(addr) => addr,
         }
     }
 
-    /// The address of a link THIS call minted — what a caller staging a seat
-    /// for it, or handing it back as freshly its own, is relying on. Stating
-    /// the reliance here is what keeps it from being an argument in a
-    /// doc-comment: MAKELINK takes [`Gate::Open`], which runs no dedup, and
-    /// `editlink`'s claim keys its I0 on a successor minted moments earlier in
-    /// the same transaction, so neither can meet an incumbent.
+    /// Returns the address of a link this call minted.
+    ///
+    /// It is what a caller staging a seat for it, or handing it back as
+    /// freshly its own, is relying on. Stating the reliance here is what keeps
+    /// it from being an argument in a doc-comment: MAKELINK takes
+    /// [`Gate::Open`], which runs no dedup, and `editlink`'s claim keys its I0
+    /// on a successor minted moments earlier in the same transaction, so
+    /// neither can meet an incumbent.
+    ///
+    /// # Panics
+    ///
+    /// Panics on [`Deposited::Incumbent`].
     fn minted(self) -> Address {
         match self {
             Deposited::Fresh(addr) => addr,
@@ -294,33 +329,39 @@ impl Deposited {
     }
 }
 
-/// The doorkeeper's verdict on a deposit's home documents, in the vocabulary
-/// every op translates from (the `From` impls below) — and the one
-/// [`EmitCoreError`] carries as its own, so the choke point's verdict on a
-/// home IS the hoist's, translated once.
+/// The doorkeeper's verdict on a deposit's home documents.
+///
+/// It is in the vocabulary every op translates from (the `From` impls
+/// below), and the one [`EmitCoreError`] carries as its own, so the choke
+/// point's verdict on a home is the hoist's, translated once.
 #[derive(Debug)]
 enum HomeFault {
     NotRegistered,
     NotOwner(Address),
 }
 
-/// The two questions asked of every home a deposit writes into: registered
-/// (P0), then owned (ω, exact account match). ALL registrations are checked
-/// before ANY ownership, so an op depositing into two homes reports an
-/// unregistered second home ahead of an unowned first — the order `editlink`
-/// pins. The payload names the home that failed ownership; M10 threads it
-/// into the rejection's fault site.
+/// Checks every home a deposit writes into: registered (P0), then owned (ω).
 ///
 /// Asked of every deposit by the gate that admits it, [`emit_core`], of the
-/// WORKING world — so no caller path reaches the mint ungated — and asked
-/// EARLIER, of the txn BASE, by each op that has in-transaction verdicts of
+/// working world — so no caller path reaches the mint ungated — and asked
+/// earlier, of the txn base, by each op that has in-transaction verdicts of
 /// its own to order behind them (`emit` has none, and asks only through the
 /// gate). The two askings cannot disagree: the only records a composite
-/// stages between them are M3 element allocations and link deposits, and
-/// neither changes a document's registration or its effective owner.
-/// `editlink` is where the gap is real (its second `emit_core` runs after
-/// the first has staged both), which is why the agreement is an argument
-/// rather than an observation.
+/// stages between them are M3 element allocations, link deposits and M5
+/// link seats, and none changes a document's registration or its effective
+/// owner. `editlink` and `makelink_replacing` are where the gap is real
+/// (each one's second `emit_core` runs after the first has staged both its
+/// records — and, in `makelink_replacing`, the record's seat), which is why
+/// the agreement is an argument rather than an observation.
+///
+/// # Errors
+///
+/// `NotRegistered` for an unregistered home, then `NotOwner` for a home the
+/// caller does not own (ω, exact account match). All registrations are
+/// checked before any ownership, so an op depositing into two homes reports
+/// an unregistered second home ahead of an unowned first — the order
+/// `editlink` pins. The payload names the home that failed ownership; M10
+/// threads it into the rejection's fault site.
 fn home_gate(m3: &M3State, caller: Caller, homes: &[&Address]) -> Result<(), HomeFault> {
     for &home in homes {
         if !m3.is_registered_document(home) {
@@ -380,14 +421,15 @@ impl From<HomeFault> for EditLinkError {
     }
 }
 
-/// `emit_core`'s internal error; each public op maps it through the `From`
-/// impls below (§2 error mapping). `Home` carries the doorkeeper's verdict,
-/// asked of the WORKING world through [`home_gate`] — the same two questions
-/// an op's hoist asks of the base — so `mint_link`'s own `HomeNotRegistered`
-/// branch is unreachable and every other `MintError` rides `Mint`. It is the
-/// ω backstop (as amended 2026-08-16): every deposit passes this one choke
+/// `emit_core`'s internal error, mapped by each public op (§2 error mapping).
+///
+/// Each public op maps it through the `From` impls below. `Home` carries the
+/// doorkeeper's verdict, asked of the working world through [`home_gate`] —
+/// the same two questions an op's hoist asks of the base — so `mint_link`'s
+/// own `HomeNotRegistered` branch is unreachable and every other `MintError`
+/// rides `Mint`. It is the ω backstop: every deposit passes this one choke
 /// point, so no caller path can reach the mint without the ownership check
-/// having run — the per-op hoists exist only to pin each op's error ORDER.
+/// having run — the per-op hoists exist only to pin each op's error order.
 #[derive(Debug)]
 enum EmitCoreError {
     Home(HomeFault),
@@ -502,57 +544,71 @@ impl From<EmitCoreError> for EditLinkError {
     }
 }
 
-/// The single choke point both write surfaces share (§2), run INSIDE one
-/// `transact`. Bounds are [`crate::LinkWorld`] with no `HasM5`, so it has NO
-/// seat step — the seat is staged by MAKELINK itself, the lone `HasM5`
-/// caller, after this returns. Any dedup LOCK was acquired by the public op
-/// before the transact (§3 step 1); this does the hoisted home check and the
-/// in-txn dedup CHECK.
+/// Gates one deposit — the single choke point both write surfaces share (§2).
 ///
-/// THE DEDUP CHECK RUNS AT THE CALLER'S VISIBILITY CLASS (lane 3.3b;
-/// PUB-6.25): the one question this gate asks of the world — the active
+/// It runs inside one `transact`. Bounds are [`crate::LinkWorld`] with no
+/// `HasM5`, so it has no seat step — the seat is staged by MAKELINK itself,
+/// the lone `HasM5` caller, after this returns. Any dedup lock is in the key
+/// set the public op hands the transact (§3 step 1); this does the hoisted
+/// home check and the in-txn dedup check.
+///
+/// **The dedup check runs at the caller's visibility class.** The one
+/// question its discipline asks of the world (PUB-6.25) — the active
 /// incumbent of the value's I0 class — is answered over that I0 class
-/// FILTERED by `visibility` at link-HOME identity, against the WORKING
+/// filtered by `visibility` at link-home identity, against the working
 /// world. An incumbent homed in a document the caller cannot read is
 /// invisible here, and the write proceeds exactly as in a world without it:
 /// a fresh mint, never an ack naming an address inside a draft's link
 /// subspace. The consequences are pinned (PUB-6.26): value-identical tuples
-/// MAY coexist across the visibility boundary, and a hit is the EARLIEST
-/// incumbent the caller's visibility class can read. The dedup LOCK is
-/// unchanged — the I0 section serializes same-I0-class deposits whatever
+/// may coexist across the visibility boundary, and a hit is the earliest
+/// incumbent the caller's visibility class can read. The dedup lock is
+/// unfiltered — the I0 section serializes same-I0-class deposits whatever
 /// visibility class their callers read at — so two callers of different
 /// visibility classes racing on one value are serialized and each sees, or
 /// does not see, the other's deposit per its own visibility class.
 ///
 /// The filter reaches every caller of this gate uniformly. For `nullify`
-/// (`Gate::Retraction`) it is vacuous under every read predicate: a
-/// retraction tuple's I0 carries its own home in F, its sole writer deposits
-/// it into that home, the caller ω-owns that home, and an owner reads its
-/// own documents — the condition [`Visibility`] states, and the one whose
-/// absence costs `nullify` a fresh retraction tuple rather than its
-/// postcondition. For `editlink`'s claim it is vacuous under ANY predicate
-/// (PUB-6.27): the claim's I0 carries a successor minted in this same
-/// transaction, so the lookup is a guaranteed miss and no incumbent — at
-/// any visibility class — can exist for it. Neither op threads a filter of
-/// its own.
+/// (`Gate::Retraction`) it is vacuous under every read predicate that admits
+/// the homes its caller ω-owns: a retraction tuple's I0 carries its own home
+/// in F, its sole writer deposits it into that home, the caller ω-owns that
+/// home, and an owner reads its own documents — the condition [`Visibility`]
+/// states, and the one whose absence costs `nullify` a fresh retraction
+/// tuple rather than its postcondition. For `editlink`'s claim it is vacuous
+/// under any predicate (PUB-6.27): the claim's I0 carries a successor minted
+/// in this same transaction, so the lookup is a guaranteed miss and no
+/// incumbent — at any visibility class — can exist for it. Neither op
+/// threads a filter of its own.
 ///
-/// The hoisted home check (Conflicts §8, a deliberate divergence from
-/// ASN-0128 I1's miss-only read) runs ahead of EVERY gate/dedup
-/// short-circuit, so an unregistered-home emit is rejected on every path —
-/// miss AND hit; callers cannot observe the branch, which is what makes the
-/// contract portable. The ω check (as amended 2026-08-16) rides directly
-/// behind it under the same discipline: a non-owner deposit is rejected on
-/// hit AND miss, and because every deposit passes THIS choke point, no
-/// caller can reach the mint ungated.
+/// **Return contract.** A [`Deposited`], which distinguishes a freshly
+/// minted address (two records staged) from an idem⊤ incumbent (nothing
+/// staged). A caller that stages anything downstream naming the address
+/// takes [`Deposited::minted`], which states that reliance where it is
+/// relied on.
 ///
-/// Both questions are asked through [`home_gate`], of the WORKING world; why
-/// that verdict and the per-op hoist's, asked of the base, cannot disagree is
-/// stated there.
+/// # Errors
 ///
-/// RETURN CONTRACT: [`Deposited`], which distinguishes a freshly minted
-/// address (two records staged) from an idem⊤ INCUMBENT (nothing staged). A
-/// caller that stages anything downstream naming the address takes
-/// [`Deposited::minted`], which states that reliance where it is relied on.
+/// In the order the checks run. The hoisted home check (Conflicts §8, a
+/// deliberate divergence from ASN-0128 I1's miss-only read) runs ahead of
+/// every gate/dedup short-circuit, so an unregistered-home emit is rejected
+/// on every path — miss and hit; callers cannot observe the branch, which is
+/// what makes the contract portable. The ω check rides directly behind it
+/// under the same discipline: a non-owner deposit is rejected on hit and
+/// miss, and because every deposit passes this choke point, no caller can
+/// reach the mint ungated. Both questions are asked through [`home_gate`],
+/// of the working world, and its verdict rides `Home`; why that verdict and
+/// the per-op hoist's, asked of the base, cannot disagree is stated there.
+/// Then the selected gate: `Gate::Open` refuses an empty type slot
+/// (`EmptyType`); `Gate::Managed` and `Gate::Retraction` refuse an
+/// unregistered class (`NotRegistered`), then, under `Gate::Managed` alone,
+/// the `[R]` class (`RetractionClass`), then a value off its registered
+/// shape (`ShapeViolation`). Last comes `Mint`, where the mint fails.
+///
+/// # Panics
+///
+/// Panics if `value`'s arity is not 3 — a store-invariant backstop no caller
+/// trips — or if a slot the deposit classifies is not level-uniform, where
+/// [`coverage_class`] aborts: the type slot always, and all three under a
+/// registered idem⊤ class.
 fn emit_core<W>(
     stg: &mut Staging<W>,
     visibility: &Visibility<'_, W>,
@@ -565,10 +621,11 @@ where
     W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
-    // STORE-INVARIANT BACKSTOP (§2): every caller builds arity 3
-    // (MAKELINK/Emit_K/assert_sup/claim; editlink pre-checks), so this never
-    // trips — but it guarantees type_slices, the FROM/TO/TYPE slots the
-    // discovery primitives index, and ASN-0086's |Σ.L| = 3 hold locally.
+    // Store-invariant backstop (§2): every caller builds arity 3
+    // (MAKELINK/Emit_K/Nullify/assert_sup/claim; editlink pre-checks), so
+    // this never trips — but it guarantees type_slices, the `FROM`/`TO`/`TYPE`
+    // slots the discovery primitives index, and ASN-0086's |Σ.L| = 3 hold
+    // locally.
     assert_eq!(value.arity(), 3, "emit_core: the store holds only arity-3 links");
     home_gate(stg.working().m3(), caller, &[home])?; // P0 then ω, of the working world
     match gate {
@@ -577,8 +634,8 @@ where
                 return Err(EmitCoreError::EmptyType); // L3 at the write boundary
             }
         }
-        // ONE discipline, derived from the value's own class: registered,
-        // shape-conformant per the REGISTERED shape, idem⊤ ⇒ active-view
+        // One discipline, derived from the value's own class: registered,
+        // shape-conformant per the registered shape, idem⊤ ⇒ active-view
         // dedup. `[R]` reaches it as an ordinary registered class — the
         // shipped registration supplies Binary and idem⊤, so nullify's
         // discipline is read from the registry rather than restated here,
@@ -602,11 +659,11 @@ where
             // hand: the same predicate that took the I0 section before the
             // transact and that keys the hint fold after it.
             if reg.idem {
-                // The one question this gate asks of the WORLD rather than of
+                // The one question this gate asks of the world rather than of
                 // the format: the three reads above are the module's compiled
                 // registry, and only this one is per-store state. Asked at
                 // the caller's visibility class (PUB-6.25): the predicate is
-                // evaluated over the WORKING world — the world this
+                // evaluated over the working world — the world this
                 // transaction is writing — at each candidate's home.
                 let world = stg.working();
                 if let Some(incumbent) = world
@@ -636,23 +693,30 @@ where
 
 // ── the `replaces` class — the authority successor (PUB-5.15) ─────────────
 
-/// THE `replaces` TYPE — the commons VALUE `1.1.0.1.0.1.0.3.12`, the core
-/// vocabulary's vacant ordinal (the board's (rep-N) RULED, owner 2026-09-29:
-/// "tke 3.12"; PUB-5.15 as RES-310 pins it): the type of the AUTHORITY
-/// SUCCESSOR, the link a record's own transaction deposits beside it to name
-/// the state that record REPLACES — `from` the record, `to` the record
-/// replaced (PUB-5.15 (iii), (iv); the authority link type investigation's
-/// §3 (A′)). A value, never a registration: [`TypeRegistry`](crate::TypeRegistry)
-/// is untouched, as it is by every commons type, and no sixth shipped class
-/// exists.
+/// Returns the `replaces` type — the commons value `1.1.0.1.0.1.0.3.12`.
 ///
-/// M7's OWN spelling, where its two readers here can read it — the class
+/// It is the core vocabulary's vacant ordinal (PUB-5.15, as RES-310 pins
+/// it): the type of the authority successor, the link a record's own
+/// transaction deposits beside it to name the state that record replaces —
+/// `from` the record, `to` the record replaced (PUB-5.15 (iii), (iv); the
+/// authority link type investigation's §3 (A′)). A value, never a
+/// registration: [`TypeRegistry`](crate::TypeRegistry) is untouched, as it
+/// is by every commons type, and no sixth shipped class exists.
+///
+/// M7's own spelling, where its two readers here can read it — the class
 /// the sole-writer fences compare against (`replaces_class`, below) and the
 /// one write that mints the class ([`LinkWriter::makelink_replacing`]) — M7
 /// sitting below the engine, whose commons ledger pins the same address
 /// again (`skep_engine::types::t_replaces`) and whose ledger test holds the
-/// two spellings EQUAL. Held, not built per call: the fences ask on every
-/// MAKELINK, `emit` and `editlink`.
+/// two spellings equal. Held, not built per call, as the class built from
+/// it is: the fences ask that class on every MAKELINK, `emit` and
+/// `editlink`, and the one write that mints the class reads this address
+/// on every call.
+///
+/// # Panics
+///
+/// Panics if `1.1.0.1.0.1.0.3.12` is not a nonempty T4-valid address, which
+/// can only happen if the constant itself is edited.
 pub fn replaces_type() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| {
         validate(
@@ -664,20 +728,23 @@ pub fn replaces_type() -> &'static Address {
     &ADDR
 }
 
-/// The `replaces` class's coverage class — what the three fences compare a
-/// type slot's own class to, exactly as the `[R]` and `[K_sup]` fences
-/// compare theirs to [`crate::TypeRegistry::shipped_class`]'s answer.
+/// Returns the `replaces` class's coverage class.
+///
+/// It is what the three fences compare a type slot's own class to, exactly
+/// as the `[R]` and `[K_sup]` fences compare theirs to
+/// [`crate::TypeRegistry::shipped_class`]'s answer.
 fn replaces_class() -> &'static CoverageClass {
     static CLASS: LazyLock<CoverageClass> =
         LazyLock::new(|| coverage_class(&enc([replaces_type()])));
     &CLASS
 }
 
-/// Whether the type slot `ty` lands in the `replaces` class — the class's
-/// sole-writer fence (PUB-5.15, RES-309/310) as a TOTAL predicate, for a
-/// caller holding an endset whose shape it has not checked: the daemon asks
-/// it of a request ahead of the transaction, so the wire's code
-/// (`replaces_not_standalone`) and the store's refusal fall on the same
+/// Returns whether the type slot `ty` lands in the `replaces` class.
+///
+/// It is the class's sole-writer fence (PUB-5.15, RES-309/310) as a total
+/// predicate, for a caller holding an endset whose shape it has not checked:
+/// the daemon asks it of a request ahead of the transaction, so the wire's
+/// code (`replaces_not_standalone`) and the store's refusal fall on the same
 /// slots. Every write that takes a caller's type slot refuses exactly the
 /// slots this answers `true` for — MAKELINK in both forms
 /// ([`MakeLinkError::ReplacesClass`]), `emit` ([`EmitError::ReplacesClass`])
@@ -685,13 +752,13 @@ fn replaces_class() -> &'static CoverageClass {
 /// comparing the class it already holds with the same class, inside its own
 /// checked region.
 ///
-/// Coverage-class EQUALITY, the `[K_sup]` fence's rule: a slot naming the
+/// Coverage-class equality, the `[K_sup]` fence's rule: a slot naming the
 /// type, alone or beside its own subtypes, is the class; a slot naming a
 /// subtype alone, or the type beside another class, is not — and the grant
-/// fold, which reads a `replaces` link by its type slot denoting EXACTLY
+/// fold, which reads a `replaces` link by its type slot denoting exactly
 /// this address, reads no slot this fence admits.
 ///
-/// Total over every endset: only an ADDRESS-DENOTING slot can name the type
+/// Total over every endset: only an address-denoting slot can name the type
 /// (a `Resolve` slot resolves to content, never to a ghost address), so any
 /// other answers `false` before a class is computed — which is also what
 /// keeps [`coverage_class`]'s level-uniformity precondition off a

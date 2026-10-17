@@ -1,4 +1,4 @@
-//! # skep-links — M7: Link & Relation Store
+//! skep-links — M7: Link & Relation Store.
 //!
 //! The **authoritative, append-only store of links and typed relations** —
 //! every connection in the docuverse — keyed by the link's own permanent
@@ -16,15 +16,15 @@
 //! authoritative state is one append-only map; everything else is a
 //! recomputable hint — lose any hint and replay rebuilds it, never wrong —
 //! and the type registry is a compiled format constant, not state (the five
-//! reserved classes are ghost tumblers, [`ReservedAddrs::format`]; owner
-//! ruling, 2026-08-26). There is no update, no delete, no tombstone record.
+//! reserved classes are ghost tumblers, [`ReservedAddrs::format`]). There is
+//! no update, no delete, no tombstone record.
 //!
-//! ## Boundary — deliberately NOT owned here
+//! ## Boundary — deliberately not owned here
 //!
 //! * address minting and home-existence/ownership facts (M3 — M7 *calls*
 //!   `mint_link`, reads `is_registered_document`);
 //! * the V→I arrangement and home seating mechanism (M5 — M7 *calls* the
-//!   semantics-blind `resolve`/`stage_seat_link`, never interpreting
+//!   semantics-blind `iter_resolve`/`stage_seat_link`, never interpreting
 //!   arrangement, never reading link semantics back);
 //! * ordering/durability/recovery (M2);
 //! * the provenance relation R (M5 — link placement is uncoupled from R,
@@ -47,26 +47,26 @@
 //! load, before replay. M7's dedup `LockKey` draws the `Space::CoverageClass`
 //! tag from M2's central enum; namespace alloc keys come from M3's
 //! `link_lock_key`. The type registry every gate and fold reads is the
-//! module's own compiled constant, [`registry`], so an assembler that needs it
-//! (M9's catalog, the world dump) shares that one value rather than building a
-//! second from the same constants. A caller THREADS IN two values, and M7
-//! interprets neither. Its [`Visibility`] class (PUB round 2, lane 3.3b):
-//! the write handle takes the caller's read predicate at construction, and
-//! the value-keyed gates (idempotency, `assert_sup`'s dedup) see only the
+//! module's own compiled constant, [`registry()`], so an assembler that needs
+//! it (M9's catalog, the world dump) shares that one value rather than
+//! building a second from the same constants. A caller threads in two
+//! values, and M7 interprets neither. Its [`Visibility`] class: the write
+//! handle takes the caller's read predicate at construction, and the
+//! value-keyed gates (idempotency, `assert_sup`'s dedup) see only the
 //! incumbents that predicate admits at link-home identity — M7 names no
-//! principal. And, since signed ops, the ATTESTATION its link writes commit
-//! under ([`LinkWriter::attested`]; `None` through [`LinkWriter::new`]) —
+//! principal. And the attestation its link writes commit under (signed ops;
+//! [`LinkWriter::attested`]; `None` through [`LinkWriter::new`]) —
 //! `makelink` in both forms, `emit`, `nullify`, `assert_sup` and `editlink`,
 //! each one transaction: handed to the kernel's attested arm at that
 //! transaction's commit marker, and read by no gate, no fold and no index
-//! here. What a signature over one of them covers is the STORED link —
+//! here. What a signature over one of them covers is the stored link —
 //! the endset each slot deposits, verbatim — which the daemon's composer
 //! reads off this crate's own builders ahead of the transaction:
 //! [`slot_endset`] for a MAKELINK's slots, [`emit_tuple`],
 //! [`retraction_tuple`] and [`supersession_claim`] for the managed writes'
 //! tuples.
 //!
-//! One commons VALUE is spelled here, beside the fences that read it: the
+//! One commons value is spelled here, beside the fences that read it: the
 //! `replaces` type ([`replaces_type`]; PUB-5.15), the authority successor
 //! whose one writer is [`LinkWriter::makelink_replacing`] — a type no
 //! registration holds, which every write that takes a caller's type slot
@@ -100,8 +100,8 @@ mod dedup;
 // The two per-slot budgets: the spans a slot keeps, the resolve steps it
 // commands.
 mod budget;
-// The typed rejections, each enum in its op's precedence order, and
-// FOLLOWLINK's ⊥.
+// The typed rejections, each enum in its op's precedence order bar two
+// hoists, and FOLLOWLINK's ⊥.
 mod error;
 // M7's slice: `LinkState` (the authoritative map and the hints folded from
 // it), the one delta `LinkRec`, the fold; beneath it `state/reads.rs`, the
@@ -115,9 +115,9 @@ mod writes;
 pub use budget::{MAX_SLOT_RESOLVE_STEPS, MAX_SLOT_SPANS};
 pub use class::{coverage_class, CoverageClass};
 pub use endset::{enc, Endset, IntoSpans, Link, Spans};
-// The ONE caller-identity type of the write-surface ownership gate
-// (as amended 2026-08-16) — defined beside M5's edit ops, re-exported here
-// because M7's five deposit ops take it too.
+// The one caller-identity type of the write-surface ownership gate —
+// defined beside M5's edit ops, re-exported here because M7's five deposit
+// ops, MAKELINK in both forms, take it too.
 pub use skep_arrangement::Caller;
 pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
@@ -132,14 +132,16 @@ pub use writes::{
     supersession_claim, Edit, LinkWriter, SlotArg, Visibility,
 };
 
-/// The auto traits M7's slice promises without saying. `WorldState` is
-/// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes
-/// those bounds of [`LinkState`] and [`LinkRec`] through types no signature
-/// in this crate mentions — and they are kept by what the private fields
-/// contain, so swapping this crate's `im` for the `Rc`-backed `im-rc` would
-/// revoke them with nothing here failing to build. Asserted in the library
-/// rather than the suite, because that is the build a manifest change is made
-/// in, and it is this crate's manifest that names `im`.
+/// The auto traits M7's slice promises without saying.
+///
+/// `WorldState` is `Send + Sync + 'static`, so the engine's
+/// `impl WorldState for World` owes those bounds of [`LinkState`] and
+/// [`LinkRec`] through types no signature in this crate mentions — and they
+/// are kept by what the private fields contain, so swapping this crate's `im`
+/// for the `Rc`-backed `im-rc` would revoke them with nothing here failing to
+/// build. Asserted in the library rather than the suite, because that is the
+/// build a manifest change is made in, and it is this crate's manifest that
+/// names `im`.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<LinkState>(); // the `WorldState` bound reaches this through the engine
@@ -165,22 +167,25 @@ const _: fn() = || {
     // not `'static` and cannot ride this helper.
 };
 
-/// The engine's **read accessor** for M7's slice (Engine Composition
-/// Contract): the engine implements this for its concrete world
+/// The engine's **read accessor** for M7's slice (Engine Composition Contract).
+///
+/// The engine implements this for its concrete world
 /// (`W: WorldState + HasLinks`), and M7 — built before `W` exists — codes
 /// against it, reaching its slice as `stg.working().links()` inside a
-/// composite and `snapshot.world().links()` for a read. READ side only; the
+/// composite and `snapshot.world().links()` for a read. Read side only; the
 /// write-side mirror is the engine's `impl From<LinkRec> for W::Record` lift.
 pub trait HasLinks {
-    /// M7's slice of the world state.
+    /// Returns M7's slice of the world state.
     fn links(&self) -> &LinkState;
 }
 
-/// The world M7 deposits into: M2's fold contract, M7's own slice, and M3's —
-/// every write path reads the store to gate and calls the namespace to mint,
-/// so the three travel together and are named once here. MAKELINK adds
-/// `HasM5` on top, being the only op that seats. Blanket-implemented, so an
-/// engine that implements the accessors gets this for free.
+/// The world M7 deposits into: M2's fold contract, M7's own slice, and M3's.
+///
+/// Every write path passes the deposit gate, which reads the store and calls
+/// the namespace to mint, so the three travel together and are named once
+/// here. MAKELINK adds `HasM5` on top, being the only op that seats.
+/// Blanket-implemented, so an engine that implements the accessors gets this
+/// for free.
 pub trait LinkWorld: WorldState + HasLinks + HasM3 {}
 impl<W: WorldState + HasLinks + HasM3> LinkWorld for W {}
 
@@ -190,11 +195,11 @@ impl<W: WorldState + HasLinks + HasM3> LinkWorld for W {}
 // M8's region and descriptor queries included. The subspace numerals `s_C`
 // and `s_L` are M1's, named there as `content_subspace`/`link_subspace`.
 
-/// FROM = 1 — the slot holding `e₁` ([`Link::from_slot`]).
+/// `FROM` = 1 — the slot holding `e₁` ([`Link::from_slot`]).
 pub const FROM: usize = 1;
 
-/// TO = 2 — the slot holding `e₂` ([`Link::to_slot`]).
+/// `TO` = 2 — the slot holding `e₂` ([`Link::to_slot`]).
 pub const TO: usize = 2;
 
-/// TYPE = 3 — the slot holding `e₃` ([`Link::type_slot`]).
+/// `TYPE` = 3 — the slot holding `e₃` ([`Link::type_slot`]).
 pub const TYPE: usize = 3;

@@ -1,11 +1,11 @@
-//! §B — the immutable, construction-time type registry: shape/idempotence/
-//! behavior registration per coverage class, built from compiled format
-//! constants ([`TypeRegistry::build`]) and never mutated (P1/P2 of
-//! ASN-0126, R1/R2 of ASN-0128 — no mutator exists). The registry's
-//! population is the five shipped classes and nothing else: the app-declared
-//! types seam was deleted by the owner ruling of 2026-08-26 (second clause) —
-//! the architecture's extension path is predicates (pdef content), not new
-//! compiled substrate classes.
+//! The immutable, construction-time type registry (§B).
+//!
+//! It holds the shape/idempotence/behavior registration per coverage class,
+//! built from compiled format constants ([`TypeRegistry::build`]) and never
+//! mutated (P1/P2 of ASN-0126, R1/R2 of ASN-0128 — no mutator exists). The
+//! registry's population is the five shipped classes and nothing else: there
+//! is no app-declared types seam — the architecture's extension path is
+//! predicates (pdef content), not new compiled substrate classes.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
@@ -16,37 +16,42 @@ use skep_namespace::ghost_position;
 use crate::class::{coverage_class, CoverageClass};
 use crate::endset::{enc, Endset, Link};
 
-/// A registered type's tuple shape (ASN-0126 P3): conformance counts the
-/// stored decomposition's spans — one FROM span always, and per shape no TO
-/// span (Unary), exactly one (Binary), or any finite number (Multi). That
-/// count is P3's set-valued `|F|`/`|G|` on the duplicate-free endsets the
-/// managed surface builds ([`Endset::len`]).
+/// A registered type's tuple shape (ASN-0126 P3).
 ///
-/// Sh-conf is a GATE ON THE MANAGED SURFACE, not an invariant of the store:
-/// `emit`, `assert_sup` and `editlink`'s claim pass it; MAKELINK and an
-/// `editlink` successor take the open deposit gate and are shape-blind. So a
-/// stored link may sit in a registered class without conforming to that
-/// class's shape, and a read over a typed slice must not assume otherwise.
-/// The three classes whose STORED discipline is guaranteed are `[R]`,
-/// `[K_sup]` and the `replaces` class (PUB-5.15), held by their sole-writer
-/// fences rather than by this shape.
+/// Conformance counts the stored decomposition's spans — one `FROM` span
+/// always, and per shape no `TO` span (Unary), exactly one (Binary), or any
+/// finite number (Multi). That count is P3's set-valued `|F|`/`|G|` on the
+/// duplicate-free endsets the managed surface builds ([`Endset::len`]).
+///
+/// Sh-conf is a gate on the managed surface, not an invariant of the store:
+/// `emit`, `nullify`, `assert_sup` and `editlink`'s claim pass it; MAKELINK
+/// and an `editlink` successor take the open deposit gate and are
+/// shape-blind. So a stored link may sit in a registered class without
+/// conforming to that class's shape, and a read over a typed slice must not
+/// assume otherwise. The three classes whose stored discipline is guaranteed
+/// are `[R]`, `[K_sup]` and the `replaces` class (PUB-5.15), held by their
+/// sole-writer fences rather than by this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
+    /// No `TO` span.
     Unary,
+    /// Exactly one `TO` span.
     Binary,
+    /// Any finite number of `TO` spans.
     Multi,
 }
 
-/// Sh-conf (P3): a value's SPAN COUNTS against a REGISTERED shape — the rule
-/// [`Shape`] states, deciding it where the shape is declared rather than at
-/// the gate that happens to consult it. Never infers a shape from the tuple
-/// (a `(1,0)` tuple conforms under Unary AND Multi). Reads both counts off
-/// the link itself, so they cannot arrive in the wrong order.
+/// Checks a value's span counts against a registered shape (Sh-conf, P3).
+///
+/// It decides the rule [`Shape`] states where the shape is declared rather
+/// than at the gate that happens to consult it. Never infers a shape from the
+/// tuple (a `(1,0)` tuple conforms under Unary and Multi). Reads both counts
+/// off the link itself, so they cannot arrive in the wrong order.
 ///
 /// The counts are of the stored decomposition ([`Endset::len`]), which is
 /// ASN-0126's set-valued `|F|`/`|G|` on a duplicate-free endset — every endset
-/// this gate sees, since `emit` builds both slots through [`enc`] — and
-/// over-counts a repeated span.
+/// this gate sees is [`enc`]-built, and so duplicate-free unless its caller
+/// names an address twice — and over-counts a repeated span.
 pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
     value.from_slot().len() == 1
         && match shape {
@@ -56,88 +61,101 @@ pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
         }
 }
 
-/// The four behavior atoms of ASN-0128, whose names there are `ReadFilter`
-/// (BH1), `DeterminateWalk` (BH2), `TypedReverseLookup` (BH3) and
-/// `AgeStaleness` (BH4); each variant below names its own. `Ord` so the set
-/// backs a `BTreeSet`.
+/// The four behavior atoms of ASN-0128.
 ///
-/// Declaring one CONFERS a set of reads and, separately, GATES a smaller set
+/// Their names there are `ReadFilter` (BH1), `DeterminateWalk` (BH2),
+/// `TypedReverseLookup` (BH3) and `AgeStaleness` (BH4); each variant below
+/// names its own. `Ord` so the set backs a `BTreeSet`.
+///
+/// Declaring one confers a set of reads and, separately, gates a smaller set
 /// — in v1 only BH3's join and BH4's `stale` read a declaration back, the
 /// other two being fixed to their shipped class. Each variant says which is
 /// which, because "declared ⇒ served" is not the same as "declared ⇒
-/// consulted", and what buys the first here is the POPULATION rather than any
-/// check: the registry holds the compiled shipped table and nothing else, so
-/// the only declarations in force are the note-pinned shipped ones — BH1 on
-/// `Retired`, BH2 on `Supersedes` — no second BH1 or BH2 declaration can
+/// consulted", and what buys the first here is the population rather than
+/// any check: the registry holds the compiled shipped table and nothing else,
+/// so the only declarations in force are the note-pinned shipped ones — BH1
+/// on `Retired`, BH2 on `Supersedes` — no second BH1 or BH2 declaration can
 /// exist to be unserved, and the two declaration-reading gates run over a
 /// population that declares neither BH3 nor BH4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Behavior {
-    /// BH1 — ASN-0128's `ReadFilter` (⇒ Unary). CONFERS `is_filtered` and the
-    /// result-side `View::Default` rewrite. GATES NOTHING at read time: v1's
-    /// `is_filtered` is type-less, reading the shipped `Retired` class
-    /// directly, so this declaration exists on exactly one registration and
-    /// no read consults it.
+    /// BH1 — ASN-0128's `ReadFilter` (⇒ Unary).
+    ///
+    /// It confers `is_filtered` and the result-side `View::Default` rewrite,
+    /// and gates nothing at read time: v1's `is_filtered` is type-less,
+    /// reading the shipped `Retired` class directly, so this declaration
+    /// exists on exactly one registration and no read consults it.
     ReadFilter,
-    /// BH2 — ASN-0128's `DeterminateWalk` (⇒ Binary), and DETERMINACY is the
-    /// half of that name the variant drops: the walk it confers halts at a
-    /// branch or a cycle rather than choosing, which is what `Tip`'s
-    /// `Indeterminate` reports the absence of. CONFERS `succs`, `chain`,
-    /// `tip`, `is_in_chain`. GATES NOTHING at read time: the walk-scope test
-    /// compares against the shipped `Supersedes` CLASS.
+    /// BH2 — ASN-0128's `DeterminateWalk` (⇒ Binary).
+    ///
+    /// Determinacy is the half of that name the variant drops: the walk it
+    /// confers halts at a branch or a cycle rather than choosing, which is
+    /// what `Tip`'s `Indeterminate` reports the absence of. It confers
+    /// `succs`, `chain`, `tip`, `is_in_chain`, and gates nothing at read
+    /// time: the walk-scope test compares against the shipped `Supersedes`
+    /// class.
     Walk,
-    /// BH3 — ASN-0128's `TypedReverseLookup` (⇒ Binary). CONFERS `sources_to`,
-    /// `target_of`, `targets_keyed`. Of those, `targets_keyed` alone consults
-    /// the declaration (through [`TypeRegistry::reverse_lookup_classes`],
-    /// which M9's catalog also reads for the join's footprint); `sources_to`
-    /// and `target_of` answer for any registered class, declared or not. No
-    /// shipped class declares it, so in this format `targets_keyed`'s join
-    /// covers no class.
+    /// BH3 — ASN-0128's `TypedReverseLookup` (⇒ Binary).
+    ///
+    /// It confers `sources_to`, `target_of`, `targets_keyed`. Of those,
+    /// `targets_keyed` alone consults the declaration (through
+    /// [`TypeRegistry::reverse_lookup_classes`], which M9's catalog also
+    /// reads for the join's footprint); `sources_to` and `target_of` answer
+    /// for any registered class, declared or not. No shipped class declares
+    /// it, so in this format `targets_keyed`'s join covers no class.
     ReverseLookup,
-    /// BH4 — ASN-0128's `AgeStaleness` (⇒ idem = ⊥, any shape). CONFERS `age`,
-    /// `stale`, `retract_stale`. GATES `stale` — and so `retract_stale`, which
-    /// builds its batch from it — and NOT `age`, which reads no registration
-    /// and answers for any resident link. The `Age` half of the corpus name is
-    /// the ungated one; the `Staleness` half is the gate. No shipped class
-    /// declares it (all five are idem⊤), so in this format `stale` refuses
-    /// every class.
+    /// BH4 — ASN-0128's `AgeStaleness` (⇒ idem = ⊥, any shape).
+    ///
+    /// It confers `age`, `stale`, `retract_stale`. It gates `stale` — and so
+    /// `retract_stale`, which builds its batch from it — and not `age`, which
+    /// reads no registration and answers for any resident link. The `Age`
+    /// half of the corpus name is the ungated one; the `Staleness` half is
+    /// the gate. No shipped class declares it (all five are idem⊤), so in
+    /// this format `stale` refuses every class.
     Age,
 }
 
-/// One type's registration: shape, idempotence flag, behavior set. A `std`
-/// `BTreeSet` over a four-variant `Copy` enum; every registration is seeded
-/// from the note-pinned shipped table when the module's [`registry`] is built
-/// and is immutable thereafter — there are no persistent updates to share,
-/// and that registry is built once per process, so no fold copies it.
+/// One type's registration: shape, idempotence flag, behavior set.
 ///
-/// `idem` is the MANAGED SURFACE'S DEDUP DISCIPLINE, not a uniqueness
+/// The behavior set is a `std` `BTreeSet` over a four-variant `Copy` enum;
+/// every registration is seeded from the note-pinned shipped table when the
+/// module's [`registry`] is built and is immutable thereafter — there are no
+/// persistent updates to share, and that registry is built once per process,
+/// so no fold copies it.
+///
+/// `idem` is the managed surface's dedup discipline, not a uniqueness
 /// invariant on the class: MAKELINK deposits into a registered idem⊤ class
 /// with neither the dedup lock nor the in-transaction check, so a class may
 /// hold several active tuples of one I0 identity. That is why the incumbent
-/// a dedup hit returns is specified as the T1-LEAST active match rather than
-/// as "the one". `shape` is a gate in the same sense — see [`Shape`].
+/// a dedup hit returns is specified as the T1-least active match the caller
+/// can read rather than as "the one". `shape` is a gate in the same sense —
+/// see [`Shape`].
 ///
-/// NOT `Serialize`, and neither are [`Shape`] and [`Behavior`]: a
+/// Not `Serialize`, and neither are [`Shape`] and [`Behavior`]: a
 /// registration is read out of the module's compiled format registry, which
 /// rides no checkpoint (it is keyed by the non-`Serialize` [`CoverageClass`]),
 /// so nothing in the crate's serialized reach contains one. Deriving serde
-/// across the three would fix `Shape`'s and `Behavior`'s variant ORDER for
-/// bincode and their variant NAMES for JSON on behalf of no wire — and
+/// across the three would fix `Shape`'s and `Behavior`'s variant order for
+/// bincode and their variant names for JSON on behalf of no wire — and
 /// `Behavior` is the one ASN-0128 could extend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
+    /// The registered tuple shape.
     pub shape: Shape,
+    /// Whether the class is idem⊤: its managed deposits de-duplicate.
     pub idem: bool,
+    /// The behavior atoms the class declares.
     pub behaviors: BTreeSet<Behavior>,
 }
 
-/// The five reserved type addresses — GHOST TUMBLERS, compiled format
-/// constants (owner ruling, 2026-08-26; [`ReservedAddrs::format`] is the one
-/// value): in-docuverse, T4-valid content positions at which nothing exists
-/// and nothing is ever minted. A type is a number — the daemon's semantics
-/// for the five shipped classes are compiled in, every other type means what
-/// its interpreting client says it means, and no document anywhere is
-/// semantically authoritative for a type.
+/// The five reserved type addresses: ghost tumblers, compiled format constants.
+///
+/// [`ReservedAddrs::format`] is the one value: in-docuverse, T4-valid
+/// content positions at which nothing exists and nothing is ever minted. A
+/// type is a number — the daemon's semantics for the five shipped classes
+/// are compiled in, every other type means what its interpreting client says
+/// it means, and no document anywhere is semantically authoritative for a
+/// type.
 ///
 /// `pred_def`/`pred_stable` are M9-coordinated addresses; their `Unary/⊤/{}`
 /// registrations are the PredLayer registration agreement — the companion
@@ -145,7 +163,9 @@ pub struct Registration {
 /// local M7 edit (§B).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReservedAddrs {
+    /// The `PredDef` class's address — ghost position 1.
     pub pred_def: Address,
+    /// The `PredStable` class's address — ghost position 2.
     pub pred_stable: Address,
     /// `[K_ret]` — the shipped BH1 filter class.
     pub retired: Address,
@@ -156,21 +176,22 @@ pub struct ReservedAddrs {
 }
 
 impl ReservedAddrs {
-    /// THE five values, format-frozen 2026-08-26: ghost tumblers
-    /// `1.1.0.1.0.1.0.1.x` for x = 1..=5 — content positions 1–5 of doc 1 of
-    /// account 1 (the operator's) of the registry node `1.1`, read verbatim
-    /// from M3's [`ghost_position`] so the addresses M7 dispatches on and the
-    /// region M3's allocator skips are one definition. Identical on every
-    /// board because they ARE the format, not because a sealed configuration
+    /// Returns the five values, frozen in the format.
+    ///
+    /// They are ghost tumblers `1.1.0.1.0.1.0.1.x` for x = 1..=5 — content
+    /// positions 1–5 of doc 1 of account 1 (the system account, keyless and
+    /// no operator's) of the registry node `1.1`, read verbatim from M3's
+    /// [`ghost_position`] so the addresses M7 dispatches on and the region
+    /// M3's allocator skips are one definition. Identical on every board
+    /// because they are the format, not because a sealed configuration
     /// enforces agreement.
     ///
     /// Collision-freedom — "a reserved name can never equal an allocated
-    /// address" — is the ALLOCATOR'S non-reissue guarantee, not subtree
+    /// address" — is the allocator's non-reissue guarantee, not subtree
     /// unreachability: the ghost content namespace's frontier is floored past
     /// the region and its membership excludes the five forever (M3's
-    /// `ghost_floor` carries the argument; the old out-of-tree `9.0.9.…`
-    /// space this replaces is abolished — no address space exists outside the
-    /// docuverse).
+    /// `ghost_floor` carries the argument; no address space exists outside
+    /// the docuverse).
     pub fn format() -> ReservedAddrs {
         ReservedAddrs {
             pred_def: ghost_position(1),
@@ -185,21 +206,28 @@ impl ReservedAddrs {
 /// The format-fixed shipped classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShippedType {
+    /// `[K_ret]`, the shipped filter class — ghost position 3.
     Retired,
+    /// `[K_sup]`, the shipped walk class — ghost position 4.
     Supersedes,
+    /// `[R]`, the retraction class — ghost position 5.
     Retraction,
+    /// The predicate layer's `pred_def` class — ghost position 1.
     PredDef,
+    /// The predicate layer's `pred_stable` class — ghost position 2.
     PredStable,
 }
 
 impl ShippedType {
-    /// The shipped set, ONCE — the one enumeration of the five, in declaration
-    /// order. Every walk over them reads it here: M7's own suite, the engine's
-    /// world dump, and whatever enumerates next. A second copy is how a walk
-    /// silently comes to cover four classes out of five. (The one place that
-    /// names the five WITHOUT walking this is `TypeRegistry::build`, which
-    /// binds each to its own reserved address; a variant added here without a
-    /// binding there is a missing field, not a silent gap.)
+    /// The shipped set, once — the one enumeration of the five.
+    ///
+    /// It lists them in declaration order. Every walk over them reads it
+    /// here: M7's own suite, the engine's world dump, and whatever enumerates
+    /// next. A second copy is how a walk silently comes to cover four classes
+    /// out of five. (`TypeRegistry::build` names the five without walking
+    /// this, binding each to its own reserved address, and so do exhaustive
+    /// matches such as `TypeRegistry::shipped`'s; a variant added here
+    /// without a binding there is a missing field, not a silent gap.)
     pub const ALL: [ShippedType; 5] = [
         ShippedType::Retired,
         ShippedType::Supersedes,
@@ -209,11 +237,13 @@ impl ShippedType {
     ];
 }
 
-/// One shipped type's two format-fixed facts, PAIRED: the endset a caller
-/// names the type by, and the [`CoverageClass`] every guard, fold and read
-/// recognizes it by. One constructor, so "the class is that type's own endset
-/// classified" holds by construction rather than by two five-arm matches a
-/// reader has to cross-check against each other.
+/// One shipped type's two format-fixed facts, paired.
+///
+/// They are the endset a caller names the type by, and the [`CoverageClass`]
+/// every guard, fold and read recognizes it by. One constructor, so "the
+/// class is that type's own endset classified" holds by construction rather
+/// than by two five-arm matches a reader has to cross-check against each
+/// other.
 #[derive(Debug)]
 struct Shipped {
     endset: Endset,
@@ -221,15 +251,20 @@ struct Shipped {
 }
 
 impl Shipped {
-    /// The per-address half of [`TypeRegistry::build`]'s startup assertion,
-    /// carried by the constructor rather than by a second loop over the same
-    /// five: a ghost tumbler is an element-level CONTENT position — the
-    /// in-docuverse form the 2026-08-26 ruling pins, and the shape M3's
-    /// ghost-region floor protects. (The superseded reserved-isolation clause
-    /// demanded the opposite subspace; its collision-freedom job now belongs
-    /// to the allocator's non-reissue guarantee — see
-    /// [`ReservedAddrs::format`].) Can only fail if the format constants
-    /// themselves are edited inconsistently.
+    /// Builds a shipped type's pair from its reserved address.
+    ///
+    /// It carries the per-address half of [`TypeRegistry::build`]'s startup
+    /// assertion, rather than a second loop over the same five: a ghost
+    /// tumbler is an element-level content position — the in-docuverse form
+    /// the format pins, and the shape M3's ghost-region floor protects.
+    /// Collision-freedom is the allocator's non-reissue guarantee — see
+    /// [`ReservedAddrs::format`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `addr` is not an element-level content position, which can
+    /// only happen if the format constants themselves are edited
+    /// inconsistently.
     fn of(addr: &Address) -> Shipped {
         assert_eq!(
             addr.level(),
@@ -249,41 +284,42 @@ impl Shipped {
     }
 }
 
-/// The immutable lookup registry: coverage class → registration, plus the five
-/// shipped types held BOTH ways — as the endset a caller names them by and as
-/// the class every guard recognizes them by, the two paired in
-/// one value per type so they cannot fall out of step. Both are fixed when
-/// the value is built, so the class a shipped type belongs to is a fact this
-/// registry knows rather than one its callers re-derive. RECOMPUTABLE from
-/// nothing but the compiled format constants — keyed by the non-`Serialize`
-/// [`CoverageClass`], so it never rides a checkpoint, and carrying no sealed
-/// configuration, because none exists.
+/// The immutable lookup registry: coverage class → registration.
 ///
-/// INVARIANT, established by `TypeRegistry::build`, its sole constructor and
-/// private to this file: the five shipped classes are pairwise distinct, each
-/// is registered, and `shipped_class(t)` is the class of `reserved_type(t)`.
-/// Every guard that recognizes a deposit by its class, and every read that
-/// compares one against a shipped class, leans on all three. That
-/// constructor is the one way to make one and nothing outside this file can
-/// reach it, so every `TypeRegistry` a caller can hold is [`registry`] — a
-/// FACT the startup assertion established rather than a value anyone can
-/// state.
+/// It also holds the five shipped types both ways — as the endset a caller
+/// names them by and as the class every guard recognizes them by, the two
+/// paired in one value per type so they cannot fall out of step. Both are
+/// fixed when the value is built, so the class a shipped type belongs to is a
+/// fact this registry knows rather than one its callers re-derive.
+/// Recomputable from nothing but the compiled format constants — keyed by the
+/// non-`Serialize` [`CoverageClass`], so it never rides a checkpoint, and
+/// carrying no sealed configuration, because none exists.
 ///
-/// An ENTITY, defined by that identity and not by its contents: the type is
+/// **Invariant.** Established by `TypeRegistry::build`, its sole constructor
+/// and private to this file: the five shipped classes are pairwise distinct,
+/// each is registered, and `shipped_class(t)` is the class of
+/// `reserved_type(t)`. Every guard that recognizes a deposit by its class,
+/// and every read that compares one against a shipped class, leans on all
+/// three. That constructor is the one way to make one and nothing outside
+/// this file can reach it, so every `TypeRegistry` a caller can hold is
+/// [`registry`] — a fact the startup assertion established rather than a
+/// value anyone can state.
+///
+/// An entity, defined by that identity and not by its contents: the type is
 /// deliberately not `Clone`, because a copy would be a second registry equal
 /// by value and distinct by identity — the very thing the private
 /// constructor exists to make unconstructible — and the workspace asserts
 /// the identity as `Arc::ptr_eq`. Every holder shares the one instance
 /// through the `Arc` [`registry`] hands out or a borrow of it.
 ///
-/// A PAIR, and both halves are load-bearing. The second says a copy cannot
+/// A pair, and both halves are load-bearing. The second says a copy cannot
 /// be made — the `Clone` bound is unsatisfiable, so a registry equal by value
 /// and distinct by identity is unconstructible as well as unbuildable. The
 /// first is what keeps that a statement about `Clone`: a bare `compile_fail`
-/// is satisfied by ANY compile error, so were the surrounding code to stop
+/// is satisfied by any compile error, so were the surrounding code to stop
 /// compiling for some unrelated reason — a renamed accessor, a changed
 /// return type — the refusal below would keep passing and pin nothing. The
-/// twin exercises everything but the bound, so such a break turns THIS half
+/// twin exercises everything but the bound, so such a break turns this half
 /// red and localizes itself. (The `E0277` code is checked on nightly only,
 /// which is why the twin rather than the annotation carries the weight.)
 ///
@@ -306,34 +342,38 @@ pub struct TypeRegistry {
 }
 
 impl TypeRegistry {
-    /// The registry's ONLY constructor (§B), a pure function of the compiled
-    /// format constants: seeds the five shipped types (each
-    /// `key = enc({reserved.<addr>})`) with their note-pinned registrations —
-    /// `Retired = Unary/⊤/{ReadFilter}` (ASN-0128 S1), `Supersedes =
-    /// Binary/⊤/{Walk}` (S2), `Retraction = Binary/⊤/{}` (S3), and the
-    /// PredLayer registration agreement `PredDef = PredStable = Unary/⊤/{}`
-    /// (an M9-negotiated constant, §B).
+    /// Builds the registry — its only constructor (§B).
     ///
-    /// Its checks are a STARTUP ASSERTION over the constants — the five ghost
-    /// tumblers are element-level content positions with pairwise-distinct
-    /// classes — which can fail only if the format constants are edited
-    /// inconsistently; no caller chooses the input, so none is handed an
-    /// `Err`.
+    /// A pure function of the compiled format constants, it seeds the five
+    /// shipped types (each keyed by the class of `enc({reserved.<addr>})`)
+    /// with their note-pinned registrations — `Retired = Unary/⊤/{ReadFilter}`
+    /// (ASN-0128 S1), `Supersedes = Binary/⊤/{Walk}` (S2),
+    /// `Retraction = Binary/⊤/{}` (S3), and the PredLayer registration
+    /// agreement `PredDef = PredStable = Unary/⊤/{}` (an M9-negotiated
+    /// constant, §B).
     ///
-    /// PRIVATE to this file, which is what makes [`registry`] "the ONE
+    /// Private to this file, which is what makes [`registry`] "the one
     /// instance" rather than a convention: a second build would be equal by
     /// value and distinct by identity, and the property this module publishes
     /// — that an assembler shares the instance the fold runs against — is an
     /// `Arc::ptr_eq`. No caller has reason to want a second: `build` takes
     /// nothing, so [`registry`] answers every question it could. Its one other
     /// caller is the unit suite beside it, which tests the build itself.
+    ///
+    /// # Panics
+    ///
+    /// Its checks are a startup assertion over the constants — the five ghost
+    /// tumblers are element-level content positions with pairwise-distinct
+    /// classes — so it panics only if the format constants are edited
+    /// inconsistently; no caller chooses the input, so none is handed an
+    /// `Err`.
     fn build() -> TypeRegistry {
         let reserved = ReservedAddrs::format();
         // Each shipped type's endset and its class are built together, so the
         // class this registry hands out for a `ShippedType` is that type's own
         // endset classified — never a positional coincidence. `Shipped::of`
         // carries the per-address half of the startup assertion, so the five
-        // are named here ONCE rather than walked again for it.
+        // are named here once rather than walked again for it.
         let retired = Shipped::of(&reserved.retired);
         let supersedes = Shipped::of(&reserved.supersedes);
         let retraction = Shipped::of(&reserved.retraction);
@@ -389,54 +429,62 @@ impl TypeRegistry {
         }
     }
 
-    /// The public class → registration lookup: `Some(reg)` for a registered
-    /// class, `None` for an unregistered one. [`CoverageClass`] is opaque and
-    /// [`coverage_class`] is its only constructor, so every argument is some
-    /// endset's actual class and `None` means unregistered. M7's own gates and
-    /// reads go through this lookup; a caller holding a shipped type asks
-    /// [`TypeRegistry::shipped_class`] for the key rather than classifying the
-    /// endset it reports, and a caller holding some other `Endset` classifies
-    /// it first.
+    /// Looks up a class's registration: `None` for an unregistered class.
+    ///
+    /// It is the public class → registration lookup, `Some(reg)` for a
+    /// registered class. [`CoverageClass`] is opaque and [`coverage_class`] is
+    /// its only constructor, so every argument is some endset's actual class
+    /// and `None` means unregistered. M7's own gates and reads go through this
+    /// lookup, save the BH3 join, which walks the registrations through
+    /// [`TypeRegistry::reverse_lookup_classes`]; a caller holding a shipped
+    /// type asks [`TypeRegistry::shipped_class`] for the key rather than
+    /// classifying the endset it reports, and a caller holding some other
+    /// `Endset` classifies it first.
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
         self.registrations.get(class)
     }
 
-    /// Whether a registered class DECLARES a behavior — the "served only where
-    /// declared" test, decided here where the shipped table above is in view,
-    /// as [`TypeRegistry::reverse_lookup_classes`] is. An unregistered class
+    /// Returns whether a registered class declares a behavior.
+    ///
+    /// It is the "served only where declared" test, decided here where the
+    /// shipped table above is in view, as
+    /// [`TypeRegistry::reverse_lookup_classes`] is. An unregistered class
     /// declares nothing. Which registrations answer to a behavior is this
-    /// registry's own knowledge, so the one gate that reads a declaration back
-    /// (`stale`'s BH4 fence) asks rather than destructuring a `Registration`
-    /// at the read surface — and M9's catalog reads its BH1 footprint through
-    /// it rather than through the field.
+    /// registry's own knowledge, so `stale`'s BH4 fence, the one gate that
+    /// reads a declaration back through this test, asks rather than
+    /// destructuring a `Registration` at the read surface — and M9's catalog
+    /// reads its BH1 footprint through it rather than through the field.
     pub fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
         self.registration(class)
             .is_some_and(|reg| reg.behaviors.contains(&behavior))
     }
 
-    /// Whether a class is REGISTERED and idem⊤ — a class whose managed
-    /// deposits de-duplicate (ASN-0128 I1); an unregistered class is not
-    /// idempotent. Which classes de-duplicate is this registry's own
-    /// knowledge, as which declare a behavior is, so it is decided here
-    /// beside [`TypeRegistry::declares`]. The one statement of the predicate
-    /// the two derived decisions apply — whether a deposit takes M2's I0
-    /// section, and whether the hint fold indexes it under its dedup key —
-    /// so the section M2 serializes and the key the fold indexes agree by
-    /// one name. The in-transaction check reads the same flag off the
-    /// `Registration` it already holds for the shape, which is the third
+    /// Returns whether a class is registered and idem⊤.
+    ///
+    /// That is a class whose managed deposits de-duplicate (ASN-0128 I1); an
+    /// unregistered class is not idempotent. Which classes de-duplicate is
+    /// this registry's own knowledge, as which declare a behavior is, so it
+    /// is decided here beside [`TypeRegistry::declares`]. The one statement
+    /// of the predicate the two derived decisions apply — whether a deposit
+    /// takes M2's I0 section, and whether the hint fold indexes it under its
+    /// dedup key — so the section M2 serializes and the key the fold indexes
+    /// agree by one name. The in-transaction check reads the same flag off
+    /// the `Registration` it already holds for the shape, which is the third
     /// spelling this one is the source of.
     pub(crate) fn is_idempotent(&self, class: &CoverageClass) -> bool {
         self.registration(class).is_some_and(|reg| reg.idem)
     }
 
-    /// The classes the BH3 join covers: registered `Binary` classes declaring
-    /// `ReverseLookup`. Which registrations answer to a behavior is this
-    /// registry's own knowledge, so the predicate reads here, where the
-    /// shipped table above is in view. No shipped registration declares BH3,
-    /// so over this format's fixed population the iterator is empty — kept as
-    /// the one statement of the rule, not specialized to the population — and
-    /// M9's catalog reads `targets_keyed`'s footprint from it, so the join and
-    /// the analysis of what it reads cannot come apart.
+    /// Returns the classes the BH3 join covers.
+    ///
+    /// They are the registered `Binary` classes declaring `ReverseLookup`.
+    /// Which registrations answer to a behavior is this registry's own
+    /// knowledge, so the predicate reads here, where the shipped table above
+    /// is in view. No shipped registration declares BH3, so over this
+    /// format's fixed population the iterator is empty — kept as the one
+    /// statement of the rule, not specialized to the population — and M9's
+    /// catalog reads `targets_keyed`'s footprint from it, so the join and the
+    /// analysis of what it reads cannot come apart.
     pub fn reverse_lookup_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
         self.registrations
             .iter()
@@ -446,28 +494,33 @@ impl TypeRegistry {
             .map(|(class, _)| class)
     }
 
-    /// The format-fixed type endset for a shipped class — for a caller
-    /// holding the registry: M9's catalog projection reads each shipped
-    /// class from this at assembly, and M7's own write ops read the
-    /// `Retraction` and `Supersedes` endsets here to build their tuples.
+    /// Returns the format-fixed type endset for a shipped class.
+    ///
+    /// It is for a caller holding the registry: M9's catalog projection reads
+    /// each shipped class from this at assembly, and M7's own write ops read
+    /// the `Retraction` and `Supersedes` endsets here to build their tuples.
     /// [`crate::LinkState::reserved_type`] is the snapshot-bound delegate, for
     /// a caller holding the slice instead.
     pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
         &self.shipped(ty).endset
     }
 
-    /// The coverage class of a shipped type — the recognition key the write
-    /// gates, the hint fold and the read surface all compare against, fixed
-    /// at build alongside the endset it classifies — and the class M9's
-    /// catalog carries for each shipped type, read from the pairing rather
-    /// than re-derived from [`TypeRegistry::reserved_type`]'s answer.
+    /// Returns the coverage class of a shipped type.
+    ///
+    /// It is the recognition key the write gates, the hint fold and the read
+    /// surface all compare against, fixed at build alongside the endset it
+    /// classifies — and the class M9's catalog carries for each shipped type,
+    /// read from the pairing rather than re-derived from
+    /// [`TypeRegistry::reserved_type`]'s answer.
     pub fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
         &self.shipped(ty).class
     }
 
-    /// The one dispatch over the five, so the endset a shipped type reports
-    /// and the class it reports come out of one [`Shipped`] rather than out of
-    /// two matches that could fall out of step.
+    /// Returns a shipped type's pair — the one dispatch over the five.
+    ///
+    /// Dispatching once means the endset a shipped type reports and the class
+    /// it reports come out of one [`Shipped`] rather than out of two matches
+    /// that could fall out of step.
     fn shipped(&self, ty: ShippedType) -> &Shipped {
         match ty {
             ShippedType::Retired => &self.retired,
@@ -479,7 +532,8 @@ impl TypeRegistry {
     }
 }
 
-/// THE registry — the compiled format constant, built once per process.
+/// The registry — the compiled format constant, built once per process.
+///
 /// [`TypeRegistry::build`] is a pure function of [`ReservedAddrs::format`], so
 /// there is nothing per-instance to hold: every slice, every writer and every
 /// assembler reads this one value, and "the assembler shares the instance the
@@ -490,11 +544,12 @@ impl TypeRegistry {
 /// `Arc<TypeRegistry>`, so this hands out one to clone.
 static REGISTRY: LazyLock<Arc<TypeRegistry>> = LazyLock::new(|| Arc::new(TypeRegistry::build()));
 
-/// The module's format registry — the ONE instance, and the one M7's own fold,
-/// gates and reads run against. An assembler that needs the registry (M9's
-/// catalog projection, the engine's world dump) reads it here rather than
-/// building a second copy from the same constants, which is what makes
-/// agreement structural.
+/// Returns the module's format registry — the one instance.
+///
+/// It is the one M7's own fold, gates and reads run against. An assembler
+/// that needs the registry (M9's catalog projection, the engine's world
+/// dump) reads it here rather than building a second copy from the same
+/// constants, which is what makes agreement structural.
 pub fn registry() -> &'static Arc<TypeRegistry> {
     &REGISTRY
 }
@@ -516,10 +571,11 @@ mod tests {
         .expect("T4-valid")
     }
 
-    /// [`ShippedType::ALL`] is THE enumeration, and a walk over it must reach
-    /// all five shipped classes. A DROPPED variant is a compile error (the
-    /// array is length-5, [`TypeRegistry::shipped`]'s match is exhaustive, and
-    /// the registry holds five fields); a DUPLICATED one is not, and it would
+    /// A walk over [`ShippedType::ALL`] must reach all five shipped classes.
+    ///
+    /// It is the enumeration. A dropped variant is a compile error (the array
+    /// is length-5, [`TypeRegistry::shipped`]'s match is exhaustive, and the
+    /// registry holds five fields); a duplicated one is not, and it would
     /// leave a class out of every walk — this suite's, and the engine's world
     /// dump, which compares dumps against each other and so would agree with
     /// itself about the gap. Distinctness is the whole test: five pairwise
@@ -552,9 +608,11 @@ mod tests {
         }
     }
 
-    /// The module's registry is ONE value: every reader shares the instance
-    /// M7's own fold and gates run against, so agreement between an assembler
-    /// and the store is a construction and not a comparison.
+    /// The module's registry is one value every reader shares.
+    ///
+    /// It is the instance M7's own fold and gates run against, so agreement
+    /// between an assembler and the store is a construction and not a
+    /// comparison.
     #[test]
     fn the_module_registry_is_one_shared_instance() {
         assert!(
@@ -570,9 +628,11 @@ mod tests {
         }
     }
 
-    /// `declares` is the "served only where declared" test: it answers for the
-    /// note-pinned shipped declarations, refuses the behaviors no shipped
-    /// class carries, and treats an unregistered class as declaring nothing.
+    /// `declares` is the "served only where declared" test.
+    ///
+    /// It answers for the note-pinned shipped declarations, refuses the
+    /// behaviors no shipped class carries, and treats an unregistered class
+    /// as declaring nothing.
     #[test]
     fn declares_reads_the_shipped_declarations_and_nothing_else() {
         let built = TypeRegistry::build();
@@ -594,8 +654,9 @@ mod tests {
         assert!(!built.declares(&unregistered, Behavior::ReadFilter));
     }
 
-    /// `is_idempotent` is the one statement of "a registered idem⊤ class" —
-    /// the predicate that decides both whether a deposit takes M2's I0
+    /// `is_idempotent` is the one statement of "a registered idem⊤ class".
+    ///
+    /// It is the predicate that decides both whether a deposit takes M2's I0
     /// section and whether the hint fold keys it — so it must agree with the
     /// registration it summarizes on every shipped class, and refuse an
     /// unregistered one rather than fault.
@@ -607,7 +668,8 @@ mod tests {
             let registration = built.registration(class).expect("every shipped class is registered");
             assert_eq!(built.is_idempotent(class), registration.idem, "{ty:?}");
             // ...and in this format that flag is ⊤ on all five, which is why
-            // every managed deposit takes a section.
+            // every managed deposit takes a section save `editlink`'s claim,
+            // whose check is a guaranteed miss.
             assert!(built.is_idempotent(class), "{ty:?} is idem⊤");
         }
         let unregistered = coverage_class(&enc([&ra(9)]));
@@ -615,10 +677,11 @@ mod tests {
         assert!(!built.is_idempotent(&unregistered), "unregistered ⇒ not idempotent");
     }
 
-    /// The five format constants are the ghost tumblers the ruling pins, in
-    /// the ruling's own assignment order — position x of the ghost doc for
-    /// x = 1..=5 — and they agree with M3's spelling of the region, so the
-    /// addresses M7 dispatches on are the ones the allocator skips.
+    /// The five format constants are the ghost tumblers, in assignment order.
+    ///
+    /// That order is position x of the ghost doc for x = 1..=5, and they
+    /// agree with M3's spelling of the region, so the addresses M7 dispatches
+    /// on are the ones the allocator skips.
     #[test]
     fn the_format_constants_are_the_five_ghost_tumblers_in_ruling_order() {
         let reserved = ReservedAddrs::format();
@@ -638,7 +701,7 @@ mod tests {
     #[test]
     fn sh_conf_reads_both_span_counts_against_the_declared_shape() {
         // The rule [`Shape`] states, decided where the shape is declared: one
-        // FROM span always, and per shape no TO span, exactly one, or any
+        // `FROM` span always, and per shape no `TO` span, exactly one, or any
         // finite number. The `|F| = 1` clause is the half no write path can
         // present — `emit` forces `enc({from})` and an `editlink` successor
         // takes the open gate — so it holds here or nowhere.

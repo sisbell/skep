@@ -1,8 +1,9 @@
-//! THE CLAIM (`client.md` §4): AUTH-5.55 as a state machine — P4, one state
-//! per AUTH-5.56 boundary, every state RESUMED BY READING the board (§4.4;
-//! RULED: the claim journal retired) — and, in its child `hosted`, the
-//! hosted arm (§4.5; AUTH-5.55 step 8), every session bare, no `Person` call
-//! anywhere.
+//! The claim (`client.md` §4): AUTH-5.55 as a state machine.
+//!
+//! It is P4, one state per AUTH-5.56 boundary, every state resumed by
+//! reading the board (§4.4: no claim journal) — and, in its child `hosted`,
+//! the hosted arm (§4.5; AUTH-5.55 step 8), every session bare, no `Person`
+//! call anywhere.
 
 use std::path::PathBuf;
 
@@ -29,49 +30,67 @@ pub use hosted::{hosted, HostedOutcome, HostedReply};
 /// The notebook arm's inputs.
 #[derive(Debug, Clone)]
 pub struct NotebookOptions {
-    /// `--principal`; RECOMMEND default 1 (§9 item 9).
+    /// `--principal`; recommend default 1 (§9 item 9).
     pub principal: Option<u64>,
-    /// `--name`: the DISPLAY NAME (S9) — a changeable label, never the
-    /// device's name `keygen` fixed; held, the write deferred.
+    /// `--name`: the display name (S9).
+    ///
+    /// It is a changeable label, never the device's name `keygen` fixed;
+    /// held, the write deferred.
     pub display_name: Option<String>,
     /// `--anchor-out`, once per anchor.
     pub anchor_out: Vec<PathBuf>,
     /// `--paper`.
     pub paper: bool,
-    /// The machine's host name and the date, for the anchor boxes' per-run
-    /// default (§4.2 step 2).
+    /// The machine's host name, for the anchor boxes' per-run default.
+    ///
+    /// The default is §4.2 step 2's.
     pub host_name: String,
+    /// The date, for the same per-run default.
     pub date: String,
 }
 
-/// What the notebook walk answers at S10: the account, its principal and
-/// the device key's fingerprint, and what the walk retained — the binding
-/// line (the origin dialed beside the account and the principal, §3.5), the
-/// agent space, the warnings, the display name held.
+/// What the notebook walk answers at S10.
+///
+/// It holds the account, its principal and the device key's fingerprint,
+/// and what the walk retained — the binding line (the origin dialed beside
+/// the account and the principal, §3.5), the agent space, the warnings, the
+/// display name held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claimed {
+    /// The claimed account.
     pub account: String,
+    /// The account's principal.
     pub principal: u64,
+    /// The device key's fingerprint.
     pub fingerprint: Fingerprint,
-    /// The agent space's address, where the setup act ran or stood done.
+    /// The agent space's address, where it is a seat.
+    ///
+    /// The first session found it one or made it one.
     pub agent_space: Option<String>,
+    /// The binding line the walk retained.
     pub binding_line: String,
+    /// The warnings the walk raised.
     pub warnings: Vec<String>,
-    /// The display name collected and HELD — no write (S9).
+    /// The display name collected and held — no write (S9).
     pub display_name: Option<String>,
 }
 
-/// §4.3: what `claim` answers on a claimed board.
+/// What `claim` answers: the board this store's, or another's (§4.3).
+///
+/// A fresh claim answers `Ours`; on a board already claimed the answer is
+/// §4.3's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimOutcome {
-    /// The board is this store's — the tail finished, the same message
-    /// whether found done or finished now.
+    /// The board is this store's, the tail finished.
+    ///
+    /// The message is the same whether the tail was found done or finished
+    /// now.
     Ours(Claimed),
     /// "claimed by ⟨claimant⟩; no key in this store is bound to it" — exit 0.
     Stranger { claimant: String },
 }
 
-/// The pre-claim residue halt (§4.4; the NO-DELEGATE-TWICE halt KEPT).
+/// Returns the pre-claim residue halt (§4.4; the no-delegate-twice halt).
 fn residue_halt(next: &str) -> Halt {
     Halt::face(
         format!("this board carries pre-claim residue — re-genesis before claiming (next_account_prefix answers {next}, past 1.0.2)"),
@@ -82,8 +101,10 @@ fn residue_halt(next: &str) -> Halt {
     )
 }
 
-/// S0′: the pre-install statements (AUTH-5.55 step 0; AUTH RES-97: both
-/// rendered before step 1 all the same) and the unclaimed window (step 1).
+/// Says S0′'s statements: the pre-install ones and the unclaimed window.
+///
+/// The pre-install statements are AUTH-5.55 step 0's (AUTH RES-97: both
+/// rendered before step 1 all the same); the unclaimed window is step 1's.
 fn statements_s0(person: &mut dyn Person, local_trust: bool) {
     let reader_clause = if local_trust {
         "; and local means the machine this board runs on: while local trust is on, anything running on it can bare-bind as you here — writing as you, and reading every draft you have already written, with no mint at all"
@@ -115,10 +136,17 @@ fn statements_s0(person: &mut dyn Person, local_trust: bool) {
     );
 }
 
-/// The store's device key for this walk (§2.2 `claim`: `--dir` alone, `--key`
-/// not consulted; §3.5's lookup): the binding for (board, N), else the lone
-/// device key, else arm 4's fork — its public facts, and its signer from the
-/// store that holds its seed (§3a).
+/// Returns the store's device key for this walk.
+///
+/// §2.2 `claim`: `--dir` alone, `--key` not consulted; §3.5's lookup: the
+/// binding for (board, N), else the lone device key, else arm 4's fork —
+/// its public facts, and its signer from the store that holds its seed
+/// (§3a).
+///
+/// # Errors
+///
+/// Arm 4's fork where the store selects no key; the store's other refusals
+/// and its signer's, as halts.
 fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode) -> Result<(KeyFacts, Box<dyn Signer>), Halt> {
     match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(principal) }, Purpose::Sign) {
         Ok(key) => {
@@ -130,9 +158,29 @@ fn device_key(store: &FileStore, board: &Board, principal: u64, mode: Mode) -> R
     }
 }
 
-/// THE NOTEBOOK WALK, S0–S10.
+/// Runs the notebook walk, S0–S10.
+///
+/// # Errors
+///
+/// A halt at the state that meets it, in the walk's order. On a claimed
+/// board, the tail's halts. S0: the reads, and the residue halt where
+/// `next_account_prefix` answers other than `1.0.1` or `1.0.2`; the device
+/// key's selection, arm 4's fork included. S1: the bare bind refused or
+/// blocked, the delegate closed or refused, or a resumed account with no
+/// seat. S2: the owner's bare bind refused or blocked, and the mint closed
+/// or refused. S3/S4: `not_an_account`, a key set that is not this
+/// store's, an abandoned backup moment and the genesis deposit's halts. S5:
+/// the pre-check and the handshake, the claim closed, an answer of a shape
+/// this client does not know, a foreign claimant, `claim_residue`,
+/// `claimant_keyless` and any other refusal. S5a–S5b: the first session's
+/// halts. S8: a claim that did not flip the board.
+///
+/// # Panics
+///
+/// Panics if `Enrollment::new` refuses a label the anchor box or `keygen`
+/// admitted; both admit only labels it takes, so neither `expect` fires.
 pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &NotebookOptions) -> Result<ClaimOutcome, Halt> {
-    // S0 PROBE: the pair, the mode, the residue fact.
+    // S0 probe: the pair, the mode, the residue fact.
     let health = board.health()?;
     let mode = Mode::of(&health);
     let local_trust = health.local_trust();
@@ -152,10 +200,10 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     let device_public = key.public.clone();
     let device_label = key.label.clone();
 
-    // S0′ STATEMENTS before step 1 (RES-97).
+    // S0′ statements before step 1 (RES-97).
     statements_s0(person, local_trust);
 
-    // S1 BARE-0 → DELEGATE, or the resume over the delegated account by
+    // S1 bare-0 → delegate, or the resume over the delegated account by
     // address (AUTH-5.56 boundary 1 as RES-118 amends it).
     let principal = if resumed {
         match principal_of(board, &account)? {
@@ -180,7 +228,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     };
     let facts = Facts { account: account.clone(), principal, origin: board.signed().clone() };
 
-    // S2 OWNER-BARE → MINT, idempotent by reading (boundary 2).
+    // S2 owner-bare → mint, idempotent by reading (boundary 2).
     let owner_bare = bare_session(board, principal, &health)?;
     let home = doc_1_of(&account);
     if !document_present(board, &home)? {
@@ -195,7 +243,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     }
 
     // S3/S4: owed where the genesis has not landed — `key_set(account)`
-    // EMPTY ⇒ S4 owed; holding this store's fingerprint ⇒ S5 owed; holding
+    // empty ⇒ S4 owed; holding this store's fingerprint ⇒ S5 owed; holding
     // keys that are not this store's ⇒ S4's own fork.
     let set = match board.key_set(&account)? {
         KeySetAnswer::Set(s) => s,
@@ -212,7 +260,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         ));
     }
     if set.is_empty() {
-        // S3 NAMES → BACKUP MOMENT. The device label shown, not re-asked.
+        // S3 names → backup moment. The device label shown, not re-asked.
         say(
             person,
             "AUTH-5.42",
@@ -234,7 +282,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
             },
         )
         .map_err(|h| abandonment_face(h, &account, principal))?;
-        // S4 GENESIS: one atom, declared, from N's bare session; at or below
+        // S4 genesis: one atom, declared, from N's bare session; at or below
         // the claim no `sig`.
         let mut entries = Vec::new();
         for a in &backup.anchors {
@@ -251,7 +299,7 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
         }
     }
 
-    // S5 CLAIM (SIGNED, FULL): the pre-check first (both reads live), the
+    // S5 claim (signed, full): the pre-check first (both reads live), the
     // challenge, the claim link.
     let pre = precheck(board, principal, &device_fp)?;
     let signed = handshake_prechecked(board, Scope::Full, &*device, &pre, Site::Claim)?;
@@ -284,10 +332,10 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     let reads = FirstSessionReads::take(board, &account, &device_fp, Some(store))?;
     let done = first_session(board, &reads, &signed, &*device, Some(store))?;
     let mut warnings = done.warnings.clone();
-    // S7 CLOSE the bare sessions (idempotent 204; dead at the flip into
-    // ENFORCING, alive in CLAIMED-PERMISSIVE).
+    // S7 close the owner's bare session (idempotent 204; dead at the flip
+    // into enforcing, alive in claimed-permissive).
     let _ = board.session_close(&owner_bare);
-    // S8 VERIFY the flip.
+    // S8 verify the flip.
     let after = board.health()?;
     if after.claimant() != Some(account.as_str()) {
         return Err(Halt::face("the claim did not flip the board", format!("/health.auth.claimant is {:?}", after.claimant()), "re-run `skep claim`"));
@@ -298,9 +346,9 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     if after.local_trust() {
         warnings.push("the board is CLAIMED-PERMISSIVE (--local-trust on): any loopback party may still write drafts as any principal, with `key: \"bare\"` as the tell; the publish class is shut to bare sessions".into());
     }
-    // S9 NAME: collected and held; the write deferred.
+    // S9 name: collected and held; the write deferred.
     let display_name = s9_name(person, opts)?;
-    // S10 RETAIN: the binding, the close, the three facts.
+    // S10 retain: the binding, the close, the three facts.
     let line = Binding::Enrollment { origin: board.dialed().clone(), principal, account: account.clone(), fingerprint: device_fp };
     if let Err(w) = store.bind(&line) {
         warnings.push(w.to_string());
@@ -317,8 +365,13 @@ pub fn notebook(board: &Board, store: &FileStore, person: &mut dyn Person, opts:
     }))
 }
 
-/// S9: the display name, with its one distinguishing line; the write
-/// deferred in v1 (AUTH-5.55 step 9; RES-62 item 10 pick B).
+/// Collects S9's display name, with its one distinguishing line.
+///
+/// The write is deferred in v1 (AUTH-5.55 step 9; RES-62 item 10 pick B).
+///
+/// # Errors
+///
+/// None: an abandoned ask answers no name.
 fn s9_name(person: &mut dyn Person, opts: &NotebookOptions) -> Result<Option<String>, Halt> {
     let display_name = match &opts.display_name {
         Some(n) => Some(n.clone()),
@@ -343,7 +396,9 @@ fn foreign_claimant(claimant: &str) -> Halt {
     )
 }
 
-/// S3's abandonment exit: the two things the person now holds (§4.1 S3).
+/// Returns S3's abandonment exit: the two things the person now holds.
+///
+/// The exit is §4.1 S3's.
 fn abandonment_face(h: Halt, account: &str, principal: u64) -> Halt {
     match h {
         Halt::Halt(face) => Halt::face(
@@ -361,7 +416,13 @@ fn abandonment_face(h: Halt, account: &str, principal: u64) -> Halt {
     }
 }
 
-/// A bare session for `principal`; the 401's two causes faced (§4.1 S1).
+/// Opens a bare session for `principal`.
+///
+/// # Errors
+///
+/// The 401 with its two causes faced (§4.1 S1); a `403 prefix_blocked` as
+/// [`Halt::Blocked`], its ground unread; and [`Board::session_open`]'s
+/// errors.
 fn bare_session(board: &Board, principal: u64, health: &crate::board::Health) -> Result<Token, Halt> {
     match board.session_open(SessionBody::Bare { principal })? {
         Opened::Token(t) => Ok(t),
@@ -379,9 +440,18 @@ fn bare_session(board: &Board, principal: u64, health: &crate::board::Health) ->
     }
 }
 
-/// S0's OURS test and the tail (§4.3): `key_set(claimant)` holds this
-/// store's fingerprint ⇒ the run RESUMES AT THE TAIL in a CONTENT-scoped
-/// session; otherwise the stranger message, exit 0.
+/// Runs S0's ours test and the tail (§4.3).
+///
+/// `key_set(claimant)` holds this store's fingerprint ⇒ the run resumes at
+/// the tail in a content-scoped session; otherwise the stranger message,
+/// exit 0.
+///
+/// # Errors
+///
+/// In order: the claimant's `key_set` read and the store's key list; the
+/// seat read, and a claimant with no seat, faced; the store's signer; the
+/// content-scoped handshake; the first session's reads and halts; then the
+/// `/health` read and the store's binding lookup.
 fn tail_or_stranger(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &NotebookOptions, claimant: String, local_trust: bool) -> Result<ClaimOutcome, Halt> {
     let set = match board.key_set(&claimant)? {
         KeySetAnswer::Set(s) => s,

@@ -1,29 +1,32 @@
-//! The merge's READS — the merge record's §1.3 in its order — and what they
-//! build: [`compose`], which reads the head, the base and every side as run
-//! lists, composes them through the core and writes nothing; the conversion
-//! of an `image` answer's runs to the core's, each origin the BARE document
-//! ([`origin_of`]); [`head_of`], the feed-walk fallback for a bare
-//! document's head member; and [`Refusal`], every refusal a read or a
-//! landing can meet.
+//! The merge's reads — the merge record's §1.3 in its order.
+//!
+//! Beside them stands what they build: [`compose`], which reads the head,
+//! the base and every side as run lists, composes them through the core and
+//! writes nothing; the conversion of an `image` answer's runs to the core's,
+//! each origin the bare document ([`origin_of`]); [`head_of`], the
+//! feed-walk fallback for a bare document's head member; and [`Refusal`],
+//! every refusal a read or a landing can meet.
 //!
 //! The reads, in the record's order (§1.3): the document's metadata and the
 //! head's extent; the base — named by the caller, or derived by `base_of`
 //! for members of one chain — imaged whole; the head and each side imaged
-//! whole; the shared material joined by the core over the three lists; the
-//! values where the value rule has work, read through the side that holds
-//! them; and the prior records for the key, so a standing record is known
-//! before anything is written (§3, idempotence). Every `image` past the run
-//! budget is re-asked in halves and the parts re-joined by I-adjacency (§8:
-//! "a region past the budget can be asked in parts"), every `retrieve_v`
-//! past the delivery budget likewise. A side the reader may not read, or a
-//! side whose base the library cannot read — a fork, a member of another
-//! document, a draft of another account (decision 15) — refuses before the
-//! first `image`.
+//! whole; the shared material joined by the core over the lists; the values
+//! where the value rule has work, read through the side that holds them;
+//! and the prior records for the key, so a standing record is known before
+//! anything is written (§3, idempotence). Every `image` past the run budget
+//! is re-asked in halves and the parts re-joined by I-adjacency (§8: "a
+//! region past the budget can be asked in parts"), every `retrieve_v` past
+//! the delivery budget likewise. A side whose base the library cannot read
+//! — a fork, a member of another document or the bare document itself, a
+//! draft of an account other than the trunk owner's, a draft with no named
+//! base (decision 15) — refuses before the first `image`; a side the reader
+//! may not read refuses at its own read.
 //!
-//! The reads go through [`Board::op`] under the caller's token, [`Board::guest`]
-//! where none is given, and [`Board::op_at`] for a draft at a position, whose
-//! `history_busy` is retried a bounded number of times (§7, "What it reads
-//! through"). Nothing here writes.
+//! The reads go through [`Board::op`] under the caller's token, or with no
+//! token where none is given, and [`Board::op_at`] for a draft at a
+//! position, whose `history_busy` is retried a bounded number of times (§7,
+//! "What it reads through"); the feed walk goes through [`Board::changes`].
+//! Nothing here writes.
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -43,19 +46,24 @@ use crate::halt::Halt;
 use super::compose::{base_of, compose_runs, Composed, Item, Options, Run, SideIx};
 use super::record::{self, Record, RecordKey, SideAt};
 
-/// The most runs one shot may name — the wire's list cap, `MAX_WIRE_LIST` =
-/// 4,096 elements per request array, which the shot's `runs` is parsed
-/// through (the merge record's §8, "The three caps, read at the pin"). A
-/// merged list past it is refused with the count, never split (decision 13).
+/// The most runs one shot may name.
+///
+/// It is the wire's list cap, `MAX_WIRE_LIST` = 4,096 elements per request
+/// array, which the shot's `runs` is parsed through (the merge record's §8,
+/// "The three caps, read at the pin"). A merged list past it is refused
+/// with the count, never split (decision 13).
 pub const SHOT_RUN_CAP: usize = 1 << 12;
 
-/// The most items one `retrieve_v` delivers — `MAX_DELIVERY_ITEMS`, 131,072
-/// (wire.md §Rejection codes, `too_many_items`): a value read wider than it
-/// is made in parts.
+/// The most items one `retrieve_v` delivers.
+///
+/// It is `MAX_DELIVERY_ITEMS`, 131,072 (wire.md §Rejection codes,
+/// `too_many_items`): a value read wider than it is made in parts.
 pub(super) const MAX_DELIVERY_ITEMS: u64 = 1 << 17;
 
-/// How many times a `history_busy` on a read at a position is retried
-/// before [`Refusal::HistoryBusy`] (§7: "retry with backoff, bounded").
+/// How many times a `history_busy` on a read at a position is retried.
+///
+/// Past them the read is [`Refusal::HistoryBusy`] (§7: "retry with backoff,
+/// bounded").
 const HISTORY_BUSY_RETRIES: u32 = 4;
 
 // ── the inputs ────────────────────────────────────────────────────────────
@@ -65,45 +73,51 @@ const HISTORY_BUSY_RETRIES: u32 = 4;
 pub struct Inputs {
     /// The trunk document `D`.
     pub doc: Address,
-    /// The head MEMBER `D.h` — side A in every shape the record draws. No
-    /// read answers a bare document's head member (UNVERIFIED-HERE 7), so
+    /// The head member `D.h` — side A in every shape the record draws.
+    ///
+    /// No read answers a bare document's head member (unverified-here 7), so
     /// the caller names it, from its own knowledge or from [`head_of`].
     pub head: Address,
-    /// The base member, where the caller knows it — the editor's staging
-    /// base for a draft side; derived by `base_of` for members of one chain
-    /// where `None` (§1.2).
+    /// The base member, where the caller knows it.
+    ///
+    /// It is the editor's staging base for a draft side; derived by
+    /// `base_of` for members of one chain where `None` (§1.2).
     pub base: Option<Address>,
     /// The other sides, in commit order.
     pub sides: Vec<Side>,
     /// The composition's switches and the merger's resolutions.
     pub options: Options,
-    /// The merge record kind's TYPE address — the link's type slot and the
-    /// record's class. Decision 9's row is interim and unpinned, so the
-    /// embedder names it.
+    /// The merge record kind's type address.
+    ///
+    /// It is the link's type slot and the record's class. Decision 9's row is
+    /// interim and unpinned, so the embedder names it.
     pub kind: Address,
 }
 
 /// One side of a merge besides the head (the merge record's §7, `Side`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Side {
-    /// A member of the document's chain — a daughter, or a daughter's
-    /// daughter.
+    /// A member of the document's chain.
+    ///
+    /// It is a daughter, or a daughter's daughter.
     Member(Address),
-    /// A draft of the merger's own account, read as of `position` where one
-    /// is given, else at the head (§1.2 shape (2)).
+    /// A draft of the trunk owner's account (§1.2 shape (2)).
+    ///
+    /// It is read as of `position` where one is given, else at the head.
     Draft {
         /// The draft's address.
         at: Address,
         /// The commit position the draft is read at; `None` the head.
         position: Option<u64>,
     },
-    /// A cross-owner fork: NOT OFFERED until the fork-source read lands
-    /// (decision 15) — refused [`Refusal::BaseUnknown`] before any read.
+    /// A cross-owner fork: not offered until the fork-source read lands.
+    ///
+    /// It is refused [`Refusal::BaseUnknown`] before any read (decision 15).
     Fork(Address),
 }
 
 impl Side {
-    /// The side's address — the member, the draft, the fork.
+    /// Returns the side's address — the member, the draft, the fork.
     pub fn address(&self) -> &Address {
         match self {
             Side::Member(a) | Side::Fork(a) => a,
@@ -111,7 +125,7 @@ impl Side {
         }
     }
 
-    /// The side's role in the record's `sides` (§4).
+    /// Returns the side's role in the record's `sides` (§4).
     pub fn role(&self) -> Role {
         match self {
             Side::Member(_) => Role::Alternative,
@@ -120,7 +134,7 @@ impl Side {
         }
     }
 
-    /// The position a draft side is read at.
+    /// Returns the position a draft side is read at.
     fn position(&self) -> Option<u64> {
         match self {
             Side::Draft { position, .. } => *position,
@@ -136,15 +150,16 @@ pub enum Role {
     Head,
     /// A daughter of the document's chain.
     Alternative,
-    /// A draft of the merger's own account.
+    /// A draft of the trunk owner's account.
     Draft,
     /// A cross-owner fork.
     Fork,
 }
 
 impl Role {
-    /// The role's spelling in the record: `head`, `alternative`, `draft`,
-    /// `fork`.
+    /// Returns the role's spelling in the record.
+    ///
+    /// It is `head`, `alternative`, `draft` or `fork`.
     pub fn as_str(self) -> &'static str {
         match self {
             Role::Head => "head",
@@ -154,7 +169,7 @@ impl Role {
         }
     }
 
-    /// The role a spelling names, `None` for any other text.
+    /// Returns the role a spelling names, `None` for any other text.
     pub fn parse(text: &str) -> Option<Role> {
         match text {
             "head" => Some(Role::Head),
@@ -166,76 +181,99 @@ impl Role {
     }
 }
 
-/// A run's family in the shot (the merge record's §1.5, the three families
-/// the wire states): the document's own I-space placed by reference, a
-/// window onto another document, or a staging draft's text re-inserted as
-/// fresh identity.
+/// A run's family in the shot (the merge record's §1.5).
+///
+/// The three families the wire states: the document's own I-space placed
+/// by reference, a window onto another document, or a staging draft's text
+/// re-inserted as fresh identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Family {
     /// The document's own I-space, by reference — its bytes signed by value.
     Own,
     /// Another document's I-space, kept as a window — signed by address.
     Window,
-    /// A draft side's fresh text, re-inserted under the document's own
-    /// I-space by the shot — its bytes signed by value.
+    /// A draft side's fresh text, re-inserted by the shot.
+    ///
+    /// It lands under the document's own I-space, its bytes signed by value.
     DraftNative,
 }
 
-/// What [`compose`] returns before anything is written (the merge record's
-/// §1.5, "What the library returns BEFORE the write"; §7, `Merged`): the
-/// core's result wrapped with what the landing needs.
+/// What [`compose`] returns before anything is written.
+///
+/// It is the core's result wrapped with what the landing needs (the merge
+/// record's §1.5, "What the library returns before the write"; §7,
+/// `Merged`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Merged {
     /// The inputs as composed.
     pub inputs: Inputs,
-    /// M, the gap report, the counts, the value log, the resolutions not
-    /// applied — the core's result.
+    /// The core's result.
+    ///
+    /// It is M, the gap report, the counts, the value log, the resolutions
+    /// not applied.
     pub composed: Composed,
     /// Each run of M's family, parallel to `composed.runs`.
     pub families: Vec<Family>,
     /// The key the record is current under: `(doc, base, {sides})`.
     pub key: RecordKey,
-    /// The cap `composed.counts.m` is checked against at the landing —
-    /// [`SHOT_RUN_CAP`]. The count is carried whatever it is, so a face can
-    /// show it; the refusal is the landing's.
+    /// The cap `composed.counts.m` is checked against at the landing.
+    ///
+    /// It is [`SHOT_RUN_CAP`]. The count is carried whatever it is, so a face
+    /// can show it; the refusal is the landing's.
     pub cap: usize,
-    /// The record the landing will write, unlanded: `landed` none, `claims`
-    /// none, `replaces` the prior record's link where one stands.
+    /// The record the landing will write, unlanded.
+    ///
+    /// Its `landed` is none, its `claims` none, its `replaces` the prior
+    /// record's link where one stands.
     pub record: Record,
     /// The highest `as_of` the reads answered.
     pub as_of: u64,
-    /// The standing record for the key, where one is current (§3, "What a
-    /// second agent sees").
+    /// The standing record for the key, where one is current.
+    ///
+    /// It is §3's "What a second agent sees".
     pub prior: Option<Record>,
-    /// The head's content extent AS READ — the shot's `base_extent`.
+    /// The head's content extent as read — the shot's `base_extent`.
     pub head_extent: u64,
-    /// The head's and each side's image, in side order, which the landing
-    /// reads the shot's values through.
+    /// The head's and each side's image, in side order.
+    ///
+    /// The landing reads the shot's values through them.
     pub(super) maps: Vec<Imaged>,
 }
 
 // ── the refusals ──────────────────────────────────────────────────────────
 
-/// Every refusal the reads and the landing can meet (the merge record's §7,
-/// "Its errors"), each named for the wire code it answers; the library's
-/// own faults and the board's other refusals ride [`Refusal::Halt`].
+/// Every refusal the reads and the landing can meet.
+///
+/// The merge record's §7 names them ("Its errors"), each that answers a
+/// wire code named for the code; the library's own faults and the board's
+/// other refusals ride [`Refusal::Halt`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// A side whose base the library cannot read — a fork, a member of
-    /// another document, a draft of another account, a draft with no named
-    /// base — refused before any read (decision 15; no interim).
+    /// A side whose base the library cannot read, refused before any `image`.
+    ///
+    /// It is a fork, a member of another document or the bare document
+    /// itself, a draft of an account other than the trunk owner's, a draft
+    /// with no named base, or a side no base can be derived with (decision
+    /// 15; no interim).
     BaseUnknown(Side),
-    /// Two draft sides: not a merge shape — the shot admits one draft, so
-    /// the way out is to shoot one (§1.2 shape (3)).
+    /// Two draft sides: not a merge shape.
+    ///
+    /// The shot admits one draft, so the way out is to shoot one (§1.2 shape
+    /// (3)).
     TwoDrafts,
-    /// `withheld` on the document named: a side or the base the reader may
-    /// not read; nothing composed.
+    /// `withheld` on the document named.
+    ///
+    /// It is a document the reads need — the trunk, the head, the base or a
+    /// side, and at the landing the landed document or the journal — that
+    /// the reader may not read; at the reads nothing is composed, at the
+    /// landing nothing further is written.
     Unreadable(Address),
     /// `doc_not_registered` on the document named.
     NoSuchDocument(Address),
-    /// `image_too_large` down to a region of one position: the document's
-    /// runs cannot be imaged, `runs_seen` of them counted before the floor
-    /// (§8's measurement, reported).
+    /// `image_too_large` down to a region of one position.
+    ///
+    /// The document's runs cannot be imaged, `runs_seen` of them counted
+    /// before the floor (§8's measurement, reported).
     TooFragmented {
         /// The document imaged.
         doc: Address,
@@ -244,11 +282,14 @@ pub enum Refusal {
     },
     /// `history_busy` on a read at a position, past the bounded retries.
     HistoryBusy,
-    /// `withheld` on the shot naming an origin the merger may not read: a
-    /// window the source gate refuses (§7, THE SHOT).
+    /// `withheld` on a write naming an origin the merger may not read.
+    ///
+    /// The write is the shot or a draft edit, the origin a window the source
+    /// gate refuses (§7, the shot).
     WindowWithheld(Address),
-    /// The merged list holds more runs than one shot may name (decision
-    /// 13): refused with the count, never split.
+    /// The merged list holds more runs than one shot may name.
+    ///
+    /// Refused with the count, never split (decision 13).
     OverCap {
         /// `counts.m`.
         runs: usize,
@@ -257,9 +298,11 @@ pub enum Refusal {
     },
     /// `signed_session_required`: the landing's session is bare.
     NeedsSignedSession,
-    /// The library's own fault named (A-288's own-bug class) — a frame the
-    /// board refused as malformed in substance, a shape it does not know —
-    /// the board's other refusals verbatim, and every transport halt.
+    /// The library's own fault named (A-288's own-bug class).
+    ///
+    /// The fault is a frame the board refused as malformed in substance, a
+    /// shape it does not know; the board's other refusals ride here verbatim,
+    /// and every transport halt.
     Halt(Halt),
 }
 
@@ -290,11 +333,13 @@ impl std::error::Error for Refusal {}
 
 // ── the origin rule ───────────────────────────────────────────────────────
 
-/// Returns the BARE DOCUMENT a content I-address was minted under: the
-/// prefix before its last `.0.1.` — the content subspace's marker — stripped
-/// of any version component to the trunk (the merge record's §1.3 step 3:
-/// "derived from its `i_start` by address arithmetic, `document_of` then the
-/// trunk"; the rule skep-cli's dev board states as `origin_of`).
+/// Returns the bare document a content I-address was minted under.
+///
+/// It is the prefix before its last `.0.1.` — the content subspace's marker
+/// — stripped of any version component to the trunk (the merge record's
+/// §1.3 step 3: "derived from its `i_start` by address arithmetic,
+/// `document_of` then the trunk"; the rule skep-cli's dev board states as
+/// `origin_of`).
 ///
 /// The core's `Run::origin` is this address, never a member's: a
 /// version-qualified origin would make every anchor and every `Choice::After`
@@ -305,16 +350,18 @@ pub fn origin_of(i_start: &str) -> Option<Address> {
     parse_address(&crate::address::document_of(minted_under)?)
 }
 
-/// The content I-address prefix of `origin`'s positions — the spelling an
-/// `image` answer's `i_start` opens with.
+/// Returns the content I-address prefix of `origin`'s positions.
+///
+/// It is the spelling an `image` answer's `i_start` opens with.
 pub(super) fn content_prefix(origin: &Address) -> String {
     format!("{origin}.0.1")
 }
 
-/// Returns the core's runs for an `image` answer's runs: each origin by
-/// [`origin_of`], I-adjacent runs of one origin coalesced — the daemon's own
-/// accumulator, `extend_or_push_run`, whose whole test is I-adjacency — so a
-/// run a part boundary cut is one run again (§8).
+/// Returns the core's runs for an `image` answer's runs.
+///
+/// Each origin is by [`origin_of`], I-adjacent runs of one origin coalesced
+/// — the daemon's own accumulator, `extend_or_push_run`, whose whole test is
+/// I-adjacency — so a run a part boundary cut is one run again (§8).
 ///
 /// # Errors
 ///
@@ -344,20 +391,23 @@ pub(super) fn runs_of(imaged: &[IRun]) -> Result<Vec<Run>, Halt> {
 
 // ── address arithmetic over members ───────────────────────────────────────
 
-/// The trunk a document, member or element address lies in; `None` for an
-/// account or a node.
+/// Returns the trunk a document, member or element address lies in.
+///
+/// `None` for an account or a node.
 pub(super) fn trunk_of(a: &Address) -> Option<Address> {
     parse_address(&crate::address::document_of(&a.to_string())?)
 }
 
-/// An address's components, for the comparisons the tumbler's own type does
-/// not offer.
+/// Returns an address's components.
+///
+/// They serve the comparisons the tumbler's own type does not offer.
 pub(super) fn comps(a: &Address) -> Vec<Nat> {
     a.tumbler().iter().cloned().collect()
 }
 
-/// A member's version components after the trunk `doc`'s; `None` where `a`
-/// is not under `doc`, or is `doc` itself.
+/// Returns a member's version components after the trunk `doc`'s.
+///
+/// `None` where `a` is not under `doc`, or is `doc` itself.
 pub(super) fn version_components(doc: &Address, a: &Address) -> Option<Vec<Nat>> {
     let (doc, comps) = (comps(doc), comps(a));
     if comps.len() <= doc.len() || comps[..doc.len()] != doc[..] {
@@ -366,12 +416,12 @@ pub(super) fn version_components(doc: &Address, a: &Address) -> Option<Vec<Nat>>
     Some(comps[doc.len()..].to_vec())
 }
 
-/// Whether `a` is a TRUNK member of `doc` — one version component.
+/// Returns whether `a` is a trunk member of `doc` — one version component.
 pub(super) fn is_trunk_member(doc: &Address, a: &Address) -> bool {
     version_components(doc, a).is_some_and(|v| v.len() == 1)
 }
 
-/// The trunk member after `head`: its one version component plus one.
+/// Returns the trunk member after `head`: its one version component plus one.
 pub(super) fn next_trunk_member(head: &Address) -> Option<Address> {
     let mut comps = comps(head);
     let last = comps.last_mut()?;
@@ -379,28 +429,32 @@ pub(super) fn next_trunk_member(head: &Address) -> Option<Address> {
     validate(Tumbler::new(comps).ok()?).ok()
 }
 
-/// The `k`-th daughter of `member`: the member's address extended by `k`.
+/// Returns the `k`-th daughter of `member`, its address extended by `k`.
 pub(super) fn daughter_of(member: &Address, k: u64) -> Option<Address> {
     let comps = comps(member).into_iter().chain(std::iter::once(Nat::from(k)));
     validate(Tumbler::new(comps).ok()?).ok()
 }
 
-/// The account an address lies in — `N.0.U` — as text; `None` for a node.
+/// Returns the account an address lies in, `N.0.U`, as text.
+///
+/// `None` for a node.
 pub(super) fn account_of(a: &Address) -> Option<String> {
     let node: Vec<String> = a.node_field().iter().map(ToString::to_string).collect();
     let account: Vec<String> = a.account_field()?.iter().map(ToString::to_string).collect();
     Some(format!("{}.0.{}", node.join("."), account.join(".")))
 }
 
-/// The ordinal — the last component — of an address, where it fits `u64`.
+/// Returns an address's last component, its ordinal, where it fits `u64`.
 pub(super) fn last_component(a: &Address) -> Option<u64> {
     u64::try_from(a.tumbler().iter().last()?).ok()
 }
 
 // ── the reader ────────────────────────────────────────────────────────────
 
-/// One document's image, whole: its extent and its runs as served, each
-/// run's `ordinal` the document's own V-ordinal.
+/// One document's image, whole.
+///
+/// It holds the document, the position it was read at, its extent and its
+/// runs as served, each run's `ordinal` the document's own V-ordinal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Imaged {
     /// The document imaged — a member, or a draft.
@@ -413,8 +467,10 @@ pub(super) struct Imaged {
     pub(super) runs: Vec<IRun>,
 }
 
-/// The reads' one door: a board and the caller's token, every answer's
-/// `as_of` kept.
+/// The door of the merge's frame reads: a board and the caller's token.
+///
+/// The highest `as_of` its answers carry is kept. The feed walk and the
+/// journal's reads ask the board directly.
 pub(super) struct Reader<'a> {
     board: &'a Board,
     token: Option<&'a Token>,
@@ -422,12 +478,12 @@ pub(super) struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    /// A reader at `board` as `token`'s principal, or as a guest.
+    /// Returns a reader at `board` as `token`'s principal, or as a guest.
     pub(super) fn new(board: &'a Board, token: Option<&'a Token>) -> Reader<'a> {
         Reader { board, token, as_of: Cell::new(0) }
     }
 
-    /// The highest `as_of` answered so far.
+    /// Returns the highest `as_of` answered so far.
     pub(super) fn as_of(&self) -> u64 {
         self.as_of.get()
     }
@@ -438,17 +494,19 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// One read frame answered as its response document — a rejection
-    /// included — at the head, or as of `at` through `/op-at`, whose
+    /// Reads one frame at the head, or as of `at` through `/op-at`.
+    ///
+    /// It answers the response document, a rejection included; `/op-at`'s
     /// `history_busy` is retried with backoff up to [`HISTORY_BUSY_RETRIES`]
     /// times.
     ///
     /// # Errors
     ///
-    /// The death signal under the token is the session's end, faced; a
-    /// position fault of `/op-at` is the caller's position, faced;
-    /// [`Refusal::HistoryBusy`] past the retries; a transport halt the
-    /// dialer's.
+    /// The death signal under the token is the session's end, faced, and
+    /// with no token so is one at the head, where one at a position halts as
+    /// [`Board::op_at`] halts it; a position fault of `/op-at` is the
+    /// caller's position, faced; [`Refusal::HistoryBusy`] past the retries;
+    /// [`Board::op`]'s and [`Board::op_at`]'s other errors.
     pub(super) fn read(&self, frame: &Value, at: Option<u64>) -> Result<Value, Refusal> {
         let Some(at) = at else {
             return match self.board.op(self.token, frame)? {
@@ -484,9 +542,11 @@ impl<'a> Reader<'a> {
         Err(Refusal::HistoryBusy)
     }
 
-    /// The refusal a read of `doc` answered, mapped: `withheld` is
-    /// [`Refusal::Unreadable`], `doc_not_registered` [`Refusal::NoSuchDocument`],
-    /// the rest the board's own, surfaced verbatim.
+    /// Maps the refusal a read of `doc` answered.
+    ///
+    /// `withheld` is [`Refusal::Unreadable`], `doc_not_registered`
+    /// [`Refusal::NoSuchDocument`], the rest the board's own, surfaced
+    /// verbatim.
     pub(super) fn refuse(&self, doc: &Address, r: &Rejection, v: &Value) -> Refusal {
         match r.key() {
             "withheld" => Refusal::Unreadable(doc.clone()),
@@ -495,8 +555,12 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A read of `doc` whose answer must be a document: a rejection is
-    /// mapped by [`Reader::refuse`].
+    /// Reads a frame of `doc` whose answer must be a document.
+    ///
+    /// # Errors
+    ///
+    /// A rejection, mapped by [`Reader::refuse`]; otherwise [`Reader::read`]'s
+    /// errors.
     pub(super) fn answered(
         &self,
         doc: &Address,
@@ -510,13 +574,21 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// `doc_metadata(doc)`, decoded.
+    /// Reads `doc_metadata(doc)`, decoded.
+    ///
+    /// # Errors
+    ///
+    /// [`Reader::answered`]'s errors; an answer that does not decode, faced.
     pub(super) fn metadata(&self, doc: &Address) -> Result<Metadata, Refusal> {
         let v = self.answered(doc, &frames::doc_metadata(&doc.to_string()), None)?;
         answers::metadata(&v).ok_or_else(|| shape("doc_metadata", &v).into())
     }
 
-    /// The content extent of `doc`, at the head or as of `at`.
+    /// Reads the content extent of `doc`, at the head or as of `at`.
+    ///
+    /// # Errors
+    ///
+    /// [`Reader::answered`]'s errors; an answer that is no `span_set`, faced.
     pub(super) fn extent(&self, doc: &Address, at: Option<u64>) -> Result<u64, Refusal> {
         let v = self.answered(doc, &frames::span_set(&doc.to_string()), at)?;
         if v["resp"].as_str() != Some("span_set") {
@@ -525,15 +597,18 @@ impl<'a> Reader<'a> {
         Ok(answers::content_extent(&v))
     }
 
-    /// `image` over content ordinals `from ..` of `doc`, `width` of them —
-    /// whole where its runs are at or under the run budget, else in parts,
-    /// halving until each part answers (§8) — the runs in V order with each
-    /// run's `ordinal` the document's own.
+    /// Images content ordinals `from ..` of `doc`, `width` of them.
+    ///
+    /// The image is whole where its runs are at or under the run budget,
+    /// else in parts, halving until each part answers (§8) — the runs in V
+    /// order with each run's `ordinal` the document's own.
     ///
     /// # Errors
     ///
     /// [`Refusal::TooFragmented`] where a part of one position is still
-    /// refused `image_too_large`.
+    /// refused `image_too_large`; another refusal, mapped by
+    /// [`Reader::refuse`]; an answer that is no image, faced;
+    /// [`Reader::read`]'s errors.
     pub(super) fn image(
         &self,
         doc: &Address,
@@ -580,22 +655,31 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    /// The extent and the whole image of `doc`, at the head or as of `at`.
+    /// Reads the extent and the whole image of `doc`.
+    ///
+    /// Both are read at the head or as of `at`.
+    ///
+    /// # Errors
+    ///
+    /// [`Reader::extent`]'s and [`Reader::image`]'s errors.
     pub(super) fn imaged(&self, doc: &Address, at: Option<u64>) -> Result<Imaged, Refusal> {
         let extent = self.extent(doc, at)?;
         let runs = self.image(doc, at, 1, extent)?;
         Ok(Imaged { doc: doc.clone(), at, extent, runs })
     }
 
-    /// The values at content ordinals `from ..` of `doc`, `width` of them,
-    /// one item a position — `retrieve_v` in parts past the delivery budget
-    /// and on `too_many_items`.
+    /// Reads the values at content ordinals `from ..` of `doc`.
+    ///
+    /// The values are `width` of them, one item a position — `retrieve_v` in
+    /// parts past the delivery budget and on `too_many_items`.
     ///
     /// # Errors
     ///
     /// A delivery holding an item no value can be spelled from — a withheld
     /// run, a reference — is faced: the merge reads the document's own
-    /// positions, which its reader may read whole.
+    /// positions, which its reader may read whole. A delivery short of, or
+    /// past, the span asked is faced; another refusal is mapped by
+    /// [`Reader::refuse`]; otherwise [`Reader::read`]'s errors.
     pub(super) fn values(
         &self,
         doc: &Address,
@@ -613,8 +697,13 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    /// One part of [`Reader::values`]: the positions delivered, a
-    /// `too_many_items` halving the part.
+    /// Reads one part of [`Reader::values`], answering the positions delivered.
+    ///
+    /// A `too_many_items` halves the part.
+    ///
+    /// # Errors
+    ///
+    /// As [`Reader::values`]'s.
     fn values_part(
         &self,
         doc: &Address,
@@ -652,7 +741,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The death signal under the caller's token, faced.
+/// Returns the death signal under the caller's token, faced.
 fn closed(during: &str) -> Halt {
     Halt::face(
         format!("the session ended while {during}"),
@@ -661,7 +750,7 @@ fn closed(during: &str) -> Halt {
     )
 }
 
-/// An answer without the shape the frame's `resp` promises.
+/// Faces an answer without the shape the frame's `resp` promises.
 fn shape(op: &str, v: &Value) -> Halt {
     Halt::face(
         format!("`{op}` answered a document this client cannot read"),
@@ -672,10 +761,11 @@ fn shape(op: &str, v: &Value) -> Halt {
 
 // ── the value mapping (the fragment model) ────────────────────────────────
 
-/// Where the positions of `run` stand among the sides' images: each stretch
-/// as `(the image's index, the V-ordinal it begins at, its width)` — the
-/// image at `prefer` asked first, then the others in order — so a sub-run
-/// of a run a side holds is read at that side's own V-ordinals
+/// Returns where the positions of `run` stand among the sides' images.
+///
+/// Each stretch is `(the image's index, the V-ordinal it begins at, its
+/// width)` — the image at `prefer` asked first, then the others in order —
+/// so a sub-run of a run a side holds is read at that side's own V-ordinals
 /// (`ordinal_of`'s mapping), and a shared identity at whichever side holds
 /// it.
 ///
@@ -716,8 +806,13 @@ pub(super) fn locate(
     Ok(out)
 }
 
-/// The values of `run`'s positions, read through the sides that hold them
-/// ([`locate`]), `prefer` asked first.
+/// Reads the values of `run`'s positions through the sides that hold them.
+///
+/// The sides are found by [`locate`], `prefer` asked first.
+///
+/// # Errors
+///
+/// [`locate`]'s fault; [`Reader::values`]'s errors.
 pub(super) fn values_for(
     reader: &Reader<'_>,
     maps: &[Imaged],
@@ -733,8 +828,9 @@ pub(super) fn values_for(
 
 // ── the shape's reads ─────────────────────────────────────────────────────
 
-/// Everything the reads of one shape yield, which `compose` and `verify`
-/// both build on.
+/// Everything the reads of one shape yield.
+///
+/// `compose` and `verify` both build on it.
 pub(super) struct Readings {
     /// The base member, named or derived.
     pub(super) base: Address,
@@ -752,16 +848,29 @@ pub(super) struct Readings {
     pub(super) families: Vec<Family>,
 }
 
-/// The reads of §1.3 in order, then the core's walk: the document's
-/// metadata, the head's extent, the base imaged, the head and each side
-/// imaged, the composition with the values read through the sides.
+/// Makes the reads of §1.3 in order, then the core's walk.
+///
+/// The reads are the document's metadata, the head's extent, the base
+/// imaged, the head and each side imaged, the composition with the values
+/// read through the sides.
 ///
 /// # Errors
 ///
-/// In this order: a fork side, a member of another document, a draft of
-/// another account or a draft with no named base is
-/// [`Refusal::BaseUnknown`] — decided before any `image`; two drafts
-/// [`Refusal::TwoDrafts`]; then each read's own refusals.
+/// In this order:
+///
+/// - a head that is no trunk member of `doc`, faced;
+/// - two drafts, [`Refusal::TwoDrafts`];
+/// - a fork side, a member of another document or the bare document
+///   itself, or a draft with no named base, [`Refusal::BaseUnknown`];
+/// - the metadata read's refusals;
+/// - a draft of an account other than the trunk owner's,
+///   [`Refusal::BaseUnknown`];
+/// - the head's extent read's refusals;
+/// - a base that cannot be derived, [`Refusal::BaseUnknown`] — every
+///   `BaseUnknown` decided before any `image`;
+/// - a base that is no member of `doc`'s chain, faced;
+/// - then each image and value read's own refusals, and an `image` run that
+///   is no content I-address.
 pub(super) fn read_shape(
     reader: &Reader<'_>,
     doc: &Address,
@@ -863,8 +972,9 @@ pub(super) fn read_shape(
     Ok(Readings { base, base_image, maps, head_extent, owner: meta.owner, composed, families })
 }
 
-/// A run's family by its origin: the trunk's own, a draft side's, or a
-/// window.
+/// Returns a run's family by its origin.
+///
+/// It is the trunk's own, a draft side's, or a window.
 fn family_of(origin: &Address, doc: &Address, sides: &[Side]) -> Family {
     if origin == doc {
         Family::Own
@@ -875,12 +985,15 @@ fn family_of(origin: &Address, doc: &Address, sides: &[Side]) -> Family {
     }
 }
 
-/// The first V-ordinal, counted from 1, at which the member's `actual` runs
-/// over its placed positions differ from the `expected` list the merge
-/// composed — `None` where they agree. A draft side's fresh runs are
-/// re-minted by the shot under `doc`'s own I-space, consecutively, so an
-/// expected `DraftNative` run matches any stretch of `doc`'s positions of
-/// its width in its place, whatever their ordinals.
+/// Returns the first V-ordinal, counted from 1, at which two lists differ.
+///
+/// The lists are the `actual` runs — a member's over its placed positions,
+/// or a draft's whole — and the `expected` list the merge composed — `None`
+/// where they agree. A
+/// draft side's fresh runs are re-minted by the shot under `doc`'s own
+/// I-space, consecutively, so an expected `DraftNative` run matches any
+/// stretch of `doc`'s positions of its width in its place, whatever their
+/// ordinals.
 pub(super) fn first_difference(
     expected: &[(Run, Family)],
     actual: &[Run],
@@ -915,12 +1028,14 @@ pub(super) fn first_difference(
 
 // ── the oracle of the join ────────────────────────────────────────────────
 
-/// Checks the client's join against the daemon's `compare` (the merge
-/// record's §1.3 step 4): ONE `compare` of the base's whole content against
-/// every side's — the second operand a region per side — asked in parts
-/// past its budgets (`too_many_blocks`, `too_many_pairs`: the larger operand
-/// halved and re-asked), and for each side the base positions the pairs name
-/// as shared must be exactly the base positions that side's image holds.
+/// Checks the client's join against the daemon's `compare`.
+///
+/// It is the merge record's §1.3 step 4: one `compare` of the base's whole
+/// content against every side's — the second operand a region per side —
+/// asked in parts past its budgets (`too_many_blocks`, `too_many_pairs`:
+/// the sides asked one at a time, then the larger operand halved and
+/// re-asked), and for each side the base positions the pairs name as shared
+/// must be exactly the base positions that side's image holds.
 ///
 /// # Errors
 ///
@@ -959,7 +1074,7 @@ pub(super) fn check_join(reader: &Reader<'_>, readings: &Readings) -> Result<(),
     Ok(())
 }
 
-/// `(start, width)` ranges sorted and merged where they touch.
+/// Sorts `(start, width)` ranges and merges those that touch.
 fn coalesced(ranges: &mut Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     ranges.sort_unstable();
     let mut out: Vec<(u64, u64)> = Vec::new();
@@ -975,8 +1090,16 @@ fn coalesced(ranges: &mut Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     out
 }
 
-/// One `compare` of the base region against the side regions, halving the
-/// larger operand on a budget refusal until each part answers.
+/// Asks one `compare` of the base region against the side regions.
+///
+/// On a budget refusal it asks the sides one at a time, then halves the
+/// larger operand, until each part answers.
+///
+/// # Errors
+///
+/// A refusal other than a budget's, mapped by [`Reader::refuse`]; a budget
+/// refusal down to one position each, faced; an answer that is no `compare`
+/// answer, faced; [`Reader::read`]'s errors.
 fn compare_parts(
     reader: &Reader<'_>,
     base: &Address,
@@ -1039,9 +1162,11 @@ fn compare_parts(
 
 // ── compose ───────────────────────────────────────────────────────────────
 
-/// Composes a merge from the board: §1.3's reads in order, the core's walk,
-/// the prior records for the key — and writes nothing (the merge record's
-/// §7, `compose`).
+/// Composes a merge from the board, writing nothing.
+///
+/// It makes §1.3's reads in order, the core's walk and the prior records'
+/// read for the key (the merge record's §7, `compose`) — all but step 6's,
+/// the shot's bytes, which the landing reads.
 ///
 /// `token` is the caller's — `None` reads as a guest, which reads public
 /// members alone. The result carries M with each run's family, the gap
@@ -1104,13 +1229,14 @@ pub fn compose(board: &Board, token: Option<&Token>, inputs: &Inputs) -> Result<
 
 // ── the feed-walk fallback ────────────────────────────────────────────────
 
-/// Returns the HEAD MEMBER of the bare document `doc` by walking its change
-/// feed — the fallback the merge record's §1.3 step 1 describes, "read
+/// Returns the head member of bare document `doc` by walking its change feed.
+///
+/// The walk is the fallback the merge record's §1.3 step 1 describes, "read
 /// backwards to the last `publish` row": no single read answers a bare
-/// document's head member (UNVERIFIED-HERE 7), so the last `publish` row
-/// under `doc` whose minted member is a TRUNK member names it; a daughter's
-/// row never does. `None` for a document with no member, or one whose rows
-/// are all below the feed's retention floor.
+/// document's head member (unverified-here 7), so the last `publish` row
+/// under `doc` whose minted member is a trunk member names it; a daughter's
+/// row never does. `None` for a document with no member, or one whose head
+/// member's `publish` row is below the feed's retention floor.
 ///
 /// The walk is paged from the floor up under `under=doc`, so its cost is the
 /// document's own rows; an embedder that knows the head names it instead.
@@ -1142,8 +1268,14 @@ pub fn head_of(
     Ok(head)
 }
 
-/// The commit position of the `publish` row that minted `member`, off its
-/// own rows of the feed; `None` where the feed no longer holds it.
+/// Returns the commit position of the `publish` row that minted `member`.
+///
+/// It is read off the member's own rows of the feed; `None` where the feed
+/// no longer holds it.
+///
+/// # Errors
+///
+/// The feed's halts: a transport fault, the death signal under the token.
 pub(super) fn position_of(
     board: &Board,
     token: Option<&Token>,
@@ -1163,9 +1295,15 @@ pub(super) fn position_of(
     Ok(at)
 }
 
-/// Every row of the feed under `under`, oldest first, from the floor to the
-/// head: the retention floor restarts the walk at the floor, a page past the
-/// byte budget is re-asked at the limit that fits.
+/// Walks every row of the feed under `under`, oldest first.
+///
+/// The walk runs from the floor to the head: the retention floor restarts
+/// the walk at the floor, a page past the byte budget is re-asked at the
+/// limit that fits.
+///
+/// # Errors
+///
+/// The feed's halts: a transport fault, the death signal under the token.
 fn feed_rows(
     board: &Board,
     token: Option<&Token>,

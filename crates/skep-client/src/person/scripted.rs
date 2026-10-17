@@ -1,8 +1,10 @@
-//! THE SCRIPTED PERSON — the library's test support (§2.4, §8): the seam a
-//! test drives, never the CLI. Answers come off a script in order; every
-//! moment is recorded in the transcript; the sheet's fields are kept so a
-//! re-type can come "off the paper" — or be wrong on purpose. An answer of
-//! the wrong kind for its moment panics: the script is the test's own.
+//! The scripted person — the library's test support (§2.4, §8).
+//!
+//! It is the seam a test drives, never the CLI. Answers come off a script in
+//! order; every moment is recorded in the transcript; the sheet's fields are
+//! kept so a re-type can come "off the paper" — or be wrong on purpose. An
+//! answer of the wrong kind for its moment panics, as does a re-type or an
+//! import off a sheet not yet shown: the script is the test's own.
 //!
 //! Compiled only under `test-hooks` (and this crate's own `cfg(test)`): a
 //! suite turns the feature on, a build that compiles no test carries none
@@ -16,7 +18,7 @@ use super::*;
 /// One scripted answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Script {
-    /// The box's default, or this text where the box offers none.
+    /// The box's default, or `default` where the box offers none.
     LabelDefault,
     /// This label.
     Label(String),
@@ -24,10 +26,11 @@ pub enum Script {
     Answer(String),
     /// A yes-or-no.
     YesNo(bool),
-    /// A confirmation: `true` types the row asked for, `false` types `no`.
+    /// A confirmation: `true` types the text it expects, `false` types `no`.
     Confirm(bool),
-    /// The re-type, read off the n-th sheet shown (the paper), counted
-    /// from zero.
+    /// The re-type, read off the n-th sheet shown (the paper).
+    ///
+    /// The sheets are counted from zero.
     RetypeFromSheet(usize),
     /// A re-type of the wrong hex — a mistyped paper.
     RetypeWrong,
@@ -35,12 +38,13 @@ pub enum Script {
     RetypeDeclined,
     /// An anchor file's destination.
     Destination(PathBuf),
-    /// A typed confirmation answered in TEXT — a wrong row, on purpose.
+    /// A typed confirmation answered in text — a wrong row, on purpose.
     Typed(String),
     /// The import: a file.
     ImportFile(PathBuf),
-    /// The import: the hex typed off the n-th sheet shown, with its
-    /// fingerprint's first group.
+    /// The import: the hex typed off the n-th sheet shown.
+    ///
+    /// It comes with its fingerprint's first group.
     ImportFromSheet(usize),
     /// The import: this hex and this prefix, as typed.
     ImportTyped { seed_hex: String, fingerprint_prefix: String },
@@ -57,21 +61,26 @@ pub enum Script {
 pub struct Scripted {
     script: VecDeque<Script>,
     /// Every moment, in order, as a line: the class, the kind, the text.
+    ///
+    /// A moment the person leaves at adds an `ABANDON at` line after its
+    /// own.
     pub transcript: Vec<String>,
-    /// Every sheet shown — the SECRET material the test is allowed to
-    /// see, since it stands for the paper.
+    /// Every sheet shown.
+    ///
+    /// It is the secret material the test is allowed to see, since it stands
+    /// for the paper.
     pub sheets: Vec<SheetFields>,
     /// The dismissals, counted.
     pub dismissed: usize,
 }
 
 impl Scripted {
-    /// A person who will answer `script`, in order.
+    /// Returns a person who will answer `script`, in order.
     pub fn new(script: Vec<Script>) -> Scripted {
         Scripted { script: script.into(), ..Scripted::default() }
     }
 
-    /// Whether the transcript carries `needle`.
+    /// Returns whether the transcript carries `needle`.
     pub fn said(&self, needle: &str) -> bool {
         self.transcript.iter().any(|l| l.contains(needle))
     }

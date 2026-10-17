@@ -1,20 +1,23 @@
-//! The signing seam (`client.md` §1.1's `sign` row, §1.4): the `Signer`
-//! trait — `public_key` the HYBRID key, `sign` the kind's BLOB over bytes
-//! the library framed — and its in-memory seed arm over
-//! `skep_signature::HybridSigner`, keygen from the seed under the
+//! The signing seam (`client.md` §1.1's `sign` row, §1.4).
+//!
+//! It holds the `Signer` trait — `public_key` the hybrid key, `sign` the
+//! kind's blob over bytes the library framed — and its in-memory seed arm
+//! over `skep_signature::HybridSigner`, keygen from the seed under the
 //! production kind's tag (AUTH-1.1; wire.md's keygen-from-seed rule); and
 //! `session_payload(origin, nonce, principal, scope)`, AUTH-6.4's two
 //! versioned layouts under `SESSION_TAG` and `SESSION_TAG_V2` — the
-//! REFERENCE layout for every signer, REPRODUCIBLE FROM THE RULE WITH NO
-//! DAEMON CRATE LINKED (AUTH-5.67; AUTH RES-61), the daemon's
+//! reference layout for every signer, reproducible from the rule with no
+//! daemon crate linked (AUTH-5.67; AUTH RES-61), the daemon's
 //! `session_payload` the arbiter (P5); and [`RecordFrame`], the bytes a
 //! credential record's `sig` is made over at the record grade, which a
 //! deposit signs and the admitted read's trial verifies.
 //!
 //! A `Signer` knows nothing of the wire: it signs bytes the library framed.
-//! Of the key material a dropped `HybridSigner` holds, the Ed25519 half is
-//! wiped and the ML-DSA-65 half released unwiped (its own doc) — AUTH-5.54
-//! step 3's DROP is OPEN WORK for that half, reported and not claimed here.
+//! Of the key material a dropped `HybridSigner` holds, the Ed25519 half and
+//! the ML-DSA-65 half are both wiped, and what the KDF and the key libraries
+//! compute from a secret inside a call is released unwiped (its own doc) —
+//! AUTH-5.54 step 3's drop is open work for that residue, reported and not
+//! claimed here.
 
 use skep_address::Address;
 use skep_identity::{framed, BoardTerm, Fingerprint, PublicKey, RecordRows, SESSION_TAG, SESSION_TAG_V2};
@@ -24,32 +27,39 @@ use crate::address::parse_address;
 use crate::board::Scope;
 use crate::origin::Origin;
 
-/// The production kind's marker tag — `mldsa65-ed25519`, tag 1, the kind
-/// every served board enrolls (wire.md §The claim ceremony and credentials).
+/// The production kind's marker tag — `mldsa65-ed25519`, tag 1.
+///
+/// It is the kind every served board enrolls (wire.md §The claim ceremony
+/// and credentials).
 pub const PRODUCTION_TAG: u8 = skep_signature::TAG_MLDSA65_ED25519;
 
-/// THE SIGNER SEAM (§1.4): a custody rung is an implementation of this
-/// trait and never a rewrite of the ceremony. `Send + Sync`, so a shell
-/// signs on whichever thread holds its board: the signer [`KeyStore::signer`]
-/// hands out crosses threads as the board does.
+/// The signer seam (§1.4).
+///
+/// A custody rung is an implementation of this trait and never a rewrite of
+/// the ceremony. It is `Send + Sync`, so a shell signs on whichever thread
+/// holds its board: the signer [`KeyStore::signer`] hands out crosses
+/// threads as the board does.
 ///
 /// [`KeyStore::signer`]: crate::store::KeyStore::signer
 pub trait Signer: Send + Sync {
-    /// The HYBRID public key — one `ALGS` token over both halves — borrowed
-    /// from the signer that holds it.
+    /// Returns the hybrid public key, borrowed from the signer that holds it.
+    ///
+    /// It is one `ALGS` token over both halves.
     fn public_key(&self) -> &PublicKey;
 
-    /// The kind's BLOB — the post-quantum signature then the Ed25519
-    /// signature, 3,373 bytes at tag 1 — over bytes the library framed
-    /// (AUTH-6.4; the record grade's frame).
+    /// Returns the kind's blob over `payload`, bytes the library framed.
+    ///
+    /// The blob is the post-quantum signature then the Ed25519 signature,
+    /// 3,373 bytes at tag 1; the payload is framed by AUTH-6.4's layouts or
+    /// by the entry frame, at the entry grade or the record grade.
     fn sign(&self, payload: &[u8]) -> Vec<u8>;
 
-    /// The key's fingerprint (AUTH-1.7), the value every compare reads.
+    /// Returns the key's fingerprint (AUTH-1.7), the value every compare reads.
     fn fingerprint(&self) -> Fingerprint {
         Fingerprint::of(self.public_key())
     }
 
-    /// The marker tag the blob is made under — the key's own row's.
+    /// Returns the marker tag the blob is made under — the key's own row's.
     fn tag(&self) -> u8 {
         self.public_key().sig_alg_row().tag
     }
@@ -65,8 +75,10 @@ impl Signer for HybridSigner {
     }
 }
 
-/// A signer behind a box is the signer it holds — every method forwarded, so
-/// a rung that overrides one keeps its override behind the pointer.
+/// A signer behind a box is the signer it holds.
+///
+/// Every method is forwarded, so a rung that overrides one keeps its
+/// override behind the pointer.
 impl<S: Signer + ?Sized> Signer for Box<S> {
     fn public_key(&self) -> &PublicKey {
         (**self).public_key()
@@ -85,8 +97,9 @@ impl<S: Signer + ?Sized> Signer for Box<S> {
     }
 }
 
-/// A signer behind a reference is the signer it refers to, every method
-/// forwarded.
+/// A signer behind a reference is the signer it refers to.
+///
+/// Every method is forwarded.
 impl<S: Signer + ?Sized> Signer for &S {
     fn public_key(&self) -> &PublicKey {
         (**self).public_key()
@@ -105,43 +118,63 @@ impl<S: Signer + ?Sized> Signer for &S {
     }
 }
 
-/// Keygen from a 32-byte seed under the production kind (the
-/// keygen-from-seed rule: one seed, two halves through the KDF, never the
-/// raw seed to either).
+/// Derives a signer from a 32-byte seed under the production kind.
+///
+/// It follows the keygen-from-seed rule: one seed, two halves through the
+/// KDF, never the raw seed to either.
+///
+/// # Panics
+///
+/// Panics if this build holds no rule for tag 1; it holds one, so the
+/// `expect` never fires.
 pub fn signer_from_seed(seed: &[u8; 32]) -> HybridSigner {
     HybridSigner::from_seed(PRODUCTION_TAG, seed).expect("tag 1 is a row this build holds")
 }
 
-/// Keygen from a seed under `tag`'s rule, `None` for a tag this build holds
-/// no rule for.
+/// Derives a signer from a seed under `tag`'s rule.
+///
+/// The answer is `None` for a tag this build holds no rule for.
 pub fn signer_from_seed_under(tag: u8, seed: &[u8; 32]) -> Option<HybridSigner> {
     HybridSigner::from_seed(tag, seed)
 }
 
-/// `n` fresh bytes from the OS random source — never a seed, which is drawn
-/// into its own zeroing value (`sheet::Seed::fresh`).
+/// Returns `n` fresh bytes from the OS random source.
+///
+/// They are never a seed, which is drawn into its own zeroing value
+/// (`sheet::Seed::fresh`).
+///
+/// # Panics
+///
+/// Panics where the OS random source fails.
 pub fn fresh_bytes(n: usize) -> Vec<u8> {
     let mut out = vec![0u8; n];
     getrandom::fill(&mut out).expect("OS entropy unavailable");
     out
 }
 
-/// A client-minted random principal id over the wire's exactly-representable
-/// range — 53 random bits, never a full `u64` and never a counter
-/// (AUTH-5.20).
+/// Returns a client-minted random principal id (AUTH-5.20).
+///
+/// It lies in the wire's exactly-representable range — 53 random bits,
+/// never a full `u64` and never a counter.
+///
+/// # Panics
+///
+/// Panics where the OS random source fails ([`fresh_bytes`]); the eight
+/// bytes it draws always convert, so that `expect` never fires.
 pub fn fresh_principal_id() -> u64 {
     let bytes = fresh_bytes(8);
     let raw = u64::from_le_bytes(bytes.try_into().expect("eight bytes"));
     (raw & ((1u64 << 53) - 1)).max(2)
 }
 
-/// AUTH-6.4 — the signed bytes, VERSIONED and never extended in place: a
-/// FULL session signs `framed(SESSION_TAG, [origin, nonce, principal])`, a
-/// CONTENT-scoped one `framed(SESSION_TAG_V2, [origin, nonce, principal,
-/// scope])` — each over the body's OWN strings, `principal` as shortest
-/// ASCII decimal, `scope` the body's own `content` bytes. `origin` is the
-/// origin this client SIGNS for the board (AUTH-4.8), the one it dialed for
-/// every direct client.
+/// Returns the bytes a session signs (AUTH-6.4).
+///
+/// They are versioned and never extended in place: a full session signs
+/// `framed(SESSION_TAG, [origin, nonce, principal])`, a content-scoped one
+/// `framed(SESSION_TAG_V2, [origin, nonce, principal, scope])` — each over
+/// the body's own strings, `principal` as shortest ASCII decimal, `scope`
+/// the body's own `content` bytes. `origin` is the origin this client signs
+/// for the board (AUTH-4.8), the one it dialed for every direct client.
 pub fn session_payload(origin: &Origin, nonce: &str, principal: u64, scope: Scope) -> Vec<u8> {
     let principal = principal.to_string();
     match scope {
@@ -153,21 +186,23 @@ pub fn session_payload(origin: &Origin, nonce: &str, principal: u64, scope: Scop
     }
 }
 
-/// THE RECORD FRAME a credential record's `sig` is made over (the record
-/// grade; wire.md §The claim ceremony and credentials): `framed("skep-entry-v1",
-/// [alg, board, account, doc, "record", body])` — `alg` the signing key's
-/// token, `board` `H.1`'s pair, `account` the HOME's account, `doc` the home,
-/// the body the five rows over the sig-less canonical record. Its rows are
-/// NAMED, so no two of its addresses trade places in a call: a frame with
-/// the home and its account swapped signs and never verifies. Composed by
-/// `skep_identity::RecordFrame`, spelled by nobody here.
+/// The record frame a credential record's `sig` is made over.
+///
+/// It is the record grade's (wire.md §The claim ceremony and credentials):
+/// `framed("skep-entry-v1", [alg, board, account, doc, "record", body])` —
+/// `alg` the signing key's token, `board` `H.1`'s pair, `account` the home's
+/// account, `doc` the home, the body the five rows over the sig-less
+/// canonical record. Its rows are named, so no two of its addresses trade
+/// places in a call: a frame with the home and its account swapped signs
+/// and never verifies. It is composed by `skep_identity::RecordFrame`,
+/// spelled by nobody here.
 #[derive(Debug, Clone, Copy)]
 pub struct RecordFrame<'a> {
     /// The signing key's `ALGS` token.
     pub alg: &'a str,
-    /// `H.1`'s pair (D13).
+    /// `H.1`'s pair (signed-ops D13).
     pub board: BoardTerm,
-    /// The HOME's account — ω over the home.
+    /// The home's account — ω over the home.
     pub home_account: &'a str,
     /// The home — the doc 1 the record is deposited into (AUTH-2.127).
     pub home: &'a str,
@@ -175,12 +210,12 @@ pub struct RecordFrame<'a> {
     pub ty: &'a str,
     /// The subject accounts — the link's `to`.
     pub to: &'a [&'a str],
-    /// The SIG-LESS canonical record (AUTH-4.58: the record's identity).
+    /// The sig-less canonical record (AUTH-4.58: the record's identity).
     pub sigless: &'a [u8],
 }
 
 impl RecordFrame<'_> {
-    /// The frame's bytes, `None` where an address of it does not parse.
+    /// Returns the frame's bytes, `None` where an address of it does not parse.
     pub fn compose(&self) -> Option<Vec<u8>> {
         let account = parse_address(self.home_account)?;
         let home = parse_address(self.home)?;
@@ -191,8 +226,9 @@ impl RecordFrame<'_> {
     }
 }
 
-/// The blob as the wire carries it — lowercase hex (6,746 characters at
-/// tag 1).
+/// Returns the blob as the wire carries it — lowercase hex.
+///
+/// It is 6,746 characters at tag 1.
 pub fn sig_hex(blob: &[u8]) -> String {
     crate::hex::encode(blob)
 }
@@ -201,8 +237,10 @@ pub fn sig_hex(blob: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// AUTH-6.4 — the two layouts, byte for byte: the tag, then each field
-    /// `be32(len) ‖ bytes`; the v2 bytes carry the scope LAST.
+    /// AUTH-6.4 — the two layouts, byte for byte.
+    ///
+    /// Each is the tag, then each field `be32(len) ‖ bytes`; the v2 bytes
+    /// carry the scope last.
     #[test]
     fn the_session_payload_is_the_rules_two_layouts() {
         let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
@@ -223,8 +261,10 @@ mod tests {
         assert_eq!(v2, expect2);
     }
 
-    /// The seam over the hybrid signer: the blob is the row's width and
-    /// verifies under the key; the fingerprint is the key's.
+    /// The seam over the hybrid signer.
+    ///
+    /// The blob is the row's width and verifies under the key; the
+    /// fingerprint is the key's.
     #[test]
     fn a_seed_signer_signs_the_rows_blob() {
         let signer = signer_from_seed(&[9u8; 32]);
@@ -237,8 +277,10 @@ mod tests {
         assert!(id >= 2 && id < (1 << 53));
     }
 
-    /// A signer behind a box or a reference is the signer it holds: the key
-    /// it lends is that signer's own, never a copy, and the blob verifies.
+    /// A signer behind a box or a reference is the signer it holds.
+    ///
+    /// The key it lends is that signer's own, never a copy, and the blob
+    /// verifies.
     #[test]
     fn a_signer_behind_a_pointer_lends_its_own_key() {
         let signer = signer_from_seed(&[10u8; 32]);

@@ -1,9 +1,13 @@
-//! Lowercase hex, two digits a byte — the one spelling every hex this crate
-//! emits takes (AUTH-1.3, AUTH-1.9); the decode admits either case, as the
-//! wire's parsers do (AUTH-2.17).
+//! Lowercase hex, two digits a byte.
+//!
+//! It is the one spelling every hex this crate emits takes (AUTH-1.3,
+//! AUTH-1.9); the decode admits either case, as the wire's parsers do
+//! (AUTH-2.17).
 
-/// Lowercase hex of `bytes`. Every emitter is in the acting half; the
-/// feature-free build decodes alone.
+/// Returns the lowercase hex of `bytes`.
+///
+/// Every emitter is in the acting half; the feature-free build decodes
+/// alone.
 #[cfg_attr(not(feature = "acting"), allow(dead_code))]
 pub(crate) fn encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -24,8 +28,10 @@ fn nibble(c: u8) -> Option<u8> {
     }
 }
 
-/// The bytes `s` spells, either case; `None` on an odd length or a non-hex
-/// byte — text of any content off the wire answers `None` and never panics.
+/// Returns the bytes `s` spells, either case.
+///
+/// The answer is `None` on an odd length or a non-hex byte — text of any
+/// content off the wire answers `None` and never panics.
 pub(crate) fn decode(s: &str) -> Option<Vec<u8>> {
     let digits = s.as_bytes();
     if digits.len() % 2 != 0 {
@@ -38,10 +44,12 @@ pub(crate) fn decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The bytes `s` spells, either case, written INTO `out` — no copy made
-/// and no heap buffer, so a secret decodes straight into the value that
-/// owns it (`sheet::Seed::from_hex`); `false` where `s` is not exactly
-/// `2 × out.len()` hex digits, `out` then holding no meaning.
+/// Writes the bytes `s` spells, either case, into `out`.
+///
+/// No copy is made and no heap buffer, so a secret decodes straight into
+/// the value that owns it (`sheet::Seed::from_hex`); the answer is `false`
+/// where `s` is not exactly `2 × out.len()` hex digits, `out` then holding
+/// no meaning.
 pub(crate) fn decode_into(s: &str, out: &mut [u8]) -> bool {
     let digits = s.as_bytes();
     if digits.len() != out.len() * 2 {
@@ -56,7 +64,7 @@ pub(crate) fn decode_into(s: &str, out: &mut [u8]) -> bool {
     true
 }
 
-/// Exactly 32 bytes from 64 hex digits, either case.
+/// Returns exactly 32 bytes from 64 hex digits, either case.
 pub(crate) fn decode32(s: &str) -> Option<[u8; 32]> {
     let mut out = [0u8; 32];
     decode_into(s, &mut out).then_some(out)

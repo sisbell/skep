@@ -1,23 +1,24 @@
-//! THE BACKUP MOMENT in AUTH-5.54's pinned order (`client.md` §4.2; RULED,
-//! owner 2026-09-09: "THE BACKUP'S DEFAULT IS THE FILE FORM … PAPER IS OPT-IN
-//! by flag, and only the paper path prints the seed and asks for the re-type
-//! from the paper"): the three statements at the HEAD (AUTH-5.54 (a)–(c)),
-//! the two anchor boxes with their per-run defaults and the domain test at
-//! the box (AUTH-5.42; AUTH-1.24), generate (step 1), EXPORT (step 2) — each
+//! The backup moment in AUTH-5.54's pinned order (`client.md` §4.2).
+//!
+//! The backup's default is the file form and paper is opt-in by flag: only
+//! the paper path prints the seed and asks for the re-type from the paper.
+//! The moment is the three statements at the head (AUTH-5.54 (a)–(c)), the
+//! two anchor boxes with their per-run defaults and the domain test at the
+//! box (AUTH-5.42; AUTH-1.24), generate (step 1), export (step 2) — each
 //! anchor to its own destination, `O_EXCL` `0600`, never under the store
 //! (§3.4), the ladder words at the path (AUTH-5.40) and the one-place
-//! sentence where both land in one place — the sheet besides under `--paper`,
-//! the DROP (step 3), the DISMISSAL on the paper path (§4.2 step 6), the
-//! RE-IMPORT over a channel whose ABSENCE breaks it (step 4: the file read
-//! back from the path it wrote, or the 64 hex typed from the print),
-//! fingerprint FIRST then the client-local sign-and-verify (step 5;
-//! AUTH-5.39), AUTH-5.41 where both exist, the keep-the-papers line KEYED
-//! PER SITE (AUTH-5.44; §4.2 step 10) — and ONLY THEN the caller's genesis
-//! (step 6). A file-path read-back that fails RE-RUNS FROM STEP 1 under a
-//! fresh pair, the bad file destroyed (§4.1 S3). Steps 1–3 alone — the
-//! generate, the export and the DROP — are `export_pair`, and statement (b)
-//! alone is `two_places`: the loss arm CITES the order with those two and
-//! inherits nothing else (§4a.6 L3).
+//! sentence where both land in one place — the sheet besides under
+//! `--paper`, the drop (step 3), the dismissal on the paper path
+//! (§4.2 step 6), the re-import over a channel whose absence breaks it
+//! (step 4: the file read back from the path it wrote, or the 64 hex typed
+//! from the print), fingerprint first then the client-local sign-and-verify
+//! (step 5; AUTH-5.39), AUTH-5.41 where both exist, the keep-the-papers
+//! line keyed per site (AUTH-5.44; §4.2 step 10) — and only then the
+//! caller's genesis (step 6). A file-path read-back that fails re-runs from
+//! step 1 under a fresh pair, every file of the pair destroyed (§4.1 S3).
+//! Steps 1–3 alone — the generate, the export and the drop — are
+//! `export_pair`, and statement (b) alone is `two_places`: the loss arm
+//! cites the order with those two and inherits nothing else (§4a.6 L3).
 
 use std::path::{Path, PathBuf};
 
@@ -34,22 +35,25 @@ use crate::store::FileStore;
 /// The venue the moment runs at — the copy is keyed by it (P7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Venue {
-    /// `claim`'s S3: host and owner one party; the artifact carries the
-    /// three facts (AUTH-5.38) and the keep-the-papers line takes the
-    /// NOTEBOOK form.
+    /// `claim`'s S3: host and owner one party.
+    ///
+    /// The artifact carries the three facts (AUTH-5.38) and the
+    /// keep-the-papers line takes the notebook form.
     Notebook { facts: Facts },
-    /// `keygen --anchors`: someone else's board — statement (a) carries the
-    /// operator sentence unconditionally (AUTH-5.43's create-org sibling),
-    /// the artifact lacks the address, the principal AND the origin, and
-    /// the line is AUTH-5.44's create-org arm.
+    /// `keygen --anchors`: someone else's board.
+    ///
+    /// Statement (a) carries the operator sentence unconditionally
+    /// (AUTH-5.43's create-org sibling), the artifact lacks the address, the
+    /// principal and the origin, and the line is AUTH-5.44's create-org arm.
     DoorSide,
-    /// `accept`'s beat (`client.md` §4c.1): the RECIPIENT's own facts —
-    /// the artifact carries the address, the principal and the origin
-    /// (AUTH-5.38; AUTH RES-162) — statement (a) carrying THE RECIPIENT'S
-    /// BEAT'S OWN operator sentence per A4 cell, rendered ONCE (`operator`;
+    /// `accept`'s beat (`client.md` §4c.1): the recipient's own facts.
+    ///
+    /// The artifact carries the address, the principal and the origin
+    /// (AUTH-5.38; AUTH RES-162) — statement (a) carrying the recipient's
+    /// beat's own operator sentence per A4 cell, rendered once (`operator`;
     /// AUTH RES-156), the anchor boxes' consequence keyed to this door (the
-    /// label rides the genesis into the GIVER's doc 1, AUTH-5.42), the line
-    /// AUTH-5.44's HANDOFF form verbatim, the org-door artifact line DROPPED.
+    /// label rides the genesis into the giver's doc 1, AUTH-5.42), the line
+    /// AUTH-5.44's handoff form verbatim, the org-door artifact line dropped.
     Handoff { facts: Facts, operator: String },
 }
 
@@ -58,44 +62,52 @@ pub enum Venue {
 pub struct BackupOptions {
     /// `--anchor-label`, up to two; a box asks where one is absent.
     pub labels: Vec<Label>,
-    /// `--anchor-out`, ONE DESTINATION PER ANCHOR (0, 1 or 2 given); the
-    /// destination is asked for where absent — NO default (§6).
+    /// `--anchor-out`, one destination per anchor (0, 1 or 2 given).
+    ///
+    /// The destination is asked for where absent — no default (§6).
     pub destinations: Vec<PathBuf>,
     /// `--paper`: the sheet printed besides, and the re-type asked.
     pub paper: bool,
     /// The store, whose paths are refused as destinations (§3.4).
     pub store: Option<PathBuf>,
-    /// The machine's host name and the date, for the per-run default.
+    /// The machine's host name, for the per-run default.
     pub host_name: String,
+    /// The date, for the per-run default.
     pub date: String,
 }
 
-/// One exported anchor's PUBLIC facts — never the seed, which was dropped.
+/// One exported anchor's public facts — never the seed, which was dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnchorArtifact {
+    /// The anchor's public key.
     pub public: PublicKey,
+    /// The anchor's fingerprint.
     pub fingerprint: Fingerprint,
+    /// The label the anchor's box fixed.
     pub label: Label,
     /// The file, where it stands (destroyed under AUTH-5.41's offer: `None`).
     pub file: Option<PathBuf>,
-    /// The print, under `--paper` — `None` on the file form, which prints
-    /// nothing.
+    /// The print, under `--paper`.
+    ///
+    /// `None` on the file form, which prints nothing.
     pub print: Option<Print>,
 }
 
 /// What a printed anchor's re-type made of its print (AUTH-5.41).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Print {
-    /// The print passed its re-type — the KEPT artifact is the print.
+    /// The print passed its re-type — the kept artifact is the print.
     Verified,
-    /// The print was NOT verified — labelled so, and the file stays the
-    /// verified artifact.
+    /// The print was not verified — labelled so.
+    ///
+    /// The file stays the verified artifact.
     Unverified,
 }
 
 /// The moment's outcome: two anchors, public facts alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupOutcome {
+    /// The two anchors, public facts alone.
     pub anchors: Vec<AnchorArtifact>,
     /// Both files landed in one place — (b)'s file-venue words were said.
     pub one_place: bool,
@@ -109,8 +121,9 @@ fn abandoned(e: Abandoned) -> Halt {
     )
 }
 
-/// The three statements at the head (AUTH-5.54 (a)–(c)), keyed to the path
-/// this run takes and to the venue.
+/// Says the three statements at the head (AUTH-5.54 (a)–(c)).
+///
+/// They are keyed to the path this run takes and to the venue.
 fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
     let operator = match venue {
         Venue::Notebook { .. } => String::new(),
@@ -138,10 +151,12 @@ fn statements(person: &mut dyn Person, venue: &Venue, paper: bool) {
     );
 }
 
-/// Statement (b) (AUTH-5.54 (b)), keyed to the path the run takes — said at
-/// the moment's head, and ALONE by the loss arm before each pair it exports
-/// (§4a.6 L3): a person who has just lost an anchor is one artifact from
-/// AUTH-5.16's both-unheld state, which is the exact loss (b) is about.
+/// Says statement (b) (AUTH-5.54 (b)), keyed to the path the run takes.
+///
+/// It is said at the moment's head, and alone by the loss arm before each
+/// pair it exports (§4a.6 L3): a person who has just lost an anchor is one
+/// artifact from AUTH-5.16's both-unheld state, which is the exact loss (b)
+/// is about.
 pub(crate) fn two_places(person: &mut dyn Person, paper: bool) {
     let b = if paper {
         "(b) PRINT TWO, KEEP THEM APART: the pair is two papers so that one place that burns, floods or is searched cannot take \
@@ -153,10 +168,15 @@ pub(crate) fn two_places(person: &mut dyn Person, paper: bool) {
     say(person, "AUTH-5.54 (b)", b);
 }
 
-/// The anchor box (AUTH-5.42's anchor copy): names the SHEET, never where
-/// you keep it; a default DERIVED PER RUN — the machine's host name, the
-/// date, a per-run token (§4.2 step 2); the domain test at the box,
-/// re-asked on a refusal.
+/// Asks the anchor box (AUTH-5.42's anchor copy).
+///
+/// The box names the sheet, never where you keep it; a default derived per
+/// run — the machine's host name, the date, a per-run token (§4.2 step 2);
+/// the domain test at the box, re-asked on a refusal.
+///
+/// # Errors
+///
+/// An abandoned box halts.
 fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: String) -> Result<Label, Halt> {
     let consequence = match venue {
         Venue::Notebook { .. } => "at this notebook the name is readable by anything on the machine (AUTH-5.85's reader clause)",
@@ -180,9 +200,11 @@ fn anchor_box(person: &mut dyn Person, venue: &Venue, which: &str, default: Stri
     }
 }
 
-/// The ladder words at the file's path (AUTH-5.40), venue-keyed: ending at
-/// "move it to media you control" on the file-only path, the print clause
-/// under `--paper` alone (RES-62 item 7).
+/// Returns the ladder words at the file's path (AUTH-5.40).
+///
+/// They are keyed to the path the run takes: ending at "move it to media
+/// you control" on the file-only path, the print clause under `--paper`
+/// alone (RES-62 item 7).
 fn ladder_words(path: &Path, paper: bool) -> String {
     let tail = if paper { ", or destroy it and keep the print" } else { "" };
     format!(
@@ -192,8 +214,15 @@ fn ladder_words(path: &Path, paper: bool) -> String {
     )
 }
 
-/// The destination for anchor `which`: the flag's, or asked (SECRET), a path
-/// inside the store refused (§3.4; §6).
+/// Returns the destination for anchor `which`: the flag's, or asked.
+///
+/// The ask is a secret moment; a path inside the store is refused (§3.4;
+/// §6), and an asked one is asked again.
+///
+/// # Errors
+///
+/// The flag's path inside the store is refused, and an abandoned ask
+/// halts.
 fn destination(person: &mut dyn Person, opts: &BackupOptions, which: usize) -> Result<PathBuf, Halt> {
     let inside = |p: &Path| opts.store.as_ref().is_some_and(|s| FileStore::open(s).contains_path(p));
     if let Some(given) = opts.destinations.get(which) {
@@ -226,12 +255,26 @@ fn destination(person: &mut dyn Person, opts: &BackupOptions, which: usize) -> R
     }
 }
 
-/// The file name: `anchor-<label slug>-<8 hex of fingerprint>.skep-key` (§6).
+/// Returns an anchor's file name (§6).
+///
+/// The name is `anchor-<label slug>-<8 hex of fingerprint>.skep-key`.
+///
+/// # Panics
+///
+/// Panics if the fingerprint's hex runs under 8 digits; it runs to 64, so
+/// the slice never fails.
 pub fn anchor_file_name(label: &Label, fp: &Fingerprint) -> String {
     format!("anchor-{}-{}.skep-key", label.slug(), &fp.to_hex()[..8])
 }
 
-/// THE MOMENT.
+/// Runs the moment.
+///
+/// # Errors
+///
+/// An abandoned box, destination, sheet, re-type or offer halts; so do a
+/// destination inside the store, a directory that cannot be made, a file
+/// that cannot be written, and a typed seed that derives the key but does
+/// not sign; and three runs in a row whose read-back fails halt the moment.
 pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions) -> Result<BackupOutcome, Halt> {
     // Step 1 (the head): the three statements, before any generation.
     statements(person, venue, opts.paper);
@@ -241,8 +284,9 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
     for (i, which) in ["a", "b"].iter().enumerate() {
         let label = match opts.labels.get(i) {
             Some(l) => {
-                // The box's statements render whenever a label is fixed, flag or
-                // prompt alike (§2.2 `keygen`).
+                // The box's statements render whenever a label is fixed, flag
+                // or prompt alike (§2.2 `keygen`): at the flag its first two,
+                // in one line.
                 say(person, "AUTH-5.42", format!("anchor {which} is named `{}`: this names the SHEET and never where you keep it; public forever and uncorrectable", crate::sheet::render_inert(l.as_str())));
                 l.clone()
             }
@@ -260,7 +304,7 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
             None => say(person, "§4.1 S3", "the moment re-runs from step 1 under a fresh pair"),
         }
     }
-    // The command that re-runs the moment is its VENUE's: the claim, the
+    // The command that re-runs the moment is its venue's: the claim, the
     // door-side form, the recipient's beat.
     let rerun = match venue {
         Venue::Notebook { .. } => "`skep claim`",
@@ -274,22 +318,30 @@ pub fn backup_moment(person: &mut dyn Person, venue: &Venue, opts: &BackupOption
     ))
 }
 
-/// AUTH-5.54 STEPS 1–3 for one pair — §4.2's steps 3–6: generate the pair,
-/// each seed born in its file's own zeroing value; EXPORT each anchor to its
-/// own destination, the ladder words at its path and the one-place sentence
-/// where both land in one place; the sheets under `--paper`; the DROP; the
-/// paper path's DISMISSAL. Answers the artifacts, each file standing and
-/// read back by nothing yet — a print, under `--paper`, unverified. The
-/// RE-IMPORT is the caller's: the moment's own read-back, or the loss arm's
-/// [`reimport_anchor`] after its enroll, which CITES this order and inherits
-/// nothing else of the moment (§4a.6 L3). `opts.labels`, `host_name` and
-/// `date` are the boxes' and unread here: `labels` names the pair.
+/// Runs AUTH-5.54 steps 1–3 for one pair — §4.2's steps 3–6.
+///
+/// The steps: generate the pair, each seed born in its file's own zeroing
+/// value; export each anchor to its own destination, the ladder words at
+/// its path and the one-place sentence where both land in one place; the
+/// sheets under `--paper`; the drop; the paper path's dismissal. It answers
+/// the artifacts, each file standing and read back by nothing yet — a
+/// print, under `--paper`, unverified. The re-import is the caller's: the
+/// moment's own read-back, or the loss arm's [`reimport_anchor`] after its
+/// enroll, which cites this order and inherits nothing else of the moment
+/// (§4a.6 L3). `opts.labels`, `host_name` and `date` are the boxes' and
+/// unread here: `labels` names the pair.
+///
+/// # Errors
+///
+/// An abandoned destination or sheet halts, as do a destination inside the
+/// store, a directory that cannot be made and a file that cannot be
+/// written.
 pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>) -> Result<BackupOutcome, Halt> {
     // Step 3: generate the pair, each seed born in its file's own zeroing
-    // value — no copy of it outlives step 5's DROP.
+    // value — no copy of it outlives step 5's drop.
     let files: Vec<KeyFile> = labels.iter().map(|l| KeyFile::new(Seed::fresh(), true, Some(l.clone()), facts)).collect();
     let publics: Vec<(PublicKey, Fingerprint)> = files.iter().map(|f| (f.public.clone(), f.fingerprint)).collect();
-    // Step 4: EXPORT — the file, each to its own destination.
+    // Step 4: export — the file, each to its own destination.
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
     for (i, file) in files.iter().enumerate() {
@@ -318,10 +370,10 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
             person.sheet(Secret(Sheet { fields: file.sheet() })).map_err(abandoned)?;
         }
     }
-    // Step 5: DROP — the seeds zeroed, the signers released, before anything
+    // Step 5: drop — the seeds zeroed, the signers released, before anything
     // is read back.
     drop(files);
-    // Step 6: DISMISS, the paper path alone.
+    // Step 6: dismiss, the paper path alone.
     if opts.paper {
         person.dismiss();
     }
@@ -340,12 +392,24 @@ pub(crate) fn export_pair(person: &mut dyn Person, opts: &BackupOptions, labels:
     Ok(BackupOutcome { anchors, one_place })
 }
 
-/// §4.2's steps 3–10 for one pair: [`export_pair`], then the RE-IMPORT, the
-/// offer and the per-site line; `None` where the file path's read-back
-/// failed — every file the pair wrote destroyed — and the moment re-runs.
+/// Runs §4.2's steps 3–10 for one pair.
+///
+/// The steps are [`export_pair`], then the re-import, the offer and the
+/// per-site line; `None` where the file path's read-back failed — every
+/// file the pair wrote destroyed — and the moment re-runs.
+///
+/// # Errors
+///
+/// [`export_pair`]'s halts; an abandoned re-type or offer; and a typed seed
+/// that derives the key but does not sign.
+///
+/// # Panics
+///
+/// Panics if an exported anchor has no file; [`export_pair`] gives each one
+/// a file, so the `expect` never fires.
 fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels: &[Label], facts: Option<&Facts>, attempt: usize) -> Result<Option<BackupOutcome>, Halt> {
     let BackupOutcome { anchors: exported, one_place } = export_pair(person, opts, labels, facts)?;
-    // Steps 7–9: RE-IMPORT, fingerprint first, the client-local verify.
+    // Steps 7–9: re-import, fingerprint first, the client-local verify.
     let mut anchors = Vec::new();
     for (i, mut artifact) in exported.iter().cloned().enumerate() {
         let path = artifact.file.clone().expect("an exported anchor's file stands");
@@ -363,7 +427,7 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                 return Ok(None);
             }
         }
-        // Step 9: AUTH-5.41 where BOTH exist and the print passed — offer to
+        // Step 9: AUTH-5.41 where both exist and the print passed — offer to
         // destroy the file, never the act unasked.
         if artifact.print == Some(Print::Verified) {
             let destroy = person
@@ -379,7 +443,7 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
         }
         anchors.push(artifact);
     }
-    // Step 10: the keep-the-papers line, KEYED PER SITE (AUTH-5.44).
+    // Step 10: the keep-the-papers line, keyed per site (AUTH-5.44).
     let noun = if opts.paper { "papers" } else { "anchor files" };
     match venue {
         Venue::Notebook { facts } => say(
@@ -406,8 +470,8 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
                  they live permanently: keep it with the papers."
             ),
         ),
-        // THE HANDOFF FORM, verbatim (AUTH-5.44; `client.md` §4c.1): the
-        // RECIPIENT's own facts, the only site where the papers' holder is not
+        // The handoff form, verbatim (AUTH-5.44; `client.md` §4c.1): the
+        // recipient's own facts, the only site where the papers' holder is not
         // the party running the door — beside the operator sentence
         // statement (a) carried, never against it (AUTH RES-156).
         Venue::Handoff { facts, .. } => say(
@@ -424,10 +488,16 @@ fn run_once(person: &mut dyn Person, venue: &Venue, opts: &BackupOptions, labels
     Ok(Some(BackupOutcome { anchors, one_place }))
 }
 
-/// The paper re-type for anchor `i` (AUTH-5.41: "the 64 hex typed once"),
-/// fingerprint FIRST (AUTH-5.39) — a wrong re-type says "re-scan" and asks
+/// Asks the paper re-type for anchor `i` (AUTH-5.41: "the 64 hex typed once").
+///
+/// Fingerprint first (AUTH-5.39) — a wrong re-type says "re-scan" and asks
 /// again; `Some(signer)` where the print passed, `None` where the person
 /// declined.
+///
+/// # Errors
+///
+/// An abandoned re-type halts, and a typed seed that derives the right key
+/// and still does not sign is this client's fault.
 fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fingerprint) -> Result<Option<HybridSigner>, Halt> {
     loop {
         let typed = person
@@ -452,10 +522,11 @@ fn retype_from_print(person: &mut dyn Person, label: &Label, i: usize, fp: &Fing
     }
 }
 
-/// The file read back from the path it was written to — the disk channel
-/// AUTH-5.41 names as the pinned order's own — fingerprint first, then the
-/// client-local sign-and-verify; `None` where it does not read back as the
-/// key it names.
+/// Reads the file back from the path it was written to.
+///
+/// It is the disk channel AUTH-5.41 names as the pinned order's own —
+/// fingerprint first, then the client-local sign-and-verify; `None` where
+/// it does not read back as the key it names.
 fn read_back_from_file(path: &Path, public: &PublicKey, fp: &Fingerprint) -> Option<HybridSigner> {
     let file = KeyFile::parse(&read_key_file(path).ok()?).ok()?;
     if file.fingerprint != *fp || file.public != *public {
@@ -465,13 +536,20 @@ fn read_back_from_file(path: &Path, public: &PublicKey, fp: &Fingerprint) -> Opt
     local_verify(&signer).then_some(signer)
 }
 
-/// THE RE-IMPORT of one exported anchor from ITS artifact (AUTH-5.54 step
-/// 4, "over a channel whose ABSENCE breaks it"; AUTH-5.59 step 3 cites it):
-/// under `paper` the 64 hex typed from the print (a declined re-type falls
-/// to the file), else the file read back from the path it was written to;
-/// fingerprint FIRST (AUTH-5.39), then the client-local sign/verify. `None`
-/// is step 3's FAILURE ARM — an enrolled anchor whose private half exists
-/// nowhere — which the caller faces as that rule says.
+/// Re-imports one exported anchor from its own artifact.
+///
+/// AUTH-5.54 step 4, "over a channel whose absence breaks it"; AUTH-5.59
+/// step 3 cites it: under `paper` the 64 hex typed from the print (a
+/// declined re-type falls to the file), else the file read back from the
+/// path it was written to; fingerprint first (AUTH-5.39), then the
+/// client-local sign/verify. `None` is step 3's failure arm — an enrolled
+/// anchor whose private half exists nowhere — which the caller faces as
+/// that rule says.
+///
+/// # Errors
+///
+/// An abandoned re-type halts, and a typed seed that derives the right key
+/// and still does not sign is this client's fault.
 pub fn reimport_anchor(person: &mut dyn Person, artifact: &AnchorArtifact, paper: bool, i: usize) -> Result<Option<HybridSigner>, Halt> {
     if paper {
         if let Some(signer) = retype_from_print(person, &artifact.label, i, &artifact.fingerprint)? {
@@ -482,8 +560,10 @@ pub fn reimport_anchor(person: &mut dyn Person, artifact: &AnchorArtifact, paper
     Ok(read_back_from_file(path, &artifact.public, &artifact.fingerprint))
 }
 
-/// Step 5's client-local check: sign and verify against the pubkey about
-/// to be enrolled — no daemon machinery.
+/// Returns whether `signer` signs and verifies — step 5's client-local check.
+///
+/// It is checked against the pubkey about to be enrolled — no daemon
+/// machinery.
 pub fn local_verify(signer: &HybridSigner) -> bool {
     let msg = b"skep backup moment: client-local verify";
     let blob = HybridSigner::sign(signer, msg);

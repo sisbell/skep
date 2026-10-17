@@ -1,27 +1,32 @@
-//! The canonical web origin (AUTH-4.2) — this crate's OWN reproduction of the
-//! daemon's grammar. The grammar is the DAEMON's (AUTH-4.1; AUTH RES-61:
-//! `Origin` and `session_payload` live at `skepd::auth`), and a client that
-//! must not link the daemon reproduces the parse from the written rule and
-//! holds it equal to the daemon's by a VECTOR SET fed from the daemon's own
-//! admitted and refused strings (P5; `client.md` §1.6, §9 item 6): the
-//! `tests` module below runs `skepd::auth::origin`'s own vectors against
-//! this parse, and never derives the grammar from the daemon.
+//! The canonical web origin (AUTH-4.2).
 //!
-//! Why the parse admits ONLY the canonical text: the origin a client signs
-//! (AUTH-4.8 — the origin of the board it ADDRESSES, the one it dialed) is
-//! compared byte for byte against the board's published sets, so a
+//! This is the crate's own reproduction of the daemon's grammar. The
+//! grammar is the daemon's (AUTH-4.1; AUTH RES-61: `Origin` and
+//! `session_payload` live at `skep_core::auth`, the daemon's core), and a
+//! client that must not link the daemon reproduces the parse from the
+//! written rule and holds it equal to the daemon's by a vector set fed from
+//! the daemon's own admitted and refused strings (P5; `client.md` §1.6, §9
+//! item 6): the `tests` module below runs `skep_core::auth::origin`'s own
+//! vectors against this parse, and never derives the grammar from the
+//! daemon.
+//!
+//! **Why the parse admits only the canonical text.** The origin a client
+//! signs (AUTH-4.8 — the origin of the board it addresses: the one it
+//! dialed, or the configured override at a frontend's own dual-bound node)
+//! is compared byte for byte against the board's published sets, so a
 //! non-canonical spelling that parsed here would sign a string no board
 //! answers for. `parse(s).as_str() == s` for every admitted `s`.
 
 use std::fmt;
 use std::net::IpAddr;
 
-/// One canonical web origin: `scheme://host[:port]`, lowercase, no path, no
-/// trailing slash, the scheme's default port OMITTED (AUTH-4.2). The
-/// canonical text is the whole value; the parts beside it answer the two
-/// questions a client asks of an origin — what to dial (host, port, scheme)
-/// and whether the host is a loopback one (the plaintext warning, §9 item
-/// 23).
+/// One canonical web origin: `scheme://host[:port]` (AUTH-4.2).
+///
+/// It is lowercase, with no path, no trailing slash, and the scheme's
+/// default port omitted. The canonical text is the whole value; the parts
+/// beside it answer the two questions a client asks of an origin — what to
+/// dial (host, port, scheme) and whether the host is a loopback one (the
+/// plaintext warning, §9 item 23).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Origin {
     canonical: String,
@@ -30,15 +35,19 @@ pub struct Origin {
     port: u16,
 }
 
-/// The three loopback-host names the daemon's bare set derives from
-/// (AUTH-4.1; AUTH-7.21: the set is CLOSED at these three).
+/// The three loopback-host names the daemon's bare set derives from (AUTH-4.1).
+///
+/// AUTH-7.21: the set is closed at these three.
 const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
 
 impl Origin {
-    /// Parse a canonical origin; `None` for anything else — uppercase, a
-    /// path, a trailing slash, `null`, an explicit default port, a
-    /// zero-padded port, an empty host, a port past 65535 (the daemon's own
-    /// doc, reproduced; the daemon's refused strings are the test's).
+    /// Parses a canonical origin; `None` for anything else.
+    ///
+    /// Anything else is uppercase, a path, a trailing slash, `null`, an
+    /// explicit default port, a zero-padded port (the daemon's own doc,
+    /// reproduced), an empty host, a port past 65535, and any other scheme,
+    /// host byte outside the canonical alphabet, or port that is empty or not
+    /// all digits; the daemon's refused strings are the test's.
     pub fn parse(s: &str) -> Option<Origin> {
         let (https, rest) = if let Some(r) = s.strip_prefix("http://") {
             (false, r)
@@ -84,42 +93,52 @@ impl Origin {
         Some(Origin { canonical: s.to_string(), https, host: host.to_string(), port })
     }
 
-    /// The canonical text — what the signed body carries and what the
-    /// bindings file keys on.
+    /// Returns the canonical text.
+    ///
+    /// It is what the signed body carries and what the bindings file keys
+    /// on.
     pub fn as_str(&self) -> &str {
         &self.canonical
     }
 
-    /// `https://`, the `tls` arm's dial.
+    /// Returns whether the scheme is `https://`, the `tls` arm's dial.
     pub fn is_https(&self) -> bool {
         self.https
     }
 
-    /// The host as the origin spells it — brackets kept for an IPv6
-    /// literal, which is how the `Host` header carries it.
+    /// Returns the host as the origin spells it.
+    ///
+    /// Brackets are kept for an IPv6 literal, which is how the `Host` header
+    /// carries it.
     pub fn host(&self) -> &str {
         &self.host
     }
 
-    /// The host to RESOLVE — the IPv6 literal's brackets shed.
+    /// Returns the host to resolve — the IPv6 literal's brackets shed.
     pub fn dial_host(&self) -> &str {
         self.host.trim_start_matches('[').trim_end_matches(']')
     }
 
-    /// The port the origin names, the scheme's default where it omits one.
+    /// Returns the port the origin names.
+    ///
+    /// It is the scheme's default where the origin omits one.
     pub fn port(&self) -> u16 {
         self.port
     }
 
-    /// `host[:port]` as the origin spells it — the `Host` header's value.
+    /// Returns `host[:port]` as the origin spells it.
+    ///
+    /// It is the `Host` header's value.
     pub fn authority(&self) -> &str {
         &self.canonical[if self.https { "https://".len() } else { "http://".len() }..]
     }
 
-    /// Whether the host is a LOOPBACK one — one of the daemon's three
-    /// loopback names, or an IP literal in the loopback range — the fact
-    /// the plaintext warning keys on (AUTH-4.53: a plaintext non-loopback
-    /// bind is signed-session-unsafe for the dialing client; §9 item 23).
+    /// Returns whether the host is a loopback one.
+    ///
+    /// It is one of the daemon's three loopback names, or an IP literal in
+    /// the loopback range — the fact the plaintext warning keys on
+    /// (AUTH-4.53: a plaintext non-loopback bind is signed-session-unsafe for
+    /// the dialing client; §9 item 23).
     pub fn names_loopback_host(&self) -> bool {
         LOOPBACK_HOSTS.contains(&self.host.as_str())
             || self.dial_host().parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
@@ -132,7 +151,9 @@ impl fmt::Display for Origin {
     }
 }
 
-/// Host canonicality: lowercase letters, digits, `.`, `-`, and the
+/// Returns whether `host` is in the canonical host alphabet.
+///
+/// The alphabet is lowercase letters, digits, `.`, `-`, and the
 /// bracketed-IPv6 alphabet (`[`, `]`, `:`) — the daemon's own alphabet, so
 /// a `.onion` host parses like any other (§7: parsed, dialed by no client).
 fn host_is_canonical(host: &str) -> bool {
@@ -143,9 +164,10 @@ fn host_is_canonical(host: &str) -> bool {
     })
 }
 
-/// [`Origin::parse`] refused: the text is not a canonical origin. The phrase
-/// is the daemon's `NotCanonical` phrase VERBATIM (`client.md` §7), so a
-/// person meets one sentence for one grammar at either end.
+/// [`Origin::parse`] refused: the text is not a canonical origin.
+///
+/// The phrase is the daemon's `NotCanonical` phrase verbatim (`client.md`
+/// §7), so a person meets one sentence for one grammar at either end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NotCanonical;
 
@@ -172,13 +194,14 @@ impl std::str::FromStr for Origin {
 mod tests {
     use super::*;
 
-    /// THE VECTOR AGREEMENT (P5; AUTH-4.2; `client.md` §1.6): the daemon's
-    /// own admitted and refused strings — `skepd::auth::origin`'s
-    /// `origins_are_canonical_only`, copied here as the vector set and never
-    /// linked — parse the same way under this crate's parse. Run against
-    /// BOTH parses: the daemon's `Origin` is on this suite's path through
-    /// the dev-dependency, so a divergence fails here and not in a person's
-    /// hands as a self-inflicted 401.
+    /// The vector agreement (P5; AUTH-4.2; `client.md` §1.6).
+    ///
+    /// The daemon's own admitted and refused strings —
+    /// `skep_core::auth::origin`'s `origins_are_canonical_only`, copied here
+    /// as the vector set and never linked — parse the same way under this
+    /// crate's parse. It runs against both parses: the daemon's `Origin` is
+    /// on this suite's path through the dev-dependency, so a divergence fails
+    /// here and not in a person's hands as a self-inflicted 401.
     #[test]
     fn the_daemons_vectors_agree_with_this_parse() {
         let admitted = [
@@ -222,10 +245,12 @@ mod tests {
         }
     }
 
-    /// THE AGREEMENT AS A LAW (P5): over every string of a generated family
-    /// — schemes, hosts, ports and tails no person picked, the near misses
-    /// among them — this parse admits exactly what the daemon's admits, and
-    /// each admitted string is its own canonical text.
+    /// The agreement as a law (P5).
+    ///
+    /// Over every string of a generated family — schemes, hosts, ports and
+    /// tails no person picked, the near misses among them — this parse
+    /// admits exactly what the daemon's admits, and each admitted string is
+    /// its own canonical text.
     #[test]
     fn the_two_parses_agree_over_a_generated_family() {
         let schemes = ["http://", "https://", "HTTP://", "ftp://", ""];
@@ -254,9 +279,11 @@ mod tests {
         assert!(admitted > 0, "the family admits no string: it tests nothing");
     }
 
-    /// The parts answer what a dial asks: scheme, host (brackets kept for
-    /// the `Host` header, shed for the resolver), the port the scheme
-    /// defaults, and the loopback test the plaintext warning keys on.
+    /// The parts answer what a dial asks.
+    ///
+    /// They are the scheme, the host (brackets kept for the `Host` header,
+    /// shed for the resolver), the port the scheme defaults, and the
+    /// loopback test the plaintext warning keys on.
     #[test]
     fn the_parts_answer_the_dial_and_the_loopback_test() {
         let o = Origin::parse("http://[::1]:8642").unwrap();

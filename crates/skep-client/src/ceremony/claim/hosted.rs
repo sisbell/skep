@@ -1,9 +1,10 @@
-//! THE HOSTED ARM (`client.md` §4.5; AUTH-5.55 step 8): the claim made by a
-//! hosting flow for a customer whose device composed the payload — the
-//! canonical record inserted VERBATIM as the genesis, every session bare,
-//! nothing generated, nothing asked, no `Person` call anywhere — and its
-//! reply, DATA for the hosting flow's message. `claim` re-exports what it
-//! answers.
+//! The hosted arm (`client.md` §4.5; AUTH-5.55 step 8).
+//!
+//! It is the claim made by a hosting flow for a customer whose device
+//! composed the payload — the canonical record inserted verbatim as the
+//! genesis, every session bare, nothing generated, nothing asked, no
+//! `Person` call anywhere — and its reply, data for the hosting flow's
+//! message. `claim` re-exports what it answers.
 
 use skep_identity::Fingerprint;
 
@@ -15,30 +16,47 @@ use crate::ceremony::first_session::document_present;
 use crate::halt::Halt;
 use crate::sheet::Facts;
 
-/// THE HOSTED ARM's reply (§4.5 H6): DATA for the hosting flow's message —
-/// the claimant and the three facts (AUTH-5.38).
+/// The hosted arm's reply (§4.5 H6): data for the hosting flow's message.
+///
+/// It holds the claimant and the three facts (AUTH-5.38), the operator's
+/// log lines, and whether the payload was anchorless.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostedReply {
+    /// The claimant: the account founded.
     pub claimant: String,
     /// The account founded, its principal and the origin dialed.
     pub facts: Facts,
-    /// The operator's log lines — TALK.
+    /// The operator's log lines — talk.
     pub log: Vec<String>,
-    /// Whether the payload carried no anchor-flagged entry (AUTH-5.16's
-    /// second arm, for the reply's own sentence).
+    /// Whether the payload carried no anchor-flagged entry.
+    ///
+    /// It is AUTH-5.16's second arm, for the reply's own sentence.
     pub anchorless: bool,
 }
 
 /// What the hosted arm answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostedOutcome {
+    /// The board claimed, and the reply.
     Claimed(HostedReply),
     /// Idempotent: already claimed, exit 0.
     AlreadyClaimed { claimant: String },
 }
 
-/// THE HOSTED ARM, H0–H6: every session bare, nothing generated, nothing
-/// asked; the payload the customer's canonical record, inserted verbatim.
+/// Runs the hosted arm, H0–H6.
+///
+/// Every session is bare, nothing generated, nothing asked; the payload is
+/// the customer's canonical record, inserted verbatim.
+///
+/// # Errors
+///
+/// A halt at the step that meets it, in order. H0: the read. H1: pre-claim
+/// residue, `next_account_prefix` answering other than `1.0.1`. H2: a
+/// payload that is not UTF-8 or not a canonical record, and a preview-kind
+/// key. H3: a bare bind refused or blocked, the delegate or the mint closed
+/// or refused. H4: the deposit's halts. H5: the claim closed,
+/// `claim_residue`, and any refusal but `already_claimed`. H6: the read, a
+/// foreign claimant, or a board still unclaimed.
 pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOutcome, Halt> {
     let mut log = Vec::new();
     // H0
@@ -50,8 +68,8 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
     if local_trust {
         log.push("warning: this daemon runs with local trust ON, so the flip will be into CLAIMED-PERMISSIVE: any party reaching its loopback — every process in the container's namespace, this sidecar included — reads every draft this customer writes, writes drafts as them, and mints permanent dead accounts under their prefix, with `key: \"bare\"` testimony and no key anywhere in it (AUTH-4.52; AUTH-4.57 pin (i) is the image's obligation)".into());
     }
-    // The configured set (§4.5 H0): `origins` minus the THREE loopback
-    // defaults EXACTLY — plain `http` over the daemon's three loopback names
+    // The configured set (§4.5 H0): `origins` minus the three loopback
+    // defaults exactly — plain `http` over the daemon's three loopback names
     // at the port the board answers at (AUTH-4.1) — so a loopback origin at
     // another port is configured, and a default configured on purpose reads
     // as the daemon's own, which the warning says.
@@ -114,7 +132,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
             return Err(Halt::face(format!("the home mint was refused: {r}"), "H3", "re-run the hosted claim"));
         }
     }
-    // H4: the record VERBATIM, declared, from N's bare session.
+    // H4: the record verbatim, declared, from N's bare session.
     let outcome = deposit(
         board,
         &owner,
@@ -123,7 +141,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
     if let DepositOutcome::Committed { reason } = outcome {
         log.push(format!("the genesis stands: {reason}"));
     }
-    // H5: the claim from N's BARE session (testimony `key: "bare"`).
+    // H5: the claim from N's bare session (testimony `key: "bare"`).
     let v = match board.op(Some(&owner), &frames::make_link(&home, &[&account], &[], T_CLAIM, Some("hosted.claim")))? {
         Answer::Closed => return Err(Halt::face("the owner's bare session ended at the claim", "closed", "re-run; H6 reads /health.auth.claimant for the answer")),
         Answer::Document(v) => v,
@@ -137,7 +155,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
             }
         }
     }
-    // H6: the ANSWER off /health.auth.claimant, never "the claim failed".
+    // H6: the answer off /health.auth.claimant, never "the claim failed".
     let after = board.health()?;
     let claimant = after.claimant().map(str::to_string);
     match claimant {
@@ -145,7 +163,7 @@ pub fn hosted(board: &Board, payload: &[u8], principal: u64) -> Result<HostedOut
         Some(c) => return Err(foreign_claimant(&c)),
         None => return Err(Halt::face("the board is still unclaimed after the claim", "the claim link was acked and /health shows no claimant", "re-run; this is a board fault")),
     }
-    // THE CLOSE IS CONDITIONED ON H0's OWN READ: under local_trust the bare
+    // The close is conditioned on H0's own read: under local_trust the bare
     // sessions survive the flip and are closed here; under false they died.
     if local_trust {
         let _ = board.session_close(&boot);

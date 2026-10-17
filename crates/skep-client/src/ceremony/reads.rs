@@ -1,17 +1,19 @@
-//! R0's READS (`client.md` §4a.2 R0), the head every recovery-family walk
-//! shares — `recover`'s two arms, `retire` and `rotate` — in R0's own order:
-//! the ORIGIN ARM first (AUTH-5.24), the mode (AUTH-5.86), `principal_prefix`
-//! (AUTH-5.67 (2)), `key_set` AT THE SET THE WALK REACHES (AUTH-5.21;
-//! AUTH-4.30 (i)), the account's own doc 1 (`first_session`'s first state's
-//! resume read), and THE ADMITTED READ once, PRICED before the first face
-//! (AUTH-5.68; §9 item 50). The halts are R0's: `claimant == null` ⇒ `skep
-//! claim`; the terminus EMPTY ⇒ the never-keyed face; an account that opens
-//! BY REFERENCE ⇒ at a walk that ENROLLS, the halt naming where the act is
+//! R0's reads (`client.md` §4a.2 R0), shared by the recovery family.
+//!
+//! They are the head every recovery-family walk shares — `recover`'s two
+//! arms, `retire` and `rotate` — in R0's own order: the origin arm first
+//! (AUTH-5.24), the mode (AUTH-5.86), `principal_prefix` (AUTH-5.67 (2)),
+//! `key_set` at the set the walk reaches (AUTH-5.21; AUTH-4.30 (i)), the
+//! account's own doc 1 (`first_session`'s first state's resume read), and
+//! the admitted read once, priced before the first face (AUTH-5.68;
+//! §9 item 50). The halts are R0's: `claimant == null` ⇒ `skep claim`; the
+//! terminus empty ⇒ the never-keyed face; an account that opens by
+//! reference ⇒ at a walk that enrolls, the halt naming where the act is
 //! made (AUTH-6.37; the twin of `not_holder_retirement`'s redirect,
 //! AUTH-3.56). The A4 cell (AUTH-5.60 step 4's table; AUTH RES-174's rider)
-//! is derived here too — the venue off the pair and the origin dialed, the
-//! rider's giver off its own walk — for the report's and the operator
-//! sentence's sake.
+//! is derived here too — the venue off `/health`'s `auth.origins` and the
+//! origin dialed, the rider's giver off its own walk — for the report's and
+//! the operator sentence's sake.
 
 use skep_identity::{Fingerprint, PublicKey};
 
@@ -24,10 +26,11 @@ use crate::derive::{origin_arm, principal_of, walk_to_set, Mode, Walk};
 use crate::halt::Halt;
 use crate::person::Person;
 
-/// AUTH-5.60 step 4's A4 cell, as the recovering party stands in it:
-/// SERVED, a LOOPBACK-BOUND notebook, a BIND-OVERRIDE notebook — and, by
-/// AUTH RES-174's rider, a party recovering at an account another party
-/// gave them, routed to the served row's instrument with the GIVER as the
+/// AUTH-5.60 step 4's A4 cell, as the recovering party stands in it.
+///
+/// It is served, a loopback-bound notebook, a bind-override notebook — and,
+/// by AUTH RES-174's rider, a party recovering at an account another party
+/// gave them, routed to the served row's instrument with the giver as the
 /// operator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A4Cell {
@@ -38,11 +41,16 @@ pub enum A4Cell {
 }
 
 impl A4Cell {
-    /// The cell `account` stands in (§4a.2 R6): an account that hangs beneath
-    /// another account's set — a handoff's recipient — takes RES-174's rider,
-    /// the GIVER read by AUTH-5.21's walk from the account above (a fault of
-    /// that read halts, never a guessed giver); every other account stands in
-    /// its board's [`A4Cell::venue`].
+    /// Returns the cell `account` stands in (§4a.2 R6).
+    ///
+    /// An account that hangs beneath another account's set — a handoff's
+    /// recipient — takes RES-174's rider, the giver read by AUTH-5.21's walk
+    /// from the account above; every other account stands in its board's
+    /// [`A4Cell::venue`].
+    ///
+    /// # Errors
+    ///
+    /// A fault of the giver's read halts, never a guessed giver.
     pub fn of(board: &Board, health: &Health, account: &str, walk: &Walk) -> Result<A4Cell, Halt> {
         if let Some(parent) = parent_account(account) {
             if !walk.set.is_empty() && walk.set_account == account {
@@ -53,11 +61,12 @@ impl A4Cell {
         Ok(A4Cell::venue(board, health))
     }
 
-    /// The board's VENUE, off `/health`'s pair and the origin dialed, no read
-    /// made: a loopback dial with only loopback origins configured is the
-    /// loopback-bound notebook; a loopback dial with a configured
-    /// non-loopback origin is the bind-override notebook; any other dial is a
-    /// served board.
+    /// Returns the board's venue off `/health`'s origins and the origin dialed.
+    ///
+    /// The origins are `auth.origins`. No read is made: a loopback dial with
+    /// only loopback origins configured is the loopback-bound notebook; a
+    /// loopback dial with a configured non-loopback origin is the
+    /// bind-override notebook; any other dial is a served board.
     pub fn venue(board: &Board, health: &Health) -> A4Cell {
         if board.dialed().names_loopback_host() {
             let overridden = health.origins().iter().any(|o| crate::origin::Origin::parse(o).is_some_and(|x| !x.names_loopback_host()));
@@ -66,9 +75,10 @@ impl A4Cell {
         A4Cell::Served
     }
 
-    /// The board is the person's own — a notebook, loopback-bound or
-    /// bind-override, whose volume copy is theirs to take; a recipient's
-    /// board is never their own.
+    /// Returns whether the board is the person's own.
+    ///
+    /// It is a notebook, loopback-bound or bind-override, whose volume copy
+    /// is theirs to take; a recipient's board is never their own.
     pub fn own_board(&self) -> bool {
         matches!(self, A4Cell::LoopbackNotebook | A4Cell::BindOverrideNotebook)
     }
@@ -81,8 +91,10 @@ pub struct Reads {
     pub account: String,
     /// AUTH-5.21's walk from A.
     pub walk: Walk,
-    /// The principal seated at the set account — the one a session there
-    /// is opened as (A's own where A holds its own set).
+    /// The principal seated at the set account.
+    ///
+    /// It is the one a session there is opened as (A's own where A holds its
+    /// own set).
     pub set_principal: u64,
     /// A's own doc 1 — the home `recover`'s retirements are written to.
     pub home: String,
@@ -91,28 +103,39 @@ pub struct Reads {
     pub cell: A4Cell,
 }
 
-/// The credential act the walk over R0's reads makes at the account it
-/// read — what R0 decides by at an account that opens BY REFERENCE.
+/// The credential act the walk over R0's reads makes at the account it read.
+///
+/// It is what R0 decides by at an account that opens by reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Act {
-    /// An ENROLLMENT (`recover`'s two arms, `rotate`): no key is enrolled AT
-    /// an account that opens by reference, so R0 halts there naming where
-    /// the act is made (AUTH-6.37).
+    /// An enrollment (`recover`'s two arms, `rotate`).
+    ///
+    /// No key is enrolled *at* an account that opens by reference, so R0
+    /// halts there naming where the act is made (AUTH-6.37).
     Enrollment,
-    /// A RETIREMENT (`retire`): REDIRECTED to the set account, where the key
-    /// stands as that account's own (`not_holder_retirement`'s redirect,
-    /// AUTH-3.56).
+    /// A retirement (`retire`): redirected to the set account.
+    ///
+    /// The key stands there as that account's own (`not_holder_retirement`'s
+    /// redirect, AUTH-3.56).
     Retirement,
 }
 
-/// R0, in its order, for a walk whose act is `act`.
+/// Runs R0, in its order, for a walk whose act is `act`.
+///
+/// # Errors
+///
+/// In R0's order: the reads' errors and the origin arm's face; an
+/// unclaimed board (⇒ `skep claim`); an unregistered principal; the
+/// never-keyed terminus; at a walk that enrolls, an account that opens by
+/// reference; a home the board will not answer for; and the admitted read's
+/// and the A4 cell's halts.
 pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, act: Act, own: &[(Fingerprint, PublicKey)]) -> Result<Reads, Halt> {
     let health = board.health()?;
-    // The ORIGIN ARM first (AUTH-5.24; AUTH-5.65).
+    // The origin arm first (AUTH-5.24; AUTH-5.65).
     origin_arm(board.signed(), &health)?;
     let mode = Mode::of(&health);
     if mode == Mode::Unclaimed {
-        // AUTH-5.60 step 1's LOST-with-no-volume arm; AUTH-5.72's notebook arm.
+        // AUTH-5.60 step 1's lost-with-no-volume arm; AUTH-5.72's notebook arm.
         return Err(Halt::face(
             "no board here recovers: this board is UNCLAIMED",
             "`/health.auth.claimant` is null — a fresh board, on which no account of yours exists; a lost notebook with no volume \
@@ -156,7 +179,7 @@ pub fn r0(board: &Board, person: &mut dyn Person, principal: u64, act: Act, own:
     // halts here, ahead of the import. The walk that mints it reads it again
     // where it acts (`FirstSessionReads`).
     document_present(board, &home)?;
-    // THE ADMITTED READ, once, priced here (§4a.2 R0; §1.1's cost).
+    // The admitted read, once, priced here (§4a.2 R0; §1.1's cost).
     say(
         person,
         "AUTH-5.68 (cost)",
@@ -186,10 +209,11 @@ mod tests {
         Health { raw: body.to_string().into_bytes(), body }
     }
 
-    /// AUTH-5.60 step 4's venue, off `/health`'s pair and the origin dialed
-    /// with NO read: a loopback dial with loopback origins alone is the
+    /// AUTH-5.60 step 4's venue, off `/health`'s origins and the origin dialed.
+    ///
+    /// No read is made: a loopback dial with loopback origins alone is the
     /// loopback-bound notebook, one with a configured non-loopback origin
-    /// beside them the bind-override notebook, and any other dial a SERVED
+    /// beside them the bind-override notebook, and any other dial a served
     /// board; a notebook is the person's own board, a served board and a
     /// recipient's never.
     #[test]

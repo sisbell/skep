@@ -1,39 +1,42 @@
-//! THE ONE OUTBOUND DIALER (`client.md` §7; RULED, owner 2026-10-04, ps3-3):
-//! the `Dialer` seam and its plain-HTTP arm, which the `skep` command, the
-//! frontend's shell and — a later lane — the daemon's node-pull all use, so
-//! no second dialer is kept in step with wire.md §Transport.
+//! The one outbound dialer (`client.md` §7).
+//!
+//! It is the `Dialer` seam and its plain-HTTP arm, which the `skep` command
+//! and the frontend's shell use and which `client.md` names for the
+//! daemon's node-pull, so no second dialer is kept in step with wire.md
+//! §Transport.
 //!
 //! One request, one connection: every response carries `Connection: close`,
 //! so a client opens a fresh `TcpStream` per call (wire.md §Transport); the
 //! request head is written out — `Host: <authority>` (brackets kept for an
-//! IPv6 literal), `Connection: close`, `Content-Type: application/json`,
-//! `Content-Length` as the body's length in ASCII decimal — the body
-//! follows, the answer is read to close and its `Content-Length` CHECKED
-//! against what arrived: a short body is a broken connection, never an
-//! answer. The response's headers are returned whole so the board can read
-//! `Skepd-Session: closed`. NO REDIRECT is followed — the daemon issues none,
-//! and following one would dial an origin the caller did not sign
-//! (AUTH-4.8). NO proxy environment is honored — a proxy is a peer the
-//! signature knows nothing about (§9 item 24). A `Dialer` never rewrites the
-//! origin string it is handed (§1.4): a transport that changed the origin
-//! under its caller would sign one string and dial another.
+//! IPv6 literal), `Connection: close`, `Content-Type: application/json`
+//! where a body follows, `Content-Length` as the body's length in ASCII
+//! decimal — the body follows, the answer is read to close and its
+//! `Content-Length` checked against what arrived: a short body is a broken
+//! connection, never an answer. The response's headers are returned whole
+//! so the board can read `Skepd-Session: closed`. No redirect is followed —
+//! the daemon issues none, and following one would dial an origin the
+//! caller did not sign (AUTH-4.8). No proxy environment is honored — a
+//! proxy is a peer the signature knows nothing about (§9 item 24). A
+//! `Dialer` never rewrites the origin string it is handed (§1.4): a
+//! transport that changed the origin under its caller would sign one string
+//! and dial another.
 //!
-//! Timeouts: connect 5 s, read/write 10 s a call for the FRAMES (skep-mcp's
-//! constants — a skepd op is milliseconds even under fsync), and a frame's
-//! whole EXCHANGE held to a deadline besides — the per-call bound plus the
-//! time its request body and the largest answer take at the streamed form's
-//! rate — re-armed on the socket before every read and write, so a board
-//! that trickles a byte inside each per-call bound cannot hold an exchange
-//! past it; the STREAMED form's read timeout scales with the declared size
-//! (ps3-14 (c)) and its body, read by its caller, keeps that per-call bound
-//! alone.
+//! **Timeouts.** Connect 5 s, read/write 10 s a call for the frames
+//! (skep-mcp's constants — a skepd op is milliseconds even under fsync), and
+//! a frame's whole exchange held to a deadline besides — the per-call bound
+//! plus the time its request body and the largest answer take at the
+//! streamed form's rate — re-armed on the socket before every read and
+//! write, so a board that trickles a byte inside each per-call bound cannot
+//! hold an exchange past it; the streamed form's read timeout scales with
+//! the declared size and its body, read by its caller, keeps that per-call
+//! bound alone.
 //!
 //! The request target and the headers are written as given, so each is
 //! checked first for what would end the request line or a header early —
 //! refused as [`DialError::Request`] before any connection opens.
 //!
 //! `https://` is the `tls` feature's arm — rustls with the platform verifier
-//! (§9 item 12) — OFF in the library and ON in the `skep` binary; without
+//! (§9 item 12) — off in the library and on in the `skep` binary; without
 //! the feature an `https` origin is [`DialError::NotHeld`], refused before
 //! any connection opens and never dialed in the clear.
 
@@ -48,45 +51,59 @@ use crate::origin::Origin;
 #[cfg(test)]
 mod tests;
 
+/// The bound on each connection attempt.
+///
 /// A dead local daemon answers `connection refused` at once; this bounds
 /// the pathological cases — an unroutable address, a filtered port.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Per-call read/write bound for a FRAME: ten seconds is headroom, not an
-/// expected wait (skep-mcp's `IO_TIMEOUT`, kept).
+/// The per-call read/write bound for a frame.
+///
+/// Ten seconds is headroom, not an expected wait (the value of skep-mcp's
+/// `IO_TIMEOUT`).
 pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The most bytes [`Dialer::exchange`] reads of one answer — the frame
-/// routes' request cap, 8 MiB, with room for the head beside it (wire.md
-/// §Transport). An answer past it is [`DialError::TooLarge`], read no
-/// further: a board never sizes this client's memory past it.
+/// The most bytes [`PlainHttp`]'s exchange reads of one answer.
+///
+/// It is the frame routes' request cap, 8 MiB, with room for the head
+/// beside it (wire.md §Transport). An answer past it is
+/// [`DialError::TooLarge`], read no further: a board never sizes this
+/// client's memory past it.
 pub const MAX_ANSWER_BYTES: usize = 8 * 1024 * 1024 + 64 * 1024;
 
-/// The streamed form's read bound per declared byte, on top of
-/// [`IO_TIMEOUT`]: one second per 256 KiB declared (the scale's constant is
-/// the build's, ps3-14 (c)).
+/// The streamed form's read bound per declared byte, on top of [`IO_TIMEOUT`].
+///
+/// It is one second per 256 KiB declared (the scale's constant is the
+/// build's).
 const STREAM_BYTES_PER_SECOND: u64 = 256 * 1024;
 
-/// A frame exchange's deadline before its request body's allowance, from
-/// the connection's open: [`IO_TIMEOUT`], and the time an answer at
-/// [`MAX_ANSWER_BYTES`] takes at [`STREAM_BYTES_PER_SECOND`] — 42.25 s, the
-/// rate the streamed form already demands of a board. The body adds its own
-/// bytes at the same rate.
+/// A frame exchange's deadline before its request body's allowance.
+///
+/// It runs from the connection's open: [`IO_TIMEOUT`], and the time an
+/// answer at [`MAX_ANSWER_BYTES`] takes at [`STREAM_BYTES_PER_SECOND`] —
+/// 42.25 s, the rate the streamed form already demands of a board. The body
+/// adds its own bytes at the same rate.
 const EXCHANGE_BOUND: Duration =
     Duration::from_millis(IO_TIMEOUT.as_millis() as u64 + MAX_ANSWER_BYTES as u64 * 1000 / STREAM_BYTES_PER_SECOND);
 
-/// The method of one exchange — a type of its own so the method and the
-/// path, both text on the request line, cannot trade places in a call.
+/// The method of one exchange.
+///
+/// It is a type of its own so the method and the path, both text on the
+/// request line, cannot trade places in a call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Method {
+    /// `GET`.
     Get,
+    /// `POST`.
     Post,
+    /// `PATCH`.
     Patch,
+    /// `DELETE`.
     Delete,
 }
 
 impl Method {
-    /// The method as the request line spells it.
+    /// Returns the method as the request line spells it.
     pub fn as_str(self) -> &'static str {
         match self {
             Method::Get => "GET",
@@ -97,42 +114,52 @@ impl Method {
     }
 }
 
-/// One request: the method, the path (with its query), the extra headers
-/// a caller adds — `Skepd-Session` when a token rides — and the body.
+/// One request: the method, the path, the extra headers and the body.
+///
+/// The path carries its query; the extra headers are the ones a caller
+/// adds — `Skepd-Session` when a token rides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    /// The request line's method.
     pub method: Method,
+    /// The request target: the path with its query.
     pub path: String,
+    /// The headers a caller adds beside the dialer's own.
     pub headers: Vec<(String, String)>,
+    /// The body, empty for none.
     pub body: Vec<u8>,
 }
 
 impl Request {
-    /// A bodiless `GET` of `path`.
+    /// Returns a bodiless `GET` of `path`.
     pub fn get(path: impl Into<String>) -> Request {
         Request { method: Method::Get, path: path.into(), headers: Vec::new(), body: Vec::new() }
     }
 
-    /// A `POST` of `body` to `path`.
+    /// Returns a `POST` of `body` to `path`.
     pub fn post(path: impl Into<String>, body: Vec<u8>) -> Request {
         Request { method: Method::Post, path: path.into(), headers: Vec::new(), body }
     }
 
-    /// The request with one more header.
+    /// Returns the request with one more header.
     pub fn header(mut self, name: &str, value: &str) -> Request {
         self.headers.push((name.to_string(), value.to_string()));
         self
     }
 }
 
-/// The streamed form's head: the request without its body, which the
-/// caller supplies as a reader, and the body's declared length where one is
-/// declared (`Content-Length`; a `GET /events` declares none and sends
-/// none).
+/// The streamed form's head: the request without its body.
+///
+/// The caller supplies the body as a reader; the head holds the body's
+/// declared length where one is declared (`Content-Length`; a
+/// `GET /events` declares none and sends none).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestHead {
+    /// The request line's method.
     pub method: Method,
+    /// The request target: the path with its query.
     pub path: String,
+    /// The headers a caller adds beside the dialer's own.
     pub headers: Vec<(String, String)>,
     /// The body's length where a body follows; `None` for a bodiless head.
     pub content_length: Option<u64>,
@@ -143,35 +170,45 @@ pub struct RequestHead {
 pub struct Headers(pub Vec<(String, String)>);
 
 impl Headers {
-    /// The first header named `name`, case-insensitively.
+    /// Returns the first header named `name`, case-insensitively.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.0.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 }
 
-/// One whole answer: the status, the headers and the body, read to close
-/// with its `Content-Length` checked.
+/// One whole answer: the status, the headers and the body.
+///
+/// It is read to close with its `Content-Length` checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
+    /// The status code.
     pub status: u16,
+    /// The headers, whole.
     pub headers: Headers,
+    /// The body.
     pub body: Vec<u8>,
 }
 
 impl Response {
-    /// The death signal on this answer's head (wire.md §Sessions): the one
-    /// fact the board's `authed` exchange reads off a response (P28).
+    /// Returns whether the death signal rides this answer's head.
+    ///
+    /// The signal is wire.md §Sessions': the one fact the board's `authed`
+    /// exchange reads off a response (P28).
     pub fn session_closed(&self) -> bool {
         self.headers.get("Skepd-Session").is_some_and(|v| v.trim() == "closed")
     }
 }
 
-/// The streamed form's answer: the head, and a reader over the body the
-/// caller holds the declared size against as bytes arrive — read to close,
-/// or dropped by the caller.
+/// The streamed form's answer: the head, and a reader over the body.
+///
+/// The caller holds the declared size against the body as bytes arrive —
+/// read to close, or dropped by the caller.
 pub struct StreamedResponse {
+    /// The answer's status code.
     pub status: u16,
+    /// The answer's headers, whole.
     pub headers: Headers,
+    /// A reader over the body, cut to a declared `Content-Length`.
     pub body: Box<dyn Read + Send>,
 }
 
@@ -182,32 +219,46 @@ impl fmt::Debug for StreamedResponse {
 }
 
 /// Why a dial failed — transport, §2.3's exit 4.
+///
+/// A streamed form's head that cannot be read is [`DialError::Response`],
+/// whatever stopped the read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DialError {
-    /// The origin's scheme is one this build does not hold (`https` without
-    /// the `tls` feature).
+    /// The origin's scheme is one this build does not hold.
+    ///
+    /// It is `https` without the `tls` feature.
     NotHeld(String),
     /// The host did not resolve to an address.
     Resolve(String),
-    /// The connection was refused or timed out at every address the host
-    /// yields.
+    /// No address the host yields took the connection.
+    ///
+    /// Each attempt was refused or timed out, the last failing by other than
+    /// a timeout.
     Connect(String),
-    /// A read or write ran past its bound.
+    /// The last connection attempt, a read or a write ran past its bound.
     Timeout(String),
     /// The request could not be written or the response read.
+    ///
+    /// It covers the TLS handshake's and record layer's refusals, met
+    /// mid-exchange, and a socket whose timeout cannot be set.
     Io(String),
-    /// The bytes read were no HTTP response.
+    /// The bytes read were no HTTP response, or no answer the wire gives.
     Response(String),
-    /// The body ended before its declared `Content-Length` — a broken
-    /// connection, never an answer.
+    /// The body ended before its declared `Content-Length`.
+    ///
+    /// It is a broken connection, never an answer.
     Truncated { declared: usize, got: usize },
     /// The answer ran past the cap and was read no further.
     TooLarge { cap: usize },
-    /// The TLS handshake or record layer refused.
+    /// The TLS layer refused the server name or its configuration.
+    ///
+    /// A handshake refused during the exchange is [`DialError::Io`].
     Tls(String),
-    /// The request's target or a header holds what would end the request
-    /// line or a header early — refused before any connection opened.
+    /// The request was refused before any connection opened.
+    ///
+    /// Its target or a header holds what would end the request line or a
+    /// header early.
     Request(String),
 }
 
@@ -235,21 +286,33 @@ impl fmt::Display for DialError {
 
 impl std::error::Error for DialError {}
 
-/// THE SEAM (`client.md` §1.4): one trait, one v1 arm, so a later transport
-/// is an implementation and never a rewrite. A `Dialer` knows nothing of
-/// sessions, keys, the ceremony or the peer rule.
+/// The seam (`client.md` §1.4): one trait, one v1 arm.
+///
+/// A later transport is an implementation and never a rewrite. A `Dialer`
+/// knows nothing of sessions, keys, the ceremony or the peer rule.
 pub trait Dialer: Send + Sync {
-    /// One request to `origin`, one response, connection closed.
+    /// Makes one exchange: one request to `origin`, one response.
+    ///
+    /// The connection is closed after the response.
+    ///
+    /// # Errors
+    ///
+    /// The [`DialError`] naming how the dial failed.
     fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError>;
 
-    /// The streamed form (ps3-14 (c)): the head sent with
-    /// `Expect: 100-continue` where a body follows, an interim answer's
-    /// headers handed to `on_interim` before any body byte, the body written
-    /// from `body`, the answer's head returned with a reader over its body —
-    /// read to close, or dropped by the caller — under a read timeout that
-    /// scales with the declared size. Where the board answers a FINAL status
-    /// instead of the interim one, no body byte is written and that head is
-    /// the answer.
+    /// Makes the streamed form of an exchange.
+    ///
+    /// The head is sent with `Expect: 100-continue` where a body follows, an
+    /// interim answer's headers handed to `on_interim` before any body byte,
+    /// the body written from `body`, the answer's head returned with a reader
+    /// over its body — read to close, or dropped by the caller — under a read
+    /// timeout that scales with the declared size. Where the board answers a
+    /// final status instead of the interim one, no body byte is written and
+    /// that head is the answer.
+    ///
+    /// # Errors
+    ///
+    /// The [`DialError`] naming how the dial failed.
     fn stream(
         &self,
         origin: &Origin,
@@ -293,9 +356,11 @@ impl<D: Dialer + ?Sized> Dialer for Box<D> {
     }
 }
 
-/// A dialer behind an `Arc` is the dialer it shares — the ONE dialer a shell
-/// holds, handed to a [`Board`](crate::board::Board) and to `resolve`'s
-/// transport alike (§7: no second dialer).
+/// A dialer behind an `Arc` is the dialer it shares.
+///
+/// It is the one dialer a shell holds, handed to a
+/// [`Board`](crate::board::Board) and to `resolve`'s transport alike (§7:
+/// no second dialer).
 impl<D: Dialer + ?Sized> Dialer for Arc<D> {
     fn exchange(&self, origin: &Origin, req: &Request) -> Result<Response, DialError> {
         (**self).exchange(origin, req)
@@ -312,11 +377,12 @@ impl<D: Dialer + ?Sized> Dialer for Arc<D> {
     }
 }
 
-/// The plaintext non-loopback WARNING (§9 item 23, RULED: a warning citing
-/// AUTH-4.53, never a refusal — the bind-override tailnet path is exactly a
-/// plaintext non-loopback origin the tunnel encrypts): the text, where a
-/// SIGNED session over `origin` would ride the token in the clear; `None`
-/// where it would not.
+/// Returns the plaintext non-loopback warning for `origin`.
+///
+/// The text is answered where a signed session over `origin` would ride the
+/// token in the clear; `None` where it would not. §9 item 23: a warning
+/// citing AUTH-4.53, never a refusal — the bind-override tailnet path is
+/// exactly a plaintext non-loopback origin the tunnel encrypts.
 pub fn plaintext_non_loopback_warning(origin: &Origin) -> Option<String> {
     if origin.is_https() || origin.names_loopback_host() {
         return None;
@@ -334,8 +400,9 @@ pub fn plaintext_non_loopback_warning(origin: &Origin) -> Option<String> {
 pub struct PlainHttp {
     connect_timeout: Duration,
     io_timeout: Duration,
-    /// A frame exchange's deadline before its body's allowance
-    /// ([`EXCHANGE_BOUND`]).
+    /// A frame exchange's deadline before its body's allowance.
+    ///
+    /// It is [`EXCHANGE_BOUND`].
     exchange_bound: Duration,
 }
 
@@ -346,7 +413,7 @@ impl Default for PlainHttp {
 }
 
 impl PlainHttp {
-    /// The arm with the pinned timeouts.
+    /// Returns the arm with the pinned timeouts.
     pub fn new() -> PlainHttp {
         PlainHttp::default()
     }
@@ -355,10 +422,23 @@ impl PlainHttp {
         format!("skepd at {origin}: {what}: {e}")
     }
 
-    /// The TCP connection to `origin`'s host, every address the name yields
-    /// tried in order within the connect bound, the timeouts set — and,
-    /// where `budget` is given, the exchange's deadline that far from the
-    /// open ([`Socket`]).
+    /// Opens the TCP connection to `origin`'s host.
+    ///
+    /// Every address the name yields is tried in order, each within the
+    /// connect bound; the timeouts are set — and, where `budget` is given,
+    /// the exchange's deadline that far from the open ([`Socket`]).
+    ///
+    /// # Errors
+    ///
+    /// [`DialError::Resolve`] where the host yields no address;
+    /// [`DialError::Timeout`] where the last attempt timed out and
+    /// [`DialError::Connect`] where it failed otherwise;
+    /// [`DialError::Io`] where a timeout cannot be set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no address was tried; the addresses are checked non-empty
+    /// first, so the `expect` never fires.
     fn tcp(&self, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Socket, DialError> {
         let addrs: Vec<SocketAddr> = (origin.dial_host(), origin.port())
             .to_socket_addrs()
@@ -398,9 +478,17 @@ impl PlainHttp {
         Ok(Socket { tcp: stream, read_bound: read_timeout, write_bound: self.io_timeout, deadline })
     }
 
-    /// The connection to `origin`: plain TCP for `http://`; an `https://`
-    /// origin is the `tls` module's whole — TLS over TCP where the build
-    /// holds the arm, refused before any connection opens where it does not.
+    /// Opens the connection to `origin`.
+    ///
+    /// It is plain TCP for `http://`; an `https://` origin is the `tls`
+    /// module's whole — TLS over TCP where the build holds the arm, refused
+    /// before any connection opens where it does not.
+    ///
+    /// # Errors
+    ///
+    /// `tcp`'s errors; for an `https://` origin, [`DialError::NotHeld`]
+    /// where the build holds no TLS arm and [`DialError::Tls`] where the TLS
+    /// layer refuses the server name or its configuration.
     fn connect(&self, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
         if origin.is_https() {
             return tls::connect(self, origin, read_timeout, budget);
@@ -408,12 +496,17 @@ impl PlainHttp {
         Ok(Box::new(self.tcp(origin, read_timeout, budget)?))
     }
 
-    /// The request's target and headers held to what this dialer writes as
-    /// given (RFC 9112 §3.2, §5): the target visible ASCII alone, a header's
-    /// name a token, its value free of CR, LF and NUL — else
-    /// [`DialError::Request`], before any connection opens. A target or a
-    /// value carrying a line break would end the request line or the header
-    /// early and write a header of the bytes' own choosing.
+    /// Checks that the target and headers are what this dialer writes as given.
+    ///
+    /// RFC 9112 §3.2, §5: the target visible ASCII alone, a header's name a
+    /// token, its value free of CR, LF and NUL. A target or a value carrying
+    /// a line break would end the request line or the header early and write
+    /// a header of the bytes' own choosing.
+    ///
+    /// # Errors
+    ///
+    /// [`DialError::Request`], before any connection opens, where the target
+    /// or a header breaks those rules.
     fn well_formed(path: &str, headers: &[(String, String)]) -> Result<(), DialError> {
         if let Some(b) = path.bytes().find(|b| !(0x21..=0x7e).contains(b)) {
             return Err(DialError::Request(format!("the request target holds the byte {b:#04x}")));
@@ -430,8 +523,10 @@ impl PlainHttp {
         Ok(())
     }
 
-    /// The request head's bytes: the daemon refuses a `Content-Length` with
-    /// any non-digit, so the length is ASCII decimal and nothing else.
+    /// Returns the request head's bytes.
+    ///
+    /// The daemon refuses a `Content-Length` with any non-digit, so the
+    /// length is ASCII decimal and nothing else.
     fn head_bytes(
         origin: &Origin,
         method: Method,
@@ -463,18 +558,20 @@ impl PlainHttp {
     }
 }
 
-/// A connection the dialer writes a request to and reads an answer from —
-/// a [`Socket`], or a TLS stream over one.
+/// A connection the dialer writes a request to and reads an answer from.
+///
+/// It is a [`Socket`], or a TLS stream over one.
 trait Conn: Read + Write + Send {}
 impl Conn for Socket {}
 
-/// A TCP connection under the dialer's bounds: each read and each write
-/// carries the per-call bound, and — where the connection serves a frame
-/// exchange — the socket's timeout is re-armed before every call to that
-/// bound or the time left before the exchange's DEADLINE, whichever is
-/// less, a call past the deadline answering `TimedOut` unmade. A TLS stream
-/// rides over it, so every read and write the TLS layer makes of the
-/// socket is held to the same deadline.
+/// A TCP connection under the dialer's bounds.
+///
+/// Each read and each write carries the per-call bound, and — where the
+/// connection serves a frame exchange — the socket's timeout is re-armed
+/// before every call to that bound or the time left before the exchange's
+/// deadline, whichever is less, a call past the deadline answering
+/// `TimedOut` unmade. A TLS stream rides over it, so every read and write
+/// the TLS layer makes of the socket is held to the same deadline.
 struct Socket {
     tcp: TcpStream,
     read_bound: Duration,
@@ -483,8 +580,14 @@ struct Socket {
 }
 
 impl Socket {
-    /// The timeout for the next call, set where a deadline stands: the
-    /// per-call `bound`, cut to the time left.
+    /// Sets the timeout for the next call, where a deadline stands.
+    ///
+    /// The timeout is the per-call `bound`, cut to the time left.
+    ///
+    /// # Errors
+    ///
+    /// `TimedOut` where the deadline has passed, and `set`'s error where the
+    /// timeout cannot be set.
     fn arm(&self, bound: Duration, set: fn(&TcpStream, Option<Duration>) -> io::Result<()>) -> io::Result<()> {
         let Some(deadline) = self.deadline else { return Ok(()) };
         let left = deadline.saturating_duration_since(Instant::now());
@@ -596,16 +699,27 @@ fn io_fault(origin: &Origin, what: &str, e: io::Error) -> DialError {
     }
 }
 
-/// One whole answer off `conn`, to EOF — or `None` where it runs past `cap`
-/// bytes, read no further than the byte past the cap.
+/// Reads one whole answer off `conn`, to EOF.
+///
+/// The answer is `None` where it runs past `cap` bytes, read no further than
+/// the byte past the cap.
+///
+/// # Errors
+///
+/// The read's I/O error.
 fn read_to_close(conn: &mut dyn Read, cap: usize) -> io::Result<Option<Vec<u8>>> {
     let mut raw = Vec::new();
     conn.take(cap as u64 + 1).read_to_end(&mut raw)?;
     Ok((raw.len() <= cap).then_some(raw))
 }
 
-/// The status, the headers and where the body begins, out of one response's
-/// bytes.
+/// Parses one response's status, headers and body start out of its bytes.
+///
+/// # Errors
+///
+/// The fault in words where the bytes hold no header terminator, a head
+/// that is not UTF-8, a status line that is not `HTTP/1.x`, or a status
+/// that does not parse.
 fn parse_head(raw: &[u8]) -> Result<(u16, Headers, usize), String> {
     let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or_else(|| String::from("no header terminator"))?;
     let head = std::str::from_utf8(&raw[..sep]).map_err(|_| String::from("non-UTF-8 response head"))?;
@@ -628,8 +742,10 @@ fn parse_head(raw: &[u8]) -> Result<(u16, Headers, usize), String> {
     Ok((status, headers, sep + 4))
 }
 
-/// A head reader over a connection: reads one response head (through its
-/// blank line) and keeps whatever body bytes arrived with it.
+/// A head reader over a connection.
+///
+/// It reads one response head (through its blank line) and keeps whatever
+/// body bytes arrived with it.
 struct HeadReader {
     conn: Box<dyn Conn>,
     buffered: Vec<u8>,
@@ -640,8 +756,15 @@ impl HeadReader {
         HeadReader { conn, buffered: Vec::new() }
     }
 
-    /// The next head off the connection; the bytes after its blank line
-    /// stay buffered for the body (or the next head).
+    /// Reads the next head off the connection.
+    ///
+    /// The bytes after its blank line stay buffered for the body (or the
+    /// next head).
+    ///
+    /// # Errors
+    ///
+    /// The fault in words where the head runs past 64 KiB, a read fails,
+    /// the connection closes before the head, or `parse_head` refuses it.
     fn head(&mut self) -> Result<(u16, Headers), String> {
         let mut chunk = [0u8; 4096];
         loop {
@@ -661,7 +784,7 @@ impl HeadReader {
         }
     }
 
-    /// The body: the buffered bytes, then the connection to its close.
+    /// Returns the body: the buffered bytes, then the connection to its close.
     fn into_body(self) -> impl Read + Send {
         io::Cursor::new(self.buffered).chain(self.conn)
     }
@@ -669,8 +792,9 @@ impl HeadReader {
 
 #[cfg(feature = "tls")]
 mod tls {
-    //! The `https://` arm: rustls over the TCP stream, the server's
-    //! certificate judged by the platform's own trust store
+    //! The `https://` arm: rustls over the TCP stream.
+    //!
+    //! The server's certificate is judged by the platform's own trust store
     //! (`rustls-platform-verifier`; §9 item 12). The crypto provider is
     //! `ring`, named explicitly so the build's provider never depends on
     //! which features another crate turned on.
@@ -702,8 +826,15 @@ mod tls {
             .map_err(DialError::Tls)
     }
 
-    /// The TCP connection to `origin`, rustls over it — every socket call the
-    /// TLS layer makes held to the connection's deadline, where one stands.
+    /// Opens the TCP connection to `origin` with rustls over it.
+    ///
+    /// Every socket call the TLS layer makes is held to the connection's
+    /// deadline, where one stands.
+    ///
+    /// # Errors
+    ///
+    /// `tcp`'s errors, and [`DialError::Tls`] where the server name or the
+    /// TLS configuration is refused.
     pub(super) fn connect(dialer: &PlainHttp, origin: &Origin, read_timeout: Duration, budget: Option<Duration>) -> Result<Box<dyn Conn>, DialError> {
         let tcp = dialer.tcp(origin, read_timeout, budget)?;
         let name = ServerName::try_from(origin.dial_host().to_string())
@@ -715,9 +846,10 @@ mod tls {
 
 #[cfg(not(feature = "tls"))]
 mod tls {
-    //! Without the feature an `https` origin is a transport this build does
-    //! not hold — refused by name before any connection opens: this arm is
-    //! handed no stream, so it can never dial in the clear.
+    //! Without the feature an `https` origin is no transport this build holds.
+    //!
+    //! It is refused by name before any connection opens: this arm is handed
+    //! no stream, so it can never dial in the clear.
 
     use std::time::Duration;
 

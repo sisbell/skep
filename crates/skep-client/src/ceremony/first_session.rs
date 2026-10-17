@@ -1,39 +1,43 @@
-//! THE ONE FIRST-SIGNED-SESSION COMPOSITION (`client.md` §1.1's
-//! `first_session`; §4c.2's closing paragraph is its home; P28): every site
-//! that owes AUTH-5.90 (iii)'s pinned order runs it — `bind` with the
-//! content-scoped session it opens for this alone (§2.2), the claim's own
-//! tail (§4.1 S5a–S5b), and the later lane's `enroll`, `retire`, `rotate` and
-//! the recovery's anchor session. TWO STATES AND NOT ONE ACT, each resuming
-//! by READING as P4 requires and NEITHER KEYED ON THE OTHER'S OUTCOME:
+//! The one first-signed-session composition.
 //!
-//! 1. THE DOC-1 MINT at the account's computable address (AUTH-2.109), the
-//!    flag affirmative — an account's FIRST mint, outside the publish class
+//! It is `client.md` §1.1's `first_session`, its home §4c.2's closing
+//! paragraph (P28): every site that owes AUTH-5.90 (iii)'s pinned order runs
+//! it — `bind` with the content-scoped session it opens for this alone
+//! (§2.2), the claim's own tail (§4.1 S5a–S5b), and `enroll`, `retire`,
+//! `rotate` and the recovery's anchor session. Two states and not one act,
+//! each resuming by reading as P4 requires and neither keyed on the other's
+//! outcome:
+//!
+//! 1. The doc-1 mint at the account's computable address (AUTH-2.109), the
+//!    flag affirmative — an account's first mint, outside the publish class
 //!    with any flag and taking no `attest` (the daemon's `publish_class`
-//!    doc; PUB-8.21; AUTH RES-182) — RESUMED BY THE DOC-1 READ THERE.
-//! 2. THE SETUP ACT, AUTH-5.87's ops (1) and (3) at `inc(account, 1)`, ONLY
-//!    WHERE `key_set(account)` IS ITSELF NON-EMPTY (the rule's own binding
+//!    doc; PUB-8.21; AUTH RES-182) — resumed by the doc-1 read there.
+//! 2. The setup act, AUTH-5.87's ops (1) and (3) at `inc(account, 1)`, only
+//!    where `key_set(account)` itself enrolls a key (the rule's own binding
 //!    class; a topic or an agent space holds no set and reserves no agent
 //!    space — AUTH-6.19's signal read at the account itself, P17): op (1) the
-//!    `delegate` of `inc(account, 1)` AND NO OTHER ADDRESS under a
-//!    client-minted random `new_id` (AUTH-5.20) PERSISTED BEFORE THE FRAME as
+//!    `delegate` of `inc(account, 1)` and no other address under a
+//!    client-minted random `new_id` (AUTH-5.20) persisted before the frame as
 //!    a binding line (§4.3's persist-first rule, P4's one named exception),
 //!    resumed by `principal_prefix(new_id)` (AUTH-5.19); `not_authorized` ⇒
 //!    the address is already a seat: read `effective_owner(inc(account, 1))`,
-//!    take `principal` WHERE `prefix` equals it, NEVER re-peek the frontier;
-//!    op (3) the mint of `inc(account, 1)`'s doc 1 in a session AS that
+//!    take `principal` where `prefix` equals it, never re-peek the frontier;
+//!    op (3) the mint of `inc(account, 1)`'s doc 1 in a session as that
 //!    account — opened by reference with `key`, which stands in the
-//!    account's set (AUTH-4.30 (i)) — idempotent by reading, THE SESSION
-//!    CLOSED WHEN THE ACT ENDS (AUTH RES-95). Op (3)'s key is pre-checked
-//!    FIRST, among the reads ahead of any frame, and where it stands in
-//!    neither list the setup state is sent NOT AT ALL, op (1) included (P13).
+//!    account's set (AUTH-4.30 (i)) — idempotent by reading, the session
+//!    closed when the act ends (AUTH RES-95). Op (3)'s key is pre-checked
+//!    first, among the reads ahead of any frame, and where it is not
+//!    enrolled there — retired, or in neither list — the setup state is sent
+//!    not at all, op (1) included (P13).
 //!
-//! EVERY READ IS PRINCIPAL-FREE AND MADE AHEAD OF THE SESSION, so a caller
-//! learns which acts are owed before it opens one and opens none where none
-//! is (`bind`'s two arms). THE DOC-1 READ ALONE IS NOT THE SELECTOR: it is
-//! the first state's own resume read. The COPY — AUTH-5.87's
-//! account-creation sentence — is the DOOR's and not this composition's.
+//! Every read of [`FirstSessionReads`] is principal-free and made ahead of
+//! the session, so a caller learns which acts are owed before it opens one
+//! and opens none where none is (`bind`'s two arms). The doc-1 read alone is
+//! not the selector: it is the first state's own resume read. The copy —
+//! AUTH-5.87's account-creation sentence — is the door's and not this
+//! composition's.
 //!
-//! Op (1)'s persist-first `delegate` is `delegate_persisted`, the ONE form
+//! Op (1)'s persist-first `delegate` is `delegate_persisted`, the one form
 //! of §4.3's rule, which the handoff's beat (a) runs too (§4c.2 G2: "the
 //! same rule, the same form, not a second one").
 
@@ -47,55 +51,70 @@ use crate::halt::Halt;
 use crate::sign::{fresh_principal_id, Signer};
 use crate::store::{Binding, FileStore, KeyStore};
 
-/// THE READS, all principal-free, taken ahead of any session.
+/// The reads, all principal-free, taken ahead of any session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstSessionReads {
+    /// The account the reads are of.
     pub account: String,
     /// `doc_1_of(account)`.
     pub home: String,
     /// The first state's resume read: the home stands.
     pub home_present: bool,
-    /// The class test: `key_set(account)` itself is non-empty.
+    /// The class test: `key_set(account)` itself enrolls a key.
     pub set_nonempty: bool,
-    /// `inc(account, 1)` — the AGENT SPACE (AUTH-5.87).
+    /// `inc(account, 1)` — the agent space (AUTH-5.87).
     pub agent_space: String,
-    /// The principal seated at the agent space where it is a seat
-    /// (`effective_owner`'s `prefix ==` it, AUTH-6.37), else none.
+    /// The principal seated at the agent space where it is a seat, else none.
+    ///
+    /// A seat is where `effective_owner`'s `prefix ==` it (AUTH-6.37).
     pub agent_space_principal: Option<u64>,
-    /// The agent space's home — its doc 1 at `agent_space.0.1` (AUTH-5.87,
-    /// "and its home") — stands.
+    /// The agent space's home stands.
+    ///
+    /// The home is its doc 1 at `agent_space.0.1` (AUTH-5.87, "and its
+    /// home").
     pub agent_space_home_present: bool,
-    /// A `new_id` an earlier run persisted for the agent space, where the
-    /// store holds one.
+    /// A `new_id` an earlier run persisted for the agent space.
+    ///
+    /// It is `None` where the store holds none.
     pub persisted_new_id: Option<u64>,
-    /// Whether the given key stands enrolled in the set that opens the agent
-    /// space — op (3)'s pre-check (P13); `None` where the setup state is not
-    /// owed.
+    /// Op (3)'s pre-check (P13) of the given key.
+    ///
+    /// It is the key's diagnosis at the set that opens the agent space;
+    /// `None` where the account holds no set of its own.
     pub key_opens_agent_space: Option<KeyDiagnosis>,
 }
 
 impl FirstSessionReads {
-    /// Whether the home mint is owed.
+    /// Returns whether the home mint is owed.
     pub fn mint_owed(&self) -> bool {
         !self.home_present
     }
 
-    /// Whether the setup act is owed: the account holds a set of its own and
-    /// either op (1) or op (3) stands undone.
+    /// Returns whether the setup act is owed.
+    ///
+    /// It is owed where the account holds a set of its own and either op (1)
+    /// or op (3) stands undone.
     pub fn setup_owed(&self) -> bool {
         self.set_nonempty && (self.agent_space_principal.is_none() || !self.agent_space_home_present)
     }
 
-    /// Whether ANY act is owed — `bind`'s selector (§2.2): nothing owed ⇒
-    /// no session is opened.
+    /// Returns whether any act is owed — `bind`'s selector (§2.2).
+    ///
+    /// Nothing owed ⇒ no session is opened.
     pub fn anything_owed(&self) -> bool {
         self.mint_owed() || self.setup_owed()
     }
 }
 
-/// Whether `doc` stands — the doc-1 resume read (AUTH-2.109; AUTH-5.56
-/// boundary 2): `retrieve_doc_v_span_set` answers a span set, or
-/// `doc_not_registered`.
+/// Returns whether `doc` stands — the doc-1 resume read.
+///
+/// AUTH-2.109; AUTH-5.56 boundary 2: `retrieve_doc_v_span_set` answers a
+/// span set, or `doc_not_registered`.
+///
+/// # Errors
+///
+/// Any other rejection is the board's refusal; otherwise
+/// [`Board::guest`]'s errors.
 pub fn document_present(board: &Board, doc: &str) -> Result<bool, Halt> {
     let v = board.guest(&frames::span_set(doc))?;
     match Rejection::of(&v) {
@@ -106,8 +125,15 @@ pub fn document_present(board: &Board, doc: &str) -> Result<bool, Halt> {
 }
 
 impl FirstSessionReads {
-    /// Take the reads for `account`, `key` the key op (3)'s session would
-    /// open under; `store` where a persisted `new_id` may stand.
+    /// Takes the reads for `account`.
+    ///
+    /// `key` is the key op (3)'s session would open under; `store` where a
+    /// persisted `new_id` may stand.
+    ///
+    /// # Errors
+    ///
+    /// `account` answering `not_an_account` halts, as do the reads' own
+    /// errors.
     pub fn take(board: &Board, account: &str, key: &Fingerprint, store: Option<&FileStore>) -> Result<FirstSessionReads, Halt> {
         let home = doc_1_of(account);
         let home_present = document_present(board, &home)?;
@@ -126,7 +152,7 @@ impl FirstSessionReads {
         let agent_space_home_present = document_present(board, &doc_1_of(&agent_space))?;
         let persisted_new_id = persisted(board, store, &agent_space);
         let key_opens_agent_space = if set_nonempty {
-            // AUTH-4.30 (i): the agent space opens BY REFERENCE to the set
+            // AUTH-4.30 (i): the agent space opens by reference to the set
             // that opens its account — its own set is empty at birth, and
             // before op (1) it is no account at all (`not_an_account`), so
             // the walk starts at the agent space once it is seated and at the
@@ -156,35 +182,49 @@ impl FirstSessionReads {
 pub struct FirstSessionDone {
     /// The home minted here (false where it already stood).
     pub minted_home: bool,
-    /// The principal seated at the agent space, where the setup act ran or
-    /// stood done — op (1).
+    /// The principal seated at the agent space — op (1).
+    ///
+    /// It stands where the agent space is a seat: read so ahead of the act,
+    /// or found or made so by op (1).
     pub agent_space_principal: Option<u64>,
     /// The agent space's home minted here — op (3).
     pub minted_agent_space_home: bool,
-    /// The setup state was NOT sent: op (3)'s key stands in neither list of
-    /// the set that opens the agent space (P13), the diagnosis handed back.
+    /// The setup state was not sent: op (3)'s key is not enrolled there.
+    ///
+    /// The key stands retired, or in neither list, of the set that opens the
+    /// agent space (P13); the diagnosis is handed back.
     pub setup_skipped: Option<KeyDiagnosis>,
-    /// Op (1) answered `not_authorized` at an account whose first child was
-    /// already seeded: the act STOPPED and no agents' home is created
-    /// (AUTH-5.90 (iii)'s permanent fact).
+    /// Op (1) answered `not_authorized` at an already-seeded first child.
+    ///
+    /// The act stopped and no agents' home is created (AUTH-5.90 (iii)'s
+    /// permanent fact).
     pub setup_stopped_seeded: bool,
     /// Warnings a caller prints — a store that could not persist the line.
     pub warnings: Vec<String>,
 }
 
-/// The `new_id` a persist-first line cached for `account` at `board`, where
-/// the store holds one — read under the origin the board DIALS, the one
-/// [`delegate_persisted`] writes every such line under. The line is a CACHE
-/// and never a source (§4.3): the seat itself is read off the board, so a
-/// store whose bindings cannot be read answers none, and the delegate goes
-/// out under a fresh `new_id`.
+/// Returns the `new_id` a persist-first line cached for `account` at `board`.
+///
+/// It is read where the store holds one, under the origin the board dials,
+/// the one [`delegate_persisted`] writes every such line under. The line is
+/// a cache and never a source (§4.3): the seat itself is read off the board,
+/// so a store whose bindings cannot be read answers none, and the delegate
+/// goes out under a fresh `new_id`.
 pub(crate) fn persisted(board: &Board, store: Option<&FileStore>, account: &str) -> Option<u64> {
     store.and_then(|s| s.persisted_new_id(board.dialed(), account).ok().flatten())
 }
 
-/// THE COMPOSITION over `reads` the caller took ahead of `session`; `key`
-/// the session's own key, which op (3) opens under; `store` for the
-/// persist-first line (a read-only one degrades to a warning, §3.7).
+/// Runs the composition over `reads` the caller took ahead of `session`.
+///
+/// `key` is the session's own key, which op (3) opens under; `store` for
+/// the persist-first line (a read-only one degrades to a warning, §3.7).
+///
+/// # Errors
+///
+/// The doc-1 mint's halts ([`mint_home`]); op (1)'s — the persist-first
+/// delegate's, and the no-seat contradiction; op (3)'s handshake, the
+/// session closed, `not_owner` or `not_an_account` faced, and any other
+/// refusal; and the reads' errors.
 pub fn first_session(
     board: &Board,
     reads: &FirstSessionReads,
@@ -200,16 +240,16 @@ pub fn first_session(
         setup_stopped_seeded: false,
         warnings: Vec::new(),
     };
-    // (1) THE DOC-1 MINT, resumed by the doc-1 read.
+    // (1) The doc-1 mint, resumed by the doc-1 read.
     done.minted_home = mint_home(board, reads, session)?;
-    // (2) THE SETUP ACT, where the account holds a set of its own.
+    // (2) The setup act, where the account holds a set of its own.
     if !reads.set_nonempty {
         return Ok(done);
     }
     if reads.agent_space_principal.is_some() && reads.agent_space_home_present {
         return Ok(done);
     }
-    // Op (3)'s key, settled FIRST (P13): in neither list ⇒ nothing sent.
+    // Op (3)'s key, settled first (P13): not enrolled ⇒ nothing sent.
     match reads.key_opens_agent_space {
         Some(KeyDiagnosis::Enrolled { .. }) => {}
         other => {
@@ -227,7 +267,7 @@ pub fn first_session(
         return Ok(done);
     }
     done.agent_space_principal = Some(principal);
-    // Op (3): the mint of the agent space's home in a session AS the agent
+    // Op (3): the mint of the agent space's home in a session as the agent
     // space, the key opening it by reference; idempotent by reading; closed
     // at the end.
     if !document_present(board, &doc_1_of(&reads.agent_space))? {
@@ -252,14 +292,20 @@ pub fn first_session(
     Ok(done)
 }
 
-/// THE FIRST STATE ALONE — the doc-1 mint by its own resume read and
-/// NEVER the setup state: the recovery's R3 on the answer "an agent's"
-/// (`client.md` §4a.2 R3; RULED 2026-10-04), where R4's containment insert
-/// homes in the agent's doc 1 too, while AUTH-5.87 excludes an agent's
-/// account BY NAME ("an agent holds no agent space; its first child is its
-/// first worker") so ops (1) and (3) would delegate the agent's first child
-/// from the owner's anchor session, permanently. Answers whether the home
-/// was minted here.
+/// Runs the first state alone — the doc-1 mint by its own resume read.
+///
+/// It never runs the setup state: the recovery's R3 on the answer "an
+/// agent's" (`client.md` §4a.2 R3), where R4's containment insert homes in
+/// the agent's doc 1 too, while AUTH-5.87 excludes an agent's account by
+/// name ("an agent holds no agent space; its first child is its first
+/// worker") so ops (1) and (3) would delegate the agent's first child from
+/// the owner's anchor session, permanently. It answers whether the home was
+/// minted here.
+///
+/// # Errors
+///
+/// `mint_home_public` is faced as this client's own fault; the session
+/// closed, any other refusal and the reads' errors halt.
 pub fn mint_home(board: &Board, reads: &FirstSessionReads, session: &Session<'_>) -> Result<bool, Halt> {
     if document_present(board, &reads.home)? {
         return Ok(false);
@@ -285,8 +331,14 @@ fn closed() -> Halt {
     )
 }
 
-/// Op (1): `delegate(inc(account, 1), new_id)` by the persist-first form;
-/// what is its own is the SEEDED stop and the no-seat contradiction.
+/// Runs op (1): `delegate(inc(account, 1), new_id)` by the persist-first form.
+///
+/// What is its own is the seeded stop and the no-seat contradiction.
+///
+/// # Errors
+///
+/// The no-seat contradiction — `not_authorized` at an address that is no
+/// seat; [`delegate_persisted`]'s halts; and the `key_set` read's.
 fn delegate_agent_space(
     board: &Board,
     reads: &FirstSessionReads,
@@ -299,7 +351,7 @@ fn delegate_agent_space(
     match delegate_persisted(board, session, store, reads.persisted_new_id, &reads.agent_space, &key.fingerprint(), &id, &mut done.warnings)? {
         Delegated::Committed { principal, .. } => Ok(principal),
         Delegated::Seated(principal) => {
-            // AUTH-5.90 (iii): a first child already SEEDED by another party
+            // AUTH-5.90 (iii): a first child already seeded by another party
             // is a permanent fact — the act stops where its set is not the
             // account's own.
             match board.key_set(&reads.agent_space)? {
@@ -322,28 +374,37 @@ fn delegate_agent_space(
 /// What the persist-first `delegate` answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delegated {
-    /// The `delegate` stands committed, `principal` the `new_id` it went
-    /// out under: `sent` by this call, or found committed by the persisted
+    /// The `delegate` stands committed under `principal`, its `new_id`.
+    ///
+    /// It was `sent` by this call, or found committed by the persisted
     /// `new_id`'s read-back (AUTH-5.19).
     Committed { principal: u64, sent: bool },
-    /// `not_authorized` at an address ALREADY A SEAT — the principal seated
-    /// there read off `effective_owner` (AUTH-6.37), the persisted line
-    /// corrected to it.
+    /// `not_authorized` at an address already a seat.
+    ///
+    /// The principal seated there is read off `effective_owner` (AUTH-6.37),
+    /// the persisted line corrected to it.
     Seated(u64),
     /// `not_authorized` at an address that is no seat: the site faces it.
     NotAuthorized,
 }
 
-/// THE PERSIST-FIRST `delegate` of `address` (§4.3, P4's one named
-/// exception; AUTH-5.20; AUTH-5.19) — the one form of the rule: the
-/// persisted `new_id` READ BACK by `principal_prefix` — this address ⇒
-/// committed; no address ⇒ the delegate never landed, the SAME `new_id` sent
-/// again; ANOTHER address ⇒ the `new_id` is spent and a FRESH one is minted,
-/// never a resume onto it — a fresh `new_id` PERSISTED AS A BINDING LINE
-/// BEFORE THE FRAME (`key` the line's fingerprint; a store that cannot append
-/// is a warning carrying the line, §3.7); `not_authorized` resolved by the
-/// seat's own read and never a re-peek of the frontier (AUTH-5.87);
-/// `duplicate_id` faced. `id` is the frame's AUTH-5.6 per-session id.
+/// Sends the persist-first `delegate` of `address` (AUTH-5.20; AUTH-5.19).
+///
+/// It is §4.3's rule, P4's one named exception, in its one form: the
+/// persisted `new_id` read back by `principal_prefix` — this address ⇒
+/// committed; no address ⇒ the delegate never landed, the same `new_id`
+/// sent again; another address ⇒ the `new_id` is spent and a fresh one is
+/// minted, never a resume onto it — a fresh `new_id` persisted as a binding
+/// line before the frame (`key` the line's fingerprint; a store that cannot
+/// append is a warning carrying the line, §3.7); `not_authorized` resolved
+/// by the seat's own read and never a re-peek of the frontier (AUTH-5.87).
+/// `id` is the frame's AUTH-5.6 per-session id.
+///
+/// # Errors
+///
+/// `duplicate_id` faced, and `claim_first`; the session closed; an answer
+/// of a shape this client does not know; any other refusal, the board's;
+/// and the reads' errors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn delegate_persisted(
     board: &Board,

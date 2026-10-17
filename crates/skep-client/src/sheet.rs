@@ -1,13 +1,14 @@
-//! The field set, their order and the grouping (`client.md` §1.1's `sheet`
-//! row): the key file's ONE JSON spelling and its reader with its refusals,
-//! [`KeyFileError`] (§3.2, RULED); the byline a key carries, [`Label`], one
-//! domain test (AUTH-1.24) wherever a label is made — a box — or read — a
-//! file; the [`Seed`] every key's secret is born into; the R42 grouping
-//! (AUTH-5.1: eight groups of eight hex, a single space between groups, four
-//! groups to a line, for a fingerprint wherever one is displayed and for the
-//! exported anchor SEED on the sheet alike), and the sheet's field list
-//! (AUTH-5.38) — the DRAWING is each embedder's (§5.2). No scannable form
-//! (§9 item 13).
+//! The field set, their order and the grouping.
+//!
+//! This is `client.md` §1.1's `sheet` row: the key file's one JSON spelling
+//! and its reader with its refusals, [`KeyFileError`] (§3.2); the byline a
+//! key carries, [`Label`], one domain test (AUTH-1.24) wherever a label is
+//! made — a box — or read — a file; the [`Seed`] every key's secret is born
+//! into; the R42 grouping (AUTH-5.1: eight groups of eight hex, a single
+//! space between groups, four groups to a line, for a fingerprint wherever
+//! one is displayed and for the exported anchor seed on the sheet alike),
+//! and the sheet's field list (AUTH-5.38) — the drawing is each embedder's
+//! (§5.2). No scannable form (§9 item 13).
 
 use std::fmt;
 use std::fs;
@@ -23,23 +24,31 @@ use crate::hex;
 use crate::origin::Origin;
 use crate::sign::signer_from_seed_under;
 
-/// The most bytes a key file holds (§3.2): its largest canonical spelling —
-/// the production kind's 3,968-hex key beside its 64-hex seed and
-/// fingerprint, a 128-byte label escaped six-fold, a 64-component account
-/// of twenty-digit components, an origin of a host name's length — runs
-/// under 7 KiB, and this is nine times that, room for an editor's
-/// whitespace. A file past it is no key file this client wrote:
-/// [`KeyFile::parse`] refuses it, and the store's reader reads no further
-/// than the byte past it.
+/// The most bytes a key file holds (§3.2).
+///
+/// Its largest canonical spelling — the production kind's 3,968-hex key
+/// beside its 64-hex seed and fingerprint, a 128-byte label escaped
+/// six-fold, a 64-component account of twenty-digit components, an origin
+/// of a host name's length — runs under 7 KiB, and this is nine times that,
+/// room for an editor's whitespace. A file past it is no key file this
+/// client wrote: [`KeyFile::parse`] refuses it, and the store's reader reads
+/// no further than the byte past it.
 pub const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
 
-/// A key file's bytes off `path` — the store's, an anchor handed in, an
-/// export read back — read no further than one byte past
-/// [`MAX_KEY_FILE_BYTES`], so [`KeyFile::parse`] refuses an oversized file
-/// without its whole length read; and a path naming no regular file refused
-/// before it is opened, and the file opened held to the same test: a device
-/// answers bytes forever, a FIFO with no writer blocks its open, and neither
-/// is a key file.
+/// Reads a key file's bytes off `path`.
+///
+/// The path is the store's, an anchor handed in, or an export read back;
+/// the read stops one byte past [`MAX_KEY_FILE_BYTES`], so
+/// [`KeyFile::parse`] refuses an oversized file without its whole length
+/// read.
+///
+/// # Errors
+///
+/// A path naming no regular file is refused before it is opened, and the
+/// file opened is held to the same test: a device answers bytes forever, a
+/// FIFO with no writer blocks its open, and neither is a key file. Either
+/// refusal is `InvalidInput`; the metadata reads, the open and the read
+/// return their own errors.
 pub(crate) fn read_key_file(path: &Path) -> io::Result<Vec<u8>> {
     let not_a_file = || io::Error::new(io::ErrorKind::InvalidInput, "not a regular file");
     if !fs::metadata(path)?.is_file() {
@@ -54,8 +63,15 @@ pub(crate) fn read_key_file(path: &Path) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// AUTH-5.1 — 64 hex as EIGHT GROUPS OF EIGHT, a single space between
-/// groups, FOUR GROUPS TO A LINE (R42; RES-62 item 9, pick A).
+/// Returns `hex64` in AUTH-5.1's grouping.
+///
+/// It is 64 hex as eight groups of eight, a single space between groups,
+/// four groups to a line (R42; RES-62 item 9, pick A).
+///
+/// # Panics
+///
+/// Panics if a group boundary falls inside a multi-byte character, which
+/// hex never holds.
 pub fn group_hex(hex64: &str) -> String {
     let groups: Vec<&str> = (0..hex64.len()).step_by(8).map(|i| &hex64[i..(i + 8).min(hex64.len())]).collect();
     groups
@@ -65,21 +81,25 @@ pub fn group_hex(hex64: &str) -> String {
         .join("\n")
 }
 
-/// Whether `typed` — a fingerprint prefix read off a print and typed — names
-/// `fp`: trimmed and ASCII-lowercased, at least one R42 group (8 hex; §9
-/// item 35; AUTH-5.1), and a prefix of the fingerprint's hex. ONE rule for
-/// every place a person types a prefix beside a seed (AUTH-5.39: the
-/// fingerprint FIRST, "this is not the key on this paper — re-scan").
+/// Returns whether `typed` names `fp`.
+///
+/// `typed` is a fingerprint prefix read off a print and typed; read trimmed
+/// and ASCII-lowercased, it names `fp` where it is at least one R42 group
+/// (8 hex; §9 item 35; AUTH-5.1) and a prefix of the fingerprint's hex. It
+/// is one rule for every place a person types a prefix beside a seed
+/// (AUTH-5.39: the fingerprint first, "this is not the key on this paper —
+/// re-scan").
 pub(crate) fn typed_prefix_matches(typed: &str, fp: &Fingerprint) -> bool {
     let typed = typed.trim().to_ascii_lowercase();
     typed.len() >= 8 && fp.to_hex().starts_with(&typed)
 }
 
-/// AUTH-5.2 — a label rendered INERT: every C0 control, DEL and every bidi
-/// control (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C) shown as
-/// its code point, never interpreted. The domain admits them (AUTH-1.24)
-/// and AUTH-5.3 declines to narrow it, so the rendering is where they are
-/// disarmed.
+/// Returns `label` rendered inert (AUTH-5.2).
+///
+/// Every C0 control, DEL and every bidi control (U+202A–U+202E,
+/// U+2066–U+2069, U+200E, U+200F, U+061C) is shown as its code point, never
+/// interpreted. The domain admits them (AUTH-1.24) and AUTH-5.3 declines to
+/// narrow it, so the rendering is where they are disarmed.
 pub fn render_inert(label: &str) -> String {
     let mut out = String::with_capacity(label.len());
     for c in label.chars() {
@@ -94,46 +114,58 @@ pub fn render_inert(label: &str) -> String {
     out
 }
 
-/// The 32-byte seed — the paper backup's 64 hex — zeroed on drop, best
-/// effort: this crate takes no zeroizing dependency and forbids unsafe code,
-/// so the overwrite is a plain store the compiler is free to elide. Every
-/// seed the crate makes is BORN in this value — drawn by [`Seed::fresh`],
-/// decoded by [`Seed::from_hex`] — so no bare copy outlives the DROP
-/// AUTH-5.54 step 3 owes. The signer derived from it wipes its Ed25519 half
-/// on drop and releases the ML-DSA-65 half unwiped
-/// (`skep_signature::HybridSigner`'s doc): the DROP is OPEN WORK for that
-/// half, reported and not claimed.
+/// The 32-byte seed — the paper backup's 64 hex — zeroed on drop, best effort.
+///
+/// This crate takes no zeroizing dependency and forbids unsafe code, so the
+/// overwrite is a plain store the compiler is free to elide. Every seed the
+/// crate makes is born in this value — drawn by [`Seed::fresh`], decoded by
+/// [`Seed::from_hex`] — so no bare copy of its bytes outlives the drop
+/// AUTH-5.54 step 3 owes; the hex spelled from it — [`Seed::to_hex`], the
+/// key file's `seed` member, the sheet's field — is a plain `String` that no
+/// drop wipes. The signer derived from it wipes both halves' keys on drop,
+/// the Ed25519 key and the ML-DSA-65 key, and what the KDF and the key
+/// libraries compute from a secret inside a call is released unwiped
+/// (`skep_signature::HybridSigner`'s doc): the drop is open work for that
+/// residue, reported and not claimed.
 pub struct Seed([u8; 32]);
 
 impl Seed {
-    /// A seed from its bytes.
+    /// Returns a seed from its bytes.
     pub fn new(bytes: [u8; 32]) -> Seed {
         Seed(bytes)
     }
 
-    /// A fresh seed from the OS random source (`getrandom`, a `CryptoRng`),
-    /// fail-stop — no seed from anything weaker — drawn straight into the
-    /// value that zeroes it.
+    /// Draws a fresh seed from the OS random source.
+    ///
+    /// The source is `getrandom`, the OS's cryptographic generator, and the
+    /// seed is drawn straight into the value that zeroes it.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the OS random source fails: fail-stop, no seed from
+    /// anything weaker.
     pub fn fresh() -> Seed {
         let mut seed = Seed([0u8; 32]);
         getrandom::fill(&mut seed.0).expect("OS entropy unavailable");
         seed
     }
 
-    /// A seed from its 64 hex, either case — a print's re-type, a key file's
-    /// member — decoded straight into the value that zeroes it; `None` for
-    /// any other text.
+    /// Decodes a seed from its 64 hex, either case.
+    ///
+    /// The hex is a print's re-type or a key file's member, decoded straight
+    /// into the value that zeroes it; the answer is `None` for any other
+    /// text.
     pub fn from_hex(text: &str) -> Option<Seed> {
         let mut seed = Seed([0u8; 32]);
         hex::decode_into(text, &mut seed.0).then_some(seed)
     }
 
-    /// The bytes.
+    /// Returns the bytes.
     pub fn bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
-    /// The seed's 64 hex — the sheet's one secret field.
+    /// Returns the seed's 64 hex — the sheet's one secret field.
     pub fn to_hex(&self) -> String {
         hex::encode(&self.0)
     }
@@ -151,21 +183,27 @@ impl fmt::Debug for Seed {
     }
 }
 
-/// A byline in AUTH-1.24's DOMAIN, never empty (AUTH-5.42): non-empty, no
-/// `\n`, at most 128 BYTES of UTF-8 counted as `Enrollment::new` counts.
-/// Every box applies the domain test ITSELF, before anything is made from a
-/// label (P13; `client.md` §2.2 `keygen`), and [`KeyFile::parse`] admits a
-/// file's `label` member by the same test.
+/// A byline in AUTH-1.24's domain, never empty (AUTH-5.42).
+///
+/// It is non-empty, with no `\n`, and at most 128 bytes of UTF-8 counted as
+/// `Enrollment::new` counts. Every box applies the domain test itself,
+/// before anything is made from a label (P13; `client.md` §2.2 `keygen`),
+/// and [`KeyFile::parse`] admits a file's `label` member by the same test.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label(String);
 
-/// Why a label is outside the domain — faced at the box, with the byte
-/// count named where the limit is the fault (AUTH-1.25's `TooLong` and
-/// `Newline`, and the empty label AUTH-5.42 faces).
+/// Why a label is outside the domain.
+///
+/// It is faced at the box, with the byte count named where the limit is the
+/// fault (AUTH-1.25's `TooLong` and `Newline`, and the empty label AUTH-5.42
+/// faces).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelFault {
+    /// The label is empty.
     Empty,
+    /// The label holds a `\n`.
     Newline,
+    /// The label runs past 128 bytes of UTF-8.
     TooLong { bytes: usize },
 }
 
@@ -185,8 +223,14 @@ impl fmt::Display for LabelFault {
 impl std::error::Error for LabelFault {}
 
 impl Label {
-    /// The domain test (AUTH-1.24), the newline read before the length as
-    /// `Enrollment::new` reads it (AUTH-1.25).
+    /// Makes a label of `text` under the domain test (AUTH-1.24).
+    ///
+    /// # Errors
+    ///
+    /// In this order, the newline read before the length as
+    /// `Enrollment::new` reads it (AUTH-1.25): [`LabelFault::Newline`] where
+    /// `text` holds a `\n`; [`LabelFault::TooLong`] past 128 bytes;
+    /// [`LabelFault::Empty`] for the empty text.
     pub fn new(text: &str) -> Result<Label, LabelFault> {
         if text.contains('\n') {
             return Err(LabelFault::Newline);
@@ -200,14 +244,16 @@ impl Label {
         Ok(Label(text.to_string()))
     }
 
-    /// The text.
+    /// Returns the text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The label as a path component: ASCII alphanumerics kept, every other
-    /// character a `-`, runs collapsed — the slug the anchor file's name
-    /// takes (§6).
+    /// Returns the label as a path component.
+    ///
+    /// ASCII alphanumerics are kept, lowercased; every other run of
+    /// characters is one `-`, a `-` at either end trimmed, and `key` stands
+    /// where nothing is left — the slug the anchor file's name takes (§6).
     pub fn slug(&self) -> String {
         let mut out = String::new();
         let mut dash = false;
@@ -231,25 +277,33 @@ impl fmt::Display for Label {
     }
 }
 
-/// THE KEY FILE AND THE ANCHOR EXPORT, one struct (§3.2, RULED 2026-09-22
-/// "b"): `type`, `v`, `anchor`, `alg`, `seed`, `public`, `fingerprint`,
-/// `label?`, `account?`, `principal?`, `origin?` — AUTH-5.38's fields where
-/// the format allows, and no other member. `public` and `fingerprint` are
-/// RE-DERIVED from the seed on every load (AUTH-5.39 applied to the store's
-/// own files): a file whose members disagree with its seed is "not the key
-/// this file names".
+/// The key file and the anchor export, one struct (§3.2).
+///
+/// Its members are `type`, `v`, `anchor`, `alg`, `seed`, `public`,
+/// `fingerprint`, `label?`, `account?`, `principal?`, `origin?` —
+/// AUTH-5.38's fields where the format allows, and no other member.
+/// `public` and `fingerprint` are re-derived from the seed on every load
+/// (AUTH-5.39 applied to the store's own files): a file whose members
+/// disagree with its seed is "not the key this file names".
 pub struct KeyFile {
+    /// Whether the key is an anchor.
     pub anchor: bool,
     /// An `ALGS` token (AUTH-1.5).
     pub alg: String,
     seed: Seed,
+    /// The public key the seed derives.
     pub public: PublicKey,
+    /// The public key's fingerprint.
     pub fingerprint: Fingerprint,
-    /// Present only where a label exists — never `""` (AUTH-1.24).
+    /// The label, present only where one exists — never `""` (AUTH-1.24).
     pub label: Option<String>,
-    /// AUTH-5.38's three facts, present where known at export.
+    /// The account, one of AUTH-5.38's three facts.
+    ///
+    /// Each of the three is present where known at export.
     pub account: Option<String>,
+    /// The principal, present where known at export.
     pub principal: Option<u64>,
+    /// The origin, present where known at export.
     pub origin: Option<Origin>,
 }
 
@@ -259,28 +313,32 @@ impl fmt::Debug for KeyFile {
     }
 }
 
-/// A KEY FILE'S REFUSALS (§3.2) — the store's own faces and never wire
-/// tokens, each read off the FILE's own contents: a state, rendered as
-/// AUTH-5.67's halt naming the path and the state (the store's
-/// `From<StoreError> for Halt`); all exit 3 (§1.1's `halt` row).
-/// Non-exhaustive: the next format version's members bring refusals of
-/// their own (§3.2's `custody`).
+/// A key file's refusals (§3.2).
+///
+/// They are the store's own faces and never wire tokens, each read off the
+/// file's own contents: a state, rendered as AUTH-5.67's halt naming the
+/// path and the state (the store's `From<StoreError> for Halt`); all exit 3
+/// (§1.1's `halt` row). Non-exhaustive: the next format version's members
+/// bring refusals of their own (§3.2's `custody`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KeyFileError {
-    /// Not JSON, or `type` is not `skep-key`.
+    /// Past [`MAX_KEY_FILE_BYTES`], not JSON, or `type` is not `skep-key`.
     NotKeyFile,
-    /// `v` above 1: "this file was written by a newer skep than this one",
-    /// never "not a key file".
+    /// `v` above 1: "this file was written by a newer skep than this one".
+    ///
+    /// It is never "not a key file".
     Newer { v: u64 },
     /// A member missing, of the wrong type, out of its domain, or unknown.
     Schema { member: String },
-    /// `public` or `fingerprint` does not re-derive from the seed: "this is
-    /// not the key this file names" (AUTH-5.39).
+    /// `public` or `fingerprint` does not re-derive from the seed (AUTH-5.39).
+    ///
+    /// It reads "this is not the key this file names".
     Disagrees,
-    /// An anchor file where a key was selected to SIGN or to be enrolled as a
-    /// device key (§2.2's selection test): the one walk that imports an
-    /// anchor is `skep recover`.
+    /// An anchor file selected to sign or to be enrolled as a device key.
+    ///
+    /// It fails §2.2's selection test: the walks that import an anchor are
+    /// `skep recover` and, where its act is anchor-grade, `skep handoff`.
     AnchorAtSigningCommand,
 }
 
@@ -301,37 +359,55 @@ impl fmt::Display for KeyFileError {
 
 impl std::error::Error for KeyFileError {}
 
-/// The three AUTH-5.38 facts an artifact carries where the account exists
-/// at export (the notebook: `delegate` runs ahead of the backup moment).
+/// The three AUTH-5.38 facts an artifact carries.
+///
+/// An artifact carries them where the account exists at export (the
+/// notebook: `delegate` runs ahead of the backup moment).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Facts {
+    /// The account.
     pub account: String,
+    /// The principal.
     pub principal: u64,
+    /// The board's origin.
     pub origin: Origin,
 }
 
-/// The sheet's FIELD LIST, in order (AUTH-5.38; §5.2): the fields SAVE
-/// `public` — the seed and the fingerprint grouped (AUTH-5.1), the label
-/// inert (AUTH-5.2), the three facts where they exist. A rendering of the
-/// fields and never of the file's bytes; read by a person, parsed by nothing.
-/// Its `Debug` prints every field but the seed, which shows as `…`: the
-/// sheet is a SECRET moment's payload (§1.1's `person` row), and a debug
-/// log of moments is an ordinary embedder's.
+/// The sheet's field list, in order (AUTH-5.38; §5.2).
+///
+/// It holds the fields save `public` — the seed and the fingerprint grouped
+/// (AUTH-5.1), the label rendered inert by [`SheetFields::lines`]
+/// (AUTH-5.2), the three facts where they exist. It is a rendering of the
+/// fields and never of the file's bytes; read by a person, parsed by
+/// nothing. Its `Debug` prints every field but the seed, which shows as
+/// `…`: the sheet is a `Secret` moment's payload (§1.1's `person` row), and
+/// a debug log of moments is an ordinary embedder's.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SheetFields {
+    /// Whether the key is an anchor.
     pub anchor: bool,
+    /// The key's `ALGS` token.
     pub alg: String,
+    /// The label as the file holds it, where one exists.
     pub label: Option<String>,
+    /// The fingerprint's 64 hex.
     pub fingerprint_hex: String,
+    /// The fingerprint's hex, grouped.
     pub fingerprint_grouped: String,
+    /// The seed's hex, grouped.
     pub seed_grouped: String,
+    /// The account, where known.
     pub account: Option<String>,
+    /// The principal, where known.
     pub principal: Option<u64>,
+    /// The origin's canonical text, where known.
     pub origin: Option<String>,
 }
 
 impl SheetFields {
-    /// The labelled lines a terminal or a window draws, in the pinned order.
+    /// Returns the labelled lines a terminal or a window draws.
+    ///
+    /// They come in the pinned order.
     pub fn lines(&self) -> Vec<(String, String)> {
         let mut out = vec![
             ("kind".to_string(), if self.anchor { "ANCHOR (paper)".to_string() } else { "device key".to_string() }),
@@ -371,9 +447,11 @@ impl fmt::Debug for SheetFields {
     }
 }
 
-/// AUTH-2.130 clause 3's string escaping, the spelling the file takes too
-/// (§3.2): `"`, `\` and U+0000–U+001F escaped — the two-character forms
-/// where JSON defines one, `\u00xx` lowercase otherwise — and nothing else.
+/// Writes `s` to `out` with AUTH-2.130 clause 3's string escaping.
+///
+/// It is the spelling the file takes too (§3.2): `"`, `\` and U+0000–U+001F
+/// escaped — the two-character forms where JSON defines one, `\u00xx`
+/// lowercase otherwise — and nothing else.
 fn escape_json_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -393,9 +471,10 @@ fn escape_json_string(s: &str, out: &mut String) {
 }
 
 impl KeyFile {
-    /// A key file over `seed` under the production kind, its byline a
-    /// [`Label`] — AUTH-1.24's domain, tested where the label was made, as
-    /// [`KeyFile::parse`] tests a file's `label` member.
+    /// Makes a key file over `seed` under the production kind.
+    ///
+    /// Its byline is a [`Label`] — AUTH-1.24's domain, tested where the
+    /// label was made, as [`KeyFile::parse`] tests a file's `label` member.
     pub fn new(seed: Seed, anchor: bool, label: Option<Label>, facts: Option<&Facts>) -> KeyFile {
         let signer = crate::sign::signer_from_seed(seed.bytes());
         let public = HybridSigner::public_key(&signer).clone();
@@ -413,19 +492,27 @@ impl KeyFile {
         }
     }
 
-    /// The signer this file's seed derives — the in-memory arm of the
-    /// `Signer` seam.
+    /// Returns the signer this file's seed derives.
+    ///
+    /// It is the in-memory arm of the `Signer` seam.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `public`'s row is one this build holds no keygen rule for;
+    /// every file [`KeyFile::new`] makes and [`KeyFile::parse`] reads holds a
+    /// row it does, so the `expect` never fires on one of those.
     pub fn signer(&self) -> HybridSigner {
         signer_from_seed_under(self.public.sig_alg_row().tag, self.seed.bytes()).expect("the file's alg is a row this build holds")
     }
 
-    /// The seed's 64 hex, the sheet's one secret field.
+    /// Returns the seed's 64 hex, the sheet's one secret field.
     pub fn seed_hex(&self) -> String {
         self.seed.to_hex()
     }
 
-    /// The sheet's fields (AUTH-5.38), the seed and the fingerprint grouped
-    /// (AUTH-5.1).
+    /// Returns the sheet's fields (AUTH-5.38).
+    ///
+    /// The seed and the fingerprint are grouped (AUTH-5.1).
     pub fn sheet(&self) -> SheetFields {
         SheetFields {
             anchor: self.anchor,
@@ -440,10 +527,12 @@ impl KeyFile {
         }
     }
 
-    /// THE ONE SPELLING (§3.2): members in schema order, no whitespace
-    /// outside strings, hex lowercase, AUTH-2.130 clause 3's escapes, one
-    /// `\n` after the closing brace — so two conforming writers emit one byte
-    /// string for one key.
+    /// Returns the file's one spelling (§3.2).
+    ///
+    /// Members come in schema order, with no whitespace outside strings, hex
+    /// lowercase, AUTH-2.130 clause 3's escapes, and one `\n` after the
+    /// closing brace — so two conforming writers emit one byte string for
+    /// one key.
     pub fn to_json(&self) -> String {
         let mut out = String::from("{\"type\":\"skep-key\",\"v\":1,\"anchor\":");
         out.push_str(if self.anchor { "true" } else { "false" });
@@ -475,11 +564,21 @@ impl KeyFile {
         out
     }
 
-    /// READ by a standard parser under the schema (§3.2): whitespace, member
-    /// order, escape spelling, a CRLF or a missing newline all ADMITTED; the
-    /// refusals the store's own — `NotKeyFile`, `Newer{v}`, `Schema{member}`,
-    /// `Disagrees` — each a state a face names beside the path. Bytes past
-    /// [`MAX_KEY_FILE_BYTES`] are no key file, whatever they spell.
+    /// Parses `bytes` under the schema with a standard parser (§3.2).
+    ///
+    /// Whitespace, member order, escape spelling, a CRLF or a missing
+    /// newline are all admitted.
+    ///
+    /// # Errors
+    ///
+    /// The refusals are the store's own, each a state a face names beside
+    /// the path: [`KeyFileError::NotKeyFile`] for bytes past
+    /// [`MAX_KEY_FILE_BYTES`], which are no key file whatever they spell, or
+    /// bytes that are not JSON or whose `type` is not `skep-key`;
+    /// [`KeyFileError::Newer`] for a `v` above 1; [`KeyFileError::Schema`]
+    /// for a member missing, of the wrong type, out of its domain, or
+    /// unknown; [`KeyFileError::Disagrees`] where `public` or `fingerprint`
+    /// does not re-derive from the seed.
     pub fn parse(bytes: &[u8]) -> Result<KeyFile, KeyFileError> {
         if bytes.len() as u64 > MAX_KEY_FILE_BYTES {
             return Err(KeyFileError::NotKeyFile);
@@ -541,7 +640,7 @@ impl KeyFile {
             Some(_) => return Err(schema("origin")),
         };
         // AUTH-5.39 applied to the store: `public` and `fingerprint` must
-        // AGREE with the seed — both re-derived and compared on every load.
+        // agree with the seed — both re-derived and compared on every load.
         let tag = SigAlgRow::of_token(alg).ok_or_else(|| schema("alg"))?.tag;
         let derived = signer_from_seed_under(tag, seed.bytes()).ok_or_else(|| schema("alg"))?;
         if HybridSigner::public_key(&derived) != &public || Fingerprint::of(&public) != fingerprint {
@@ -575,9 +674,11 @@ mod tests {
         assert_eq!(render_inert("a\u{202E}b\u{07}"), "a<U+202E>b<U+0007>");
     }
 
-    /// AUTH-5.2, the whole set: every C0 control, DEL and every bidi control
-    /// renders as its code point — 45 characters — and the neighbours at
-    /// each end of each range render as themselves.
+    /// AUTH-5.2, the whole set.
+    ///
+    /// Every C0 control, DEL and every bidi control renders as its code point
+    /// — 45 characters — and a neighbour at one end or both of each range
+    /// renders as itself.
     #[test]
     fn every_control_and_bidi_control_renders_as_its_code_point() {
         let inert: Vec<char> = (0x00..=0x1f)
@@ -597,9 +698,11 @@ mod tests {
         assert!(render_inert(&all).bytes().all(|b| b.is_ascii_graphic()), "{}", render_inert(&all));
     }
 
-    /// AUTH-1.24/1.25 at the box: 128 bytes admitted, 129 refused with the byte
-    /// count named (AUTH-2.96's vector row), a newline refused, the empty label
-    /// faced (AUTH-5.42).
+    /// AUTH-1.24/1.25 at the box.
+    ///
+    /// 128 bytes are admitted, 129 refused with the byte count named
+    /// (AUTH-2.96's vector row), a newline refused, the empty label faced
+    /// (AUTH-5.42).
     #[test]
     fn the_label_domain_is_tested_at_the_box() {
         assert!(Label::new(&"a".repeat(128)).is_ok());
@@ -614,10 +717,11 @@ mod tests {
         assert!(fault.to_string().contains("a name is required"));
     }
 
-    /// One byline domain, the box's and the record's (AUTH-1.24, AUTH-1.25):
-    /// every text the box admits `Enrollment::new` keeps as it is, and every
+    /// One byline domain, the box's and the record's (AUTH-1.24, AUTH-1.25).
+    ///
+    /// Every text the box admits `Enrollment::new` keeps as it is, and every
     /// text the box refuses — save the empty one, which the record maps to
-    /// none — `Enrollment::new` refuses too, over labels of 0 to 131 bytes
+    /// none — `Enrollment::new` refuses too, over labels of 0 to 135 bytes
     /// of one- to four-byte characters, a line break at the start, the
     /// middle, the end or none. The walks' `expect`s on a label the box
     /// admitted stand on this.
@@ -642,9 +746,11 @@ mod tests {
         }
     }
 
-    /// §9 item 35's typed prefix, one rule: at least one R42 group, a prefix
-    /// of the fingerprint, read trimmed and in either case — and a short
-    /// group padded with spaces is no group.
+    /// §9 item 35's typed prefix, one rule.
+    ///
+    /// It is at least one R42 group, a prefix of the fingerprint, read
+    /// trimmed and in either case — and a short group padded with spaces is
+    /// no group.
     #[test]
     fn a_typed_prefix_is_one_r42_group_or_more_in_either_case() {
         let fp = KeyFile::new(Seed::new([8u8; 32]), true, None, None).fingerprint;
@@ -657,9 +763,10 @@ mod tests {
         assert!(!typed_prefix_matches(&format!("{other}{}", &hex[1..8]), &fp), "another key's group");
     }
 
-    /// A seed is born in its zeroing value: drawn fresh, or decoded from its
-    /// 64 hex in either case — any other text is no seed; and the sheet
-    /// prints every field but the seed.
+    /// A seed is born in its zeroing value, and the sheet hides it.
+    ///
+    /// It is drawn fresh, or decoded from its 64 hex in either case — any
+    /// other text is no seed; and the sheet prints every field but the seed.
     #[test]
     fn a_seed_is_drawn_or_decoded_into_its_value_and_the_sheet_hides_it() {
         assert_ne!(Seed::fresh().bytes(), Seed::fresh().bytes());
@@ -671,8 +778,10 @@ mod tests {
         assert!(!printed.contains(&file.seed_hex()[..8]), "the seed never prints: {printed}");
     }
 
-    /// §3.2 — one spelling written, a standard parser reading it back:
-    /// whitespace and member order admitted, the refusals the store's own.
+    /// §3.2 — one spelling written, a standard parser reading it back.
+    ///
+    /// Whitespace and member order are admitted, the refusals the store's
+    /// own.
     #[test]
     fn the_key_file_round_trips_and_refuses_by_state() {
         let facts = Facts { account: "1.0.1".into(), principal: 1, origin: Origin::parse("http://127.0.0.1:8642").unwrap() };

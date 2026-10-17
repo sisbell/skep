@@ -1,24 +1,26 @@
-//! THE ONE RETIREMENT PREVIEW, `preview(removed)` (`client.md` §1.1's
-//! `ceremony` row; §5.1 "the retirement preview"), run at every site that
-//! retires — `retire`, `recover` R4 (once per retirement and per STOLEN
-//! round), the LOSS arm's L6 and `rotate` T1: AUTH-5.46's ordinary arm's
-//! FOUR CLAUSES (the commit kills that key's live sessions, AUTH-4.63; the
-//! retirement is a permanent public record; I4 bars the fingerprint forever,
-//! AUTH-2.98; the device returns only as a fresh keypair under a new byline,
-//! AUTH-5.42, AUTH-5.69); THE REACH's two halves over the gesture's own
-//! enumeration (every account the gesture will not close and every account
-//! this client cannot open — the act where one exists, the state where none
-//! does; AUTH-5.46 as RES-142 re-instated it; AUTH-5.59's head); the rows
-//! LABELLED from the admitted read (AUTH-5.69), rendered inert (AUTH-5.2);
-//! the LAST-DEVICE line forked on the same read's ANCHOR FLAGS (§4a.4 — the
-//! NO-ANCHOR arm UNWRITABLE, `would_empty`, taking no confirmation) at every
-//! site but a rotation's, whose retire-old follows its replacement's
-//! enrollment (AUTH-5.59 steps 1 and 4); the
-//! LAST-ANCHOR line with RES-177's downgrade, armed; and the TYPED ANSWER
-//! through `Person::confirm_typed`, never a flag — no `--yes` exists,
-//! because "the wrong row is the mistake stress produces". The library takes
-//! the fingerprints to retire as INPUT and never chooses one (§4a.4; §9
-//! item 33).
+//! The one retirement preview, `preview(removed)`.
+//!
+//! `client.md` §1.1's `ceremony` row; §5.1 "the retirement preview": it runs
+//! at every site that retires — `retire`, `recover` R4 (once per retirement
+//! and per stolen round) and its containment act at an agent's account, the
+//! loss arm at L5's failure arm and at L6, and `rotate` T1. It holds
+//! AUTH-5.46's ordinary arm's four clauses (the commit kills that key's live
+//! sessions, AUTH-4.63; the retirement is a permanent public record; I4
+//! bars the fingerprint forever, AUTH-2.98; the device returns only as a
+//! fresh keypair under a new byline, AUTH-5.42, AUTH-5.69); the reach's two
+//! halves over the gesture's own enumeration (every account the gesture
+//! will not close and every account this client cannot open — the act where
+//! one exists, the state where none does; AUTH-5.46 as RES-142 states it;
+//! AUTH-5.59's head); the rows labelled from the admitted read (AUTH-5.69),
+//! rendered inert (AUTH-5.2); the last-device line forked on the set's
+//! anchor flags (§4a.4 — the no-anchor arm unwritable, `would_empty`, taking
+//! no confirmation) at every site but a rotation's, whose retire-old follows
+//! its replacement's enrollment (AUTH-5.59 steps 1 and 4); the last-anchor
+//! line with RES-177's downgrade, armed; and the typed answer through
+//! `Person::confirm_typed`, never a flag — no `--yes` exists, because "the
+//! wrong row is the mistake stress produces". The library takes the
+//! fingerprints to retire as input and never chooses one (§4a.4;
+//! §9 item 33).
 
 use skep_identity::Fingerprint;
 
@@ -38,15 +40,16 @@ pub struct Row {
     pub label: Option<String>,
     /// This store holds the key.
     pub held: bool,
-    /// The key opened the session the retirement runs under: the commit
-    /// ends this session.
+    /// The key opened the session the retirement runs under.
+    ///
+    /// The commit ends this session.
     pub session_key: bool,
-    /// Enrolled AFTER this walk began (the STOLEN arm's round).
+    /// Enrolled after this walk began (the stolen arm's round).
     pub enrolled_since: bool,
 }
 
 impl Row {
-    /// A row over the set, the records and what this store holds.
+    /// Returns a row over the set, the records and what this store holds.
     pub fn of(fp: &Fingerprint, set: &KeySet, records: Option<&Records>, held: &[Fingerprint], session_key: Option<&Fingerprint>, since: bool) -> Row {
         Row {
             fingerprint: *fp,
@@ -77,7 +80,7 @@ impl Row {
     }
 }
 
-/// The site the preview runs at — what each ADDS (§1.1's `ceremony` row).
+/// The site the preview runs at — what each adds (§1.1's `ceremony` row).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewSite {
     Retire,
@@ -93,8 +96,10 @@ pub struct Preview<'a> {
     pub account: &'a str,
     pub set: &'a KeySet,
     pub rows: &'a [Row],
-    /// The head invariant's enumeration for the retired key (AUTH-5.59's
-    /// head), over which the REACH is stated.
+    /// The head invariant's enumeration for the retired key.
+    ///
+    /// It is the closure AUTH-5.59's head defines, and the reach is stated
+    /// over it.
     pub closure: &'a Closure,
     /// This store's own keys, for the reach's act.
     pub held: &'a [Fingerprint],
@@ -108,17 +113,26 @@ pub struct Preview<'a> {
 pub enum Previewed {
     /// The typed answer named the row.
     Confirmed,
-    /// `no`.
+    /// `no` — or `n`, nothing, or three answers that are not the row.
     Declined,
     /// The write is unreachable (`would_empty`): no confirmation was taken.
     Unwritable,
 }
 
-/// THE PREVIEW.
+/// Runs the preview.
+///
+/// # Errors
+///
+/// An abandoned confirmation halts.
+///
+/// # Panics
+///
+/// Panics where `p.rows` is empty and the walk reaches the typed answer;
+/// every site names the row it retires.
 pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Halt> {
     let removed: Vec<Fingerprint> = p.rows.iter().map(|r| r.fingerprint).collect();
     say(person, "AUTH-5.46", format!("RETIREMENT PREVIEW at {} — the row(s) this act retires:\n  {}", p.account, p.rows.iter().map(Row::render).collect::<Vec<_>>().join("\n  ")));
-    // THE FOUR CLAUSES (AUTH-5.46's ordinary arm).
+    // The four clauses (AUTH-5.46's ordinary arm).
     let own_session = p.rows.iter().any(|r| r.session_key);
     say(
         person,
@@ -131,7 +145,7 @@ pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Ha
     say(person, "AUTH-5.46 (2)", "(2) the retirement is a PERMANENT PUBLIC RECORD in this account's doc 1");
     say(person, "AUTH-5.46 (3)", "(3) I4 bars this fingerprint from ever re-entering this set (AUTH-2.98): no act on this key changes it");
     say(person, "AUTH-5.46 (4)", "(4) that device returns only as a FRESH keypair under a NEW permanent byline (AUTH-5.42, AUTH-5.69)");
-    // THE REACH's two halves over the gesture's own enumeration.
+    // The reach's two halves over the gesture's own enumeration.
     let others: Vec<&crate::ceremony::enumerate::Admitted> = p.closure.accounts.iter().filter(|a| a.account != p.account).collect();
     if others.is_empty() {
         say(person, "AUTH-5.46 (reach)", format!("THE REACH: the board names no other set of yours holding this key — the enumeration from {} admitted {} account(s) and this gesture closes every one it names", p.account, p.closure.accounts.len()));
@@ -159,12 +173,12 @@ pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Ha
             }
         }
     }
-    // THE LAST-DEVICE LINE, forked on the ANCHOR FLAGS of the same read.
+    // The last-device line, forked on the anchor flags of the set named.
     let remaining_devices = p.set.enrolled.iter().filter(|e| !e.anchor && !removed.contains(&e.fingerprint)).count();
     let anchors_remaining = p.set.enrolled.iter().filter(|e| e.anchor && !removed.contains(&e.fingerprint)).count();
     let anchors_total = p.set.enrolled.iter().filter(|e| e.anchor).count();
     if anchors_total > 0 && anchors_remaining == 0 && p.rows.iter().any(|r| r.anchor) {
-        // THE LAST-ANCHOR arm (AUTH-5.46; RES-177's downgrade) — armed,
+        // The last-anchor arm (AUTH-5.46; RES-177's downgrade) — armed,
         // unreachable in these walks.
         say(
             person,
@@ -186,7 +200,7 @@ pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Ha
                 ),
             );
         } else {
-            // NO anchor: the write is unreachable (`would_empty`) and no
+            // No anchor: the write is unreachable (`would_empty`) and no
             // confirmation is taken (§4a.4).
             say(
                 person,
@@ -205,7 +219,7 @@ pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Ha
         PreviewSite::Rotate => say(person, "AUTH-5.59 step 4", "this is the rotation's retire-old: THE LAST WRITE the old key's session can make; the commit ends that session atomically and the next act is a sign-in with the new key"),
         _ => {}
     }
-    // THE TYPED ANSWER: the row's first R42 group, or `no`; a wrong row is
+    // The typed answer: the row's first R42 group, or `no`; a wrong row is
     // re-asked (AUTH-5.46: "the wrong row is the mistake stress produces").
     let expected = removed[0].to_hex()[..8].to_string();
     for _ in 0..3 {
@@ -227,7 +241,7 @@ pub fn preview(person: &mut dyn Person, p: &Preview<'_>) -> Result<Previewed, Ha
     Ok(Previewed::Declined)
 }
 
-/// The decline, faced: nothing written, the walk resumes by reading.
+/// Returns the decline, faced: nothing written, the walk resumes by reading.
 pub fn declined(what: &str) -> Halt {
     Halt::face(
         format!("the {what} was declined at the preview: nothing was written"),
@@ -244,8 +258,13 @@ mod tests {
     use crate::person::scripted::{Script, Scripted};
     use crate::sign::signer_from_seed;
 
-    /// One account's set of ONE device key and no anchor, and the preview of
-    /// retiring that key at `site`.
+    /// Builds a one-device-key, anchorless set and previews retiring its key.
+    ///
+    /// The set is one account's; the preview runs at `site`.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the preview halts.
     fn lone_key_preview(site: PreviewSite) -> (Previewed, Scripted) {
         let key = signer_from_seed(&[12; 32]).public_key().clone();
         let fp = Fingerprint::of(&key);
@@ -257,10 +276,12 @@ mod tests {
         (answer, person)
     }
 
-    /// The LAST-DEVICE fork is no rotation's: retiring an anchorless
-    /// account's only device key is unwritable at `retire` and takes no
-    /// confirmation, while a rotation's retire-old — its replacement
-    /// enrolled at T2 first — reads the set it names and asks for the row.
+    /// The last-device fork is no rotation's.
+    ///
+    /// Retiring an anchorless account's only device key is unwritable at
+    /// `retire` and takes no confirmation, while a rotation's retire-old —
+    /// its replacement enrolled at T2 first — reads the set it names and asks
+    /// for the row.
     #[test]
     fn the_last_device_fork_is_no_rotations() {
         let (answer, person) = lone_key_preview(PreviewSite::Retire);
@@ -272,11 +293,13 @@ mod tests {
         assert!(person.said("AUTH-5.59 step 4") && person.said("CONSENT confirm"), "{}", person.transcript.join("\n"));
     }
 
-    /// THE TYPED ANSWER (AUTH-5.46: "the wrong row is the mistake stress
-    /// produces"): the row's first R42 group, in either case and whatever
-    /// whitespace rides it, confirms at once; `no` or nothing declines at
-    /// once; and a row NEAR the group — a hex short, a hex long — never
-    /// confirms: it is asked again, three times, then declined.
+    /// The typed answer is the row's first R42 group and nothing near it.
+    ///
+    /// AUTH-5.46: "the wrong row is the mistake stress produces". The group,
+    /// in either case and whatever whitespace rides it, confirms at once;
+    /// `no` or nothing declines at once; and a row near the group — a hex
+    /// short, a hex long — never confirms: it is asked again, three times,
+    /// then declined.
     #[test]
     fn the_typed_answer_is_the_rows_first_group_and_nothing_near_it() {
         let (anchor, device) = (signer_from_seed(&[13; 32]).public_key().clone(), signer_from_seed(&[12; 32]).public_key().clone());

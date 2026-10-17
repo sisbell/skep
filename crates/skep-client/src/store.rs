@@ -1,21 +1,23 @@
-//! The key store (`client.md` §3): the `KeyStore` seam (§1.4) — `generate`,
-//! `signer`, `bindings`, `bind` — and its `FileStore` arm, plain files with
-//! modes (§3a's rung 1, RULED): `<store>/keys/<fingerprint>.key` written
-//! ONCE under `O_EXCL` at mode `0600` in a `0700` directory (§3.3), the
-//! append-only `bindings` file in its TWO line forms (§3.5) under the
-//! advisory lock `<store>/lock` (§3.7), and NO anchor under the store, ever
-//! (§3.4; AUTH-5.54 step 3). The store is the seed's CUSTODIAN (§3a:
-//! "signing and key lookup behind `Signer` and `KeyStore`"): a lookup
-//! answers a key's PUBLIC facts, [`KeyFacts`], and the seed leaves the store
-//! only as the signer [`KeyStore::signer`] derives from it — so a later
-//! custody rung is a different signer behind that one method, never a
-//! rewrite of a walk (§1.4). The refusals are the store's own faces
-//! ([`StoreError`], [`KeyFileError`]), never wire tokens, each converted
-//! into AUTH-5.67's halt naming the path and the state by
-//! `From<StoreError> for Halt`, so a walk's `?` carries it; a lookup that
-//! selects no key is §3.5 arm 4's fork, [`arm4_face`]. A binding line that
-//! cannot be appended is no refusal at all: [`Unappended`], the warning
-//! carrying the line (§3.7).
+//! The key store (`client.md` §3).
+//!
+//! It is the `KeyStore` seam (§1.4) — `generate`, `signer`, `bindings`,
+//! `bind` — and its `FileStore` arm, plain files with modes (§3a's rung 1):
+//! `<store>/keys/<fingerprint>.key` written once under `O_EXCL` at mode
+//! `0600` in a `0700` directory (§3.3), the append-only `bindings` file in
+//! its two line forms (§3.5) under the advisory lock `<store>/lock` (§3.7),
+//! and no anchor under the store, ever (§3.4; AUTH-5.54 step 3). The store
+//! is the seed's custodian (§3a: "signing and key lookup behind `Signer` and
+//! `KeyStore`"): a lookup answers a key's public facts, [`KeyFacts`], and
+//! the seed leaves a lookup only as the signer [`KeyStore::signer`] derives
+//! from it — [`FileStore::load`], the store's own reader, hands a file out
+//! with its seed — so a later custody rung is a different signer behind
+//! that one method, never a rewrite of a walk (§1.4). The refusals are the
+//! store's own faces ([`StoreError`], [`KeyFileError`]), never wire tokens,
+//! each converted into AUTH-5.67's halt naming the state, and the path where
+//! there is one, by `From<StoreError> for Halt`, so a walk's `?` carries it;
+//! a lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`]. A
+//! binding line that cannot be appended is no refusal at all:
+//! [`Unappended`], the warning carrying the line (§3.7).
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -35,20 +37,23 @@ use crate::sign::Signer;
 #[cfg(test)]
 mod tests;
 
-/// A key's identity in the store — its FINGERPRINT, the file's name (§3.1).
+/// A key's identity in the store — its fingerprint, the file's name (§3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeyId(pub Fingerprint);
 
-/// §3.5's lookup input (§1.4): a key-file path, the (`--board`,
-/// `--principal`) pair the binding and lone-key arms take, or `fingerprint
-/// --select`'s prefix-or-label.
+/// §3.5's lookup input (§1.4).
+///
+/// It is a key-file path, the (`--board`, `--principal`) pair the binding
+/// and lone-key arms take, or `fingerprint --select`'s prefix-or-label.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeySelector<'a> {
     /// `--key <path>` / `SKEP_KEY`: that file, no lookup (arm 1).
     Path(&'a Path),
-    /// §3.5's (`--board`, `--principal`) pair: arm 2, the last binding for
-    /// it; arm 3, no binding and the lone device key. `None` for the
-    /// principal where the board has exactly one binding in the store.
+    /// §3.5's (`--board`, `--principal`) pair.
+    ///
+    /// Arm 2 is the last binding for it; arm 3, no binding selected and the
+    /// lone device key. `None` stands for the principal where the board has
+    /// exactly one binding in the store.
     Board { origin: &'a Origin, principal: Option<u64> },
     /// A fingerprint prefix, 2–64 characters of `[0-9a-f]`.
     Prefix(&'a str),
@@ -57,34 +62,42 @@ pub enum KeySelector<'a> {
 }
 
 impl<'a> KeySelector<'a> {
-    /// `fingerprint --select`'s two arms told apart by SHAPE: 2–64
-    /// characters all in `[0-9a-f]` is a prefix, anything else a label.
+    /// Returns `fingerprint --select`'s arm for `text`, told apart by shape.
+    ///
+    /// 2–64 characters all in `[0-9a-f]` is a prefix, anything else a label.
     pub fn select(text: &'a str) -> KeySelector<'a> {
         let hexy = (2..=64).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
         if hexy { KeySelector::Prefix(text) } else { KeySelector::Label(text) }
     }
 }
 
-/// What a selected key is to be used for: SIGNING (or enrollment as a device
-/// key), where an anchor file is REFUSED whichever arm selected it (§2.2's
-/// selection test, P11); or a READ of its public facts (`fingerprint
-/// --key`, `verify`), where it is not.
+/// What a selected key is to be used for.
+///
+/// It is signing (or enrollment as a device key), where an anchor file is
+/// refused whichever arm selected it (§2.2's selection test, P11); or a
+/// read of its public facts (`fingerprint --key`, `verify`), where it is
+/// not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
+    /// To sign, or to be enrolled as a device key.
     Sign,
+    /// To read the key's public facts.
     Read,
 }
 
-/// ONE LINE of the bindings file, IN EITHER OF ITS TWO FORMS AND NO THIRD
-/// (§3.5): the enrollment line `origin principal account fingerprint`
-/// (AUTH-5.76's retention), and the `signed <dialed-origin> <signed-origin>`
+/// One line of the bindings file, in either of its two forms (§3.5).
+///
+/// The two are the enrollment line `origin principal account fingerprint`
+/// (AUTH-5.76's retention) and the `signed <dialed-origin> <signed-origin>`
 /// line a frontend at its own bind-override node writes (AUTH-4.57 (a)'s
-/// client half). The two are told apart by the first field — a canonical
-/// origin carries `://`. Its `Display` is the line without its newline, and
-/// [`FromStr`] reads one back.
+/// client half), and there is no third. They are told apart by the first
+/// field — a canonical origin carries `://`. Its `Display` is the line
+/// without its newline, and [`FromStr`] reads one back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Binding {
+    /// The enrollment line, `origin principal account fingerprint`.
     Enrollment { origin: Origin, principal: u64, account: String, fingerprint: Fingerprint },
+    /// The `signed <dialed-origin> <signed-origin>` line.
     Signed { dialed: Origin, signed: Origin },
 }
 
@@ -98,8 +111,10 @@ impl fmt::Display for Binding {
     }
 }
 
-/// A line of neither form — a hand-edited stray, which the bindings file's
-/// reader ignores as it ignores a torn final line (§3.7).
+/// A line of neither form — a hand-edited stray.
+///
+/// The bindings file's reader ignores it as it ignores a torn final line
+/// (§3.7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NotABinding;
 
@@ -130,44 +145,56 @@ impl FromStr for Binding {
     }
 }
 
-/// The public facts of one key in the store — what a lookup answers, what
-/// `fingerprint --dir` lists and what a lookup's halt names. No seed: a key
-/// signs through [`KeyStore::signer`]. The key's `ALGS` token is
-/// `public.alg()`.
+/// The public facts of one key in the store.
+///
+/// They are what a lookup answers, what `fingerprint --dir` lists and what
+/// a lookup's halt names. No seed: a key signs through [`KeyStore::signer`].
+/// The key's `ALGS` token is `public.alg()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyFacts {
+    /// The key file's path.
     pub path: PathBuf,
+    /// The key's fingerprint.
     pub fingerprint: Fingerprint,
+    /// The public key.
     pub public: PublicKey,
+    /// The label, where the file carries one.
     pub label: Option<String>,
+    /// Whether the file is an anchor's.
     pub anchor: bool,
 }
 
 impl KeyFacts {
-    /// A loaded file's public facts, at `path`.
+    /// Returns a loaded file's public facts, at `path`.
     fn of(path: PathBuf, file: &KeyFile) -> KeyFacts {
         KeyFacts { path, fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: file.anchor }
     }
 }
 
-/// What the store could not do. Non-exhaustive: a later custody rung's
-/// refusals join it (§1.4).
+/// What the store could not do.
+///
+/// Non-exhaustive: a later custody rung's refusals join it (§1.4).
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StoreError {
-    /// A key file refused by its own contents (AUTH-5.67's halt names the
-    /// path and the state).
+    /// A key file refused by its own contents.
+    ///
+    /// AUTH-5.67's halt names the path and the state.
     KeyFile { path: PathBuf, error: KeyFileError },
-    /// A path missing, unreadable or mis-pathed — HALT AND SURFACE naming
-    /// it, never a fallback (AUTH-5.67).
+    /// A path missing, unreadable, unwritable or mis-pathed.
+    ///
+    /// It is halt and surface naming it, never a fallback (AUTH-5.67).
     Io { path: PathBuf, error: io::Error },
     /// A binding's fingerprint names no file in the store.
     MissingKey { path: PathBuf, fingerprint: Fingerprint },
-    /// §3.5 arm 4: no key was selected — the store's keys listed for the
-    /// caller to fork the face on `claimant`.
+    /// §3.5 arm 4: no key was selected.
+    ///
+    /// The store's keys are listed for the caller to fork the face on
+    /// `claimant`.
     NoSelection { keys: Vec<KeyFacts> },
-    /// More than one key matches a `--select` — every match listed, never a
-    /// pick (`client.md` §2.2).
+    /// More than one key matches a `--select`.
+    ///
+    /// Every match is listed, never a pick (`client.md` §2.2).
     Ambiguous { keys: Vec<KeyFacts> },
     /// No key matches a `--select`.
     NotFound { select: String },
@@ -190,15 +217,19 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// THE ONE WAY [`KeyStore::bind`] FAILS: the bindings file could not be
-/// appended — a read-only mount, a missing permission — and the line rides
-/// the failure for the person to record by hand. A WARNING and never a
-/// refusal (§3.7): its `Display` is the warning a walk prints, and no walk
-/// halts on it.
+/// The one way [`KeyStore::bind`] fails.
+///
+/// The bindings file could not be appended — a read-only mount, a missing
+/// permission — and the line rides the failure for the person to record by
+/// hand. It is a warning and never a refusal (§3.7): its `Display` is the
+/// warning a walk prints, and no walk halts on it.
 #[derive(Debug)]
 pub struct Unappended {
+    /// The bindings file's path.
     pub path: PathBuf,
+    /// The line that was not appended.
     pub line: String,
+    /// The I/O error the append met.
     pub error: io::Error,
 }
 
@@ -216,8 +247,11 @@ impl fmt::Display for Unappended {
 
 impl std::error::Error for Unappended {}
 
-/// A store refusal as AUTH-5.67's halt naming the path and the state — the
-/// conversion a walk's `?` makes.
+/// A store refusal as AUTH-5.67's halt naming the state and its path.
+///
+/// A refusal with no path — [`StoreError::NoSelection`],
+/// [`StoreError::Ambiguous`], [`StoreError::NotFound`] — names the state
+/// alone. It is the conversion a walk's `?` makes.
 impl From<StoreError> for Halt {
     fn from(e: StoreError) -> Halt {
         match e {
@@ -245,8 +279,9 @@ impl From<StoreError> for Halt {
     }
 }
 
-/// §3.5 arm 4's three forks on `claimant`, the keyless residue keyed on the
-/// claimed board's mode (AUTH-5.86).
+/// Returns §3.5 arm 4's face, in its three forks on `mode` and `keys`.
+///
+/// The keyless residue is keyed on the claimed board's mode (AUTH-5.86).
 pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode) -> Halt {
     match (mode, keys.is_empty()) {
         (Mode::Unclaimed, true) => Halt::face(
@@ -285,28 +320,56 @@ pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode) -> Halt {
     }
 }
 
-/// THE SEAM (§1.4): rung 2's `generate` mints the keychain item the file
-/// then indexes, which no `Signer` can do — the trait's one non-signing job
-/// and its warrant (§9 item 26). `generate` takes no anchor flag: an anchor
-/// is generated by the ceremony's own in-memory signer and exported, never
-/// through the store (§3.4).
+/// The key store's seam (§1.4).
+///
+/// Rung 2's `generate` mints the keychain item the file then indexes, which
+/// no `Signer` can do — the trait's one non-signing key job and its warrant
+/// (§9 item 26). `generate` takes no anchor flag: an anchor is generated by
+/// the ceremony's own in-memory signer and exported, never through the
+/// store (§3.4).
 pub trait KeyStore {
-    /// One DEVICE key of the production kind from a fresh OS seed, its file
-    /// written once; the fingerprint names it.
+    /// Generates one device key of the production kind from a fresh OS seed.
+    ///
+    /// Its file is written once; the fingerprint names it.
+    ///
+    /// # Errors
+    ///
+    /// The file store's [`StoreError::Io`], naming the directory it could
+    /// not make or the file it could not write.
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError>;
-    /// The signer `sel` names, an anchor refused (§2.2's selection test) —
-    /// THE ONE WAY a stored key signs: every walk takes a stored key's signer
-    /// here, and its public facts from the lookup.
+    /// Returns the signer `sel` names, an anchor refused.
+    ///
+    /// The refusal is §2.2's selection test. This is the one way a stored
+    /// key signs: every walk takes a stored key's signer here, and its public
+    /// facts from the lookup.
+    ///
+    /// # Errors
+    ///
+    /// The lookup's refusals — the file store's are [`FileStore::select`]'s
+    /// under [`Purpose::Sign`] — an anchor file among them, as
+    /// [`KeyFileError::AnchorAtSigningCommand`].
     fn signer(&self, sel: &KeySelector<'_>) -> Result<Box<dyn Signer>, StoreError>;
-    /// Every binding line for `origin`, in file order (the newest last).
+    /// Returns every binding line for `origin`, in file order.
+    ///
+    /// The newest is last.
+    ///
+    /// # Errors
+    ///
+    /// The file store's [`StoreError::Io`] where the bindings file stands and
+    /// cannot be read.
     fn bindings(&self, origin: &Origin) -> Result<Vec<Binding>, StoreError>;
-    /// Append one line under the lock; the one failure is [`Unappended`],
-    /// a warning carrying the line.
+    /// Appends one line under the lock.
+    ///
+    /// # Errors
+    ///
+    /// The one failure is [`Unappended`], a warning carrying the line.
     fn bind(&self, b: &Binding) -> Result<(), Unappended>;
 }
 
-/// The default store on every platform: `~/.skep/` (§6; §9 item 10, RULED —
-/// the ssh convention; the user profile's `.skep` on Windows).
+/// Returns the default store on every platform: `~/.skep/` (§6; §9 item 10).
+///
+/// It follows the ssh convention; on Windows it is the user profile's
+/// `.skep`.
 pub fn default_store_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -320,12 +383,12 @@ pub struct FileStore {
 }
 
 impl FileStore {
-    /// The store at `root`; nothing is created until a write.
+    /// Opens the store at `root`; nothing is created until a write.
     pub fn open(root: impl Into<PathBuf>) -> FileStore {
         FileStore { root: root.into() }
     }
 
-    /// The store's directory.
+    /// Returns the store's directory.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -342,23 +405,29 @@ impl FileStore {
         self.root.join("lock")
     }
 
-    /// The path a key of `fp` rests at.
+    /// Returns the path a key of `fp` rests at.
     pub fn key_path(&self, fp: &Fingerprint) -> PathBuf {
         self.keys_dir().join(format!("{}.key", fp.to_hex()))
     }
 
-    /// §3.4's check: whether `path` lies under this store — where an anchor
-    /// file is REFUSED (the backup moment's destination; a later `--anchor`).
-    /// Both are read as the filesystem will resolve them (`resolved`): a
-    /// destination the backup moment is about to create may lie several
-    /// directories deep, or reach the store through a relative path or a
-    /// symlink, and the store itself may not be made yet.
+    /// Returns whether `path` lies under this store (§3.4's check).
+    ///
+    /// Under the store an anchor file is refused (the backup moment's
+    /// destination; a later `--anchor`). Both are read as the filesystem will
+    /// resolve them (`resolved`): a destination the backup moment is about to
+    /// create may lie several directories deep, or reach the store through a
+    /// relative path or a symlink, and the store itself may not be made yet.
     pub fn contains_path(&self, path: &Path) -> bool {
         resolved(path).starts_with(resolved(&self.root))
     }
 
-    /// The directory `0700`, created once (§3.3); the umask irrelevant. A
-    /// failure names the directory it could not make.
+    /// Creates the store's directories at mode `0700`, once (§3.3).
+    ///
+    /// The umask is irrelevant.
+    ///
+    /// # Errors
+    ///
+    /// A failure names the directory it could not make.
     fn ensure_dirs(&self) -> Result<(), (PathBuf, io::Error)> {
         for dir in [self.root.clone(), self.keys_dir()] {
             if dir.is_dir() {
@@ -376,9 +445,16 @@ impl FileStore {
         Ok(())
     }
 
-    /// A file written ONCE: `O_CREAT|O_EXCL`, mode `0600` set at creation
-    /// (§3.3) — never chmod'd after a world-readable moment. The one writer
-    /// every key file and anchor file of this crate goes through.
+    /// Writes `bytes` to a new file at `path`, once (§3.3).
+    ///
+    /// The open is `O_CREAT|O_EXCL` with mode `0600` set at creation — never
+    /// chmod'd after a world-readable moment. It is the one writer every key
+    /// file and anchor file of this crate goes through.
+    ///
+    /// # Errors
+    ///
+    /// The open's, the write's and the sync's I/O errors — `AlreadyExists`
+    /// where a file stands at `path`.
     pub fn write_once(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut opts = OpenOptions::new();
         opts.write(true).create_new(true);
@@ -392,16 +468,30 @@ impl FileStore {
         file.sync_all()
     }
 
-    /// One key file loaded and judged (§3.2's reader; AUTH-5.67's halt names
-    /// the path) — the seed with it. The store's own reader, and a suite's
-    /// for a key another party holds; a walk reads [`FileStore::select`]'s
-    /// facts and signs through [`KeyStore::signer`].
+    /// Loads and judges one key file, the seed with it (§3.2's reader).
+    ///
+    /// It is the store's own reader, and a suite's for a key another party
+    /// holds; a walk reads [`FileStore::select`]'s facts and signs through
+    /// [`KeyStore::signer`].
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Io`] where the file cannot be read or is no regular
+    /// file, and [`StoreError::KeyFile`] where its own contents refuse it —
+    /// AUTH-5.67's halt names the path.
     pub fn load(&self, path: &Path) -> Result<KeyFile, StoreError> {
         let bytes = read_key_file(path).map_err(|error| StoreError::Io { path: path.to_path_buf(), error })?;
         KeyFile::parse(&bytes).map_err(|error| StoreError::KeyFile { path: path.to_path_buf(), error })
     }
 
-    /// Every key file in the store, by file name order, its public facts.
+    /// Returns the public facts of every key file in the store.
+    ///
+    /// They come in file name order.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Io`] where the keys directory stands and cannot be read;
+    /// a key file's own refusal, [`FileStore::load`]'s, where one is refused.
     pub fn list(&self) -> Result<Vec<KeyFacts>, StoreError> {
         let dir = self.keys_dir();
         let entries = match fs::read_dir(&dir) {
@@ -418,9 +508,15 @@ impl FileStore {
         paths.iter().map(|p| self.facts_of(p)).collect()
     }
 
-    /// This store's DEVICE keys — every key file whose `anchor` member is
-    /// false, in [`FileStore::list`]'s order; an anchor copied in is never
-    /// "this store's own" (§3.4; AUTH-5.28).
+    /// Returns this store's device keys.
+    ///
+    /// They are every key file whose `anchor` member is false, in
+    /// [`FileStore::list`]'s order; an anchor copied in is never "this store's
+    /// own" (§3.4; AUTH-5.28).
+    ///
+    /// # Errors
+    ///
+    /// [`FileStore::list`]'s errors.
     pub fn device_keys(&self) -> Result<Vec<KeyFacts>, StoreError> {
         Ok(self.list()?.into_iter().filter(|k| !k.anchor).collect())
     }
@@ -430,8 +526,14 @@ impl FileStore {
         Ok(KeyFacts::of(path.to_path_buf(), &file))
     }
 
-    /// Every binding line, in file order; a final line without `\n` ignored
-    /// (§3.7: a torn append is never a torn record).
+    /// Returns every binding line, in file order.
+    ///
+    /// A final line without `\n` is ignored (§3.7: a torn append is never a
+    /// torn record).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Io`] where the bindings file stands and cannot be read.
     pub fn all_bindings(&self) -> Result<Vec<Binding>, StoreError> {
         let path = self.bindings_path();
         let text = match fs::read_to_string(&path) {
@@ -446,8 +548,13 @@ impl FileStore {
         Ok(complete.lines().filter_map(|line| line.parse().ok()).collect())
     }
 
-    /// The LAST enrollment line for (`origin`, `principal`) — the newest
-    /// wins (§3.5 arm 2).
+    /// Returns the last enrollment line for (`origin`, `principal`).
+    ///
+    /// The newest wins (§3.5 arm 2).
+    ///
+    /// # Errors
+    ///
+    /// [`FileStore::all_bindings`]'s errors.
     pub fn enrollment_for(&self, origin: &Origin, principal: u64) -> Result<Option<(String, Fingerprint)>, StoreError> {
         Ok(self.all_bindings()?.into_iter().rev().find_map(|b| match b {
             Binding::Enrollment { origin: o, principal: p, account, fingerprint } if &o == origin && p == principal => {
@@ -457,10 +564,15 @@ impl FileStore {
         }))
     }
 
-    /// The `new_id` a persist-first line recorded for `account` at `origin`
-    /// — the principal of the LAST enrollment line naming that account —
-    /// where one stands (§4.3; AUTH-5.20): the `new_id` an interrupted
-    /// `delegate` was sent under, or was about to be.
+    /// Returns the `new_id` a persist-first line recorded for `account`.
+    ///
+    /// It is the principal of the last enrollment line naming that account
+    /// at `origin`, where one stands (§4.3; AUTH-5.20): the `new_id` an
+    /// interrupted `delegate` was sent under, or was about to be.
+    ///
+    /// # Errors
+    ///
+    /// [`FileStore::all_bindings`]'s errors.
     pub fn persisted_new_id(&self, origin: &Origin, account: &str) -> Result<Option<u64>, StoreError> {
         Ok(self.all_bindings()?.into_iter().rev().find_map(|b| match b {
             Binding::Enrollment { origin: o, principal, account: a, .. } if &o == origin && a == account => Some(principal),
@@ -468,17 +580,21 @@ impl FileStore {
         }))
     }
 
-    /// The principals bound at `origin`, newest first, each once — THE
-    /// ONE-BINDING TEST that lets `--principal` be omitted (`client.md`
-    /// §3.5, as RULED 2026-10-04: "`--principal` may be omitted where the
-    /// board has exactly one binding in the store, the agent space's line
-    /// not counting: §4.3's persist-first line binds the account's first
-    /// child (`inc(account, 1)`), so a claimed board always holds that line
-    /// beside the account's, and the one-binding test excludes every line
-    /// whose account is the first child of another line's account at the
-    /// same board"). The exclusion is ONE condition: a line is dropped where
-    /// its account is [`first_child`] of another line's account at this
-    /// origin.
+    /// Returns the principals bound at `origin`, newest first, each once.
+    ///
+    /// This is the one-binding test that lets `--principal` be omitted
+    /// (`client.md` §3.5: "`--principal` may be omitted where the board has
+    /// exactly one binding in the store, the agent space's line not counting:
+    /// §4.3's persist-first line binds the account's first child
+    /// (`inc(account, 1)`), so a claimed board always holds that line beside
+    /// the account's, and the one-binding test excludes every line whose
+    /// account is the first child of another line's account at the same
+    /// board"). The exclusion is one condition: a line is dropped where its
+    /// account is [`first_child`] of another line's account at this origin.
+    ///
+    /// # Errors
+    ///
+    /// [`FileStore::all_bindings`]'s errors.
     pub fn principals_at(&self, origin: &Origin) -> Result<Vec<u64>, StoreError> {
         let lines: Vec<(u64, String)> = self
             .all_bindings()?
@@ -499,7 +615,13 @@ impl FileStore {
         Ok(out)
     }
 
-    /// The `signed` line's origin for `dialed`, where one stands (§3.5).
+    /// Returns the `signed` line's origin for `dialed` (§3.5).
+    ///
+    /// The answer is `None` where no such line stands.
+    ///
+    /// # Errors
+    ///
+    /// [`FileStore::all_bindings`]'s errors.
     pub fn signed_origin_for(&self, dialed: &Origin) -> Result<Option<Origin>, StoreError> {
         Ok(self.all_bindings()?.into_iter().rev().find_map(|b| match b {
             Binding::Signed { dialed: d, signed } if &d == dialed => Some(signed),
@@ -507,20 +629,35 @@ impl FileStore {
         }))
     }
 
-    /// THE LOOKUP (§3.5), in its precedence: (1) a path; (2) the LAST
-    /// binding for (origin, principal); (3) no binding and exactly one
-    /// device key in the store; (4) otherwise `NoSelection` with the keys
-    /// listed, for the caller's fork on `claimant`. Under `Purpose::Sign`
-    /// an anchor file is refused at every arm (§2.2's selection test). The
-    /// answer is the selected key's PUBLIC facts; its signer is
-    /// [`KeyStore::signer`]'s, over the same lookup.
+    /// Looks up the key `sel` selects (§3.5), answering its public facts.
+    ///
+    /// Its signer is [`KeyStore::signer`]'s, over the same lookup.
+    ///
+    /// # Errors
+    ///
+    /// The lookup runs in its precedence: (1) a path; (2) the last binding
+    /// for (origin, principal); (3) no binding selected and exactly one
+    /// device key in the store; (4) otherwise [`StoreError::NoSelection`]
+    /// with the keys listed, for the caller's fork on `claimant`. Under
+    /// [`Purpose::Sign`] an anchor file is refused at every arm (§2.2's
+    /// selection test). A binding whose key file is gone is
+    /// [`StoreError::MissingKey`]; a prefix or a label that matches no key is
+    /// [`StoreError::NotFound`], and one that matches more than one
+    /// [`StoreError::Ambiguous`]; a key file is refused as [`FileStore::load`]
+    /// refuses it.
     pub fn select(&self, sel: &KeySelector<'_>, purpose: Purpose) -> Result<KeyFacts, StoreError> {
         let (path, file) = self.selected(sel, purpose)?;
         Ok(KeyFacts::of(path, &file))
     }
 
-    /// The lookup's one body: the selected key's path and its file, the seed
-    /// with it — private, so the seed leaves the store only as a signer.
+    /// Returns the selected key's path and its file, the seed with it.
+    ///
+    /// It is the lookup's one body — private, so the seed leaves the lookup
+    /// only as a signer.
+    ///
+    /// # Errors
+    ///
+    /// [`FileStore::select`]'s errors.
     fn selected(&self, sel: &KeySelector<'_>, purpose: Purpose) -> Result<(PathBuf, KeyFile), StoreError> {
         let judged = |path: PathBuf| -> Result<(PathBuf, KeyFile), StoreError> {
             let file = self.load(&path)?;
@@ -568,7 +705,12 @@ impl FileStore {
         }
     }
 
-    /// The one match's path; none, or more than one listed and never a pick.
+    /// Returns the one match's path.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] for none, and [`StoreError::Ambiguous`] for
+    /// more than one, listed and never a pick.
     fn one_of(matches: &[&KeyFacts], select: &str) -> Result<PathBuf, StoreError> {
         match matches {
             [] => Err(StoreError::NotFound { select: select.to_string() }),
@@ -577,9 +719,14 @@ impl FileStore {
         }
     }
 
-    /// Append `line` to the bindings file in ONE `write` under the advisory
-    /// lock on `<store>/lock` (§3.7). A failed append — a read-only mount —
-    /// is [`Unappended`], carrying the line for the person to record.
+    /// Appends `line` to the bindings file in one `write` (§3.7).
+    ///
+    /// The write runs under the advisory lock on `<store>/lock`.
+    ///
+    /// # Errors
+    ///
+    /// A failed append — a read-only mount — is [`Unappended`], carrying the
+    /// line for the person to record.
     pub fn append_line(&self, line: &str) -> Result<(), Unappended> {
         let path = self.bindings_path();
         let text = format!("{line}\n");
@@ -611,8 +758,10 @@ impl FileStore {
     }
 }
 
-/// `path` as the filesystem will resolve it once its missing directories
-/// are made: absolute against the working directory, its deepest EXISTING
+/// Returns `path` as the filesystem will resolve it.
+///
+/// The resolution is the one that holds once its missing directories are
+/// made: absolute against the working directory, its deepest existing
 /// ancestor canonicalized — every symlink and `..` in it resolved — and the
 /// components below that ancestor re-joined lexically, which is exact
 /// because none of them exists yet, so no link lies among them.

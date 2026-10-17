@@ -1,37 +1,40 @@
-//! The merge's LANDING — the merge record's §1.5: the one `publish` of the
-//! merged list from the head with its signed body, then the claim's read and
-//! the record in the journal with its public link, each step idempotent by
-//! reading first (P4, P14); the draft landing, the core's edit script applied
-//! in place (decision 16); and [`resume`], the residue walk that completes
-//! what a lost acknowledgment left, writing nothing twice.
+//! The merge's landing — the merge record's §1.5.
 //!
-//! THE ORDER, and what each step reads first. The cap: `counts.m` against
-//! the shot's run cap before any frame (decision 13; P13). The shot: the
-//! trunk's next member, then the head's daughters, read for a member whose
-//! first `placed` positions already hold M — else one `publish` from the
-//! head, its body every copied run's bytes re-read through the side that
-//! holds them and every window signed by address, re-asked ONCE under the
+//! The landing is the one `publish` of the merged list from the head with
+//! its signed body, then the claim's read and the record in the journal with
+//! its public link, each step idempotent by reading first (P4, P14); the
+//! draft landing, the core's edit script applied in place (decision 16);
+//! and [`resume`], the residue walk that completes what a lost
+//! acknowledgment left, writing nothing twice.
+//!
+//! **The order, and what each step reads first.** The cap: `counts.m`
+//! against the shot's run cap before any frame (decision 13; P13). The shot:
+//! the trunk's next member, then the head's daughters, read for a member
+//! whose first `placed` positions already hold M — else one `publish` from
+//! the head, its body every copied run's bytes re-read through the side that
+//! holds them and every window signed by address, re-asked once under the
 //! same per-session `id` where the acknowledgment was lost. A daughter in
 //! the acknowledgment is reported at once ([`Landed::AsDaughter`]): the head
 //! moved under the merge, the library never re-runs, the embedder does with
 //! `retries` one higher (decision 17). The record: the links of the kind to
 //! the member, read for a record of this key and this landing — else the
 //! journal found or minted, the atom appended at its end, the link from the
-//! merger's doc 1 to the member and every alternative side under the kind.
+//! merger's doc 1 to the member and every side besides the head under the
+//! kind.
 //!
-//! THE CLAIM, as this wire admits it. The record's step (i) files
+//! **The claim, as this wire admits it.** The record's step (i) files
 //! `assert_sup{home: the merger's doc 1, old: the daughter, new: the member}`
-//! over two VERSION MEMBERS. The wire's `assert_sup` takes resident LINKS
+//! over two version members. The wire's `assert_sup` takes resident links
 //! alone as its endpoints — wire.md §Links (writes): "a link named by
-//! ADDRESS", `endpoint_not_resident` for "an address no link occupies" — and
+//! address", `endpoint_not_resident` for "an address no link occupies" — and
 //! a version member is no link, so the claim the record spells is refused by
 //! the daemon as built, ahead of any transaction. This build therefore makes
-//! the claim's READ, `in_claims{y: the daughter, view: active}`, recording a
+//! the claim's read, `in_claims{y: the daughter, view: active}`, recording a
 //! claim another writer filed, and sends no `assert_sup`. What states the
-//! supersession on this wire is the record's own PUBLIC link from the
-//! merger's doc 1 to the member AND the daughter under the merge kind, which
+//! supersession on this wire is the record's own public link from the
+//! merger's doc 1 to the member and the daughter under the merge kind, which
 //! a reader at the daughter finds by `find_links_ftt{ty, to}`. A claim over
-//! version members is a wire ruling to come, not a frame this library sends.
+//! version members is the wire's to admit, not a frame this library sends.
 
 use std::num::NonZeroU64;
 
@@ -55,49 +58,61 @@ use super::reads::{
 };
 use super::record::{read_record, RecordLanding};
 
-/// The most bytes a shot's signed body may run to — the frame routes'
-/// request-body cap, 8 MiB (wire.md §HTTP status codes, `413
-/// payload_too_large`), the parity the daemon holds a shot's body to. The
-/// body is composed under it ([`PublishBody::within`]) and a body past it
-/// is refused by name, never built.
+/// The most bytes a shot's signed body may run to.
+///
+/// It is the frame routes' request-body cap, 8 MiB (wire.md §HTTP status
+/// codes, `413 payload_too_large`), the parity the daemon holds a shot's
+/// body to. The body is composed under it ([`PublishBody::within`]) and a
+/// body past it is refused by name, never built.
 pub const SHOT_BODY_BUDGET: usize = 8 * 1024 * 1024;
 
-/// THE MERGER — a signed session's facts and its hand (the merge record's
-/// §7, "What it reads through"): the session's token, the account it acts
-/// as, and the signer it was opened with. Taken as facts, never as the
-/// ceremony's own session type, which this module does not name: the
-/// embedder opens the session with a content scope through the handshake
-/// and lends its token, its account and its signer here.
+/// The merger: a signed session's facts and its hand.
+///
+/// The facts are the session's token, the account it acts as, and the
+/// signer it was opened with (the merge record's §7, "What it reads
+/// through"). They are taken as facts, never as the ceremony's own session
+/// type, which this module does not name: the embedder opens the session
+/// with a content scope through the handshake and lends its token, its
+/// account and its signer here.
 #[derive(Clone, Copy)]
 pub struct Merger<'a> {
     /// The signed session's token — what every write presents.
     pub token: &'a Token,
-    /// The account the session acts as, `principal_prefix(principal)` — the
-    /// record link's home is its doc 1.
+    /// The account the session acts as, `principal_prefix(principal)`.
+    ///
+    /// The record link's home is its doc 1.
     pub account: &'a str,
-    /// The signer the session was opened with — the shot's and the record
-    /// link's hand.
+    /// The signer the session was opened with.
+    ///
+    /// It is the shot's and the record link's hand.
     pub signer: &'a dyn Signer,
 }
 
-/// How a merge lands (the merge record's §7, `Landing`): the SHOT from the
-/// head, or the DRAFT landing into a staging draft.
+/// How a merge lands (the merge record's §7, `Landing`).
+///
+/// It is the shot from the head, or the draft landing into a staging draft.
 pub enum Landing<'a> {
-    /// One `publish` from the head with M as the runs, then the claim's read
-    /// and the record (§1.5).
+    /// One `publish` from the head with M as the runs (§1.5).
+    ///
+    /// The claim's read and the record follow it.
     Shot {
         /// The merger's signed session and hand.
         merger: Merger<'a>,
-        /// The staging draft whose fresh text the shot re-inserts, where the
-        /// merger typed any; a draft side's is named without asking.
+        /// The staging draft whose fresh text the shot re-inserts.
+        ///
+        /// The caller names it where the merger typed any; a draft side's
+        /// is named without asking where M holds its fresh text.
         draft: Option<Address>,
-        /// The merge journal the record goes to; the account's default
-        /// private one where `None` (decision 7).
+        /// The merge journal the record goes to.
+        ///
+        /// The account's default where `None` — the journal its first
+        /// record went to, or a private one minted (decision 7).
         journal: Option<Address>,
     },
-    /// The core's edit script applied into `into` by identity, then the
-    /// record with `landed` the draft — no claim: the person's own shot is
-    /// the claim's moment (decision 16).
+    /// The core's edit script applied into `into` by identity.
+    ///
+    /// The record follows, with `landed` the draft — no claim: the person's
+    /// own shot is the claim's moment (decision 16).
     Draft {
         /// The merger's signed session and hand.
         merger: Merger<'a>,
@@ -111,37 +126,52 @@ pub enum Landing<'a> {
 /// What a landing answered (the merge record's §7, `Landed`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Landed {
-    /// The merge landed on the trunk: the member, the shot's position, the
-    /// claims standing at the daughters, the record's public link, and the
-    /// retries the record carries.
+    /// The merge landed on the trunk.
+    ///
+    /// It carries the member, the shot's position, the claims standing at
+    /// the daughters, the record's public link, and the retries the record
+    /// carries.
     Member {
         /// The merged member, `D.h+1`.
         address: Address,
         /// The shot's commit position.
+        ///
+        /// Where the member already stood and the feed holds no row of its
+        /// mint, it is the highest `as_of` the reads answered.
         position: u64,
         /// The supersession claims standing at the daughters, as read.
         claims: Vec<Address>,
-        /// The record's public link, homed in the merger's doc 1.
+        /// The record's public link.
+        ///
+        /// It is the one written, homed in the merger's doc 1, or the one
+        /// already standing for this key and landing.
         record: Address,
         /// `Options::retries`, as written into the record.
         retries: u32,
     },
-    /// The head moved under the merge: the shot landed as the head's
-    /// daughter. Reported, never a success; the embedder re-runs with the
-    /// new head and `retries` one higher (decision 17).
+    /// The head moved under the merge; the shot landed as its daughter.
+    ///
+    /// Reported, never a success; the embedder re-runs with the new head and
+    /// `retries` one higher (decision 17).
     AsDaughter {
         /// The daughter minted.
         address: Address,
         /// The shot's commit position.
+        ///
+        /// Where the daughter already stood and the feed holds no row of its
+        /// mint, it is the highest `as_of` the reads answered.
         position: u64,
     },
-    /// M landed into the staging draft: the draft, how many in-place edits
-    /// it took, and the record's public link.
+    /// M landed into the staging draft.
+    ///
+    /// It carries the draft, how many in-place edits it took, and the
+    /// record's public link.
     Draft {
         /// The draft.
         into: Address,
-        /// The `delete` and `reinstate` ops applied — 0 where the draft
-        /// already held M.
+        /// The `delete` and `reinstate` ops applied.
+        ///
+        /// It is 0 where the draft already held M.
         ops: usize,
         /// The record's public link.
         record: Address,
@@ -162,32 +192,53 @@ impl<'a> Landing<'a> {
     }
 }
 
-/// Lands a composed merge (the merge record's §7, `land`): the shot or the
-/// draft landing, then the claim's read and the record, each step read
-/// first, so a second call over the same `merged` writes nothing twice.
+/// Lands a composed merge (the merge record's §7, `land`).
+///
+/// The shot is followed by the claim's read and the record, the draft
+/// landing by the record alone, each step read first, so a second call over
+/// the same `merged` writes nothing twice.
 ///
 /// # Errors
 ///
-/// In this order: [`Refusal::OverCap`] before any frame; the reads'
-/// refusals; the shot's — [`Refusal::WindowWithheld`],
-/// [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], the
-/// library's own faults as [`Refusal::Halt`]; a lost acknowledgment as the
-/// dialer's halt after one re-ask, for [`resume`] to complete.
+/// In this order:
+///
+/// - [`Refusal::OverCap`], before any frame;
+/// - the reads' refusals, for a member or a draft already holding M;
+/// - the shot's: the value reads' refusals, [`Refusal::WindowWithheld`],
+///   [`Refusal::NeedsSignedSession`], [`Refusal::NoSuchDocument`], and a
+///   lost acknowledgment as the dialer's halt after one re-ask, for
+///   [`resume`] to complete — or the draft landing's edits':
+///   [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`], and a
+///   lost acknowledgment as the dialer's halt, with no re-ask;
+/// - the claim's and the record's reads' refusals, then the record's
+///   writes': [`Refusal::NeedsSignedSession`].
+///
+/// At any step the library's own faults, the board's other refusals
+/// verbatim, transport halts and the death signal are [`Refusal::Halt`].
+///
+/// # Panics
+///
+/// Panics if a landing that shoots answers none; the walk with `shoot` on
+/// answers one on every path, so the `expect` never fires.
 pub fn land(board: &Board, merged: &Merged, landing: Landing<'_>) -> Result<Landed, Refusal> {
     walk(board, merged, landing, true)
         .map(|landed| landed.expect("a landing that shoots answers a landing"))
 }
 
-/// The residue walk (the merge record's §1.5, P14): where the shot landed
-/// and its acknowledgment was lost, finds the member whose first `placed`
-/// positions equal M — the trunk's next member, else a daughter of the head
-/// — or the draft already holding M, and completes the claim's read and the
-/// record, writing nothing twice; `None` where nothing landed, with nothing
-/// written.
+/// Completes a landing whose acknowledgment was lost — the residue walk.
+///
+/// Where the shot landed and its acknowledgment was lost, the walk (the
+/// merge record's §1.5, P14) finds the member whose first `placed`
+/// positions equal M — the trunk's next member, else a daughter of the
+/// head, which it reports as [`Landed::AsDaughter`] — or the draft already
+/// holding M, and completes the record, after the claim's read for the
+/// trunk's member, writing nothing twice; `None` where nothing landed, with
+/// nothing written.
 ///
 /// # Errors
 ///
-/// As [`land`]'s but the shot's.
+/// As [`land`]'s but the shot's and the draft landing's edits', which it
+/// never sends.
 pub fn resume(
     board: &Board,
     merged: &Merged,
@@ -196,8 +247,14 @@ pub fn resume(
     walk(board, merged, landing, false)
 }
 
-/// The three steps, each read first; `shoot` whether a landing not found
-/// standing is made.
+/// Runs the landing's steps, each read first.
+///
+/// They are the shot, the claim's read and the record, or the draft landing
+/// and the record. `shoot` is whether a landing not found standing is made.
+///
+/// # Errors
+///
+/// As [`land`]'s, or as [`resume`]'s with `shoot` off.
 fn walk(
     board: &Board,
     merged: &Merged,
@@ -261,6 +318,9 @@ enum Standing {
     /// No member of the head's reach holds M.
     Absent,
     /// The trunk's next member holds M, minted at this position.
+    ///
+    /// Where the feed holds no row of the mint, the position is the reads'
+    /// highest `as_of`.
     Trunk(Address, u64),
     /// A daughter of the head holds M: the shot landed under a moved head.
     Daughter(Address, u64),
@@ -273,6 +333,9 @@ enum Holds {
     /// Another arrangement, or one this reader cannot read.
     Other,
     /// M over its first `placed` positions, minted at this position.
+    ///
+    /// Where the feed holds no row of the mint, the position is the reads'
+    /// highest `as_of`.
     Merged(u64),
 }
 
@@ -284,8 +347,15 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    /// The shot's read-first: the trunk's next member, then — where that is
-    /// another's — the head's daughters in order until the first absent.
+    /// Finds the member that already holds M, the shot's read-first.
+    ///
+    /// It reads the trunk's next member, then — where that is another's —
+    /// the head's daughters in order until the first absent.
+    ///
+    /// # Errors
+    ///
+    /// A member's reads' refusals, as `holds` answers them; a head or a
+    /// daughter whose address cannot be spelled, as the library's own fault.
     fn standing_member(&self, merged: &Merged) -> Result<Standing, Refusal> {
         let head = &merged.inputs.head;
         let next = next_trunk_member(head).ok_or_else(|| {
@@ -315,7 +385,14 @@ impl Writer<'_> {
         Ok(Standing::Absent)
     }
 
-    /// Whether `member` holds M over its first `placed` positions.
+    /// Returns whether `member` holds M over its first `placed` positions.
+    ///
+    /// # Errors
+    ///
+    /// The member's reads' refusals but `withheld`, a `doc_not_registered`
+    /// on its metadata and a member too fragmented to image, which answer as
+    /// what it holds; an `image` run that is no content I-address; the feed
+    /// walk's halts.
     fn holds(&self, merged: &Merged, member: &Address) -> Result<Holds, Refusal> {
         let meta = match self.reader.metadata(member) {
             Ok(m) => m,
@@ -347,11 +424,24 @@ impl Writer<'_> {
         Ok(Holds::Merged(at))
     }
 
-    /// THE SHOT: the body through [`PublishBody`] — every copied run's values
+    /// Sends the shot, answering the member minted and the ack's position.
+    ///
+    /// The body goes through [`PublishBody`] — every copied run's values
     /// re-read through the side that holds them, every window by address,
-    /// the base group the head and its extent as read — the frame with its
-    /// `attest` and its id, one re-ask under the same id on a lost
-    /// acknowledgment; the member minted and the ack's position.
+    /// the base group the head and its extent as read — then the frame with
+    /// its `attest` and its id, one re-ask under the same id on a lost
+    /// acknowledgment.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::WindowWithheld`], [`Refusal::NeedsSignedSession`] and
+    /// [`Refusal::NoSuchDocument`] as the board answers them; the value
+    /// reads' refusals; the attest's halts; a body past
+    /// [`SHOT_BODY_BUDGET`], a run with no address, a window of width 0, and
+    /// the board's refusal of the frame's substance, as the library's own
+    /// faults; an answer of a shape this client does not know, faced; the
+    /// death signal; a dial fault after the one re-ask; the board's other
+    /// refusals verbatim.
     fn publish(&self, merged: &Merged, draft: Option<&Address>) -> Result<(Address, u64), Refusal> {
         let doc = &merged.inputs.doc;
         let head = &merged.inputs.head;
@@ -407,7 +497,7 @@ impl Writer<'_> {
             attest,
             Some(&id),
         );
-        // A lost acknowledgment is re-asked ONCE under the same id in the same
+        // A lost acknowledgment is re-asked once under the same id in the same
         // session (§1.5: the per-session idempotency key), else `resume`.
         let answer = match self.board.op(Some(self.merger.token), &frame) {
             Err(Halt::Dial(_)) => self.board.op(Some(self.merger.token), &frame)?,
@@ -443,9 +533,14 @@ impl Writer<'_> {
         })
     }
 
-    /// THE CLAIM'S READ: the active claims at each daughter whose `new` is
-    /// the member — what another writer filed; this wire admits none over
-    /// version members (the module's doc).
+    /// Returns the claim's read: the active claims whose `new` is the member.
+    ///
+    /// They are read at each daughter — what another writer filed; this wire
+    /// admits none over version members (the module's doc).
+    ///
+    /// # Errors
+    ///
+    /// The `in_claims` read's refusal at a daughter.
     fn claims_standing(&self, merged: &Merged, member: &Address) -> Result<Vec<Address>, Refusal> {
         let mut out = Vec::new();
         let member = member.to_string();
@@ -464,9 +559,15 @@ impl Writer<'_> {
         Ok(out)
     }
 
-    /// THE RECORD'S READ: a standing record for this key and this landing,
-    /// found by the links of the kind to the landed address — its public
-    /// link, where one stands.
+    /// Returns the record's read: a standing record's public link.
+    ///
+    /// The record is one for this key and this landing, found by the links
+    /// of the kind to the landed address; `None` where none stands.
+    ///
+    /// # Errors
+    ///
+    /// The link read's refusal at the landed address; a halt reading a
+    /// record.
     fn record_standing(
         &self,
         merged: &Merged,
@@ -502,10 +603,22 @@ impl Writer<'_> {
         Ok(None)
     }
 
-    /// THE RECORD: the journal found or minted, the atom appended at its end
-    /// as a plain insert, the public link from the merger's doc 1 to the
-    /// landed address and every alternative side under the kind, attested;
-    /// the link's address.
+    /// Writes the record, answering its link's address.
+    ///
+    /// The journal is found or minted, the atom appended at its end as a
+    /// plain insert, and the public link made from the merger's doc 1 to the
+    /// landed address and every side besides the head under the kind,
+    /// attested on a board with `H.1`.
+    ///
+    /// # Errors
+    ///
+    /// The journal's halts ([`journal::of`]); the extent read's refusal; the
+    /// `H.1` read's halt; a journal that is published, full or another
+    /// account's, a doc 1 this session does not own, a doc 1 or an account
+    /// this client cannot spell, and an attest the board refuses, as the
+    /// library's own faults; an answer of a shape this client does not know,
+    /// faced; [`Refusal::NeedsSignedSession`] at the link; the death signal;
+    /// the board's other refusals verbatim.
     fn write_record(
         &self,
         merged: &Merged,
@@ -553,7 +666,7 @@ impl Writer<'_> {
             }
         };
         // The link from doc 1: the atom's unit span to the landed address and
-        // every alternative side, typed the kind (§4, "Its HOME").
+        // every side besides the head, typed the kind (§4, "Its home").
         let home_text = doc_1_of(self.merger.account);
         let home = parse_address(&home_text).ok_or_else(|| {
             own_fault_face("the account's doc 1 cannot be spelled", home_text.clone())
@@ -602,11 +715,23 @@ impl Writer<'_> {
         })
     }
 
-    /// THE DRAFT LANDING: the draft imaged at the head, the core's script
-    /// from its runs to M applied op by op — each `delete` and `reinstate`
-    /// one commit — where the draft does not hold M already; the ops applied
-    /// and the last commit's position, or `None` where it holds another list
-    /// and `shoot` is off.
+    /// Lands M into the draft, answering the ops applied and a position.
+    ///
+    /// The draft is imaged at the head and the core's script from its runs
+    /// to M applied op by op — each `delete` and `reinstate` one commit —
+    /// where the draft does not hold M already. The answer is the ops
+    /// applied and the last commit's position — 0 and the reads' highest
+    /// `as_of` where the draft already holds M — or `None` where it holds
+    /// another list and `shoot` is off.
+    ///
+    /// # Errors
+    ///
+    /// The draft's reads' refusals; [`Refusal::WindowWithheld`] where an
+    /// edit names an origin the merger may not read;
+    /// [`Refusal::NeedsSignedSession`]; a run with no address and the
+    /// board's refusal of an edit's substance, as the library's own faults;
+    /// an answer of a shape this client does not know, faced; the death
+    /// signal; a dial fault; the board's other refusals verbatim.
     fn land_into_draft(
         &self,
         merged: &Merged,
@@ -680,7 +805,14 @@ impl Writer<'_> {
         Ok(Some((ops.len(), position)))
     }
 
-    /// One write under the merger's token, its answer the response document.
+    /// Sends one write under the merger's token.
+    ///
+    /// Its answer is the response document.
+    ///
+    /// # Errors
+    ///
+    /// The death signal under the token, faced; otherwise [`Board::op`]'s
+    /// errors.
     fn answered_write(&self, frame: &Value, during: &str) -> Result<Value, Refusal> {
         match self.board.op(Some(self.merger.token), frame)? {
             Answer::Closed => Err(closed(during).into()),
@@ -688,11 +820,18 @@ impl Writer<'_> {
         }
     }
 
-    /// The `attest` member over `body` for a write whose `doc` row is `doc`:
-    /// the entry frame under `H.1`'s pair, the merger's account and the
-    /// row, signed by the merger's signer (signed ops;
-    /// `skep_identity::entry_frame`, the one composer). `None` on a board
-    /// with no `H.1`, where the member is dropped unread.
+    /// Returns the `attest` member over `body`.
+    ///
+    /// It is for a write whose `doc` row is `doc`: the entry frame under
+    /// `H.1`'s pair, the merger's account and the row, signed by the
+    /// merger's signer (signed ops; `skep_identity::entry_frame`, the one
+    /// composer). `None` on a board with no `H.1`, where the member is
+    /// dropped unread.
+    ///
+    /// # Errors
+    ///
+    /// The `H.1` read's halt; a merger's account this client cannot spell,
+    /// as the library's own fault.
     fn attest(&self, doc: &Address, body: &EntryBody) -> Result<Option<Value>, Refusal> {
         let Some(term) = self.board.board_term()? else { return Ok(None) };
         let account = parse_address(self.merger.account).ok_or_else(|| {
@@ -707,7 +846,7 @@ impl Writer<'_> {
     }
 }
 
-/// The death signal under the session, faced.
+/// Returns the death signal under the session, faced.
 fn closed(during: &str) -> Halt {
     Halt::face(
         format!("the session ended while {during}"),
@@ -716,18 +855,21 @@ fn closed(during: &str) -> Halt {
     )
 }
 
-/// A board refusal of this library's own frame (A-288's own-bug class):
-/// nothing a person can act on.
+/// Faces a board refusal of this library's own frame (A-288's own-bug class).
+///
+/// It is nothing a person can act on.
 fn own_fault(what: &str, r: &Rejection) -> Refusal {
     own_fault_face(format!("the board refused {what}"), format!("{}: the frame this library composed is wrong in substance — its base, its runs, its home or its attest", r.token()))
 }
 
-/// This library's own fault, faced: there is no user-facing act to offer.
+/// Returns this library's own fault, faced.
+///
+/// There is no user-facing act to offer.
 fn own_fault_face(state: impl Into<String>, cause: impl Into<String>) -> Refusal {
     Refusal::Halt(Halt::face(state, cause, "this is a fault in this library, not in your keys or your act; nothing further was written"))
 }
 
-/// An answer without the shape the write's ack promises.
+/// Faces an answer without the shape the write's ack promises.
 fn shape_face(op: &str, v: &Value) -> Halt {
     Halt::face(
         format!("`{op}` answered a document this client cannot read"),

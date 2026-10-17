@@ -1,10 +1,12 @@
-//! The merge journal (the merge record's §4, "Its HOME"; decision 7): the
-//! document a merge record's atom is appended to — any number per account,
-//! the caller's to name — and the default where none is named: ONE PRIVATE
-//! DRAFT per account, found by the account's own links of the kind from its
-//! doc 1 and named by the first record's link, or MINTED on first use with
-//! `create_new_document{published: false}`. Public or private is the
-//! journal document's own flag; the library never changes it.
+//! The merge journal (the merge record's §4, "Its home"; decision 7).
+//!
+//! It is the document a merge record's atom is appended to — any number per
+//! account, the caller's to name — and the default where none is named: the
+//! journal the account's first record went to, found by the account's own
+//! links of the kind from its doc 1 and named by the first record's link, or
+//! a private draft minted on first use with
+//! `create_new_document{published: false}`. Public or private is the journal
+//! document's own flag; the library never changes it.
 
 use serde_json::Value;
 use skep_address::Address;
@@ -15,16 +17,19 @@ use crate::halt::Halt;
 
 use super::land::Merger;
 
-/// Returns the journal a merge record goes to: `journal` where the caller
-/// names one; else the account's default — the journal the first link of
-/// `kind` homed in the merger's doc 1 points into, found by
-/// `find_links_ftt` over `ty` and `home` (no class scan), or a fresh private
-/// draft minted into the account where no such link stands (decision 7).
+/// Returns the journal a merge record goes to (decision 7).
+///
+/// It is `journal` where the caller names one; else the account's default —
+/// the journal the first link of `kind` homed in the merger's doc 1 points
+/// into, found by `find_links_ftt` over `ty` and `home` (no class scan), or
+/// a fresh private draft minted into the account where no such link stands.
 ///
 /// # Errors
 ///
-/// The death signal under the merger's token; a board refusal of the find or
-/// the mint, verbatim; an acknowledgment without an address, faced.
+/// A transport halt; the death signal under the merger's token; a board
+/// refusal of the find, of a link's read or of the mint, verbatim; a mint's
+/// acknowledgment with no address this client can parse, or an answer of a
+/// shape this client does not know, faced.
 pub fn of(
     board: &Board,
     merger: &Merger<'_>,
@@ -68,8 +73,11 @@ pub fn of(
     }
 }
 
-/// The response document of an exchange under the merger's token, the death
-/// signal faced.
+/// Returns the response document of an exchange under the merger's token.
+///
+/// # Errors
+///
+/// The death signal, faced.
 fn document(answer: Answer, during: &str) -> Result<Value, Halt> {
     match answer {
         Answer::Closed => Err(Halt::face(
@@ -81,7 +89,11 @@ fn document(answer: Answer, during: &str) -> Result<Value, Halt> {
     }
 }
 
-/// A read's document, a rejection the board's refusal.
+/// Returns a read's document.
+///
+/// # Errors
+///
+/// The death signal, faced; a rejection, the board's refusal.
 fn read(answer: Answer, during: &str) -> Result<Value, Halt> {
     let v = document(answer, during)?;
     match Rejection::of(&v) {

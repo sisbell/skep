@@ -1,30 +1,32 @@
-//! `rotate` (`client.md` §4a.8 T0–T5): AUTH-5.59's DEVICE arm as ONE
-//! gesture (RULED, owner 2026-09-09) — the OLD key HELD and signing, the NEW
-//! key made here or carried in as `--payload` and compared as `enroll`
-//! compares it. T0 R0's reads, the admitted read (the OLD key's enroll LINK
-//! address for T3 and every label) and THE HEAD INVARIANT'S ENUMERATION
-//! (AUTH-5.59's head). T1 the device-name box PREFILLED from the retiring
-//! key's label (AUTH-5.59 step 6; AUTH-5.42; on the payload arm the label
-//! rides inside the record, shown uncorrectable beside the comparison),
-//! then `preview(removed)` over T0's enumeration — NO enrollment preview
-//! beside it, the asymmetry with R3 the walks' own (R3 writes into an
-//! account an imported artifact chose). T2 `first_session(X, the OLD key's
-//! FULL session, the OLD key)` (AUTH-5.87; AUTH-5.90 (iii)) then
-//! `DepositKind::Enroll` (or `EnrollVerbatim`) under the old key's hand at
-//! the record grade (AUTH-5.59 step 1). T3 THE TRAIL — `assert_sup` from the
-//! OLD enroll link to the NEW, homed in `X`'s own doc 1, `old` the address
-//! T0's admitted read returned (at the notebook the genesis link's), `new`
-//! T2's ack, signed by the OLD key, RESUMED BY READING the trail's presence
-//! so a re-run never writes a second trail (AUTH-5.59 step 2; §4a.5). T4
-//! `DepositKind::Retire` of the old key — THE LAST WRITE its session can
+//! `rotate` (`client.md` §4a.8 T0–T5): AUTH-5.59's device arm as one gesture.
+//!
+//! The old key is held and signing, the new key made here or carried in as
+//! `--payload` and compared as `enroll` compares it. T0 R0's reads, the
+//! admitted read (the old key's enroll link address for T3 and every label)
+//! and the head invariant's enumeration (AUTH-5.59's head). T1 the
+//! device-name box prefilled from the retiring key's label
+//! (AUTH-5.59 step 6; AUTH-5.42; on the payload arm the label rides inside
+//! the record, shown uncorrectable beside the comparison), then
+//! `preview(removed)` over T0's enumeration — no enrollment preview beside
+//! it, the asymmetry with R3 the walks' own (R3 writes into an account an
+//! imported artifact chose). T2
+//! `first_session(X, the old key's full session, the old key)` (AUTH-5.87;
+//! AUTH-5.90 (iii)) then `DepositKind::Enroll` (or `EnrollVerbatim`) under
+//! the old key's hand at the record grade (AUTH-5.59 step 1). T3 the trail
+//! — `assert_sup` from the old enroll link to the new, homed in `X`'s own
+//! doc 1, `old` the address T0's admitted read returned (at the notebook the
+//! genesis link's), `new` T2's ack, signed by the old key, resumed by
+//! reading the trail's presence so a re-run never writes a second trail
+//! (AUTH-5.59 step 2; §4a.5). T4
+//! `DepositKind::Retire` of the old key — the last write its session can
 //! make, no close sent (AUTH-4.63; AUTH-5.59 step 4), `would_empty` armed.
-//! T5 the `closed` as rotation's EXPECTED END (AUTH-5.28), the binding
-//! appended for the new key where it is THIS store's, NONE on the payload
+//! T5 the `closed` as rotation's expected end (AUTH-5.28), the binding
+//! appended for the new key where it is this store's, none on the payload
 //! arm (the three facts printed for `skep bind` on the new device,
-//! AUTH-5.32's return leg), the retired key's file left in place (§9 item
-//! 36). `too_many_enrolled` at T2 faced as the PERSON-CLASS inversion
-//! (AUTH-5.13); a `closed` BEFORE T4 faced per AUTH-5.77 with the hand
-//! named, the walk halting at the first undone state.
+//! AUTH-5.32's return leg), the retired key's file left in place
+//! (§9 item 36). `too_many_enrolled` at T2 faced as the person-class
+//! inversion (AUTH-5.13); a `closed` before T4 faced per AUTH-5.77 with the
+//! hand named, the walk halting at the first undone state.
 
 use skep_identity::{Enrollment, Fingerprint, PublicKey};
 
@@ -48,40 +50,56 @@ use crate::store::{arm4_face, Binding, FileStore, KeyFacts, KeySelector, KeyStor
 /// The command's inputs.
 #[derive(Debug, Clone)]
 pub struct RotateOptions {
+    /// The principal whose store key is the old key.
+    ///
+    /// The key is §3.5's lookup for (board, principal): its binding, else
+    /// the store's lone device key.
     pub principal: u64,
     /// `--label <l>`: the new device's name, else the box, prefilled.
     pub label: Option<String>,
-    /// `--payload <file|->`: the new key carried in from the device that
-    /// holds it.
+    /// `--payload <file|->`: the new key, carried in.
+    ///
+    /// It comes from the device that holds it.
     pub payload: Option<Vec<u8>>,
 }
 
 /// What the rotation did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rotated {
+    /// The three facts the rotation acted at.
     pub facts: Facts,
+    /// The old key's fingerprint, retired.
     pub old: Fingerprint,
+    /// The new key's fingerprint, enrolled.
     pub new: Fingerprint,
     /// The supersession claim's address.
     pub trail: String,
-    /// The binding appended for the new key, where it is this store's.
+    /// The new key's binding line, where the key is this store's.
+    ///
+    /// The line is appended to the store; a store that cannot append it
+    /// answers a warning carrying the line.
     pub binding_line: Option<String>,
+    /// The warnings the walk raised.
     pub warnings: Vec<String>,
 }
 
-/// The NEW key T2 enrolls, as T1 settles it — exactly one of three: carried
-/// in as `--payload`, its record kept VERBATIM as the sig-less body
-/// (AUTH-4.58); an unbound key of this store already enrolled, T2 standing
-/// done (the resume, read off `key_set`); or a fresh key generated at T2
-/// under the label the box fixed.
+/// The new key T2 enrolls, as T1 settles it — exactly one of three.
+///
+/// It is carried in as `--payload`, its record kept verbatim as the
+/// sig-less body (AUTH-4.58); an unbound key of this store already
+/// enrolled, T2 standing done (the resume, read off `key_set`); or a fresh
+/// key generated at T2 under the label the box fixed.
 enum NewKey {
     Payload { text: String, entries: Vec<Enrollment> },
     Resumed(KeyFacts),
     Fresh(Label),
 }
 
-/// AUTH-5.77's face for a `closed` met BEFORE T4: the old key retired by
-/// another hand under the walk, the hand named from the records.
+/// Returns AUTH-5.77's face for a `closed` met before T4.
+///
+/// The old key was retired by another hand under the walk, the hand named
+/// from the records; where the records cannot be read or name no
+/// retirement of it, the face is `h` as it stands.
 fn closed_before_t4(board: &Board, reads: &Reads, old: &Fingerprint, own: &[(Fingerprint, PublicKey)], h: Halt) -> Halt {
     let Ok(records) = credential_records(board, &reads.walk.set_account, own) else { return h };
     let Some(rec) = records.retirement_of(old) else { return h };
@@ -96,9 +114,30 @@ fn closed_before_t4(board: &Board, reads: &Reads, old: &Fingerprint, own: &[(Fin
     )
 }
 
-/// THE WALK.
+/// Runs the walk.
+///
+/// # Errors
+///
+/// In the walk's order: arm 4's fork where the store selects no key, and
+/// the store's other refusals; the paste's halts on the payload arm; R0's
+/// halts; the old key already retired, or its enroll link not found; the
+/// enumeration; the store's bindings read; the comparison abandoned or
+/// declined; a label refused at the box, or an abandoned box; the preview
+/// declined or unwritable; the handshake; the first-session reads; the
+/// first session's halts, or a `closed` before T4, faced with the hand
+/// named; the new key's generation; the set full at T2, the person-class
+/// inversion; a reconciled enrollment whose link is not found; the trail;
+/// and the deposits' other halts.
+///
+/// # Panics
+///
+/// Panics where the payload names no entry, `Enrollment::new` refuses a
+/// stored or a boxed label, or a fingerprint's hex runs under 8 digits;
+/// `parse_payload`'s entries are never none, the store and the box admit
+/// only labels `Enrollment::new` takes, and the hex runs to 64, so none
+/// fires.
 pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RotateOptions) -> Result<Rotated, Halt> {
-    // The OLD key: the store's binding for (board, n).
+    // The old key: the store's key for (board, n), by §3.5's lookup.
     let old_key: KeyFacts = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
         Err(StoreError::NoSelection { keys }) => {
@@ -120,13 +159,13 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         }
         None => None,
     };
-    // T0: R0's reads (this walk ENROLLS), the old enroll link, the closure.
+    // T0: R0's reads (this walk enrolls), the old enroll link, the closure.
     let reads = r0(board, person, opts.principal, Act::Enrollment, &own)?;
     let account = reads.account.clone();
     if reads.walk.set.retired(&old_fp).is_some() {
         return Err(Halt::face(format!("the old key {old_fp} is already retired at {account}"), "I4 (AUTH-2.98): a retired fingerprint never re-enters the set; this rotation already ended, or another hand ended it", "sign in with a key you still hold (`skep session`)"));
     }
-    // The OLD key's enroll link — at the notebook the genesis link's.
+    // The old key's enroll link — at the notebook the genesis link's.
     let Some(old_link) = reads.records.enrollment_of(&old_fp).map(|r| r.link.clone()) else {
         return Err(Halt::face(
             format!("the enroll link of {old_fp} was not found at {account}"),
@@ -135,9 +174,9 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         ));
     };
     let closure = head_closure(board, person, &account, &old_fp)?;
-    // The NEW key's resume read (T2 by `key_set`): on the payload arm its
+    // The new key's resume read (T2 by `key_set`): on the payload arm its
     // fingerprint enrolled (`payload_enrolled`); on the generate arm an
-    // UNBOUND device key of this store enrolled beside the old one.
+    // unbound device key of this store enrolled beside the old one.
     let bound: Vec<Fingerprint> = store.all_bindings()?.into_iter().filter_map(|b| match b {
         Binding::Enrollment { origin, fingerprint, .. } if origin == *board.dialed() => Some(fingerprint),
         _ => None,
@@ -150,7 +189,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             .cloned(),
     };
     let payload_enrolled = payload.as_ref().is_some_and(|(_, e)| reads.walk.set.enrolled(&Fingerprint::of(&e[0].key)).is_some());
-    // T1: the box, PREFILLED from the retiring key's label — or the payload's
+    // T1: the box, prefilled from the retiring key's label — or the payload's
     // label shown uncorrectable beside the comparison.
     let old_label = reads.records.label_of(&old_fp).or_else(|| old_key.label.clone());
     let new_key = match (payload, resumed_new) {
@@ -190,7 +229,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             NewKey::Fresh(label)
         }
     };
-    // THE PREVIEW over T0's enumeration (no enrollment preview beside it).
+    // The preview over T0's enumeration (no enrollment preview beside it).
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
     let rows = [Row::of(&old_fp, &reads.walk.set, Some(&reads.records), &held, Some(&old_fp), false)];
     match preview(person, &Preview { account: &account, set: &reads.walk.set, rows: &rows, closure: &closure, held: &held, site: PreviewSite::Rotate, own_board: reads.cell.own_board() })? {
@@ -198,7 +237,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         Previewed::Declined => return Err(declined("rotation")),
         Previewed::Unwritable => return Err(Halt::face("the rotation's retire-old would empty the set", "`would_empty` armed", "this is this client's frame")),
     }
-    // T2: the OLD key's FULL session — closed on every halt below by its own
+    // T2: the old key's full session — closed on every halt below by its own
     // drop, ended at T4 by T4's commit; `first_session` first; the enrollment.
     let session = handshake(board, Scope::Full, &*old, opts.principal, Site::Session)?;
     let fs_reads = FirstSessionReads::take(board, &account, &old_fp, Some(store))?;
@@ -207,7 +246,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     }
     let home = fs_reads.home.clone();
     let mut warnings = Vec::new();
-    // `new_stored`: the new key where it is THIS store's — the one T5 binds.
+    // `new_stored`: the new key where it is this store's — the one T5 binds.
     let (new_fp, new_stored, new_link): (Fingerprint, Option<KeyFacts>, String) = {
         let (kind, key, fp) = match new_key {
             NewKey::Payload { text, entries } => {
@@ -248,7 +287,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         };
         (fp, key, link)
     };
-    // T3: THE TRAIL, resumed by reading its presence.
+    // T3: the trail, resumed by reading its presence.
     let supersession = Trail { home: &home, old: &old_link, new: &new_link };
     let trail = match supersession.present(board)? {
         Some(claim) => {
@@ -263,7 +302,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             Err(h) => return Err(closed_before_t4(board, &reads, &old_fp, &own, h)),
         },
     };
-    // T4: the retire-old — THE LAST WRITE; no close sent.
+    // T4: the retire-old — the last write; no close sent.
     let id = format!("rotate.retire.{}", &old_fp.to_hex()[..8]);
     match deposit(board, session.token(), &Deposit { home: &home, subject: &account, kind: DepositKind::Retire(vec![old_fp]), hand: Some(&*old), id: &id }) {
         Ok(DepositOutcome::Deposited { .. }) => {}
@@ -274,7 +313,7 @@ pub fn rotate(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     // AUTH-4.63: T4's commit ended the old key's session.
     session.ended_by_commit();
     say(person, "AUTH-5.28", "ROTATION'S EXPECTED END: the commit ended the old key's session (AUTH-4.63) and no close is sent; the `closed` any later request would meet is this end and never a death face — the last step is a sign-in with the new key");
-    // T5: the binding for the new key where it is THIS store's.
+    // T5: the binding for the new key where it is this store's.
     let binding_line = match &new_stored {
         Some(key) => {
             let line = Binding::Enrollment { origin: board.dialed().clone(), principal: opts.principal, account: account.clone(), fingerprint: key.fingerprint };

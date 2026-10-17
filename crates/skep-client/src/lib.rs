@@ -1,16 +1,16 @@
-//! # skep-client — the library every acting client embeds
+//! skep-client — the library every acting client embeds.
 //!
-//! The design is `client.md` (the skep-ux-design repo, lane 5.1a): what a
-//! person's own client — the `skep` command, the bundled app's shell, the
-//! attendant — needs to claim a board, open a signed session, keep its keys
-//! and check what a board holds for it, and nothing a frontend needs. The
-//! modules are §1.1's table, one each, listed bottom-up; `ARCHITECTURE.md`
-//! §The client draws how they fit and the rules that cross them.
+//! The design is `client.md` (the skep-ux-design repo): what a person's own
+//! client — the `skep` command, the bundled app's shell, the attendant —
+//! needs to claim a board, open a signed session, keep its keys and check
+//! what a board holds for it, and nothing a frontend needs. The modules are
+//! §1.1's table, one each, listed bottom-up; `ARCHITECTURE.md` §The client
+//! draws how they fit and the rules that cross them.
 //!
-//! The READING half, in every build — all a daemon embedding the dialer
+//! The reading half, in every build — all a daemon embedding the dialer
 //! takes:
 //!
-//! * [`origin`] — the canonical web origin, this crate's OWN reproduction of
+//! * [`origin`] — the canonical web origin, this crate's own reproduction of
 //!   the daemon's grammar (AUTH-4.2; AUTH RES-61) under a vector-agreement
 //!   test over the daemon's own admitted and refused strings (P5).
 //! * [`address`] — the address grammar over the wire's dotted spelling: an
@@ -20,26 +20,32 @@
 //!   to.
 //! * `hex` (private) — lowercase hex, the one spelling every hex this crate
 //!   emits takes.
-//! * [`dial`] — the ONE outbound dialer (`Dialer`) and its plain-HTTP arm:
+//! * [`dial`] — the one outbound dialer (`Dialer`) and its plain-HTTP arm:
 //!   one `TcpStream` per request, `Connection: close`, `Content-Length`
 //!   checked, no redirects, no proxy environment (wire.md §Transport), a
 //!   frame exchange held to a deadline and its target and headers checked
 //!   before any connection opens; the streamed form for the blob routes and
 //!   `/events`; `https://` behind the `tls` feature. A dialer behind a
-//!   reference, a box or an `Arc` is one, so a shell shares ONE between its
+//!   reference, a box or an `Arc` is one, so a shell shares one between its
 //!   boards and the resolver.
 //! * [`halt`] — the one error family: `Halt`, `Refused`, `Blocked`, `Dial`,
 //!   with §2.3's exit codes as the binary's mapping (AUTH-5.66).
-//! * [`board`] — `Board { dialed, signed, dialer }`: the wire's endpoints,
-//!   every token-bearing dial through ONE `authed` exchange, the one reader
-//!   of `Skepd-Session: closed` (P28), every token-free read through
-//!   `Board::guest`, which halts on that signal, and `H.1`'s pair read once
-//!   per board (D13); its child `frames` spells every frame this crate
-//!   sends, its child `answers` decodes every read answer the crate reads,
-//!   and `Rejection::key` is the one token a refusal is dispatched on
-//!   (wire.md §Rejections).
+//! * [`board`] — `Board { dialed, signed, dialer, term }`: the wire's
+//!   endpoints, every token-bearing dial but the close through one `authed`
+//!   exchange, the one reader of `Skepd-Session: closed` beside the close
+//!   (P28), the token-free reads through `Board::guest`, `op_at`, `changes`
+//!   and `changes_key`, which halt on that signal — save a read that hands
+//!   `Board::op` no token, as the merge's reads as a guest, the feed
+//!   consumer's document reads for the published index, and the grant reads
+//!   and the deposit's ordinal read where no token is given do — and
+//!   `H.1`'s pair read once per board (signed-ops D13); its child `frames`
+//!   spells every frame this crate sends, its child `answers` decodes the
+//!   read answers the crate reads but the registry reads', which `Board`
+//!   decodes itself, and an envelope member a caller reads in place, and
+//!   `Rejection::key` is the one token a refusal is dispatched on (wire.md
+//!   §Rejections).
 //! * [`derive`](mod@derive) — the pure derivations over board reads: the
-//!   MODE off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
+//!   mode off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check, the
 //!   three-state key diagnosis at the set AUTH-5.21's walk reaches
 //!   (AUTH-4.30 (i)), the principal of an address (AUTH-6.37), AUTH-5.66's
 //!   `closed` predicate, and — behind `acting` — `derive::records`, the one
@@ -63,58 +69,61 @@
 //!   render as (AUTH-5.67); and `Unappended`, the warning a binding line
 //!   that cannot be appended answers (§3.7).
 //! * [`person`] — the `Person` seam: the human moments in three classes,
-//!   SECRET, CONSENT and PUBLIC, as types — a SECRET payload printing no key
+//!   secret, consent and public, as types — a secret payload printing no key
 //!   material; behind `test-hooks`, `person::scripted`, the scripted person
 //!   a test drives.
-//! * [`verify`] — the READER's verifier: a committed signature judged against
-//!   the signature-FILTERED key set as of the entry's base (AUTH-2.94;
+//! * [`verify`] — the reader's verifier: a committed signature judged against
+//!   the signature-filtered key set as of the entry's base (AUTH-2.94;
 //!   D14), a pure function of its caller's reads.
 //! * [`resolve`] — `skep_resolve::Transport` over this crate's dialer.
-//! * [`ceremony`] — the ceremonies in two layers: the COMPOSITIONS every
+//! * [`ceremony`] — the ceremonies in two layers: the compositions every
 //!   walk runs over (P28) — `handshake`, `deposit`, `first_session`,
 //!   `backup`, `payload`, `preview`, `enumerate`, `trail`, `import`, `reads`
-//!   — and the WALKS over them — `claim`, `enroll`, `recover`, `retire`,
+//!   — and the walks over them — `claim`, `enroll`, `recover`, `retire`,
 //!   `rotate`, `handoff`, `accept`. A walk names compositions and never
 //!   another walk.
 //! * [`share`] — the grant as this client composes and reads it (PUB-5.1,
 //!   PUB-5.15): `share`, one document or one account opened to one account;
 //!   `privash`, one draft opened to every account on the board and never a
-//!   guest (PUB-5.108, Nelson's term); `revoke`; and the three reads —
+//!   guest (PUB-5.108, Nelson's term); `revoke`; and the three lists —
 //!   `issued`, `held` (R78's discovery read) and `privashed` (the board's
-//!   universal set). Each write reads the key's state first and sends no
+//!   universal set). Each write reads the state it acts on first — the
+//!   key's for a grant, the grant's for a revocation — and sends no
 //!   duplicate; a lost acknowledgement is read back, never re-sent. Beside
 //!   the ceremonies and naming none: a grant is no credential.
 //!
-//! Behind the default-OFF `search` feature — the SHELL's half of search
+//! Behind the default-off `search` feature — the shell's half of search
 //! (`client.md` §4e; the index itself is `skep-search`'s):
 //!
-//! * [`search`] — the feed consumer over `/changes` (one read per changed
+//! * `search` — the feed consumer over `/changes` (one read per changed
 //!   document per poll, in parts past the delivery budget, at the class the
 //!   index takes), the index directory beside the key store (the modes, the
 //!   lock, the save by rename, the aside), the resume at open, the session's
 //!   triggers (widen, narrow, the refresh, the forget), the document index
 //!   the plane reads, the state event's ten arms as a typed enum, the bridge
 //!   call that composes the pair, and the jump's landing rule. A library API
-//!   an embedder calls — the `skep` command one embedder, the shell the
-//!   other — and nothing in it assumes a page or a webview.
+//!   an embedder calls — the shell, skep-shell, is its embedder — and
+//!   nothing in it assumes a page or a webview.
 //!
-//! Behind the default-OFF `merge` feature — MERGING VERSIONS, the editor's
+//! Behind the default-off `merge` feature — merging versions, the editor's
 //! act on a daughter (the design's merge record):
 //!
-//! * [`merge`] — the merge as a library: the pure core, `compose_runs` over
+//! * `merge` — the merge as a library: the pure core, `compose_runs` over
 //!   the base's and the sides' run lists under the one rule; `compose`, the
 //!   reads over a board in the record's order, writing nothing; `land` and
 //!   `resume`, the one `publish` of the merged list from the head with its
 //!   signed body, the claim's read, the record in a merge journal with its
 //!   public link, and the draft landing; `verify`, the record's testimony
 //!   recomputed; the record kind and the journal. The surfaces — the
-//!   command, the attendant's call, the agent tool — are a later lane's.
+//!   command, the attendant's call, the agent tool — are not this crate's:
+//!   the command is skep-cli's `skep merge`.
 //!
 //! No async runtime, no HTTP crate, no argument-parsing crate (§1.1's
 //! dependency paragraph). The fence (§1.1): this crate reads no content save
-//! the credential records the admitted read names and `H.1`'s pair;
+//! credential records — those the admitted read names, and the one a
+//! deposit reads back — the takedown record a block names, and `H.1`'s pair;
 //! `Board::op` is a general frame pipe for its embedders. The fence is a
-//! statement about the DEFAULT build: the `search` module, OFF by default,
+//! statement about the default build: the `search` module, off by default,
 //! is §4e's consumer and makes its reads only where an embedder turns the
 //! feature on, as the frontend's shell does.
 
@@ -157,10 +166,12 @@ pub use dial::{DialError, Dialer, PlainHttp, Request, Response};
 pub use halt::{Blocked, Face, Halt, Refused};
 pub use origin::{NotCanonical, Origin};
 
-/// The auto-traits this crate promises without saying so: a shell holds a
-/// `Board` across threads, and a halt crosses to whichever thread reports
-/// it. A private field that revoked either would compile here and break an
-/// embedder's build naming nothing — so it fails to compile here instead.
+/// The auto-traits this crate promises without saying so.
+///
+/// A shell holds a `Board` across threads, and a halt crosses to whichever
+/// thread reports it. A private field that revoked either would compile here
+/// and break an embedder's build naming nothing — so it fails to compile
+/// here instead.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Board>();
@@ -169,9 +180,11 @@ const _: fn() = || {
     assert_send_sync::<Origin>();
 };
 
-/// The acting half's promises of the same kind: a shell signs on whichever
-/// thread holds its board, so the signer a stored key yields, the store that
-/// yields it and the session it opens cross threads as the board does.
+/// The acting half's promises of the same kind.
+///
+/// A shell signs on whichever thread holds its board, so the signer a stored
+/// key yields, the store that yields it and the session it opens cross
+/// threads as the board does.
 #[cfg(feature = "acting")]
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
@@ -180,9 +193,11 @@ const _: fn() = || {
     assert_send_sync::<ceremony::handshake::Session<'static>>();
 };
 
-/// The search half's promises (`search.md` §5.6): the consumer stands
-/// between the feed thread that writes and the bridge's search thread that
-/// reads, so it and every value that crosses its lock owe `Send + Sync`.
+/// The search half's promises (`search.md` §5.6).
+///
+/// The consumer stands between the feed thread that writes and the bridge's
+/// search thread that reads, so it and every value that crosses its lock owe
+/// `Send + Sync`.
 #[cfg(feature = "search")]
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}

@@ -1,25 +1,34 @@
-//! THE BRIDGE CALL (`client.md` §4e.5; §4b.1's `search` row): `search(session
-//! | guest, board, query, opts) → {hits, places, state}` as a library call on
-//! the consumer. THE QUERY IS UNTRUSTED INPUT: its length is bounded at
-//! [`QUERY_BOUND`] bytes (INTERIM) BEFORE the crate's `Query::parse` sees it,
-//! the refusal [`QueryTooLong`] echoing nothing of it. THE PAIR is composed
-//! by role (`search.md` §1.4, §5.2): `Pair::session` from the published
-//! index, the principal's supplement, the supplement header's ranges and
-//! the HONORED SET the discovery reads hold — the standing's three inputs
-//! (§3.1), so the crate composes `Held` by prefix arithmetic and no read is
-//! made — or `Pair::guest` from the published index alone; `limit` and
-//! `offset` forwarded. THE TWO MATCHERS IN ONE CALL: `places`, the document
-//! index's exact address and label matches, DRAWN AT THE CALL's CLASS — the
-//! published part and the principal's part for a session, the published part
-//! alone for the guest — each with a standing at the DOCUMENT grain: `Public`
-//! from the published part, `YoursToRead` from the principal's, `Held` by
-//! the same arithmetic over the header ranges, the honored set and the
+//! The bridge call (`client.md` §4e.5; §4b.1's `search` row).
+//!
+//! It is `search(session | guest, board, query, opts) → {hits, places,
+//! state}` as a library call on the consumer.
+//!
+//! **The query is untrusted input.** Its length is bounded at
+//! [`QUERY_BOUND`] bytes (interim) before the crate's `Query::parse` sees
+//! it, the refusal [`QueryTooLong`] echoing nothing of it.
+//!
+//! **The pair** is composed by role (`search.md` §1.4, §5.2):
+//! `Pair::session` from the published index, the principal's supplement,
+//! the supplement header's ranges and the honored set the discovery reads
+//! hold — the standing's three inputs (§3.1), so the crate composes `Held`
+//! by prefix arithmetic and no read is made — or `Pair::guest` from the
+//! published index alone, for the guest and for a session whose supplement
+//! is not mounted; `limit` and `offset` forwarded.
+//!
+//! **The two matchers in one call.** `places`, the document index's exact
+//! address and label matches, is drawn at the call's class — the published
+//! part and the principal's part for a session, the published part alone
+//! for the guest and where no supplement is mounted — each with a standing
+//! at the document grain: `Public` from the published part, save a draft
+//! there, which is `YoursToRead`; `YoursToRead` from the principal's, `Held`
+//! by the same arithmetic over the header ranges, the honored set and the
 //! subtree. The crate's flags — `truncated`, `more_terms`, `fuzzy_bounded`,
-//! `positions_bounded` — are forwarded; `state` is THE PAIR's. PURE LOCAL: no
-//! board read on the call's path (fact 10), and NO RECORD OF A SEARCH: no log
-//! line, refusal detail or panic payload of this module carries the query or
-//! a hit. Nothing in the answer names a file, a path or a principal's
-//! directory.
+//! `positions_bounded` — are forwarded; `state` is the pair's.
+//!
+//! **Pure local.** No board read on the call's path (fact 10), and no
+//! record of a search: no log line, refusal detail or panic payload of this
+//! module carries the query or a hit. Nothing in the answer names a file, a
+//! path or a principal's directory.
 
 use std::fmt;
 
@@ -31,14 +40,16 @@ use crate::board::Token;
 use super::consumer::{Consumer, Mount, Slot};
 use super::state::State;
 
-/// A SIGNED SESSION as the search half takes it: the token the handshake
-/// answered, the principal it was opened as and the account it acts as —
-/// the three facts `ceremony::handshake::Session` lends through its getters
-/// (`token()`, `principal()`, `account()`), which the embedder hands in
-/// here, so this module stands BESIDE the ceremonies and names none
-/// (`ARCHITECTURE.md` §The client: "Nothing outside `ceremony/` names it";
-/// `tests/it/tidy.rs` checks it). The token never leaves the consumer: it
-/// rides the supplement's reads in `Skepd-Session` and nothing else.
+/// A signed session as the search half takes it.
+///
+/// It is the token the handshake answered, the principal it was opened as
+/// and the account it acts as — the three facts `ceremony::handshake::Session`
+/// lends through its getters (`token()`, `principal()`, `account()`), which
+/// the embedder hands in here, so this module stands beside the ceremonies
+/// and names none (`ARCHITECTURE.md` §The client: "Nothing outside
+/// `ceremony/` names it"; `tests/it/tidy.rs` checks it). The token never
+/// leaves the consumer: it rides the supplement's reads in `Skepd-Session`
+/// and nothing else.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionRef<'a> {
     /// The session's token.
@@ -49,13 +60,15 @@ pub struct SessionRef<'a> {
     pub account: &'a str,
 }
 
-/// THE QUERY's LENGTH BOUND in bytes (`client.md` §4e.5: "an INTERIM 1,024
-/// bytes").
+/// The query's length bound in bytes.
+///
+/// `client.md` §4e.5: "an interim 1,024 bytes".
 pub const QUERY_BOUND: usize = 1024;
 
-/// `query_too_long` — the shell's own refusal, never a wire token: the
-/// query's byte length passed [`QUERY_BOUND`]. Its text names the bound and
-/// the length and nothing of the input.
+/// `query_too_long` — the shell's own refusal, never a wire token.
+///
+/// The query's byte length passed [`QUERY_BOUND`]. Its text names the bound
+/// and the length and nothing of the input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueryTooLong {
     /// The bound, in bytes.
@@ -72,8 +85,9 @@ impl fmt::Display for QueryTooLong {
 
 impl std::error::Error for QueryTooLong {}
 
-/// Who searches (`client.md` §4b.1): the guest form, or a session — the
-/// pair its principal names.
+/// Who searches (`client.md` §4b.1).
+///
+/// It is the guest form, or a session — the pair its principal names.
 #[derive(Debug, Clone, Copy)]
 pub enum Who<'a> {
     /// The guest form: the published index alone.
@@ -83,7 +97,7 @@ pub enum Who<'a> {
 }
 
 impl Who<'_> {
-    /// The principal a session searches as; none for the guest.
+    /// Returns the principal a session searches as; none for the guest.
     pub fn principal(&self) -> Option<u64> {
         match self {
             Who::Guest => None,
@@ -92,8 +106,9 @@ impl Who<'_> {
     }
 }
 
-/// The list's bounds (`search.md` §3.2): `limit` the rows the box shows,
-/// `offset` the rows skipped.
+/// The list's bounds (`search.md` §3.2).
+///
+/// `limit` is the rows the box shows, `offset` the rows skipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchOpts {
     /// The hits listed at most.
@@ -103,14 +118,15 @@ pub struct SearchOpts {
 }
 
 impl Default for SearchOpts {
-    /// No offset, the crate's `DEFAULT_LIMIT` rows.
+    /// Returns no offset and the crate's `DEFAULT_LIMIT` rows.
     fn default() -> SearchOpts {
         SearchOpts { limit: DEFAULT_LIMIT, offset: 0 }
     }
 }
 
-/// One of the document index's exact matches (§4e.5), with a standing at
-/// the document grain.
+/// One of the document index's exact matches (§4e.5).
+///
+/// It carries a standing at the document grain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
     /// The document.
@@ -123,8 +139,10 @@ pub struct Place {
     pub standing: Standing,
 }
 
-/// The bridge call's answer: the crate's hits with its five facts forwarded,
-/// the shell's places, and the pair's state.
+/// The bridge call's answer.
+///
+/// It holds the crate's hits with its five facts forwarded, the shell's
+/// places, and the pair's state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchAnswer {
     /// The hits, `search.md` §3.1's contract.
@@ -139,17 +157,28 @@ pub struct SearchAnswer {
     pub fuzzy_bounded: bool,
     /// Whether the evaluation stopped at its positions bound.
     pub positions_bounded: bool,
-    /// The document index's exact address and label matches at the call's
-    /// class.
+    /// The document index's exact address and label matches.
+    ///
+    /// They are drawn at the call's class.
     pub places: Vec<Place>,
     /// The state of the pair this call searched.
     pub state: State,
 }
 
 impl Consumer<'_> {
-    /// THE BRIDGE CALL (the module doc). A board the consumer holds no index
-    /// for answers `State::None` and no hit; a held lock `State::Busy` and no
-    /// hit; a faced file `State::NewerSkep` and no hit.
+    /// Makes the bridge call (the module doc).
+    ///
+    /// A board the consumer holds no index for answers `State::None` and no
+    /// hit; a held lock, or a resume left pending, `State::Busy` and no hit;
+    /// a faced file `State::NewerSkep` and no hit.
+    ///
+    /// # Errors
+    ///
+    /// [`QueryTooLong`] where the query's byte length passes [`QUERY_BOUND`].
+    ///
+    /// # Panics
+    ///
+    /// Panics where the engines' lock is poisoned.
     pub fn search(&self, who: Who<'_>, query: &str, opts: &SearchOpts) -> Result<SearchAnswer, QueryTooLong> {
         if query.len() > QUERY_BOUND {
             return Err(QueryTooLong { bound: QUERY_BOUND, length: query.len() });
@@ -215,13 +244,15 @@ impl Consumer<'_> {
     }
 }
 
-/// THE STANDING AT THE DOCUMENT GRAIN (`client.md` §4e.5; `search.md`
-/// §3.1), the shell's own arithmetic over the three inputs it holds: a
-/// document of the principal's part is `YoursToRead` where a range with no
-/// grant — the subtree's own or an ancestor's — covers it, or an honored
-/// prefix does; else `Held` with the narrowest covering granted range's cell
-/// and issuer, the rung the range's own shape; a document no range covers is
-/// `YoursToRead`. No read is made.
+/// Returns a document's standing at the document grain.
+///
+/// It is the shell's own arithmetic over the three inputs it holds
+/// (`client.md` §4e.5; `search.md` §3.1): a document of the principal's
+/// part is `YoursToRead` where a range with no grant — the subtree's own or
+/// an ancestor's — covers it, or an honored prefix does; else `Held` with
+/// the narrowest covering granted range's cell and issuer, the rung the
+/// range's own shape; a document no range covers is `YoursToRead`. No read
+/// is made.
 pub(super) fn standing_of(doc: &Address, ranges: &[RangeRecord], honored: &[Prefix]) -> Standing {
     let mut departed: Option<&RangeRecord> = None;
     for range in ranges {
@@ -250,8 +281,9 @@ pub(super) fn standing_of(doc: &Address, ranges: &[RangeRecord], honored: &[Pref
     }
 }
 
-/// A range's width for the narrowest-prefix rule: its prefix's component
-/// count, the board's whole feed the widest.
+/// Returns a range's width for the narrowest-prefix rule.
+///
+/// It is its prefix's component count, the board's whole feed the widest.
 fn width(range: &RangeRecord) -> usize {
     range.under.as_ref().map_or(0, |under| under.tumbler().len())
 }

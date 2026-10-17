@@ -1,28 +1,30 @@
-//! THE ANCHOR IMPORT STEP (`client.md` §4a.2 R1; §4a.3) — never a command:
-//! ONE anchor, from a FILE (`--anchor <path>` — a path INSIDE the store
-//! refused ahead of the kept-or-placed question, §3.4; KEPT-OR-PLACED asked
-//! when the ceremony opens, the destroy-at-end stated, AUTH-5.54 step 3's
-//! file arm), from PAPER (the 64 hex typed, then a fingerprint PREFIX of at
-//! least one R42 group, §9 item 35; AUTH-5.41), or NEITHER — "I hold
-//! neither" an ANSWER, the no-artifact face (AUTH-5.16's first arm with its
-//! DESTROYED / FINDABLE fork and the three acts that exist elsewhere, forked
-//! by cell). FINGERPRINT FIRST (AUTH-5.39): re-derived from the seed and
-//! compared against the artifact's — the typed arm's fingerprint prefix off
-//! the print, the file arm's `KeyFile::parse`, which refuses a file whose
-//! members do not re-derive from its seed — then against the set R0's walk
-//! reached (the RETIRED-SHEET face from the admitted read — the position
-//! and the retiring hand's label, AUTH-5.22, AUTH-5.77, neither asserted
-//! below the retention floor; a device key's material; the WRONG SHEET,
-//! AUTH-5.25 (iii)), then the client-local sign/verify against the `key`
-//! `key_set` publishes (AUTH-5.54 step 5's pattern). AUTH-5.22's facts —
-//! the file's `account`, `principal` and `origin` — are compared BEFORE any
-//! `/challenge`, a disagreement a halt naming both. R1's TWO QUESTIONS: WHOSE
-//! ACCOUNT THIS IS (asked ONCE per walk at R1's head, on every arm; the
-//! address is NOT the key) and, where the set holds a second enrolled
-//! anchor, whether the OTHER PAPER is still held (AUTH-5.47's urgency, `skep
-//! recover --anchor-lost` named). The SEED's lifetime is §4a.3's: the caller
-//! holds the anchor to the last record signed with it, and the anchor's end —
-//! its close or its drop — takes the seed with it.
+//! The anchor import step (`client.md` §4a.2 R1; §4a.3) — never a command.
+//!
+//! It takes one anchor, from a file (`--anchor <path>` — a path inside the
+//! store refused ahead of the kept-or-placed question, §3.4; kept-or-placed
+//! asked when the ceremony opens, the destroy-at-end stated,
+//! AUTH-5.54 step 3's file arm), from paper (the 64 hex typed, then a
+//! fingerprint prefix of at least one R42 group, §9 item 35; AUTH-5.41), or
+//! neither — "I hold neither" an answer, the no-artifact face (AUTH-5.16's
+//! first arm with its destroyed / findable fork and the three acts that
+//! exist elsewhere, forked by cell). Fingerprint first (AUTH-5.39):
+//! re-derived from the seed and compared against the artifact's — the typed
+//! arm's fingerprint prefix off the print, the file arm's `KeyFile::parse`,
+//! which refuses a file whose members do not re-derive from its seed — then
+//! against the set R0's walk reached (the retired-sheet face from the
+//! admitted read — the position and the retiring hand's label, AUTH-5.22,
+//! AUTH-5.77, neither asserted below the retention floor; a device key's
+//! material; the wrong sheet, AUTH-5.25 (iii)), then the client-local
+//! sign/verify against the `key` `key_set` publishes (AUTH-5.54 step 5's
+//! pattern). AUTH-5.22's facts — the file's `account`, `principal` and
+//! `origin` — are compared before any `/challenge`, a disagreement a halt
+//! naming both. R1's two questions: whose account this is (asked once per
+//! walk at R1's head, on every arm; the address is not the key) and, where
+//! the set holds a second enrolled anchor, whether the other paper is still
+//! held (AUTH-5.47's urgency, `skep recover --anchor-lost` named). The
+//! seed's lifetime is §4a.3's: the caller holds the anchor to the last
+//! record signed with it, and the anchor's end — its close or its drop —
+//! takes the seed with it.
 
 use std::path::{Path, PathBuf};
 
@@ -41,24 +43,28 @@ use crate::sheet::{read_key_file, render_inert, typed_prefix_matches, KeyFile, S
 use crate::sign::Signer;
 use crate::store::FileStore;
 
-/// R1's head question: whose account this is — the person's OWN, or an
-/// AGENT's whose custody sheet the owner holds (AUTH-5.62). A thing the
-/// person at the keyboard knows and no read answers (RES-45's discipline).
+/// R1's head question: whose account this is.
+///
+/// It is the person's own, or an agent's whose custody sheet the owner
+/// holds (AUTH-5.62). A thing the person at the keyboard knows and no read
+/// answers (RES-45's discipline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Whose {
     Own,
     Agent,
 }
 
-/// The imported anchor: the signer (the SEED, held to §4a.3's bound), its
-/// fingerprint and label, and the kept-or-placed answer for its file — and
-/// THE OWNER OF ITS OWN END. The anchor is dropped when the ceremony it was
-/// imported FOR ends (AUTH-5.54 step 3), and every exit ends that ceremony:
-/// [`ImportedAnchor::dispose`] is the close that tells the person, and an
-/// anchor dropped without it — every halt a walk takes after the import —
-/// still destroys a PLACED copy on the drop, best effort, so the person who
-/// answered "placed" never leaves with a findable paper on the ladder's worst
-/// rung (AUTH-5.40). The seed goes with the anchor.
+/// The imported anchor, the owner of its own end.
+///
+/// It holds the signer (the seed, held to §4a.3's bound), its fingerprint
+/// and label, and the kept-or-placed answer for its file. The anchor is
+/// dropped when the ceremony it was imported *for* ends (AUTH-5.54 step 3),
+/// and every exit ends that ceremony: [`ImportedAnchor::dispose`] is the
+/// close that tells the person, and an anchor dropped without it — every
+/// halt a walk takes after the import — still destroys a placed copy on the
+/// drop, best effort, so the person who answered "placed" never leaves with
+/// a findable paper on the ladder's worst rung (AUTH-5.40). The seed goes
+/// with the anchor.
 pub struct ImportedAnchor {
     pub signer: HybridSigner,
     pub fingerprint: Fingerprint,
@@ -72,8 +78,9 @@ pub struct ImportedAnchor {
 }
 
 impl ImportedAnchor {
-    /// AUTH-5.54 step 3's mirror at the close: the PLACED copy destroyed, the
-    /// KEPT artifact retained — each said.
+    /// Disposes of the anchor at the close — AUTH-5.54 step 3's mirror.
+    ///
+    /// The placed copy is destroyed, the kept artifact retained — each said.
     pub fn dispose(mut self, person: &mut dyn Person) {
         self.ended = true;
         match (&self.file, self.kept_or_placed) {
@@ -104,17 +111,20 @@ impl std::fmt::Debug for ImportedAnchor {
 /// The import's answer.
 pub enum ImportOutcome {
     Anchor(Box<ImportedAnchor>),
-    /// "I hold neither" — an ANSWER and never an error (AUTH-5.16's
-    /// no-artifact arm; `client.md` §4a.2 R1); the caller faces it —
-    /// [`no_artifact_face`] at the recovery's arms, its own face at the
+    /// "I hold neither" — an answer and never an error.
+    ///
+    /// AUTH-5.16's no-artifact arm; `client.md` §4a.2 R1: the caller faces it
+    /// — [`no_artifact_face`] at the recovery's arms, its own face at the
     /// handoff.
     Neither,
 }
 
-/// What the artifact handed in yields, its fingerprint already checked
-/// against the artifact's own: the signer (the SEED, held to §4a.3's bound),
-/// its label, its file where it was one, and the kept-or-placed answer for
-/// that file (`Kept` on paper).
+/// What the artifact handed in yields.
+///
+/// Its fingerprint is already checked against the artifact's own; it holds
+/// the signer (the seed, held to §4a.3's bound), its label, its file where
+/// it was one, and the kept-or-placed answer for that file (`Kept` on
+/// paper).
 struct Handed {
     signer: HybridSigner,
     label: Option<String>,
@@ -126,10 +136,14 @@ struct Handed {
 pub struct ImportContext<'a> {
     pub board: &'a Board,
     pub store: &'a FileStore,
-    /// The account named (`principal_prefix(n)`) and its principal.
+    /// The account named — `principal_prefix(n)`.
+    ///
+    /// Its principal is `principal`.
     pub account: &'a str,
     pub principal: u64,
-    /// The set the walk reached and its account.
+    /// The account of the set the walk reached.
+    ///
+    /// The set itself is `set`.
     pub set_account: &'a str,
     pub set: &'a KeySet,
     pub records: &'a Records,
@@ -145,7 +159,11 @@ fn abandoned() -> Halt {
     Halt::face("the import was abandoned", "the person left at the import", "re-run when ready; nothing was written")
 }
 
-/// WHOSE ACCOUNT THIS IS, asked once at R1's head (§4a.2 R1; §2.2's head).
+/// Asks whose account this is, once at R1's head (§4a.2 R1; §2.2's head).
+///
+/// # Errors
+///
+/// An abandoned question halts.
 pub fn whose_account(person: &mut dyn Person, account: &str, principal: u64) -> Result<Whose, Halt> {
     say(
         person,
@@ -160,9 +178,15 @@ pub fn whose_account(person: &mut dyn Person, account: &str, principal: u64) -> 
     Ok(if own { Whose::Own } else { Whose::Agent })
 }
 
-/// The file's three facts (AUTH-5.38) against `--board`, n and
-/// `principal_prefix(n)` (AUTH-5.22): a disagreement a halt naming both,
-/// never silently preferred or ignored.
+/// Compares the file's three facts (AUTH-5.38) with the board and principal.
+///
+/// They are held against `--board`, n and `principal_prefix(n)`
+/// (AUTH-5.22).
+///
+/// # Errors
+///
+/// A disagreement is a halt naming both, never silently preferred or
+/// ignored.
 fn compare_facts(file: &KeyFile, cx: &ImportContext<'_>) -> Result<(), Halt> {
     let mut faults = Vec::new();
     if let Some(a) = &file.account {
@@ -190,9 +214,13 @@ fn compare_facts(file: &KeyFile, cx: &ImportContext<'_>) -> Result<(), Halt> {
     ))
 }
 
-/// THE RETIRED-SHEET FACE (AUTH-5.22 as RES-114 cut it; AUTH-5.77's reads):
-/// the position and the retiring hand's label where readable, neither
-/// asserted below the floor; the act off the anchor flags.
+/// Returns the retired-sheet face.
+///
+/// AUTH-5.22 as RES-114 narrows it; AUTH-5.77's reads: the position and the
+/// retiring hand's label where the records read the hand as a key, the
+/// position alone at a bare session's, and neither asserted otherwise —
+/// below the floor among the cases; the act off the set's other anchors and
+/// this store's own keys.
 fn retired_sheet(cx: &ImportContext<'_>, fp: &Fingerprint) -> Halt {
     let label = cx.records.label_of(fp).map(|l| render_inert(&l)).unwrap_or_else(|| "(no label recorded)".into());
     let cause = match cx.records.retirement_of(fp) {
@@ -223,11 +251,12 @@ fn retired_sheet(cx: &ImportContext<'_>, fp: &Fingerprint) -> Halt {
     )
 }
 
-/// THE NO-ARTIFACT FACE (AUTH-5.16's FIRST arm at its neither-paper branch;
-/// `client.md` §4a.2 R1): the state, then the DESTROYED / FINDABLE fork and
-/// the three acts that exist elsewhere, forked by cell; the AGENT form on
-/// "an agent's"; the import's own abandonment where the person leaves at the
-/// fork.
+/// Returns the no-artifact face (`client.md` §4a.2 R1).
+///
+/// It is AUTH-5.16's first arm at its neither-paper branch: the state, then
+/// the destroyed / findable fork and the three acts that exist elsewhere,
+/// forked by cell; the agent form on "an agent's"; the import's own
+/// abandonment where the person leaves at the fork.
 pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Halt {
     let anchors: Vec<String> = cx.set.enrolled.iter().filter(|e| e.anchor).map(|e| format!("{} ({})", e.fingerprint, cx.records.label_of(&e.fingerprint).map(|l| render_inert(&l)).unwrap_or_default())).collect();
     if cx.whose == Whose::Agent {
@@ -273,7 +302,20 @@ pub fn no_artifact_face(person: &mut dyn Person, cx: &ImportContext<'_>) -> Halt
     )
 }
 
-/// THE IMPORT.
+/// Runs the import.
+///
+/// # Errors
+///
+/// An abandoned prompt or question; the file arm's halts; a typed paper
+/// whose facts the person disowns; the retired-sheet face, a device key's
+/// material and the wrong sheet; and a key that does not sign as the key
+/// the board publishes.
+///
+/// # Panics
+///
+/// Panics if the set loses the fingerprint between the diagnosis and the
+/// key's read; the diagnosis found it enrolled, so the `expect` never
+/// fires.
 pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<ImportOutcome, Halt> {
     // The file arm by flag, else the prompt's three answers.
     let handed = match cx.anchor_path {
@@ -298,7 +340,8 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
                     let signer = crate::sign::signer_from_seed(seed.bytes());
                     let fp = Signer::fingerprint(&signer);
                     if !typed_prefix_matches(&fingerprint_prefix, &fp) {
-                        // AUTH-5.39: "this is not the key on this paper — re-scan".
+                        // AUTH-5.39: "this is not the key on this paper —
+                        // re-scan".
                         say(person, "AUTH-5.39", "this is not the key on this paper — re-scan: the fingerprint on the print does not match the key the typed seed derives");
                         continue;
                     }
@@ -355,7 +398,7 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
         ));
     }
     say(person, "AUTH-5.39", format!("anchor {} ({}) imported: fingerprint first, then the set, then the local verify — all pass", fp, label.as_deref().map(render_inert).unwrap_or_else(|| "(no label)".into())));
-    // The OTHER PAPER, where the set holds a second enrolled anchor.
+    // The other paper, where the set holds a second enrolled anchor.
     let others: Vec<String> = cx.set.enrolled.iter().filter(|e| e.anchor && e.fingerprint != fp).map(|e| format!("{} ({})", e.fingerprint, cx.records.label_of(&e.fingerprint).map(|l| render_inert(&l)).unwrap_or_default())).collect();
     if !others.is_empty() {
         let held = person
@@ -372,9 +415,17 @@ pub fn import_anchor(person: &mut dyn Person, cx: &ImportContext<'_>) -> Result<
     Ok(ImportOutcome::Anchor(Box::new(ImportedAnchor { fingerprint: fp, label, file, kept_or_placed, signer, ended: false })))
 }
 
-/// The FILE arm: the path inside the store refused ahead of the question;
-/// the destroy-at-end stated; KEPT-OR-PLACED asked (SECRET); the file
+/// Runs the file arm.
+///
+/// The path inside the store is refused ahead of the question; the
+/// destroy-at-end stated; kept-or-placed asked (a secret moment); the file
 /// parsed, its `anchor` member true; AUTH-5.22's facts compared.
+///
+/// # Errors
+///
+/// A path inside the store, ahead of the question; an abandoned question;
+/// a file missing, unreadable or mis-pathed; a file the parse refuses; a
+/// device key's file; and the facts' disagreement.
 fn import_file(person: &mut dyn Person, cx: &ImportContext<'_>, path: &Path) -> Result<Handed, Halt> {
     if cx.store.contains_path(path) {
         return Err(Halt::face(

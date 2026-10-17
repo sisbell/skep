@@ -1,27 +1,28 @@
-//! `accept` — THE RECIPIENT's beat (`client.md` §4c.1; AUTH-5.90; AUTH
-//! RES-162): `--board` and `--account` REQUIRED (a run missing either asks,
-//! generating nothing); THE READS FIRST — `/health` (the pair, the mode,
-//! the A4 cell; at a served board the beat ASKS hosted-host or the giver's
-//! own org, RES-45), `key_set` at `--account` MUST BE EMPTY (non-empty ⇒
-//! halt: already handed away, the act the GIVER's — which makes a re-run
-//! safe), `effective_owner(account)` with `prefix == account` THE
-//! ALLOCATION TEST (unequal ⇒ halt: beat (a) still owed), AUTH-5.21's walk
-//! upward whose terminus is ⟨giver⟩, `key_set` at `inc(--account, 1)`
-//! (string (xi) where taken, (viii) where not), the ⟨m⟩ count by the cone,
-//! the block clause's cell off `claimant`; then string (vi) ahead of
-//! generation, `keygen --anchors`' walk with THIS DOOR's copy —
-//! `Venue::Handoff` (the operator sentence per A4 cell rendered ONCE,
-//! AUTH-5.44's HANDOFF form, AUTH-5.42's consequence keyed to this door, the
-//! org-door artifact line DROPPED, the abandonment disposition);
-//! `--no-anchors` the DECLINE's site (AUTH-5.62's sentence; AUTH-5.90's
-//! decline clause; the cost its CONFIRMATION by a typed answer; no pair,
-//! no backup moment); the ACCEPTANCE string (v) per cell with its shares
-//! and block clauses; the ACCOUNT-CREATION sentence in the future tense
-//! (AUTH-5.87); AUTH-5.85's statement scoped by the board's venue; THE
-//! REPLY string (vii) on its arm with `skep bind` and what skipping it
-//! costs (AUTH-5.90 (iii)); the three-key (or one-key) canonical record for
-//! the giver; `--reprint` re-composing the record from the artifacts'
-//! PUBLIC members alone. A PERSON DOOR; `--reprint` is not.
+//! `accept`: the recipient's beat (`client.md` §4c.1; AUTH-5.90; AUTH RES-162).
+//!
+//! `--board` and `--account` are required (a run missing either asks,
+//! generating nothing); the reads first — `/health` (the pair, the
+//! mode), `effective_owner(account)` with `prefix == account` the
+//! allocation test (unequal ⇒ halt: beat (a) still owed), `key_set` at
+//! `--account` must enroll no key (an enrolled one ⇒ halt: already handed
+//! away, the act the giver's — which makes a re-run safe), AUTH-5.21's walk
+//! upward whose terminus is ⟨giver⟩, the A4 cell (at a served board the
+//! beat asks hosted-host or the giver's own org, RES-45), `key_set` at
+//! `inc(--account, 1)` (string (xi) where taken, (viii) where not), the ⟨m⟩
+//! count by the cone, the block clause's cell off `claimant`; then string
+//! (vi) ahead of generation, `keygen --anchors`' walk with this door's copy
+//! — `Venue::Handoff` (the operator sentence per A4 cell rendered once,
+//! AUTH-5.44's handoff form, AUTH-5.42's consequence keyed to this door, the
+//! org-door artifact line dropped, the abandonment disposition);
+//! `--no-anchors` the decline's site (AUTH-5.62's sentence; AUTH-5.90's
+//! decline clause; the cost its confirmation by a typed answer; no pair, no
+//! backup moment); the acceptance string (v) per cell with its shares and
+//! block clauses; the account-creation sentence in the future tense
+//! (AUTH-5.87); AUTH-5.85's statement scoped by the board's venue; the reply
+//! string (vii) on its arm with `skep bind` and what skipping it costs
+//! (AUTH-5.90 (iii)); the three-key (or one-key) canonical record for the
+//! giver; `--reprint` re-composing the record from the artifacts' public
+//! members alone. A person door; `--reprint` is not.
 
 use std::path::{Path, PathBuf};
 
@@ -42,18 +43,27 @@ use crate::store::{Binding, FileStore, KeyFacts, KeySelector, KeyStore, Purpose}
 /// The beat's inputs.
 #[derive(Debug, Clone)]
 pub struct AcceptOptions {
+    /// `--account`: the subdivision's address the giver handed over.
     pub account: String,
+    /// The device key's label; the box asks where it is absent.
     pub label: Option<String>,
+    /// `--anchor-out`, once per anchor.
     pub anchor_out: Vec<PathBuf>,
+    /// `--paper`.
     pub paper: bool,
+    /// `--no-anchors`: the anchor pair declined.
     pub no_anchors: bool,
-    /// At a served board: the host is a HOSTED host (`Some(true)`), the
-    /// giver's own org (`Some(false)`), or asked (`None`).
+    /// The host of a served board.
+    ///
+    /// It is a hosted host (`Some(true)`), the giver's own org
+    /// (`Some(false)`), or asked (`None`).
     pub hosted: Option<bool>,
-    /// The machine's host name and the date, for the anchor boxes' per-run
-    /// default (§4.2 step 2) — never the party that runs the board, which
-    /// `hosted` answers.
+    /// The machine's host name, for the anchor boxes' per-run default.
+    ///
+    /// The default is §4.2 step 2's — never the party that runs the board,
+    /// which `hosted` answers.
     pub host_name: String,
+    /// The date, for the same per-run default.
     pub date: String,
 }
 
@@ -62,9 +72,13 @@ pub struct AcceptOptions {
 pub struct Accepted {
     /// The canonical record for the giver.
     pub record: String,
+    /// The recipient's three facts.
     pub facts: Facts,
+    /// The device key's fingerprint.
     pub device: Fingerprint,
+    /// The anchor pair's artifacts — none where the pair was declined.
     pub anchors: Vec<AnchorArtifact>,
+    /// Whether the anchor pair was declined (`--no-anchors`).
     pub declined_pair: bool,
 }
 
@@ -72,8 +86,9 @@ fn abandoned() -> Halt {
     Halt::face("the beat was abandoned", "the person left", "re-run when ready; nothing was generated")
 }
 
-/// The operator sentence per A4 cell, in the recipient's own facts (string
-/// (v)'s close; AUTH-5.43; AUTH RES-156).
+/// Returns the operator sentence per A4 cell, in the recipient's own facts.
+///
+/// It is string (v)'s close (AUTH-5.43; AUTH RES-156).
 fn operator_sentence(cell: &A4Cell, giver: &str, hosted: bool) -> String {
     match cell {
         A4Cell::Served if hosted => format!("Whoever runs this board can read what you write here before you publish it, and can withhold or delay it; anything they write in your name carries no signature of yours, and the app you install shows it as unsigned; on this board they can still retire your keys and continue as you, which every copy that checks signatures will show was not you; your way back is a fresh account. {giver} cannot: the rules give them no way to retire your keys here."),
@@ -82,7 +97,7 @@ fn operator_sentence(cell: &A4Cell, giver: &str, hosted: bool) -> String {
     }
 }
 
-/// The device-name box's statements at this door (AUTH-5.42).
+/// Returns the device-name box's statements at this door (AUTH-5.42).
 fn device_box() -> Vec<String> {
     vec![
         "This name is permanent and cannot be edited: fixing a typo costs a keypair.".into(),
@@ -92,7 +107,22 @@ fn device_box() -> Vec<String> {
     ]
 }
 
-/// THE BEAT.
+/// Runs the beat.
+///
+/// # Errors
+///
+/// In the beat's order: an address that is no subdivision's; the reads'
+/// errors; an unclaimed board; an account not yet delegated; an account
+/// that already holds a key set; a walk that reaches no set; the giver's
+/// read for the A4 cell; an abandoned ask; a label refused at the box, or
+/// an abandoned box; the store's generation and selection; a decline
+/// unconfirmed or abandoned; and the backup moment's halts, faced as the
+/// beat stopping before the payload.
+///
+/// # Panics
+///
+/// Panics if `Enrollment::new` refuses a label the box admitted; the box
+/// admits only labels it takes, so neither `expect` fires.
 pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &AcceptOptions) -> Result<Accepted, Halt> {
     let account = opts.account.trim().to_string();
     if account.is_empty() || parent_account(&account).is_none() {
@@ -102,7 +132,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             "ask the giver for the address and pass it as `--account <address>`",
         ));
     }
-    // THE READS FIRST.
+    // The reads first.
     let health = board.health()?;
     let mode = Mode::of(&health);
     if mode == Mode::Unclaimed {
@@ -168,7 +198,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     say(person, "§3a", format!("key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700); your anchors are what its loss recovers from", store.key_path(&key_id.0).display()));
     let facts = Facts { account: account.clone(), principal, origin: board.dialed().clone() };
     let operator = operator_sentence(&cell, &giver, hosted);
-    // The pair, or the DECLINE at its site.
+    // The pair, or the decline at its site.
     let (anchors, declined_pair) = if opts.no_anchors {
         say(
             person,
@@ -197,7 +227,7 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         })?;
         (out.anchors, false)
     };
-    // THE ACCEPTANCE, string (v) per cell, with the shares and block clauses.
+    // The acceptance, string (v) per cell, with the shares and block clauses.
     say(person, "AUTH-5.90 (v)", format!("(v) What you write here can be read by {giver} and by everyone above them, forever — and by whoever any account above this one is later given to, which nothing here tells you. This account cannot move. {operator} Anything this account already shared stays shared until you withdraw it — whoever it was shared with reads what you write here until then; this account's home page lists those shares."));
     if giver_is_member {
         say(person, "AUTH-5.90 (v) block", format!("If {giver}'s account is ever blocked on this board, this account is blocked with it: it sits under theirs."));
@@ -211,14 +241,15 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         say(person, "AUTH-5.90 (viii)", format!("(viii) Your agents' home will be {first_space}; giving that account away gives your agents' home away."));
         say(person, "AUTH-5.87", "creating your account will also create a space for your agents beneath it, and its home — reserved by your own hand at `skep bind`");
     }
-    // AUTH-5.85's statement, scoped by the board's VENUE.
+    // AUTH-5.85's statement, scoped by the board's venue.
     let notebook = A4Cell::venue(board, &health) == A4Cell::LoopbackNotebook;
     if notebook {
         say(person, "AUTH-5.85", format!("every edit to this page, including what you later remove, is kept — this notebook's history is permanent, and it is local: no mirror holds it and this board can never be made public; the records this page holds (your keys, the grants you issue) stand as records of their own, so removing the text one names does not remove it: the record stays in force, and the version you removed it from remains readable{}", if health.local_trust() { "; and local means the machine this board runs on: while local trust is on, anything running on it can bare-bind as you here — writing as you, and reading every draft you have already written, with no mint at all" } else { "" }));
     } else {
         say(person, "AUTH-5.85", "every edit to this page, including what you later remove, is public history — and the records this page holds (your keys, the grants you issue) stand as records of their own, so removing the text one names does not remove it: the record stays in force, and the version you removed it from remains readable");
     }
-    // THE REPLY, string (vii) per arm, with `skep bind` and what skipping it costs.
+    // The reply, string (vii) per arm, with `skep bind` and what skipping it
+    // costs.
     let keep = if declined_pair { "Keep this somewhere you control" } else { "Keep this with your papers" };
     say(
         person,
@@ -238,12 +269,25 @@ pub fn accept(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
     Ok(Accepted { record, facts, device: device.fingerprint, anchors, declined_pair })
 }
 
-/// `--reprint [--anchor <path>]…`: the record re-composed from the
-/// artifacts' PUBLIC members alone — `public`, `fingerprint`, `anchor`,
-/// `label` — no seed loaded past the parse's own re-derivation, nothing
-/// written; the device key from `key` or the store's lone UNBOUND device
-/// key. A `--paper` file destroyed under AUTH-5.41's offer halts: the act is
-/// a re-run under a fresh pair.
+/// Re-composes the record for `--reprint [--anchor <path>]…`.
+///
+/// The record comes from the artifacts' public members alone — `public`,
+/// `fingerprint`, `anchor`, `label` — no seed loaded past the parse's own
+/// re-derivation, nothing written; the device key from `key` or the store's
+/// lone unbound device key.
+///
+/// # Errors
+///
+/// An anchor path where no file remains halts — a `--paper` file destroyed
+/// under AUTH-5.41's offer among them: the act is a re-run under a fresh
+/// pair. So do a path naming a device key's file, no unbound device key or
+/// more than one, and the store's refusals.
+///
+/// # Panics
+///
+/// Panics if `Enrollment::new` refuses a stored label; the store reads a
+/// label only where it is one `Enrollment::new` takes, so neither `expect`
+/// fires.
 pub fn reprint(store: &FileStore, key: Option<&Path>, anchors: &[PathBuf], board: Option<&crate::origin::Origin>) -> Result<String, Halt> {
     let mut entries = Vec::new();
     for path in anchors {

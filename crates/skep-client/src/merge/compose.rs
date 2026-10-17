@@ -4,27 +4,30 @@
 //! merged list, the gap report and the run counts go out; every value read
 //! is made through a closure the caller supplies, so a test needs no board.
 //! The record's §1.4 states the composition in seven steps, and the seven
-//! private functions `removals`, `spine`, `additions`, `placement`, `gaps`,
-//! `splice` and `report` are those steps in that order. §2's rules decide
-//! each gap's kind and its default; §5's value rule reads bytes at a shared
-//! gap (the dedup) and, switched on, before the walk (the retype). Beside
-//! the core stand the two other pure functions §7 names: [`base_of`], the
-//! nearest common ancestor of two members by §1.2's address forms, and
+//! private functions `removals`, `spine_of`, `additions`, `placement`,
+//! `gaps`, `splice` and `report` are those steps in that order, with
+//! `collision_regions` feeding `gaps` and `resolve` applying step 7's
+//! resolutions ahead of the splice. §2's rules
+//! decide each gap's kind and its default; §5's value rule reads bytes at a
+//! shared gap (the dedup) and, switched on, before the walk (the retype).
+//! Beside the core stand the two other pure functions §7 names: [`base_of`],
+//! the nearest common ancestor of two members by §1.2's address forms, and
 //! [`script`], the in-place edit script §1.5's draft landing applies.
 //!
-//! The vocabulary is the record's. A RUN is `(origin, i_start, width)`. The
-//! BASE is the member both sides descend from. The SPINE is the surviving
-//! base material in the order M keeps it. A side's run is FRESH when its
-//! positions are not the base's. A STRETCH is a side's maximal run of fresh
-//! material at one place, with its two ANCHORS: the base positions
+//! The vocabulary is the record's. A run is `(origin, i_start, width)`. The
+//! base is the member every side descends from. The spine is the surviving
+//! base material in the order M keeps it. A side's run is fresh when its
+//! positions are not the base's. A stretch is a side's maximal run of fresh
+//! material at one place, with its two anchors: the base positions
 //! immediately before and after it in that side's own sequence, the ends of
-//! the document standing in where there is none. A SPOT is the pair of
-//! anchors a stretch sits between. A GAP is a place in M between two
+//! the document standing in where there is none. A spot is the pair of
+//! anchors a stretch sits between. A gap is a place in M between two
 //! surviving base positions, or at either end, where some side placed
-//! material or where both sides removed the same material.
+//! material or where two sides removed the same material — save a `moves`
+//! gap, which is no place but a side's reorder the spine did not take.
 //!
 //! The lists are never expanded to positions. The walk is made over the
-//! FRAGMENTS of the three lists' common refinement — every run cut at every
+//! fragments of the lists' common refinement — every run cut at every
 //! other run's edges, so a fragment lies wholly inside or wholly outside each
 //! list — and a fragment stands for its positions in every rule below. The
 //! cost is in runs, not in width.
@@ -45,7 +48,7 @@ use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Leve
 /// it. The origin is a document address — the chain that minted the
 /// positions, which for a member's own text is its trunk and for a window
 /// is the other document. The crate's `image` answer carries a prefix string
-/// and a V-ordinal instead; the lane that reads converts.
+/// and a V-ordinal instead; the merge's reads convert it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Run {
     /// The document whose chain minted the positions.
@@ -62,9 +65,10 @@ impl Run {
         Run { origin, i_start, width }
     }
 
-    /// Returns the ordinal one past the run's last position, its exclusive
-    /// end: the daemon's own notion of a run's reach, which two runs are
-    /// I-adjacent at. Saturates at the top of the range rather than wrap.
+    /// Returns the ordinal one past the run's last position, its exclusive end.
+    ///
+    /// It is the daemon's own notion of a run's reach, which two runs are
+    /// I-adjacent at. It saturates at the top of the range rather than wrap.
     pub fn reach(&self) -> u64 {
         self.i_start.saturating_add(self.width)
     }
@@ -72,7 +76,8 @@ impl Run {
     /// Returns the address of the run's position at offset `k`.
     ///
     /// `None` for `k` at or past the width, for an origin that is no
-    /// document address, and for an ordinal the address grammar refuses.
+    /// document address, and for an ordinal past the range or one the
+    /// address grammar refuses.
     pub fn address_at(&self, k: u64) -> Option<Address> {
         if k >= self.width {
             return None;
@@ -88,32 +93,41 @@ impl Run {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SideIx(pub u8);
 
-/// A gap's number in the report, counted from 1 in M's order.
+/// A gap's number in the report, counted from 1, the `moves` gaps first.
+///
+/// The other gaps are numbered in the order of their default places in M;
+/// a resolution that moves one keeps its number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GapId(pub u32);
 
-/// One delivery item of a run's value: the bytes of one position, or of one
-/// atom, as `retrieve_v` delivers it.
+/// One delivery item of a run's value, as `retrieve_v` delivers it.
 ///
-/// The crate holds no delivery-item type of its own, so the item is its
-/// bytes; two runs are equal under the value rule when their items are.
+/// It is the bytes of one position, or of one atom. The crate holds no
+/// public delivery-item type of its own, so the item is its bytes; two runs
+/// are equal under the value rule when their items are.
 pub type Item = Vec<u8>;
 
 /// The composition's switches (merge record §5 and §7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    /// The value rule's dedup: at a gap where two sides placed equal bytes,
-    /// keep one identity, the earlier side's (§5, case (g)). On by default.
+    /// The value rule's dedup (§5, case (g)), on by default.
+    ///
+    /// At an `order` gap where two sides placed equal bytes, one identity is
+    /// kept, the earlier side's.
     pub dedup: bool,
-    /// The value rule's retype normalization: a side that removed base
-    /// bytes and placed equal fresh bytes in their place keeps the base's
-    /// identity instead (§5, case (f)). Off by default.
+    /// The value rule's retype normalization (§5, case (f)), off by default.
+    ///
+    /// A side that removed base bytes and placed equal fresh bytes in their
+    /// place keeps the base's identity instead, where another side still
+    /// holds those base bytes to read them through.
     pub retype: bool,
     /// The merger's choices at gaps the rules left unsettled (§1.4 step 7).
     pub resolutions: Vec<Resolution>,
-    /// How many times this merge's publish landed as a daughter and the
-    /// merger composed again (merge record decision 17). Carried for the
-    /// record the landing writes; the composition does not read it.
+    /// How many times this merge's publish landed as a daughter.
+    ///
+    /// Each time, the merger composed again (merge record decision 17). It
+    /// is carried for the record the landing writes; the composition does
+    /// not read it.
     pub retries: u32,
 }
 
@@ -123,8 +137,9 @@ impl Default for Options {
     }
 }
 
-/// The merger's choice at one gap, overriding its default (merge record
-/// §1.4 step 7, §2 "what unsettled means").
+/// The merger's choice at one gap, overriding its default.
+///
+/// The merge record draws it at §1.4 step 7 and §2, "what unsettled means".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolution {
     /// The gap resolved, by its number in the report.
@@ -138,28 +153,34 @@ pub struct Resolution {
 /// What a merger can choose at a gap (merge record §7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
-    /// The sides' groups in this order; a side left out is not placed. At a
-    /// `moves` gap, the one side whose order the spine takes.
+    /// The sides' groups in this order; a side left out is not placed.
+    ///
+    /// At a `moves` gap, the one side whose order the spine takes.
     Order(Vec<SideIx>),
-    /// The gap's material placed immediately after this surviving base
-    /// position.
+    /// The gap's material placed after this surviving base position.
+    ///
+    /// It lands at the first place after the position where some list's run
+    /// starts or ends — right after it where one does.
     After(Address),
-    /// The gap's material placed immediately before this surviving base
-    /// position.
+    /// The gap's material placed before this surviving base position.
+    ///
+    /// It lands at the last place at or before the position where some
+    /// list's run starts or ends — right before it where one does.
     Before(Address),
     /// Only this side's material placed; the other sides' is left out.
     KeepOnly(SideIx),
     /// Every side's material placed in the default order, confirmed.
     KeepBoth,
-    /// Nothing placed: the gap's material left out of M, its bytes standing
-    /// where the side holds them.
+    /// Nothing placed: the gap's material left out of M.
+    ///
+    /// Its bytes stand where the side holds them.
     Omit,
 }
 
 /// Who settled a gap (merge record §4, `resolved_by`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedBy {
-    /// The rules of §2, with no choice asked.
+    /// The rules of §2, or the value rule's dedup (§5), with no choice asked.
     Rule,
     /// A person, with judgment.
     Person,
@@ -169,30 +190,45 @@ pub enum ResolvedBy {
     Answer(Address),
 }
 
-/// The six kinds of gap (merge record §2, §4). The rules settle one of
-/// them, `Anchor`; the other five are the merger's.
+/// The six kinds of gap (merge record §2, §4).
+///
+/// The rules settle one of them, `Anchor`; the other five are the merger's,
+/// save an `order` gap the value rule's dedup settles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GapKind {
-    /// Both sides added at one spot: unsettled, the default the commit order
-    /// (R1).
+    /// Two or more sides added at one spot: unsettled (R1).
+    ///
+    /// The default is the commit order.
     Order,
-    /// An addition beside a removal, one of its anchors surviving and the
-    /// adding side's own removal overlapping nothing the other side removed:
-    /// settled, placed beside the survivor (R2).
+    /// An addition beside a removal, one of its anchors surviving (R2).
+    ///
+    /// The adding side's own removal overlaps nothing another side removed:
+    /// settled, placed beside the survivor.
     Anchor,
-    /// An addition whose anchors are both gone: unsettled, the default after
-    /// the nearest surviving base position to its left (R3).
+    /// An addition whose anchors are both gone: unsettled (R3).
+    ///
+    /// The default is after the nearest surviving base position to its left.
     Corner,
-    /// An addition whose anchors both survive but no longer stand together,
-    /// the other side's move having opened a cut there: unsettled, the
+    /// An addition whose anchors both survive but no longer stand together.
+    ///
+    /// The spine's order parts them — another side's move, or the base's
+    /// where the adding side's own move is not applied: unsettled, the
     /// default after the left anchor (R4 i).
     Cut,
-    /// Both sides removed overlapping base material, whether both, one or
-    /// neither put something in its place: unsettled, the default what was
-    /// put there kept in the commit order after the left survivor (R4 ii).
+    /// Two or more sides removed overlapping base material: unsettled (R4 ii).
+    ///
+    /// It holds whether all, some or none of them put something in its
+    /// place; the default is what was put there, kept in the commit order
+    /// after the left survivor.
     Collision,
-    /// Both sides reordered overlapping material: unsettled, the default the
-    /// earlier side's order, the later side's reorder not applied (R4 iii).
+    /// A side's reorder the spine did not take: unsettled (R4 iii).
+    ///
+    /// With no `spine_hint` it arises where the sides' reorders do not
+    /// compose, as where two sides reordered overlapping material, and the
+    /// default is the earliest reordering side's order, each later side
+    /// whose order differs from it a `moves` gap, its reorder not applied.
+    /// Under a `spine_hint` the default is the hinted side's order, and each
+    /// other side whose reorder differs from it is a `moves` gap.
     Moves,
 }
 
@@ -200,10 +236,12 @@ pub enum GapKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Placement {
     /// The sides whose material was placed, in that order.
+    ///
+    /// At a `moves` gap, the one side whose order the spine took.
     Order(Vec<SideIx>),
-    /// Placed immediately after the surviving anchor.
+    /// Placed immediately after the surviving base position before the gap.
     After,
-    /// Placed immediately before the surviving anchor.
+    /// Placed immediately before the surviving base position after the gap.
     Before,
     /// Nothing placed: the merger's `Omit`.
     Omitted,
@@ -212,18 +250,23 @@ pub enum Placement {
 /// One gap of the report (merge record §1.4 step 7, §4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gap {
-    /// The gap's number, counted from 1 in M's order.
+    /// The gap's number, counted from 1, the `moves` gaps first.
+    ///
+    /// The other gaps are numbered in the order of their default places in M.
     pub id: GapId,
     /// Its kind.
     pub kind: GapKind,
-    /// The surviving base position M holds immediately before the gap;
+    /// The surviving base position M holds immediately before the gap.
+    ///
     /// `None` at the start of M, and at a `moves` gap.
     pub after: Option<Address>,
-    /// The surviving base position M holds immediately after the gap;
+    /// The surviving base position M holds immediately after the gap.
+    ///
     /// `None` at the end of M, and at a `moves` gap.
     pub before: Option<Address>,
-    /// The contested runs with the side each came from, in the default
-    /// order; at a `moves` gap, the material each side moved.
+    /// The contested runs with the side each came from, in the default order.
+    ///
+    /// At a `moves` gap, the material each side moved.
     pub runs: Vec<(SideIx, Run)>,
     /// How the runs were laid in M.
     pub placed: Placement,
@@ -236,14 +279,15 @@ pub struct Gap {
 /// One run of M with the side that placed it (merge record §1.5, `Merged`).
 ///
 /// The record's `family` member — own, window or draft-native — needs the
-/// reads to tell a window from an own run, so the lane that reads adds it.
+/// reads to tell a window from an own run, so the merge's reads add it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlacedRun {
     /// The run, coalesced as the member will hold it.
     pub run: Run,
-    /// The side whose fresh material begins the run; `None` for a run that
-    /// begins with the base's material. A run two sides' adjacent fresh runs
-    /// coalesced into carries the first's.
+    /// The side whose fresh material begins the run.
+    ///
+    /// `None` for a run that begins with the base's material. A run two
+    /// sides' adjacent fresh runs coalesced into carries the first's.
     pub side: Option<SideIx>,
 }
 
@@ -252,11 +296,14 @@ pub struct PlacedRun {
 pub struct RunCounts {
     /// The first side's runs as given.
     pub a: usize,
-    /// The other sides' runs as given, together: the record keeps two
-    /// numbers, and every side after the first is an alternative.
+    /// The other sides' runs as given, together.
+    ///
+    /// The record keeps two numbers, and every side after the first is an
+    /// alternative.
     pub b: usize,
-    /// M's runs, coalesced — the count the shot carries and the cap is
-    /// checked against.
+    /// M's runs, coalesced.
+    ///
+    /// It is the count the shot carries and the cap is checked against.
     pub m: usize,
 }
 
@@ -271,40 +318,51 @@ pub struct ValueLog {
     pub applied: Vec<GapId>,
 }
 
-/// What [`compose_runs`] returns: M, the gap report, the counts, the value
-/// log, and the resolutions it could not apply.
+/// What [`compose_runs`] returns.
+///
+/// It holds M, the gap report, the counts, the value log, and the
+/// resolutions it could not apply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Composed {
     /// The merged list, coalesced by I-adjacency as the member will hold it.
     pub runs: Vec<PlacedRun>,
-    /// Every gap, in M's order; a one-sided addition between two surviving
-    /// anchors that stand together asks nothing and is not listed.
+    /// Every gap by number: the `moves` gaps, then the others.
+    ///
+    /// The others come in the order of their default places in M. A
+    /// one-sided addition between two surviving anchors that stand
+    /// together asks nothing and is not listed.
     pub gaps: Vec<Gap>,
     /// The run counts.
     pub counts: RunCounts,
     /// The value rule's log.
     pub values: ValueLog,
-    /// The resolutions that named no gap of this report, a gap the rules
-    /// had settled, or a choice the gap's kind cannot take. Each stands
-    /// here untouched, so the caller sees what was not applied.
+    /// The resolutions not applied.
+    ///
+    /// Each named no gap of this report, a gap the rules had settled, or a
+    /// choice the gap cannot take; each stands here untouched, so the caller
+    /// sees what was not applied.
     pub ignored: Vec<Resolution>,
 }
 
-/// One in-place edit of a draft (merge record §1.5, the draft landing):
-/// the wire's `delete` and `reinstate`, positions in the draft's content
-/// ordinals, counted from 1.
+/// One in-place edit of a draft (merge record §1.5, the draft landing).
+///
+/// The edits are the wire's `delete` and `reinstate`, positions in the
+/// draft's content ordinals, counted from 1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InPlaceOp {
-    /// Remove `width` positions from position `p` of the draft as it stands
-    /// when the op is applied.
+    /// Removes `width` positions from position `p` of the draft.
+    ///
+    /// The position is the draft's as it stands when the op is applied.
     Delete {
         /// The first position removed.
         p: u64,
         /// How many positions.
         width: u64,
     },
-    /// Place `runs` by identity before position `at` of the draft as it
-    /// stands when the op is applied; `at` one past the content appends.
+    /// Places `runs` by identity before position `at` of the draft.
+    ///
+    /// The position is the draft's as it stands when the op is applied; `at`
+    /// one past the content appends.
     Reinstate {
         /// The position the first placed run takes.
         at: u64,
@@ -321,9 +379,10 @@ pub enum InPlaceOp {
 /// as `image` delivers it, the sides in commit order. `spine_hint` names
 /// the side whose order the spine takes where the sides disagree about the
 /// order of the surviving base material; `None` computes it — the base's
-/// order, or the one side's that reordered, or both sides' reorders where
-/// they touch different material, else the earlier side's with a `moves`
-/// gap for the later. `values` answers a side's run with its items, which
+/// order, or the one side's that reordered, or the reorders of two or more
+/// sides composed where they touch different material, else the earliest
+/// reordering side's, with a `moves` gap for each later side whose order
+/// differs from it. `values` answers a side's run with its items, which
 /// the value rule compares; a run asked may be a part of a run the side
 /// holds; `None` leaves the rule unfired there. The composition writes
 /// nothing and dials nothing (merge record §1.4, §7).
@@ -331,11 +390,13 @@ pub enum InPlaceOp {
 /// The walk, in the record's seven steps: the removals, the spine, each
 /// side's additions with their anchors, the placement of each by its
 /// kind, the gaps with the order rule and the value rule, the splice and
-/// the coalesce, the report with the resolutions applied. A `moves` gap
-/// resolved by `Choice::Order` of one side re-walks the whole composition
-/// under that side's order, so the report's other gaps may be numbered
-/// afresh: a caller resolves a `moves` gap first and reads the report
-/// again.
+/// the coalesce, the report with the resolutions applied — applied ahead
+/// of the splice, so M holds them. With no
+/// `spine_hint`, a `moves` gap resolved by `Choice::Order` of one side
+/// re-walks the whole composition under that side's order, so the report's
+/// other gaps may be numbered afresh: a caller resolves a `moves` gap first
+/// and reads the report again. Under a `spine_hint` that resolution is not
+/// applied and stands in `ignored`.
 ///
 /// **Precondition.** Every run has a width above 0, and no position stands
 /// twice in one list. A release build skips a run of width 0 and the later
@@ -343,8 +404,8 @@ pub enum InPlaceOp {
 ///
 /// # Panics
 ///
-/// A debug build stops on a run of width 0 and on a position placed twice
-/// in one list.
+/// Panics in a debug build on a run of width 0 and on a position placed
+/// twice in one list.
 pub fn compose_runs(
     base: &[Run],
     sides: &[(SideIx, Vec<Run>)],
@@ -368,7 +429,7 @@ pub fn compose_runs(
     first
 }
 
-/// The seven steps over the normalized sequences, under one spine choice.
+/// Runs the seven steps over the normalized sequences under one spine choice.
 fn walk(
     r: &Refinement,
     seqs: &[Vec<usize>],
@@ -402,8 +463,9 @@ fn walk(
     }
 }
 
-/// The resolution of a `moves` gap, if one is given: the side whose order
-/// the merger chose, and who chose.
+/// Returns the resolution of a `moves` gap, if one is given.
+///
+/// It is the side whose order the merger chose, and who chose.
 fn moves_choice(r: &Refinement, composed: &Composed, resolutions: &[Resolution]) -> Option<(usize, ResolvedBy)> {
     for res in resolutions {
         let Some(gap) = composed.gaps.iter().find(|g| g.id == res.gap && g.kind == GapKind::Moves) else {
@@ -424,9 +486,10 @@ fn moves_choice(r: &Refinement, composed: &Composed, resolutions: &[Resolution])
 
 // ── the refinement ────────────────────────────────────────────────────────
 
-/// One fragment of the common refinement: `width` positions of the origin
-/// `origin` names from ordinal `start`, lying wholly inside or wholly
-/// outside every list given.
+/// One fragment of the common refinement.
+///
+/// It is `width` positions of the origin `origin` names from ordinal
+/// `start`, lying wholly inside or wholly outside every list given.
 #[derive(Debug, Clone, Copy)]
 struct Frag {
     origin: usize,
@@ -434,7 +497,7 @@ struct Frag {
     width: u64,
 }
 
-/// The three lists as sequences of fragment ids over one fragment table.
+/// The lists given as sequences of fragment ids over one fragment table.
 struct Refinement {
     /// The origins named, interned.
     origins: Vec<Address>,
@@ -446,13 +509,20 @@ struct Refinement {
     sides: Vec<Vec<usize>>,
     /// Each side's index as the caller named it.
     side_ix: Vec<SideIx>,
-    /// Each side's runs as given.
+    /// Each side's run count as given.
     side_runs: Vec<usize>,
 }
 
 impl Refinement {
-    /// The refinement of the base and the sides: every run cut at every
-    /// other run's edges, each list then a sequence of fragment ids.
+    /// Returns the refinement of the base and the sides.
+    ///
+    /// Every run is cut at every other run's edges, each list then a
+    /// sequence of fragment ids.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build on a run of width 0 and on a position placed
+    /// twice in one list.
     fn of(base: &[Run], sides: &[(SideIx, Vec<Run>)]) -> Refinement {
         let mut origins: Vec<Address> = Vec::new();
         let mut points: Vec<Vec<u64>> = Vec::new();
@@ -512,12 +582,12 @@ impl Refinement {
         }
     }
 
-    /// Each fragment's index in the base, where it is the base's.
+    /// Returns each fragment's index in the base, where it is the base's.
     fn in_base(&self) -> Vec<Option<usize>> {
         self.presence(&self.base)
     }
 
-    /// Each fragment's index in `seq`, where it is there.
+    /// Returns each fragment's index in `seq`, where it is there.
     fn presence(&self, seq: &[usize]) -> Vec<Option<usize>> {
         let mut out = vec![None; self.frags.len()];
         for (i, &f) in seq.iter().enumerate() {
@@ -526,8 +596,10 @@ impl Refinement {
         out
     }
 
-    /// The fragments as runs, I-adjacent fragments of one origin widened
-    /// into one: the daemon's own accumulator, never coalescing on value.
+    /// Returns the fragments as runs.
+    ///
+    /// I-adjacent fragments of one origin are widened into one: the daemon's
+    /// own accumulator, never coalescing on value.
     fn coalesce(&self, frags: impl IntoIterator<Item = usize>) -> Vec<Run> {
         let mut out: Vec<Run> = Vec::new();
         for f in frags {
@@ -545,20 +617,22 @@ impl Refinement {
         out
     }
 
-    /// The address of a fragment's first position.
+    /// Returns the address of a fragment's first position.
     fn first_address(&self, f: usize) -> Option<Address> {
         let frag = self.frags[f];
         element_address(&self.origins[frag.origin], frag.start)
     }
 
-    /// The address of a fragment's last position.
+    /// Returns the address of a fragment's last position.
     fn last_address(&self, f: usize) -> Option<Address> {
         let frag = self.frags[f];
         element_address(&self.origins[frag.origin], frag.start.checked_add(frag.width)?.checked_sub(1)?)
     }
 
-    /// The items of a side's fragments, read through the closure as the
-    /// runs the side holds them in; `None` where any read answers none.
+    /// Returns the items of a side's fragments, read through the closure.
+    ///
+    /// They are read as the runs the side holds them in; `None` where any
+    /// read answers none.
     fn bytes(
         &self,
         side: usize,
@@ -572,7 +646,7 @@ impl Refinement {
         Some(out)
     }
 
-    /// The base fragment holding `addr`, by its index in the base.
+    /// Returns the base fragment holding `addr`, by its index in the base.
     fn locate(&self, addr: &Address, in_base: &[Option<usize>]) -> Option<usize> {
         let doc = skep_address::document_of(addr)?;
         let o = self.origins.iter().position(|x| *x == doc)?;
@@ -586,19 +660,22 @@ impl Refinement {
     }
 }
 
-/// The address `origin·0·1·ordinal`; `None` for an origin that is no
-/// document address or an ordinal of 0.
+/// Returns the address `origin·0·1·ordinal`.
+///
+/// `None` for an origin that is no document address or an ordinal of 0.
 fn element_address(origin: &Address, ordinal: u64) -> Option<Address> {
     elem_addr(ElemPos { doc: origin.clone(), subspace: content_subspace(), ordinal: Nat::from(ordinal) }).ok()
 }
 
 // ── before the walk: the value rule's retype, and shared identities ───────
 
-/// The retype normalization (merge record §5, case (f)): a side's stretch
-/// standing in place of base material the side removed whole, whose bytes
-/// equal that material's, is replaced by the material's own fragments, so
-/// the base's identity is kept. The removed bytes are read from another
-/// side that still holds them — a base run's value is never read.
+/// Applies the retype normalization (merge record §5, case (f)).
+///
+/// A side's stretch standing in place of base material the side removed
+/// whole, whose bytes equal that material's, is replaced by the material's
+/// own fragments, so the base's identity is kept. The removed bytes are
+/// read from another side that still holds them — a base run's value is
+/// never read.
 fn undo_retypes(r: &Refinement, seqs: &mut [Vec<usize>], values: &dyn Fn(SideIx, &Run) -> Option<Vec<Item>>) {
     let in_base = r.in_base();
     for s in 0..seqs.len() {
@@ -624,9 +701,10 @@ fn undo_retypes(r: &Refinement, seqs: &mut [Vec<usize>], values: &dyn Fn(SideIx,
     }
 }
 
-/// A fresh identity several sides hold is placed once, where the earliest
-/// side holds it: an identical addition is not a difference (merge record
-/// §2, the one rule).
+/// Places a fresh identity several sides hold once.
+///
+/// It is placed where the earliest side holds it: an identical addition is
+/// not a difference (merge record §2, the one rule).
 fn claim_identities(r: &Refinement, seqs: &mut [Vec<usize>]) {
     let in_base = r.in_base();
     let mut claimed = HashSet::new();
@@ -637,8 +715,10 @@ fn claim_identities(r: &Refinement, seqs: &mut [Vec<usize>]) {
 
 // ── step 1: the removals ──────────────────────────────────────────────────
 
-/// Step 1 (merge record §1.4): per side, the base positions absent from
-/// it; and their union, absent from M whatever the other side did.
+/// Returns step 1's removals (merge record §1.4).
+///
+/// They are, per side, the base positions absent from it; and their union,
+/// absent from M whatever the other sides did.
 fn removals(r: &Refinement, in_side: &[Vec<Option<usize>>]) -> (Vec<Vec<bool>>, Vec<bool>) {
     let removed_by: Vec<Vec<bool>> =
         in_side.iter().map(|side| r.base.iter().map(|&f| side[f].is_none()).collect()).collect();
@@ -648,8 +728,10 @@ fn removals(r: &Refinement, in_side: &[Vec<Option<usize>>]) -> (Vec<Vec<bool>>, 
 
 // ── step 2: the spine ─────────────────────────────────────────────────────
 
-/// A `moves` gap: the side whose order the spine took, the side whose
-/// reorder was not applied, and the material each moved.
+/// A `moves` gap as the walk holds it.
+///
+/// It names the side whose order the spine took, the side whose reorder was
+/// not applied, and the material each moved.
 struct Moves {
     id: GapId,
     winner: usize,
@@ -658,12 +740,15 @@ struct Moves {
     resolved_by: Option<ResolvedBy>,
 }
 
-/// Step 2 (merge record §1.4): the surviving base material in the order M
-/// keeps it — the base's, unless a side reordered it: then that side's; two
-/// sides' reorders composed where they touch different material, else the
-/// earlier side's order with a `moves` gap for each later side (§2 R4 iii).
-/// `hint` names the side whose order wins outright; `forced` marks every
-/// `moves` gap settled by the merger who named it.
+/// Returns step 2's spine and its `moves` gaps (merge record §1.4).
+///
+/// The spine is the surviving base material in the order M keeps it — the
+/// base's, unless a side reordered it: then that side's; the reorders of
+/// two or more sides composed where they touch different material, else the
+/// earliest reordering side's order with a `moves` gap for each later side
+/// whose order differs from it (§2 R4 iii). `hint`
+/// names the side whose order wins outright; `forced` marks every `moves`
+/// gap settled by the merger who named it.
 fn spine_of(
     r: &Refinement,
     seqs: &[Vec<usize>],
@@ -713,8 +798,10 @@ fn spine_of(
     (spine, spine_pos, moves)
 }
 
-/// The base material a side moved: the survivors outside the longest part
-/// of the side's order that keeps the base's, as runs with the side.
+/// Returns the base material a side moved, as runs with the side.
+///
+/// It is the survivors outside the longest part of the side's order that
+/// keeps the base's.
 fn moved_runs(r: &Refinement, surv: &[usize], side: usize, order: &[usize]) -> Vec<(SideIx, Run)> {
     let moved = moved_set(surv, order);
     let mut bis: Vec<usize> = moved.into_iter().collect();
@@ -722,8 +809,9 @@ fn moved_runs(r: &Refinement, surv: &[usize], side: usize, order: &[usize]) -> V
     r.coalesce(bis.into_iter().map(|bi| r.base[bi])).into_iter().map(|run| (r.side_ix[side], run)).collect()
 }
 
-/// The base indices a side's order moved, relative to the base's order of
-/// the survivors.
+/// Returns the base indices a side's order moved.
+///
+/// They are relative to the base's order of the survivors.
 fn moved_set(surv: &[usize], order: &[usize]) -> HashSet<usize> {
     let mut rank = vec![None; surv.iter().copied().max().map_or(0, |m| m + 1)];
     for (p, &bi) in surv.iter().enumerate() {
@@ -734,13 +822,14 @@ fn moved_set(surv: &[usize], order: &[usize]) -> HashSet<usize> {
     order.iter().enumerate().filter(|(i, _)| !kept.contains(i)).map(|(_, &bi)| bi).collect()
 }
 
-/// Two or more sides' reorders composed into one order of the survivors,
-/// or `None` where they overlap: a survivor both moved, or a pair of
-/// survivors whose order the sides' moves and the base's order between
-/// them cannot all keep. The material no side moved keeps the base's
-/// order; each moved survivor keeps its place among that material as its
-/// side put it; two moved survivors stand in the order the side that
-/// changed their order gave, else the base's.
+/// Composes two or more sides' reorders into one order of the survivors.
+///
+/// `None` where they overlap: a survivor two of them moved, or a pair of
+/// survivors whose order the sides' moves and the base's order between them
+/// cannot all keep. The material no side moved keeps the base's order; each
+/// moved survivor keeps its place among that material as its side put it;
+/// two moved survivors stand in the order the side that changed their order
+/// gave, else the base's.
 fn compose_reorders(surv: &[usize], orders: &[(usize, &[usize])]) -> Option<Vec<usize>> {
     let top = surv.iter().copied().max().map_or(0, |m| m + 1);
     let mut base_pos = vec![usize::MAX; top];
@@ -813,8 +902,10 @@ fn compose_reorders(surv: &[usize], orders: &[(usize, &[usize])]) -> Option<Vec<
     Some(spine)
 }
 
-/// The positions of one longest strictly increasing run of `keys`, a `None`
-/// never kept — patience sorting with back links; deterministic.
+/// Returns the positions of one longest strictly increasing subsequence.
+///
+/// The subsequence is of `keys`, a `None` never kept — patience sorting
+/// with back links; deterministic.
 fn longest_increasing(keys: &[Option<usize>]) -> Vec<usize> {
     let mut tails: Vec<usize> = Vec::new();
     let mut back: Vec<Option<usize>> = vec![None; keys.len()];
@@ -840,8 +931,11 @@ fn longest_increasing(keys: &[Option<usize>]) -> Vec<usize> {
 
 // ── step 3: the additions ─────────────────────────────────────────────────
 
-/// A side's stretch: its fragments, where it begins in the side's sequence,
-/// and its two anchors as base indices — `None` at the document's ends.
+/// A side's stretch.
+///
+/// It holds its side, its fragments, where it begins in the side's
+/// sequence, and its two anchors as base indices — `None` at the document's
+/// ends.
 struct Stretch {
     side: usize,
     at: usize,
@@ -850,9 +944,11 @@ struct Stretch {
     y: Option<usize>,
 }
 
-/// Step 3 (merge record §1.4): each side's additions — the maximal
-/// stretches of its sequence whose positions are not the base's, each
-/// with the base positions immediately before and after it there.
+/// Returns step 3's additions (merge record §1.4).
+///
+/// They are each side's maximal stretches of its sequence whose positions
+/// are not the base's, each with the base positions immediately before and
+/// after it there.
 fn additions(seqs: &[Vec<usize>], in_base: &[Option<usize>]) -> Vec<Stretch> {
     let mut out = Vec::new();
     for (side, seq) in seqs.iter().enumerate() {
@@ -879,23 +975,27 @@ fn additions(seqs: &[Vec<usize>], in_base: &[Option<usize>]) -> Vec<Stretch> {
 
 // ── step 4: the placement ─────────────────────────────────────────────────
 
-/// Where a stretch goes and what kind of gap it makes: `home` the gap of
-/// the spine it lands in (gap `g` lies before the spine's `g`-th
-/// survivor, `0` the start), `kind` `None` for a one-sided addition between
-/// two anchors that stand together, which asks nothing.
+/// Where a stretch goes and what kind of gap it makes.
+///
+/// `home` is the gap of the spine it lands in (gap `g` lies before the
+/// spine's `g`-th survivor, `0` the start), `kind` `None` for an addition
+/// between two anchors that stand together, which asks nothing where it is
+/// one-sided.
 struct Placed {
     kind: Option<GapKind>,
     home: usize,
     before: bool,
 }
 
-/// Step 4 (merge record §1.4, §2 as ruled): each stretch placed by its
-/// anchors. Its own side's removal between its anchors overlapping another
-/// side's removal is a `collision`, whatever stands in the place. Else both
-/// anchors surviving and standing together in the spine is the gap between
-/// them; both surviving apart is a `cut`, after the left; one surviving is
-/// an `anchor`, beside the survivor; neither is a `corner`, after the
-/// nearest survivor to the left in the base's order.
+/// Returns step 4's placements (merge record §1.4, §2).
+///
+/// Each stretch is placed by its anchors. Its own side's removal between
+/// its anchors overlapping another side's removal is a `collision`,
+/// whatever stands in the place. Else both anchors surviving and standing
+/// together in the spine is the gap between them; both surviving apart is a
+/// `cut`, after the left; one surviving is an `anchor`, beside the
+/// survivor; neither is a `corner`, after the nearest survivor to the left
+/// in the base's order.
 fn placement(
     r: &Refinement,
     stretches: &[Stretch],
@@ -934,8 +1034,9 @@ fn placement(
                 }
                 (true, false) => Placed { kind: Some(GapKind::Anchor), home: after(st.x), before: false },
                 (false, true) => {
-                    // The right anchor survives: before it in the spine — and where
-                    // it is `⊤`, the end of the document, before the spine's end.
+                    // The right anchor survives: before it in the spine —
+                    // and where it is `⊤`, the end of the document, before
+                    // the spine's end.
                     Placed { kind: Some(GapKind::Anchor), home: st.y.and_then(|y| spine_pos[y]).unwrap_or(spine.len()), before: true }
                 }
                 (false, false) => Placed { kind: Some(GapKind::Corner), home: left(st.x), before: false },
@@ -944,8 +1045,11 @@ fn placement(
         .collect()
 }
 
-/// The spine gap immediately after the nearest surviving base position at
-/// or left of base index `from`, in the base's order; the start where none.
+/// Returns the spine gap immediately after a survivor to the left.
+///
+/// The survivor is the nearest surviving base position at or left of base
+/// index `from`, in the base's order; the gap is the start where there is
+/// none.
 fn after_left_survivor(from: Option<usize>, removed: &[bool], spine_pos: &[Option<usize>]) -> usize {
     let mut cursor = from;
     while let Some(bi) = cursor {
@@ -957,17 +1061,19 @@ fn after_left_survivor(from: Option<usize>, removed: &[bool], spine_pos: &[Optio
     0
 }
 
-/// A stretch of base material two sides both removed, as a spine gap and
-/// the base indices it covers (merge record decision 3: a collision with
-/// nothing put in its place is still listed).
+/// A stretch of base material two sides both removed.
+///
+/// It is held as a spine gap and the base indices it covers (merge record
+/// decision 3: a collision with nothing put in its place is still listed).
 struct Region {
     home: usize,
     first: usize,
     last: usize,
 }
 
-/// The maximal stretches of the base, in its order, that two sides both
-/// removed.
+/// Returns the maximal stretches of the base that two sides both removed.
+///
+/// They come in the base's order.
 fn collision_regions(
     r: &Refinement,
     removed_by: &[Vec<bool>],
@@ -994,15 +1100,19 @@ fn collision_regions(
 
 // ── step 5: the gaps ──────────────────────────────────────────────────────
 
-/// One side's material at a gap: its stretches' fragments, in the side's
-/// own order.
+/// One side's material at a gap.
+///
+/// It is its stretches' fragments, in the side's own order.
 struct Group {
     side: usize,
     frags: Vec<usize>,
 }
 
-/// A gap as the walk holds it before the report: the spine gap it lands in,
-/// the spot it sorts by there, the groups by side in the default order.
+/// A gap as the walk holds it before the report.
+///
+/// It holds its number and its kind, the spine gap it lands in, the spot it
+/// sorts by there, the groups by side in the default order, how they are
+/// placed, and whether and by whom it is settled.
 struct Entry {
     id: Option<GapId>,
     kind: Option<GapKind>,
@@ -1014,13 +1124,15 @@ struct Entry {
     resolved_by: Option<ResolvedBy>,
 }
 
-/// Step 5 (merge record §1.4, §2 R1, §5): the stretches that landed at one
-/// spot grouped by side, each group in its side's own order, the groups in
-/// the order rule's order — a spot two sides added at is an `order` gap,
-/// unsettled; the collisions at one spine gap are one `collision` gap, a
-/// region no side filled listed too; then the dedup where it is on. The
-/// gaps are numbered here, in M's order after the `moves` gaps, so the
-/// dedup can name the gap it fired at.
+/// Returns step 5's gaps (merge record §1.4, §2 R1, §5).
+///
+/// The stretches that landed at one spot are grouped by side, each group in
+/// its side's own order, the groups in the order rule's order — a spot two
+/// sides added at is an `order` gap, unsettled, where it would otherwise be
+/// no gap or an `anchor`; the collisions at one spine gap are one
+/// `collision` gap, a region no side filled listed too; then the dedup
+/// where it is on. The gaps are numbered here, in M's order after the
+/// `moves` gaps, so the dedup can name the gap it fired at.
 fn gaps(
     r: &Refinement,
     stretches: &[Stretch],
@@ -1075,9 +1187,10 @@ fn gaps(
             });
         }
     }
-    // The order rule: a spot two sides added at is an `order` gap, the
-    // groups by the commit of their first run — inside one chain the address
-    // order, a side whose material is not the base's chain last.
+    // The order rule: a spot two sides added at is an `order` gap where it
+    // would otherwise be no gap or an `anchor`, the groups by the commit of
+    // their first run — inside one chain the address order, a side whose
+    // material is not the base's chain last.
     let chain: HashSet<usize> = r.base.iter().map(|&f| r.frags[f].origin).collect();
     for entry in entries.iter_mut() {
         entry.groups.sort_by_key(|g| {
@@ -1131,10 +1244,11 @@ fn gaps(
 
 // ── step 7's resolutions, applied before the splice ───────────────────────
 
-/// The merger's resolutions applied to the gaps they name (merge record
-/// §1.4 step 7): each overrides the gap's default and sets who resolved it.
-/// Returned are the ones not applied: naming no gap, a gap the rules
-/// settled, or a choice the gap cannot take. Of two naming one gap the
+/// Applies the merger's resolutions to the gaps they name.
+///
+/// Each overrides the gap's default and sets who resolved it (merge record
+/// §1.4 step 7). Returned are the ones not applied: naming no gap, a gap the
+/// rules settled, or a choice the gap cannot take. Of two naming one gap the
 /// later stands.
 fn resolve(
     r: &Refinement,
@@ -1218,11 +1332,12 @@ fn resolve(
 
 // ── step 6: the splice and the coalesce ───────────────────────────────────
 
-/// Step 6 (merge record §1.4): M is the spine with every gap's material
-/// spliced in — at one spine gap the spots in the base's order of their
-/// anchors, at one spot the groups as placed — then coalesced by
-/// I-adjacency with the daemon's own rule, so `runs(M)` is what the member
-/// will hold.
+/// Returns M, step 6 of the merge record's §1.4.
+///
+/// M is the spine with every gap's material spliced in — at one spine gap
+/// the spots in the base's order of their anchors, at one spot the groups
+/// as placed — then coalesced by I-adjacency with the daemon's own rule, so
+/// `runs(M)` is what the member will hold.
 fn splice(r: &Refinement, entries: &[Entry], spine: &[usize]) -> Vec<PlacedRun> {
     let mut by_home: Vec<Vec<usize>> = vec![Vec::new(); spine.len() + 1];
     for (i, e) in entries.iter().enumerate() {
@@ -1273,9 +1388,12 @@ fn splice(r: &Refinement, entries: &[Entry], spine: &[usize]) -> Vec<PlacedRun> 
 
 // ── step 7: the report ────────────────────────────────────────────────────
 
-/// Step 7 (merge record §1.4): every gap with its kind, its anchors as M
-/// holds them, the runs placed with their sides, whether it is settled and
-/// by whom — the `moves` gaps first, then the others in M's order.
+/// Returns step 7's report (merge record §1.4).
+///
+/// It lists every gap with its kind, its anchors as M holds them, the runs
+/// contested with their sides, whether it is settled and by whom — by
+/// number, the `moves` gaps first, then the others in the order of their
+/// default places in M.
 fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], spine: &[usize]) -> Vec<Gap> {
     let mut out: Vec<Gap> = moves
         .iter()
@@ -1314,16 +1432,15 @@ fn report(r: &Refinement, entries: &[Entry], moves: &[Moves], spine: &[usize]) -
 
 // ── the base of two members ───────────────────────────────────────────────
 
-/// Returns the base of two members of one chain: their nearest common
-/// ancestor along the chains of members each was minted against (merge
-/// record §1.2).
+/// Returns the base of two members of one chain (merge record §1.2).
 ///
-/// A trunk member `D.k` was minted against `D.k−1`, a daughter `X.m`
-/// against `X`; `D.1` against nothing. So for `D.k+1` against `D.k.m` the
-/// base is `D.k`; for `D.k.1` against `D.k.2`, `D.k`; for `D.k.1.1` against
-/// the head, `D.k`; for `D.k.1` against `D.j.1` with `j < k`, `D.j`. `None`
-/// for two members of different documents, and for an address that is no
-/// member: a bare document, a draft, an element.
+/// It is their nearest common ancestor along the chains of members each was
+/// minted against. A trunk member `D.k` was minted against `D.k−1`, a
+/// daughter `X.m` against `X`; `D.1` against nothing. So for `D.k+1` against
+/// `D.k.m` the base is `D.k`; for `D.k.1` against `D.k.2`, `D.k`; for
+/// `D.k.1.1` against the head, `D.k`; for `D.k.1` against `D.j.1` with
+/// `j < k`, `D.j`. `None` for two members of different documents, and for
+/// an address that is no member: a bare document, a draft, an element.
 pub fn base_of(a: &Address, b: &Address) -> Option<Address> {
     let (head_a, versions_a) = member_parts(a)?;
     let (head_b, versions_b) = member_parts(b)?;
@@ -1335,9 +1452,11 @@ pub fn base_of(a: &Address, b: &Address) -> Option<Address> {
     validate(Tumbler::new(head_a.into_iter().chain(shared)).ok()?).ok()
 }
 
-/// A member's components through its document number, and its version
-/// components after them; `None` unless a document address with at least
-/// one version component.
+/// Splits a member at its document number into head and version components.
+///
+/// The head runs through the document number, the version components after
+/// it; `None` unless a document address with at least one version
+/// component.
 fn member_parts(a: &Address) -> Option<(Vec<Nat>, Vec<Nat>)> {
     if a.level() != Level::Document {
         return None;
@@ -1351,7 +1470,7 @@ fn member_parts(a: &Address) -> Option<(Vec<Nat>, Vec<Nat>)> {
     Some((comps[..head].to_vec(), comps[head..].to_vec()))
 }
 
-/// A member's version components and every ancestor's, nearest first.
+/// Returns a member's version components and each ancestor's, nearest first.
 fn ancestry(mut versions: Vec<Nat>) -> Vec<Vec<Nat>> {
     let one = Nat::from(1u32);
     let mut out = Vec::new();
@@ -1369,24 +1488,25 @@ fn ancestry(mut versions: Vec<Nat>) -> Vec<Vec<Nat>> {
 
 // ── the in-place script ───────────────────────────────────────────────────
 
-/// Returns the edit script that turns a draft arranged as `current` into
-/// `target` by identity (merge record §1.5, the draft landing).
+/// Returns the edit script from a draft arranged as `current` to `target`.
 ///
-/// The longest part of `current` that stands in `target`'s order is kept;
-/// every other stretch of `current` is one `delete`, the deletes listed
-/// last-to-first so each position holds when the one before it has been
-/// applied; then every stretch of `target` not kept is one `reinstate`,
-/// first-to-last, at the position it takes once the ones before it are
-/// applied. A run that moved is deleted before it is placed again, so a
-/// draft never holds it twice. Each op is one commit on the draft.
+/// The script turns the draft into `target` by identity (merge record §1.5,
+/// the draft landing). The longest part of `current` that stands in
+/// `target`'s order is kept; every other stretch of `current` is one
+/// `delete`, the deletes listed last-to-first so each position holds when
+/// the one before it has been applied; then every stretch of `target` not
+/// kept is one `reinstate`, first-to-last, at the position it takes once
+/// the ones before it are applied. A run that moved is deleted before it is
+/// placed again, so a draft never holds it twice. Each op is one commit on
+/// the draft.
 ///
 /// **Precondition.** As [`compose_runs`]'s: no run of width 0, no position
 /// twice in one list.
 ///
 /// # Panics
 ///
-/// A debug build stops on a run of width 0 and on a position placed twice
-/// in one list, as [`compose_runs`] does.
+/// Panics in a debug build on a run of width 0 and on a position placed
+/// twice in one list, as [`compose_runs`] does.
 pub fn script(current: &[Run], target: &[Run]) -> Vec<InPlaceOp> {
     let r = Refinement::of(current, &[(SideIx(0), target.to_vec())]);
     let (cur, tgt) = (&r.base, &r.sides[0]);

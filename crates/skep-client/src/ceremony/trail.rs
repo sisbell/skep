@@ -1,15 +1,17 @@
-//! THE SUPERSESSION TRAIL (`client.md` §4a.5; AUTH-5.59 step 2): `assert_sup`
-//! from the OLD enroll LINK to the NEW enroll LINK — links, never the record
-//! documents — homed in the SUBJECT ACCOUNT'S OWN DOC 1, written by `rotate`
-//! (§4a.8 T3) and the LOSS arm (§4a.6, between L5 and L6) and by `recover`'s
-//! device arm NEVER (AUTH RES-62 §6). Above the claim the trail is
-//! publish-class (homed in a published doc 1, sent from a signed session),
-//! so it carries an `attest` over its own entry frame — composed through
-//! `skep_identity::entry_frame` with `entry_body_assert_sup`'s body, the one
-//! composer (P28; no second `entry_frame`), and signed by the walk's own key
-//! (the OLD key at `rotate`, the surviving anchor on the LOSS arm). RESUMED
-//! BY READING the trail's presence over the residence-address discovery, so
-//! a re-run never writes a second trail (AUTH-5.59 step 3's machine resume).
+//! The supersession trail (`client.md` §4a.5; AUTH-5.59 step 2).
+//!
+//! It is `assert_sup` from the old enroll link to the new enroll link —
+//! links, never the record documents — homed in the subject account's own
+//! doc 1, written by `rotate` (§4a.8 T3) and the loss arm (§4a.6, between
+//! L5 and L6) and by `recover`'s device arm never (AUTH RES-62 §6). Above
+//! the claim the trail is publish-class (homed in a published doc 1, sent
+//! from a signed session), so it carries an `attest` over its own entry
+//! frame — composed through `skep_identity::entry_frame` with
+//! `entry_body_assert_sup`'s body, the one composer (P28; no second
+//! `entry_frame`), and signed by the walk's own key (the old key at
+//! `rotate`, the surviving anchor on the loss arm). It is resumed by
+//! reading the trail's presence over the residence-address discovery, so a
+//! re-run never writes a second trail (AUTH-5.59 step 3's machine resume).
 
 use serde_json::json;
 use skep_identity::{entry_body_assert_sup, entry_frame, unit_span, DocTerm, EntrySlot, LinkSlots};
@@ -21,24 +23,33 @@ use crate::ceremony::handshake::Session;
 use crate::halt::Halt;
 use crate::sign::{sig_hex, Signer};
 
-/// ONE SUPERSESSION TRAIL, named by its three addresses: `home` the subject
-/// account's own doc 1 it is homed in, `old` the OLD enroll link and `new`
-/// the NEW one. The addresses are NAMED so `old` and `new` cannot trade
-/// places in a call — a claim written backwards is permanent and public,
-/// and the resume read, which looks FROM `old`, would miss it and write a
-/// second.
+/// One supersession trail, named by its three addresses.
+///
+/// `home` is the subject account's own doc 1 it is homed in, `old` the old
+/// enroll link and `new` the new one. The addresses are named so `old` and
+/// `new` cannot trade places in a call — a claim written backwards is
+/// permanent and public, and the resume read, which looks from `old`, would
+/// miss it and write a second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Trail<'a> {
+    /// The subject account's own doc 1 the trail is homed in.
     pub home: &'a str,
+    /// The old enroll link.
     pub old: &'a str,
+    /// The new enroll link.
     pub new: &'a str,
 }
 
 impl Trail<'_> {
-    /// THE RESUME READ: a supersession claim FROM `old` TO `new` already
-    /// stands — `find_links_ftt` over the supersedes type and `old`'s unit
-    /// span, each claim's `to` read off `read_link` — its address, else
-    /// `None`.
+    /// Reads whether a supersession claim from `old` to `new` already stands.
+    ///
+    /// It is the resume read — `find_links_ftt` over the supersedes type and
+    /// `old`'s unit span, each claim's `to` read off `read_link` — answering
+    /// the claim's address, else `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`Board::guest`]'s errors, the discovery's and each `read_link`'s.
     pub fn present(&self, board: &Board) -> Result<Option<String>, Halt> {
         let v = board.guest(&frames::find_links_ftt_from(T_SUPERSEDES, self.old))?;
         for claim in answers::addrs(&v) {
@@ -49,12 +60,22 @@ impl Trail<'_> {
         Ok(None)
     }
 
-    /// THE WRITE: `assert_sup` homed in `home`, with its `attest` — the entry
-    /// frame's `alg` the signing key's token, `board` `H.1`'s pair, `account`
-    /// the session's account, `doc` the home, the body
-    /// `entry_body_assert_sup`'s four rows (the supersedes class's unit
-    /// span, `old`'s, `new`'s, the `replaces` row empty) — signed by
-    /// `signer`. Answers the claim's address.
+    /// Writes the trail: `assert_sup` homed in `home`, with its `attest`.
+    ///
+    /// The entry frame's `alg` is the signing key's token, `board` `H.1`'s
+    /// pair, `account` the session's account, `doc` the home, the body
+    /// `entry_body_assert_sup`'s four rows (the supersedes class's unit span,
+    /// `old`'s, `new`'s, the `replaces` row empty) — signed by `signer`. It
+    /// answers the claim's address.
+    ///
+    /// # Errors
+    ///
+    /// A board with no `H.1` yet halts, nothing written; an address of the
+    /// trail that does not parse is this client's frame; the session closed,
+    /// an answer of a shape this client does not know, an endpoint that is
+    /// not a resident link, an `attestation_*` refusal and `not_owner` are
+    /// each faced; any other refusal is the board's; and the reads' and the
+    /// write's own errors.
     pub fn write(&self, board: &Board, session: &Session<'_>, signer: &dyn Signer, id: &str) -> Result<String, Halt> {
         let Trail { home, old, new } = *self;
         let Some(term) = board.board_term()? else {

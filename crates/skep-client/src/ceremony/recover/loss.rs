@@ -1,9 +1,10 @@
-//! `recover --anchor-lost` — THE LOSS ARM, L0–L7 (`client.md` §4a.6;
-//! AUTH-5.59's LOSS arm; AUTH-5.47): every enrolled anchor shown with the
+//! `recover --anchor-lost` — the loss arm, L0–L7 (`client.md` §4a.6).
+//!
+//! AUTH-5.59's loss arm; AUTH-5.47: every enrolled anchor shown with the
 //! record that enrolled it, the finder question (P27), two fresh boxes
-//! prefilled from the LOST paper's label, the SURVIVING paper imported and
+//! prefilled from the lost paper's label, the surviving paper imported and
 //! its session opened, a fresh pair exported under AUTH-5.54 steps 1–3 and
-//! enrolled as ONE anchor-flagged record, each fresh anchor re-imported from
+//! enrolled as one anchor-flagged record, each fresh anchor re-imported from
 //! its artifact and probed (step 3's failure arm retiring a pair whose
 //! private half exists nowhere and re-running under a fresh one), the
 //! supersession trail from the lost anchor's enroll link to the new pair's,
@@ -30,7 +31,30 @@ use crate::person::{LabelBox, Person, Public, Question};
 use crate::sheet::{read_key_file, render_inert, Facts, KeyFile, Label};
 use crate::store::{FileStore};
 
-/// THE LOSS ARM, L0–L7 (`client.md` §4a.6; AUTH-5.59's LOSS arm; AUTH-5.47).
+/// Runs the loss arm, L0–L7 (`client.md` §4a.6).
+///
+/// It is AUTH-5.59's loss arm (AUTH-5.47).
+///
+/// # Errors
+///
+/// In the arm's order: the store's refusals; R0's halts; no anchor
+/// enrolled; a `--lost` prefix naming a device key, no anchor or more than
+/// one; the default unconfirmed, or a pick naming no single anchor; an
+/// abandoned question or box; the import's halts and the no-artifact face;
+/// the lost paper handed in as the surviving one; an agent's account; the
+/// handshake; the first-session reads; the export's, the first session's
+/// and the deposit's halts; a reconciled enrollment whose link is not found;
+/// the re-import's and the probe's, and the failure arm's retirements;
+/// three fresh pairs in a row failing; the lost anchor's enroll link not
+/// found; the trail's; and the retirements'.
+///
+/// # Panics
+///
+/// Panics if `Enrollment::new` refuses a label the box admitted, the
+/// exported pair holds fewer than two anchors, or a fingerprint's hex runs
+/// under 8 digits; the box admits only labels it takes, `export_pair`
+/// exports one anchor per label of the box's two, and the hex runs to 64,
+/// so none fires.
 pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RecoverOptions) -> Result<Recovered, Halt> {
     let own: Vec<(Fingerprint, PublicKey)> = store.device_keys()?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
@@ -100,11 +124,11 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
     let lost_label = reads.records.label_of(&lost_fp);
     let surviving_fp_expected: Option<Fingerprint> = anchors.iter().find(|f| **f != lost_fp).copied();
     let surviving_label = surviving_peek.as_ref().and_then(|s| s.label.clone()).or_else(|| surviving_fp_expected.and_then(|f| reads.records.label_of(&f)));
-    // THE FINDER QUESTION (P27).
+    // The finder question (P27).
     let finder = person.yes_no(Public(Question { text: format!("could the lost sheet ({}) be in someone else's hands — found, taken, or simply not known destroyed? (the race arm re-reads the set after each write and retires every key you do not account for)", row_text(&lost_fp, &reads.records)) })).map_err(|_| abandoned())?;
     let accounted_at_l0: Vec<Fingerprint> = reads.walk.set.enrolled.iter().map(|e| e.fingerprint).collect();
     let race = finder;
-    // L1: the two boxes, PREFILLED from the LOST paper's label.
+    // L1: the two boxes, prefilled from the lost paper's label.
     let boxes = |person: &mut dyn Person, attempt: usize| -> Result<Vec<Label>, Halt> {
         let token = crate::hex::encode(&crate::sign::fresh_bytes(2));
         let mut labels = Vec::new();
@@ -132,7 +156,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         Ok(labels)
     };
     let mut labels = boxes(person, 0)?;
-    // L2: R1 with the SURVIVING artifact, then R2.
+    // L2: R1 with the surviving artifact, then R2.
     let whose = whose_account(person, &account, opts.principal)?;
     let cx = ImportContext { board, store, account: &account, principal: opts.principal, set_account: &reads.walk.set_account, set: &reads.walk.set, records: &reads.records, own: &own, anchor_path: opts.anchor.as_deref(), whose, cell: &reads.cell };
     let surviving: ImportedAnchor = match import_anchor(person, &cx)? {
@@ -154,12 +178,13 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         let mut new_link: Option<String> = None;
         let mut artifacts: Vec<AnchorArtifact> = Vec::new();
         for attempt in 0..3 {
-            // L3: AUTH-5.54 steps 1–3 CITED — statement (b) alone, then the
-            // pair exported and DROPPED; the boxes are L1's, the re-import L5's.
+            // L3: AUTH-5.54 steps 1–3 cited — statement (b) alone, then the
+            // pair exported and dropped; the boxes are L1's, the re-import
+            // L5's.
             two_places(person, opts.paper);
             let export = BackupOptions { labels: Vec::new(), destinations: opts.anchor_out.clone(), paper: opts.paper, store: Some(store.root().to_path_buf()), host_name: opts.host_name.clone(), date: opts.date.clone() };
             let backup = export_pair(person, &export, &labels, Some(&facts))?;
-            // L4: `first_session` FIRST; then BOTH fresh anchors as ONE record.
+            // L4: `first_session` first; then both fresh anchors as one record.
             first_session(board, &fs_reads, &session, &surviving.signer, Some(store))?;
             let entries: Vec<Enrollment> = backup.anchors.iter().map(|a| Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).expect("a label the box admitted")).collect();
             let id = format!("recover.loss.enroll.{}", &backup.anchors[0].fingerprint.to_hex()[..8]);
@@ -172,7 +197,8 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
             };
             say(person, "AUTH-5.59 step 1", format!("BOTH fresh anchors enrolled as ONE anchor-flagged record under the surviving paper's session: {} and {}", backup.anchors[0].fingerprint, backup.anchors[1].fingerprint));
             enrolled_pair = backup.anchors.iter().map(|a| a.fingerprint).collect();
-            // L5: step 3 for EACH new anchor — the re-import, the probe, the wipe.
+            // L5: step 3 for each new anchor — the re-import, the probe, the
+            // wipe.
             let mut failed: Option<usize> = None;
             for (i, artifact) in backup.anchors.iter().enumerate() {
                 match reimport_anchor(person, artifact, opts.paper, i)? {
@@ -189,8 +215,9 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                 }
             }
             if let Some(i) = failed {
-                // THE FAILURE ARM: retire the just-enrolled fingerprint from
-                // this session, then re-run from step 1 under a fresh pair.
+                // The failure arm: retire the just-enrolled pair's
+                // fingerprints from this session, then re-run from step 1
+                // under a fresh pair.
                 say(person, "AUTH-5.59 step 3", format!("anchor {} ({}) did not re-import from its artifact: an ENROLLED anchor whose private half exists nowhere — it is retired from the session this gesture holds, and the walk re-runs from step 1 under a fresh pair (attempt {})", backup.anchors[i].fingerprint, backup.anchors[i].label, attempt + 2));
                 let set = reread(board, &account)?;
                 let records = credential_records(board, &account, &own)?;
@@ -213,7 +240,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
         let Some(new_link) = new_link else {
             return Err(Halt::face("three fresh pairs in a row failed their re-import", "the artifacts' media does not read back", "check the destination media and re-run"));
         };
-        // THE TRAIL between L5 and L6: from the LOST anchor's enroll link to
+        // The trail between L5 and L6: from the lost anchor's enroll link to
         // the new pair's, signed by the surviving anchor.
         let old_link = reads.records.enrollment_of(&lost_fp).map(|r| r.link.clone()).ok_or_else(|| Halt::face("the lost anchor's enroll link was not found", "the trail's `old` is the address the admitted read returns", "re-run"))?;
         let supersession = Trail { home: &fs_reads.home, old: &old_link, new: &new_link };
@@ -228,7 +255,7 @@ pub(super) fn loss_arm(board: &Board, store: &FileStore, person: &mut dyn Person
                 claim
             }
         };
-        // L6: the LOST anchor retired; on the race arm every unaccounted key.
+        // L6: the lost anchor retired; on the race arm every unaccounted key.
         let mut set = reread(board, &account)?;
         let mut records = credential_records(board, &account, &own)?;
         if set.enrolled(&lost_fp).is_some() {

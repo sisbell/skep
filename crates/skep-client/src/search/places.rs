@@ -1,23 +1,28 @@
-//! THE DOCUMENT INDEX the plane reads (`client.md` §4e.2; A-255; foundations
-//! §2.1, §2.3): "addresses, first lines, counts per account — stays the
-//! shell's own structure, and the search index is the crate's; both are fed
-//! by the one poll — the document index's addresses and counts from the rows
-//! themselves and its FIRST LINES from the delivery the consumer already
-//! reads for the crate". HELD AS THE SEARCH INDEX IS: a PUBLISHED part fed
-//! from the token-free rows and shared on the device, and a part per
-//! principal holding what that principal's class adds, so `places` is drawn
-//! at the call's class (§4e.5; PATTERNS P39 — a principal's holding is a
-//! file of its own). THE PERSISTENCE — the one item the design owed by name
-//! ("a file each, or one") — is SETTLED BY P39: ONE FILE PER PART beside its
-//! index, `published.places` and `principal-<n>.places`, written by the same
+//! The document index the plane reads.
+//!
+//! `client.md` §4e.2 (A-255; foundations §2.1, §2.3) draws it: "addresses,
+//! first lines, counts per account — stays the shell's own structure, and
+//! the search index is the crate's; both are fed by the one poll — the
+//! document index's addresses and counts from the rows themselves and its
+//! first lines from the delivery the consumer already reads for the crate".
+//!
+//! **Held as the search index is.** A published part is fed from the
+//! token-free rows and shared on the device, and a part per principal holds
+//! what that principal's class adds, so `places` is drawn at the call's
+//! class (§4e.5; PATTERNS P39 — a principal's holding is a file of its own).
+//!
+//! **The persistence** — the one item the design owed by name ("a file
+//! each, or one") — is settled by P39: one file per part beside its index,
+//! `published.places` and `principal-<n>.places`, written by the same
 //! rename and deleted with the supplement it belongs to. The form: one JSON
 //! line per document in the key file's conventions (`client.md` §3.2) —
 //! members in one order, no whitespace outside strings — `doc`, `kind`,
 //! `label` (the first line, or `null`) and `member` (the head member the
 //! document was last read at, so a restart probes no trunk the file already
-//! knows; `null` for a draft read at its own address and a memberless
-//! document). The part is DERIVED STATE in the index's sense: a line that
-//! does not parse drops the part, and the next poll refills what it reads.
+//! knows; a draft's own address for a draft, read at its own address, and
+//! `null` for a memberless document). The part is derived state in the
+//! index's sense: a line that does not parse drops the part, and the next
+//! poll refills what it reads.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,8 +33,9 @@ use skep_search::{Item, Kind, Unit};
 
 use crate::address::parse_address;
 
-/// The most bytes a first line keeps: a label is a line the box shows, not
-/// a paragraph.
+/// The most bytes a first line keeps.
+///
+/// A label is a line the box shows, not a paragraph.
 const LABEL_BOUND: usize = 200;
 
 /// One document's row of the document index.
@@ -37,15 +43,18 @@ const LABEL_BOUND: usize = 200;
 pub struct PlaceRecord {
     /// Edition or draft.
     pub kind: Kind,
-    /// The member the document was last read at: an edition's head member,
-    /// `None` for a draft and for a published document without a member.
+    /// The member the document was last read at.
+    ///
+    /// It is an edition's head member, or a draft's own address; `None` for
+    /// a published document without a member.
     pub member: Option<Address>,
-    /// The first line of the document's text, trimmed and bounded; `None`
-    /// where it holds no text.
+    /// The first line of the document's text, trimmed and bounded.
+    ///
+    /// `None` where that line, trimmed, is empty.
     pub label: Option<String>,
 }
 
-/// One PART of the document index: the published part, or one principal's.
+/// One part of the document index: the published part, or one principal's.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Places {
     docs: BTreeMap<Address, PlaceRecord>,
@@ -67,38 +76,40 @@ impl fmt::Display for PlacesError {
 impl std::error::Error for PlacesError {}
 
 impl Places {
-    /// An empty part.
+    /// Returns an empty part.
     pub fn new() -> Places {
         Places::default()
     }
 
-    /// The documents held.
+    /// Returns how many documents are held.
     pub fn len(&self) -> usize {
         self.docs.len()
     }
 
-    /// Whether no document is held.
+    /// Returns whether no document is held.
     pub fn is_empty(&self) -> bool {
         self.docs.is_empty()
     }
 
-    /// The row for `doc`, replacing any earlier one.
+    /// Records the row for `doc`, replacing any earlier one.
     pub fn record(&mut self, doc: Address, record: PlaceRecord) {
         self.docs.insert(doc, record);
     }
 
-    /// The row for `doc`, where one stands.
+    /// Returns the row for `doc`, where one stands.
     pub fn get(&self, doc: &Address) -> Option<&PlaceRecord> {
         self.docs.get(doc)
     }
 
-    /// Every row, in address order.
+    /// Returns every row, in address order.
     pub fn docs(&self) -> impl Iterator<Item = (&Address, &PlaceRecord)> {
         self.docs.iter()
     }
 
-    /// THE COUNTS PER ACCOUNT (A-255): how many documents of this part lie
-    /// under each account, in address order.
+    /// Returns the counts per account (A-255).
+    ///
+    /// They are how many documents of this part lie under each account, in
+    /// address order.
     pub fn counts(&self) -> BTreeMap<Address, usize> {
         let mut counts = BTreeMap::new();
         for doc in self.docs.keys() {
@@ -109,9 +120,11 @@ impl Places {
         counts
     }
 
-    /// THE EXACT MATCHES (§4e.5; foundations §2.3): the documents whose
-    /// address is the text — an address parses exact — and those whose label
-    /// is the text, trimmed; in address order, each once.
+    /// Returns the exact matches (§4e.5; foundations §2.3).
+    ///
+    /// They are the documents whose address is the text — an address parses
+    /// exact — and those whose label is the text, trimmed; in address order,
+    /// each once.
     pub fn matching(&self, text: &str) -> Vec<&Address> {
         let text = text.trim();
         if text.is_empty() {
@@ -127,10 +140,11 @@ impl Places {
             .collect()
     }
 
-    /// THE FIRST LINE of a unit's text — the text items' bytes through the
-    /// first line break, lossily decoded, trimmed, bounded to `LABEL_BOUND`
-    /// bytes at a character boundary; `None` for a unit holding no text
-    /// before its first break.
+    /// Returns the first line of a unit's text.
+    ///
+    /// It is the text items' bytes through the first line break, lossily
+    /// decoded, trimmed, bounded to `LABEL_BOUND` bytes at a character
+    /// boundary; `None` where the line, trimmed, is empty.
     pub fn first_line(unit: &Unit) -> Option<String> {
         let mut bytes: Vec<u8> = Vec::new();
         'items: for item in unit.items() {
@@ -158,8 +172,10 @@ impl Places {
         (!line.is_empty()).then_some(line)
     }
 
-    /// The part's file: one JSON line per document in the key file's
-    /// conventions, in address order.
+    /// Encodes the part's file.
+    ///
+    /// It is one JSON line per document in the key file's conventions, in
+    /// address order.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for (doc, record) in &self.docs {
@@ -175,9 +191,14 @@ impl Places {
         out
     }
 
-    /// The part read back from its file; a member this build does not know
-    /// is ignored (the forward rule), and a line that does not parse refuses
-    /// the part.
+    /// Decodes the part from its file.
+    ///
+    /// A member this build does not know is ignored (the forward rule).
+    ///
+    /// # Errors
+    ///
+    /// A line that does not parse refuses the part: [`PlacesError`], naming
+    /// the line.
     pub fn decode(bytes: &[u8]) -> Result<Places, PlacesError> {
         let text = String::from_utf8_lossy(bytes);
         let mut places = Places::new();
@@ -209,11 +230,13 @@ impl Places {
     }
 }
 
-/// The BARE DOCUMENT an address lies in or names — `N·0·A·0·D` through the
-/// first component after the second separator — for a document, a version
-/// member (`D.k`, `D.k.j`) or an element of it; `None` for a node or an
-/// account. The address a feed row's `docs` entry names is reduced to this
-/// key (`search.md` §2.1: the unit key is the bare document address alone).
+/// Returns the bare document an address lies in or names.
+///
+/// It is `N·0·A·0·D`, through the first component after the second
+/// separator — for a document, a version member (`D.k`, `D.k.j`) or an
+/// element of it; `None` for a node or an account. The address a feed row's
+/// `docs` entry names is reduced to this key (`search.md` §2.1: the unit key
+/// is the bare document address alone).
 pub(crate) fn bare_document(addr: &Address) -> Option<Address> {
     let comps: Vec<Nat> = addr.tumbler().iter().cloned().collect();
     let second_zero = zero_index(&comps, 2)?;
@@ -224,34 +247,41 @@ pub(crate) fn bare_document(addr: &Address) -> Option<Address> {
     address_of(&comps[..=end])
 }
 
-/// The ACCOUNT an address lies under — `N·0·A`, the components before the
-/// second separator; `None` for a node address.
+/// Returns the account an address lies under.
+///
+/// It is `N·0·A`, the components before the second separator; `None` for a
+/// node address and for an account's own, which holds no second separator.
 pub(crate) fn account_of(addr: &Address) -> Option<Address> {
     let comps: Vec<Nat> = addr.tumbler().iter().cloned().collect();
     let second_zero = zero_index(&comps, 2)?;
     address_of(&comps[..second_zero])
 }
 
-/// The trunk member `D.k` of document `doc`.
+/// Returns the trunk member `D.k` of document `doc`.
 pub(crate) fn member_of(doc: &Address, k: u64) -> Option<Address> {
     let mut comps: Vec<Nat> = doc.tumbler().iter().cloned().collect();
     comps.push(Nat::from(k));
     address_of(&comps)
 }
 
-/// The node's own prefix — the first component of `addr`, under which every
-/// address of the board lies.
+/// Returns the node's own prefix, the first component of `addr`.
+///
+/// Every address of the board lies under it.
 pub(crate) fn node_of(addr: &Address) -> Option<Address> {
     let first = addr.tumbler().iter().next()?.clone();
     address_of(&[first])
 }
 
-/// A T4-valid address from its components, or none.
+/// Returns a T4-valid address from its components, or none.
 fn address_of(comps: &[Nat]) -> Option<Address> {
     validate(Tumbler::new(comps.iter().cloned()).ok()?).ok()
 }
 
-/// The index of the `n`-th zero component, `n` 1-based.
+/// Returns the index of the `n`-th zero component, `n` 1-based.
+///
+/// # Panics
+///
+/// Panics in a debug build where `n` is 0.
 fn zero_index(comps: &[Nat], n: usize) -> Option<usize> {
     let zero = Nat::from(0u64);
     comps.iter().enumerate().filter(|(_, c)| **c == zero).map(|(i, _)| i).nth(n - 1)

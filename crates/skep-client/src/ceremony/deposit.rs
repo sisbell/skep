@@ -1,30 +1,33 @@
-//! THE ONE CREDENTIAL-WRITE COMPOSITION (`client.md` §5.3; P28), run at
-//! every deposit site — §4.1 S4, §4.5 H4, and the later lane's R3, R4, L4,
-//! L6, T2, T4, G4 and `enroll` — holding, ABOVE THE CLAIM, THE RECORD GRADE
-//! in this order: the SIG-LESS canonical record composed (AUTH-4.58: that
-//! body is the record's identity); the `record` frame composed over it by
-//! `skep_identity::RecordFrame` — `board` the head document `H.1`'s pair,
-//! `account` the HOME's account, `doc` the home, the five rows wire.md states
-//! — SIGNED by the HAND the caller passes, the `sig` appended canonically
-//! LAST; then the insert declared under the record's class type (AUTH-5.4;
-//! PUB-2.64), the re-read `from` (AUTH-5.5), the link carrying the same type
-//! (PUB-2.63), AUTH-5.6's per-session `id` on both, AUTH-5.17's reconcile
-//! from the records and the BASE ARMED SET. At or below the claim the record
-//! carries no `sig` and the order is the insert and the link alone.
+//! The one credential-write composition (`client.md` §5.3; P28).
 //!
-//! THE HAND IS THE GRADE: a key of the set that opens the home's account —
+//! It runs at every deposit site — §4.1 S4, §4.5 H4, R3, R4, L4, L5's
+//! failure arm, L6, T2, T4, G4, `enroll` and `retire` — holding, above the
+//! claim, the record grade in this order: the sig-less canonical record
+//! composed (AUTH-4.58: that body is the record's identity); the `record`
+//! frame composed over it by `skep_identity::RecordFrame` — `board` the head
+//! document `H.1`'s pair, `account` the home's account, `doc` the home, the
+//! five rows wire.md states — signed by the hand the caller passes, the
+//! `sig` appended canonically last; then the insert declared under the
+//! record's class type (AUTH-5.4; PUB-2.64), the re-read `from` (AUTH-5.5),
+//! the link carrying the same type (PUB-2.63), AUTH-5.6's per-session `id`
+//! on both, AUTH-5.17's reconcile from the records and the base armed set.
+//! At or below the claim the record carries no `sig` and the order is the
+//! insert, its re-read and the link.
+//!
+//! The hand is the grade: a key of the set that opens the home's account —
 //! an anchor where the act is anchor-grade (AUTH-3.20/3.22; AUTH-3.21's
 //! exception), any enrolled key otherwise — chosen by the walk, which holds
-//! the session the act needs, and JUDGED BY THE BOARD
+//! the session the act needs, and judged by the board
 //! (`anchor_session_required`; the `attestation_` family), both faced in
 //! the base set below; this composition re-checks nothing the board judges.
 //!
-//! Every token the base set arms is faced with its CONTENT and never the
-//! token alone; everything outside it is HALT AND SURFACE (AUTH-5.66's
-//! residue). A deposit that stops answers WHICH ARM stopped it,
-//! [`DepositHalt`], beside the face it composed, so a walk acts on the arm
-//! and never on a face's words. Each site states only what it ADDS or rules
-//! unreachable.
+//! Every token the base set arms is faced with its content and never the
+//! token alone, save where it surfaces the board's refusal as it answered —
+//! the claim's own tokens, and a reconcile its reads do not settle;
+//! everything outside it is halt and surface (AUTH-5.66's residue). A
+//! deposit that stops answers which arm stopped it, [`DepositHalt`], beside
+//! the face it composed, so a walk acts on the arm and never on a face's
+//! words. Each site states only what it adds or rules unreachable.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -41,9 +44,10 @@ use crate::sign::{sig_hex, RecordFrame, Signer};
 pub enum DepositKind {
     /// An enrollment of these entries, composed here (`encode_enroll`).
     Enroll(Vec<Enrollment>),
-    /// An enrollment whose canonical bytes arrived from another device and
-    /// are kept VERBATIM as the sig-less body (AUTH-4.58; §4.5 H2, `enroll`'s
-    /// paste) — admitted by `parse_enroll` ahead of any frame.
+    /// An enrollment whose canonical bytes arrived from another device.
+    ///
+    /// They are kept verbatim as the sig-less body (AUTH-4.58; §4.5 H2,
+    /// `enroll`'s paste) — admitted by `parse_enroll` ahead of any frame.
     EnrollVerbatim(String),
     /// A retirement of these fingerprints (`encode_retire`).
     Retire(Vec<Fingerprint>),
@@ -51,18 +55,22 @@ pub enum DepositKind {
 
 /// One deposit.
 pub struct Deposit<'a> {
-    /// The home — the subject's own doc 1 for a holder act, the genesis
-    /// registry's for a seeding (AUTH-2.127).
+    /// The home — the subject's own doc 1 for a holder act.
+    ///
+    /// It is the genesis registry's for a seeding (AUTH-2.127).
     pub home: &'a str,
     /// The subject account — the link's `to`.
     pub subject: &'a str,
+    /// What the deposit records.
     pub kind: DepositKind,
-    /// The writing hand, ABOVE THE CLAIM — and with it the act's GRADE (the
-    /// module's doc); `None` at or below the claim (S4, H4), where the
-    /// record carries no `sig`.
+    /// The writing hand above the claim, and with it the act's grade.
+    ///
+    /// It is `None` at or below the claim (S4, H4), where the record carries
+    /// no `sig` (the module's doc).
     pub hand: Option<&'a dyn Signer>,
-    /// AUTH-5.6's per-session id, one per credential act; the insert and the
-    /// link take `<id>.insert` and `<id>.link`.
+    /// AUTH-5.6's per-session id, one per credential act.
+    ///
+    /// The insert and the link take `<id>.insert` and `<id>.link`.
     pub id: &'a str,
 }
 
@@ -71,36 +79,45 @@ pub struct Deposit<'a> {
 pub enum DepositOutcome {
     /// Both writes acked: the atom, the link, the link's position.
     Deposited { atom: String, link: String, at: u64 },
-    /// The act had ALREADY COMMITTED and its ack was lost — reconciled from
-    /// the records (AUTH-5.17; AUTH-5.18's containment), never "failed".
+    /// The act had already committed and its ack was lost.
+    ///
+    /// It is reconciled from the records (AUTH-5.17; AUTH-5.18's
+    /// containment), never "failed" — and a retirement whose fingerprints
+    /// another hand had already retired answers so too.
     Committed { reason: String },
 }
 
-/// Why a deposit stopped: THE ARM of the base set that stopped it, each
-/// carrying the face this composition composed for it. The arms a walk acts
-/// on are named; every other halt is [`DepositHalt::Other`]. A walk that
-/// only surfaces the face takes it with `?` (`From<DepositHalt> for Halt`).
-/// Non-exhaustive: an arm a walk comes to act on is named here in its turn.
+/// Why a deposit stopped: the arm of the base set that stopped it.
+///
+/// Each carries its halt — the face this composition composed for it, or,
+/// under [`DepositHalt::Other`], a refusal or a fault passed on as it
+/// arrived. The arms a walk acts on are named; every other halt is
+/// [`DepositHalt::Other`]. A walk that only surfaces the face takes it with
+/// `?` (`From<DepositHalt> for Halt`). Non-exhaustive: an arm a walk comes
+/// to act on is named here in its turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DepositHalt {
-    /// The death signal met under the deposit's own token — at the ordinal
-    /// read, the insert, the read-back or the link (wire.md §Sessions): the
-    /// session died under the act, and the walk faces WHICH trigger
-    /// (AUTH-5.27; AUTH-4.63).
+    /// The death signal met under the deposit's own token.
+    ///
+    /// It is met at the ordinal read, the insert, the read-back or the link
+    /// (wire.md §Sessions): the session died under the act, and the walk
+    /// faces which trigger (AUTH-5.27; AUTH-4.63).
     SessionClosed(Halt),
-    /// `too_many_enrolled` — the set is full (AUTH-5.13: the act, never the
-    /// count).
+    /// `too_many_enrolled` — the set is full.
+    ///
+    /// AUTH-5.13: the act, never the count.
     SetFull(Halt),
-    /// `not_genesis_registry` with the record's keys not contained in the
-    /// set (AUTH-5.18): its neither arm, or an account whose set is empty.
+    /// `not_genesis_registry` with the record's keys not contained in the set.
+    ///
+    /// AUTH-5.18: its neither arm, or an account whose set is empty.
     NotGenesisRegistry(Halt),
     /// Every other halt and refusal.
     Other(Halt),
 }
 
 impl DepositHalt {
-    /// The face, whichever arm.
+    /// Returns the face, whichever arm.
     pub fn face(&self) -> &Halt {
         match self {
             DepositHalt::SessionClosed(h) | DepositHalt::SetFull(h) | DepositHalt::NotGenesisRegistry(h) | DepositHalt::Other(h) => h,
@@ -116,8 +133,10 @@ impl From<DepositHalt> for Halt {
     }
 }
 
-/// A read the deposit makes that halts on its own — a guest read, a
-/// transport fault — is no armed arm.
+/// A halt the deposit meets outside the arms it names is no armed arm.
+///
+/// It is a read's own halt — a guest read's, or a transport fault — a
+/// refusal surfaced as it answered, or a face of this client's own frame.
 impl From<Halt> for DepositHalt {
     fn from(h: Halt) -> DepositHalt {
         DepositHalt::Other(h)
@@ -132,19 +151,22 @@ impl fmt::Display for DepositHalt {
 
 impl std::error::Error for DepositHalt {}
 
-/// What the deposit writes, decided ONCE from its [`DepositKind`]: an
-/// enrollment's entries — composed by the walk, or parsed off a verbatim
-/// paste — or a retirement's fingerprints. The record's class, its canonical
-/// spelling and the fingerprints the reconcile reads are each answered by the
-/// kind, so no later step re-derives which kind it is.
+/// What the deposit writes, decided once from its [`DepositKind`].
+///
+/// It is an enrollment's entries — composed by the walk, or parsed off a
+/// verbatim paste — or a retirement's fingerprints. The record's class, its
+/// canonical spelling and the fingerprints the reconcile reads are each
+/// answered by the kind, so no later step re-derives which kind it is.
 enum Written<'k> {
     Enrollment(Cow<'k, [Enrollment]>),
     Retirement(&'k [Fingerprint]),
 }
 
 impl Written<'_> {
-    /// The record class's type address — the insert's declaration and the
-    /// link's type alike (AUTH-5.4; PUB-2.63).
+    /// Returns the record class's type address.
+    ///
+    /// It is the insert's declaration and the link's type alike (AUTH-5.4;
+    /// PUB-2.63).
     fn ty(&self) -> &'static str {
         match self {
             Written::Enrollment(_) => T_ENROLL,
@@ -152,8 +174,9 @@ impl Written<'_> {
         }
     }
 
-    /// The canonical record (AUTH-2.130), its `sig` appended last where one
-    /// is given.
+    /// Returns the canonical record (AUTH-2.130).
+    ///
+    /// Its `sig` is appended last where one is given.
     fn record(&self, sig: Option<&str>) -> String {
         match self {
             Written::Enrollment(entries) => canonical_record(&entries[..], sig),
@@ -161,7 +184,7 @@ impl Written<'_> {
         }
     }
 
-    /// The fingerprints the record names.
+    /// Returns the fingerprints the record names.
     fn fingerprints(&self) -> Vec<Fingerprint> {
         match self {
             Written::Enrollment(entries) => entries.iter().map(|e| Fingerprint::of(&e.key)).collect(),
@@ -170,16 +193,30 @@ impl Written<'_> {
     }
 }
 
-/// THE NEXT FREE CONTENT ORDINAL of `doc` — one past its arranged content
-/// extent, off `retrieve_doc_v_span_set` (PUB-2.59: where a declared deposit
-/// into a published document must land).
+/// Returns the next free content ordinal of `doc`.
+///
+/// It is one past its arranged content extent, off
+/// `retrieve_doc_v_span_set` (PUB-2.59: where a declared deposit into a
+/// published document must land).
+///
+/// # Errors
+///
+/// The death signal, a refusal of the read, an extent at the top of the
+/// ordinal range, and [`Board::op`]'s errors.
 pub fn next_content_ordinal(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, Halt> {
     ordinal_at(board, token, doc).map_err(Halt::from)
 }
 
-/// [`next_content_ordinal`], its death signal the deposit's own arm; an
-/// extent at the top of the ordinal range, which leaves no ordinal after it,
-/// is the board's fault and halts before the insert.
+/// Returns the next free content ordinal, as [`next_content_ordinal`] does.
+///
+/// Its death signal is the deposit's own arm.
+///
+/// # Errors
+///
+/// The death signal is [`DepositHalt::SessionClosed`]; a refusal of the read
+/// is the board's; an extent at the top of the ordinal range, which leaves
+/// no ordinal after it, is the board's fault and halts before the insert;
+/// and [`Board::op`]'s errors.
 fn ordinal_at(board: &Board, token: Option<&Token>, doc: &str) -> Result<u64, DepositHalt> {
     match board.op(token, &frames::span_set(doc))? {
         Answer::Closed => Err(DepositHalt::SessionClosed(closed_face("reading the home's extent"))),
@@ -209,13 +246,18 @@ fn closed_face(during: &str) -> Halt {
     )
 }
 
-/// AUTH-5.5's READ-BACK: the bytes at the atom's address are the record
-/// written — the I→V inversion over `image`, then `retrieve_v` (AUTH-2.114);
-/// an atom the arrangement does not hold, or an I-map that does not read
-/// whole, does not read back (AUTH-2.115). The death signal on any of its
-/// three reads is the session's end and never a mismatch, and a refusal of
-/// any of them is the board's, surfaced as it answered — never a record
-/// that did not read back.
+/// Reads the record back — AUTH-5.5's read-back.
+///
+/// The bytes at the atom's address are the record written — the I→V
+/// inversion over `image`, then `retrieve_v` (AUTH-2.114); an atom the
+/// arrangement does not hold, or an I-map that does not read whole, does
+/// not read back (AUTH-2.115).
+///
+/// # Errors
+///
+/// The death signal on any of its three reads is the session's end and
+/// never a mismatch, and a refusal of any of them is the board's, surfaced
+/// as it answered — never a record that did not read back.
 fn read_back(board: &Board, token: Option<&Token>, home: &str, atom: &str, expected: &str) -> Result<bool, DepositHalt> {
     let closed = || DepositHalt::SessionClosed(closed_face("reading the record back"));
     let answered = |answer: Answer| -> Result<Value, DepositHalt> {
@@ -235,7 +277,17 @@ fn read_back(board: &Board, token: Option<&Token>, home: &str, atom: &str, expec
     Ok(answers::first_atom(&v).as_deref() == Some(expected.as_bytes()))
 }
 
-/// THE COMPOSITION.
+/// Runs the composition.
+///
+/// # Errors
+///
+/// In the composition's order: a verbatim paste `parse_enroll` refuses;
+/// above the claim, a board with no `H.1`, a home with no owner and a frame
+/// that does not compose; the ordinal read's halts; the insert closed, an
+/// answer of a shape this client does not know, the insert's refusals and a
+/// second `published_target`; the read-back's halts, and a record that does
+/// not read back; the link closed, an answer of a shape this client does
+/// not know, and the base armed set's faces.
 pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositOutcome, DepositHalt> {
     // The record: the sig-less canonical body — a verbatim paste's own
     // bytes, AUTH-4.58 — then, above the claim, the hand's `sig` at the
@@ -288,7 +340,7 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
 
     // The insert, declared under the record's class type, at the next free
     // content ordinal; `published_target` — this client's own position
-    // arithmetic raced — re-reads the ordinal and re-sends ONCE under the
+    // arithmetic raced — re-reads the ordinal and re-sends once under the
     // same id (§5.3), and a second `published_target` is the halt below.
     let insert_id = format!("{}.insert", d.id);
     let link_id = format!("{}.link", d.id);
@@ -317,9 +369,9 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         )));
     };
 
-    // AUTH-5.5: the re-read `from` — the bytes at the minted address ARE the
-    // record written; pre-claim nothing un-arranges the atom, post-claim doc
-    // 1 is published, so a mismatch is this client's own fault.
+    // AUTH-5.5: the re-read `from` — the bytes at the minted address *are*
+    // the record written; pre-claim nothing un-arranges the atom, post-claim
+    // doc 1 is published, so a mismatch is this client's own fault.
     if !read_back(board, Some(token), d.home, &atom, &record_text)? {
         return Err(DepositHalt::Other(Halt::face(
             "the record read back from its address is not the record written",
@@ -328,7 +380,7 @@ pub fn deposit(board: &Board, token: &Token, d: &Deposit<'_>) -> Result<DepositO
         )));
     }
 
-    // The link, carrying the SAME type (PUB-2.63).
+    // The link, carrying the same type (PUB-2.63).
     let v = match board.op(Some(token), &frames::make_link(d.home, &[&atom], &[d.subject], ty, Some(&link_id)))? {
         Answer::Closed => return Err(DepositHalt::SessionClosed(closed_face("linking the record"))),
         Answer::Document(v) => v,
@@ -344,8 +396,10 @@ fn shape_face(v: &Value) -> Halt {
     Halt::face("the board answered a shape this client does not know", format!("{v}"), "this is a fault in this client or the board; nothing further was written")
 }
 
-/// The insert's own refusals: `record_sig_required`, the attestation
-/// tokens and `not_owner` are this client's frame, never the person's act.
+/// Faces the insert's own refusals.
+///
+/// `record_sig_required`, the attestation tokens and `not_owner` are this
+/// client's frame, never the person's act.
 fn insert_face(r: &Rejection, v: &Value) -> Halt {
     let token = r.token();
     match r.key() {
@@ -373,17 +427,23 @@ fn insert_face(r: &Rejection, v: &Value) -> Halt {
     }
 }
 
-/// THE BASE ARMED SET at the link (§5.3), with AUTH-5.17's reconcile from
-/// the records; everything outside it the residue, HALT AND SURFACE. The
-/// arms a walk acts on answer by name — `SetFull`, `NotGenesisRegistry` —
-/// and every other face rides [`DepositHalt::Other`].
+/// Faces the base armed set at the link (§5.3), with AUTH-5.17's reconcile.
+///
+/// The reconcile reads the records; everything outside the set is the
+/// residue, halt and surface.
+///
+/// # Errors
+///
+/// Every face but a reconcile: the arms a walk acts on answer by name —
+/// `SetFull`, `NotGenesisRegistry` — and every other face rides
+/// [`DepositHalt::Other`], the reads' errors among them.
 fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, written: &Written<'_>) -> Result<DepositOutcome, DepositHalt> {
     let other = |h: Halt| -> Result<DepositOutcome, DepositHalt> { Err(DepositHalt::Other(h)) };
     let token = r.token();
     let record_fps = written.fingerprints();
     match r.key() {
         "nothing_changed" => {
-            // AUTH-5.17: TWO STATES, read from the records (`key_set`).
+            // AUTH-5.17: two states, read from the records (`key_set`).
             let set = match board.key_set(d.subject)? {
                 KeySetAnswer::Set(s) => s,
                 KeySetAnswer::NotAnAccount => return other(r.refused(v)),
@@ -410,8 +470,8 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, w
             other(r.refused(v))
         }
         "not_genesis_registry" => {
-            // AUTH-5.18: read `key_set(subject)` BEFORE facing anything; the
-            // test is CONTAINMENT.
+            // AUTH-5.18: read `key_set(subject)` before facing anything; the
+            // test is containment.
             let set = match board.key_set(d.subject)? {
                 KeySetAnswer::Set(s) => s,
                 KeySetAnswer::NotAnAccount => return other(r.refused(v)),
@@ -441,7 +501,7 @@ fn reconcile_or_face(board: &Board, d: &Deposit<'_>, r: &Rejection, v: &Value, w
             )))
         }
         "no_holder" => {
-            // THE CLAIMED-MID-SPAN CELL (AUTH-5.56 cell 6), forked as AUTH-5.15
+            // The claimed-mid-span cell (AUTH-5.56 cell 6), forked as AUTH-5.15
             // forks it on `/health.auth.claimant` against this walk's account.
             let health = board.health()?;
             match health.claimant() {
@@ -535,26 +595,34 @@ mod tests {
         Token::parse("9f3a6c21d4b8e07a5c1b2d4e6f708192").expect("a token")
     }
 
-    /// A span set arranging `extent` content positions, from `1.1`.
+    /// Returns a span set arranging `extent` content positions, from `1.1`.
     fn span_set(extent: u64) -> Value {
         let set = if extent == 0 { json!([]) } else { json!([{"start": "1.1", "width": format!("0.{extent}")}]) };
         json!({"as_of": 9, "resp": "span_set", "set": set})
     }
 
-    /// A one-item delivery of `text` as a record's composite value.
+    /// Returns a one-item delivery of `text` as a record's composite value.
     fn delivery(text: &str) -> Value {
         json!({"as_of": 9, "items": [{"atom": text}], "resp": "delivery"})
     }
 
-    /// A retirement of one key, at or below the claim — no hand, so no read
-    /// beyond the deposit's own.
+    /// Returns a retirement of one key, at or below the claim.
+    ///
+    /// It has no hand, so no read beyond the deposit's own.
+    ///
+    /// # Panics
+    ///
+    /// Panics if 64 hex digits are not a fingerprint's spelling; they are,
+    /// so the `unwrap` never fires.
     fn retirement(id: &str) -> Deposit<'_> {
         Deposit { home: HOME, subject: "1.0.1", kind: DepositKind::Retire(vec![Fingerprint::parse_hex(&"ab".repeat(32)).unwrap()]), hand: None, id }
     }
 
-    /// A board answering the read-back's reads — the span set at `extent`,
-    /// the `image` with `runs`, `retrieve_v` by the span start asked at —
-    /// save the death signal at the read `closed_at` names.
+    /// Returns a board answering the read-back's reads.
+    ///
+    /// It answers the span set at `extent`, the `image` with `runs`,
+    /// `retrieve_v` by the span start asked at — save the death signal at
+    /// the read `closed_at` names.
     fn reading(extent: u64, runs: Value, bytes_at: fn(&str) -> &'static str, closed_at: Option<&'static str>) -> Arc<Fake> {
         Fake::new(move |req| {
             let f = fake::frame(req);
@@ -571,16 +639,17 @@ mod tests {
         })
     }
 
-    /// AUTH-5.5's read-back (AUTH-2.114, AUTH-2.115): the bytes at the
-    /// atom's V-position — its ordinal off the I-map, never off its address
-    /// — are the record written; an atom the arrangement does not hold, or an
-    /// I-map that does not read whole, does not read back, and nothing is
-    /// read past the read that settles it; the death signal on any of its
-    /// three reads is the session's end, never a mismatch.
+    /// AUTH-5.5's read-back (AUTH-2.114, AUTH-2.115).
+    ///
+    /// The bytes at the atom's V-position — its ordinal off the I-map, never
+    /// off its address — are the record written; an atom the arrangement does
+    /// not hold, or an I-map that does not read whole, does not read back,
+    /// and nothing is read past the read that settles it; the death signal on
+    /// any of its three reads is the session's end, never a mismatch.
     #[test]
     fn the_read_back_is_the_arranged_bytes_and_nothing_else() {
         let read = |fake: &Arc<Fake>| read_back(&fake::board(fake), Some(&token()), HOME, ATOM, "REC");
-        // The atom is the THIRD arranged position, its address's last
+        // The atom is the third arranged position, its address's last
         // component 4: its bytes are read at `1.3`.
         let held = json!([{"i_start": "1.0.1.0.1.0.1.7", "width": "2"}, {"i_start": ATOM, "width": "1"}]);
         let third: fn(&str) -> &'static str = |start| if start == "1.3" { "REC" } else { "XXX" };
@@ -605,10 +674,11 @@ mod tests {
         }
     }
 
-    /// The I-map a read-back holds is its runs' size and never the widths'
-    /// the board names: a run 2^63 wide over an extent of 3 is no map, read
-    /// at once with nothing read after it; and a refused `image` is the
-    /// board's refusal as it answered, never a record that did not read back.
+    /// A read-back's I-map is its runs' size, never the widths a board names.
+    ///
+    /// A run 2^63 wide over an extent of 3 is no map, read at once with
+    /// nothing read after it; and a refused `image` is the board's refusal as
+    /// it answered, never a record that did not read back.
     #[test]
     fn a_read_back_holds_runs_and_surfaces_a_refused_image() {
         let read = |fake: &Arc<Fake>| read_back(&fake::board(fake), Some(&token()), HOME, ATOM, "REC");
@@ -623,8 +693,9 @@ mod tests {
         assert!(matches!(&halt, Halt::Refused(r) if r.token() == "image_too_large"), "{halt}");
     }
 
-    /// An extent at the top of the ordinal range leaves no ordinal after it:
-    /// the deposit halts in the board's fault, exit 3, and sends no insert.
+    /// An extent at the top of the ordinal range leaves no ordinal after it.
+    ///
+    /// The deposit halts in the board's fault, exit 3, and sends no insert.
     #[test]
     fn an_extent_at_the_top_of_the_range_halts_before_the_insert() {
         let fake = Fake::new(|req| match fake::frame(req)["op"].as_str() {
@@ -637,9 +708,10 @@ mod tests {
         assert_eq!(fake.log(), ["POST /op retrieve_doc_v_span_set"]);
     }
 
-    /// AUTH-5.5: a record that does not read back is NEVER LINKED — the
-    /// inserted atom stays inert prose in the home — and the deposit halts in
-    /// this client's frame.
+    /// AUTH-5.5: a record that does not read back is never linked.
+    ///
+    /// The inserted atom stays inert prose in the home, and the deposit halts
+    /// in this client's frame.
     #[test]
     fn a_record_that_does_not_read_back_is_never_linked() {
         let fake = Fake::new(|req| match fake::frame(req)["op"].as_str() {
@@ -655,10 +727,11 @@ mod tests {
         assert!(!fake.log().iter().any(|l| l == "POST /op make_link"), "linked: {:?}", fake.log());
     }
 
-    /// §5.3: `published_target` at the insert — this client's own position
-    /// arithmetic raced — re-reads the ordinal and re-sends ONCE under the
-    /// same id; a second is a halt in this client's frame, exit 3, never the
-    /// raw refusal.
+    /// §5.3: `published_target` at the insert re-sends once under the same id.
+    ///
+    /// This client's own position arithmetic raced, so the ordinal is re-read
+    /// first; a second is a halt in this client's frame, exit 3, never the raw
+    /// refusal.
     #[test]
     fn a_second_published_target_halts_in_this_clients_frame() {
         let fake = Fake::new(|req| match fake::frame(req)["op"].as_str() {

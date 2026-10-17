@@ -1,12 +1,19 @@
-//! The wire's READ answers, decoded (wire.md §The response envelope): the
-//! read-side counterpart of [`frames`](super::frames), each answer shape this
-//! crate reads spelled once — a discovery's `addrs`, a `read_link`'s slots, a
-//! `delivery`'s first value, a `span_set`'s content extent and a `runs`
-//! answer's I-map. Pure functions of a document the caller already holds:
-//! the dial stays the caller's — under its token or as a guest — and with it
+//! The wire's read answers, decoded (wire.md §The response envelope).
+//!
+//! The module is the read-side counterpart of [`frames`](super::frames),
+//! each answer shape this crate reads spelled once — a discovery's `addrs`,
+//! a `read_link`'s slots, a `delivery`'s first value, a `span_set`'s
+//! content extent and a `runs` answer's I-map, and behind `search` and
+//! `merge` a `delivery`'s typed items and its values, a `doc_metadata`'s
+//! terms, a `universal_grants` answer's rows, a head member's pair, a
+//! `compare` answer's pairs, a `claims` answer's rows and an answer's
+//! `as_of`. Pure functions of a document the caller already holds: the
+//! dial stays the caller's — under its token or as a guest — and with it
 //! what the death signal means. The ack and refusal readers (`acked_at`,
-//! `acked_addr`, [`Rejection`](super::Rejection)) stay at `board`'s root,
-//! where `Board` itself and the suites read them.
+//! `acked_addr`, [`Rejection`](super::Rejection)) and the registry reads'
+//! decoding stay at `board`'s root, where `Board` itself and the suites
+//! read them, and a caller reads an envelope member such as `as_of` in
+//! place.
 
 // Every reader but `first_atom` — the board term's — is in the acting half;
 // the feature-free build decodes the board term alone.
@@ -14,49 +21,57 @@
 
 use serde_json::Value;
 
-/// A discovery's addresses — `find_links_*`, `find_docs_containing`,
-/// `show_origin`, the `addrs` answer — in the order served; none where the
-/// document is no such answer.
+/// Returns a discovery's addresses — the `addrs` answer — in the order served.
+///
+/// A discovery is `find_links_*`, `find_docs_containing` or `show_origin`;
+/// the answer is none where the document is no such answer.
 pub(crate) fn addrs(v: &Value) -> Vec<&str> {
     v["addrs"].as_array().into_iter().flatten().filter_map(Value::as_str).collect()
 }
 
-/// The first address a `read_link` answer's FROM slot names — a credential
-/// link's record atom (AUTH-2.113).
+/// Returns the first address a `read_link` answer's from slot names.
+///
+/// It is a credential link's record atom (AUTH-2.113).
 pub(crate) fn link_from(v: &Value) -> Option<&str> {
     slot_start(v, 0)
 }
 
-/// The first address a `read_link` answer's TO slot names — a credential
-/// link's subject, a supersession claim's new link.
+/// Returns the first address a `read_link` answer's to slot names.
+///
+/// It is a credential link's subject, a supersession claim's new link.
 pub(crate) fn link_to(v: &Value) -> Option<&str> {
     slot_start(v, 1)
 }
 
-/// The start of the first span of a `read_link` answer's slot at `index`,
-/// the slots served in their read-back order: FROM, TO, TYPE.
+/// Returns the first span's start in slot `index` of a `read_link` answer.
+///
+/// The slots are served in their read-back order: from, to, type.
 fn slot_start(v: &Value, index: usize) -> Option<&str> {
     v["link"]["slots"].get(index)?.get(0)?["start"].as_str()
 }
 
-/// The start of EVERY span of a `read_link` answer's slot at `index` (the
-/// read-back order: 0 FROM, 1 TO, 2 TYPE), in the order served — empty for
-/// an EMPTY slot, the ANY-PRINCIPAL grant's `to` (PUB-5.8) — and `None`
-/// where the document holds no link: `link: null`, the absent address's
-/// answer (wire.md §The read predicate), or no `link_value` at all. A grant
-/// reader needs the whole slot, where `link_to` answers one address: a `to`
-/// naming two is a record of neither kind (PUB-5.15).
+/// Returns the start of every span of a `read_link` answer's slot at `index`.
+///
+/// The read-back order is 0 from, 1 to, 2 type; the starts come in the
+/// order served — empty for an empty slot, the any-principal grant's `to`
+/// (PUB-5.8) — and `None` where the document holds no link: `link: null`,
+/// the absent address's answer (wire.md §The read predicate), or no
+/// `link_value` at all. A grant reader needs the whole slot, where
+/// `link_to` answers one address: a `to` naming two is a record of neither
+/// kind (PUB-5.15).
 pub(crate) fn link_slot_starts(v: &Value, index: usize) -> Option<Vec<&str>> {
     let slots = v["link"]["slots"].as_array()?;
     Some(slots.get(index)?.as_array()?.iter().filter_map(|s| s["start"].as_str()).collect())
 }
 
-/// A `delivery`'s FIRST item read as the one composite value a record is
-/// (wire.md §Content values): an `atom` item's text, or an `atom_hex` item's
-/// bytes. `None` for any other item — a `content` or `hex` item is a RUN of
-/// per-byte values and never a record's text, a `ref` a link position, a
-/// `withheld` item a value the reader may not read — and for a document that
-/// is no delivery.
+/// Returns a `delivery`'s first item as the one composite value a record is.
+///
+/// The value (wire.md §Content values) is an `atom` item's text, or an
+/// `atom_hex` item's bytes. `None` for any other item — a `content` or
+/// `hex` item is a run of per-byte values and never a record's text, a
+/// `ref` a link position, a `withheld` item a value the reader may not read
+/// — and for a document that is no delivery, holds no item, or whose
+/// `atom_hex` does not decode.
 pub(crate) fn first_atom(v: &Value) -> Option<Vec<u8>> {
     if v["resp"].as_str() != Some("delivery") {
         return None;
@@ -68,30 +83,35 @@ pub(crate) fn first_atom(v: &Value) -> Option<Vec<u8>> {
     crate::hex::decode(item["atom_hex"].as_str()?)
 }
 
-/// One item of a `delivery`, as the wire types it (wire.md §Value
-/// encodings) and before the search index's own typing: a `content` item's
-/// bytes or a `hex` run's, an `atom`/`atom_hex` at one position, a
-/// `withheld` run at its width with its origin, and an item kind this crate
-/// does not know, kept at the width it carries by the wire's forward rule.
+/// One item of a `delivery`, as the wire types it (wire.md §Value encodings).
+///
+/// It comes before the search index's own typing: a `content` item's bytes
+/// or a `hex` run's, an `atom`/`atom_hex` at one position, a `withheld` run
+/// at its width with its origin, and an item kind this crate does not know,
+/// kept at the width it carries by the wire's forward rule.
 #[cfg_attr(not(feature = "search"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Delivered {
-    /// One `content` item's UTF-8 bytes, or a `hex` run's bytes: one per
-    /// position.
+    /// One `content` item's UTF-8 bytes, or a `hex` run's bytes.
+    ///
+    /// The bytes are one per position.
     Text(Vec<u8>),
     /// An `atom` or `atom_hex`: one position, a composite value.
     Atom,
     /// A `withheld` run: `width` positions, the origin document's address.
     Withheld { origin: String, width: u64 },
-    /// A kind this crate does not know, at the width it carries (1 where it
-    /// carries none).
+    /// A kind this crate does not know, at the width it carries.
+    ///
+    /// The width is 1 where it carries none.
     Unknown { width: u64 },
 }
 
-/// A `delivery`'s items in order with its `as_of` (wire.md §The response
-/// envelope) — the feed consumer's read of a document's content, each item
-/// typed as [`Delivered`]; `None` for a document that is no delivery, or
-/// one whose `hex` run does not parse.
+/// Returns a `delivery`'s items in order with its `as_of`.
+///
+/// It is the feed consumer's read of a document's content (wire.md §The
+/// response envelope), each item typed as [`Delivered`]; `None` for a
+/// document that is no delivery or carries no `as_of`, or one whose `hex`
+/// run or `withheld` item does not parse.
 #[cfg_attr(not(feature = "search"), allow(dead_code))]
 pub(crate) fn delivery(v: &Value) -> Option<(Vec<Delivered>, u64)> {
     if v["resp"].as_str() != Some("delivery") {
@@ -118,16 +138,19 @@ pub(crate) fn delivery(v: &Value) -> Option<(Vec<Delivered>, u64)> {
     Some((items, as_of))
 }
 
-/// A `doc_metadata` answer's `published` bit (wire.md §Namespace); `None`
-/// for a document that is no such answer — a rejection among them.
+/// Returns a `doc_metadata` answer's `published` bit (wire.md §Namespace).
+///
+/// `None` for a document that is no such answer — a rejection among them —
+/// or one without the bit.
 #[cfg_attr(not(feature = "search"), allow(dead_code))]
 pub(crate) fn published(v: &Value) -> Option<bool> {
     (v["resp"].as_str() == Some("doc_metadata")).then(|| v["published"].as_bool()).flatten()
 }
 
-/// A `universal_grants` answer's rows (wire.md §Grants): each covered
-/// prefix with the issuers who granted it, in the order served; empty for a
-/// guest and for a document that is no such answer.
+/// Returns a `universal_grants` answer's rows (wire.md §Grants).
+///
+/// Each covered prefix comes with the issuers who granted it, in the order
+/// served; empty for a guest and for a document that is no such answer.
 #[cfg_attr(not(feature = "search"), allow(dead_code))]
 pub(crate) fn universal_rows(v: &Value) -> Vec<(&str, Vec<&str>)> {
     v["rows"]
@@ -142,10 +165,12 @@ pub(crate) fn universal_rows(v: &Value) -> Vec<(&str, Vec<&str>)> {
         .collect()
 }
 
-/// A `skep-head` record's `(position, chain)` pair (wire.md §The other
-/// endpoints) off the delivery of a head member's first atom — the pair an
-/// `H.k` names, re-read byte-equal at the resume (`search.md` §5.4);
-/// `None` where the delivery holds no such record.
+/// Returns the `(position, chain)` pair a `skep-head` record names.
+///
+/// It is read off the delivery of a head member's first atom (wire.md §The
+/// other endpoints) — the pair an `H.k` names, re-read byte-equal at the
+/// resume (`search.md` §5.4); `None` where the delivery holds no such
+/// record.
 #[cfg_attr(not(feature = "search"), allow(dead_code))]
 pub(crate) fn head_pair(v: &Value) -> Option<(u64, [u8; 32])> {
     let bytes = first_atom(v)?;
@@ -156,9 +181,11 @@ pub(crate) fn head_pair(v: &Value) -> Option<(u64, [u8; 32])> {
     Some((rec["position"].as_u64()?, rec["chain"].as_str().and_then(crate::hex::decode32)?))
 }
 
-/// One pair of a `compare` answer (wire.md §The response envelope): a shared
-/// run of `width` positions at content ordinal `u1` in `d1` and `u2` in `d2`
-/// — the jump's landing rule reads these (`search.md` §3.4).
+/// One pair of a `compare` answer (wire.md §The response envelope).
+///
+/// It is a shared run of `width` positions at content ordinal `u1` in `d1`
+/// and `u2` in `d2` — the jump's landing rule reads these (`search.md`
+/// §3.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Correspondence {
     /// The first operand's document.
@@ -173,10 +200,11 @@ pub struct Correspondence {
     pub width: u64,
 }
 
-/// A `compare` answer's pairs, in the order served, each over the content
-/// subspace; `None` for a document that is no such answer, or one whose
-/// pair names another subspace or does not parse — the landing rule reads a
-/// whole answer or none.
+/// Returns a `compare` answer's pairs, in the order served.
+///
+/// Each is over the content subspace; `None` for a document that is no such
+/// answer, or one whose pair names another subspace or does not parse — the
+/// landing rule reads a whole answer or none.
 #[cfg_attr(not(feature = "search"), allow(dead_code))]
 pub(crate) fn compare_pairs(v: &Value) -> Option<Vec<Correspondence>> {
     if v["resp"].as_str() != Some("compare") {
@@ -200,14 +228,15 @@ pub(crate) fn compare_pairs(v: &Value) -> Option<Vec<Correspondence>> {
         .collect()
 }
 
-/// A `delivery`'s items as THE VALUE AT EACH POSITION, in order (wire.md
-/// §Value encodings): a `content` item's bytes one per position, a `hex`
-/// run's likewise, an `atom` or `atom_hex` item the one composite value at
-/// its position — the values a `publish` body spells, and the value rule
-/// compares, one item a position. `None` for a document that is no
-/// delivery, and for an item that is no value a caller can spell: a
-/// `withheld` run, a `ref`, a hex that does not decode, a kind this crate
-/// does not know.
+/// Returns a `delivery`'s items as the value at each position, in order.
+///
+/// The values follow wire.md §Value encodings: a `content` item's bytes one
+/// per position, a `hex` run's likewise, an `atom` or `atom_hex` item the
+/// one composite value at its position — the values a `publish` body
+/// spells, and the value rule compares, one item a position. `None` for a
+/// document that is no delivery, and for an item that is no value a caller
+/// can spell: a `withheld` run, a `ref`, a hex that does not decode, a kind
+/// this crate does not know.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
     if v["resp"].as_str() != Some("delivery") {
@@ -230,10 +259,11 @@ pub(crate) fn delivery_values(v: &Value) -> Option<Vec<Vec<u8>>> {
     Some(out)
 }
 
-/// A `doc_metadata` answer's terms (wire.md §The response envelope): the
-/// publication bit, the owner account, and the shot terms a member carries
-/// — `placed`, the positions the client's runs cover, and `base_extent` —
-/// each `None` where the address carries none.
+/// A `doc_metadata` answer's terms (wire.md §The response envelope).
+///
+/// They are the publication bit, the owner account, and the shot terms a
+/// member carries — `placed`, the positions the client's runs cover, and
+/// `base_extent` — each `None` where the address carries none.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Metadata {
@@ -243,8 +273,10 @@ pub(crate) struct Metadata {
     pub(crate) base_extent: Option<u64>,
 }
 
-/// A `doc_metadata` answer decoded; `None` for a document that is no such
-/// answer — a rejection among them — or one without its owner.
+/// Decodes a `doc_metadata` answer.
+///
+/// `None` for a document that is no such answer — a rejection among them —
+/// or one without its owner or its `published` bit.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     if v["resp"].as_str() != Some("doc_metadata") {
@@ -259,9 +291,10 @@ pub(crate) fn metadata(v: &Value) -> Option<Metadata> {
     })
 }
 
-/// One claim of an `in_claims` or `out_claims` answer (wire.md §The
-/// response envelope, `claims`): the claim's address, its `old`, its `new`,
-/// its home and whether it is active.
+/// One claim of an `in_claims` or `out_claims` answer.
+///
+/// It holds the claim's address, its `old`, its `new`, its home and whether
+/// it is active (wire.md §The response envelope, `claims`).
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Claim {
@@ -272,8 +305,10 @@ pub(crate) struct Claim {
     pub(crate) active: bool,
 }
 
-/// A `claims` answer's rows in the order served; empty for a document that
-/// is no such answer, a row missing a member dropped.
+/// Returns a `claims` answer's rows in the order served.
+///
+/// Empty for a document that is no such answer, a row missing a member
+/// dropped — save `active`, which an absent member leaves true.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 pub(crate) fn claims(v: &Value) -> Vec<Claim> {
     if v["resp"].as_str() != Some("claims") {
@@ -295,16 +330,19 @@ pub(crate) fn claims(v: &Value) -> Vec<Claim> {
         .collect()
 }
 
-/// An answer's `as_of` (wire.md §The response envelope), where the
-/// document carries one.
+/// Returns an answer's `as_of` (wire.md §The response envelope).
+///
+/// It is `None` where the document carries none.
 #[cfg_attr(not(feature = "merge"), allow(dead_code))]
 pub(crate) fn as_of(v: &Value) -> Option<u64> {
     v["as_of"].as_u64()
 }
 
-/// The number of content positions a `retrieve_doc_v_span_set` answer
-/// arranges — the width of its span at the content subspace's first
-/// position, `1.1` — and 0 where no content stands.
+/// Returns how many content positions a `span_set` answer arranges.
+///
+/// The answer is `retrieve_doc_v_span_set`'s; the count is the width of its
+/// span at the content subspace's first position, `1.1` — and 0 where no
+/// content stands.
 pub(crate) fn content_extent(v: &Value) -> u64 {
     v["set"]
         .as_array()
@@ -313,15 +351,18 @@ pub(crate) fn content_extent(v: &Value) -> u64 {
         .unwrap_or(0)
 }
 
-/// The most runs an `image` answer carries — M8's run budget,
-/// `MAX_IMAGE_RUNS` (wire.md §Rejection codes: a read past it is
-/// `image_too_large`). The number alone is mirrored here, as the delivery
-/// budget is beside the feed consumer.
+/// The most runs an `image` answer carries — M8's run budget.
+///
+/// The budget is `MAX_IMAGE_RUNS`; a read past it is `image_too_large`
+/// (wire.md §Rejection codes). The number alone is mirrored here, as the
+/// delivery budget is beside the feed consumer.
 pub(crate) const MAX_IMAGE_RUNS: usize = 1 << 12;
 
-/// One run of an `image` answer: `width` content I-addresses from `first` —
-/// each the run's `prefix` and one ordinal — arranged from V-ordinal
-/// `ordinal` on, in order.
+/// One run of an `image` answer.
+///
+/// It holds `width` content I-addresses from `first` — each the run's
+/// `prefix` and one ordinal — arranged from V-ordinal `ordinal` on, in
+/// order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IRun {
     /// The I-addresses' components before their last.
@@ -334,18 +375,19 @@ pub(crate) struct IRun {
     pub(crate) ordinal: u64,
 }
 
-/// THE I-MAP of an `image` answer over content ordinals `1 ..= extent`, as
-/// its RUNS in V order — AUTH-2.114's I→V inversion, the deposit's read-back
-/// and the admitted read alike; [`ordinal_of`] answers an I-address's
-/// V-ordinal off it. `None` for a document that is no `runs` answer, a run
-/// that does not parse, more runs than the run budget, a run whose last
-/// I-address passes the range, or widths that arrange more positions than
-/// the extent asked: one unreadable run would shift every ordinal after it
-/// onto another position's bytes, so the map is whole or absent, and its
-/// size is the runs' whatever widths the board names. Both readers reach a
-/// record's bytes THROUGH the arrangement and never by identity
-/// (`retrieve_i`): an atom a later edit un-arranged must fail the read-back
-/// (AUTH-2.115).
+/// Returns an `image` answer's I-map over content ordinals `1 ..= extent`.
+///
+/// The map is the answer's runs in V order — AUTH-2.114's I→V inversion, the
+/// deposit's read-back and the admitted read alike; [`ordinal_of`] answers
+/// an I-address's V-ordinal off it. `None` for a document that is no `runs`
+/// answer, a run that does not parse, more runs than the run budget, a run
+/// whose last I-address passes the range, or widths that arrange more
+/// positions than the extent asked: one unreadable run would shift every
+/// ordinal after it onto another position's bytes, so the map is whole or
+/// absent, and its size is the runs' whatever widths the board names. Both
+/// readers reach a record's bytes through the arrangement and never by
+/// identity (`retrieve_i`): an atom a later edit un-arranged must fail the
+/// read-back (AUTH-2.115).
 pub(crate) fn i_runs(v: &Value, extent: u64) -> Option<Vec<IRun>> {
     if v["resp"].as_str() != Some("runs") {
         return None;
@@ -369,8 +411,9 @@ pub(crate) fn i_runs(v: &Value, extent: u64) -> Option<Vec<IRun>> {
     Some(out)
 }
 
-/// The V-ordinal `atom` is arranged at among `runs`, in V order — the first
-/// run holding it — or `None` where no run does.
+/// Returns the V-ordinal `atom` is arranged at among `runs`, in V order.
+///
+/// The first run holding it answers; `None` where no run does.
 pub(crate) fn ordinal_of(runs: &[IRun], atom: &str) -> Option<u64> {
     let (prefix, last) = atom.rsplit_once('.')?;
     let n = natural(last)?;
@@ -379,8 +422,10 @@ pub(crate) fn ordinal_of(runs: &[IRun], atom: &str) -> Option<u64> {
         .and_then(|r| r.ordinal.checked_add(n - r.first))
 }
 
-/// A natural in its one spelling — decimal digits, no sign, no leading zero
-/// — within `u64`; any other text `None`.
+/// Parses a natural in its one spelling.
+///
+/// The spelling is decimal digits, no sign, no leading zero. The value must
+/// lie within `u64`; any other text is `None`.
 fn natural(text: &str) -> Option<u64> {
     let canonical = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && (text == "0" || !text.starts_with('0'));
     canonical.then(|| text.parse().ok()).flatten()
@@ -392,8 +437,10 @@ mod tests {
 
     use super::*;
 
-    /// wire.md's own example answers, decoded: the `addrs` of a discovery,
-    /// the slots of a `read_link`, the extent of a `span_set`.
+    /// wire.md's own example answers, decoded.
+    ///
+    /// They are the `addrs` of a discovery, the slots of a `read_link`, the
+    /// extent of a `span_set`.
     #[test]
     fn the_reads_decode_the_wires_own_examples() {
         assert_eq!(addrs(&json!({"addrs":["1.0.1.0.1.0.2.1"],"as_of":9,"resp":"addrs"})), ["1.0.1.0.1.0.2.1"]);
@@ -405,8 +452,9 @@ mod tests {
         assert_eq!(content_extent(&json!({"as_of":9,"resp":"span_set","set":[]})), 0);
     }
 
-    /// A record's value is a delivery's composite item, `atom` or
-    /// `atom_hex` — never a run of per-byte values, whatever it spells.
+    /// A record's value is a delivery's composite item, `atom` or `atom_hex`.
+    ///
+    /// It is never a run of per-byte values, whatever it spells.
     #[test]
     fn the_first_atom_is_a_composite_value_and_never_a_run() {
         assert_eq!(first_atom(&json!({"as_of":9,"items":[{"content":"hi"},{"atom":"chunk"}],"resp":"delivery"})), None, "a run is first");
@@ -416,9 +464,10 @@ mod tests {
         assert_eq!(first_atom(&json!({"code":"withheld","op":"retrieve_v","resp":"rejected"})), None);
     }
 
-    /// The `runs` example maps its five I-positions to ordinals 1–5, a
-    /// second run continuing the count; one run that does not parse leaves
-    /// NO map, never a shifted one.
+    /// The `runs` example maps its five I-positions to ordinals 1–5.
+    ///
+    /// A second run continues the count; one run that does not parse leaves
+    /// no map, never a shifted one.
     #[test]
     fn the_i_map_is_whole_or_absent() {
         let one = json!({"as_of":9,"resp":"runs","runs":[{"i_start":"1.0.1.0.1.0.1.1","width":"5"}]});
@@ -434,8 +483,9 @@ mod tests {
         assert_eq!(i_runs(&json!({"resp":"runs","runs":[]}), 5), Some(Vec::new()));
     }
 
-    /// The map's size is its runs' and never the widths' a board names: a
-    /// run past the extent asked, a run whose last I-address passes the
+    /// The map's size is its runs' and never the widths' a board names.
+    ///
+    /// A run past the extent asked, a run whose last I-address passes the
     /// range, more runs than the run budget and a refusal each answer no map,
     /// and a run as wide as the range answers its ordinal at once.
     #[test]

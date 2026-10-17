@@ -1,20 +1,22 @@
-//! THE HEAD INVARIANT's ENUMERATION and THE BY-REFERENCE CONE (`client.md`
-//! §4a.8 T0; §4a.2 R6; AUTH-5.59's head; AUTH-5.89): "every key act of the
+//! The head invariant's enumeration and the by-reference cone.
+//!
+//! AUTH-5.59's head (`client.md` §4a.8 T0; §4a.2 R6): "every key act of the
 //! holder's — an enrollment as well as a retirement — reaches every set of
-//! the holder's own, and the board says which those are", AND THE
-//! ENUMERATION IS A CLOSURE AND NEVER ONE LEVEL — `X` together with every
+//! the holder's own, and the board says which those are", and the
+//! enumeration is a closure and never one level — `X` together with every
 //! account whose honored genesis stands in the doc 1 of an account the
 //! enumeration already holds and whose set holds the key the act names,
-//! `X`'s doc 1 first, then each admitted account's, UNTIL NO ACCOUNT IS
-//! ADDED, one `key_set` read per admitted account — a subject the doc 1s
-//! name more than once read once. The CONE is descended by ADDRESS and never
-//! by record (AUTH RES-143): children under an account are CONTIGUOUS and
-//! `next_account_prefix` names the frontier — a child of that account, or
-//! the walk halts — each child's set one `key_set` read, a SEEDED child
-//! STOPPING the descent (its genesis stands in a doc 1 the read already
-//! took), the depth bounded by `MAX_PRINCIPAL_COMPONENTS`. The cost is said
-//! as the walks count it (§4a.2 R6: the accounts walked are counted on
-//! stderr while it runs, through the `Person`).
+//! `X`'s doc 1 first, then each admitted account's, until no account is
+//! added, one `key_set` read per subject the doc 1s name, admitted or not —
+//! a subject named more than once read once. The cone (AUTH-5.89) is
+//! descended by address and never by record (AUTH RES-143): children under
+//! an account are contiguous and `next_account_prefix` names the frontier
+//! — a child of that account, or the walk halts — each child's set one
+//! `key_set` read, a seeded child stopping the descent (its genesis stands
+//! in a doc 1 the read already took), the depth bounded by
+//! `MAX_PRINCIPAL_COMPONENTS`. The cost is said as the walks count it
+//! (§4a.2 R6: the accounts walked are counted on stderr while it runs,
+//! through the `Person`).
 
 use std::collections::HashSet;
 
@@ -40,18 +42,31 @@ pub struct Admitted {
 pub struct Closure {
     /// `X` first, then each admitted account in the order admitted.
     pub accounts: Vec<Admitted>,
-    /// The board reads made.
+    /// The board reads counted.
+    ///
+    /// A `read_link` that names no subject and a `key_set` answering
+    /// `not_an_account` are made and not counted.
     pub reads: usize,
 }
 
-/// The `to` slot's first address of a link, off `read_link`.
+/// Returns the `to` slot's first address of a link, off `read_link`.
+///
+/// # Errors
+///
+/// [`Board::guest`]'s errors.
 pub fn link_subject(board: &Board, link: &str) -> Result<Option<String>, Halt> {
     let lv = board.guest(&frames::read_link(link))?;
     Ok(answers::link_to(&lv).map(str::to_string))
 }
 
-/// THE ENROLL LINKS homed in `home` — every genesis (and holder enrollment)
-/// deposited into one doc 1, each with its subject — the enumeration's read.
+/// Returns the enroll links homed in `home`, each with its subject.
+///
+/// They are every genesis (and holder enrollment) deposited into one doc 1
+/// — the enumeration's read.
+///
+/// # Errors
+///
+/// [`Board::guest`]'s errors, the discovery's and each `read_link`'s.
 pub fn enroll_links_homed(board: &Board, home: &str) -> Result<Vec<(String, String)>, Halt> {
     let v = board.guest(&frames::find_links_ftt_home(T_ENROLL, home))?;
     let mut out = Vec::new();
@@ -66,8 +81,14 @@ pub fn enroll_links_homed(board: &Board, home: &str) -> Result<Vec<(String, Stri
     Ok(out)
 }
 
-/// THE CLOSURE for `key` from `x`, as AUTH-5.59's head defines it: each
-/// subject a genesis names read once, whichever doc 1 names it again.
+/// Computes the closure for `key` from `x`, as AUTH-5.59's head defines it.
+///
+/// Each subject a genesis names is read once, whichever doc 1 names it
+/// again.
+///
+/// # Errors
+///
+/// `x` answering `not_an_account` halts, as do the reads' own errors.
 pub fn head_closure(board: &Board, person: &mut dyn Person, x: &str, key: &Fingerprint) -> Result<Closure, Halt> {
     let mut reads = 0usize;
     let set = match board.key_set(x)? {
@@ -105,23 +126,33 @@ pub fn head_closure(board: &Board, person: &mut dyn Person, x: &str, key: &Finge
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConeNode {
     pub account: String,
-    /// Its own set is non-empty: a SEEDED child — the descent stops here.
+    /// Its own set enrolls a key: a seeded child — the descent stops here.
     pub seeded: bool,
 }
 
 /// The cone's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cone {
-    /// Every account beneath the roots that opens by reference (its own set
-    /// empty), and every seeded child the descent stopped at.
+    /// The accounts the descent met beneath the roots.
+    ///
+    /// They are every account whose own set enrolls no key — every account
+    /// that opens by reference among them — and every seeded child the
+    /// descent stopped at.
     pub nodes: Vec<ConeNode>,
     pub reads: usize,
 }
 
-/// THE BY-REFERENCE CONE beneath `roots`: the children of each account by
-/// `next_account_prefix`'s frontier ([`frontier_children`]), each child's set
-/// one `key_set` read, a seeded child stopping the descent, the depth bounded
-/// by [`MAX_PRINCIPAL_COMPONENTS`].
+/// Walks the by-reference cone beneath `roots`.
+///
+/// The children of each account come by `next_account_prefix`'s frontier
+/// ([`frontier_children`]), each child's set one `key_set` read, a seeded
+/// child stopping the descent, the depth bounded by
+/// [`MAX_PRINCIPAL_COMPONENTS`].
+///
+/// # Errors
+///
+/// A frontier that names no child of its account halts, as do the reads'
+/// own errors.
 pub fn by_reference_cone(board: &Board, person: &mut dyn Person, roots: &[String]) -> Result<Cone, Halt> {
     let mut nodes = Vec::new();
     let mut reads = 0usize;
@@ -153,12 +184,17 @@ pub fn by_reference_cone(board: &Board, person: &mut dyn Person, roots: &[String
     Ok(Cone { nodes, reads })
 }
 
-/// The frontier's ordinal beneath `parent` — `n` where `next_account_prefix`
-/// answered `{parent}.{n}`, `n` a natural from 1 in its one spelling — the
-/// children `1 .. n` standing before it (wire.md §Namespace: children under
-/// an account are contiguous). A frontier naming no child of `parent` is no
-/// answer the namespace gives: the walk halts on it rather than count
-/// children of another account.
+/// Returns the frontier's ordinal beneath `parent`.
+///
+/// It is `n` where `next_account_prefix` answered `{parent}.{n}`, `n` a
+/// natural from 1 in its one spelling — the children `1 .. n` standing
+/// before it (wire.md §Namespace: children under an account are
+/// contiguous).
+///
+/// # Errors
+///
+/// A frontier naming no child of `parent` is no answer the namespace gives:
+/// the walk halts on it rather than count children of another account.
 fn frontier_children(parent: &str, frontier: &str) -> Result<u64, Halt> {
     let n = frontier
         .strip_prefix(parent)
@@ -185,9 +221,11 @@ mod tests {
     use crate::board::fake::{self, Fake};
     use crate::person::scripted::Scripted;
 
-    /// A frontier answer that names no child of the account walked —
-    /// another account's address, a top-of-range ordinal under it — halts
-    /// the cone after the one read that met it, its children never counted.
+    /// A frontier that names no child of the account walked halts the cone.
+    ///
+    /// The answer is another account's address, or an ordinal under it that
+    /// is zero, zero-led or past the range; the cone halts after the one read
+    /// that met it, its children never counted.
     #[test]
     fn a_frontier_that_names_no_child_of_the_parent_is_refused() {
         for frontier in ["9.18446744073709551615", "1.0.10.3", "1.0.1.0", "1.0.1.03", "1.0.1.18446744073709551616"] {
@@ -198,8 +236,9 @@ mod tests {
         }
     }
 
-    /// The cone reads each child's set once and its seat never: three
-    /// children beneath `1.0.1`, each opening by reference, cost the
+    /// The cone reads each child's set once and its seat never.
+    ///
+    /// Three children beneath `1.0.1`, each opening by reference, cost the
     /// frontier, three `key_set` reads and each child's own frontier.
     #[test]
     fn the_cone_reads_each_child_once() {
@@ -220,9 +259,10 @@ mod tests {
         assert!(!fake.log().iter().any(|l| l.ends_with("effective_owner")), "{:?}", fake.log());
     }
 
-    /// The closure reads a subject's set once, whichever doc 1 names it
-    /// again: `1.0.2` named under `1.0.1`'s doc 1 and again under an
-    /// admitted account's is one `key_set` read.
+    /// The closure reads a subject's set once, whichever doc 1 names it again.
+    ///
+    /// `1.0.2` named under `1.0.1`'s doc 1 and again under an admitted
+    /// account's is one `key_set` read.
     #[test]
     fn the_closure_reads_each_subject_once() {
         let key = crate::sign::signer_from_seed(&[5; 32]).public_key().clone();

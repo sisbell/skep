@@ -1,10 +1,11 @@
-//! The registry walk over this crate's one dialer (`client.md` §1.1's
-//! dependency paragraph; RULED, owner 2026-10-04, ps3-2 and ps3-3): this crate
-//! implements `skep_resolve::Transport` over its `Dialer`, so the shell dials
-//! the board the registry names and never one the serving board's word names
-//! (P25), and no cycle forms and no second trait is minted. The registry
-//! answers the BOARD and never an account's set: the reader's verifier takes
-//! no key set from it (`verify`'s row).
+//! The registry walk over this crate's one dialer.
+//!
+//! This crate implements `skep_resolve::Transport` over its `Dialer`
+//! (`client.md` §1.1's dependency paragraph), so the shell dials the board
+//! the registry names and never one the serving board's word names (P25),
+//! and no cycle forms and no second trait is minted. The registry answers
+//! the board and never an account's set: the reader's verifier takes no key
+//! set from it (`verify`'s row).
 
 use std::sync::Arc;
 
@@ -27,7 +28,7 @@ impl std::fmt::Debug for DialerTransport {
 }
 
 impl DialerTransport {
-    /// The transport for `origin` through `dialer`.
+    /// Returns the transport for `origin` through `dialer`.
     pub fn new(dialer: Arc<dyn Dialer>, origin: Origin) -> DialerTransport {
         DialerTransport { dialer, origin }
     }
@@ -52,8 +53,9 @@ impl Transport for DialerTransport {
     }
 }
 
-/// The resolver's `Origin` as this crate's, where the two grammars agree —
-/// both reproduce the daemon's (AUTH-4.2) — and [`NotCanonical`] where they
+/// The resolver's `Origin` as this crate's, where the two grammars agree.
+///
+/// Both reproduce the daemon's (AUTH-4.2); [`NotCanonical`] where they
 /// diverge.
 impl TryFrom<&skep_resolve::Origin> for Origin {
     type Error = NotCanonical;
@@ -63,8 +65,9 @@ impl TryFrom<&skep_resolve::Origin> for Origin {
     }
 }
 
-/// A `Dial` for `skep_resolve::Mirror` over `dialer`: the shipped dial's
-/// shape, this crate's transport behind it.
+/// Returns a `Dial` for `skep_resolve::Mirror` over `dialer`.
+///
+/// It has the shipped dial's shape, this crate's transport behind it.
 pub fn dial(dialer: Arc<dyn Dialer>) -> impl Fn(&skep_resolve::Origin) -> Result<Box<dyn Transport>, TransportError> {
     move |o: &skep_resolve::Origin| {
         let origin = Origin::try_from(o).map_err(|_| TransportError::Response(format!("{o} is not a canonical origin here")))?;
@@ -72,9 +75,16 @@ pub fn dial(dialer: Arc<dyn Dialer>) -> impl Fn(&skep_resolve::Origin) -> Result
     }
 }
 
-/// THE GUEST-READING RESOLVE over the registry board at `registry`: a reader
-/// with no mirror (REG-3.24, REG-3.33), its verdicts UNDETERMINABLE HERE —
-/// `resolve(prefix)` → the board's endpoint as a named state, priced.
+/// Resolves `prefix` as a guest reader over the registry board at `registry`.
+///
+/// It is a reader with no mirror (REG-3.24, REG-3.33), its verdicts
+/// `UndeterminableHere` — `resolve(prefix)` → the board's endpoint as a
+/// named state, priced.
+///
+/// # Errors
+///
+/// The walk's [`BoardError`], where the registry board refuses or cannot
+/// answer a read its scan makes.
 pub fn guest_resolve(dialer: Arc<dyn Dialer>, registry: &Origin, prefix: &Address) -> Result<(Resolution, GuestCost), BoardError> {
     let board = skep_resolve::Board::new(Box::new(DialerTransport::new(dialer, registry.clone())));
     skep_resolve::guest_resolve(&board, prefix, &SystemResolver, &Transports::default())
@@ -84,8 +94,9 @@ pub fn guest_resolve(dialer: Arc<dyn Dialer>, registry: &Origin, prefix: &Addres
 mod tests {
     use super::*;
 
-    /// The resolver's origin converts where the two grammars agree, its text
-    /// kept byte for byte.
+    /// The resolver's origin converts where the two grammars agree.
+    ///
+    /// Its text is kept byte for byte.
     #[test]
     fn a_resolver_origin_converts_to_this_crates() {
         for text in ["http://127.0.0.1:8642", "https://board.example", "http://[::1]:8642"] {
@@ -94,10 +105,12 @@ mod tests {
         }
     }
 
-    /// The transport is this crate's one dialer and adds nothing (P25): the
-    /// resolver's request reaches the dialer at the transport's own origin —
-    /// method, path and body as the resolver framed them, no header added —
-    /// and the dialer's status and body come back as they were answered.
+    /// The transport is this crate's one dialer and adds nothing (P25).
+    ///
+    /// The resolver's request reaches the dialer at the transport's own
+    /// origin — method, path and body as the resolver framed them, no header
+    /// added — and the dialer's status and body come back as they were
+    /// answered.
     #[test]
     fn the_transport_carries_the_resolvers_request_to_its_own_origin() {
         use crate::board::fake::Fake;

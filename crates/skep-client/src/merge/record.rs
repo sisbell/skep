@@ -1,27 +1,30 @@
-//! The merge record — the D13 `merge` kind (the merge record's §4): the
-//! schema as a struct whose JSON is built by hand, the key a record is
-//! current under and the currency rule ([`current`]: newest wins per key,
-//! the trunk owner's home over another's, decision 8), how a reader finds a
-//! record (the public link from the merger's doc 1 to the member and the
-//! daughter, the atom read THROUGH the journal's arrangement and never by
-//! identity), and [`verify`], the record's testimony recomputed.
+//! The merge record — the D13 `merge` kind (the merge record's §4).
 //!
-//! TESTIMONY, plainly (D4): the record is a claim its writer makes, as the
-//! supersession claim beside it is; the daemon derives nothing from it, the
-//! member's arrangement is the fact. Everything it asserts is recomputable
-//! from reads a verifier can make — the base and the sides are members, or a
-//! draft the verifier may read, the rules are versioned, the value switches
-//! are in the body — so `verify` recomputes M and compares it with the
-//! member's image over its first `placed` positions, the daemon's `compare`
-//! the oracle the client's join is checked against (§1.3 step 4), and
-//! answers EQUAL, DIFFERS or UNREADABLE, never a verdict manufactured for a
-//! side it may not read (D14).
+//! It holds the schema as a struct whose JSON is built by hand, the key a
+//! record is current under and the currency rule ([`current`]: newest wins
+//! per key, the trunk owner's home over another's, decision 8), how a reader
+//! finds a record (the public link from the merger's doc 1 to the landed
+//! member or draft and every side besides the head, the atom read through
+//! the journal's arrangement and never by identity), and [`verify`], the
+//! record's testimony recomputed.
 //!
-//! ONE SCHEMA, kind `merge`: `type` fixed, `v` the schema's version, `rules`
-//! the rule set's, then `doc`, `base`, `sides`, `landed`, `claims`, `runs`,
-//! `retries`, `gaps`, `values`, `replaces` and `by` (§4, "Under D13"). The
-//! record is encoded as the one JSON object `serde_json` renders; a reader
-//! that does not know a member treats it as absent.
+//! **Testimony, plainly (D4).** The record is a claim its writer makes, as
+//! the supersession claim beside it is; the daemon derives nothing from it,
+//! the member's arrangement is the fact. Everything it asserts is
+//! recomputable from reads a verifier can make — the base and the sides are
+//! members, or a draft the verifier may read, the rules are versioned, the
+//! value switches are in the body — so `verify` recomputes M and compares it
+//! with the landed member's image over its first `placed` positions, or the
+//! draft's at the position recorded, the daemon's `compare` the oracle the
+//! client's join is checked against (§1.3 step 4),
+//! and answers `Equal`, `Differs` or `Unreadable`, never a verdict
+//! manufactured for a side it may not read (D14).
+//!
+//! **One schema**, kind `merge`: `type` fixed, `v` the schema's version,
+//! `rules` the rule set's, then `doc`, `base`, `sides`, `landed`, `claims`,
+//! `runs`, `retries`, `gaps`, `values`, `replaces` and `by` (§4, "Under
+//! D13"). The record is encoded as the one JSON object `serde_json`
+//! renders; a reader that does not know a member treats it as absent.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -37,26 +40,29 @@ use super::compose::{
 };
 use super::reads::{self, last_component, origin_of, Reader, Refusal, Role, Side};
 
-/// The kind's `type` member — `merge`, the owner's word on every surface
-/// (decision 12).
+/// The kind's `type` member, `merge`.
+///
+/// It is the word on every surface (decision 12).
 pub const TYPE: &str = "merge";
 
 /// The schema's version, `v`.
 pub const SCHEMA_VERSION: u64 = 1;
 
-/// The rule set's version, `rules`: §2 as ruled is `merge-rules-1`.
+/// The rule set's version, `rules`: §2's rule set is `merge-rules-1`.
 pub const RULES: &str = "merge-rules-1";
 
-/// The `by` member: this library's crate and version.
+/// Returns the `by` member: this library's crate and version.
 pub(super) fn by() -> String {
     format!("skep-client {}", env!("CARGO_PKG_VERSION"))
 }
 
 // ── the key ───────────────────────────────────────────────────────────────
 
-/// The key a record is current under — `(doc, base, {sides})`, a term of the
-/// body (the merge record's §4, "Its CURRENCY"; P20). The sides are a SET:
-/// kept sorted, so two keys naming the same sides in another order are one.
+/// The key a record is current under — `(doc, base, {sides})`.
+///
+/// It is a term of the body (the merge record's §4, "Its currency"; P20).
+/// The sides are a set: kept sorted, so two keys naming the same sides in
+/// another order are one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordKey {
     /// The trunk document.
@@ -68,7 +74,7 @@ pub struct RecordKey {
 }
 
 impl RecordKey {
-    /// A key over `sides`, sorted and deduplicated.
+    /// Returns a key over `sides`, sorted and deduplicated.
     pub fn new(doc: Address, base: Address, sides: impl IntoIterator<Item = Address>) -> RecordKey {
         let mut sides: Vec<Address> = sides.into_iter().collect();
         sides.sort_by_key(reads::comps);
@@ -76,9 +82,10 @@ impl RecordKey {
         RecordKey { doc, base, sides }
     }
 
-    /// The key as one line of text — `merge:<doc>:<base>:<side>+<side>…` —
-    /// the stem of the per-session idempotency ids the landing's writes
-    /// carry.
+    /// Returns the key as one line of text.
+    ///
+    /// The text is `merge:<doc>:<base>:<side>+<side>…`, the stem of the
+    /// per-session idempotency ids the landing's writes carry.
     pub fn text(&self) -> String {
         let sides: Vec<String> = self.sides.iter().map(ToString::to_string).collect();
         format!("merge:{}:{}:{}", self.doc, self.base, sides.join("+"))
@@ -87,8 +94,10 @@ impl RecordKey {
 
 // ── the sides and the landing, as the record spells them ──────────────────
 
-/// One side as the record's `sides` carries it (§4): a member with its role,
-/// or a draft with the position it was read at.
+/// One side as the record's `sides` carries it (§4).
+///
+/// It is a member with its role, or a draft with the position it was read
+/// at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SideAt {
     /// `{"at": <member>, "role": …}` — the head, an alternative, or a fork.
@@ -108,7 +117,7 @@ pub enum SideAt {
 }
 
 impl SideAt {
-    /// The record's side for a composed [`Side`].
+    /// Returns the record's side for a composed [`Side`].
     pub fn of(side: &Side) -> SideAt {
         match side {
             Side::Member(at) => SideAt::Member { at: at.clone(), role: Role::Alternative },
@@ -117,14 +126,14 @@ impl SideAt {
         }
     }
 
-    /// The side's address.
+    /// Returns the side's address.
     pub fn address(&self) -> &Address {
         match self {
             SideAt::Member { at, .. } | SideAt::Draft { at, .. } => at,
         }
     }
 
-    /// The side's role.
+    /// Returns the side's role.
     pub fn role(&self) -> Role {
         match self {
             SideAt::Member { role, .. } => *role,
@@ -132,7 +141,7 @@ impl SideAt {
         }
     }
 
-    /// The [`Side`] a record's side composes as; the head is no side.
+    /// Returns the [`Side`] a record's side composes as; the head is no side.
     pub fn side(&self) -> Option<Side> {
         match self {
             SideAt::Member { role: Role::Head, .. } => None,
@@ -165,10 +174,14 @@ impl SideAt {
     }
 }
 
-/// Where a record's merge landed (§4, `landed`): the member minted and the
-/// ack's position, or the draft the merged list was landed into and the
-/// position of its last edit. `None` in the record is the question — a
-/// merger that chose not to land (§3).
+/// Where a record's merge landed (§4, `landed`).
+///
+/// It is the member minted and the ack's position, or the draft the merged
+/// list was landed into and the position of its last edit; where the
+/// landing found the member standing with no feed row of its mint, or the
+/// draft already holding M, the position is the reads' highest `as_of`.
+/// `None` in the record is the question — a merger that chose not to land
+/// (§3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordLanding {
     /// `{"member": …, "position": N}`.
@@ -176,6 +189,9 @@ pub enum RecordLanding {
         /// The member minted.
         member: Address,
         /// The shot's commit position.
+        ///
+        /// It is the reads' highest `as_of` where the member stood with no
+        /// feed row of its mint.
         position: u64,
     },
     /// `{"draft": …, "position": N}`.
@@ -183,50 +199,60 @@ pub enum RecordLanding {
         /// The staging draft.
         draft: Address,
         /// The last edit's commit position.
+        ///
+        /// It is the reads' highest `as_of` where the draft already held M.
         position: u64,
     },
 }
 
 // ── the record ────────────────────────────────────────────────────────────
 
-/// The merge record (§4, "Under D13"): one JSON object, its `type` fixed
-/// [`TYPE`], as a struct.
+/// The merge record (§4, "Under D13"), as a struct.
+///
+/// It is one JSON object, its `type` fixed [`TYPE`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     /// The trunk.
     pub doc: Address,
-    /// The base member — never absent: the `no_base` shape is not offered
-    /// (decision 15).
+    /// The base member — never absent.
+    ///
+    /// The `no_base` shape is not offered (decision 15).
     pub base: Address,
-    /// Two or more sides, the head first.
+    /// The head, then every side composed.
+    ///
+    /// Every shape the record draws has two or more.
     pub sides: Vec<SideAt>,
     /// Where the merge landed, or `None` for the question.
     pub landed: Option<RecordLanding>,
-    /// The supersession claims' addresses — those standing at the daughters
-    /// when the record was written.
+    /// The supersession claims' addresses.
+    ///
+    /// They are those standing at the daughters when the record was written.
     pub claims: Vec<Address>,
     /// The run counts, `{a, b, m}` (decision 17).
     pub runs: RunCounts,
-    /// How many times the merger's publish landed as a daughter and it
-    /// composed again (decision 17).
+    /// How many times the merger's publish landed as a daughter.
+    ///
+    /// Each time, it composed again (decision 17).
     pub retries: u32,
     /// The gap report, as §1.4's.
     pub gaps: Vec<Gap>,
     /// The value rule's switches and where it fired.
     pub values: ValueLog,
-    /// The record this one supersedes under the key — its public link's
-    /// address — or `None` at the first (P1).
+    /// The record this one supersedes under the key.
+    ///
+    /// It is its public link's address — or `None` at the first (P1).
     pub replaces: Option<Address>,
     /// The library's crate and version.
     pub by: String,
-    /// The public link this record was found through, where it was read
-    /// from a board; `None` for one composed and not yet landed. No member
-    /// of the body.
+    /// The public link this record was found through.
+    ///
+    /// It stands where the record was read from a board; `None` for one
+    /// composed and not yet landed. No member of the body.
     pub link: Option<Address>,
 }
 
 impl Record {
-    /// The record as its one JSON object.
+    /// Returns the record as its one JSON object.
     pub fn to_value(&self) -> Value {
         let landed = match &self.landed {
             None => Value::Null,
@@ -255,9 +281,13 @@ impl Record {
         })
     }
 
-    /// The record a JSON object spells; `None` for an object of another
-    /// `type`, another schema version, or one missing a member the schema
-    /// requires. A member this build does not know is left unread.
+    /// Returns the record a JSON object spells.
+    ///
+    /// `None` for an object of another `type`, another schema version, or
+    /// one missing a member this build cannot do without; a missing
+    /// `landed`, `claims`, `retries`, `replaces`, `by` or `values.applied`
+    /// reads as its empty value, and `rules` is not read. A member this build
+    /// does not know is left unread.
     pub fn from_value(v: &Value) -> Option<Record> {
         if v["type"].as_str() != Some(TYPE) || v["v"].as_u64() != Some(SCHEMA_VERSION) {
             return None;
@@ -308,7 +338,7 @@ impl Record {
         })
     }
 
-    /// The key the record is current under.
+    /// Returns the key the record is current under.
     pub fn key(&self) -> RecordKey {
         RecordKey::new(
             self.doc.clone(),
@@ -317,15 +347,19 @@ impl Record {
         )
     }
 
-    /// The head side — the one with `role` `head`.
+    /// Returns the head side — the one with `role` `head`.
     pub fn head(&self) -> Option<&SideAt> {
         self.sides.iter().find(|s| s.role() == Role::Head)
     }
 
-    /// The composition's options the record carries: the value switches, the
-    /// retries, and the merger's resolutions as the gaps record them — each
-    /// gap settled by a person, an agent or an answer re-stated as the choice
-    /// its `placed` spells, so a verifier composes the same M (§4).
+    /// Returns the composition's options the record carries.
+    ///
+    /// They are the value switches, the retries, and the merger's
+    /// resolutions as the gaps record them — each gap settled by a person,
+    /// an agent or an answer re-stated as the choice its `placed` spells, so
+    /// a verifier composes the same M (§4) — save a gap of two or more groups
+    /// a merger moved, which is re-stated as its order alone and composed at
+    /// its default place.
     pub fn options(&self) -> Options {
         let mut resolutions = Vec::new();
         for gap in &self.gaps {
@@ -356,7 +390,7 @@ impl Record {
     }
 }
 
-/// One gap as the record spells it (§4, `gaps`).
+/// Returns one gap as the record spells it (§4, `gaps`).
 fn gap_to_value(g: &Gap) -> Value {
     let kind = match g.kind {
         GapKind::Order => "order",
@@ -396,7 +430,7 @@ fn gap_to_value(g: &Gap) -> Value {
     })
 }
 
-/// The gap a JSON object spells, its runs' origins by [`origin_of`].
+/// Returns the gap a JSON object spells, its runs' origins by [`origin_of`].
 fn gap_from_value(v: &Value) -> Option<Gap> {
     let kind = match v["kind"].as_str()? {
         "order" => GapKind::Order,
@@ -457,15 +491,17 @@ fn gap_from_value(v: &Value) -> Option<Gap> {
 
 // ── how a reader finds it, and its currency ───────────────────────────────
 
-/// Returns the CURRENT record for `key` — the newest record naming the key,
-/// the trunk owner's home current over another account's (§4, "Its
-/// CURRENCY"; decision 8) — found as "How a reader finds it" says: the
-/// links of `kind` to each side (`find_links_ftt` over `ty` and `to`, never
-/// a class scan), each record's atom read THROUGH its journal's arrangement
-/// — `image` then `retrieve_v`, never `retrieve_i` — and its key checked.
-/// A record whose journal the reader may not read is no candidate: its
-/// link's type, ends and position stay visible, its body does not. `None`
-/// where no readable record names the key.
+/// Returns the current record for `key`.
+///
+/// It is the newest record naming the key, the trunk owner's home current
+/// over another account's (§4, "Its currency"; decision 8), found as "How a
+/// reader finds it" says: the links of `kind` to each side (`find_links_ftt`
+/// over `ty` and `to`, never a class scan), each record's atom read through
+/// its journal's arrangement — `image` then `retrieve_v`, never
+/// `retrieve_i` — and its key checked. A record whose journal the reader
+/// may not read is no candidate: its link's type, ends and position stay
+/// visible, its body does not. `None` where no readable record names the
+/// key.
 ///
 /// Newest: within one home the link minted last, by its ordinal; across
 /// homes the greater link address, the owner's home preferred before either.
@@ -489,7 +525,11 @@ pub fn current(
     current_among(&reader, kind, key, owner_home.as_deref())
 }
 
-/// [`current`] over a reader, the owner's home already known where it is.
+/// Runs [`current`] over a reader, the owner's home known where it is.
+///
+/// # Errors
+///
+/// As [`current`]'s.
 pub(super) fn current_among(
     reader: &Reader<'_>,
     kind: &Address,
@@ -527,10 +567,17 @@ pub(super) fn current_among(
     }))
 }
 
-/// The record a link of the kind names: the atom its FROM slot starts at,
-/// read through the journal's arrangement; `None` where the journal or its
-/// atom is not readable to this reader, where the atom is not arranged, or
-/// where its bytes are no record of the kind.
+/// Returns the record a link of the kind names.
+///
+/// It is the atom its `from` slot starts at, read through the journal's
+/// arrangement; `None` where the journal or its atom is not readable to
+/// this reader, where the atom is not arranged, or where its bytes are no
+/// record of the kind.
+///
+/// # Errors
+///
+/// A halt reading the link, the journal or the atom: a transport fault, the
+/// death signal under the token.
 pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<Record>, Halt> {
     let lv = reader.read(&frames::read_link(&link.to_string()), None).map_err(into_halt)?;
     let Some(atom) = answers::link_from(&lv) else { return Ok(None) };
@@ -567,9 +614,10 @@ pub(super) fn read_record(reader: &Reader<'_>, link: &Address) -> Result<Option<
     }))
 }
 
-/// A read refusal where the reads are a lookup's: a halt surfaces; a
-/// refusal of the document read is the lookup's own answer and never
-/// reaches here.
+/// Returns a read refusal as a halt, where the reads are a lookup's.
+///
+/// A halt surfaces; a refusal of the document read is the lookup's own
+/// answer and never reaches here.
 fn into_halt(e: Refusal) -> Halt {
     match e {
         Refusal::Halt(h) => h,
@@ -583,34 +631,44 @@ fn into_halt(e: Refusal) -> Halt {
 
 // ── verify ────────────────────────────────────────────────────────────────
 
-/// What [`verify`] answers (§4, TESTIMONY).
+/// What [`verify`] answers (§4, testimony).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// The member holds M over its first `placed` positions.
+    /// The landed member holds M over its first `placed` positions.
+    ///
+    /// For a draft landing, the draft's whole image at the position recorded
+    /// is M.
     Equal,
-    /// The member differs from M, first at this V-ordinal.
+    /// The landed member or draft differs from M, first at this V-ordinal.
     Differs {
         /// The first V-ordinal, counted from 1, at which the two differ.
         at: u64,
     },
-    /// A document the verdict needs — the landed member, or the draft — is
-    /// not readable to this reader: the verdict withheld, never made up.
+    /// A document the verdict needs is not readable to this reader.
+    ///
+    /// It is the landed member, or the draft, withheld or not registered:
+    /// the verdict withheld, never made up.
     Unreadable(Address),
 }
 
-/// Verifies a record's testimony: M recomputed from the record's inputs —
-/// its base, its sides, its value switches and the choices its gaps record
-/// — and compared with the landed member's image over its first `placed`
-/// positions, or the draft's whole image at the position recorded (§4,
-/// TESTIMONY; §7, `verify`). The daemon's `compare` is asked once as the
-/// oracle of the client's join (§1.3 step 4), in parts past its budgets.
+/// Verifies a record's testimony (§4, testimony; §7, `verify`).
+///
+/// M is recomputed from the record's inputs — its base, its sides, its
+/// value switches and the choices its gaps record — and compared with the
+/// landed member's image over its first `placed` positions, or the draft's
+/// whole image at the position recorded. The daemon's `compare` is asked
+/// once as the oracle of the client's join (§1.3 step 4), in parts past its
+/// budgets.
 ///
 /// # Errors
 ///
 /// The reads' refusals ([`Refusal`]) on the base and the sides; a record
 /// with no head side or with `landed` none is faced — there is nothing to
 /// verify against; a client join the oracle disagrees with is this
-/// library's own fault, faced.
+/// library's own fault, faced; a landed member with no `placed` term is
+/// faced; the landed document's reads' refusals but `withheld` and
+/// `doc_not_registered`, which answer [`Verdict::Unreadable`]; an `image`
+/// run that is no content I-address.
 pub fn verify(board: &Board, token: Option<&Token>, record: &Record) -> Result<Verdict, Refusal> {
     let reader = Reader::new(board, token);
     let head = record.head().ok_or_else(|| {

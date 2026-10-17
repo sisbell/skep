@@ -1,8 +1,10 @@
-//! A FAKE BOARD for this crate's unit tests: a [`Dialer`] answering each
-//! request by a closure the test writes, keeping every request it serves
-//! beside the origin it was dialed at — so a test pins what a composition
-//! sends, in what order, and what it makes of each answer, with no daemon.
-//! A suite that needs the daemon itself drives it through `tests/it`.
+//! A fake board for this crate's unit tests.
+//!
+//! It is a [`Dialer`] answering each request by a closure the test writes,
+//! keeping every request it serves beside the origin it was dialed at — so
+//! a test pins what a composition sends, in what order, and what it makes
+//! of each answer, with no daemon. A suite that needs the daemon itself
+//! drives it through `tests/it`.
 
 use std::sync::{Arc, Mutex};
 
@@ -22,20 +24,27 @@ pub(crate) struct Fake {
 }
 
 impl Fake {
-    /// A fake answering each request by `reply`.
+    /// Returns a fake answering each request by `reply`.
     pub(crate) fn new(reply: impl Fn(&Request) -> Response + Send + Sync + 'static) -> Arc<Fake> {
         Arc::new(Fake { reply: Box::new(reply), sent: Mutex::new(Vec::new()) })
     }
 
-    /// A fake that serves no request: any request panics naming itself — the
-    /// proof that a path makes no read.
+    /// Returns a fake that serves no request.
+    ///
+    /// Any request panics naming itself — the proof that a path makes no
+    /// read.
     pub(crate) fn unread() -> Arc<Fake> {
         Fake::new(|req| panic!("this path makes no read, and it sent {} {}", req.method.as_str(), req.path))
     }
 
-    /// One line per request served, in order: `METHOD path`, and for `/op`
-    /// and `/op-at` the frame's `op` after it — the line `tests/it`'s
-    /// recording dialer writes.
+    /// Returns one line per request served, in order.
+    ///
+    /// Each is `METHOD path`, and for `/op` and `/op-at` the frame's `op`
+    /// after it — the line `tests/it`'s recording dialer writes.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the lock on the served requests is poisoned.
     pub(crate) fn log(&self) -> Vec<String> {
         let sent = self.sent.lock().unwrap();
         sent.iter()
@@ -68,28 +77,35 @@ impl Dialer for Fake {
     }
 }
 
-/// The origin a fake board is dialed at.
+/// Returns the origin a fake board is dialed at.
+///
+/// # Panics
+///
+/// Panics if `http://127.0.0.1:8642` is not a canonical origin; it is one,
+/// so the `expect` never fires.
 pub(crate) fn origin() -> Origin {
     Origin::parse("http://127.0.0.1:8642").expect("a canonical origin")
 }
 
-/// A board dialed at [`origin`] over `fake`.
+/// Returns a board dialed at [`origin`] over `fake`.
 pub(crate) fn board(fake: &Arc<Fake>) -> Board {
     Board::new(origin(), fake.clone())
 }
 
-/// An answer of `status` carrying `body` as JSON.
+/// Returns an answer of `status` carrying `body` as JSON.
 pub(crate) fn json(status: u16, body: Value) -> Response {
     Response { status, headers: Headers::default(), body: body.to_string().into_bytes() }
 }
 
-/// A `200` whose head carries the death signal (wire.md §Sessions).
+/// Returns a `200` whose head carries the death signal (wire.md §Sessions).
 pub(crate) fn closed() -> Response {
     Response { status: 200, headers: Headers(vec![("Skepd-Session".into(), "closed".into())]), body: b"{}".to_vec() }
 }
 
-/// The frame a request carries: an `/op` body whole, an `/op-at` body's
-/// inner `frame`, `Null` for a request that carries none.
+/// Returns the frame a request carries.
+///
+/// It is an `/op` body whole, an `/op-at` body's inner `frame`, `Null` for a
+/// request that carries none.
 pub(crate) fn frame(req: &Request) -> Value {
     let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
     if req.path == "/op-at" {

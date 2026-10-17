@@ -1,31 +1,33 @@
-//! `handoff` — THE GIVER's walk (`client.md` §4c.2 G0–G6; AUTH-5.90's door),
-//! TWO INVOCATIONS: without `--payload`, G0's payload-free reads then G2 =
-//! beat (a) — `delegate(new_prefix = --account, new_id)` with `new_id`
-//! PERSISTED before the frame as a binding line (§4.3's persist-first rule;
-//! AUTH-5.20; AUTH-5.19's read-back) — and the ADDRESS printed; IDEMPOTENT.
-//! With `--payload`: G0 whole — `--account` in the giver's subtree with its
-//! set EMPTY (AUTH-6.19's signal); the set that opens it by AUTH-5.21's walk
-//! and its GRADE (AUTH-3.21's exception: anchor-grade where that set holds
-//! an anchor, the giver's anchor then IMPORTED); THE OWNERSHIP TEST = where
-//! that walk TERMINATES, the giver's own account, and a terminus that is
-//! another party's a HALT (containment is NOT the test); `effective_owner`
-//! (the seat, or beat (a) owed); the GIVING account's doc 1 (or beat (b)
-//! owed); `parse_enroll` with `enroll`'s own comparison beat (AUTH-4.59;
-//! AUTH-5.39); THE LATCH's test client-side first (AUTH-2.71) with the
-//! declined board-wide check's residue said; the precondition that the
-//! recipient's client can dial this board (RES-187). G1 the strings
-//! (i)–(iv), (viii)/(ix) by NUMBER and the ANCHORLESS line (AUTH-5.16's
-//! second arm; AUTH-5.62 (ii)); a typed confirmation. G3 = beat (b) the
-//! giving account's home mint, idempotent by reading (AUTH-2.109). G4 =
-//! beat (c) THE GENESIS — `DepositKind::EnrollVerbatim` homed in THE DOC 1 OF
-//! THE ACCOUNT THE SUBDIVISION HANGS FROM (AUTH-2.62; AUTH-2.127), the
-//! session acting AS that account (by reference below depth 1, AUTH-4.30
-//! (i)), the grade as G0 read it. G5 = beat (d) the retry (AUTH-5.17;
-//! AUTH-5.18's containment; the LATCH's face scoped to the home). G6 the
-//! three facts for string (vii), the mirror's close, the giver's own
-//! sessions AS the given account dead from the commit (AUTH-4.63). A
-//! top-level `--account` HALTS: no door at the bootstrap tier (AUTH-5.90's
-//! last clause).
+//! `handoff` — the giver's walk (`client.md` §4c.2 G0–G6; AUTH-5.90's door).
+//!
+//! It runs in two invocations. Without `--payload`: G0's payload-free reads
+//! then G2 = beat (a) — `delegate(new_prefix = --account, new_id)` with
+//! `new_id` persisted before the frame as a binding line (§4.3's
+//! persist-first rule; AUTH-5.20; AUTH-5.19's read-back) — and the address
+//! printed; idempotent. With `--payload`: G0 whole — `--account` in the
+//! giver's subtree, its seat read by `effective_owner` and its own set
+//! enrolling no key (AUTH-6.19's signal); the set that opens it by
+//! AUTH-5.21's walk and its grade (AUTH-3.21's exception: anchor-grade
+//! where that set holds an anchor, the giver's anchor then imported); the
+//! ownership test = where that walk terminates, the giver's own account,
+//! and a terminus that is another party's a halt (containment is not the
+//! test); the precondition that the recipient's client can dial this board
+//! (RES-187); beat (a) owed where no seat stands; `parse_enroll`; the
+//! latch's test client-side first (AUTH-2.71) with the declined board-wide
+//! check's residue said; `enroll`'s own comparison beat (AUTH-4.59;
+//! AUTH-5.39); the giving account's doc 1 (or beat (b) owed).
+//! G1 the strings (i)–(iv), (viii)/(ix) by number and the anchorless line
+//! (AUTH-5.16's second arm; AUTH-5.62 (ii)); a typed confirmation.
+//! G3 = beat (b) the giving account's home mint, idempotent by reading
+//! (AUTH-2.109). G4 = beat (c) the genesis — `DepositKind::EnrollVerbatim`
+//! homed in the doc 1 of the account the subdivision hangs from (AUTH-2.62;
+//! AUTH-2.127), the session acting as that account (by reference below
+//! depth 1, AUTH-4.30 (i)), the grade as G0 read it. G5 = beat (d) the
+//! retry (AUTH-5.17; AUTH-5.18's containment; the latch's face scoped to
+//! the home). G6 the three facts for string (vii), the mirror's close, the
+//! giver's own sessions as the given account dead from the commit
+//! (AUTH-4.63). A top-level `--account` halts: no door at the bootstrap
+//! tier (AUTH-5.90's last clause).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -53,23 +55,32 @@ use crate::store::{arm4_face, FileStore, KeyFacts, KeySelector, KeyStore, Purpos
 /// The command's inputs.
 #[derive(Debug, Clone)]
 pub struct HandoffOptions {
+    /// The giver's principal, whose store key opens the giver's sessions.
+    ///
+    /// The key is §3.5's lookup for (board, principal): its binding, else
+    /// the store's lone device key.
     pub principal: u64,
     /// `--account <address>`: the subdivision.
     pub account: String,
     /// `--payload <file|->`: the recipient's record — the second invocation.
     pub payload: Option<Vec<u8>>,
-    /// `--anchor <path>`: the giver's anchor file, where the act is
-    /// anchor-grade.
+    /// `--anchor <path>`: the giver's anchor file.
+    ///
+    /// It serves where the act is anchor-grade.
     pub anchor: Option<PathBuf>,
 }
 
-/// The genesis's GRADE (AUTH-3.21's exception): ANCHOR-grade wherever the
-/// set that opens the subdivision holds an anchor — the giver's paper
-/// anchor imported to sign it — DEVICE-grade where that set holds none. G0
-/// reads it off the set; the hand the deposit signs with carries it.
+/// The genesis's grade (AUTH-3.21's exception).
+///
+/// It is anchor-grade wherever the set that opens the subdivision holds an
+/// anchor — the giver's paper anchor imported to sign it — device-grade
+/// where that set holds none. G0 reads it off the set; the hand the deposit
+/// signs with carries it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Grade {
+    /// Device-grade: the set holds no anchor.
     Device,
+    /// Anchor-grade: the set holds an anchor, and the giver's paper signs.
     Anchor,
 }
 
@@ -86,8 +97,10 @@ impl fmt::Display for Grade {
 /// What the walk did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandoffOutcome {
-    /// Beat (a): the subdivision delegated (or found delegated) — its
-    /// address and the principal seated there.
+    /// Beat (a): the subdivision delegated, or found delegated.
+    ///
+    /// It holds its address, the principal seated there, and whether beat
+    /// (a) already stood.
     Delegated { account: String, principal: u64, already: bool },
     /// Beats (b)–(d): the genesis written; the three facts for the reply.
     Seeded { facts: Facts, grade: Grade, reconciled: bool, warnings: Vec<String> },
@@ -102,8 +115,9 @@ struct G0 {
     giving: String,
     /// The principal seated at `--account`, where beat (a) stands done.
     principal: Option<u64>,
-    /// The set that opens `--account` (the walk's terminus) and its anchor
-    /// grade.
+    /// The set that opens `--account` — the walk's terminus.
+    ///
+    /// Its anchor grade is `grade`.
     set: crate::board::KeySet,
     set_account: String,
     grade: Grade,
@@ -134,8 +148,8 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
         return Err(Halt::face(format!("{account} is not in your subtree"), format!("your account is {giver_account}; a handoff gives away a subdivision beneath it"), "name an address beneath your account"));
     }
     // The set that opens `--account`: AUTH-5.21's walk from it (or from the
-    // giving account where the seat is not yet allocated); THE OWNERSHIP
-    // TEST is where it TERMINATES.
+    // giving account where the seat is not yet allocated); the ownership
+    // test is where it terminates.
     let principal = principal_of(board, &account)?;
     let own_set = match board.key_set(&account)? {
         KeySetAnswer::Set(s) => s,
@@ -170,12 +184,18 @@ fn g0(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffO
     Ok(G0 { giver_account, giver_key: key, giving, principal, set: walk.set, set_account: walk.set_account, grade, cell, health })
 }
 
-/// G2 = beat (a): the delegate under a persisted `new_id` — §4.3's
-/// persist-first form, `first_session`'s own (§4c.2 G2: "the same rule, the
-/// same form, not a second one") — idempotent by the seat's read; what is
-/// the site's is the address said on a delegate sent, and the face where
-/// the address is no delegable child. Answers the principal seated at the
-/// address, and whether beat (a) already stood.
+/// Runs G2 = beat (a): the delegate under a persisted `new_id`.
+///
+/// It is §4.3's persist-first form, `first_session`'s own (§4c.2 G2: "the
+/// same rule, the same form, not a second one") — idempotent by the seat's
+/// read; what is the site's is the address said on a delegate sent. It
+/// answers the principal seated at the address, and whether beat (a)
+/// already stood.
+///
+/// # Errors
+///
+/// The face where the address is no delegable child, and
+/// `delegate_persisted`'s halts.
 fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session: &Session<'_>, account: &str) -> Result<(u64, bool), Halt> {
     if let Some(principal) = g.principal {
         say(person, "AUTH-5.90 (a)", format!("beat (a) stands done: {account} is seated (principal {principal}) — found by reading, no second delegate is sent"));
@@ -202,17 +222,31 @@ fn g2(board: &Board, store: &FileStore, person: &mut dyn Person, g: &G0, session
     }
 }
 
-/// THE WALK.
+/// Runs the walk.
+///
+/// # Errors
+///
+/// In the walk's order: G0's halts — a top-level `--account`, arm 4's fork
+/// and the store's refusals, the pre-check and the giver's key face, an
+/// address outside the giver's subtree, a set already standing at it, a
+/// terminus that is another party's, and the reads; the store's signer;
+/// the giving account unseated. On the first invocation, the handshake and
+/// G2's halts; on the second, beat (a) owed, the paste's halts, the latch,
+/// the comparison abandoned or declined, the reads, the confirmation
+/// abandoned or not the address, the store's key list, the anchor import —
+/// no anchor handed in at an anchor-grade act — the handshake, the mint
+/// closed or refused, `not_genesis_registry` faced, and the deposit's other
+/// halts.
 pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &HandoffOptions) -> Result<HandoffOutcome, Halt> {
     let account = opts.account.trim().to_string();
     let g = g0(board, store, person, opts)?;
     let device = store.signer(&KeySelector::Path(&g.giver_key.path))?;
-    // The session acts AS the giving account: the giver's own at depth 1,
-    // BY REFERENCE below it (AUTH-4.30 (i)) — for beat (a)'s delegate (only
+    // The session acts as the giving account: the giver's own at depth 1,
+    // by reference below it (AUTH-4.30 (i)) — for beat (a)'s delegate (only
     // the owner of the parent delegates under it) and for beat (c)'s
     // genesis (ω admits the write from no other, AUTH-3.32).
     let session_principal = if g.giving == g.giver_account { opts.principal } else { principal_of(board, &g.giving)?.ok_or_else(|| Halt::face(format!("{} has no seat", g.giving), "the giving account is unallocated: delegate it first (`skep handoff --account` at that address)", "hand off the giving account's own parent first"))? };
-    // FIRST INVOCATION: beat (a) alone, the address printed.
+    // The first invocation: beat (a) alone, the address printed.
     let Some(payload) = &opts.payload else {
         if let Some(principal) = g.principal {
             return Ok(HandoffOutcome::Delegated { account, principal, already: true });
@@ -223,7 +257,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
         let (principal, already) = out?;
         return Ok(HandoffOutcome::Delegated { account, principal, already });
     };
-    // SECOND INVOCATION: G0 whole.
+    // The second invocation: G0 whole.
     let Some(principal) = g.principal else {
         return Err(Halt::face(
             format!("{account} is not yet delegated: beat (a) is still owed"),
@@ -234,7 +268,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     let text = payload_text(payload)?;
     let entries = parse_payload(&text)?;
     let payload_fps: Vec<Fingerprint> = entries.iter().map(|e| Fingerprint::of(&e.key)).collect();
-    // THE LATCH's test, client-side FIRST (AUTH-2.71), with the declined
+    // The latch's test, client-side first (AUTH-2.71), with the declined
     // board-wide check's residue said.
     if let Some(fp) = payload_fps.iter().find(|fp| g.set.enrolled(fp).is_some() || g.set.retired(fp).is_some()) {
         return Err(Halt::face(
@@ -248,7 +282,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     if !compare_payload(person, &entries, "skep handoff")? {
         return Err(Halt::face("the comparison was declined: nothing was written", "the typed answer was `no`", "compare with the recipient over the channel the address went out on, and re-run"));
     }
-    // G1: THE COPY, strings by number, before the write.
+    // G1: the copy, strings by number, before the write.
     let giving_home = doc_1_of(&g.giving);
     let home_present = document_present(board, &giving_home)?;
     let anchor_sentence = if g.grade == Grade::Anchor { " Handing this off is an anchor act: you will import your paper anchor to write it." } else { "" };
@@ -292,7 +326,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     if typed.trim() != account {
         return Err(Halt::face("the handoff was declined: nothing was written", "the typed answer was not the address", "re-run when ready"));
     }
-    // The hand: the giver's ANCHOR where the act is anchor-grade.
+    // The hand: the giver's anchor where the act is anchor-grade.
     let own: Vec<(Fingerprint, PublicKey)> = store.device_keys()?.iter().map(|k| (k.fingerprint, k.public.clone())).collect();
     let anchor: Option<ImportedAnchor> = if g.grade == Grade::Anchor {
         say(person, "AUTH-3.21", "the set that opens this account holds an anchor, so the handoff is ANCHOR-GRADE: your paper anchor is imported for this act alone");
@@ -323,7 +357,7 @@ pub fn handoff(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
             say(person, "AUTH-5.90 (b)", format!("beat (b): {giving_home} minted, born published"));
         }
-        // G4 = beat (c): THE GENESIS, verbatim, homed in the giving account's
+        // G4 = beat (c): the genesis, verbatim, homed in the giving account's
         // doc 1, at the grade G0 read.
         let id = format!("handoff.genesis.{account}");
         let outcome = deposit(board, session.token(), &Deposit { home: &giving_home, subject: &account, kind: DepositKind::EnrollVerbatim(text.clone()), hand: Some(hand), id: &id });

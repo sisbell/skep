@@ -1,34 +1,37 @@
-//! `recover` (`client.md` §4a): the DEVICE arm R0–R6 as one walk with the
-//! STOLEN order (R4 ahead of R3, `key_set` RE-READ after each retirement,
-//! the loop while any unaccounted non-anchor fingerprint stands, completion
-//! the read after R3's commit, TERMINATION NOT GUARANTEED said —
-//! AUTH-5.60 step 2's own order; AUTH-5.64's residual), and, in its child
-//! `loss`, the LOSS arm L0–L7 (`--anchor-lost`, AUTH-5.59's LOSS arm;
-//! AUTH-5.47). R0's reads in their order and R0's halts (the KEYLESS face
-//! naming `skep keygen` then `skep recover`; `claimant == null` ⇒ `skep
-//! claim`; the by-reference halt; NO anchor flagged ⇒ AUTH-5.16's second
-//! arm; this store's key `retired` ⇒ I4; `enrolled` ⇒ RESUME at R4); R1 =
-//! the import (whose account first, every arm); R2 the anchor session
-//! through `handshake` (the seed held per §4a.3); R3 — R1's CLASS ANSWER
-//! FIRST: on "an agent's" the enrollment is REFUSED and the ANCHORED ARM's
-//! containment act OFFERED from the session R2 holds (AUTH-5.64: retire the
-//! non-anchor set, enroll nothing; `first_session`'s FIRST STATE ALONE —
-//! RULED 2026-10-04), then on "my own" the ENROLLMENT PREVIEW with a typed
-//! confirmation, then `DepositKind::Enroll` of the store's device key under
-//! the imported anchor's hand (the anchor grade); `first_session(A, R2's
-//! session, the imported anchor)` AHEAD OF THE WALK'S FIRST CREDENTIAL WRITE
-//! — R3's enrollment on the LOST arm, R4's first retirement on the STOLEN
-//! arm (§4a.2 R3, R4); R4 — `--lost` against `enrolled`'s NON-ANCHOR
-//! entries, the DEFAULT the one enrolled non-anchor fingerprint this store
-//! does not hold, a list picked by fingerprint WITH LABELS otherwise, each
-//! `preview(removed)` + a typed answer + `DepositKind::Retire` under the
-//! anchor's hand; the `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27); R5
-//! the mirror's close (AUTH-5.54 step 3); R6 the binding appended, the
-//! three facts, and on the STOLEN arm AUTH-5.89's RECOVERY READ over the
-//! closure and the cone (every returned genesis shown with its hand and
-//! label, UNATTRIBUTABLE below the floor; the WITNESS question with its
-//! bounds, RES-184; the SEIZED class; the REPORT per A4 cell, RES-174's
-//! rider) and AUTH-5.28's expected end.
+//! `recover` (`client.md` §4a): the device arm R0–R6 as one walk.
+//!
+//! The walk keeps the stolen order (R4 ahead of R3, `key_set` re-read after
+//! each retirement, the loop while any unaccounted non-anchor fingerprint
+//! stands, completion the read after R3's commit, termination not
+//! guaranteed said — AUTH-5.60 step 2's own order; AUTH-5.64's residual),
+//! and, in its child `loss`, the loss arm L0–L7 (`--anchor-lost`,
+//! AUTH-5.59's loss arm; AUTH-5.47). R0's reads in their order and R0's
+//! halts (the keyless face naming `skep keygen` then `skep recover`;
+//! `claimant == null` ⇒ `skep claim`; the by-reference halt; no anchor
+//! flagged ⇒ AUTH-5.16's second arm; this store's key `retired` ⇒ I4;
+//! `enrolled` ⇒ resume at R4); R1 = the import (whose account first, every
+//! arm); R2 the anchor session through `handshake` (the seed held per
+//! §4a.3); R3 — R1's class answer first: on "an agent's" the enrollment is
+//! refused and the anchored arm's containment act offered from the session
+//! R2 holds (AUTH-5.64: retire the non-anchor set — eight keys at most —
+//! and enroll nothing; `first_session`'s first state alone), then on "my
+//! own" the enrollment preview with a typed confirmation, then
+//! `DepositKind::Enroll` of the store's device key under the imported
+//! anchor's hand (the anchor grade);
+//! `first_session(A, R2's session, the imported anchor)` ahead of the walk's
+//! first credential write — R3's enrollment on the lost arm, R4's first
+//! retirement on the stolen arm (§4a.2 R3, R4); R4 — `--lost` against
+//! every entry of `enrolled`, the default the one enrolled non-anchor
+//! fingerprint this store does not hold, a list picked by fingerprint with
+//! labels otherwise, each `preview(removed)` + a typed answer +
+//! `DepositKind::Retire` under the anchor's hand; the `closed` path's one
+//! arm per E2 trigger (AUTH-5.27); R5 the mirror's close
+//! (AUTH-5.54 step 3); R6 the binding appended, the three facts, and on the
+//! stolen arm AUTH-5.89's recovery read over the closure and the cone
+//! (every returned genesis shown with its hand and label, unattributable
+//! below the floor; the witness question with its bounds, RES-184; the
+//! seized class; the report per A4 cell, RES-174's rider) and AUTH-5.28's
+//! expected end.
 
 use std::path::PathBuf;
 
@@ -58,40 +61,52 @@ use loss::loss_arm;
 /// The command's inputs.
 #[derive(Debug, Clone)]
 pub struct RecoverOptions {
+    /// The principal whose account the walk recovers.
     pub principal: u64,
     /// `--anchor <path>`: the kept file.
     pub anchor: Option<PathBuf>,
-    /// `--lost <fp-prefix>`…
+    /// `--lost <fp-prefix>`, once per key named lost.
     pub lost: Vec<String>,
-    /// `--stolen`; `None` asks LOST or STOLEN at the head.
+    /// `--stolen`; `None` asks lost or stolen at the head.
     pub stolen: Option<bool>,
-    /// `--anchor-lost`: the LOSS arm.
+    /// `--anchor-lost`: the loss arm.
     pub anchor_lost: bool,
     /// `--anchor-out <dir>` (the loss arm), once per fresh anchor.
     pub anchor_out: Vec<PathBuf>,
     /// `--paper` (the loss arm).
     pub paper: bool,
-    /// The machine's host name and the date, for the fresh anchors' boxes'
-    /// per-run default (the loss arm; §4.2 step 2).
+    /// The machine's host name, for the fresh anchor boxes' per-run default.
+    ///
+    /// It serves the loss arm (§4.2 step 2).
     pub host_name: String,
+    /// The date, for the same per-run default.
     pub date: String,
 }
 
 /// What the walk did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recovered {
+    /// The three facts the walk recovered at.
     pub facts: Facts,
-    /// The device key enrolled (the device arm), or the fresh anchors (the
-    /// loss arm).
+    /// The device key enrolled (the device arm), or the fresh anchors.
+    ///
+    /// The fresh anchors are the loss arm's.
     pub enrolled: Vec<Fingerprint>,
+    /// The fingerprints the walk retired.
     pub retired: Vec<Fingerprint>,
+    /// The device key's binding line, where the walk composed one.
+    ///
+    /// The line is appended to the store; a store that cannot append it
+    /// answers a warning carrying the line.
     pub binding_line: Option<String>,
     /// The containment act ran (an agent's account): nothing enrolled.
     pub containment: bool,
-    /// THE RECOVERY READ's lines (AUTH-5.89; §4a.2 R6), the stolen arm's —
-    /// among them the REPORT per A4 cell, where the cell has one (AUTH-5.60
-    /// step 4).
+    /// The recovery read's lines (AUTH-5.89; §4a.2 R6), the stolen arm's.
+    ///
+    /// Among them stands the report per A4 cell, where the cell has one
+    /// (AUTH-5.60 step 4).
     pub recovery_read: Vec<String>,
+    /// The warnings the walk raised.
     pub warnings: Vec<String>,
 }
 
@@ -99,9 +114,14 @@ fn abandoned() -> Halt {
     Halt::face("the walk was abandoned", "the person left", "re-run when ready; every state resumes by reading (P4)")
 }
 
-/// The store's device keys for this walk (§2.2 `recover`: the STORE's,
-/// never `--key`), their public facts — the walk enrolls one by its public
-/// key and signs with none; the KEYLESS face where the store holds none.
+/// Returns the store's device keys for this walk, their public facts.
+///
+/// §2.2 `recover`: the store's, never `--key` — the walk enrolls one by its
+/// public key and signs with none.
+///
+/// # Errors
+///
+/// The keyless face where the store holds none, and the store's refusals.
 fn device_key_for(store: &FileStore) -> Result<Vec<KeyFacts>, Halt> {
     let devices = store.device_keys()?;
     if devices.is_empty() {
@@ -114,7 +134,16 @@ fn device_key_for(store: &FileStore) -> Result<Vec<KeyFacts>, Halt> {
     Ok(devices)
 }
 
-/// The one ENROLLED at the set (a resume), else the one FRESH device key.
+/// Returns the one key enrolled at the set (a resume), else the one fresh key.
+///
+/// # Errors
+///
+/// A store whose every key stands retired is I4's halt; more than one fresh
+/// key halts.
+///
+/// # Panics
+///
+/// Panics where `devices` is empty; `device_key_for` answers no such list.
 fn pick_device(devices: Vec<KeyFacts>, set: &KeySet) -> Result<(KeyFacts, bool), Halt> {
     if let Some(enrolled) = devices.iter().position(|d| set.enrolled(&d.fingerprint).is_some()) {
         let mut devices = devices;
@@ -142,12 +171,16 @@ fn pick_device(devices: Vec<KeyFacts>, set: &KeySet) -> Result<(KeyFacts, bool),
     }
 }
 
-/// A fingerprint's row for a face: grouped, labelled.
+/// Returns a fingerprint's row for a face: its hex, labelled.
 fn row_text(fp: &Fingerprint, records: &Records) -> String {
     format!("{} ({})", fp, records.label_of(fp).map(|l| render_inert(&l)).unwrap_or_else(|| "no label recorded".into()))
 }
 
-/// The current set at `account`.
+/// Re-reads the current set at `account`.
+///
+/// # Errors
+///
+/// `not_an_account` halts, as do the read's own errors.
 fn reread(board: &Board, account: &str) -> Result<KeySet, Halt> {
     match board.key_set(account)? {
         KeySetAnswer::Set(s) => Ok(s),
@@ -155,10 +188,18 @@ fn reread(board: &Board, account: &str) -> Result<KeySet, Halt> {
     }
 }
 
-/// R4's TARGETS: `--lost` prefixes resolved against `enrolled`'s NON-ANCHOR
-/// entries (an anchor match refused ahead of any frame); with none named,
-/// the DEFAULT — the one enrolled non-anchor fingerprint this store does not
-/// hold — or a LIST the person picks from by fingerprint, with labels.
+/// Returns R4's targets.
+///
+/// `--lost` prefixes are resolved against every entry of `enrolled`;
+/// with none named, the default — the one enrolled non-anchor fingerprint
+/// this store does not hold — or a list the person picks from by
+/// fingerprint, with labels.
+///
+/// # Errors
+///
+/// An anchor match is refused ahead of any frame, as are a `--lost` prefix
+/// matching no enrolled key or more than one; an abandoned pick; and a
+/// picked prefix naming no single key of the list.
 fn targets(person: &mut dyn Person, set: &KeySet, records: &Records, held: &[Fingerprint], lost: &[String]) -> Result<Vec<Fingerprint>, Halt> {
     let mut out = Vec::new();
     if !lost.is_empty() {
@@ -219,10 +260,23 @@ fn targets(person: &mut dyn Person, set: &KeySet, records: &Records, held: &[Fin
     }
 }
 
-/// ONE retirement under the anchor session: `preview(removed)`, the typed
-/// answer, `DepositKind::Retire` under the anchor's hand. A key R0's set did
-/// not hold was ENROLLED SINCE the walk began, and its row says so — read
-/// off the walk's own reads, never passed in.
+/// Makes one retirement under the anchor session.
+///
+/// It runs `preview(removed)`, the typed answer, `DepositKind::Retire` under
+/// the anchor's hand. A key R0's set did not hold was enrolled since the
+/// walk began, and its row says so — read off the walk's own reads, never
+/// passed in.
+///
+/// # Errors
+///
+/// The enumeration's halts; the preview declined, unwritable or abandoned;
+/// the session closed, faced by its trigger; and the deposit's other
+/// halts.
+///
+/// # Panics
+///
+/// Panics if a fingerprint's hex runs under 8 digits; it runs to 64, so the
+/// slice never fails.
 #[allow(clippy::too_many_arguments)]
 fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, hand: &HybridSigner, reads: &Reads, set: &KeySet, records: &Records, fp: &Fingerprint, held: &[Fingerprint], site: PreviewSite) -> Result<(), Halt> {
     let closure = head_closure(board, person, &reads.walk.set_account, fp)?;
@@ -245,18 +299,20 @@ fn retire_one(board: &Board, person: &mut dyn Person, session: &Session<'_>, han
     }
 }
 
-/// The `closed` path's ONE ARM PER E2 TRIGGER (AUTH-5.27), taken where a
-/// deposit under the anchor session met the death signal
-/// ([`DepositHalt::SessionClosed`]). A retirement ends a session only where it
-/// names the key that OPENED it (AUTH-4.63), so the one key this face reads is
-/// `session_key`: retired, it was ANOTHER hand's act, the hand named from the
-/// records (AUTH-5.77) — another anchor standing retired says nothing of this
-/// session, and the loss arm retires the lost paper itself. Otherwise the
-/// daemon's restart (AUTH-5.31; its re-open meeting a block is the block's
-/// arm) — derived from `key_set` and the records, never a silent re-import.
-/// The SEEDED trigger arises only by reference, and is no arm here: both of
-/// this walk's arms run R0 as walks that enroll, which halts a by-reference
-/// account, so the session acts as the account whose set it is.
+/// Returns the `closed` path's one arm per E2 trigger (AUTH-5.27).
+///
+/// It is taken where a deposit under the anchor session met the death
+/// signal ([`DepositHalt::SessionClosed`]). A retirement ends a session only
+/// where it names the key that opened it (AUTH-4.63), so the one key this
+/// face reads is `session_key`: retired, it was another hand's act, the
+/// hand named from the records (AUTH-5.77) — another anchor standing
+/// retired says nothing of this session, and the loss arm retires the lost
+/// paper itself. Otherwise the daemon's restart (AUTH-5.31; its re-open
+/// meeting a block is the block's arm) — derived from `key_set` and the
+/// records, never a silent re-import. The seeded trigger arises only by
+/// reference, and is no arm here: both of this walk's arms run R0 as walks
+/// that enroll, which halts a by-reference account, so the session acts as
+/// the account whose set it is.
 fn closed_arm(board: &Board, reads: &Reads, session_key: &Fingerprint) -> Halt {
     if let Ok(KeySetAnswer::Set(now)) = board.key_set(&reads.walk.set_account) {
         if now.retired(session_key).is_some() {
@@ -281,10 +337,15 @@ fn closed_arm(board: &Board, reads: &Reads, session_key: &Fingerprint) -> Halt {
     )
 }
 
-/// THE RECOVERY READ (AUTH-5.89; `client.md` §4a.2 R6), on the STOLEN arm:
-/// the closure for the stolen fingerprint, the agent space, the cone — every
-/// returned genesis shown, the witness question, the seized class, the
-/// report per A4 cell.
+/// Runs the stolen arm's recovery read (AUTH-5.89; `client.md` §4a.2 R6).
+///
+/// It walks the closure for the stolen fingerprint, the agent space, the
+/// cone — every returned genesis shown, the witness question, the seized
+/// class, the report per A4 cell.
+///
+/// # Errors
+///
+/// The reads' errors, and an abandoned witness question.
 fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: &[Fingerprint], own: &[(Fingerprint, PublicKey)]) -> Result<Vec<String>, Halt> {
     let a = reads.walk.set_account.clone();
     say(person, "AUTH-5.89 (cost)", "THE RECOVERY READ over every space the stolen key could open: one `next_account_prefix`, one `key_set` and one `effective_owner` per account, with the admitted record read beneath each — seconds at a notebook with a few topics, minutes at hundreds of subdivisions; the accounts walked are counted as it runs; an interruption re-runs the read");
@@ -362,7 +423,7 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
         say(person, "AUTH-5.89 (seized)", line.clone());
         lines.push(line);
     }
-    // THE REPORT PER A4 CELL (AUTH-5.60 step 4; AUTH RES-174).
+    // The report per A4 cell (AUTH-5.60 step 4; AUTH RES-174).
     let prefixes: Vec<String> = unmarked.iter().map(|(s, _, _)| s.clone()).collect();
     let cell_line = match &reads.cell {
         A4Cell::Served => format!(
@@ -387,16 +448,35 @@ fn recovery_read(board: &Board, person: &mut dyn Person, reads: &Reads, stolen: 
     Ok(lines)
 }
 
-/// THE WALK.
+/// Runs the walk.
+///
+/// # Errors
+///
+/// On `--anchor-lost`, the loss arm's halts. Otherwise, in the walk's
+/// order: the keyless face; an abandoned question; R0's halts; no anchor
+/// enrolled; the device key's pick; the import's halts and the no-artifact
+/// face; the handshake; the first-session reads; at an agent's account the
+/// containment declined, or its mint's and retirements' halts; R4's
+/// targets'; on the stolen arm the first session and R4's rounds; the
+/// enrollment declined or abandoned; on the lost arm the first session; the
+/// deposits' halts, a closed session faced by its trigger; R4's rounds after
+/// R3, the lost arm's and the stolen arm's completion read; and the recovery
+/// read's.
+///
+/// # Panics
+///
+/// Panics if `Enrollment::new` refuses a stored label or a fingerprint's hex
+/// runs under 8 digits; the store admits only labels it takes and the hex
+/// runs to 64, so neither fires.
 pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RecoverOptions) -> Result<Recovered, Halt> {
     if opts.anchor_lost {
         return loss_arm(board, store, person, opts);
     }
-    // The STORE holds a device key for this walk — ahead of every read.
+    // The store holds a device key for this walk — ahead of every read.
     let devices = device_key_for(store)?;
     let own: Vec<(Fingerprint, PublicKey)> = devices.iter().map(|d| (d.fingerprint, d.public.clone())).collect();
     let held: Vec<Fingerprint> = own.iter().map(|(f, _)| *f).collect();
-    // LOST or STOLEN, at the walk's head ahead of every read (§4a.1; §4a.2
+    // Lost or stolen, at the walk's head ahead of every read (§4a.1; §4a.2
     // R6: the stolen arm's recovery read is priced at the choice).
     let stolen = match opts.stolen {
         Some(s) => s,
@@ -408,7 +488,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     // R0.
     let reads = r0(board, person, opts.principal, Act::Enrollment, &own)?;
     let account = reads.account.clone();
-    // NO anchor flagged ⇒ AUTH-5.16's second arm.
+    // No anchor flagged ⇒ AUTH-5.16's second arm.
     if !reads.walk.set.has_anchor() {
         return Err(Halt::face(
             format!("no anchor is enrolled at {}: the act is impossible on this account permanently", reads.walk.set_account),
@@ -420,21 +500,21 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
     if resumed {
         say(person, "AUTH-5.56", format!("resumed: the device key {} is already enrolled at {} — R3 stands done, read off `key_set`; the walk continues at R4", device.fingerprint, reads.walk.set_account));
     }
-    // R1: WHOSE ACCOUNT, then the import.
+    // R1: whose account, then the import.
     let whose = whose_account(person, &account, opts.principal)?;
     let cx = ImportContext { board, store, account: &account, principal: opts.principal, set_account: &reads.walk.set_account, set: &reads.walk.set, records: &reads.records, own: &own, anchor_path: opts.anchor.as_deref(), whose, cell: &reads.cell };
     let anchor: ImportedAnchor = match import_anchor(person, &cx)? {
         ImportOutcome::Anchor(a) => *a,
         ImportOutcome::Neither => return Err(no_artifact_face(person, &cx)),
     };
-    // R2: THE ANCHOR SESSION (FULL), the seed held for the records.
+    // R2: the anchor session (full), the seed held for the records.
     let session = handshake(board, Scope::Full, &anchor.signer, opts.principal, Site::Recover)?;
     say(person, "§4a.3", "the anchor session is open; the seed is held for the records this walk signs with it and dropped at the last of them — inside AUTH-5.54 step 3's mirror; a crash before the close leaves this anchor-grade token standing until the daemon restarts (your act at a notebook; the operator's reach at a hosted board)");
     let mut retired: Vec<Fingerprint> = Vec::new();
     let mut warnings = Vec::new();
     let result = (|| -> Result<Recovered, Halt> {
         let fs_reads = FirstSessionReads::take(board, &account, &anchor.fingerprint, Some(store))?;
-        // R3's CLASS ANSWER FIRST: an agent's ⇒ the containment act.
+        // R3's class answer first: an agent's ⇒ the containment act.
         if whose == Whose::Agent {
             say(
                 person,
@@ -448,7 +528,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             if !take {
                 return Err(Halt::face("the containment act was declined: nothing was written", "the account stands anchored, the act untaken — never the anchorless arm's", "re-run when ready"));
             }
-            // `first_session`'s FIRST STATE ALONE (RULED 2026-10-04).
+            // `first_session`'s first state alone.
             if mint_home(board, &fs_reads, &session)? {
                 say(person, "AUTH-5.90 (iii)", format!("the home {} was minted (the first state alone; the setup state never runs at an agent's account)", fs_reads.home));
             }
@@ -489,7 +569,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
                 if !stolen {
                     return Ok(());
                 }
-                // THE RE-READ after each round: a fingerprint appearing
+                // The re-read after each round: a fingerprint appearing
                 // between rounds is shown as what it is.
                 *set = reread(board, &reads.walk.set_account)?;
                 let unaccounted: Vec<Fingerprint> = set.enrolled.iter().filter(|e| !e.anchor && !accounted.contains(&e.fingerprint) && !retired.contains(&e.fingerprint)).map(|e| e.fingerprint).collect();
@@ -507,7 +587,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
         };
         if stolen {
-            // `first_session` AHEAD OF THE WALK'S FIRST CREDENTIAL WRITE, which
+            // `first_session` ahead of the walk's first credential write, which
             // on this arm is R4's first retirement, homed in A's doc 1 (§4a.2
             // R4) — a doc 1 that may not stand at a handoff's recipient who
             // never ran `skep bind` (AUTH-5.90 (iii)).
@@ -515,8 +595,8 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             warnings.extend(done.warnings.clone());
             r4(person, &mut set, &mut records, picked.clone(), &mut retired)?;
         }
-        // R3: THE ENROLLMENT PREVIEW and its typed confirmation, then — on the
-        // LOST arm, whose first credential write it is — `first_session`, then
+        // R3: the enrollment preview and its typed confirmation, then — on the
+        // lost arm, whose first credential write it is — `first_session`, then
         // the enrollment under the anchor's hand.
         if !resumed {
             say(
@@ -549,7 +629,7 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
                 Ok(DepositOutcome::Deposited { .. }) => say(person, "AUTH-5.59 step 1", format!("the device key {} is enrolled from the anchor's session", device.fingerprint)),
                 Ok(DepositOutcome::Committed { reason }) => say(person, "AUTH-5.17", format!("R3 stands: {reason}")),
                 Err(DepositHalt::SetFull(_)) => {
-                    // The PERSON-CLASS inversion: R4 first, then R3.
+                    // The person-class inversion: R4 first, then R3.
                     say(person, "AUTH-5.13", "the set is full: retire a key you no longer hold first, then this device is enrolled — R4 runs ahead of R3 under this same session");
                     r4(person, &mut set, &mut records, picked.clone(), &mut retired)?;
                     let outcome = deposit(board, session.token(), &Deposit { home: &fs_reads.home, subject: &account, kind: DepositKind::Enroll(vec![Enrollment::new(device.public.clone(), false, device.label.clone()).expect("a stored label")]), hand: Some(&anchor.signer), id: &id })?;
@@ -562,10 +642,10 @@ pub fn recover(board: &Board, store: &FileStore, person: &mut dyn Person, opts: 
             }
         }
         if !stolen {
-            // THE LOST ARM keeps R3 → R4.
+            // The lost arm keeps R3 → R4.
             r4(person, &mut set, &mut records, picked.clone(), &mut retired)?;
         } else {
-            // COMPLETION IS THE READ MADE AFTER R3's ENROLL COMMITS.
+            // Completion is the read made after R3's enroll commits.
             r4(person, &mut set, &mut records, Vec::new(), &mut retired)?;
         }
         Ok(Recovered { facts: Facts { account: account.clone(), principal: opts.principal, origin: board.dialed().clone() }, enrolled: vec![device.fingerprint], retired: retired.clone(), binding_line: None, containment: false, recovery_read: Vec::new(), warnings: warnings.clone() })
@@ -607,15 +687,16 @@ mod tests {
         s
     }
 
-    /// A device key's public facts, as the store's lookup answers them.
+    /// Returns a device key's public facts as the store's lookup answers them.
     fn facts(seed: u8) -> KeyFacts {
         let file = KeyFile::new(Seed::new([seed; 32]), false, Label::new(&format!("device {seed}")).ok(), None);
         KeyFacts { path: format!("{seed}.key").into(), fingerprint: file.fingerprint, public: file.public.clone(), label: file.label.clone(), anchor: false }
     }
 
-    /// The store's device key for the walk, picked off its public facts: the
-    /// enrolled one resumes; one fresh key is the key; a retired-only store
-    /// is I4's halt.
+    /// The store's device key for the walk, picked off its public facts.
+    ///
+    /// The enrolled one resumes; one fresh key is the key; a retired-only
+    /// store is I4's halt.
     #[test]
     fn the_device_key_is_picked_by_its_diagnosis() {
         let fresh = facts(1);

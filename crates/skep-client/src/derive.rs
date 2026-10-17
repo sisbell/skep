@@ -1,11 +1,12 @@
-//! The read-derivations (`client.md` §1.1's `derive` row): each a pure
-//! function over board reads with no store among its inputs — the MODE off
-//! `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check in both arms, the
-//! THREE-STATE key diagnosis at the set AUTH-5.21's walk reaches (AUTH-4.30
-//! (i); every unseeded account answers EMPTY BY LAW, AUTH-6.19), the
-//! principal of an address (AUTH-6.37), and AUTH-5.66's `closed` predicate.
-//! The one admitted READ — the account's credential records — is
-//! [`records`], behind `acting`.
+//! The read-derivations (`client.md` §1.1's `derive` row).
+//!
+//! Each is a pure function over board reads with no store among its inputs
+//! — the mode off `/health`'s pair (AUTH-5.86), AUTH-5.65's pre-check in
+//! both arms, the three-state key diagnosis at the set AUTH-5.21's walk
+//! reaches (AUTH-4.30 (i); every unseeded account answers empty by law,
+//! AUTH-6.19), the principal of an address (AUTH-6.37), and AUTH-5.66's
+//! `closed` predicate. The one admitted read — the account's credential
+//! records — is [`records`], behind `acting`.
 
 use std::fmt;
 
@@ -19,8 +20,10 @@ use crate::origin::Origin;
 #[cfg(feature = "acting")]
 pub mod records;
 
-/// The three modes, DERIVED from the pair `/health` publishes and never a
-/// field of it (AUTH-5.86; the negative pin: no `mode` field, ever).
+/// The three modes, derived from the pair `/health` publishes.
+///
+/// A mode is never a field of it (AUTH-5.86; the negative pin: no `mode`
+/// field, ever).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Mode {
     /// `claimant == null`.
@@ -32,7 +35,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// AUTH-5.86's one sentence over the pair.
+    /// Returns the mode — AUTH-5.86's one sentence over the pair.
     pub fn of(health: &Health) -> Mode {
         match (health.claimant(), health.local_trust()) {
             (None, _) => Mode::Unclaimed,
@@ -41,7 +44,7 @@ impl Mode {
         }
     }
 
-    /// The mode's name as the design spells it.
+    /// Returns the mode's name as the design spells it.
     pub fn name(self) -> &'static str {
         match self {
             Mode::Unclaimed => "UNCLAIMED",
@@ -58,40 +61,51 @@ impl fmt::Display for Mode {
     }
 }
 
-/// THE WALK (AUTH-5.21; AUTH-4.30 (i)'s client sentence): `key_set` at the
-/// account and, while that set is EMPTY, at each account above it in turn,
-/// taking the first whose set is not; the terminus EMPTY is the never-keyed
-/// state. Every input public.
+/// The walk (AUTH-5.21; AUTH-4.30 (i)'s client sentence).
+///
+/// It reads `key_set` at the account and, while that set is empty, at each
+/// account above it in turn, taking the first whose set is not; the
+/// terminus empty is the never-keyed state. Every input public.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Walk {
     /// The account asked about.
     pub account: String,
-    /// The account whose set the walk reached — the one the principal
-    /// authenticates against; `account` itself where the terminus is empty.
+    /// The account whose set the walk reached.
+    ///
+    /// It is the one the principal authenticates against; `account` itself
+    /// where the terminus is empty.
     pub set_account: String,
     /// That set.
     pub set: KeySet,
-    /// Every account the walk read, top-down from `account`.
+    /// Every account the walk read, upward from `account`.
     pub visited: Vec<String>,
 }
 
 impl Walk {
-    /// Whether the terminus is EMPTY — no set opens this account.
+    /// Returns whether the terminus is empty — no set opens this account.
     pub fn terminus_empty(&self) -> bool {
         self.set.is_empty()
     }
 
-    /// Whether the account opens BY REFERENCE — its own set empty, a set
-    /// above it reached.
+    /// Returns whether the account opens by reference.
+    ///
+    /// Its own set is empty, a set above it reached.
     pub fn by_reference(&self) -> bool {
         self.set_account != self.account && !self.set.is_empty()
     }
 }
 
-/// Run the walk from `account` — an account within the namespace's
-/// principal depth, which no conforming board names past: one deeper is
-/// refused before the first read (`too_deep`), so the walk makes at most
-/// [`MAX_PRINCIPAL_COMPONENTS`] reads and holds as many short prefixes.
+/// Runs the walk from `account`.
+///
+/// The account lies within the namespace's principal depth, which no
+/// conforming board names past; with a deeper one refused, the walk makes
+/// at most [`MAX_PRINCIPAL_COMPONENTS`] reads and holds as many short
+/// prefixes.
+///
+/// # Errors
+///
+/// An account one deeper is refused before the first read (`too_deep`); an
+/// address answering `not_an_account` halts; and the reads' errors.
 pub fn walk_to_set(board: &Board, account: &str) -> Result<Walk, Halt> {
     if !within_principal_depth(account) {
         return Err(too_deep(account));
@@ -115,18 +129,19 @@ pub fn walk_to_set(board: &Board, account: &str) -> Result<Walk, Halt> {
         }
         match parent_account(&at) {
             Some(parent) => at = parent,
-            // The terminus EMPTY: the account's own address, whose set is
+            // The terminus empty: the account's own address, whose set is
             // empty — the never-keyed state.
             None => return Ok(Walk { account: account.to_string(), set_account: account.to_string(), set, visited }),
         }
     }
 }
 
-/// The face of an account deeper than the namespace delegates — named by
-/// the board (`principal_prefix`, a session's account, ω's prefix), never by
-/// the person, so the fault is the board's: the walk upward from it would
-/// climb one component a read and keep each prefix. The account is named
-/// by its first 64 bytes alone.
+/// Returns the face of an account deeper than the namespace delegates.
+///
+/// The account is named by the board (`principal_prefix`, a session's
+/// account, ω's prefix), never by the person, so the fault is the board's:
+/// the walk upward from it would climb one component a read and keep each
+/// prefix. The account is named by its first 64 bytes alone.
 pub(crate) fn too_deep(account: &str) -> Halt {
     Halt::face(
         format!("the board named an account deeper than any it can delegate: {}…", clipped(account, 64)),
@@ -138,8 +153,9 @@ pub(crate) fn too_deep(account: &str) -> Halt {
     )
 }
 
-/// THE THREE-STATE KEY DIAGNOSIS — `key_set` publishing both lists
-/// (AUTH-6.18): ONE diagnosis shared by `verify`, `session`'s pre-check and
+/// The three-state key diagnosis — `key_set` publishing both lists (AUTH-6.18).
+///
+/// It is one diagnosis shared by `verify`, `session`'s pre-check and
 /// `enroll` (`client.md` §2.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyDiagnosis {
@@ -147,13 +163,14 @@ pub enum KeyDiagnosis {
     Enrolled { anchor: bool },
     /// In `retired`: I4's permanent bar (AUTH-2.98).
     Retired { anchor: bool },
-    /// In NEITHER list: "this account's records do not list this key"
-    /// (AUTH-5.25 cell (iii)).
+    /// In neither list: "this account's records do not list this key".
+    ///
+    /// It is AUTH-5.25 cell (iii).
     Neither,
 }
 
 impl KeyDiagnosis {
-    /// The diagnosis of `fp` against `set`.
+    /// Returns the diagnosis of `fp` against `set`.
     pub fn of(set: &KeySet, fp: &Fingerprint) -> KeyDiagnosis {
         if let Some(e) = set.enrolled(fp) {
             return KeyDiagnosis::Enrolled { anchor: e.anchor };
@@ -165,8 +182,9 @@ impl KeyDiagnosis {
     }
 }
 
-/// Where the key stands, as a person reads it — the phrase a face completes
-/// after "this key stands".
+/// Where the key stands, as a person reads it.
+///
+/// It is the phrase a face completes after "this key stands".
 impl fmt::Display for KeyDiagnosis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -178,10 +196,15 @@ impl fmt::Display for KeyDiagnosis {
     }
 }
 
-/// THE ORIGIN ARM (AUTH-5.24, FIRST; AUTH-5.65): the origin this client
-/// SIGNS for the board ∈ `/health.auth.signed_origins`, else the ORIGIN
-/// STATE (AUTH-5.36 arm (1)'s content) with its clearing acts by cell —
-/// never "sign in", never a retry.
+/// Runs the origin arm (AUTH-5.24, first; AUTH-5.65).
+///
+/// The origin this client signs for the board must stand ∈
+/// `/health.auth.signed_origins`.
+///
+/// # Errors
+///
+/// Where it does not, the origin state (AUTH-5.36 arm (1)'s content) with
+/// its clearing acts by cell — never "sign in", never a retry.
 pub fn origin_arm(signed: &Origin, health: &Health) -> Result<(), Halt> {
     if health.signed_origins().iter().any(|o| *o == signed.as_str()) {
         return Ok(());
@@ -202,27 +225,37 @@ pub fn origin_arm(signed: &Origin, health: &Health) -> Result<(), Halt> {
     ))
 }
 
-/// AUTH-5.65's PRE-CHECK, both arms, ahead of EVERY `/challenge` this
-/// client fetches: the origin arm first (AUTH-5.24), then the address
-/// DERIVED by `principal_prefix` (AUTH-5.67 (2); `None` the
-/// delegation-never-committed cell), then the key-set compare at the set
-/// AUTH-5.21's walk reaches. The diagnosis is answered, not faced: the
-/// caller renders the three-state face for its own site. The principal the
-/// reads were made for rides with them, so a handshake over them opens as
-/// that principal and no other.
+/// AUTH-5.65's pre-check, both arms.
+///
+/// It runs ahead of every `/challenge` this client fetches: the origin arm
+/// first (AUTH-5.24), then the address derived by `principal_prefix`
+/// (AUTH-5.67 (2); `None` the delegation-never-committed cell), then the
+/// key-set compare at the set AUTH-5.21's walk reaches. The diagnosis is
+/// answered, not faced: the caller renders the three-state face for its own
+/// site. The principal the reads were made for rides with them, so a
+/// handshake over them opens as that principal and no other.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreCheck {
+    /// The `/health` answer the pre-check read.
     pub health: Health,
+    /// The mode off that answer's pair.
     pub mode: Mode,
     /// The principal `n` the pre-check was made for.
     pub principal: u64,
     /// `principal_prefix(n)`.
     pub account: String,
+    /// The walk from `account`.
     pub walk: Walk,
+    /// The key's diagnosis at the set the walk reached.
     pub diagnosis: KeyDiagnosis,
 }
 
-/// Run the pre-check for `principal` holding the key `fp`.
+/// Runs the pre-check for `principal` holding the key `fp`.
+///
+/// # Errors
+///
+/// In order: the `/health` read's errors; the origin arm's face; an
+/// unregistered principal; and the walk's halts.
 pub fn precheck(board: &Board, principal: u64, fp: &Fingerprint) -> Result<PreCheck, Halt> {
     let health = board.health()?;
     origin_arm(board.signed(), &health)?;
@@ -241,31 +274,42 @@ pub fn precheck(board: &Board, principal: u64, fp: &Fingerprint) -> Result<PreCh
     Ok(PreCheck { health, mode, principal, account, walk, diagnosis })
 }
 
-/// The principal seated at `addr` — `effective_owner(addr).principal` taken
-/// WHERE `prefix == addr` (AUTH-6.37: the one allocation test); `None` where
-/// the address is not an allocated seat — ω then names the seat above it,
-/// which is NOT this address's principal.
+/// Returns the principal seated at `addr`.
+///
+/// It is `effective_owner(addr).principal` taken where `prefix == addr`
+/// (AUTH-6.37: the one allocation test); `None` where the address is not an
+/// allocated seat — ω then names the seat above it, which is *not* this
+/// address's principal.
+///
+/// # Errors
+///
+/// [`Board::effective_owner`]'s errors.
 pub fn principal_of(board: &Board, addr: &str) -> Result<Option<u64>, Halt> {
     Ok(board.effective_owner(addr)?.filter(|o| o.prefix == addr).map(|o| o.principal))
 }
 
-/// AUTH-5.66's `closed` predicate, a pure function over the key THIS
-/// PROCESS ALREADY HOLDS and the two reads the pre-check already makes:
-/// re-handshake iff that fingerprint is in the set AUTH-5.21's walk reaches
-/// for the derived address AND the origin this client signs is answered
-/// for, else HALT — the key BURNED on the key arm, the ORIGIN STATE on the
-/// origin arm. The STORE is not among its inputs: a predicate that re-read
-/// the file would re-handshake out of the halt the burn's expected end IS.
-/// The handshake's own `403 prefix_blocked` is the third value's SITE — the
-/// re-handshake it directs meets it — and is faced there (`Blocked`).
+/// The arms of AUTH-5.66's `closed` predicate.
+///
+/// The predicate is a pure function over the key this process already
+/// holds and the two reads the pre-check already makes: re-handshake iff
+/// that fingerprint stands enrolled in the set AUTH-5.21's walk reaches for
+/// the derived address and the origin this client signs is answered for,
+/// else halt — the key burned on the key arm, the origin state on the
+/// origin arm. The store is not among its inputs: a predicate that re-read
+/// the file would re-handshake out of the halt the burn's expected end
+/// *is*. The handshake's own `403 prefix_blocked` is the third value's site
+/// — the re-handshake it directs meets it — and is faced there (`Blocked`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClosedArm {
+    /// The key stands enrolled and the origin is answered for: re-handshake.
     ReHandshake,
+    /// The key is not enrolled at the set: halt, the key burned.
     KeyBurned,
+    /// The signed origin is not answered for: halt, the origin state.
     OriginState,
 }
 
-/// The arm for a `closed` met by a process holding `loaded`.
+/// Returns the arm for a `closed` met by a process holding `loaded`.
 pub fn on_closed(loaded: &Fingerprint, signed: &Origin, health: &Health, walk: &Walk) -> ClosedArm {
     if origin_arm(signed, health).is_err() {
         return ClosedArm::OriginState;
@@ -297,8 +341,9 @@ mod tests {
         assert_eq!(Mode::ClaimedPermissive.to_string(), "CLAIMED-PERMISSIVE", "a mode displays as its name");
     }
 
-    /// AUTH-5.24/5.36 — the origin arm names the ORIGIN STATE, never a
-    /// retry; AUTH-5.66 — the `closed` predicate's three values.
+    /// AUTH-5.24/5.36 — the origin arm names the origin state, never a retry.
+    ///
+    /// AUTH-5.66 — the `closed` predicate's three values.
     #[test]
     fn the_origin_arm_and_the_closed_predicate() {
         let signed = Origin::parse("http://127.0.0.1:8642").unwrap();
@@ -317,11 +362,13 @@ mod tests {
         assert_eq!(stands(KeyDiagnosis::Enrolled { anchor: false }), "this key stands enrolled as a device key");
     }
 
-    /// AUTH-5.66's predicate over its whole input — the loaded key enrolled
-    /// as an anchor or as a device key, retired, or in neither list, each
-    /// with the origin this client signs answered for or not: RE-HANDSHAKE
-    /// iff the key stands enrolled and the origin is answered for, the
-    /// ORIGIN STATE wherever it is not, the key BURNED otherwise.
+    /// AUTH-5.66's predicate over its whole input.
+    ///
+    /// The loaded key enrolled as an anchor or as a device key, retired, or
+    /// in neither list, each with the origin this client signs answered for
+    /// or not: re-handshake iff the key stands enrolled and the origin is
+    /// answered for, the origin state wherever it is not, the key burned
+    /// otherwise.
     #[test]
     fn the_closed_predicate_re_handshakes_iff_the_key_stands_and_the_origin_answers() {
         use crate::board::{EnrolledKey, RetiredKey};
@@ -345,16 +392,21 @@ mod tests {
         }
     }
 
-    /// The account `1.0.1` deepened to `n` components, each added one a 1.
+    /// Returns `1.0.1` deepened to `n` components, each added one a 1.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `n` is under 3.
     fn deep(n: usize) -> String {
         format!("1.0.1{}", ".1".repeat(n - 3))
     }
 
-    /// The namespace's depth holds the walk (wire.md §Operations,
-    /// `delegate`): an account deeper than any board delegates — four
-    /// million components, the eight megabytes a `principal_prefix` answer
-    /// may carry inside the dialer's cap — is refused before its first read,
-    /// its face naming no more than its first 64 bytes.
+    /// The namespace's depth holds the walk (wire.md §Operations, `delegate`).
+    ///
+    /// An account deeper than any board delegates — four million components,
+    /// the eight megabytes a `principal_prefix` answer may carry inside the
+    /// dialer's cap — is refused before its first read, its face naming no
+    /// more than its first 64 bytes.
     #[test]
     fn a_walk_from_an_account_deeper_than_the_namespace_delegates_reads_nothing() {
         let halt = walk_to_set(&fake::board(&Fake::unread()), &deep(4_000_000)).expect_err("too deep");
@@ -363,9 +415,10 @@ mod tests {
         assert!(text.contains("deeper than any it can delegate") && text.len() < 4096, "{}", clipped(&text, 512));
     }
 
-    /// From an account at the namespace's depth the walk climbs one account a
-    /// read to the top-level account — 62 reads from 64 components — and
-    /// keeps one prefix a read.
+    /// The walk climbs one account a read from the namespace's depth.
+    ///
+    /// From an account at that depth it reaches the top-level account — 62
+    /// reads from 64 components — and keeps one prefix a read.
     #[test]
     fn the_walk_climbs_at_most_the_namespaces_depth() {
         let fake = Fake::new(|_| fake::json(200, json!({"as_of": 9, "enrolled": [], "resp": "key_set", "retired": []})));
@@ -374,8 +427,9 @@ mod tests {
         assert_eq!((walk.visited.len(), fake.log().len()), (62, 62));
     }
 
-    /// The pre-check holds the board's `principal_prefix` answer to the depth
-    /// before it walks: `/health`, the prefix, and the halt.
+    /// The pre-check holds the board's `principal_prefix` answer to the depth.
+    ///
+    /// It does so before it walks: `/health`, the prefix, and the halt.
     #[test]
     fn the_precheck_refuses_a_principal_prefix_past_the_bound() {
         let origin = fake::origin().as_str().to_string();

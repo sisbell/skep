@@ -1,22 +1,24 @@
-//! `retire` (`client.md` §4a.4; §2.2): a DEVICE key retired from a FULL
-//! session this command opens with a key this store holds (AUTH-5.60 step
-//! 1: "from any OTHER enrolled key — an ungated device act", AUTH-3.65's
-//! device columns). R0's reads; a FULL session under the store's key for
+//! `retire` (`client.md` §4a.4; §2.2): a device key retired.
+//!
+//! The retirement is made from a full session this command opens with a
+//! key this store holds (AUTH-5.60 step 1: "from any other enrolled key —
+//! an ungated device act", AUTH-3.65's device columns). R0's reads; the
+//! prefix resolved against the enrolled list with labels from the admitted
+//! read (AUTH-5.69) — more than one match a halt listing them, an anchor
+//! match refused ahead of any frame naming `recover --anchor-lost` and the
+//! later replacement; a full session under the store's key for
 //! (`--board`, n); `first_session` first (R4's insert homes in the
-//! account's doc 1, which may not stand — AUTH-5.90 (iii)); the prefix
-//! resolved against the enrolled list WITH LABELS from the admitted read
-//! (AUTH-5.69) — more than one match a halt listing them, an ANCHOR match
-//! refused ahead of any frame naming `recover --anchor-lost` and the LATER
-//! replacement; `preview(removed)` over the head invariant's enumeration;
-//! the typed answer; ONE `DepositKind::Retire`; the close — OR, where the
-//! retired key IS this session's own (AUTH-5.59 step 4's device arm), NO
-//! close sent: the commit ends the session atomically (AUTH-4.63) and the
-//! `closed` any later request meets is AUTH-5.28's expected end in its FORK
-//! (an enrolled key still held ⇒ `skep session`; none ⇒ the keyless face,
+//! account's doc 1, which may not stand — AUTH-5.90 (iii));
+//! `preview(removed)` over the head invariant's enumeration; the typed
+//! answer; one `DepositKind::Retire`; the close — or, where the retired key
+//! is this session's own (AUTH-5.59 step 4's device arm), no close sent:
+//! the commit ends the session atomically (AUTH-4.63) and the `closed` any
+//! later request meets is AUTH-5.28's expected end in its fork (an enrolled
+//! device key still held ⇒ `skep session`; none ⇒ the keyless face,
 //! `skep recover` with a paper). At an account that opens by reference the
-//! retirement is REDIRECTED to the set account, where the key stands as
+//! retirement is redirected to the set account, where the key stands as
 //! that account's own (`not_holder_retirement`'s face, AUTH-3.56). The
-//! store's change: NONE (§9 item 36). The NOTEBOOK-AT-LOSS face where the
+//! store's change: none (§9 item 36). The notebook-at-loss face where the
 //! store holds no key that opens a session at `--board` (§4a.1).
 
 use skep_identity::Fingerprint;
@@ -37,21 +39,23 @@ use crate::store::{FileStore, KeySelector, KeyStore, Purpose, StoreError};
 /// The command's inputs.
 #[derive(Debug, Clone)]
 pub struct RetireOptions {
+    /// The principal whose account and store key the walk starts from.
     pub principal: u64,
-    /// `--fingerprint <fp-prefix>`: a prefix of the fingerprint to retire,
-    /// resolved against the enrolled list.
+    /// `--fingerprint <fp-prefix>`: a prefix of the fingerprint to retire.
+    ///
+    /// It is resolved against the enrolled list.
     pub fingerprint_prefix: String,
 }
 
 /// How the walk ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetireEnd {
-    /// Another key's retirement: the walk sent the session's close
-    /// (AUTH-4.47).
+    /// Another key's retirement: the walk sent the session's close (AUTH-4.47).
     CloseSent,
-    /// The session's OWN key was retired: the commit ended the session
-    /// (AUTH-4.63) and no close was sent; the expected end's fork
-    /// (AUTH-5.28) — another enrolled key of this store stands, or none.
+    /// The session's own key was retired: the commit ended the session.
+    ///
+    /// No close was sent (AUTH-4.63); the expected end's fork (AUTH-5.28) —
+    /// another enrolled device key of this store stands, or none.
     EndedByCommit { another_held: bool },
 }
 
@@ -60,15 +64,34 @@ pub enum RetireEnd {
 pub struct Retired {
     /// The account the retirement is homed at (the set account).
     pub account: String,
+    /// The retired key's fingerprint.
     pub fingerprint: Fingerprint,
+    /// The retired key's label, from the admitted read.
     pub label: Option<String>,
+    /// How the walk ended.
     pub end: RetireEnd,
+    /// Whether the act had already committed — reconciled from the records.
     pub reconciled: bool,
 }
 
-/// THE WALK.
+/// Runs the walk.
+///
+/// # Errors
+///
+/// In the walk's order: the notebook-at-loss face where the store holds no
+/// key that opens a session here, and the store's other refusals; R0's
+/// halts; a prefix matching no enrolled key or more than one; an anchor
+/// match, ahead of any frame; the handshake; the first session; the
+/// enumeration; the preview declined or unwritable (`would_empty`); the
+/// deposit; and, after the session's own key is retired, the `key_set`
+/// read.
+///
+/// # Panics
+///
+/// Panics if a fingerprint's hex runs under 8 digits; it runs to 64, so the
+/// slice never fails.
 pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &RetireOptions) -> Result<Retired, Halt> {
-    // The store's key for (board, n); the NOTEBOOK-AT-LOSS face where none
+    // The store's key for (board, n); the notebook-at-loss face where none
     // opens a session here (§4a.1).
     let key = match store.select(&KeySelector::Board { origin: board.dialed(), principal: Some(opts.principal) }, Purpose::Sign) {
         Ok(key) => key,
@@ -93,7 +116,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         );
     }
     let set_account = reads.walk.set_account.clone();
-    // The prefix, resolved against the enrolled list WITH LABELS.
+    // The prefix, resolved against the enrolled list with labels.
     let prefix = opts.fingerprint_prefix.trim().to_ascii_lowercase();
     let matches: Vec<_> = reads.walk.set.enrolled.iter().filter(|e| e.fingerprint.to_hex().starts_with(&prefix)).collect();
     let target = match matches.as_slice() {
@@ -123,10 +146,10 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
         ));
     }
     let label = reads.records.label_of(&target.fingerprint);
-    // THE FULL SESSION, as the set account's principal — closed on every
+    // The full session, as the set account's principal — closed on every
     // halt below by its own drop.
     let session = handshake(board, Scope::Full, &*signer, reads.set_principal, Site::Session)?;
-    // `first_session` FIRST.
+    // `first_session` first.
     let fs_reads = FirstSessionReads::take(board, &set_account, &key.fingerprint, Some(store))?;
     first_session(board, &fs_reads, &session, &*signer, Some(store))?;
     // The enumeration and the preview.
@@ -145,7 +168,7 @@ pub fn retire(board: &Board, store: &FileStore, person: &mut dyn Person, opts: &
             ));
         }
     }
-    // ONE retirement.
+    // One retirement.
     let own_key = target.fingerprint == key.fingerprint;
     let id = format!("retire.{}", &target.fingerprint.to_hex()[..8]);
     // A retirement that did not commit leaves the session live, and its drop

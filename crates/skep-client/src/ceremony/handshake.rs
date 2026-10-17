@@ -1,19 +1,20 @@
-//! THE ONE SESSION-OPEN COMPOSITION (`client.md` §1.1's `handshake`; P28):
-//! AUTH-5.65's pre-check ahead of the `/challenge` — the origin arm first
-//! (AUTH-5.24), then the key-set compare at the set AUTH-5.21's walk reaches
-//! — the challenge with its `ttl_ms` read off the body and never assumed
-//! (`Board::challenge` refuses a body without one), the framing under
-//! `SESSION_TAG` or `SESSION_TAG_V2` as `scope` says
-//! (AUTH-6.4), the signature, the body (AUTH-6.2), the ONE re-challenge on
+//! The one session-open composition (`client.md` §1.1's `handshake`; P28).
+//!
+//! It runs AUTH-5.65's pre-check ahead of the `/challenge` — the origin arm
+//! first (AUTH-5.24), then the key-set compare at the set AUTH-5.21's walk
+//! reaches — the challenge with its `ttl_ms` read off the body and never
+//! assumed (`Board::challenge` refuses a body without one), the framing
+//! under `SESSION_TAG` or `SESSION_TAG_V2` as `scope` says (AUTH-6.4), the
+//! signature, the body (AUTH-6.2), the one re-challenge on
 //! `session_rejected` (AUTH-5.25), and the three answers with their faces:
-//! AUTH-5.25's TERMINAL BUSY arm in the rule's own words; `403
-//! prefix_blocked`'s HALT AND SURFACE with the ground read as a guest
-//! (AUTH-5.66; RES-73), never a retry and never "busy"; and `400
-//! malformed_session_request`, this client's own framing, surfaced verbatim.
-//! The one re-challenge completes before the composition returns, so a
-//! caller holding key material may drop it on return where nothing after
-//! signs with it. The SCOPE is the walk's, passed once. The [`Session`] it
-//! answers owns its own END.
+//! AUTH-5.25's terminal busy arm in the rule's own words;
+//! `403 prefix_blocked`'s halt and surface with the ground read as a guest
+//! (AUTH-5.66; RES-73), never a retry and never "busy"; and
+//! `400 malformed_session_request`, this client's own framing, surfaced
+//! verbatim. The one re-challenge completes before the composition returns,
+//! so a caller holding key material may drop it on return where nothing
+//! after signs with it. The scope is the walk's, passed once. The
+//! [`Session`] it answers owns its own end.
 
 use skep_identity::{Fingerprint, PublicKey};
 
@@ -23,18 +24,20 @@ use crate::derive::{precheck, KeyDiagnosis, PreCheck, Walk};
 use crate::halt::{Blocked, Halt};
 use crate::sign::{session_payload, sig_hex, Signer};
 
-/// One open signed session: the token, what it was opened as and the board
-/// it stands at — and THE OWNER OF ITS OWN END. Exactly one of three acts
-/// ends it, each consuming it: [`Session::close`], `POST /session/close`
-/// (AUTH-4.47; AUTH-5.54 step 3's mirror takes "the SESSION and not the
-/// material alone"); [`Session::ended_by_commit`], where the act's own
-/// commit ended it — the session's own key retired (AUTH-4.63) — and no
-/// close is owed; and [`Session::into_token`], the token handed out live. A
-/// session dropped by none of them — every halt a walk takes after its
-/// handshake — sends the close on the drop, best effort, so no exit leaves
-/// a session standing at the daemon until its restart (§4a.3's residue).
-/// What it was opened as is read through its getters and set only by the
-/// handshake: the token its drop closes is the token it opened.
+/// One open signed session, the owner of its own end.
+///
+/// It holds the token, what it was opened as and the board it stands at.
+/// Exactly one of three acts ends it, each consuming it: [`Session::close`],
+/// `POST /session/close` (AUTH-4.47; AUTH-5.54 step 3's mirror takes "the
+/// session and not the material alone"); [`Session::ended_by_commit`],
+/// where the act's own commit ended it — the session's own key retired
+/// (AUTH-4.63) — and no close is owed; and [`Session::into_token`], the
+/// token handed out live. A session dropped by none of them — every halt a
+/// walk takes after its handshake — sends the close on the drop, best
+/// effort, so no exit leaves a session standing at the daemon until its
+/// restart (§4a.3's residue). What it was opened as is read through its
+/// getters and set only by the handshake: the token its drop closes is the
+/// token it opened.
 #[derive(Debug)]
 pub struct Session<'b> {
     board: &'b Board,
@@ -50,54 +53,69 @@ pub struct Session<'b> {
 }
 
 impl Session<'_> {
-    /// The session's token — what every frame under it presents.
+    /// Returns the session's token — what every frame under it presents.
     pub fn token(&self) -> &Token {
         &self.token
     }
 
-    /// The principal it was opened as.
+    /// Returns the principal it was opened as.
     pub fn principal(&self) -> u64 {
         self.principal
     }
 
-    /// The scope it was opened under (AUTH RES-63).
+    /// Returns the scope it was opened under (AUTH RES-63).
     pub fn scope(&self) -> Scope {
         self.scope
     }
 
-    /// `principal_prefix(principal)` — the account the session acts as.
+    /// Returns `principal_prefix(principal)` — the account the session acts as.
     pub fn account(&self) -> &str {
         &self.account
     }
 
-    /// The fingerprint of the key that opened it.
+    /// Returns the fingerprint of the key that opened it.
     pub fn fingerprint(&self) -> Fingerprint {
         self.fingerprint
     }
 
-    /// One frame under this session's token, at the board it stands at.
+    /// Sends one frame under this session's token, at the board it stands at.
+    ///
+    /// # Errors
+    ///
+    /// [`Board::op`]'s errors.
     pub fn op(&self, frame: &serde_json::Value) -> Result<Answer, Halt> {
         self.board.op(Some(&self.token), frame)
     }
 
-    /// `POST /session/close` (AUTH-4.47) — the session's ordinary end.
+    /// Closes the session with `POST /session/close` (AUTH-4.47).
+    ///
+    /// It is the session's ordinary end.
+    ///
+    /// # Errors
+    ///
+    /// [`Board::session_close`]'s errors.
     pub fn close(mut self) -> Result<CloseAnswer, Halt> {
         self.ended = true;
         self.board.session_close(&self.token)
     }
 
-    /// The end where the act's own commit ended the session (AUTH-4.63: a
-    /// retirement of the key that opened it kills its sessions at the
-    /// commit): nothing is sent — the `closed` any later request would meet
-    /// is the act's EXPECTED END (AUTH-5.28). Called only after that commit
-    /// answered; a retirement that did not commit leaves the session live,
-    /// and its drop closes it.
+    /// Ends the session where the act's own commit ended it.
+    ///
+    /// AUTH-4.63: a retirement of the key that opened it kills its sessions
+    /// at the commit. Nothing is sent — the `closed` any later request would
+    /// meet is the act's expected end (AUTH-5.28).
+    ///
+    /// **Precondition.** Called only after that commit answered; a
+    /// retirement that did not commit leaves the session live, and its drop
+    /// closes it.
     pub fn ended_by_commit(mut self) {
         self.ended = true;
     }
 
-    /// The end where the session outlives this process: its token handed
-    /// out LIVE — `skep session`'s one datum (§2.2), which the holder closes.
+    /// Hands out the token live: the session outlives this process.
+    ///
+    /// The token is `skep session`'s one datum (§2.2), which the holder
+    /// closes.
     pub fn into_token(mut self) -> Token {
         self.ended = true;
         self.token.clone()
@@ -112,45 +130,58 @@ impl Drop for Session<'_> {
     }
 }
 
-/// THE SITE a handshake runs at — what the key arm's third-state face names
-/// as its act (`client.md` §2.2 `verify`: the act is site-specific, so the
-/// face names the site rather than a retry).
+/// The site a handshake runs at.
+///
+/// It is what the key arm's third-state face names as its act (`client.md`
+/// §2.2 `verify`: the act is site-specific, so the face names the site
+/// rather than a retry).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Site {
     /// `skep session` — a board this store claimed, or is keyless for.
     Session,
-    /// The claim's own signed session (S5): the genesis recorded a pubkey
-    /// this key does not match (AUTH-5.25 (iii)).
+    /// The claim's own signed session (S5).
+    ///
+    /// The genesis recorded a pubkey this key does not match (AUTH-5.25
+    /// (iii)).
     Claim,
-    /// The claim's tail on the OURS arm, and `bind`'s setup arm.
+    /// The claim's tail on the `Ours` arm, and `bind`'s setup arm.
     Tail,
-    /// `first_session`'s op (3), a session AS `inc(account, 1)` by reference.
+    /// `first_session`'s op (3), a session as `inc(account, 1)` by reference.
     Setup,
     /// The hosted customer's first signed session, the detection H6 names.
     Hosted,
-    /// The recovery's anchor session (§4a.2 R2) and the loss arm's: the key
-    /// is an IMPORTED anchor, so neither list is the WRONG SHEET (AUTH-5.25
-    /// (iii)) — another account's or another board's paper.
+    /// The recovery's anchor session (§4a.2 R2) and the loss arm's.
+    ///
+    /// The key is an imported anchor, so neither list is the wrong sheet
+    /// (AUTH-5.25 (iii)) — another account's or another board's paper.
     Recover,
-    /// The giver's session at the handoff door (§4c.2), the one it opens
-    /// BY REFERENCE as the giving account included.
+    /// The giver's session at the handoff door (§4c.2).
+    ///
+    /// It includes the one the giver opens by reference as the giving
+    /// account.
     Giver,
 }
 
-/// THE THREE-STATE KEY FACE (`client.md` §2.2 `verify`), ONE diagnosis shared
-/// by `verify`, `session`'s pre-check and `enroll`: `retired` ⇒ I4's
-/// permanent bar (AUTH-2.98), the hand named from the records where it can be
-/// read (AUTH-5.28's chrome where this store's own, AUTH-5.77's where
-/// another's), neither asserted below the floor (§9 item 50); in NEITHER list
-/// ⇒ AUTH-5.25 (iii) with the act by site. The diagnosis is made HERE, of
-/// `fp` against the set `walk` reached, so the face judges no key but the
-/// one it names.
+/// Faces the three-state key diagnosis of `fp` (`client.md` §2.2 `verify`).
+///
+/// It is one diagnosis shared by `verify`, `session`'s pre-check and
+/// `enroll`. The diagnosis is made here, of `fp` against the set `walk`
+/// reached, so the face judges no key but the one it names.
+///
+/// # Errors
+///
+/// `retired` ⇒ I4's permanent bar (AUTH-2.98), the hand named from the
+/// records where they read it as a key or a bare session at a position
+/// (AUTH-5.28's chrome where this store's own, AUTH-5.77's where
+/// another's), and otherwise neither hand nor position asserted — below the
+/// floor among the cases (§9 item 50); in neither list ⇒ AUTH-5.25 (iii)
+/// with the act by site.
 pub fn key_face(board: &Board, walk: &Walk, fp: &Fingerprint, own: &[(Fingerprint, PublicKey)], site: Site) -> Result<(), Halt> {
     match KeyDiagnosis::of(&walk.set, fp) {
         KeyDiagnosis::Enrolled { .. } => Ok(()),
         KeyDiagnosis::Retired { .. } => {
-            // The hand and the position, from the admitted read (RULED, owner
-            // 2026-09-22 "i"); the read made only on this failing path.
+            // The hand and the position, from the admitted read; the read
+            // made only on this failing path.
             let records = credential_records(board, &walk.set_account, own).ok();
             let label = records.as_ref().and_then(|r| r.label_of(fp));
             let named = match &label {
@@ -218,17 +249,29 @@ pub fn key_face(board: &Board, walk: &Walk, fp: &Fingerprint, own: &[(Fingerprin
     }
 }
 
-/// THE COMPOSITION: the pre-check, then the handshake.
+/// Runs the composition: the pre-check, then the handshake.
+///
+/// # Errors
+///
+/// [`precheck`]'s halts, then [`handshake_prechecked`]'s.
 pub fn handshake<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, principal: u64, site: Site) -> Result<Session<'b>, Halt> {
     let fp = signer.fingerprint();
     let pre = precheck(board, principal, &fp)?;
     handshake_prechecked(board, scope, signer, &pre, site)
 }
 
-/// The handshake over reads the caller already made (the claim's S5, whose
-/// `principal_prefix` and `key_set` reads are live): the session opens as
-/// the principal those reads were made for, and the face judges `signer`'s
-/// own key against the set they reached.
+/// Runs the handshake over reads the caller already made.
+///
+/// The claim's S5 is one, whose `principal_prefix` and `key_set` reads are
+/// live: the session opens as the principal those reads were made for, and
+/// the face judges `signer`'s own key against the set they reached.
+///
+/// # Errors
+///
+/// In order: [`key_face`]'s faces, before any challenge; then
+/// [`Board::challenge`]'s and [`Board::session_open`]'s errors; a second
+/// `401 session_rejected` in a row is the terminal busy arm; and a
+/// `403 prefix_blocked` is [`Halt::Blocked`], its ground read as a guest.
 pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Signer, pre: &PreCheck, site: Site) -> Result<Session<'b>, Halt> {
     let fp = signer.fingerprint();
     let own = [(fp, signer.public_key().clone())];
@@ -245,7 +288,7 @@ pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Sig
             }
             Opened::Rejected => {
                 if rejected_once {
-                    // AUTH-5.25's TERMINAL BUSY ARM, in the rule's own words:
+                    // AUTH-5.25's terminal busy arm, in the rule's own words:
                     // the pre-check found this key enrolled and this origin
                     // answered for, so the cause is transient, never a
                     // mis-signing.
@@ -268,11 +311,13 @@ pub fn handshake_prechecked<'b>(board: &'b Board, scope: Scope, signer: &dyn Sig
     }
 }
 
-/// The takedown record's text, read AS A GUEST at the board that named it
-/// (RES-73's reading): the record value at the version address's first
+/// Reads the takedown record's text as a guest at the board that named it.
+///
+/// RES-73's reading: the record value at the version address's first
 /// position, off `retrieve_v` — `None` where it does not answer one. Best
 /// effort: whether its ω prefix covers this account and its home is that
-/// board's doc 1 are stated in the face as what was and was not read.
+/// board's doc 1 go unchecked, and the face states what was and was not
+/// read.
 fn read_ground(board: &Board, record: &str) -> Option<String> {
     let v = board.guest(&frames::retrieve_v(record, 1, 1)).ok()?;
     answers::first_atom(&v).and_then(|bytes| String::from_utf8(bytes).ok())
@@ -305,10 +350,12 @@ mod tests {
         fake::json(200, json!({"session": TOKEN}))
     }
 
-    /// A board at which the pre-check passes for `signer` as principal 1 —
-    /// the origin answered for, `1.0.1` the account, the key enrolled there
-    /// — answering `POST /session` from `sessions` in turn, a third attempt
-    /// a panic, and the takedown record's guest read with `ground`.
+    /// Returns a board where the pre-check passes for `signer` as principal 1.
+    ///
+    /// The origin is answered for, `1.0.1` is the account and the key is
+    /// enrolled there; the board answers `POST /session` from `sessions` in
+    /// turn, an attempt past them a panic, and the takedown record's guest
+    /// read with `ground`.
     fn signing_in(signer: &HybridSigner, sessions: Vec<Response>, ground: Value) -> Arc<Fake> {
         let key = signer.public_key().clone();
         let origin = fake::origin().as_str().to_string();
@@ -328,9 +375,11 @@ mod tests {
         })
     }
 
-    /// AUTH-5.25: a `401 session_rejected` after a pre-check that passed is
-    /// answered by ONE re-challenge — a fresh nonce, signed again — and the
-    /// session it opens is the one answered.
+    /// AUTH-5.25: one re-challenge answers a `401 session_rejected`.
+    ///
+    /// The `401` comes after a pre-check that passed; the re-challenge is a
+    /// fresh nonce, signed again, and the session it opens is the one
+    /// answered.
     #[test]
     fn a_rejected_sign_in_is_re_challenged_once_then_opens() {
         let signer = signer();
@@ -343,8 +392,9 @@ mod tests {
         assert_eq!(log.iter().filter(|l| *l == "POST /session").count(), 2, "{log:?}");
     }
 
-    /// AUTH-5.25's TERMINAL BUSY ARM: a second `401` in a row after a
-    /// pre-check that passed is transient — "try again", the rule's own act —
+    /// AUTH-5.25's terminal busy arm: a second `401` in a row is transient.
+    ///
+    /// It follows a pre-check that passed — "try again", the rule's own act —
     /// and is never met by a third attempt.
     #[test]
     fn a_second_rejection_is_the_terminal_busy_arm() {
@@ -357,9 +407,10 @@ mod tests {
         assert_eq!(fake.log().iter().filter(|l| *l == "POST /session").count(), 2);
     }
 
-    /// AUTH-5.25's blocked arm (AUTH-6.5; RES-65, RES-73): `403
-    /// prefix_blocked` HALTS AND SURFACES the takedown record it names, its
-    /// ground read as a guest at the board that named it — or said
+    /// AUTH-5.25's blocked arm (AUTH-6.5; RES-65, RES-73).
+    ///
+    /// `403 prefix_blocked` halts and surfaces the takedown record it names,
+    /// its ground read as a guest at the board that named it — or said
     /// unreadable — after one challenge and one sign-in: never a retry, never
     /// "busy".
     #[test]
@@ -384,8 +435,9 @@ mod tests {
         }
     }
 
-    /// The key arm's third state AT EACH SITE (`client.md` §2.2 `verify`): a
-    /// key in neither list is faced with its site's own act and no other
+    /// The key arm's third state at each site (`client.md` §2.2 `verify`).
+    ///
+    /// A key in neither list is faced with its site's own act and no other
     /// site's, never a retry — made of the walk alone, with no read.
     #[test]
     fn a_key_in_neither_list_is_faced_with_its_sites_own_act() {
@@ -415,9 +467,11 @@ mod tests {
         }
     }
 
-    /// The RETIRED state where the records cannot be read — below the
-    /// floor, the board unreachable — asserts NO hand and no position (§9
-    /// item 50), and is still the retired face, never the read's own fault.
+    /// The retired state where the records cannot be read asserts no hand.
+    ///
+    /// The records are below the floor or the board unreachable; the face
+    /// asserts no position either (§9 item 50), and is still the retired
+    /// face, never the read's own fault.
     #[test]
     fn a_retired_key_whose_records_cannot_be_read_asserts_no_hand() {
         let board = fake::board(&Fake::new(|_| fake::json(500, json!({"error": "internal"}))));

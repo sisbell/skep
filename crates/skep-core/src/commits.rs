@@ -1205,7 +1205,8 @@ impl fmt::Display for FeedWalkRefusedLine<'_> {
 /// the durability barrier, or the sequence order exhausted; then the act. A
 /// pure value, pinned by `to_string()` in the unit suite; emitted under
 /// `Class::Failure` through [`Commits::say_the_kernels_halt_once`], once an
-/// uptime, and re-said by the standing line as `the kernel is poisoned`.
+/// uptime, and re-said by the standing line as `the kernel is poisoned since
+/// position {p}`, the position this line names — no commit lands past it.
 /// Here and not in `server.rs` beside the daemon's other lines because its
 /// first site is this card's, below the daemon, and imports point down.
 pub struct KernelHaltLine {

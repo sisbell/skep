@@ -110,8 +110,10 @@ impl FetchPool {
 /// family waits).
 ///
 /// Its edge pair names it `upload`: `the upload pool is saturated`, and `the
-/// upload pool has room again after {n} refusals` — the one line of the
-/// eight pairs the ruling lets carry a count, the episode's refusals.
+/// upload pool has room again after {n} refusals` — the line of the pools'
+/// pairs the ruling lets carry a count, the episode's refusals, as the
+/// daemon's write pool's landing does too: each counts acts refused and no
+/// reader.
 pub struct UploadPool {
     permits: Permits,
     edge: EdgeTracker,

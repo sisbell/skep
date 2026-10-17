@@ -11,8 +11,9 @@
 //!   tracker: the once-per-episode memory of a bound that refuses — the
 //!   first refusal an edge, the clearing an edge once the condition has
 //!   stood clear for a hold-down — which the five pools, the daemon's
-//!   stream budget, its challenge store and its accept loop each hold, and
-//!   the one clock their hold-down is judged against.
+//!   worker pool, its stream budget and its streams' threads, its challenge
+//!   store and its accept loop each hold, and the one clock their hold-down
+//!   is judged against.
 //! * [`notice`] — the operator's stream: one line, or one notice of several
 //!   lines, every line opening with the program's name and the head carrying
 //!   its time, handed to one thread that writes them in order — so that a

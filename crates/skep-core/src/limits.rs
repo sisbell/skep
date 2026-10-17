@@ -48,16 +48,16 @@ pub const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 /// interval of the checkpoint thread's timed wait on the write path's
 /// signal (`commits::CheckpointSignal::wait`), at each tick of which the
 /// thread writes ONE `standing:` line re-saying every standing bad state
-/// that stands — the eight, in the line's order: the write path's halt, the
-/// kernel's poison, a stopped feed file, the pruner's thread gone, the feed
-/// walk's thread gone, the cell index failed, the floor binding,
-/// CLAIMED-PERMISSIVE — and nothing on a healthy board (`operations.md` §1
-/// THE RATES; §1.1 m11).
+/// that stands — the nine, in the line's order: the write path's halt, the
+/// kernel's poison, the journal damage a history read met, a stopped feed
+/// file, the pruner's thread gone, the feed walk's thread gone, the cell
+/// index failed, the floor binding, CLAIMED-PERMISSIVE — and nothing on a
+/// healthy board (`operations.md` §1 THE RATES; §1.1 m11).
 /// What the interval bounds is how long a standing state goes unsaid past
 /// its transition: each is said once at its transition, so a stream rotated
 /// past that line holds nothing of it, and an hour is the most a reader of
 /// the current stream waits to learn of a state that still stands. A tick
-/// on a healthy board costs the eight reads — an atomic load or one lock
+/// on a healthy board costs the nine reads — an atomic load or one lock
 /// each — and writes nothing.
 pub const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 
@@ -89,10 +89,11 @@ pub const FEED_WALK_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 /// how long a bound that refused must have stood CLEAR — no refusal — before
 /// its next admission says the second line of its edge pair, `landing:`
 /// (`operations.md` §1.1 m12; §4 rows 27 and 33; §6's three rows). ONE
-/// constant for the eight pairs: the five permit pools — the
+/// constant for the ten pairs: the five permit pools — the
 /// reconstruction, the class scan, the fetch, the upload and the write —
-/// the live-stream budget, the challenge store's live evictions and the
-/// workers' `accept`; each judges it through `skep_util::permits`'s
+/// the worker pool, the live-stream budget, the live streams' threads, the
+/// challenge store's live evictions and the workers' `accept`; each judges
+/// it through `skep_util::permits`'s
 /// [`EdgeTracker`](skep_util::permits::EdgeTracker), the one mechanism. The
 /// first line, `failure:`, is said when a request FIRST meets the bound; a
 /// refusal inside the hold-down keeps the episode open and restarts it, so
@@ -117,12 +118,12 @@ pub const FEED_WALK_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 ///
 /// WHEN THE SECOND LINE COMES. It is judged at the holder's next ADMITTED
 /// act — a permit taken, a stream admitted, a mint that evicted no live
-/// nonce, an `accept` that succeeded — never by a timer and never at a
-/// refusal: a landing says the condition is clear, and only an act the
-/// bound admitted shows it so. The ops lanes record §5.3 states the
-/// property for the challenge pair and it holds of every pair: on a quiet
-/// holder the `landing:` comes at its first admitted act after the
-/// hold-down, however late.
+/// nonce, an `accept` that succeeded, a connection a worker takes with
+/// another still free — never by a timer and never at a refusal: a landing
+/// says the condition is clear, and only an act the bound admitted shows it
+/// so. The ops lanes record §5.3 states the property for the challenge pair
+/// and it holds of every pair: on a quiet holder the `landing:` comes at its
+/// first admitted act after the hold-down, however late.
 pub const EDGE_HOLD_DOWN: Duration = Duration::from_secs(15);
 
 /// THE PAGE BYTE BUDGET of `/changes` (signed ops, round 7 — bu7-2 = reg-H1;

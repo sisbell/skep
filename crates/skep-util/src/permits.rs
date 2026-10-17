@@ -12,10 +12,11 @@
 //! stood clear for a hold-down the holder names — so what a saturated pool,
 //! a full stream budget, a spent nonce or a failing `accept` says on the
 //! operator stream is two lines per episode and never one per request. One
-//! type the five pools, the live-stream budget, the challenge store and the
-//! accept loop each hold; the words are each holder's, a pool's being
-//! [`PoolEdgeLine`]'s; the clock the hold-down is judged against is
-//! [`edge_clock_now`], one reading the daemon's test seam can advance.
+//! type the five pools, the worker pool, the live-stream budget, the live
+//! streams' threads, the challenge store and the accept loop each hold; the
+//! words are each holder's, a pool's being [`PoolEdgeLine`]'s; the clock the
+//! hold-down is judged against is [`edge_clock_now`], one reading the
+//! daemon's test seam can advance.
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -259,13 +260,14 @@ impl EdgeTracker {
 
 /// A POOL's TWO LINES (`operations.md` §1.1 m12), the ruled words: `the
 /// {pool} pool is saturated` at the first edge, `the {pool} pool has room
-/// again` at the second — and, for the one pool the ruling lets carry it
-/// ([`PoolEdgeLine::counted`], the upload pool's), ` after {n} refusals`,
-/// the episode's count. NOTHING ELSE ON A LINE: no count otherwise, no
-/// path, query, principal, peer, position or reader (D9, read loose: a pool
+/// again` at the second — and, for the pools whose refusals are acts refused
+/// and no reader's read ([`PoolEdgeLine::counted`]: the upload pool's, the
+/// one the ruling names, and the write pool's), ` after {n} refusals`, the
+/// episode's count. NOTHING ELSE ON A LINE: no count otherwise, no path,
+/// query, principal, peer, position or reader (D9, read loose: a pool
 /// saying "full" names no reader). The class word is the door's
-/// ([`Edge::class`]). One rendering for the five pools, so the two crates
-/// that say them cannot drift apart.
+/// ([`Edge::class`]). One rendering for the five permit pools and the
+/// daemon's worker pool, so the two crates that say them cannot drift apart.
 pub struct PoolEdgeLine<'a> {
     pool: &'a str,
     edge: Edge,
@@ -273,15 +275,15 @@ pub struct PoolEdgeLine<'a> {
 }
 
 impl<'a> PoolEdgeLine<'a> {
-    /// The line for `pool`'s `edge`, carrying no count: the read pools' and
-    /// the write pool's form.
+    /// The line for `pool`'s `edge`, carrying no count: the read pools' form,
+    /// and the worker pool's, whose connections are any route's.
     pub fn new(pool: &'a str, edge: Edge) -> PoolEdgeLine<'a> {
         PoolEdgeLine { pool, edge, counted: false }
     }
 
     /// The line for `pool`'s `edge`, the landing carrying the episode's
-    /// refusals: the upload pool's form, the one the ruling admits a count
-    /// on.
+    /// refusals: the upload pool's and the write pool's form, whose
+    /// refusals count uploads and writes refused and never a reader.
     pub fn counted(pool: &'a str, edge: Edge) -> PoolEdgeLine<'a> {
         PoolEdgeLine { pool, edge, counted: true }
     }
@@ -303,7 +305,7 @@ impl fmt::Display for PoolEdgeLine<'_> {
 
 /// THE CLOCK SEAM's OFFSET: milliseconds added to every reading of
 /// [`edge_clock_now`], zero for the life of a shipped daemon. One offset for
-/// the process, so the eight pairs read one clock and the daemon's hook
+/// the process, so every pair reads one clock and the daemon's hook
 /// ([`advance_edge_clock_ms`]) moves them together.
 static EDGE_CLOCK_OFFSET_MS: AtomicU64 = AtomicU64::new(0);
 

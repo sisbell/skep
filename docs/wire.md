@@ -858,7 +858,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 500    | `blob_io`                   | the blob store refused I/O; the upload stands at its last durable point (§Media) |
 | 503    | `index_rebuilding`          | the cell index is being rebuilt from the board after an open, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; retry shortly (§Media) |
 | 503    | `index_failed`              | the cell index's rebuild after an open DIED on its thread and the index FAILED for the life of the process, and this request is one of its three readers — the blob upload's creation or resume, or the deposit read; `detail` names the state and the act, a restart, the operator's: no second ask succeeds before it (§Media) |
-| 503    | `feed_rebuilding`           | a `/changes` page whose rows would come from the positions a lost or torn `commits.log` left uncovered, which the daemon re-covers behind the listener after an open — pages below and above the region serve, and `/events` is untouched; retry shortly, as `history_busy` is (§The change feed) |
+| 503    | `feed_rebuilding`           | a `/changes` page whose rows would come from the positions a lost or torn `commits.log` left uncovered, which the daemon re-covers behind the listener after an open — pages below and above the region serve, and `/events` is untouched; retry shortly, as `history_busy` is — save where the walk's thread has died, which `detail` says: the region then stays uncovered until a restart, and no retry succeeds before it (§The change feed) |
 | 404    | `no_value`                  | the blob fetch's `i` names an element position the document never minted (§Media, THE FETCH) |
 | 404    | `not_a_cell`                | the fetch's `i` holds a value naming no media cell — prose, a def, a record of another kind (§Media, THE FETCH) |
 | 404    | `unknown_cell_schema`       | the fetch's `i` holds a value naming a media kind under no schema this board reads — D13's halt (§Media, THE FETCH) |
@@ -4677,7 +4677,10 @@ the region: one starting below it that would reach into it is refused
 too, so no position is skipped in silence. Pages above and below the
 region serve meanwhile, a page served below it answering `more: true`;
 `/events` is untouched, announcing every commit as ever; the landed
-positions are bare entries, as above.
+positions are bare entries, as above. Where the walk's thread dies, the
+region stays uncovered for the life of the process: the refusal keeps its
+token, and its `detail` says the walk ended and names the restart, before
+which no retry succeeds.
 
 **The feed's files.** Beside `commits.log` the daemon keeps four derived
 sidecars in the data dir — `feed-index.log` (document → positions),

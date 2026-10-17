@@ -224,6 +224,29 @@ fn write_busy_names_the_op_in_a_transport_refusal() {
     );
 }
 
+/// Checks that `feed_rebuilding` names the retry or the restart by the walk.
+///
+/// Both answer 503 `feed_rebuilding` naming the region; while the walk runs
+/// the detail says retry shortly, and where its thread has died it names the
+/// restart and gives no retry hint, since no landing comes this uptime.
+#[test]
+fn feed_rebuilding_names_the_retry_while_the_walk_runs_and_the_restart_once_it_died() {
+    let detail = |walk: FeedWalk| {
+        let r = refuse_feed_rebuilding(3, 9, walk);
+        assert_eq!(r.status, 503, "{walk:?}");
+        let body: Value = serde_json::from_slice(r.bytes()).expect("json");
+        assert_eq!(body["error"].as_str(), Some("feed_rebuilding"), "{walk:?}: {body}");
+        let detail = body["detail"].as_str().expect("a detail").to_string();
+        assert!(detail.contains("above 3 through 9"), "{walk:?}: {detail}");
+        detail
+    };
+    let walking = detail(FeedWalk::Walking);
+    assert!(walking.contains("retry shortly") && !walking.contains("until a restart"), "{walking}");
+    let gone = detail(FeedWalk::Gone);
+    assert!(gone.contains("until a restart") && !gone.contains("retry shortly"), "{gone}");
+    assert!(gone.contains("no retry succeeds before the restart"), "{gone}");
+}
+
 /// The body and the type naming it travel together: a bodiless reply
 /// writes no content headers at all, and a bodied one writes both —
 /// which is what makes "a 204 that silently drops its bytes" and

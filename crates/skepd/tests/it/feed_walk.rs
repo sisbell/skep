@@ -521,7 +521,8 @@ fn a_page_is_refused_by_its_rows_not_its_since_alone() {
 /// the thread at its first boundary — the catch's consequence line once,
 /// naming the region (the hook's prefixed line is the binary's, not
 /// asserted in-process) — `/health` 200, a page into the region still
-/// refused, a write still admitted, the standing line's clause at the next
+/// refused, its detail naming the restart and no retry, a write still
+/// admitted, the standing line's clause at the next
 /// tick; a reopen walks the region again and lands it.
 #[test]
 fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
@@ -552,6 +553,13 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let (st, v) = changes(port, Some(&owner), &format!("since={low}"));
     assert_eq!((st, v["error"].as_str()), (503, Some("feed_rebuilding")), "{v}");
+    // The dead walk's refusal names the restart, never a retry: no landing
+    // comes this uptime (`operations.md` §1.1 row 41).
+    let detail = v["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.contains("until a restart") && !detail.contains("retry shortly"),
+        "the dead walk's page names the restart: {detail}"
+    );
     let at = commit(port, &owner);
     let (st, v) = changes(port, Some(&owner), &format!("since={head}"));
     assert_eq!((st, positions(&v)), (200, vec![at]), "a write is admitted and serves above the head: {v}");

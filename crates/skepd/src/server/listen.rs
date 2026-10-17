@@ -388,7 +388,10 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
 ///
 /// Failure is the OS's alone: a refused worker thread, an `io::Error`. The
 /// listener and the port it bound were the caller's before this call and
-/// are released with the retired start, as `serve` releases them.
+/// are released with the retired start, as `serve` releases them. The start
+/// is retired before the pruner's thread and the checkpoint thread are
+/// spawned (`operations.md` §4 row 23), so a retired start runs no pass and
+/// no checkpoint, and its stop waits on neither.
 ///
 /// # Panics
 ///
@@ -443,6 +446,13 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
     let mut handles = Vec::with_capacity(workers);
     let mut refused = None;
     for _ in 0..workers {
+        // The workers' thread seam (test seam, `server/hooks.rs`): the next
+        // spawns a suite armed meet the seam's error in place of the OS's.
+        #[cfg(any(test, feature = "test-hooks"))]
+        if let Some(e) = daemon.take_a_worker_thread_fault() {
+            refused = Some(e);
+            break;
+        }
         let daemon = Arc::clone(&daemon);
         let listener = Arc::clone(&listener);
         let stop = Arc::clone(&stop);
@@ -499,6 +509,29 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
             }
         }
     }
+    // A refused worker costs the whole start, never a half-started server,
+    // and spawns nothing more: the pruner and the checkpoint thread are a
+    // serving daemon's, so a start being retired runs no pass and no
+    // checkpoint and says neither's refusal. The stop joins the workers that
+    // did start, ends any stream they already admitted, and releases the
+    // listener and the journal-directory lock — so the port this caller is
+    // about to retry on is free before it sees the error.
+    if let Some(e) = refused {
+        Skepd {
+            daemon,
+            _listener: listener,
+            workers: handles,
+            subscribers,
+            stop,
+            pruner: None,
+            cadence: Arc::new(Cadence::new()),
+            checkpointer: None,
+            addr,
+            port,
+        }
+        .shutdown();
+        return Err(e);
+    }
     // The pruner (`skep-media`'s `pruner.rs`), on a thread of its own: the
     // pass once the cell index's walk at open completes, then on the
     // cadence. A served daemon's — an embedder routing by hand runs no pass
@@ -543,7 +576,7 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
             None
         }
     };
-    let server = Skepd {
+    Ok(Skepd {
         daemon,
         _listener: listener,
         workers: handles,
@@ -554,19 +587,7 @@ pub fn serve_bound(daemon: Daemon, listener: Listener, workers: usize) -> io::Re
         checkpointer,
         addr,
         port,
-    };
-    match refused {
-        // A refused thread costs the whole start, never a half-started
-        // server: the stop joins the workers that did start, ends any
-        // stream they already admitted, and releases the listener and the
-        // journal-directory lock — so the port this caller is about to
-        // retry on is free before it sees the error.
-        Some(e) => {
-            server.shutdown();
-            Err(e)
-        }
-        None => Ok(server),
-    }
+    })
 }
 
 impl Skepd {

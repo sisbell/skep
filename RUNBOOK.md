@@ -109,6 +109,23 @@ apart.
    checkpoint's landing names gigabytes free, and `df -h` agrees;
    `df -i` shows the inodes spent.
 
+   A write can be refused for a cause other than room, and then no
+   line says so. The full volume's line answers the OS's no-space
+   answer alone. A journal write refused for any other cause — the
+   board's user over its quota (`Disk quota exceeded`), or the device
+   answering `Input/output error` where the journal's own repair
+   still succeeds — is rolled back and refused `durability`,
+   disposition `retry`, as at a full volume. But nothing is said, at
+   that write or any after it; no commit lands, so no checkpoint line
+   comes either; `writes.halted` stays `false`; and the floor never
+   binds, since the free space it reads counts no user's quota, and
+   `df -h` shows room. The refusal's `detail`, which its client is
+   answered, names the cause, the OS's own words last:
+   `seg-{n}.wal: append: {error}`. Where clients are refused
+   `durability` and the stream is quiet, read a refused write's
+   detail: for a quota, `quota -v`, run as the board's user, shows it
+   spent; for the device, read the OS's own log (`dmesg`).
+
 2. **Make room first.** Grow the volume, or free space that
    something other than the board holds. Grown room ends the
    floor's refusals at the next upload, which reads the free space
@@ -118,8 +135,12 @@ apart.
    Where the inodes are spent (step 1), only files removed make
    room: grow the volume — an ext4 volume's inodes grow with it —
    or remove files the board does not hold; a large file freed
-   elsewhere frees one inode, however many bytes. Never delete,
-   move or truncate a file in the data directory to make room:
+   elsewhere frees one inode, however many bytes. Where the board's
+   user is over its quota (step 1), raise the quota or remove files
+   that user owns outside the data directory; the next write
+   succeeds by itself. Do not restart before then: the open writes
+   first (step 4). Never delete, move or truncate a file in the data
+   directory to make room:
 
    - the journal's files, `seg-<n>.wal`, `checkpoint.<n>`,
      `checkpoint.tmp` and `kernel.lock`, are the kernel's, and it
@@ -187,8 +208,11 @@ apart.
    - `feed-attest.log`'s line: make room, then restart. The open
      writes the missing line back from the journal and syncs it; on
      a volume still full, the open fails.
-   - A change-feed file's stop: make room, then restart. The open
-     rewrites the file and needs the room to do it.
+   - A change-feed file's stop: make room, then restart — soon where
+     the file is `commits.log`, since every write after its stop is
+     held in memory alone and the next open re-covers each as a bare
+     entry, its key and its time lost. The open rewrites the file and
+     needs the room to do it.
    - The checkpoint's failure: make room, and nothing more. The
      next attempt comes by itself at the cadence's next crossing:
      after another 1,024 commits, or another quarter of the newest
@@ -196,6 +220,9 @@ apart.
      whichever comes first.
    - The write refused at a full volume: make room. The next write
      succeeds by itself, and no restart is owed.
+   - A write refused `durability` and said by nothing (step 1): act
+     on its detail's cause — a quota as step 2 says, `Input/output
+     error` as `500 blob_io`'s does below.
    - `500 blob_io`, or a log the pruner names `STOPPED`: act on the
      words its detail or its cause carries.
      - `the volume is full (No space left on device …)`: make room.
@@ -215,6 +242,8 @@ apart.
        the volume, restoring from a copy where the device lost data
        (Restore), and start again. The open reads each log afresh
        and cuts the line a failed append tore.
+     - `Disk quota exceeded`: the board's user is over its quota; as
+       step 2 says.
      - `no partial stands for this upload`, on a resume: that
        upload's finish failed past its rename — at a directory's
        fsync, or at its lease's append on a full volume — so its
@@ -261,21 +290,50 @@ apart.
 8. **Watch between the lines.** `GET /health` answers
    `writes.halted` as `true` while either halt stands. And once an
    hour, while any bad state stands, the daemon writes one
-   `standing:` line naming each, its clauses joined by `; `. Among
-   them:
+   `standing:` line naming each, its clauses joined by `; `, in this
+   order:
 
    ```
    the write path is halted since position {position} (feed-attest.log)
    the kernel is poisoned since position {position}
    a history read found the journal unreadable at position {position}
    {file} stopped since position {position}
+   the pruner's thread is gone
+   the feed walk's thread is gone; positions ({low}, {head}] stay uncovered
+   the cell index failed to build
    deposits refused at the floor (free space {free} below the floor in force {floor})
+   CLAIMED-PERMISSIVE
    ```
 
    Each clause carries the position or the file its first line
    named: the kernel's halt line's position, and the damage's site —
    `at position {position}`, or `({file}: {act}: {error})` where the
-   read failed. The standing line is the checkpoint thread's. Where the stream
+   read failed. What ends each:
+
+   - the write path's halt and the kernel's: a restart, once the
+     volume has room and the device answers (step 5);
+   - the history read's damage: a restart, after the acts Restore's
+     lead names;
+   - a stopped file: a restart once there is room (step 5). Restart
+     soon where the file is `commits.log`: every write after its stop
+     is held in memory alone, and the next open re-covers each from
+     the journal as a bare entry, its key and its time lost. An index
+     file's stop loses nothing by the wait;
+   - the pruner's thread: a restart; the blob logs' stops stand until
+     it;
+   - the feed walk's thread: a restart soon, for the same reason as
+     `commits.log`'s stop, `/changes` refusing pages into the region
+     meanwhile (Restart, step 3);
+   - the cell index: a restart; uploads and the listing of one's
+     deposits are answered `503 index_failed` until it (Start, step 3,
+     item 18);
+   - the floor: room (steps 2 and 3); the refusals end at the next
+     upload;
+   - `CLAIMED-PERMISSIVE`: a restart with `--no-local-trust`, where
+     local trust on a claimed board was not meant (Start, step 3,
+     item 13).
+
+   The standing line is the checkpoint thread's. Where the stream
    holds `checkpoint thread ended: …` or `checkpoint thread: the OS
    refused it …`, no standing line comes until a restart, and its
    absence says nothing of the board's health; restart soon, since
@@ -293,15 +351,40 @@ once, and in every hourly `standing:` line after it (`a history read
 found the journal unreadable at position {position}`):
 
 ```
-failure: history: journal corrupt at rest; position {position} names the damage: {account}; reads at the head and every write serve on, since neither reads the journal back, but the next start's open reads it all and may refuse on the same file: copy the data directory, run skepd inventory over the copy (its open reads the journal as a start does), and restore what it refuses from a copy before the board restarts; check the volume and its device
+failure: history: journal corrupt at rest; position {position} names the damage: {account}; reads at the head and every write serve on, since neither reads the journal back, but the next start's open reads the journal above its start point and may refuse on the same file: copy the data directory, run skepd inventory over the copy (its open reads the journal as a start does), and restore what it refuses from a copy before the board restarts; where no copy holds that file whole, keep the board serving and do not restart it until the next checkpoint lands: an open then starts above the damage and passes it over; check the volume and its device
 ```
 
 An I/O failure reads `history: history read I/O failure: {file}:
-{act}: {error}; …` instead. Take the steps before a restart, not
-after it: the next start's open reads the same journal and may
-refuse at the damage. Copy the data directory, run the inventory
-over the copy (Back up, step 2), and have the act its account names
-ready before you stop the daemon.
+{act}: {error}; …` instead, without the wait for a checkpoint.
+Take the steps before a restart, not after it: the next start's
+open reads the same journal and may refuse at the damage. Copy the
+data directory, run the inventory over the copy (Back up, step 2),
+and have the act its account names ready before you stop the
+daemon.
+
+Where the inventory refuses and no copy holds the damaged file
+whole, rewind nothing and do not restart. Damage at rest is found
+only when something reads it, so every copy taken since the damage
+holds the same bytes; and a copy of the active segment holds only
+the commits made before it was taken, so restoring it rewinds the
+board. Keep the daemon serving until the next checkpoint lands
+(`landing: checkpoint at position {position} landed …`, The full
+volume, step 6), at the cadence The full volume, step 5, gives. An
+open reads the active segment and each segment holding a position
+above its start point, and no other: that checkpoint holds the
+head, above the damage, so an open from it passes the damage over,
+loses nothing, and says so (Start, step 3, item 5). A second landing
+puts the older checkpoint, the one an open falls back to, above it
+too. Copy the data directory again after the landing and run the
+inventory over the new copy: where it answers its object, the
+journal opens as a start's would. Until that landing, a crash or a
+reboot meets the refusal.
+
+An I/O failure is never passed over in a file the open reads, and
+every open reads the active segment: there no checkpoint helps, and
+the act is the device's, or the rewind. A closed segment the failure
+names is one an open from a checkpoint above it never opens, so
+where no copy holds that segment whole, the same wait serves.
 
 **Read the refusal before you restore.** An open the journal's own
 data refuses says so on one line, `skepd: engine open: durable
@@ -806,7 +889,8 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        it the count of entries in force and each inert entry.
 
    17. The worker threads, started last. A worker thread the OS
-       refuses stops the start, exit 1:
+       refuses stops the start, exit 1, before the pruner and the
+       checkpoint thread start:
 
        ```
        skepd: the OS refused a worker thread at start: {error}; the workers that started are stopped, the port and the data directory released, and nothing serves; retry under a higher thread limit
@@ -910,6 +994,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    claiming account, or `null` while the board is unclaimed;
    `media.uploads` matches the setting; `writes.halted` is `false`.
 
+   A `/health` that does not answer once the open is done points to
+   the volume. Its `head_time` is read behind the change feed's lock,
+   which a write holds across the attest store's sync and the
+   checkpoint thread holds across the feed's compaction; so a device
+   that stops answering mid-sync holds every probe and every
+   `/changes` page, each on a worker of its own, until no worker is
+   left for the reads at the head, which read no file. No line says
+   so. Read the OS's log for the device (`dmesg`). A restart does not
+   help while the device does not answer, since the open reads and
+   writes it first.
+
 7. **Claim it, the first time.** While `auth.claimant` is `null`,
    any process that can reach the port can claim the board, so claim
    the notebook you keep before anything else runs against it, at a
@@ -996,6 +1091,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    failure: every worker thread has ended; the board serves nothing
    ```
 
+   A panic on the binary's own thread, `main` — in the open, before
+   any worker starts — ends it at once, exit 101, after its line and
+   the open's before it reach the stream. A unit that restarts on
+   failure runs the open again each time; where the same line comes
+   at each attempt, it is a defect of the build, which a restart does
+   not mend: stop the unit and keep the line.
+
 ## 5. Restart
 
 1. **Stop, then start** (Stop; Start). A restart runs the open's
@@ -1035,6 +1137,10 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    ```
    failure: the feed walk ended: {cause}; positions ({low}, {head}] stay uncovered — /changes refuses pages into them until a restart, which walks again
    ```
+
+   Restart soon: until then every write is held in memory alone, as
+   after `commits.log`'s stop (The full volume, step 5), and the next
+   open's walk re-covers each as a bare entry.
 
 4. **Read the report as at a start.** A restart under a new
    `--node-prefix` moves the blocked-prefix list's off-board test,

@@ -852,10 +852,12 @@ fn journal_damage_a_history_read_meets_is_said_once_and_re_said_while_it_stands(
     assert!(
         said[0].ends_with(
             "; reads at the head and every write serve on, since neither reads the journal \
-             back, but the next start's open reads it all and may refuse on the same file: copy \
-             the data directory, run skepd inventory over the copy (its open reads the journal \
-             as a start does), and restore what it refuses from a copy before the board \
-             restarts; check the volume and its device"
+             back, but the next start's open reads the journal above its start point and may \
+             refuse on the same file: copy the data directory, run skepd inventory over the \
+             copy (its open reads the journal as a start does), and restore what it refuses \
+             from a copy before the board restarts; where no copy holds that file whole, keep \
+             the board serving and do not restart it until the next checkpoint lands: an open \
+             then starts above the damage and passes it over; check the volume and its device"
         ),
         "the line says what serves and the act: {said:?}"
     );
@@ -887,5 +889,72 @@ fn journal_damage_a_history_read_meets_is_said_once_and_re_said_while_it_stands(
         assert!(std::time::Instant::now() < deadline, "no standing line re-said it: {standing:?}");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    sd.shutdown();
+}
+
+/// `src` copied whole under `dst`: the copy RUNBOOK §2 has the inventory run
+/// over, so its open reads the copy's journal and never the board's.
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).expect("the copy's directory");
+    for entry in std::fs::read_dir(src).expect("the board lists") {
+        let entry = entry.expect("an entry");
+        let to = dst.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &to);
+        } else {
+            std::fs::copy(entry.path(), &to).expect("copy a file");
+        }
+    }
+}
+
+/// Checks that journal damage a checkpoint lands above is passed over.
+///
+/// A byte of the active segment's first frame is flipped while the board
+/// serves — the case RUNBOOK §2's restore can only rewind, a copy of the
+/// active segment holding only the commits made before it — and a copy's
+/// inventory refuses the journal, as the next start would. Then a checkpoint
+/// lands at the head, above the damage: a copy taken after it opens, and so
+/// does the board, its start point that checkpoint, the run below it passed
+/// over (Start, step 3, item 5), and its head the head it had.
+#[test]
+fn journal_damage_a_checkpoint_lands_above_is_passed_over_by_the_next_open() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let scenario = seed(port);
+    assert!(
+        !dir.path().join("seg-2.wal").exists(),
+        "the premise: the damage lies in the active segment"
+    );
+    let segment = dir.path().join("seg-1.wal");
+    let mut bytes = std::fs::read(&segment).expect("the journal's first segment");
+    bytes[16] ^= 0xFF;
+    std::fs::write(&segment, &bytes).expect("rewrite the segment in place");
+    let read = retrieve(&scenario.doc1, 5);
+    let (st, v) = op_at(port, Some(&scenario.token), scenario.at_i1, &read);
+    assert_eq!((st, v["error"].as_str()), (500, Some("history_corrupt")), "{v}");
+
+    let copies = tempfile::tempdir().expect("tempdir");
+    let before = copies.path().join("before");
+    copy_dir(dir.path(), &before);
+    let refused = skepd::tools::inventory(&before, skepd::tools::HoleCheck::LengthOnly)
+        .expect_err("an open from genesis folds through the damage and refuses");
+    assert!(refused.to_string().contains("durable committed data cannot be read"), "{refused}");
+
+    sd.daemon().checkpoint_now();
+    let base = sd.daemon().newest_checkpoint().expect("the checkpoint landed").seq;
+    let after = copies.path().join("after");
+    copy_dir(dir.path(), &after);
+    skepd::tools::inventory(&after, skepd::tools::HoleCheck::LengthOnly).unwrap_or_else(|e| {
+        panic!("FINDING (RUNBOOK §2): an open from the checkpoint passes the damage over: {e}")
+    });
+    let head = head_of(port);
+    sd.shutdown();
+
+    let sd = spawn(dir.path());
+    let recovery = sd.daemon().recovery().expect("a journaled open's account");
+    assert_eq!(recovery.start_point, base, "the open starts at the checkpoint above the damage");
+    assert!(recovery.runs_passed_over >= 1, "…and passes the damage over: {recovery:?}");
+    assert_eq!(head_of(sd.port()), head, "nothing acknowledged is lost");
     sd.shutdown();
 }

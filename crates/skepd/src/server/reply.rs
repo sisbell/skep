@@ -959,6 +959,20 @@ pub(super) fn refuse_reclaimed(floor: Option<u64>) -> Reply {
     refuse_with(TransportError::HistoryReclaimed, fields)
 }
 
+/// The walk behind the listener, as a page refused `feed_rebuilding` meets it.
+///
+/// It is read off the write path's own state of the walk
+/// (`Commits::feed_walk_gone`), and it decides what the refusal's `detail`
+/// tells the client to do: retry while the walk runs, restart where it died.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FeedWalk {
+    /// The walk runs: its landing covers the region, and a retry succeeds.
+    Walking,
+    /// The walk's thread died on a caught panic (`operations.md` §1.1 row
+    /// 41): the region stays uncovered until a restart, which walks again.
+    Gone,
+}
+
 /// Returns the `503 feed_rebuilding` refusal.
 ///
 /// The page's rows would come from the positions a lost or torn
@@ -967,13 +981,25 @@ pub(super) fn refuse_reclaimed(floor: Option<u64>) -> Reply {
 /// voice under its own token, the `detail` naming the region in words and
 /// the retry, and *no* member beyond `error` and `detail`: a region member
 /// on the wire is a design the record does not make. Pages below and above
-/// the region serve, as the detail says.
-pub(super) fn refuse_feed_rebuilding(low: u64, head: u64) -> Reply {
-    let detail = format!(
-        "the change feed is being rebuilt behind the listener: positions above {low} through \
-         {head} are not yet covered, and this page reaches into them; pages below and above \
-         serve; retry shortly"
-    );
+/// the region serve, as the detail says. Where the walk's thread has died
+/// ([`FeedWalk::Gone`]), the region stays uncovered for the uptime, and the
+/// detail says so, names the restart and gives no retry hint —
+/// `index_failed`'s voice (PATTERNS P10) under this token, so a client that
+/// retries retry-class refusals is told no retry succeeds before a restart.
+pub(super) fn refuse_feed_rebuilding(low: u64, head: u64, walk: FeedWalk) -> Reply {
+    let detail = match walk {
+        FeedWalk::Walking => format!(
+            "the change feed is being rebuilt behind the listener: positions above {low} \
+             through {head} are not yet covered, and this page reaches into them; pages below \
+             and above serve; retry shortly"
+        ),
+        FeedWalk::Gone => format!(
+            "the change feed's rebuild behind the listener ended at this start: positions above \
+             {low} through {head} stay uncovered until a restart, which walks them again, and \
+             this page reaches into them; pages below and above serve; no retry succeeds before \
+             the restart"
+        ),
+    };
     refuse(TransportError::FeedRebuilding, Some(&detail))
 }
 

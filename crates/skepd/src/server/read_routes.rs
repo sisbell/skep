@@ -14,7 +14,7 @@ use skep_util::notice::Class;
 use super::actor::Resolved;
 use super::reply::{
     op_answer, refuse, refuse_feed_rebuilding, refuse_over_budget, refuse_reclaimed,
-    refuse_unavailable, Reply,
+    refuse_unavailable, FeedWalk, Reply,
     TransportError,
 };
 use super::request::{at_most_once, query_pairs, sole_param};
@@ -140,7 +140,7 @@ impl Daemon {
         // world): transport metadata, never invented, and never an older
         // position's time offered in the head's place.
         //
-        // Four independent reads, no lock held across them — this, the auth
+        // Four independent reads, no lock held ACROSS them — this, the auth
         // object's own head snapshot (whose World carries the key table),
         // the `(log_position, chain_head)` pair at the end, and the `writes`
         // member's two atomic loads beside them — so this answer may
@@ -154,6 +154,17 @@ impl Daemon {
         // here would serialize a liveness probe behind every write, which is
         // the worse trade; `CommitsLog::head_time` states what each field is
         // true of.
+        //
+        // One read does wait: `head_time` takes the change feed's own lock,
+        // which the write path's record step holds across a commit's lines —
+        // through the attest store's `sync_data` on every attested commit —
+        // and the checkpoint thread across the feed's compaction after a
+        // landing. A millisecond on a healthy volume; on one that stops
+        // answering mid-sync, this probe waits with it, holding its worker,
+        // as every `/changes` page does, while a read at the head, which
+        // reads no file, still answers. Neither waiter is pooled, so enough
+        // of them park every worker; the head's time behind no lock is the
+        // change feed's to offer.
         //
         // `log_position` and `chain_head` do not straddle each other: the
         // kernel's root carries the seq and the chain together, and
@@ -274,8 +285,15 @@ impl Daemon {
             // The walk behind the listener (`operations.md` §3.3 step 2):
             // the page's rows would come from the region a lost or torn
             // `commits.log` left uncovered — refused retry-class until the
-            // walk lands it.
-            ChangesAnswer::Rebuilding { low, head } => refuse_feed_rebuilding(low, head),
+            // walk lands it, and, where the walk's thread has died, refused
+            // with the restart named, since no landing comes this uptime.
+            ChangesAnswer::Rebuilding { low, head } => {
+                let walk = match self.commits.feed_walk_gone() {
+                    Some(_) => FeedWalk::Gone,
+                    None => FeedWalk::Walking,
+                };
+                refuse_feed_rebuilding(low, head, walk)
+            }
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
                 obj(vec![

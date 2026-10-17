@@ -10,7 +10,8 @@
 //! service units and its Windows question. The units are WORDS here — no
 //! test loads one. So are the figures the binary's constants supply, read
 //! through those constants, §3 step 2's variables, read off the binary's
-//! own help, and §2's line for the journal damage a history read meets.
+//! own help, §2's line for the journal damage a history read meets, §1's
+//! write refused for a cause but room, and §1 step 8's standing clauses.
 
 use std::path::Path;
 
@@ -364,9 +365,13 @@ fn runbook_names_every_variable_the_daemon_reads_and_refuses_any_other() {
 
 /// §2 RESTORE's LEAD AND §1 STEP 8 — THE JOURNAL DAMAGE A HISTORY READ MEETS
 /// (RUNBOOK §2): the lead quotes the line the daemon says once, under
-/// `failure:`, and the steps it asks before a restart; and the standing
-/// line's list carries its clause by the damage's site, and the kernel's
-/// poison by the position its halt line named.
+/// `failure:`, with its wait for a checkpoint above damage at rest, and the
+/// steps it asks before a restart; where no copy holds the file whole, it
+/// keeps the daemon serving until a checkpoint lands above the damage, which
+/// an open from it passes over (`history.rs` holds the binary to it), and
+/// says where an I/O failure is not passed over; and the standing line's
+/// list carries its clause by the damage's site, and the kernel's poison by
+/// the position its halt line named.
 #[test]
 fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause() {
     let lead = passage(
@@ -380,7 +385,22 @@ fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause(
         line.trim_start().starts_with(&opening),
         "the lead quotes the damage's line under its class word: {line}"
     );
-    assert!(collapsed(after).contains("before a restart, not after it"), "{after}");
+    assert!(
+        line.contains(
+            "where no copy holds that file whole, keep the board serving and do not restart it \
+             until the next checkpoint lands"
+        ),
+        "the quoted line carries the wait for a checkpoint: {line}"
+    );
+    let after = collapsed(after);
+    assert!(after.contains("before a restart, not after it"), "{after}");
+    for fact in [
+        "Keep the daemon serving until the next checkpoint lands",
+        "an open from it passes the damage over, loses nothing",
+        "An I/O failure is never passed over in a file the open reads",
+    ] {
+        assert!(after.contains(fact), "the lead says {fact:?}: {after}");
+    }
     let list = passage("\n## 1. The full volume", "8. **Watch between the lines.**", &["\n## 2."]);
     let damage = "a history read found the journal unreadable at position {position}";
     assert!(
@@ -391,6 +411,85 @@ fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause(
         list.lines().any(|l| l.trim() == "the kernel is poisoned since position {position}"),
         "the standing line's list carries the poison's clause, by its position: {list}"
     );
+}
+
+/// Checks that §1 step 8 says what ends each standing clause.
+///
+/// The step's fence is the binary's own standing line, every clause in its
+/// order (`server/tests.rs` holds the two together); beneath it, the step
+/// says what ends each, and that the two states costing every write its
+/// testimony while they stand — `commits.log`'s stop and the feed walk's
+/// death — are ended by a restart soon.
+#[test]
+fn runbook_says_what_ends_each_standing_clause() {
+    let step = passage(
+        "\n## 1. The full volume",
+        "8. **Watch between the lines.**",
+        &["\n## 2."],
+    );
+    let (_, after) = fenced(&step);
+    let after = collapsed(after);
+    for fact in [
+        "What ends each:",
+        "Restart soon where the file is `commits.log`: every write after its stop is held in \
+         memory alone",
+        "the feed walk's thread: a restart soon",
+        "`503 index_failed` until it",
+        "`CLAIMED-PERMISSIVE`: a restart with `--no-local-trust`",
+    ] {
+        assert!(after.contains(fact), "step 8 says {fact:?}: {after}");
+    }
+}
+
+/// Checks that §3 step 6 says a `/health` that hangs waits on the volume.
+///
+/// The probe's `head_time` is read behind the change feed's lock, which a
+/// write holds across the attest store's sync, so a device that stops
+/// answering mid-sync holds the probe; the step says so, that no line says
+/// it, and that a restart does not help while the device does not answer.
+#[test]
+fn runbook_says_a_health_probe_that_hangs_waits_on_the_volume() {
+    let step = collapsed(&passage(
+        "\n## 3. Start",
+        "6. **Check from outside**",
+        &["\n7. **Claim it, the first time.**"],
+    ));
+    for fact in [
+        "A `/health` that does not answer once the open is done points to the volume",
+        "behind the change feed's lock",
+        "No line says so",
+        "A restart does not help while the device does not answer",
+    ] {
+        assert!(step.contains(fact), "§3 step 6 says {fact:?}: {step}");
+    }
+}
+
+/// Checks that §1 says a write refused for a cause but room is unsaid.
+///
+/// Step 1 says such a write is refused `durability` and said by nothing —
+/// `volume.rs` holds the binary to it — and names the quota and the device
+/// and where the cause is read; step 5 acts on it.
+#[test]
+fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_nothing() {
+    let step = collapsed(&passage(
+        "\n## 1. The full volume",
+        "1. **Tell the two states apart.**",
+        &["2. **Make room first.**"],
+    ));
+    for fact in [
+        "A write can be refused for a cause other than room, and then no line says so",
+        "`Disk quota exceeded`",
+        "`Input/output error`",
+        "`writes.halted` stays `false`",
+    ] {
+        assert!(step.contains(fact), "§1 step 1 says {fact:?}: {step}");
+    }
+    let acts = collapsed(&passage(
+        "\n## 1. The full volume",
+        "5. **Then act on the line you saw.**",
+        &["6. **Know what the floor keeps meanwhile.**"],
+    ));
+    assert!(acts.contains("A write refused `durability` and said by nothing"), "{acts}");
 }
 
 /// §9.3 WINDOWS — A QUESTION, NO COMMAND (the runbook states only what this

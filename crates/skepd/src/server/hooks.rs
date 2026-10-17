@@ -179,23 +179,38 @@ struct AcceptFaults {
     workers: Vec<ThreadId>,
 }
 
-/// The live streams' thread seam: the test seam behind
-/// [`Daemon::refuse_the_next_stream_threads`].
+/// A thread seam's arm: the next spawns it is asked about, refused.
 ///
-/// The next `remaining` streams the budget admits are refused their thread
-/// before any spawn, with an `io::Error` whose text is `text` in place of the
-/// OS's — no thread made, the socket dropped, the clean close a refused spawn
-/// gives — so a suite drives the live streams' thread pair without exhausting
-/// the process's threads. Per daemon, so no other daemon's streams meet it.
-pub(super) struct StreamThreadFaults {
+/// The next `remaining` spawns are refused before any thread is made, each
+/// with an `io::Error` whose text is `text` in place of the OS's, so a suite
+/// drives a refused thread without exhausting the process's threads. Per
+/// daemon, so no other daemon's spawns meet it. Two seams hold one: the live
+/// streams' threads ([`Daemon::refuse_the_next_stream_threads`]) and the
+/// workers' ([`Daemon::refuse_the_next_worker_threads`]).
+pub(super) struct ThreadRefusals {
     remaining: usize,
     text: String,
 }
 
-impl StreamThreadFaults {
+impl ThreadRefusals {
     /// Returns the seam unarmed.
-    pub(super) fn new() -> StreamThreadFaults {
-        StreamThreadFaults { remaining: 0, text: String::new() }
+    pub(super) fn new() -> ThreadRefusals {
+        ThreadRefusals { remaining: 0, text: String::new() }
+    }
+
+    /// Arms the next `k` spawns' refusal, `text` the error; replaces any arm.
+    fn arm(&mut self, k: usize, text: &str) {
+        self.remaining = k;
+        self.text = text.to_string();
+    }
+
+    /// Takes one armed refusal: the error, one arm spent, or `None`.
+    fn take(&mut self) -> Option<io::Error> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        Some(io::Error::other(self.text.clone()))
     }
 }
 
@@ -845,9 +860,7 @@ impl Daemon {
     /// the process's threads. Per daemon; arming again replaces the arm.
     #[doc(hidden)]
     pub fn refuse_the_next_stream_threads(&self, k: usize, text: &str) {
-        let mut faults = self.stream_thread_faults.lock();
-        faults.remaining = k;
-        faults.text = text.to_string();
+        self.stream_thread_faults.lock().arm(k, text);
     }
 
     /// Takes one armed refusal of a stream's thread: the admission's side.
@@ -855,12 +868,28 @@ impl Daemon {
     /// It answers the error the seam names in place of the spawn, one arm
     /// spent, or `None` where the seam is unarmed and the stream is spawned.
     pub(super) fn take_a_stream_thread_fault(&self) -> Option<io::Error> {
-        let mut faults = self.stream_thread_faults.lock();
-        if faults.remaining == 0 {
-            return None;
-        }
-        faults.remaining -= 1;
-        Some(io::Error::other(faults.text.clone()))
+        self.stream_thread_faults.lock().take()
+    }
+
+    /// Refuses the next `k` worker threads their spawn, `text` the error.
+    ///
+    /// **Test hook** (the same standing). Each of the next `k` workers
+    /// `serve_bound` spawns meets, in place of the OS's spawn, an
+    /// `io::Error` whose text is `text`: no thread is made, and the start is
+    /// retired as at a refused worker (`operations.md` §4 row 23) — so a
+    /// suite drives that refusal without exhausting the process's threads.
+    /// Per daemon; arming again replaces the arm.
+    #[doc(hidden)]
+    pub fn refuse_the_next_worker_threads(&self, k: usize, text: &str) {
+        self.worker_thread_faults.lock().arm(k, text);
+    }
+
+    /// Takes one armed refusal of a worker's thread: `serve_bound`'s side.
+    ///
+    /// It answers the error the seam names in place of the spawn, one arm
+    /// spent, or `None` where the seam is unarmed and the worker is spawned.
+    pub(super) fn take_a_worker_thread_fault(&self) -> Option<io::Error> {
+        self.worker_thread_faults.lock().take()
     }
 
     /// Returns how many accepts the seam has failed, and on how many workers.

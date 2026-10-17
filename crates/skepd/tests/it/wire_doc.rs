@@ -1033,10 +1033,12 @@ fn doc_states_the_upload_its_pins_and_its_refusals() {
 /// `feed_rebuilding` at 503 in the retry-class family's voice — the region
 /// a lost or torn `commits.log` left uncovered, re-covered behind the
 /// listener, pages below and above serving, `/events` untouched, retry
-/// shortly — and §The change feed's **Rebuilding.** paragraph says the
-/// walk's shape: the refusal's body, that it is retry-class as
-/// `history_busy` is, that pages above and below serve, `/events` is
-/// untouched, and that one rewrite lands it. The daemon's answers are
+/// shortly, save after the walk's death, which no retry outlasts — and §The
+/// change feed's **Rebuilding.** paragraph says the walk's shape: the
+/// refusal's body, that it is retry-class as `history_busy` is, that pages
+/// above and below serve, `/events` is untouched, that one rewrite lands
+/// it, and that a dead walk's region stays uncovered until a restart, its
+/// `detail` saying so. The daemon's answers are
 /// pinned end to end in `feed_walk.rs`; this pins that the contract says so.
 #[test]
 fn doc_states_the_feed_walk_behind_the_listener_and_its_token() {
@@ -1057,6 +1059,7 @@ fn doc_states_the_feed_walk_behind_the_listener_and_its_token() {
         "`/events` is untouched",
         "retry shortly",
         "`history_busy`",
+        "no retry succeeds before it",
     ] {
         assert!(row.contains(fact), "the row says {fact:?}: {row}");
     }
@@ -1069,6 +1072,8 @@ fn doc_states_the_feed_walk_behind_the_listener_and_its_token() {
         "above and below the region serve",
         "`/events` is untouched",
         "ONE rewrite",
+        "Where the walk's thread dies, the region stays uncovered",
+        "no retry succeeds",
     ] {
         assert!(feed.contains(fact), "§The change feed says {fact:?}");
     }

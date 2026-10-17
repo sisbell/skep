@@ -297,6 +297,57 @@ fn serve_bound_serves_over_the_listener_the_bind_answered_and_a_connect_during_t
     server.shutdown();
 }
 
+/// Checks that a refused worker retires the start and starts no checkpoint.
+///
+/// The seam refuses the first worker's thread (`operations.md` §4 row 23):
+/// `serve_bound` answers that refusal, the port and the journal-directory
+/// lock released — and, a checkpoint due before the serve, none ran: a start
+/// being retired spawns neither the pruner nor the checkpoint thread.
+#[test]
+fn a_refused_worker_retires_the_start_and_starts_no_checkpoint() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let daemon = Daemon::open(dir.path()).expect("genesis open");
+    let token = bare_session(&daemon, 0);
+    let post = |body: &str| match daemon.route(&HttpRequest {
+        method: "POST".to_string(),
+        path: "/op".to_string(),
+        query: None,
+        session_token: Some(token.clone()),
+        origin: None,
+        peer: Peer::Loopback,
+        body: body.as_bytes().to_vec(),
+    }) {
+        Routed::Reply(r) => serde_json::from_slice::<Value>(r.bytes()).expect("json"),
+        _ => panic!("POST /op is a reply"),
+    };
+    daemon.set_checkpoint_bytes_bound(1);
+    let read = post(r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = read["addr"].as_str().expect("a delegable prefix").to_string();
+    let write = post(&format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":41}}"#));
+    assert!(write["at"].is_u64(), "one commit past a one-byte bound: {write}");
+    assert!(daemon.checkpoint_is_due_now(), "the premise: a checkpoint is due");
+    daemon.refuse_the_next_worker_threads(1, "the test seam's refusal of a worker thread");
+    let listener = bind(0).expect("an ephemeral port");
+    let port = listener.port();
+    let refused = serve_bound(daemon, listener, MIN_WORKERS).expect_err("the start is retired");
+    assert_eq!(refused.to_string(), "the test seam's refusal of a worker thread");
+    let rebound = bind(port).expect("the port is released before the refusal is answered");
+    assert_eq!(rebound.port(), port);
+    drop(rebound);
+    // The journal-directory lock is released: a reopen takes it, the flock a
+    // just-dropped kernel held given a moment to land under load, as the
+    // embedding helper's retry gives it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let reopened = loop {
+        match Daemon::open(dir.path()) {
+            Ok(daemon) => break daemon,
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => panic!("the journal-directory lock is released: {e}"),
+        }
+    };
+    assert!(reopened.newest_checkpoint().is_none(), "no checkpoint ran in a retired start");
+}
+
 /// THE STOP's WAKE CONNECT dials the address the listener bound — a listener
 /// bound to one specific address answers there alone — and loopback where
 /// the bind was unspecified (`0.0.0.0`, the hosted image's), which names no
@@ -1605,6 +1656,54 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     assert_eq!(none.to_string(), "");
 }
 
+/// Checks that RUNBOOK §1 step 8 lists the standing line as it is written.
+///
+/// Every clause stands at sentinel figures, each figure put back as the
+/// placeholder the runbook names it by: the render is the step's fence, its
+/// lines joined by `; ` in their order — so a clause the line gains, loses
+/// or moves fails here rather than leaving the runbook short of it. The
+/// runbook is read at test runtime, as `tests/it/runbook_doc.rs` reads it.
+#[test]
+fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
+    use skep_core::commits::StoppedFile;
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md");
+    let runbook = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let step = runbook
+        .split("8. **Watch between the lines.**")
+        .nth(1)
+        .unwrap_or_else(|| panic!("RUNBOOK.md no longer carries §1 step 8"));
+    let fence = step
+        .split("```")
+        .nth(1)
+        .and_then(|block| block.split_once('\n'))
+        .map(|(_, body)| body)
+        .unwrap_or_else(|| panic!("§1 step 8 carries a fence:\n{step}"));
+    let listed: Vec<&str> = fence.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let every = StandingLine {
+        halted_at: Some(Seq(9001)),
+        poisoned: Some(Seq(9001)),
+        history_damaged: Some("at position 9001".to_string()),
+        stopped_files: vec![StoppedFile { name: "{file}", since: 9001 }],
+        pruner_gone: true,
+        feed_walk_gone: Some((9002, 9003)),
+        index_failed: true,
+        floor: Some(FloorBinding { free_space: 9004, floor: 9005 }),
+        claimed_permissive: true,
+    };
+    let written = [
+        ("9001", "{position}"),
+        ("9002", "{low}"),
+        ("9003", "{head}"),
+        ("9004", "{free}"),
+        ("9005", "{floor}"),
+    ]
+    .into_iter()
+    .fold(every.to_string(), |line, (figure, named)| line.replace(figure, named));
+    assert_eq!(listed.join("; "), written, "RUNBOOK §1 step 8's fence:\n{fence}");
+}
+
 /// m10's WORDS and ROW 41's TWO CONSEQUENCE LINES at fixed inputs: the
 /// kernel's halt with its position, the class of its three causes and the
 /// act; the pruner's verbatim; and the checkpoint thread's opening on row
@@ -1648,24 +1747,37 @@ fn the_halt_line_and_the_two_catches_lines_carry_their_ruled_words() {
 /// THE JOURNAL DAMAGE's LINE (RUNBOOK §2) at fixed inputs: the kernel's own
 /// words for the damage — corruption at rest naming its position, an I/O
 /// failure naming its file, its act and the OS's cause — then what serves
-/// on, why the next start may refuse, and the act.
+/// on, why the next start may refuse, and the act; and, for damage at rest
+/// alone, the wait for a checkpoint above it, which an open from that
+/// checkpoint passes over, where no copy holds the file whole.
 #[test]
 fn the_history_damage_line_names_the_kernels_account_what_serves_and_the_act() {
-    let after = "; reads at the head and every write serve on, since neither reads the journal \
-                 back, but the next start's open reads it all and may refuse on the same file: \
-                 copy the data directory, run skepd inventory over the copy (its open reads the \
-                 journal as a start does), and restore what it refuses from a copy before the \
-                 board restarts; check the volume and its device";
+    let before = "; reads at the head and every write serve on, since neither reads the journal \
+                  back, but the next start's open reads the journal above its start point and may \
+                  refuse on the same file: copy the data directory, run skepd inventory over the \
+                  copy (its open reads the journal as a start does), and restore what it refuses \
+                  from a copy before the board restarts";
+    let passed_over = "; where no copy holds that file whole, keep the board serving and do not \
+                       restart it until the next checkpoint lands: an open then starts above the \
+                       damage and passes it over";
+    let device = "; check the volume and its device";
     let corrupt = HistoryError::Corruption { at: Seq(9), cause: None };
     assert_eq!(
         HistoryDamageLine(&corrupt).to_string(),
-        format!("history: journal corrupt at rest; position 9 names the damage{after}")
+        format!(
+            "history: journal corrupt at rest; position 9 names the damage{before}{passed_over}\
+             {device}"
+        )
     );
     let unreadable =
         HistoryError::Io(std::io::Error::other("seg-3.wal: read: Input/output error"));
     assert_eq!(
         HistoryDamageLine(&unreadable).to_string(),
-        format!("history: history read I/O failure: seg-3.wal: read: Input/output error{after}")
+        format!(
+            "history: history read I/O failure: seg-3.wal: read: Input/output error{before}\
+             {device}"
+        ),
+        "an I/O failure in the active segment stops every open: no wait is named"
     );
 }
 

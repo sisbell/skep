@@ -131,6 +131,16 @@ const SKEPD_TEST_WORKER_FAULT: &str = "SKEPD_TEST_WORKER_FAULT";
 #[cfg(feature = "test-hooks")]
 const SKEPD_TEST_FEED_WALK_HOLD: &str = "SKEPD_TEST_FEED_WALK_HOLD";
 
+/// The main fault's variable: a test seam, read by `test-hooks` builds alone.
+///
+/// Set to anything, `main` panics once the open has returned — its lines
+/// queued — and before the workers spawn: the shape a panic in the open has,
+/// so a suite holds the hook's line, and the open's before it, to the stream
+/// ahead of exit 101. A shipped build reads no such variable: the read below
+/// it does not compile without the feature.
+#[cfg(feature = "test-hooks")]
+const SKEPD_TEST_MAIN_FAULT: &str = "SKEPD_TEST_MAIN_FAULT";
+
 /// The exit's line (`operations.md` §1.1 m16; §4 row 32).
 ///
 /// It is what the binary says when `wait` returns — every worker thread has
@@ -259,19 +269,27 @@ static HOOK_MEMORY: LazyLock<Mutex<HookMemory>> = LazyLock::new(|| Mutex::new(Ho
 /// the next. Installed first, before the command line is read, so no thread
 /// of this process's panics outside it. The line is enqueued as every
 /// notice is and written by the stream's thread: a worker's panic lands
-/// while the daemon serves on; a panic on `main`'s own thread unwinds to
-/// exit 101 with no drain, so the line races the exit and the stream's
-/// thread wins it or not.
+/// while the daemon serves on; a panic on `main`'s own thread — the open's,
+/// a tool's — unwinds to exit 101, so the hook drains the stream before the
+/// unwind goes on, as every exit of the binary's does, and its line and the
+/// open's before it reach the stream (`operations.md` §0 fact 1). A sink that
+/// never takes the bytes holds that drain, as it holds every exit's.
 fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
         let key = (thread.id(), site_of(info.location()));
-        let Some(repeats) = HOOK_MEMORY.lock().admit(key, Instant::now(), STANDING_INTERVAL) else {
-            return;
-        };
-        let payload = info.payload().downcast_ref::<&'static str>().copied();
-        let line = panic_line(thread.name(), info.location(), payload, repeats);
-        notice::emit(Class::Failure, line);
+        let admitted = HOOK_MEMORY.lock().admit(key, Instant::now(), STANDING_INTERVAL);
+        if let Some(repeats) = admitted {
+            let payload = info.payload().downcast_ref::<&'static str>().copied();
+            let line = panic_line(thread.name(), info.location(), payload, repeats);
+            notice::emit(Class::Failure, line);
+        }
+        // A panic on `main` ends the process at exit 101 with the stream's
+        // thread wherever it is: drained first, whether or not the rate let
+        // this line be said, so the lines queued before it reach the stream.
+        if thread.name() == Some("main") {
+            notice::drain();
+        }
     }));
 }
 
@@ -1087,6 +1105,12 @@ fn main() {
         }
     };
     let seq = daemon.log_position();
+    // The main fault (test seam, `test-hooks` builds alone): a panic on
+    // `main` with the open's lines queued, which the hook drains.
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os(SKEPD_TEST_MAIN_FAULT).is_some() {
+        panic!("the test seam's fault on main");
+    }
     // The serve over the bound listener: the auth port bound to the port
     // the bind answered, the warnings, then the workers. What can fail here
     // is the OS refusing a worker thread — the bind's own refusal was said

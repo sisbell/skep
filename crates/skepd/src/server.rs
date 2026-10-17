@@ -693,14 +693,23 @@ pub struct Daemon {
     /// without the `test-hooks` feature has no such field.
     #[cfg(any(test, feature = "test-hooks"))]
     faults: ThreadFaults,
-    /// The live streams' thread seam ([`hooks::StreamThreadFaults`]).
+    /// The live streams' thread seam ([`hooks::ThreadRefusals`]).
     ///
     /// **Test seam.** The next streams a suite armed are refused their
     /// thread with the seam's error in place of the OS's spawn. Unarmed until
     /// a suite arms it, and a build without the `test-hooks` feature has no
     /// such field.
     #[cfg(any(test, feature = "test-hooks"))]
-    stream_thread_faults: Mutex<hooks::StreamThreadFaults>,
+    stream_thread_faults: Mutex<hooks::ThreadRefusals>,
+    /// The workers' thread seam ([`hooks::ThreadRefusals`]).
+    ///
+    /// **Test seam.** The next workers `serve_bound` spawns that a suite
+    /// armed are refused their thread with the seam's error in place of the
+    /// OS's spawn, the start retired as at a refused worker. Unarmed until a
+    /// suite arms it, and a build without the `test-hooks` feature has no
+    /// such field.
+    #[cfg(any(test, feature = "test-hooks"))]
+    worker_thread_faults: Mutex<hooks::ThreadRefusals>,
     /// Every line said through this daemon's own classed door this uptime.
     ///
     /// **Test seam.** The door is [`Daemon::say`] and [`Daemon::say_lines`],
@@ -1112,7 +1121,9 @@ impl Daemon {
                 unlink: AtomicBool::new(false),
             },
             #[cfg(any(test, feature = "test-hooks"))]
-            stream_thread_faults: Mutex::new(hooks::StreamThreadFaults::new()),
+            stream_thread_faults: Mutex::new(hooks::ThreadRefusals::new()),
+            #[cfg(any(test, feature = "test-hooks"))]
+            worker_thread_faults: Mutex::new(hooks::ThreadRefusals::new()),
             #[cfg(any(test, feature = "test-hooks"))]
             said,
         };
@@ -3067,9 +3078,23 @@ impl fmt::Display for CheckpointThreadRefusedLine<'_> {
 /// restore of what it refuses. A history read scans the journal from its
 /// base to its end, so it is the one reader that meets the damage of a
 /// segment the write path never reads back, which the next start's open
-/// does read. Said once per uptime, by [`Daemon::refuse_history`], and
-/// re-said by the standing line. A pure value the unit suite pins by
-/// `to_string()`; emitted under `Class::Failure`.
+/// reads where the damage lies above its start point. Said once per uptime,
+/// by [`Daemon::refuse_history`], and re-said by the standing line. A pure
+/// value the unit suite pins by `to_string()`; emitted under
+/// `Class::Failure`.
+///
+/// **Damage at rest, where no copy holds the file whole.** The line then
+/// names the one recovery that loses nothing: keep the board serving until
+/// the next checkpoint lands. That checkpoint holds the head, above the
+/// damage, and an open from it passes a corrupt run below it over and says
+/// so (the kernel's `runs_passed_over`; RUNBOOK §3 step 3 item 5). A copy
+/// taken since the damage holds the same bytes, since damage at rest is
+/// found only when something reads it, and the active segment's copy holds
+/// only the commits made before it was taken, so for either a restore is
+/// impossible or a rewind. The line names that wait for damage at rest
+/// alone: every open reads the active segment, whatever its start point,
+/// and stops at a file it cannot read, so no checkpoint carries an open past
+/// an I/O failure there (RUNBOOK §2 gives the closed segment's case).
 pub(super) struct HistoryDamageLine<'a>(pub(super) &'a HistoryError);
 
 impl fmt::Display for HistoryDamageLine<'_> {
@@ -3077,12 +3102,20 @@ impl fmt::Display for HistoryDamageLine<'_> {
         write!(
             f,
             "history: {}; reads at the head and every write serve on, since neither reads the \
-             journal back, but the next start's open reads it all and may refuse on the same \
-             file: copy the data directory, run skepd inventory over the copy (its open reads \
-             the journal as a start does), and restore what it refuses from a copy before the \
-             board restarts; check the volume and its device",
+             journal back, but the next start's open reads the journal above its start point and \
+             may refuse on the same file: copy the data directory, run skepd inventory over the \
+             copy (its open reads the journal as a start does), and restore what it refuses \
+             from a copy before the board restarts",
             self.0
-        )
+        )?;
+        if let HistoryError::Corruption { .. } = self.0 {
+            f.write_str(
+                "; where no copy holds that file whole, keep the board serving and do not \
+                 restart it until the next checkpoint lands: an open then starts above the \
+                 damage and passes it over",
+            )?;
+        }
+        f.write_str("; check the volume and its device")
     }
 }
 

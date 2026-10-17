@@ -11,6 +11,9 @@
 //!   a write LANDS, the arm again, the line is said AGAIN; `writes.halted`
 //!   stays `false` throughout — the condition clears by itself; nothing
 //!   refused commits.
+//! * A write refused for a cause but room — the append armed
+//!   `QuotaExceeded` — is refused `durability`, `retry`, as at a full
+//!   volume, and said by nothing, as RUNBOOK §1 step 1 says.
 //! * ROW 2 — A REFUSED OPEN NAMES ITS FILE: a data directory whose
 //!   `feed-attest.log` (then `commits.log`) is unreadable refuses the open
 //!   `change-feed sidecar: feed-attest.log: Permission denied (os error
@@ -170,6 +173,42 @@ fn a_write_refused_at_a_full_volume_is_said_once_and_again_after_a_landed_commit
 #[test]
 fn a_barrier_refused_at_a_full_volume_is_said_the_same_way() {
     the_full_volume_is_said_once_and_cleared_by_a_landing(Step::JournalBarrier);
+}
+
+/// Checks that a write refused for a cause but room is said by nothing.
+///
+/// The journal's next append is armed `QuotaExceeded`, the board's user
+/// over its quota: the write is refused `durability`, `retry`, its detail
+/// the segment, the act and the cause, nothing committed and
+/// `writes.halted` false, as at a full volume — and no `failure:` line is
+/// said, m1 answering the OS's no-space kind alone. RUNBOOK §1 step 1 says
+/// so (`runbook_doc.rs` holds the sentence); the day skep-core's m1 answers
+/// every kind, this test and that sentence change together.
+#[test]
+fn a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    let (_, head) = health(port);
+    let said_before = sd.daemon().lines_said().len();
+    sd.daemon().fail_the_next_checkpoint_step(Step::JournalAppend, ErrorKind::QuotaExceeded);
+    let v = op(port, Some(&owner), &create_frame());
+    assert_eq!(
+        (v["resp"].as_str(), v["code"].as_str(), v["disposition"].as_str()),
+        (Some("rejected"), Some("durability"), Some("retry")),
+        "the quota's refusal, a true no-op: {v}"
+    );
+    let detail = v["detail"].as_str().unwrap_or_else(|| panic!("a detail: {v}"));
+    assert!(detail.ends_with(": append: injected QuotaExceeded at JournalAppend"), "{v}");
+    assert_eq!(health(port), (false, head), "no halt, nothing committed");
+    let failures: Vec<String> = sd.daemon().lines_said()[said_before..]
+        .iter()
+        .filter(|l| l.starts_with("failure:"))
+        .cloned()
+        .collect();
+    assert!(failures.is_empty(), "RUNBOOK §1 step 1: said by nothing: {failures:?}");
+    sd.shutdown();
 }
 
 /// The daemon opened over `dir` as the fixtures open one, in-process — what

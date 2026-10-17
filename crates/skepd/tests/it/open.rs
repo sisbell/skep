@@ -28,6 +28,8 @@
 //! * THE WORKERS' END: the floor's workers, a panic past the catch in each
 //!   after its one reply — the hook's line per death, then `failure: every
 //!   worker thread has ended; the board serves nothing`, and exit 1.
+//! * A panic on `main`, the open's lines queued, reaches the stream with
+//!   them before exit 101: the hook drains the stream on `main`.
 //! * THE SIX LINES SURVIVE A LOST READER: a stdout with no reader costs the
 //!   serving line and never the daemon, which serves on; a stderr with no
 //!   reader costs a refusal's line and never its exit code — 2 stays 2, 1
@@ -1276,6 +1278,44 @@ fn every_worker_gone_is_said_after_the_hooks_line_and_the_binary_exits_1() {
          {} ms after the last reply",
         exit_after.as_millis()
     );
+}
+
+/// Checks that a panic on `main` reaches the stream before exit 101.
+///
+/// The main fault armed (`SKEPD_TEST_MAIN_FAULT`, read under `test-hooks`),
+/// `main` panics with the open's lines queued: the binary exits 101, its
+/// stderr holding the open's version line and, after it, the hook's —
+/// `main: a thread panicked at {location}: the test seam's fault on main` —
+/// and nothing on stdout (`operations.md` §0 fact 1). Without the hook's
+/// drain, the exit races the stream's thread, and whenever it wins every
+/// line is lost.
+#[test]
+fn a_panic_on_main_reaches_the_stream_before_exit_101() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut cmd = skepd(&tmp.path().join("data"), &["--port", "0"]);
+    cmd.env("SKEPD_TEST_MAIN_FAULT", "1");
+    let mut child = Spawned::launch(&mut cmd);
+    let stderr = Stderr::of(&mut child.child);
+    let status = child.wait_within(PATIENCE);
+    let mut stdout = String::new();
+    child.child.stdout.take().expect("piped").read_to_string(&mut stdout).expect("read stdout");
+    let whole = stderr.whole();
+    assert_eq!(status.code(), Some(101), "a panic on main:\n{}", whole.join("\n"));
+    let version_at = whole
+        .iter()
+        .position(|l| after_the_head(l, "open").is_some_and(|said| said.starts_with("version ")))
+        .unwrap_or_else(|| panic!("the open's lines reached the stream:\n{}", whole.join("\n")));
+    let hook_at = whole
+        .iter()
+        .position(|l| {
+            after_the_head(l, "failure").is_some_and(|said| {
+                said.starts_with("main: a thread panicked at ")
+                    && said.ends_with(": the test seam's fault on main")
+            })
+        })
+        .unwrap_or_else(|| panic!("the hook's line reached the stream:\n{}", whole.join("\n")));
+    assert!(version_at < hook_at, "the open's lines come first:\n{}", whole.join("\n"));
+    assert!(stdout.is_empty(), "no serving line: {stdout:?}");
 }
 
 /// §0 FACT 1 — THE SIX LINES SURVIVE A LOST READER. (i) The serving line's

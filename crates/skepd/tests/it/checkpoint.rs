@@ -11,7 +11,7 @@
 //! `Daemon::checkpoint_lines` — each as `{class}: {text}` — and pinned by
 //! phrase, the class word by prefix; the figures a line carries are judged
 //! against the thread's own hooks (the kernel's reclaimed bytes and inline
-//! count, the daemon's resident-set peak, the floor in force) and against
+//! count, the daemon's resident-set high-water, the floor in force) and against
 //! the data directory. The words themselves are the unit suite's
 //! (`server/tests.rs`, by `to_string()` at fixed figures).
 
@@ -99,19 +99,53 @@ fn lines(sd: &Skepd) -> Vec<String> {
     sd.daemon().checkpoint_lines()
 }
 
-/// The backstop's line with the one figure no test can fix — how long the
-/// inline run held every write, whole milliseconds — read out and judged a
-/// whole number, and the rest of the line handed back for its pin with `N`
-/// in the figure's place.
-fn held_ms_read_out(line: &str) -> String {
-    let (head, tail) = line
-        .split_once("holding every write ")
-        .unwrap_or_else(|| panic!("the line says how long the run held every write: {line}"));
+/// Waits for the pruner's first pass to be said.
+///
+/// Its line takes a reading of the resident set too, and the next pass is
+/// an hour on, so once it is said no reading but the checkpoint thread's
+/// lands: a suite pinning a landing's resident figures against the daemon's
+/// high-water waits for it first.
+fn wait_for_the_first_pass(sd: &Skepd) {
+    wait_until("the pruner's first pass", || {
+        sd.daemon().lines_said().iter().any(|l| l.starts_with("landing: pruner: "))
+    });
+}
+
+/// The resident clause's two figures: the reading the line took, and the
+/// largest of the uptime's readings beside it, the reading never above it.
+fn resident_figures(line: &str) -> (u64, u64) {
+    let now = figure_after(line, "the process's resident set ");
+    let largest = figure_after(line, ", the largest of this uptime's readings ");
+    assert!(now > 0 && now <= largest, "a reading, never above the largest: {line}");
+    (now, largest)
+}
+
+/// `line` with the milliseconds figure between `lead` and `trail` — a run's
+/// duration, the one figure no test can fix — read out and judged a whole
+/// number, and the rest of the line handed back for its pin with `N` in the
+/// figure's place.
+fn ms_read_out(line: &str, lead: &str, trail: &str) -> String {
+    let (head, tail) =
+        line.split_once(lead).unwrap_or_else(|| panic!("the line says {lead:?}: {line}"));
     let (ms, rest) =
-        tail.split_once(" ms, ").unwrap_or_else(|| panic!("…in milliseconds: {line}"));
+        tail.split_once(trail).unwrap_or_else(|| panic!("…in milliseconds: {line}"));
     ms.parse::<u128>()
         .unwrap_or_else(|e| panic!("{ms:?} is no whole number of milliseconds ({e}): {line}"));
-    format!("{head}holding every write N ms, {rest}")
+    format!("{head}{lead}N{trail}{rest}")
+}
+
+/// The backstop's line with how long the inline run held every write read
+/// out ([`ms_read_out`]).
+fn held_ms_read_out(line: &str) -> String {
+    ms_read_out(line, "holding every write ", " ms, ")
+}
+
+/// The backstop's line cut at the newest checkpoint's clause: the line up to
+/// it, and the clause after `; the newest checkpoint at position `, where
+/// the wake took the landing's re-reads.
+fn newest_clause(line: &str) -> (&str, &str) {
+    line.split_once("; the newest checkpoint at position ")
+        .unwrap_or_else(|| panic!("the line names the newest checkpoint and what it moved: {line}"))
 }
 
 /// ROW 25 — THE FIGURES ARE THE KERNEL's AND THE HOST's (and the class word
@@ -123,8 +157,9 @@ fn held_ms_read_out(line: &str) -> String {
 /// the gate's one door, and with no pin the host's own, a figure within the
 /// volume's capacity; the duration clause is PRESENT in milliseconds — a
 /// small world lands inside one, so the figure may read zero and is never
-/// held above it; the resident set is above zero, equal to the daemon's
-/// high-water, and never decreases across two landings; both bounds are the
+/// held above it; the resident set's reading is above zero and never above
+/// the largest of the uptime's readings beside it, that one is the daemon's
+/// high-water and never decreases across two landings; both bounds are the
 /// small board's, and the compaction fence is the reclaim floor.
 #[test]
 fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_the_resident_peak() {
@@ -132,6 +167,7 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    wait_for_the_first_pass(&sd);
     rotate_the_segment(port, &owner, dir.path());
     let before = segments(dir.path());
     assert!(before.len() >= 2, "a closed segment stands below the head: {before:?}");
@@ -182,7 +218,9 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     );
     let peak = sd.daemon().resident_set_peak().expect("a reading was made at the landing");
     assert!(peak > 0);
-    assert_eq!(figure_after(line, "the process's resident set peaked at "), peak, "{line}");
+    let (_, largest) = resident_figures(line);
+    assert_eq!(largest, peak, "the largest reading is the daemon's high-water: {line}");
+    assert!(!line.contains("peaked"), "the largest reading is no peak of the process's: {line}");
     assert!(
         line.ends_with(&format!(
             "; the change feed's files compacted below position {}",
@@ -220,7 +258,7 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     }
     let peak_after = sd.daemon().resident_set_peak().expect("a second reading");
     assert!(peak_after >= peak, "the high-water never decreases: {peak} then {peak_after}");
-    assert_eq!(figure_after(line, "the process's resident set peaked at "), peak_after, "{line}");
+    assert_eq!(resident_figures(line).1, peak_after, "{line}");
     assert!(
         line.ends_with("; the change feed's files hold nothing below the reclaim floor"),
         "{line}"
@@ -323,16 +361,17 @@ fn a_landing_line_names_the_file_that_stood_beside_the_fence() {
 /// ROW 26 / §4 ROW 2 — A FAILURE PAST THE RENAME, and the class word
 /// `failure`: through the daemon's door to the kernel's write-fault seam, the
 /// directory's sync after the rename fails on a full volume — the base
-/// LANDED, so the line is the landed arm, naming the landed position, "the
-/// directory's sync" and "the volume is full", and the thread takes the
-/// landing's re-reads off the landed base: the media floor, moved aside
-/// beforehand, is back at the figure the base sizes, and the byte bound,
-/// moved to one byte, is back at the floor's 24 MiB, so a small commit after
-/// crosses nothing. Retention failing — a directory squatting on a name it
-/// must remove — is the landed arm with "retention". A failure BEFORE the
-/// rename — the temp file's sync — is the `Io` arm: no base, the head's
-/// position as an ordering, the floor unmoved; and SAID PER ATTEMPT, a second
-/// armed attempt saying it again.
+/// LANDED, so the line is the landed arm, naming the landed position, its
+/// size, the run's duration, "the directory's sync" and "the volume is
+/// full", and the thread takes the landing's re-reads off the landed base and
+/// SAYS them: the media floor, moved aside beforehand, is back at the figure
+/// the base sizes, and the byte bound, moved to one byte, is back at the
+/// floor's 24 MiB — each figure on the line — so a small commit after crosses
+/// nothing. Retention failing — a directory squatting on a name it must
+/// remove — is the landed arm with "retention". A failure BEFORE the rename —
+/// the temp file's sync — is the `Io` arm: no base, the run's duration, the
+/// head's position as an ordering, the floor unmoved; and SAID PER ATTEMPT, a
+/// second armed attempt saying it again.
 #[test]
 fn a_failure_after_the_base_landed_names_the_base_and_its_step_and_re_reads_the_figures() {
     let mib: u64 = 1024 * 1024;
@@ -350,22 +389,30 @@ fn a_failure_after_the_base_landed_names_the_base_and_its_step_and_re_reads_the_
     let landed = sd.daemon().newest_checkpoint().expect("the base landed before the step failed");
     let said = lines(&sd);
     assert_eq!(said.len(), 1, "{said:?}");
+    let line = ms_read_out(&said[0], " bytes) in ", " ms but ");
     assert!(
-        said[0].starts_with(&format!(
-            "failure: a checkpoint landed at position {} but the directory's sync failed: the \
-             volume is full (",
-            landed.seq.0
+        line.starts_with(&format!(
+            "failure: a checkpoint landed at position {} ({} bytes) in N ms but the directory's \
+             sync failed: the volume is full (",
+            landed.seq.0, landed.len
         )),
-        "{}",
-        said[0]
+        "{line}"
     );
     assert!(
-        said[0].ends_with(
+        line.contains(&format!(
+            "; the cadence's byte bound {}, the media floor in force {}, the volume's free space ",
+            24 * mib,
+            256 * mib
+        )),
+        "what the re-reads off the landed base moved, said: {line}"
+    );
+    assert!(!line.contains("reclaimed;"), "no reclaim figure for a call that failed: {line}");
+    assert!(
+        line.ends_with(
             "; the journal is not reclaimed and holds every commit; the next attempt is at the \
              cadence's next crossing"
         ),
-        "{}",
-        said[0]
+        "{line}"
     );
     assert_eq!(
         sd.daemon().media_floor_in_force(),
@@ -392,13 +439,15 @@ fn a_failure_after_the_base_landed_names_the_base_and_its_step_and_re_reads_the_
     let said = lines(&sd);
     assert_eq!(said.len(), 2, "{said:?}");
     assert!(
-        said[1].starts_with(&format!(
-            "failure: a checkpoint landed at position {} but retention failed: ",
-            landed.seq.0
+        ms_read_out(&said[1], " bytes) in ", " ms but ").starts_with(&format!(
+            "failure: a checkpoint landed at position {} ({} bytes) in N ms but retention \
+             failed: ",
+            landed.seq.0, landed.len
         )),
         "{}",
         said[1]
     );
+    assert!(said[1].contains("the media floor in force 268435456"), "{}", said[1]);
     assert!(
         !said[1].contains("the volume is full"),
         "not a full volume: its own text: {}",
@@ -419,10 +468,10 @@ fn a_failure_after_the_base_landed_names_the_base_and_its_step_and_re_reads_the_
         assert_eq!(said.len(), 2 + attempt, "said per attempt: {said:?}");
         let line = said.last().expect("the attempt's line");
         assert_eq!(
-            line,
-            &format!(
-                "failure: checkpoint FAILED (the head stood at position {at} when the run began): \
-                 the volume is full (checkpoint.tmp: fsync: injected StorageFull at \
+            ms_read_out(line, "FAILED after ", " ms ("),
+            format!(
+                "failure: checkpoint FAILED after N ms (the head stood at position {at} when the \
+                 run began): the volume is full (checkpoint.tmp: fsync: injected StorageFull at \
                  CheckpointSync); the journal is not reclaimed and holds every commit; the next \
                  attempt is at the cadence's next crossing"
             )
@@ -481,8 +530,9 @@ fn two_crossings_in_one_run_are_said_once_as_the_backstops_and_again_when_the_co
     sd.daemon().release_the_checkpoint_thread();
     wait_until("the backstop's line", || lines(&sd).len() == 1);
     let said = lines(&sd);
+    let (line, newest) = newest_clause(&said[0]);
     assert_eq!(
-        held_ms_read_out(&said[0]),
+        held_ms_read_out(line),
         format!(
             "landing: checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran \
              inline on a writer since position {start_point}, the last run by the commit at \
@@ -490,6 +540,19 @@ fn two_crossings_in_one_run_are_said_once_as_the_backstops_and_again_when_the_co
         ),
         "counted from the start point, the class word `landing`, the run named by the commit \
          that carried it"
+    );
+    assert!(
+        newest.starts_with(&format!("{second} ({} bytes): ", backstop.len)),
+        "the base the wake took the re-reads off: {newest}"
+    );
+    assert!(
+        newest.contains(&format!(
+            "reclaimed; the cadence's byte bound {}, the media floor in force {}, ",
+            24 * mib,
+            256 * mib
+        )),
+        "a run that landed its base whole: what it reclaimed, then what the re-reads moved, the \
+         floor and the bound among them: {newest}"
     );
     assert_eq!(
         sd.daemon().media_floor_in_force(),
@@ -525,8 +588,9 @@ fn two_crossings_in_one_run_are_said_once_as_the_backstops_and_again_when_the_co
     sd.daemon().release_the_checkpoint_thread();
     wait_until("the second backstop line", || lines(&sd).len() == 2);
     let said = lines(&sd);
+    let (line, newest) = newest_clause(&said[1]);
     assert_eq!(
-        held_ms_read_out(&said[1]),
+        held_ms_read_out(line),
         format!(
             "landing: checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran \
              inline on a writer since position {}, the last run by the commit at position \
@@ -535,9 +599,74 @@ fn two_crossings_in_one_run_are_said_once_as_the_backstops_and_again_when_the_co
         ),
         "counted from the position the thread last said a line for"
     );
+    assert!(newest.starts_with(&format!("{fourth} (")), "{newest}");
+    assert!(newest.contains("the media floor in force 268435456"), "{newest}");
     assert_eq!(
         sd.daemon().newest_checkpoint().map(|h| h.seq.0),
         Some(fourth),
+        "no checkpoint of the thread's own"
+    );
+    sd.shutdown();
+}
+
+/// m13 — A BACKSTOP WHOSE INLINE RUN LANDED ITS BASE AND THEN FAILED says
+/// what the landing moved and no reclaim figure: the thread held, the floor
+/// moved aside and the byte bound at one byte, the first crossing sets the
+/// flag; the directory's sync armed to fail on a full volume, the second
+/// crossing runs the checkpoint inline — its base LANDS and its directory's
+/// sync fails, the commit acknowledged all the same, so the kernel stores no
+/// reclaim figure for the run. Released, the thread finds the newest
+/// checkpoint moved and takes the landing's re-reads off it: the backstop's
+/// line says the run FAILED, then the newest base and what the re-reads
+/// moved — the floor back at the figure the base sizes, the byte bound at
+/// the floor's 24 MiB — and nothing reclaimed, a figure the kernel holds for
+/// a run that landed whole alone.
+#[test]
+fn a_backstop_whose_run_landed_its_base_and_then_failed_says_what_moved_and_no_reclaim() {
+    let mib: u64 = 1024 * 1024;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let owner = open_session(port, CLAIMANT_PRINCIPAL);
+    sd.daemon().hold_the_checkpoint_thread();
+    sd.daemon().set_media_floor(1);
+    sd.daemon().refuse_the_next_head_once();
+    sd.daemon().set_checkpoint_bytes_bound(1);
+    commit(port, &owner);
+    assert!(sd.daemon().checkpoint_is_due_now(), "the first crossing set the flag");
+    sd.daemon().fail_the_next_checkpoint_step(Step::CheckpointDirSync, ErrorKind::StorageFull);
+    let second = commit(port, &owner);
+    assert_eq!(sd.daemon().inline_checkpoints(), 1, "the second crossing ran inline");
+    assert!(
+        sd.daemon().last_inline_checkpoint_failure().is_some(),
+        "…and its directory's sync failed"
+    );
+    let landed = sd.daemon().newest_checkpoint().expect("the inline run's base landed");
+    assert_eq!(landed.seq.0, second, "at the committing write's position");
+    sd.daemon().release_the_checkpoint_thread();
+    wait_until("the backstop's line", || lines(&sd).len() == 1);
+    let said = lines(&sd);
+    let (line, newest) = newest_clause(&said[0]);
+    assert!(
+        line.starts_with("landing: checkpoint: the cadence outran the checkpoint thread; "),
+        "{line}"
+    );
+    assert!(line.contains(&format!("the last run by the commit at position {second}, ")), "{line}");
+    assert!(line.contains(" ms, FAILED: "), "the run's failure, in the kernel's words: {line}");
+    assert!(
+        newest.starts_with(&format!(
+            "{second} ({} bytes): the cadence's byte bound {}, the media floor in force {}, ",
+            landed.len,
+            24 * mib,
+            256 * mib
+        )),
+        "what the re-reads off the landed base moved, and no reclaim figure: {newest}"
+    );
+    assert!(!newest.contains("reclaimed"), "no reclaim figure for a run that failed: {newest}");
+    assert_eq!(sd.daemon().media_floor_in_force(), 256 * mib, "the floor re-read off the base");
+    assert_eq!(
+        sd.daemon().newest_checkpoint().map(|h| h.seq.0),
+        Some(second),
         "no checkpoint of the thread's own"
     );
     sd.shutdown();

@@ -422,13 +422,28 @@ fn a_pass_compacts_a_log_past_its_trigger_and_leaves_a_small_one_alone() {
 }
 
 /// The row 35 lines the daemon has said — `failure: pruner: the pass
-/// failed: …` — in order.
+/// failed: …` — in order, each with the pass's duration read off its end
+/// ([`without_the_pass_duration`]).
 fn pass_failures(sd: &skepd::Skepd) -> Vec<String> {
     sd.daemon()
         .lines_said()
         .into_iter()
         .filter(|l| l.starts_with("failure: pruner: the pass failed: "))
+        .map(|l| without_the_pass_duration(&l))
         .collect()
+}
+
+/// A row 35 line with the pass's duration — `; the pass took {d} ms`, its
+/// end, the one figure no test can fix — read off and judged a whole number
+/// of milliseconds, and the rest of the line handed back for its pin.
+fn without_the_pass_duration(line: &str) -> String {
+    let (rest, took) = line
+        .rsplit_once("; the pass took ")
+        .unwrap_or_else(|| panic!("the pass's line says how long the pass took: {line}"));
+    let ms = took.strip_suffix(" ms").unwrap_or_else(|| panic!("…in milliseconds, last: {line}"));
+    ms.parse::<u128>()
+        .unwrap_or_else(|e| panic!("{ms:?} is no whole number of milliseconds ({e}): {line}"));
+    rest.to_string()
 }
 
 /// `dir` made UNREADABLE — mode `0300`, searched and written but never read
@@ -625,9 +640,23 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     assert_eq!(pass_failures(&sd).len(), 2, "a pass that failed nothing says line 34");
     let pruner_lines: Vec<String> =
         sd.daemon().lines_said().into_iter().filter(|l| l.contains("pruner: ")).collect();
+    let line_34 = pruner_lines.last().expect("the pass after says its line");
     assert!(
-        pruner_lines.last().is_some_and(|l| l.starts_with("landing: pruner: 0 expired partials removed, 0 files unlinked, 0 kept, 0 asides removed")),
+        line_34.starts_with("landing: pruner: 0 expired partials removed, 0 files unlinked, 0 kept, 0 asides removed"),
         "{pruner_lines:?}"
+    );
+    // Line 34 carries the pass's duration, then a reading of the resident set.
+    let (_, took) = line_34
+        .rsplit_once("; the pass took ")
+        .unwrap_or_else(|| panic!("line 34 says how long the pass took: {line_34}"));
+    let (ms, resident) =
+        took.split_once(" ms; ").unwrap_or_else(|| panic!("…in milliseconds: {line_34}"));
+    ms.parse::<u128>()
+        .unwrap_or_else(|e| panic!("{ms:?} is no whole number of milliseconds ({e}): {line_34}"));
+    assert!(
+        resident.starts_with("the process's resident set ")
+            && resident.contains(", the largest of this uptime's readings "),
+        "the pass reads the resident set beside the uptime's largest reading: {line_34}"
     );
     sd.shutdown();
 }

@@ -49,7 +49,7 @@ apart.
    - A checkpoint fails. It is said at each attempt:
 
      ```
-     failure: checkpoint FAILED (the head stood at position {position} when the run began): the volume is full ({error}); the journal is not reclaimed and holds every commit; the next attempt is at the cadence's next crossing
+     failure: checkpoint FAILED after {ms} ms (the head stood at position {position} when the run began): the volume is full ({error}); the journal is not reclaimed and holds every commit; the next attempt is at the cadence's next crossing
      ```
 
    - `feed-attest.log`, which holds each attested commit's
@@ -139,10 +139,12 @@ apart.
    and deposited files that no cell names and no live lease holds;
    it never touches a placed picture. A restart is how to run the
    pass early, not a way to make room. The pass says what it did,
-   what it freed, and each of the blob store's two logs' size:
+   what it freed, each of the blob store's two logs' size, how long
+   it took — it holds the credential lock one file at a time, so a
+   slow pass is a slow volume — and a reading of the daemon's memory:
 
    ```
-   landing: pruner: {n} expired partials removed, {n} files unlinked, {n} kept, {n} asides removed, {n} bytes freed; blobs/uploads.log {n} lines ({n} bytes); blobs/leases.log {n} lines ({n} bytes)
+   landing: pruner: {n} expired partials removed, {n} files unlinked, {n} kept, {n} asides removed, {n} bytes freed; blobs/uploads.log {n} lines ({n} bytes); blobs/leases.log {n} lines ({n} bytes); the pass took {ms} ms; the process's resident set {bytes} bytes, the largest of this uptime's readings {bytes} bytes
    ```
 
    `{n} bytes freed` is the room the pass made. Where it is `0`
@@ -233,8 +235,12 @@ apart.
    may take the volume below it, so deposits alone never take the
    room the journal needs to reach its next checkpoint. It holds
    back nothing else that fills the volume. The open names both
-   (Start, step 3, item 9), and so does each checkpoint's landing
-   line:
+   (Start, step 3, item 9), and so does every line that follows a
+   landing — each checkpoint's landing line, the backstop's
+   (`checkpoint: the cadence outran the checkpoint thread; …; the
+   newest checkpoint at position {position} ({bytes} bytes): …`) and
+   a failure after a base landed — each with the fence below which
+   the change feed answers `410`:
 
    ```
    landing: checkpoint at position {position} landed ({bytes} bytes) in {ms} ms; {reclaimed}; the cadence's byte bound {bytes}, the media floor in force {floor}, the volume's free space {free}; …
@@ -260,13 +266,16 @@ apart.
 
    ```
    the write path is halted since position {position} (feed-attest.log)
-   the kernel is poisoned
-   a history read found the journal unreadable
+   the kernel is poisoned since position {position}
+   a history read found the journal unreadable at position {position}
    {file} stopped since position {position}
    deposits refused at the floor (free space {free} below the floor in force {floor})
    ```
 
-   The standing line is the checkpoint thread's. Where the stream
+   Each clause carries the position or the file its first line
+   named: the kernel's halt line's position, and the damage's site —
+   `at position {position}`, or `({file}: {act}: {error})` where the
+   read failed. The standing line is the checkpoint thread's. Where the stream
    holds `checkpoint thread ended: …` or `checkpoint thread: the OS
    refused it …`, no standing line comes until a restart, and its
    absence says nothing of the board's health; restart soon, since
@@ -281,7 +290,7 @@ serves. A read of an earlier position (`POST /op-at`, `GET
 end, where the write path never reads it back; it is answered
 `500 history_corrupt` or `500 history_io`, and the daemon says so
 once, and in every hourly `standing:` line after it (`a history read
-found the journal unreadable`):
+found the journal unreadable at position {position}`):
 
 ```
 failure: history: journal corrupt at rest; position {position} names the damage: {account}; reads at the head and every write serve on, since neither reads the journal back, but the next start's open reads it all and may refuse on the same file: copy the data directory, run skepd inventory over the copy (its open reads the journal as a start does), and restore what it refuses from a copy before the board restarts; check the volume and its device
@@ -630,12 +639,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    6. The recovery, `{base}` being `checkpoint.{n}` or `genesis`:
 
       ```
-      open: recovered from {base}, {n} commits replayed, in {ms} ms
+      open: recovered from {base} to position {position}, {n} commits replayed, in {ms} ms
       ```
 
-      On a large board the open takes a while, and the board
-      answers nothing until it is done. This line says how long the
-      recovery took.
+      `{position}` is the committed head the open came back at:
+      every write acknowledged at or below it stands. On a large
+      board the open takes a while, and the board answers nothing
+      until it is done. This line says how long the recovery took.
 
       Where no journal stood in the data directory, no segment and
       no checkpoint, the open began a new board rather than
@@ -740,7 +750,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        first head, written now:
 
        ```
-       landing: the board is claimed and its journal held no head: H.1 written at open, naming the committed pair as it stood
+       landing: the board is claimed and its journal held no head: H.1 written at open at position {position} in {ms} ms, naming the committed pair at position {position}
        ```
 
        Where the head writer refuses it, the open goes on and says:
@@ -958,9 +968,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 3. **Know how it ends on its own.** The library's orderly stop is
    for programs that embed the daemon; the `skepd` binary never
    runs it. The binary ends by itself only once every worker thread
-   has ended. A thread's panic is said on one line; when the last
-   worker is gone, the daemon says the second line below and exits
-   1:
+   has ended. A thread's panic is said on one line, once an hour per
+   site on its thread while it recurs, the panics between counted on
+   the next (`; {n} more at this site on this thread since its last
+   line`); when the last worker is gone, the daemon says the second
+   line below and exits 1:
 
    ```
    failure: {thread}: a thread panicked at {location}

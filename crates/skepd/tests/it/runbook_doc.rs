@@ -314,7 +314,8 @@ fn runbook_quotes_the_figures_the_constants_supply() {
 /// §2 RESTORE's LEAD AND §1 STEP 8 — THE JOURNAL DAMAGE A HISTORY READ MEETS
 /// (RUNBOOK §2): the lead quotes the line the daemon says once, under
 /// `failure:`, and the steps it asks before a restart; and the standing
-/// line's list carries its clause.
+/// line's list carries its clause by the damage's site, and the kernel's
+/// poison by the position its halt line named.
 #[test]
 fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause() {
     let lead = passage(
@@ -330,9 +331,14 @@ fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause(
     );
     assert!(collapsed(after).contains("before a restart, not after it"), "{after}");
     let list = passage("\n## 1. The full volume", "8. **Watch between the lines.**", &["\n## 2."]);
+    let damage = "a history read found the journal unreadable at position {position}";
     assert!(
-        list.lines().any(|l| l.trim() == "a history read found the journal unreadable"),
-        "the standing line's list carries the damage's clause: {list}"
+        list.lines().any(|l| l.trim() == damage),
+        "the standing line's list carries the damage's clause, by its site: {list}"
+    );
+    assert!(
+        list.lines().any(|l| l.trim() == "the kernel is poisoned since position {position}"),
+        "the standing line's list carries the poison's clause, by its position: {list}"
     );
 }
 

@@ -3,7 +3,6 @@
 //! The endpoints are `/op-at`, `/health`, `/chain`, `/changes` and `/dump`.
 
 use std::num::NonZeroUsize;
-use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use skep_febe::{consult_read, Response};
@@ -19,7 +18,7 @@ use super::reply::{
     TransportError,
 };
 use super::request::{at_most_once, query_pairs, sole_param};
-use super::{Daemon, HistoryDamageLine};
+use super::{Daemon, HistoryDamageLine, JournalDamageSite};
 use crate::history::Unavailable;
 use skep_core::auth::key_set_of;
 use skep_core::codec::{check_keys, key_set_reply, DaemonOp};
@@ -116,17 +115,18 @@ impl Daemon {
     /// The reply is [`refuse_unavailable`]'s, the reader's answer unchanged.
     /// Beside it, where the refusal is the journal's damage
     /// ([`Unavailable::journal_damage`]), the first such refusal of this
-    /// uptime says [`HistoryDamageLine`] under `Class::Failure` and sets the
-    /// flag the standing line reads: a history read scans the journal from
-    /// its base to its end, so it is the first reader to meet damage in a
-    /// segment the write path never reads back — damage the next start's
-    /// open reads and may refuse on, which the operator can still mend while
-    /// the board serves (RUNBOOK §2). Once per uptime and never per request,
-    /// and the line names no reader (D9). `/op-at`, `/chain?at` and
-    /// `/dump?at` answer every refusal through it.
+    /// uptime says [`HistoryDamageLine`] under `Class::Failure` and keeps
+    /// the damage's site ([`JournalDamageSite`]) for the standing line, which
+    /// re-says it by that site: a history read scans the journal from its
+    /// base to its end, so it is the first reader to meet damage in a segment
+    /// the write path never reads back — damage the next start's open reads
+    /// and may refuse on, which the operator can still mend while the board
+    /// serves (RUNBOOK §2). Once per uptime and never per request, and
+    /// neither line names a reader (D9). `/op-at`, `/chain?at` and `/dump?at`
+    /// answer every refusal through it.
     pub(super) fn refuse_history(&self, e: Unavailable) -> Reply {
         if let Some(damage) = e.journal_damage() {
-            if !self.history_damage_said.swap(true, Ordering::AcqRel) {
+            if self.history_damage.set(JournalDamageSite(damage).to_string()).is_ok() {
                 self.say(Class::Failure, HistoryDamageLine(damage));
             }
         }

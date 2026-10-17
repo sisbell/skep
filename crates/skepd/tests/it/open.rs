@@ -14,8 +14,9 @@
 //!   commit as `skepd --version` names them, and the three format stamps,
 //!   each from its crate's constant — `open: data-dir
 //!   {path}` the second, and `open: recovered from {checkpoint.n |
-//!   genesis}, {k} commits replayed, in {d} ms` stands on stderr before the
-//!   serving line — `{k}` the kernel's count across a reopen with no
+//!   genesis} to position {head}, {k} commits replayed, in {d} ms` stands on
+//!   stderr before the serving line — `{head}` the position the board was
+//!   left at and `{k}` the kernel's count, across a reopen with no
 //!   checkpoint and one with a checkpoint at a known position. A fresh
 //!   board's first open says, after its landing, `open: no journal stood in
 //!   the data directory: this open began a new board at genesis — …`; a
@@ -70,8 +71,8 @@ use skep_util::notice::{Class, Moment};
 use skepd::tools::{self, HoleCheck};
 
 use crate::common::{
-    acked_addr, claim_board, expect_resp, get, json, op, open_session, parse_response,
-    spawn_unclaimed, T_ENROLL,
+    acked_addr, claim_board, expect_resp, get, head_position, json, op, open_session,
+    parse_response, spawn_unclaimed, T_ENROLL,
 };
 
 /// THE WORKER FAULT's VARIABLE — the binary's test door (`main.rs`, read
@@ -355,15 +356,17 @@ fn serve_on_a_reserved_port(
     panic!("the binary bound a reserved port within no {ATTEMPTS} attempts")
 }
 
-/// The landing's figures off its words — `recovered from {base}, {k}
-/// commits replayed, in {d} ms` — as (base, k, d).
-fn recovered_figures(line: &str) -> (String, u64, u64) {
+/// The landing's figures off its words — `recovered from {base} to position
+/// {head}, {k} commits replayed, in {d} ms` — as (base, head, k, d).
+fn recovered_figures(line: &str) -> (String, u64, u64, u64) {
     let rest = line.strip_prefix("recovered from ").unwrap_or_else(|| panic!("{line:?}"));
-    let (base, rest) = rest.split_once(", ").unwrap_or_else(|| panic!("{line:?}"));
+    let (base, rest) = rest.split_once(" to position ").unwrap_or_else(|| panic!("{line:?}"));
+    let (head, rest) = rest.split_once(", ").unwrap_or_else(|| panic!("{line:?}"));
     let (replayed, rest) = rest.split_once(" commits replayed, in ").unwrap_or_else(|| panic!("{line:?}"));
     let duration = rest.strip_suffix(" ms").unwrap_or_else(|| panic!("{line:?}"));
     (
         base.to_string(),
+        head.parse().unwrap_or_else(|_| panic!("{line:?}")),
         replayed.parse().unwrap_or_else(|_| panic!("{line:?}")),
         duration.parse().unwrap_or_else(|_| panic!("{line:?}")),
     )
@@ -633,11 +636,14 @@ fn the_open_says_its_version_and_the_formats_it_reads_first_then_its_directory()
 /// §3.1 STEP 3 — THE TWO RULED OPEN LINES, IN ORDER, WITH THE KERNEL's
 /// FIGURES: a fresh board's child writes `open: data-dir {path}` as its
 /// first stderr line after the version line and `open: recovered from
-/// genesis, 0 commits replayed, in {d} ms` before the serving line; the
-/// same board reopened after N commits with no checkpoint says `{k} = N`;
-/// a board checkpointed at position P with M commits above it — built
-/// in-process through the checkpoint seam — says `checkpoint.P` and
-/// `{k} = M`, the count the kernel pins. Each child killed by the test.
+/// genesis to position 0, 0 commits replayed, in {d} ms` before the serving
+/// line; the same board reopened after N commits with no checkpoint says
+/// `{k} = N` and the head `/health` reported before the kill — every write
+/// acknowledged at or below it stands, which the line is the stream's one
+/// word of; a board checkpointed at position P with M commits above it —
+/// built in-process through the checkpoint seam — says `checkpoint.P`,
+/// `{k} = M`, the count the kernel pins, and the head it was closed at. Each
+/// child killed by the test.
 #[test]
 fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -647,8 +653,8 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     // BEGUN, said after the landing, which reads alike either way.
     let mut first = serve_and_read_the_open(&dir, &[]);
     assert_eq!(first.data_dir_line, format!("data-dir {}", dir.display()));
-    let (base, replayed, _) = recovered_figures(&first.recovered_line);
-    assert_eq!((base.as_str(), replayed), ("genesis", 0), "{}", first.recovered_line);
+    let (base, head, replayed, _) = recovered_figures(&first.recovered_line);
+    assert_eq!((base.as_str(), head, replayed), ("genesis", 0, 0), "{}", first.recovered_line);
     let began = await_said(&mut first.stderr, "open", BEGAN);
     assert!(
         began.contains("the directory named above is not where it lives"),
@@ -666,16 +672,24 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     insert_into_the_home(first.port, &session, &home, 1, 3);
     let commits = commits_above(first.port, 0);
     assert_eq!(commits.len(), 5, "the five commits made: {commits:?}");
+    let killed_at = head_position(first.port);
     first.child.kill();
 
-    // SECOND LIFE: the same board, no checkpoint — genesis, N replayed.
+    // SECOND LIFE: the same board, no checkpoint — genesis, N replayed, and
+    // the head the first life was killed at.
     let mut second = serve_and_read_the_open(&dir, &[]);
     assert_eq!(second.data_dir_line, format!("data-dir {}", dir.display()));
-    let (base, replayed, _) = recovered_figures(&second.recovered_line);
+    let (base, head, replayed, _) = recovered_figures(&second.recovered_line);
     assert_eq!(
         (base.as_str(), replayed),
         ("genesis", commits.len() as u64),
         "FINDING (m7): the landing's count is not the commits the open replayed: {}",
+        second.recovered_line
+    );
+    assert_eq!(
+        head, killed_at,
+        "the landing names the head the open came back at, the one the first life last \
+         reported: {}",
         second.recovered_line
     );
     // A journal stood, so nothing was begun: read on past where the line
@@ -694,7 +708,7 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     // closed, and reopened by the binary.
     let tmp = tempfile::tempdir().expect("tempdir");
     let dir = tmp.path().join("data");
-    let (position, above) = {
+    let (position, above, closed_at) = {
         let sd = spawn_unclaimed(&dir);
         let port = sd.port();
         let (home, session) = delegate_a_home(port);
@@ -710,15 +724,16 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
         let seen = commits_above(port, position);
         println!("above checkpoint.{position}: {above} boundaries; the guest's feed shows {seen:?}");
         assert!(above >= 3, "the three inserts at least: {above}");
+        let closed_at = sd.daemon().log_position().0;
         sd.shutdown();
-        (position, above)
+        (position, above, closed_at)
     };
     let mut third = serve_and_read_the_open(&dir, &[]);
-    let (base, replayed, _) = recovered_figures(&third.recovered_line);
+    let (base, head, replayed, _) = recovered_figures(&third.recovered_line);
     assert_eq!(
-        (base.as_str(), replayed),
-        (format!("checkpoint.{position}").as_str(), above),
-        "FINDING (m7): the landing names another base or count: {}",
+        (base.as_str(), head, replayed),
+        (format!("checkpoint.{position}").as_str(), closed_at, above),
+        "FINDING (m7): the landing names another base, head or count: {}",
         third.recovered_line
     );
     third.child.kill();

@@ -17,13 +17,19 @@
 //! leading verb parsed before any flag; and `skepd --version`, read the
 //! same way, the one line a release's check holds the shipped binaries to.
 
+use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use std::sync::LazyLock;
+use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
+use skep_core::limits::STANDING_INTERVAL;
 use skep_util::notice::{self, Class};
 use skep_util::source::Source;
 // `DEFAULT_WORKERS` and `MIN_WORKERS` are the library's, not this binary's:
@@ -133,36 +139,124 @@ const SKEPD_TEST_FEED_WALK_HOLD: &str = "SKEPD_TEST_FEED_WALK_HOLD";
 /// stand alone here so the unit suite pins them.
 const WORKERS_ENDED: &str = "every worker thread has ended; the board serves nothing";
 
+/// Returns a panic's site as the hook's line names it.
+///
+/// It is the location as std spells it, `file:line:column`, or `an unknown
+/// location` where the hook's info carries none — the line's words and the
+/// key the hook's rate counts a site's panics under ([`HookMemory`]).
+fn site_of(location: Option<&Location<'_>>) -> String {
+    location.map_or_else(|| "an unknown location".to_string(), |at| at.to_string())
+}
+
 /// Returns the hook's line, the words alone (`operations.md` §1.1 row 41).
 ///
 /// A pure function the unit suite pins: the thread by its name
 /// (`an unnamed thread` where it has none), `a thread panicked at` the
-/// location as std spells it (`file:line:column`; `an unknown location`
-/// where the hook's info carries none), and the payload only where it is a
-/// `&'static str` — a literal the code wrote, which no request can have
-/// formatted — so a formatted panic (`expect`, `assert_eq!`, an index)
-/// shows its location alone, which identifies the site, and nothing of
-/// §1's never list can ride the line. The class word is the emitter's
+/// site ([`site_of`]), and the payload only where it is a `&'static str` — a
+/// literal the code wrote, which no request can have formatted — so a
+/// formatted panic (`expect`, `assert_eq!`, an index) shows its location
+/// alone, which identifies the site, and nothing of §1's never list can ride
+/// the line. Where `repeats` is above zero — the panics at this site on this
+/// thread the hook counted and did not say since its last line there
+/// ([`HookMemory::admit`]) — the line ends `; {repeats} more at this site on
+/// this thread since its last line`. The class word is the emitter's
 /// (`Class::Failure`).
 fn panic_line(
     thread: Option<&str>,
     location: Option<&Location<'_>>,
     payload: Option<&str>,
+    repeats: u64,
 ) -> String {
     let thread = thread.unwrap_or("an unnamed thread");
-    let at = location.map_or_else(|| "an unknown location".to_string(), |at| at.to_string());
+    let at = site_of(location);
+    let repeated = match repeats {
+        0 => String::new(),
+        n => format!("; {n} more at this site on this thread since its last line"),
+    };
     match payload {
-        Some(payload) => format!("{thread}: a thread panicked at {at}: {payload}"),
-        None => format!("{thread}: a thread panicked at {at}"),
+        Some(payload) => format!("{thread}: a thread panicked at {at}: {payload}{repeated}"),
+        None => format!("{thread}: a thread panicked at {at}{repeated}"),
     }
 }
+
+/// The hook's rate: a site's panics on a thread, said once an hour.
+///
+/// It holds THE RATES (`operations.md` §1: once per condition, never per
+/// request). A site's first panic on a thread is said; each later one there
+/// within the standing interval (`skep_core::limits::STANDING_INTERVAL`, the
+/// hour the standing line re-says a standing state at) is counted and says
+/// nothing; the first after it is said with the count. Keyed by the THREAD
+/// as well as the site, so each worker that dies at one site is a line of
+/// its own (m16), and a panic that recurs per request — the OS refusing
+/// entropy at every `POST /session` and `GET /challenge`, the one panic the
+/// router raises by design (`Daemon::route`'s card) — is a line an hour per
+/// worker, never a line per request written at the rate of whoever can
+/// reach the board, which would crowd the stream's queue and drop the lines
+/// behind it.
+struct HookMemory {
+    /// Each `(thread, site)` the hook has said a panic at.
+    seen: HashMap<(ThreadId, String), Seen>,
+}
+
+/// One key's memory: when its last line was said, and the panics since.
+struct Seen {
+    /// When the hook last said a panic at this key.
+    said_at: Instant,
+    /// The panics at this key counted, and not said, since then.
+    since: u64,
+}
+
+/// The keys [`HookMemory`] holds before it forgets them all.
+///
+/// A bound, since a thread that ends leaves its key behind: past it the
+/// memory starts afresh, and each key's next panic is said as a first.
+const HOOK_MEMORY_KEYS: usize = 1024;
+
+impl HookMemory {
+    /// Returns the memory before any panic.
+    fn new() -> HookMemory {
+        HookMemory { seen: HashMap::new() }
+    }
+
+    /// Answers whether the panic at `key` is said, at `now`.
+    ///
+    /// It answers `Some(n)` where it is — a key's first panic, or its first
+    /// `interval` or more past the key's last line — `n` the panics at the
+    /// key counted since that line; `None` where it is counted.
+    fn admit(&mut self, key: (ThreadId, String), now: Instant, interval: Duration) -> Option<u64> {
+        if self.seen.len() >= HOOK_MEMORY_KEYS && !self.seen.contains_key(&key) {
+            self.seen.clear();
+        }
+        match self.seen.entry(key) {
+            Entry::Vacant(vacant) => {
+                vacant.insert(Seen { said_at: now, since: 0 });
+                Some(0)
+            }
+            Entry::Occupied(mut occupied) => {
+                let seen = occupied.get_mut();
+                if now.saturating_duration_since(seen.said_at) < interval {
+                    seen.since = seen.since.saturating_add(1);
+                    return None;
+                }
+                let repeats = seen.since;
+                *seen = Seen { said_at: now, since: 0 };
+                Some(repeats)
+            }
+        }
+    }
+}
+
+/// The hook's one memory, for the process.
+static HOOK_MEMORY: LazyLock<Mutex<HookMemory>> = LazyLock::new(|| Mutex::new(HookMemory::new()));
 
 /// Installs the panic hook: the binary's, never the library's.
 ///
 /// It is a process-global an embedder must be free to set itself: one
-/// prefixed, timed line through the operator stream's classed door at every
+/// prefixed, timed line through the operator stream's classed door at a
 /// panic, before any catch — Rust's own unprefixed text never reaches the
-/// stream. Installed first, before the command line is read, so no thread
+/// stream — at the rate [`HookMemory`] holds it to: a site's first panic on
+/// a thread, then one an hour while it recurs, the panics between counted on
+/// the next. Installed first, before the command line is read, so no thread
 /// of this process's panics outside it. The line is enqueued as every
 /// notice is and written by the stream's thread: a worker's panic lands
 /// while the daemon serves on; a panic on `main`'s own thread unwinds to
@@ -171,8 +265,13 @@ fn panic_line(
 fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
+        let key = (thread.id(), site_of(info.location()));
+        let Some(repeats) = HOOK_MEMORY.lock().admit(key, Instant::now(), STANDING_INTERVAL) else {
+            return;
+        };
         let payload = info.payload().downcast_ref::<&'static str>().copied();
-        notice::emit(Class::Failure, panic_line(thread.name(), info.location(), payload));
+        let line = panic_line(thread.name(), info.location(), payload, repeats);
+        notice::emit(Class::Failure, line);
     }));
 }
 

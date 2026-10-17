@@ -624,16 +624,16 @@ impl Daemon {
     /// **Test hook** (the same standing). It is the pass the cadence runs,
     /// under the credential lock's write arm one file at a time, its line
     /// said as the cadence says it (`Daemon::say_the_pass`: row 34, or row 35
-    /// where a step failed); `None` where the index is not ready and the
-    /// pass did not start. A step's failure is the *report's*
-    /// (`PrunePass::failed`, the step and the cause beside the figures and
-    /// the compaction's state), never a panic here: a suite reads it as the
-    /// operator's line does.
+    /// where a step failed, each with the pass's duration); `None` where the
+    /// index is not ready and the pass did not start. A step's failure is the
+    /// *report's* (`PrunePass::failed`, the step and the cause beside the
+    /// figures and the compaction's state), never a panic here: a suite reads
+    /// it as the operator's line does.
     #[doc(hidden)]
     pub fn prune_now(&self) -> Option<PrunePass> {
         let pass = self.prune_pass();
         self.say_the_pass(&pass);
-        pass
+        pass.map(|timed| timed.report)
     }
 
     /// The line the pruner's hold writes on the operator stream as it parks.
@@ -1258,35 +1258,35 @@ impl Daemon {
     /// kept whole, the head then each line of the rest on a line of its own
     /// — the configuration warnings at both their moments, the open's-report
     /// `auth:` line, the node prefix, the blocked list at its three moments,
-    /// the claim's flip line and a reissue's refusal among them; and the
-    /// standing line (`standing:`), the kernel's halt line, the full volume's
-    /// line, the feed files' lines — a cut, the unreadable slots and the
-    /// malformed names at their open, a stop past a rename while serving —
-    /// and the three thread catches' consequence lines (`failure:`) — the
-    /// checkpoint thread's, the pruner's and the feed walk's — so a suite
-    /// pins the words and the class of what went to the operator stream,
-    /// which no suite captures in-process. The open's own lines (said before
-    /// the write path exists) and the checkpoint thread's own landing,
-    /// failure and backstop lines ([`Daemon::checkpoint_lines`]) are not
-    /// among them.
+    /// the claim's flip line, the head written at open where a claimed
+    /// board's journal held none, the pruner's pass and a reissue's refusal
+    /// among them; and the standing line (`standing:`), the kernel's halt
+    /// line, the full volume's line, the feed files' lines — a cut, the
+    /// unreadable slots and the malformed names at their open, a stop past a
+    /// rename while serving — and the three thread catches' consequence lines
+    /// (`failure:`) — the checkpoint thread's, the pruner's and the feed
+    /// walk's — so a suite pins the words and the class of what went to the
+    /// operator stream, which no suite captures in-process. The open's own
+    /// lines (said before the write path exists) and the checkpoint thread's
+    /// own landing, failure and backstop lines ([`Daemon::checkpoint_lines`])
+    /// are not among them.
     #[doc(hidden)]
     pub fn lines_said(&self) -> Vec<String> {
         self.said.lock().clone()
     }
 
-    /// Returns the daemon's high-water of its own resident set.
+    /// Returns the largest reading the daemon has taken of its resident set.
     ///
-    /// **Test hook** (the same standing). It is the largest reading the
-    /// daemon has taken, one per landing and per backstop wake, or `None`
-    /// before the first reading; the figure line 25 carries as "peaked at",
-    /// so a suite pins the line's figure against the daemon's and its
-    /// monotonicity across landings.
+    /// **Test hook** (the same standing). The readings are one per landing (a
+    /// landed failure's included), per backstop wake and per pruner pass that
+    /// lands, `None` before the first; the figure line 25 carries as "the
+    /// largest of this uptime's readings", so a suite pins the line's figure
+    /// against the daemon's and its monotonicity across landings. It is no
+    /// peak of the process's: what rose and fell between two readings is in
+    /// none of them.
     #[doc(hidden)]
     pub fn resident_set_peak(&self) -> Option<u64> {
-        match self.checkpointer.resident_peak.load(Ordering::Acquire) {
-            0 => None,
-            peak => Some(peak),
-        }
+        self.resident.most()
     }
 
     /// Moves the media floor in force to `bytes`.

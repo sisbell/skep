@@ -217,8 +217,8 @@ use skep_engine::{Engine, EngineError, HistoryError, Recovery, World, WORLD_FORM
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, InlineCheckpoint, KernelConfig,
-    LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
+    BurnedSeqPolicy, CheckpointError, CheckpointHeader, CheckpointPolicy, Durability,
+    InlineCheckpoint, KernelConfig, LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
 };
 use skep_media::gate::MediaGate;
 use skep_media::index;
@@ -232,7 +232,7 @@ use skep_util::notice::{self, Class, Moment};
 use skep_util::permits::{Edge, EdgeTracker, Permits, PoolEdgeLine};
 use skep_util::source::Source;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use skep_core::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
 use skep_core::codec::JsonCodec;
@@ -626,17 +626,25 @@ pub struct Daemon {
     /// `Daemon::take_write_permit`) tells of every refusal and every permit
     /// taken, whose edges that door says at once through [`Daemon::say`] —
     /// `the write pool is saturated` at the first refusal of an episode,
-    /// `the write pool has room again` at the first permit taken a hold-down
-    /// past its last — once per episode and nothing per request; the pool's
-    /// twin of the tracker each of the four other pools holds for itself.
+    /// `the write pool has room again after {n} refusals` at the first permit
+    /// taken a hold-down past its last — once per episode and nothing per
+    /// request; the pool's twin of the tracker each of the four other pools
+    /// holds for itself.
     write_edge: EdgeTracker,
     /// The checkpoint thread's memory between its wakes ([`CheckpointMemory`]).
     ///
     /// It is the inline count as the thread last said it and the position
-    /// that count is counted from, the newest checkpoint as it last looked,
-    /// and the resident set's high-water. Held here because the thread is
-    /// `listen.rs`'s and the test seam runs its arms on a caller's thread.
+    /// that count is counted from, and the newest checkpoint as it last
+    /// looked. Held here because the thread is `listen.rs`'s and the test
+    /// seam runs its arms on a caller's thread.
     checkpointer: CheckpointMemory,
+    /// The daemon's high-water of its own resident set ([`ResidentHighWater`]).
+    ///
+    /// The checkpoint thread reads it at every landing, a landed failure's
+    /// included, and at every backstop wake; the pruner's thread at every
+    /// pass that lands. Each line that carries the figure carries that
+    /// reading beside the largest of the uptime's readings.
+    resident: ResidentHighWater,
     /// The liveness flags of the daemon's two loop threads.
     ///
     /// Each ([`ThreadLiveness`]) is set by its loop's catch as the thread
@@ -655,16 +663,17 @@ pub struct Daemon {
     /// unlink's own answer and nothing else. Set, read and cleared at one
     /// site, under no lock: the atomic is what makes the field `Sync`.
     aside_fault_said: AtomicBool,
-    /// The journal damage's once-flag (RUNBOOK §2).
+    /// Where a history read first met the journal's damage (RUNBOOK §2).
     ///
-    /// It holds whether a history read has met the journal's damage this
-    /// uptime ([`crate::history::Unavailable::journal_damage`]), set where
-    /// [`Daemon::refuse_history`] says [`HistoryDamageLine`], once,
-    /// and read by the standing line, which re-says the damage at every tick.
-    /// Never cleared while the daemon runs: the line's act — a copy, the
-    /// inventory over it, a restore — is finished by a restart, whose open
-    /// reads the journal whole.
-    history_damage_said: AtomicBool,
+    /// It is set once, by the first refusal of this uptime that is the
+    /// journal's damage ([`crate::history::Unavailable::journal_damage`]),
+    /// where [`Daemon::refuse_history`] says [`HistoryDamageLine`]: the site
+    /// [`JournalDamageSite`] renders, the position or the file that line's
+    /// account names. The standing line reads it, and re-says the damage at
+    /// every tick by that site, so the two lines join. Never cleared while the
+    /// daemon runs: the line's act — a copy, the inventory over it, a restore
+    /// — is finished by a restart, whose open reads the journal whole.
+    history_damage: OnceLock<String>,
     /// The dirty-crash harness's one seam into the claim's step.
     ///
     /// It is armed through `Daemon::hold_between_the_claim_and_its_head`:
@@ -951,11 +960,12 @@ impl Daemon {
         for warning in recovery_warnings(engine.recovery()) {
             notice::emit(Class::Warning(Moment::AtOpen), warning);
         }
-        // The recovery's landing (m7): the base the open loaded, the commits
-        // it replayed above it and how long the engine's open took — said on
-        // every open, not on a skip alone, after the account above of what
-        // was passed over on the way to that base.
-        say_open_line(RecoveredLine::of(engine.recovery(), open_ms));
+        // The recovery's landing (m7): the base the open loaded, the
+        // committed head it came back at, the commits it replayed above that
+        // base and how long the engine's open took — said on every open, not
+        // on a skip alone, after the account above of what was passed over on
+        // the way to that base.
+        say_open_line(RecoveredLine::of(engine.recovery(), engine.kernel().current_seq(), open_ms));
         // The beginning (AUTH-2.86's family of startup reports): where no
         // journal stood in the directory the landing above reads `recovered
         // from genesis` all the same, so the open says it began a board —
@@ -1086,12 +1096,13 @@ impl Daemon {
             write_permits: Permits::new(MAX_CONCURRENT_WRITES),
             write_edge: EdgeTracker::new(EDGE_HOLD_DOWN),
             checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
+            resident: ResidentHighWater::new(),
             threads: ThreadLiveness {
                 pruner_ended: AtomicBool::new(false),
                 checkpointer_ended: AtomicBool::new(false),
             },
             aside_fault_said: AtomicBool::new(false),
-            history_damage_said: AtomicBool::new(false),
+            history_damage: OnceLock::new(),
             #[cfg(any(test, feature = "test-hooks"))]
             hold_between_claim_and_head: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -1141,7 +1152,11 @@ impl Daemon {
     /// clean restart writes none. The line on the operator stream is
     /// I11 (c)'s: a head written for a reason other than the cadence's is
     /// said, never silent — a landing, as the flip's own line is
-    /// (`operations.md` §1.1 row 12). A head the driver refuses here is
+    /// (`operations.md` §1.1 row 12), through the daemon's classed door —
+    /// naming where `H.1` landed, how long its write held the lock, and the
+    /// committed pair it names ([`HeadAtOpenLine`]): the one line this board
+    /// has of its first head where the crash split the claim from it, so the
+    /// flip's own line was never said. A head the driver refuses here is
     /// surfaced as every refused head is, and fails nothing: the open
     /// returns all the same, and the board answers attested writes
     /// `board_unavailable` until a head lands.
@@ -1160,11 +1175,16 @@ impl Daemon {
             return;
         }
         let serial = self.commits.serial_lock();
+        // The pair the head names is the committed head under this lock, the
+        // one `write_first_head` reads before its own write opens.
+        let kernel = self.engine.kernel();
+        let named = kernel.current_seq();
+        let began = Instant::now();
         if self.commits.write_first_head(&serial) == FirstHead::Written {
-            notice::emit(
+            let duration_ms = began.elapsed().as_millis();
+            self.say(
                 Class::Landing,
-                "the board is claimed and its journal held no head: H.1 written at open, \
-                 naming the committed pair as it stood",
+                HeadAtOpenLine { landed: kernel.current_seq(), duration_ms, named },
             );
         }
     }
@@ -1610,13 +1630,15 @@ impl Daemon {
     /// each atomic loads or one lock, save the floor's fresh read of the
     /// volume, and none under the serialization guard — in the order the
     /// line says them: (1) the write path's halt with its position, (2) the
-    /// kernel's poison, (3) the journal damage a history read met this
-    /// uptime (`Daemon::history_damage_said`; RUNBOOK §2), (4) the feed's
-    /// stopped files with theirs, (5) the pruner's liveness flag, (6) the
-    /// feed walk's liveness flag with the region its death left uncovered,
-    /// (7) the cell index's failed state, the media gate's (`operations.md`
-    /// §4 row 26), (8) the media gate's floor binding — its free space below
-    /// its floor in force, the creation's own test
+    /// kernel's poison with the head it halted at — no commit lands past a
+    /// poisoned kernel, so the head at the tick is the position the halt line
+    /// (m10) named — (3) the journal damage a history read met this uptime,
+    /// by the site its line named (`Daemon::history_damage`; RUNBOOK §2), (4)
+    /// the feed's stopped files with theirs, (5) the pruner's liveness flag,
+    /// (6) the feed walk's liveness flag with the region its death left
+    /// uncovered, (7) the cell index's failed state, the media gate's
+    /// (`operations.md` §4 row 26), (8) the media gate's floor binding — its
+    /// free space below its floor in force, the creation's own test
     /// (`MediaGate::floor_binding`, both figures read fresh, so the floor's
     /// clause stops by itself once room stands) — and (9) the
     /// `CLAIMED-PERMISSIVE` bit as `log_config_warnings` reads the claim; and
@@ -1624,10 +1646,11 @@ impl Daemon {
     /// one clause stands; nothing otherwise. No clause for the checkpoint
     /// thread's own death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
+        let kernel = self.engine.kernel();
         let line = StandingLine {
             halted_at: self.commits.halted_at(),
-            poisoned: self.engine.kernel().is_poisoned(),
-            history_damaged: self.history_damage_said.load(Ordering::Acquire),
+            poisoned: kernel.is_poisoned().then(|| kernel.current_seq()),
+            history_damaged: self.history_damage.get().cloned(),
             stopped_files: self.commits.stopped_feed_files(),
             pruner_gone: self.threads.pruner_ended.load(Ordering::Acquire),
             feed_walk_gone: self.commits.feed_walk_gone(),
@@ -1752,28 +1775,19 @@ impl Daemon {
 // byte bound and the floor re-read, the feed compacted, the landing or the
 // failure said; and, on a wake with no flag, the backstop's landing followed
 // the same way. The three lines are rendered by the pure types below this
-// block — `LandingLine`, `FailureLine`, `BackstopLine` — which the unit
-// suite pins by `to_string()`, and every one goes to the operator stream
-// through `Daemon::say_checkpoint_line`, classed.
+// block — `LandingLine`, `FailureLine`, `BackstopLine`, each saying what a
+// landing moved wherever one moved (`AfterLanding`) — which the unit suite
+// pins by `to_string()`, and every one goes to the operator stream through
+// `Daemon::say_checkpoint_line`, classed.
 
 /// The checkpoint thread's memory between wakes.
 ///
 /// It is what one line of the thread's leaves for the next: the inline count
 /// as last said and the position it is counted from, the newest checkpoint
-/// as the thread last looked, the resident set's high-water, and — under
-/// the test seam — every line the arms rendered this uptime, since no suite
-/// captures stderr in-process.
+/// as the thread last looked, and — under the test seam — every line the
+/// arms rendered this uptime, since no suite captures stderr in-process.
 struct CheckpointMemory {
     looked: Mutex<Looked>,
-    /// The resident set's high-water.
-    ///
-    /// It is the largest reading the daemon has taken of its own physical
-    /// memory (`memory_stats`), one reading per landing and per backstop
-    /// wake, on the checkpoint thread — the figure line 25 carries as
-    /// "peaked at". The daemon's own, not the kernel's `ru_maxrss`, which
-    /// this differs from by what rose and fell between two readings. Zero
-    /// before the first reading: a resident set is never zero.
-    resident_peak: AtomicU64,
     /// The lines rendered this uptime, each `{class}: {text}` (a test seam).
     #[cfg(any(test, feature = "test-hooks"))]
     lines: Mutex<Vec<String>>,
@@ -1818,27 +1832,84 @@ impl CheckpointMemory {
     fn at_open(start_point: Seq, newest: Option<Seq>) -> CheckpointMemory {
         CheckpointMemory {
             looked: Mutex::new(Looked { inline_said: 0, since: start_point, newest }),
-            resident_peak: AtomicU64::new(0),
             #[cfg(any(test, feature = "test-hooks"))]
             lines: Mutex::new(Vec::new()),
             #[cfg(any(test, feature = "test-hooks"))]
             hold: CheckpointHold { held: Mutex::new(false), released: Condvar::new() },
         }
     }
+}
 
-    /// Folds a reading of the resident set into the high-water it answers.
+/// The daemon's high-water of its own resident set.
+///
+/// It holds the largest reading the daemon has taken of its own physical
+/// memory (`memory_stats`, the resident set size): one at every checkpoint
+/// landing, a landed failure's included, one at every backstop wake, and one
+/// at every pruner pass that lands. The largest of those readings and never
+/// the kernel's `ru_maxrss`: what rose and fell between two readings is in
+/// neither, so a line names the reading it took and the largest of the
+/// uptime's beside it ([`ResidentRead`]), and calls neither the process's
+/// peak (`operations.md` §1.1 row 25).
+struct ResidentHighWater {
+    /// The largest reading so far, zero before the first.
     ///
-    /// The reading is the process's; the high-water is answered — `None`
-    /// where no reading was ever made, this one included. A reading the
-    /// crate cannot make moves nothing and fails nothing: the line then
-    /// carries the peak so far, or says it is unread.
-    fn note_resident_set(&self) -> Option<u64> {
-        if let Some(reading) = memory_stats::memory_stats() {
-            self.resident_peak.fetch_max(reading.physical_mem as u64, Ordering::AcqRel);
+    /// A resident set is never zero, so zero stands for no reading.
+    most: AtomicU64,
+}
+
+impl ResidentHighWater {
+    /// Returns the high-water before any reading.
+    fn new() -> ResidentHighWater {
+        ResidentHighWater { most: AtomicU64::new(0) }
+    }
+
+    /// Takes a reading of the resident set and folds it into the high-water.
+    ///
+    /// It answers the reading and the largest so far, this one included. A
+    /// reading the crate cannot make moves nothing and fails nothing: the
+    /// line then says it is unread, beside the largest so far.
+    fn read(&self) -> ResidentRead {
+        let now = memory_stats::memory_stats().map(|stats| stats.physical_mem as u64);
+        if let Some(now) = now {
+            self.most.fetch_max(now, Ordering::AcqRel);
         }
-        match self.resident_peak.load(Ordering::Acquire) {
+        ResidentRead { now, most: self.most() }
+    }
+
+    /// Returns the largest reading so far, `None` before the first.
+    fn most(&self) -> Option<u64> {
+        match self.most.load(Ordering::Acquire) {
             0 => None,
-            peak => Some(peak),
+            most => Some(most),
+        }
+    }
+}
+
+/// One reading of the resident set, beside the largest of the uptime's.
+///
+/// It renders `the process's resident set {now} bytes, the largest of this
+/// uptime's readings {most} bytes`, `unread` in place of a figure no reading
+/// answered: the one clause line 25, the backstop's line, a failure after a
+/// base landed and the pruner's pass line carry (`operations.md` §1.1 rows
+/// 25, 26 and 34; m13).
+struct ResidentRead {
+    /// This reading, in bytes; `None` where the read answered nothing.
+    now: Option<u64>,
+    /// The largest reading of the uptime, this one included.
+    ///
+    /// `None` before any reading answered.
+    most: Option<u64>,
+}
+
+impl fmt::Display for ResidentRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.now {
+            Some(now) => write!(f, "the process's resident set {now} bytes")?,
+            None => f.write_str("the process's resident set unread")?,
+        }
+        match self.most {
+            Some(most) => write!(f, ", the largest of this uptime's readings {most} bytes"),
+            None => Ok(()),
         }
     }
 }
@@ -1856,15 +1927,6 @@ struct CheckpointHold {
     released: Condvar,
 }
 
-/// The landing's re-reads, which follow any checkpoint.
-///
-/// They are the figures the one function below answers for the line.
-struct ReRead {
-    bytes_bound: NonZeroU64,
-    floor: u64,
-    compaction: FeedCompaction,
-}
-
 impl Daemon {
     /// Returns whether the kernel's cadence is due (`Kernel::checkpoint_due`).
     ///
@@ -1875,7 +1937,7 @@ impl Daemon {
         self.engine.kernel().checkpoint_due()
     }
 
-    /// Takes the landing's re-reads, after any checkpoint.
+    /// Takes the landing's re-reads, after any checkpoint, and answers them.
     ///
     /// The checkpoint is the thread's own, a base that landed before its run
     /// failed, or a backstop's found on a wake with no flag. The re-reads
@@ -1883,18 +1945,44 @@ impl Daemon {
     /// floor, kept by the gate from the newest checkpoint's size as it is
     /// noted (`MediaGate::note_checkpoint`), then the change feed's five
     /// files compacted to the journal's reclaim floor
-    /// (`Commits::compact_feed_below_reclaim_floor`). One function, so the
-    /// three arms cannot disagree about what follows a landing; the newest
-    /// header is the caller's one read of it, its length handed in. Where
-    /// the floor has not moved — a reclamation that failed, a landing below
-    /// the retained window — the compaction finds nothing below the floor
-    /// and writes nothing.
-    fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> ReRead {
+    /// (`Commits::compact_feed_below_reclaim_floor`) — the fence below which
+    /// `/changes` answers `410` — and beside them the volume's free space as
+    /// the floor's refusal reads it, through the gate's one door, and a
+    /// reading of the resident set. One function, so the three arms cannot
+    /// disagree about what follows a landing, and the answer is what each
+    /// arm's line says of it ([`AfterLanding`]): no figure a landing moves
+    /// moves unsaid. The newest header is the caller's one read of it, its
+    /// length handed in. Where the floor has not moved — a reclamation that
+    /// failed, a landing below the retained window — the compaction finds
+    /// nothing below the floor and writes nothing.
+    fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> AfterLanding {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
         let floor = self.media.note_checkpoint(newest_len);
         let compaction = self.commits.compact_feed_below_reclaim_floor(&self.engine);
-        ReRead { bytes_bound, floor, compaction }
+        AfterLanding {
+            bytes_bound: bytes_bound.get(),
+            floor,
+            free_space: self.media.free_space(),
+            resident: self.resident.read(),
+            compaction,
+        }
+    }
+
+    /// Returns the kernel's reclaim figures for its last whole landing.
+    ///
+    /// They are `Kernel::last_reclaimed_bytes` and
+    /// `Kernel::last_removed_checkpoints`, which the kernel stores at the end
+    /// of a call that landed whole and at no other — so a caller asks for
+    /// them only where the landing its line names is such a call: the
+    /// thread's own landing, or a backstop's whose last inline run landed the
+    /// newest base whole.
+    fn reclaimed_by_the_last_landing(&self) -> Reclaimed {
+        let kernel = self.engine.kernel();
+        Reclaimed {
+            bytes: kernel.last_reclaimed_bytes().unwrap_or(0),
+            removed: kernel.last_removed_checkpoints(),
+        }
     }
 
     /// Says one line of the checkpoint thread's on the operator stream.
@@ -1918,22 +2006,25 @@ impl Daemon {
     /// once, the landing's re-reads taken from it
     /// ([`Daemon::re_read_after_a_landing`]), and one line — [`LandingLine`],
     /// the position and the size, the run's duration, the journal bytes the
-    /// kernel reclaimed (`Kernel::last_reclaimed_bytes`, read after the
-    /// `Ok`), the checkpoint files its retention removed, each by name and
-    /// length (`Kernel::last_removed_checkpoints`, read after the `Ok`), both
-    /// bounds in force, the volume's free space as the media floor reads it
-    /// (the gate's one door, so the floor's refusal and this line never
-    /// disagree), the resident set's high-water, the feed's compaction per
-    /// file, and the inline count where it moved since the thread last said
-    /// it. On a failure: one line per attempt — [`FailureLine`]: the head's
-    /// position when the run began as an ordering, the cause (a full volume
-    /// in the operator's words), and the trailer the cause earns; and where
-    /// the kernel answers that a base landed before the step after its
-    /// rename failed (`CheckpointError::Landed`), the newest header is read
-    /// after the call — the base is on disk — the landing's re-reads are
-    /// taken off it, and the line names the landed position and which step
-    /// failed. The kernel removes its own temp file, best-effort, before
-    /// answering a failure that landed nothing.
+    /// kernel reclaimed and the checkpoint files its retention removed, each
+    /// by name and length (`Kernel::last_reclaimed_bytes`,
+    /// `Kernel::last_removed_checkpoints`, read after the `Ok`), what the
+    /// re-reads answered — both bounds in force, the volume's free space as
+    /// the media floor reads it (the gate's one door, so the floor's refusal
+    /// and this line never disagree), the resident set, the feed's
+    /// compaction per file — and the inline count where it moved since the
+    /// thread last said it. On a failure: one line per attempt —
+    /// [`FailureLine`]: the run's duration, the head's position when the run
+    /// began as an ordering, the cause (a full volume in the operator's
+    /// words), and the trailer the cause earns; and where the kernel answers
+    /// that a base landed before the step after its rename failed
+    /// (`CheckpointError::Landed`), the newest header is read after the call
+    /// — the base is on disk — the landing's re-reads are taken off it, and
+    /// the line names the landed base, its size, which step failed and what
+    /// the re-reads moved (the reclaim figures it does not carry: the kernel
+    /// stores them for a call that landed whole alone). The kernel removes
+    /// its own temp file, best-effort, before answering a failure that landed
+    /// nothing.
     pub(crate) fn service_the_checkpoint(&self) {
         let kernel = self.engine.kernel();
         let at = kernel.current_seq();
@@ -1943,7 +2034,8 @@ impl Daemon {
         match outcome {
             Ok(landed) => {
                 let newest = kernel.newest_checkpoint();
-                let re_read = self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
+                let reclaimed = self.reclaimed_by_the_last_landing();
+                let after = self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
                 let runs = kernel.inline_checkpoints();
                 let line = {
                     let mut looked = self.checkpointer.looked.lock();
@@ -1958,32 +2050,34 @@ impl Daemon {
                         position: landed,
                         bytes: newest.map(|h| h.len),
                         duration_ms,
-                        reclaimed: kernel.last_reclaimed_bytes().unwrap_or(0),
-                        removed: kernel.last_removed_checkpoints(),
-                        bytes_bound: re_read.bytes_bound.get(),
-                        floor: re_read.floor,
-                        free_space: self.media.free_space(),
-                        resident_peak: self.checkpointer.note_resident_set(),
-                        compaction: re_read.compaction,
+                        reclaimed,
+                        after,
                         inline,
                     }
                 };
                 self.say_checkpoint_line(Class::Landing, line.to_string());
             }
             Err(e) => {
-                let landed_at = match &e {
-                    CheckpointError::Landed { .. } => {
+                let line = match &e {
+                    CheckpointError::Landed { step, cause } => {
                         let newest = kernel.newest_checkpoint();
-                        self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
-                        let seq = newest.map(|h| h.seq);
-                        self.checkpointer.looked.lock().newest = seq;
-                        seq
+                        let after = self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
+                        self.checkpointer.looked.lock().newest = newest.as_ref().map(|h| h.seq);
+                        FailureLine::Landed {
+                            at,
+                            duration_ms,
+                            base: newest.map(LandedBase::from),
+                            step: *step,
+                            cause,
+                            after,
+                        }
                     }
                     CheckpointError::Io(_)
                     | CheckpointError::Serialize(_)
-                    | CheckpointError::Poisoned => None,
+                    | CheckpointError::Poisoned => {
+                        FailureLine::Unlanded { at, duration_ms, error: &e }
+                    }
                 };
-                let line = FailureLine { at, landed_at, error: &e };
                 self.say_checkpoint_line(Class::Failure, line.to_string());
             }
         }
@@ -2001,9 +2095,14 @@ impl Daemon {
     /// ([`BackstopLine`]): the runs since the last line, the position they
     /// are counted from, and of the last of them the commit that ran it, how
     /// long it held every write, and whether it landed or how it failed
-    /// (`Kernel::last_inline_checkpoint`). Said once for each movement of the
-    /// count and never otherwise; a count line 25 has just carried is one
-    /// that moved not. The resident set is read here too, as at a landing.
+    /// (`Kernel::last_inline_checkpoint`); and, where the re-reads were
+    /// taken, the newest base and what they moved, with what the landing
+    /// reclaimed where the last inline run landed that base whole — the one
+    /// line that says the floor or the feed's fence moved under a backstop.
+    /// Said once for each movement of the count and never otherwise; a count
+    /// line 25 has just carried is one that moved not. The resident set is
+    /// read at every such wake, its figure on the line where the re-reads
+    /// carry it.
     pub(crate) fn follow_the_backstop(&self) {
         let kernel = self.engine.kernel();
         let runs = kernel.inline_checkpoints();
@@ -2012,16 +2111,30 @@ impl Daemon {
             if runs == looked.inline_said {
                 return;
             }
+            let last = kernel.last_inline_checkpoint().map(LastInlineRun::from);
             let newest = kernel.newest_checkpoint();
             let newest_seq = newest.as_ref().map(|h| h.seq);
-            if newest_seq != looked.newest {
-                self.re_read_after_a_landing(newest.map(|h| h.len));
+            let moved = if newest_seq == looked.newest {
+                None
+            } else {
+                // The reclaim figures are the newest base's only where the
+                // last inline run landed it whole: a run that landed a base
+                // and then failed stores none, and leaves the previous
+                // landing's standing.
+                let whole = matches!(
+                    &last,
+                    Some(LastInlineRun { outcome: Ok(at), .. }) if Some(*at) == newest_seq
+                );
+                let reclaimed = whole.then(|| self.reclaimed_by_the_last_landing());
+                let after = self.re_read_after_a_landing(newest.as_ref().map(|h| h.len));
                 looked.newest = newest_seq;
-            }
+                Some(NewestLanded { base: newest.map(LandedBase::from), reclaimed, after })
+            };
             let line = BackstopLine {
                 runs: runs.saturating_sub(looked.inline_said),
                 since: looked.since,
-                last: kernel.last_inline_checkpoint().map(LastInlineRun::from),
+                last,
+                newest: moved,
             };
             looked.inline_said = runs;
             if let Some(seq) = newest_seq {
@@ -2029,7 +2142,9 @@ impl Daemon {
             }
             line
         };
-        self.checkpointer.note_resident_set();
+        if line.newest.is_none() {
+            self.resident.read();
+        }
         self.say_checkpoint_line(Class::Landing, line.to_string());
     }
 }
@@ -2050,8 +2165,31 @@ struct LandingLine {
     bytes: Option<u64>,
     /// The run's duration, whole milliseconds, the thread's own `Instant`.
     duration_ms: u128,
-    /// The journal bytes the landing reclaimed; zero is "nothing reclaimed".
-    reclaimed: u64,
+    /// What the landing reclaimed, as the kernel's figures say it.
+    ///
+    /// The call landed whole, so the kernel stored them for it.
+    reclaimed: Reclaimed,
+    /// What the landing moved: the thread's re-reads off its base.
+    after: AfterLanding,
+    /// The inline count where it moved since the thread last said it.
+    ///
+    /// It comes with the position it is counted from; `None` where it did
+    /// not move, and the clause is absent.
+    inline: Option<InlineRuns>,
+}
+
+/// What a landing reclaimed: the kernel's figures for a call that landed whole.
+///
+/// It renders `{bytes} journal bytes reclaimed`, or `nothing reclaimed` at
+/// zero, then each checkpoint file retention removed — `; checkpoint.{n}
+/// removed ({bytes} bytes)`, the rest joined by `, ` — as line 25 and the
+/// backstop's line carry it (`operations.md` §1.1 row 25; m13). The kernel
+/// stores the figures at the end of a call that landed whole and at no other
+/// (`Kernel::last_reclaimed_bytes`), so a line after a base landed and a
+/// later step failed carries none.
+struct Reclaimed {
+    /// The journal bytes reclaimed; zero is "nothing reclaimed".
+    bytes: u64,
     /// The checkpoint files the landing's retention removed, oldest first.
     ///
     /// Each is named by its position and its length in bytes
@@ -2061,23 +2199,71 @@ struct LandingLine {
     /// `checkpoint.{n}`. Empty where retention removed none, and the clause
     /// is absent.
     removed: Vec<(Seq, u64)>,
+}
+
+impl fmt::Display for Reclaimed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.bytes {
+            0 => f.write_str("nothing reclaimed")?,
+            bytes => write!(f, "{bytes} journal bytes reclaimed")?,
+        }
+        // Each file by its own name — never `Base`'s, whose `genesis` would
+        // misname a checkpoint written at position 0.
+        for (i, (seq, len)) in self.removed.iter().enumerate() {
+            f.write_str(if i == 0 { "; " } else { ", " })?;
+            write!(f, "checkpoint.{} removed ({len} bytes)", seq.0)?;
+        }
+        Ok(())
+    }
+}
+
+/// What a landing moved, as every line that follows one says it.
+///
+/// The figures are the thread's re-reads off the newest base
+/// ([`Daemon::re_read_after_a_landing`]): the cadence's byte bound and the
+/// media floor in force, the volume's free space as the floor reads it, a
+/// reading of the resident set, and the change feed's compaction — the fence
+/// below which `/changes` answers `410 history_reclaimed`, with each file
+/// that stood named. Line 25 carries them, and so do the backstop's line
+/// where its wake took the re-reads and a failure after a base landed
+/// (`operations.md` §1.1 rows 25 and 26; m13; §6), so no figure a landing
+/// moves — the floor a deposit is refused at, the fence a mirror is refused
+/// below — moves with no line naming it. It renders `the cadence's byte
+/// bound {b}, the media floor in force {F}, the volume's free space {f};
+/// {resident}; the change feed's files {compacted below position {p} | hold
+/// nothing below the reclaim floor}`.
+struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
     /// The media floor in force after the re-read.
     floor: u64,
     /// The volume's free space as the media floor reads it.
     free_space: u64,
-    /// The daemon's high-water of its resident set, in bytes.
-    ///
-    /// `None` where no reading was ever made — "unread".
-    resident_peak: Option<u64>,
+    /// A reading of the resident set, beside the uptime's largest.
+    resident: ResidentRead,
     /// The feed's compaction: the fence, and the files that stood.
     compaction: FeedCompaction,
-    /// The inline count where it moved since the thread last said it.
-    ///
-    /// It comes with the position it is counted from; `None` where it did
-    /// not move, and the clause is absent.
-    inline: Option<InlineRuns>,
+}
+
+impl fmt::Display for AfterLanding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the cadence's byte bound {}, the media floor in force {}, the volume's free space \
+             {}; {}; the change feed's files ",
+            self.bytes_bound, self.floor, self.free_space, self.resident
+        )?;
+        match self.compaction.fence {
+            Some(fence) => {
+                write!(f, "compacted below position {}", fence.saturating_add(1))?;
+                for file in &self.compaction.standing {
+                    write!(f, ", {file} standing as it was")?;
+                }
+                Ok(())
+            }
+            None => f.write_str("hold nothing below the reclaim floor"),
+        }
+    }
 }
 
 /// The inline clause's two figures, as line 25 carries them.
@@ -2097,37 +2283,7 @@ impl fmt::Display for LandingLine {
             Some(bytes) => write!(f, "{bytes} bytes")?,
             None => f.write_str("size unread")?,
         }
-        write!(f, ") in {} ms; ", self.duration_ms)?;
-        match self.reclaimed {
-            0 => f.write_str("nothing reclaimed")?,
-            reclaimed => write!(f, "{reclaimed} journal bytes reclaimed")?,
-        }
-        // Each file by its own name — never `Base`'s, whose `genesis` would
-        // misname a checkpoint written at position 0.
-        for (i, (seq, len)) in self.removed.iter().enumerate() {
-            f.write_str(if i == 0 { "; " } else { ", " })?;
-            write!(f, "checkpoint.{} removed ({len} bytes)", seq.0)?;
-        }
-        write!(
-            f,
-            "; the cadence's byte bound {}, the media floor in force {}, the volume's free \
-             space {}; ",
-            self.bytes_bound, self.floor, self.free_space
-        )?;
-        match self.resident_peak {
-            Some(peak) => write!(f, "the process's resident set peaked at {peak} bytes")?,
-            None => f.write_str("the process's resident set unread")?,
-        }
-        f.write_str("; the change feed's files ")?;
-        match self.compaction.fence {
-            Some(fence) => {
-                write!(f, "compacted below position {}", fence.saturating_add(1))?;
-                for file in &self.compaction.standing {
-                    write!(f, ", {file} standing as it was")?;
-                }
-            }
-            None => f.write_str("hold nothing below the reclaim floor")?,
-        }
+        write!(f, ") in {} ms; {}; {}", self.duration_ms, self.reclaimed, self.after)?;
         if let Some(inline) = &self.inline {
             write!(
                 f,
@@ -2143,41 +2299,81 @@ impl fmt::Display for LandingLine {
 ///
 /// It is rendered in the operator stream's words from what the kernel
 /// answered: a pure value the unit suite pins by `to_string()` at each
-/// cause. Where the error is `CheckpointError::Landed`, the line opens on
-/// the landed base — "a checkpoint landed at position {n} but {step}
-/// failed" — the step in the daemon's three words (the directory's sync,
-/// retention, the journal's reclamation), chosen by `LandedStep`'s arm and
-/// never the kernel's `Display`; otherwise on the head's position when the
-/// run began, worded as the ordering it is. The cause: a full volume
-/// (`StorageFull`) in the operator's words beside the OS's text, in the
-/// `Io` arm and the `Landed` arm alike; every other cause its own
-/// `Display`. The trailer is keyed to the cause: an I/O cause retries at
-/// the cadence's next crossing, a poisoned kernel takes no checkpoint until
-/// a restart, a world that will not serialize refuses the same way until
-/// the build fixes it. The class word is the emitter's (`Class::Failure`).
-struct FailureLine<'a> {
-    /// `Kernel::current_seq`, read before the call.
+/// cause, in one of two arms, since a run that landed a base moved what a
+/// landing moves and one that landed none moved nothing. A run that landed
+/// no base opens on the run's duration and the head's position when it
+/// began, worded as the ordering it is — "checkpoint FAILED after {d} ms
+/// (the head stood at position {p} when the run began)". A run whose base
+/// LANDED before the step after its rename failed (`CheckpointError::Landed`)
+/// opens on the base, its size and the run's duration — "a checkpoint landed
+/// at position {n} ({bytes} bytes) in {d} ms but {step} failed" — the step
+/// in the daemon's three words (the directory's sync, retention, the
+/// journal's reclamation), chosen by `LandedStep`'s arm and never the
+/// kernel's `Display`, then what the thread's re-reads off the base moved
+/// ([`AfterLanding`]); the reclaim figures it does not carry, the kernel
+/// storing none for a call that failed. The cause: a full volume
+/// (`StorageFull`) in the operator's words beside the OS's text, in either
+/// arm; every other cause its own `Display`. The trailer is keyed to the
+/// cause: an I/O cause retries at the cadence's next crossing, a poisoned
+/// kernel takes no checkpoint until a restart, a world that will not
+/// serialize refuses the same way until the build fixes it. The class word
+/// is the emitter's (`Class::Failure`).
+enum FailureLine<'a> {
+    /// A run that landed no base.
     ///
-    /// An ordering, since the checkpoint loads its own root under its mutex.
-    at: Seq,
-    /// Where a base landed, its position, read after the call.
-    ///
-    /// It is the newest checkpoint's position, `None` where its header did
-    /// not answer.
-    landed_at: Option<Seq>,
-    error: &'a CheckpointError,
+    /// `error` is the kernel's answer — `Io`, `Serialize` or `Poisoned`;
+    /// [`FailureLine::Landed`] is the `Landed` error's own arm.
+    Unlanded {
+        /// `Kernel::current_seq`, read before the call.
+        ///
+        /// An ordering, since the checkpoint loads its own root under its
+        /// mutex.
+        at: Seq,
+        /// The run's duration, whole milliseconds, the thread's own `Instant`.
+        duration_ms: u128,
+        /// What the kernel answered.
+        error: &'a CheckpointError,
+    },
+    /// A run whose base landed before the step after its rename failed.
+    Landed {
+        /// `Kernel::current_seq`, read before the call.
+        ///
+        /// It is the floor of the landed base's position where its header
+        /// did not answer.
+        at: Seq,
+        /// The run's duration, whole milliseconds, the thread's own `Instant`.
+        duration_ms: u128,
+        /// The base as the newest header claims it, read after the call.
+        ///
+        /// `None` where the header did not answer.
+        base: Option<LandedBase>,
+        /// The step that failed after the rename.
+        step: LandedStep,
+        /// The step's cause.
+        cause: &'a std::io::Error,
+        /// What the thread's re-reads off the landed base moved.
+        after: AfterLanding,
+    },
 }
+
+/// The trailer of a failure whose next attempt is the cadence's next crossing.
+const RETRIED_AT_THE_NEXT_CROSSING: &str =
+    "; the journal is not reclaimed and holds every commit; the next attempt is at the \
+     cadence's next crossing";
 
 impl fmt::Display for FailureLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.error {
-            CheckpointError::Landed { step, cause } => {
-                match self.landed_at {
-                    Some(landed) => write!(f, "a checkpoint landed at position {landed}")?,
+        match self {
+            FailureLine::Landed { at, duration_ms, base, step, cause, after } => {
+                match base {
+                    Some(base) => write!(
+                        f,
+                        "a checkpoint landed at position {} ({} bytes)",
+                        base.position, base.bytes
+                    )?,
                     None => write!(
                         f,
-                        "a checkpoint landed at or above position {} (its header unread)",
-                        self.at
+                        "a checkpoint landed at or above position {at} (its header unread)"
                     )?,
                 }
                 let step = match step {
@@ -2185,34 +2381,58 @@ impl fmt::Display for FailureLine<'_> {
                     LandedStep::Retention => "retention",
                     LandedStep::Reclamation => "the journal's reclamation",
                 };
-                write!(f, " but {step} failed: {}", VolumeWords(cause))?;
+                write!(
+                    f,
+                    " in {duration_ms} ms but {step} failed: {}; {after}",
+                    VolumeWords(cause)
+                )?;
+                f.write_str(RETRIED_AT_THE_NEXT_CROSSING)
             }
-            CheckpointError::Io(io) => write!(
-                f,
-                "checkpoint FAILED (the head stood at position {} when the run began): {}",
-                self.at,
-                VolumeWords(io)
-            )?,
-            other @ (CheckpointError::Serialize(_) | CheckpointError::Poisoned) => write!(
-                f,
-                "checkpoint FAILED (the head stood at position {} when the run began): {other}",
-                self.at
-            )?,
+            FailureLine::Unlanded { at, duration_ms, error } => {
+                write!(
+                    f,
+                    "checkpoint FAILED after {duration_ms} ms (the head stood at position {at} \
+                     when the run began): "
+                )?;
+                match error {
+                    CheckpointError::Io(io) | CheckpointError::Landed { cause: io, .. } => {
+                        write!(f, "{}", VolumeWords(io))?
+                    }
+                    other @ (CheckpointError::Serialize(_) | CheckpointError::Poisoned) => {
+                        write!(f, "{other}")?
+                    }
+                }
+                // The trailer, keyed to the cause: what still serves and when
+                // the next attempt comes — a promise of a crossing only where
+                // one can.
+                f.write_str(match error {
+                    CheckpointError::Io(_) | CheckpointError::Landed { .. } => {
+                        RETRIED_AT_THE_NEXT_CROSSING
+                    }
+                    CheckpointError::Poisoned => {
+                        "; no checkpoint is taken until a restart (the kernel's halt, said above)"
+                    }
+                    CheckpointError::Serialize(_) => {
+                        "; every crossing refuses the same way until the world encodes: the \
+                         build's to fix"
+                    }
+                })
+            }
         }
-        // The trailer, keyed to the cause: what still serves and when the
-        // next attempt comes — a promise of a crossing only where one can.
-        f.write_str(match self.error {
-            CheckpointError::Io(_) | CheckpointError::Landed { .. } => {
-                "; the journal is not reclaimed and holds every commit; the next attempt is at \
-                 the cadence's next crossing"
-            }
-            CheckpointError::Poisoned => {
-                "; no checkpoint is taken until a restart (the kernel's halt, said above)"
-            }
-            CheckpointError::Serialize(_) => {
-                "; every crossing refuses the same way until the world encodes: the build's to fix"
-            }
-        })
+    }
+}
+
+/// A base that landed, as its header claims it: its position and its length.
+struct LandedBase {
+    /// The position the base embodies.
+    position: Seq,
+    /// The file's length in bytes, as the header claims it.
+    bytes: u64,
+}
+
+impl From<CheckpointHeader> for LandedBase {
+    fn from(header: CheckpointHeader) -> LandedBase {
+        LandedBase { position: header.seq, bytes: header.len }
     }
 }
 
@@ -2245,7 +2465,12 @@ impl fmt::Display for VolumeWords<'_> {
 /// write path's serial guard spans the commit that runs it, so every other
 /// writer waited it out: the one figure that tells a slow board's operator
 /// the stall was a checkpoint's), and whether it landed and where, or how it
-/// failed, in the kernel's rendered words. A pure value, pinned by
+/// failed, in the kernel's rendered words. And where the wake found the
+/// newest checkpoint moved and took the landing's re-reads off it, the base
+/// and what they moved ([`NewestLanded`]): `; the newest checkpoint at
+/// position {n} ({bytes} bytes): {reclaimed; }{after}` — the reclaim figures
+/// where the last inline run landed that base whole — so a floor or a feed
+/// fence a backstop moved is said where it moved. A pure value, pinned by
 /// `to_string()`; emitted under `Class::Landing`.
 struct BackstopLine {
     runs: u64,
@@ -2256,6 +2481,39 @@ struct BackstopLine {
     /// moves the count; rendered `unread` should the type's absence ever
     /// arise, rather than spelled as a landing.
     last: Option<LastInlineRun>,
+    /// The newest checkpoint and what its landing moved, where it moved.
+    ///
+    /// `None` where the newest checkpoint is the one the thread last looked
+    /// at — a wake that took no re-read — and the clause is absent.
+    newest: Option<NewestLanded>,
+}
+
+/// The newest checkpoint as a backstop's wake found it moved.
+///
+/// It is the base as its header claims it — `None` where the header did not
+/// answer — what the landing reclaimed, where the last inline run landed
+/// that base whole, and what the thread's re-reads off it moved.
+struct NewestLanded {
+    base: Option<LandedBase>,
+    reclaimed: Option<Reclaimed>,
+    after: AfterLanding,
+}
+
+impl fmt::Display for NewestLanded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.base {
+            Some(base) => write!(
+                f,
+                "the newest checkpoint at position {} ({} bytes): ",
+                base.position, base.bytes
+            )?,
+            None => f.write_str("the newest checkpoint's header unread: ")?,
+        }
+        if let Some(reclaimed) = &self.reclaimed {
+            write!(f, "{reclaimed}; ")?;
+        }
+        write!(f, "{}", self.after)
+    }
 }
 
 /// The last inline run as [`BackstopLine`] says it.
@@ -2286,17 +2544,23 @@ impl fmt::Display for BackstopLine {
              a writer since position {}, the last ",
             self.runs, self.since
         )?;
-        let Some(last) = &self.last else {
-            return f.write_str("unread");
-        };
-        write!(
-            f,
-            "run by the commit at position {}, holding every write {} ms, ",
-            last.after, last.held_ms
-        )?;
-        match &last.outcome {
-            Ok(landed) => write!(f, "landed at position {landed}"),
-            Err(cause) => write!(f, "FAILED: {cause}"),
+        match &self.last {
+            None => f.write_str("unread")?,
+            Some(last) => {
+                write!(
+                    f,
+                    "run by the commit at position {}, holding every write {} ms, ",
+                    last.after, last.held_ms
+                )?;
+                match &last.outcome {
+                    Ok(landed) => write!(f, "landed at position {landed}")?,
+                    Err(cause) => write!(f, "FAILED: {cause}")?,
+                }
+            }
+        }
+        match &self.newest {
+            Some(newest) => write!(f, "; {newest}"),
+            None => Ok(()),
         }
     }
 }
@@ -2430,17 +2694,23 @@ impl fmt::Display for DataDirLine<'_> {
 
 /// The recovery's landing (m7), in the operator stream's words.
 ///
-/// It reads `recovered from {checkpoint.n | genesis}, {k} commits replayed,
-/// in {d} ms`, rendered from the engine's own account of its open: the base
-/// it loaded ([`Base`]'s words, the ones the two warnings name the start
-/// point by), the commits it replayed above that base (`Recovery::replayed`:
-/// transactions, never the records they carry; `0` where the base was the
-/// committed head, a fresh board's genesis included) and the engine's
-/// open's duration, whole milliseconds, the daemon's own `Instant` around
-/// the call. A pure value the unit suite pins by `to_string()`; emitted
-/// under `Class::Open` through [`say_open_line`].
+/// It reads `recovered from {checkpoint.n | genesis} to position {p}, {k}
+/// commits replayed, in {d} ms`, rendered from the engine's own account of
+/// its open: the base it loaded ([`Base`]'s words, the ones the two warnings
+/// name the start point by); the committed head it came back at, every write
+/// acknowledged at or below which stands — the position the tail cut, where
+/// one was cut, lies past, and the one a mirror resumes against, which no
+/// other line of the stream names and `{k}` cannot give, since it counts
+/// transactions and not positions; the commits it replayed above that base
+/// (`Recovery::replayed`: transactions, never the records they carry; `0`
+/// where the base was the committed head, a fresh board's genesis included)
+/// and the engine's open's duration, whole milliseconds, the daemon's own
+/// `Instant` around the call. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
 struct RecoveredLine {
     start_point: Seq,
+    /// The committed head the open came back at (`Kernel::current_seq`).
+    head: Seq,
     replayed: u64,
     duration_ms: u128,
 }
@@ -2448,13 +2718,15 @@ struct RecoveredLine {
 impl RecoveredLine {
     /// Returns the line from the engine's account, where it gave one.
     ///
-    /// An engine that answers no account loads nothing —
-    /// `Durability::InMemory`, which no daemon opens under: every daemon's
-    /// open is journaled — and is said as a genesis that replayed nothing,
-    /// which is what the open's sizing reads of the same absence.
-    fn of(recovery: Option<&Recovery>, duration_ms: u128) -> RecoveredLine {
+    /// `head` is the kernel's committed head as the open left it. An engine
+    /// that answers no account loads nothing — `Durability::InMemory`, which
+    /// no daemon opens under: every daemon's open is journaled — and is said
+    /// as a genesis that replayed nothing, which is what the open's sizing
+    /// reads of the same absence.
+    fn of(recovery: Option<&Recovery>, head: Seq, duration_ms: u128) -> RecoveredLine {
         RecoveredLine {
             start_point: recovery.map_or(Seq(0), |r| r.start_point),
+            head,
             replayed: recovery.map_or(0, |r| r.replayed),
             duration_ms,
         }
@@ -2465,8 +2737,9 @@ impl fmt::Display for RecoveredLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "recovered from {}, {} commits replayed, in {} ms",
+            "recovered from {} to position {}, {} commits replayed, in {} ms",
             Base(self.start_point),
+            self.head,
             self.replayed,
             self.duration_ms
         )
@@ -2785,14 +3058,38 @@ impl fmt::Display for HistoryDamageLine<'_> {
     }
 }
 
+/// Where a history read met the journal's damage, as the standing line says.
+///
+/// It reads `at position {p}` for damage at rest — the position the kernel's
+/// account names, the one [`HistoryDamageLine`] opens on — and `({error})`
+/// for an I/O failure, the kernel's file, act and cause; never the position
+/// the reader asked for (D9). The standing line's clause carries it, so a
+/// stream rotated past the failure line still names the segment to restore
+/// before a restart (RUNBOOK §2), and the two lines join on it. A pure value
+/// the unit suite pins by `to_string()`; rendered once, by
+/// [`Daemon::refuse_history`], into `Daemon::history_damage`.
+pub(super) struct JournalDamageSite<'a>(pub(super) &'a HistoryError);
+
+impl fmt::Display for JournalDamageSite<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            HistoryError::Corruption { at, .. } => write!(f, "at position {at}"),
+            HistoryError::Io(io) => write!(f, "({io})"),
+            other => write!(f, "({other})"),
+        }
+    }
+}
+
 /// The standing line (`operations.md` §1, the rates; §1.1 m11).
 ///
 /// It is in the operator stream's words: one clause per standing bad state,
 /// each by name with its position or file, joined by `; ` in the rates'
 /// order — `the write path is halted since position {p} (feed-attest.log)`;
-/// `the kernel is poisoned`; `a history read found the journal unreadable`
-/// (the damage [`HistoryDamageLine`] said, which the next open reads;
-/// RUNBOOK §2); `{file} stopped since position {p}` once per stopped file;
+/// `the kernel is poisoned since position {p}`, the position the kernel's
+/// halt line named; `a history read found the journal unreadable at
+/// position {p}` or `… ({error})` (the damage [`HistoryDamageLine`] said,
+/// which the next open reads, by its site — [`JournalDamageSite`]; RUNBOOK
+/// §2); `{file} stopped since position {p}` once per stopped file;
 /// `the pruner's thread is gone`; `the feed walk's thread is gone;
 /// positions ({low}, {head}] stay uncovered` (the walk behind the listener
 /// dead on a caught panic, its region pending for the uptime —
@@ -2808,13 +3105,16 @@ impl fmt::Display for HistoryDamageLine<'_> {
 pub(super) struct StandingLine {
     /// The write path's halt and the position it was set at.
     pub(super) halted_at: Option<Seq>,
-    /// `Kernel::is_poisoned`.
-    pub(super) poisoned: bool,
-    /// Whether a history read met the journal's damage this uptime.
+    /// `Kernel::is_poisoned`, with the head the kernel halted at.
     ///
-    /// It is the flag [`Daemon::refuse_history`] sets as it says
-    /// [`HistoryDamageLine`].
-    pub(super) history_damaged: bool,
+    /// No commit lands past a poisoned kernel, so `Kernel::current_seq` at
+    /// the tick is the position the halt line (m10) named.
+    pub(super) poisoned: Option<Seq>,
+    /// Where a history read met the journal's damage this uptime.
+    ///
+    /// It is the site [`Daemon::refuse_history`] kept as it said
+    /// [`HistoryDamageLine`] — [`JournalDamageSite`]'s rendering.
+    pub(super) history_damaged: Option<String>,
     /// The feed's stopped files, each with its position.
     pub(super) stopped_files: Vec<StoppedFile>,
     /// The pruner's liveness flag.
@@ -2848,8 +3148,8 @@ impl StandingLine {
     /// It is the one condition the line is said under.
     pub(super) fn stands(&self) -> bool {
         self.halted_at.is_some()
-            || self.poisoned
-            || self.history_damaged
+            || self.poisoned.is_some()
+            || self.history_damaged.is_some()
             || !self.stopped_files.is_empty()
             || self.pruner_gone
             || self.feed_walk_gone.is_some()
@@ -2865,11 +3165,11 @@ impl fmt::Display for StandingLine {
         if let Some(at) = self.halted_at {
             clauses.push(format!("the write path is halted since position {at} (feed-attest.log)"));
         }
-        if self.poisoned {
-            clauses.push("the kernel is poisoned".to_string());
+        if let Some(at) = self.poisoned {
+            clauses.push(format!("the kernel is poisoned since position {at}"));
         }
-        if self.history_damaged {
-            clauses.push("a history read found the journal unreadable".to_string());
+        if let Some(site) = &self.history_damaged {
+            clauses.push(format!("a history read found the journal unreadable {site}"));
         }
         for file in &self.stopped_files {
             clauses.push(format!("{} stopped since position {}", file.name, file.since));
@@ -2984,6 +3284,39 @@ impl fmt::Display for ClaimLine<'_> {
     }
 }
 
+/// The first head written at open (`operations.md` §1.1 row 12).
+///
+/// It reads `the board is claimed and its journal held no head: H.1 written
+/// at open at position {landed} in {d} ms, naming the committed pair at
+/// position {named}` — where `H.1`'s last commit landed, how long its write
+/// held the write path's lock, and the committed pair it names, the board
+/// term every attested write is checked against (signed-ops D13). Said where
+/// the crash window split the claim from its head, so the flip's own line
+/// ([`ClaimLine`]) was never said and this is the one line the board has of
+/// its first head (I11 (c): a head written for a reason other than the
+/// cadence's is said, never silent). A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Landing` by
+/// [`Daemon::write_the_claims_head_if_owed`].
+struct HeadAtOpenLine {
+    /// The committed head once `H.1`'s commits landed.
+    landed: Seq,
+    /// The head's write, whole milliseconds, under the write path's lock.
+    duration_ms: u128,
+    /// The committed pair `H.1` names: the head before its own write opened.
+    named: Seq,
+}
+
+impl fmt::Display for HeadAtOpenLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the board is claimed and its journal held no head: H.1 written at open at position \
+             {} in {} ms, naming the committed pair at position {}",
+            self.landed, self.duration_ms, self.named
+        )
+    }
+}
+
 // ── the edge pairs' words ────────────────────────────────────────────────
 //
 // What the nine pairs say (`operations.md` §1.1 m12; §4 rows 27 and 33;
@@ -2994,9 +3327,9 @@ impl fmt::Display for ClaimLine<'_> {
 // edge suite pins as said (`tests/it/edges.rs`), said under the edge's class
 // word through the classed door and never the un-classed one; nothing on a
 // line but the condition and, where the OS refused, its own words for the
-// cause — no count (the upload pool's landing and the accept loop's
-// recovery alone carry one), no path, query, principal, peer, position or
-// reader.
+// cause — no count (the upload and write pools' landings and the accept
+// loop's recovery alone carry one, the episode's refusals, which count no
+// reader), no path, query, principal, peer, position or reader.
 
 /// The word the reconstruction pool's two lines name it by.
 ///

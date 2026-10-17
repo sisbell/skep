@@ -1041,9 +1041,10 @@ fn claim_crash_child(dir: &Path) -> ! {
 /// it judges the data dir twice: BELOW THE DOOR the journal's head is the
 /// claim's own position — the claim landed, no head did; THROUGH THE DOOR
 /// the board is claimed, `H.1` stands at the claim's position with the
-/// head's eight records above it and `prev` null, and — served — the board
-/// takes an attested write at once, its slot filled. A third open writes
-/// nothing: the repair is owed once.
+/// head's eight records above it and `prev` null, the open's one line about
+/// it naming the position the head landed at and the pair it names, and —
+/// served — the board takes an attested write at once, its slot filled. A
+/// third open writes nothing and says nothing: the repair is owed once.
 #[test]
 fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     if let Some(dir) = std::env::var_os(CLAIM_CRASH_DIR) {
@@ -1124,6 +1125,29 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     );
     let h1 = board_term(port).expect("FINDING (H): no H.1 after the reopen");
     assert_eq!(h1.log_position, CLAIM_POSITION, "H.1 names the claim's own position");
+    // The one line this board will ever have about `H.1` — the flip's own
+    // never came — said through the daemon's classed door: where the head
+    // landed, how long it took, and the pair it names.
+    let at_open: Vec<String> = sd
+        .daemon()
+        .lines_said()
+        .into_iter()
+        .filter(|l| l.contains("H.1 written at open"))
+        .collect();
+    assert_eq!(at_open.len(), 1, "FINDING (H): the head written at open is said once: {at_open:?}");
+    let line = &at_open[0];
+    assert!(
+        line.starts_with(&format!(
+            "landing: the board is claimed and its journal held no head: H.1 written at open at \
+             position {} in ",
+            CLAIM_POSITION + H1_RECORDS
+        )),
+        "the position the head landed at: {line}"
+    );
+    assert!(
+        line.ends_with(&format!(" ms, naming the committed pair at position {CLAIM_POSITION}")),
+        "the pair the head names, the claim's own position: {line}"
+    );
     let v = op(port, None, &common::retrieve_frame(HEAD_MEMBER_1, 1, 1));
     let atom = expect_resp(&v, "delivery")["items"][0]["atom"].as_str().expect("H.1's record");
     let rec: Value = serde_json::from_str(atom).expect("a skep-head record");
@@ -1143,6 +1167,11 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     // A THIRD open writes nothing: `H.1` stands, the repair was owed once.
     let d = timed_daemon_open(&dir, "H: the reopen of a repaired board");
     assert_eq!(d.log_position().0, at, "a clean reopen of a headed board writes no head");
+    assert!(
+        !d.lines_said().iter().any(|l| l.contains("H.1 written at open")),
+        "…and says none: {:?}",
+        d.lines_said()
+    );
     let v = route_op(&d, None, &retrieve_frame("1.1.0.1.0.2.2", 1));
     assert_ne!(v["resp"].as_str(), Some("delivery"), "no H.2 was written: {v}");
 }

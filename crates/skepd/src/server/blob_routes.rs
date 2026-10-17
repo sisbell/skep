@@ -117,6 +117,7 @@
 //! gate withholds (M-I2 (a)).
 
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use serde_json::Value;
 use skep_address::Address;
@@ -672,35 +673,49 @@ impl Daemon {
     /// Runs the pruner's pass as the daemon runs it, through its one pruner.
     ///
     /// The pass is `skep-media`'s `pruner.rs` (`Pruner::pass`), the
-    /// credential lock's write arm taken for one file at a time. `None` where
-    /// the index is not ready — the pass does not start.
-    pub(super) fn prune_pass(&self) -> Option<PrunePass> {
-        self.pruner.pass(&self.media, || self.auth.credential_lock.write())
+    /// credential lock's write arm taken for one file at a time, timed by the
+    /// daemon's own `Instant` around it ([`TimedPass`]), so the cadence's
+    /// loop and the test seam's pass carry one figure. `None` where the index
+    /// is not ready — the pass does not start.
+    pub(super) fn prune_pass(&self) -> Option<TimedPass> {
+        let began = Instant::now();
+        let report = self.pruner.pass(&self.media, || self.auth.credential_lock.write())?;
+        Some(TimedPass { report, duration_ms: began.elapsed().as_millis() })
     }
 
     /// Says the pass (`operations.md` §1.1 rows 34, 35): one line per pass.
     ///
     /// The line goes on the daemon's classed door — row 34 under
-    /// `Class::Landing` where no step failed, the report's own `Display`
-    /// (its figures, the halt, the compaction half); row 35 under
-    /// `Class::Failure` where one did — `pruner: the pass failed: {e}`, the
-    /// step and the cause — then the same compaction half
-    /// (`PrunePass::compaction`: each log's size,
+    /// `Class::Landing` where no step failed: the report's own `Display` (its
+    /// figures, the halt, the compaction half), the pass's duration
+    /// (`; the pass took {d} ms`), then a reading of the resident set
+    /// ([`ResidentRead`](super::ResidentRead)), so a board whose index walk
+    /// completed reads its memory at the pass's cadence whether or not a
+    /// checkpoint lands; row 35 under `Class::Failure` where one did —
+    /// `pruner: the pass failed: {e}`, the step and the cause — then the same
+    /// compaction half (`PrunePass::compaction`: each log's size,
     /// `{log} {n} lines ({b} bytes)`, and what a compaction rewrote it from;
     /// `{log}'s stop lifted, rewritten whole after {stop}`; `a compaction
     /// FAILED`; `STOPPED: {log} takes no append until a compaction completes
-    /// — {stop}`, a stop its cause, its age and the appends it refused), so
-    /// the line names the failure *and* whether the stop it may have met is
-    /// lifted or stands, why it stood and what it cost. Nothing where the
-    /// pass did not start (`None`: the index not ready). The cadence's loop
-    /// and the test seam's pass say it alike.
-    pub(super) fn say_the_pass(&self, pass: &Option<PrunePass>) {
-        let Some(report) = pass else { return };
+    /// — {stop}`, a stop its cause, its age and the appends it refused), then
+    /// the pass's duration — so the line names the failure *and* whether the
+    /// stop it may have met is lifted or stands, why it stood, what it cost
+    /// and how long the pass held the credential lock's write arm. Nothing
+    /// where the pass did not start (`None`: the index not ready). The
+    /// cadence's loop and the test seam's pass say it alike.
+    pub(super) fn say_the_pass(&self, pass: &Option<TimedPass>) {
+        let Some(TimedPass { report, duration_ms }) = pass else { return };
         match &report.failed {
-            None => self.say(Class::Landing, report),
+            None => self.say(
+                Class::Landing,
+                format_args!("{report}; the pass took {duration_ms} ms; {}", self.resident.read()),
+            ),
             Some(failed) => self.say(
                 Class::Failure,
-                format_args!("pruner: the pass failed: {failed}{}", report.compaction()),
+                format_args!(
+                    "pruner: the pass failed: {failed}{}; the pass took {duration_ms} ms",
+                    report.compaction()
+                ),
             ),
         }
     }
@@ -711,6 +726,21 @@ impl Daemon {
     pub(super) fn index_is_ready_for_pruning(&self) -> bool {
         self.media.index_ready()
     }
+}
+
+/// One pruner pass as the daemon ran it: its report and its duration.
+///
+/// [`Daemon::prune_pass`] answers it; [`Daemon::say_the_pass`] says both,
+/// the duration the time the pass held the credential lock's write arm one
+/// file at a time against every finish and every door read — the LANDING
+/// class's duration (`operations.md` §1, the grammar; §1.1 rows 34, 35), and
+/// the one trend the stream keeps between landings of how the volume serves
+/// the pass.
+pub(super) struct TimedPass {
+    /// What the pass did (`skep-media`'s `PrunePass`).
+    pub(super) report: PrunePass,
+    /// The pass's duration, whole milliseconds, the daemon's own `Instant`.
+    pub(super) duration_ms: u128,
 }
 
 // ── the queries, the answers, the refusals ───────────────────────────────

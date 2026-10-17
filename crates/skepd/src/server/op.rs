@@ -301,14 +301,18 @@ impl Daemon {
     /// pool's tracker at the edge clock's instant, and the edge it answers —
     /// the first refusal of an episode, the first permit taken a hold-down
     /// past its last refusal — goes out in the pool's words (`the write pool
-    /// is saturated` / `the write pool has room again`), once per episode
-    /// and nothing per request. One helper for the three sites, so the pair
-    /// cannot be judged at two of them and missed at the third. The test hook
-    /// (`Daemon::try_hold_write_permit`) takes its permits beside this door
-    /// and crosses no edge: what a suite holds is the pool, not a request.
-    /// The head writer's own commits take no permit and pass no door: they
-    /// run inside the triggering write's turn, or at the open before anything
-    /// is served.
+    /// is saturated` / `the write pool has room again after {n} refusals`),
+    /// once per episode and nothing per request. The landing carries the
+    /// episode's refusals, the upload pool's counted form
+    /// (`PoolEdgeLine::counted`): they are writes refused, the evidence of
+    /// whether `MAX_CONCURRENT_WRITES` parks too many writers through a
+    /// backstop (§4 row 27), and they count no reader. One helper for the
+    /// three sites, so the pair cannot be judged at two of them and missed at
+    /// the third. The test hook (`Daemon::try_hold_write_permit`) takes its
+    /// permits beside this door and crosses no edge: what a suite holds is
+    /// the pool, not a request. The head writer's own commits take no permit
+    /// and pass no door: they run inside the triggering write's turn, or at
+    /// the open before anything is served.
     #[must_use = "a permit dropped at once returns its slot at once: bind it for the sequence's \
                   whole frame"]
     fn take_write_permit(&self) -> Option<Permit<'_>> {
@@ -319,7 +323,7 @@ impl Daemon {
             None => self.write_edge.refused(now),
         };
         if let Some(edge) = edge {
-            self.say(edge.class(), PoolEdgeLine::new(WRITE_POOL, edge));
+            self.say(edge.class(), PoolEdgeLine::counted(WRITE_POOL, edge));
         }
         permit
     }

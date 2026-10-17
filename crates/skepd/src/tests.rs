@@ -159,26 +159,80 @@ fn a_loose_directory_is_found_and_a_tight_an_absent_or_a_file_is_not() {
 /// location as std spells it, and the payload only where the hook found
 /// a `&'static str` — a formatted panic shows its location alone; an
 /// unnamed thread and a missing location are said as such, never as a
-/// hole in the line.
+/// hole in the line; and the panics the hook counted at the site since its
+/// last line there, where it counted any, at the line's end.
 #[test]
 fn the_hooks_line_names_the_thread_the_location_and_a_literal_payload_alone() {
     let here = Location::caller();
     assert_eq!(
-        panic_line(Some("skepd-worker"), Some(here), Some("the test seam's worker fault")),
+        panic_line(Some("skepd-worker"), Some(here), Some("the test seam's worker fault"), 0),
         format!("skepd-worker: a thread panicked at {here}: the test seam's worker fault")
     );
     assert_eq!(
-        panic_line(Some("skepd-pruner"), Some(here), None),
+        panic_line(Some("skepd-pruner"), Some(here), None, 0),
         format!("skepd-pruner: a thread panicked at {here}"),
         "a formatted payload — a String — is not carried: the location identifies the site"
     );
     assert_eq!(
-        panic_line(None, None, Some("boom")),
+        panic_line(None, None, Some("boom"), 0),
         "an unnamed thread: a thread panicked at an unknown location: boom"
+    );
+    assert_eq!(
+        panic_line(Some("skepd-worker"), Some(here), None, 812),
+        format!(
+            "skepd-worker: a thread panicked at {here}; 812 more at this site on this thread \
+             since its last line"
+        ),
+        "a recurring panic's line counts the ones the hook did not say"
     );
     assert!(
         here.to_string().ends_with(&format!(":{}:{}", here.line(), here.column())),
         "the location is std's own spelling, file:line:column: {here}"
+    );
+}
+
+/// THE HOOK's RATE (§1 THE RATES): a site's first panic on a thread is said,
+/// `Some(0)`; each later one there inside the interval is counted and says
+/// nothing; another thread at the same site is a first of its own (m16: one
+/// line per worker); the first past the interval is said with the count since
+/// the last line, the interval starting again from it; and past
+/// `HOOK_MEMORY_KEYS` keys the memory starts afresh, a key it held said
+/// again as a first.
+#[test]
+fn the_hooks_rate_says_a_sites_panic_once_an_interval_per_thread_with_the_repeats_counted() {
+    let interval = Duration::from_secs(3600);
+    let t0 = Instant::now();
+    let secs = |s| t0 + Duration::from_secs(s);
+    let here = std::thread::current().id();
+    let there = std::thread::spawn(|| std::thread::current().id()).join().expect("a thread");
+    let site = || "crates/skep-core/src/auth/entropy.rs:29:31".to_string();
+    let mut memory = HookMemory::new();
+    assert_eq!(memory.admit((here, site()), t0, interval), Some(0), "the site's first panic");
+    for s in 1..=2 {
+        assert_eq!(memory.admit((here, site()), secs(s), interval), None, "counted, unsaid");
+    }
+    assert_eq!(
+        memory.admit((there, site()), secs(3), interval),
+        Some(0),
+        "another thread at the same site is a first of its own"
+    );
+    assert_eq!(
+        memory.admit((here, site()), t0 + interval, interval),
+        Some(2),
+        "the first past the interval carries the two counted"
+    );
+    assert_eq!(
+        memory.admit((here, site()), t0 + interval + Duration::from_secs(1), interval),
+        None,
+        "and the interval starts again from that line"
+    );
+    for n in 0..HOOK_MEMORY_KEYS {
+        memory.admit((here, format!("site {n}")), t0 + interval, interval);
+    }
+    assert_eq!(
+        memory.admit((there, site()), t0 + interval, interval),
+        Some(0),
+        "past the bound the memory starts afresh: a key inside its interval is a first again"
     );
 }
 

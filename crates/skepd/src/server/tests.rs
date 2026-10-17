@@ -324,9 +324,9 @@ fn the_stops_wake_connect_dials_the_bound_address_and_loopback_for_an_unspecifie
 /// THE OPEN's TWO LINES' WORDS (`operations.md` §1.1 m7; §3.1 step 3),
 /// pinned at fixed figures: the directory as the operator named it; the
 /// base as the two warnings name it — `genesis` at `Seq(0)`, else the
-/// checkpoint's file name — the commits replayed and the engine's open in
-/// milliseconds; and an engine that gave no account, said as a genesis that
-/// replayed nothing.
+/// checkpoint's file name — the committed head the open came back at, the
+/// commits replayed and the engine's open in milliseconds; and an engine
+/// that gave no account, said as a genesis that replayed nothing.
 #[test]
 fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_in_their_words() {
     use skep_engine::Recovery;
@@ -336,12 +336,19 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
         "data-dir /var/lib/skep/board"
     );
     assert_eq!(
-        RecoveredLine { start_point: Seq(0), replayed: 0, duration_ms: 12 }.to_string(),
-        "recovered from genesis, 0 commits replayed, in 12 ms"
+        RecoveredLine { start_point: Seq(0), head: Seq(0), replayed: 0, duration_ms: 12 }
+            .to_string(),
+        "recovered from genesis to position 0, 0 commits replayed, in 12 ms"
     );
+    let recovered = RecoveredLine {
+        start_point: Seq(4096),
+        head: Seq(4413),
+        replayed: 317,
+        duration_ms: 60_301,
+    };
     assert_eq!(
-        RecoveredLine { start_point: Seq(4096), replayed: 317, duration_ms: 60_301 }.to_string(),
-        "recovered from checkpoint.4096, 317 commits replayed, in 60301 ms"
+        recovered.to_string(),
+        "recovered from checkpoint.4096 to position 4413, 317 commits replayed, in 60301 ms"
     );
     let account = Recovery {
         start_point: Seq(2048),
@@ -357,12 +364,12 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
         identity_resolved_empty: false,
     };
     assert_eq!(
-        RecoveredLine::of(Some(&account), 5).to_string(),
-        "recovered from checkpoint.2048, 9 commits replayed, in 5 ms"
+        RecoveredLine::of(Some(&account), Seq(2057), 5).to_string(),
+        "recovered from checkpoint.2048 to position 2057, 9 commits replayed, in 5 ms"
     );
     assert_eq!(
-        RecoveredLine::of(None, 5).to_string(),
-        "recovered from genesis, 0 commits replayed, in 5 ms",
+        RecoveredLine::of(None, Seq(0), 5).to_string(),
+        "recovered from genesis to position 0, 0 commits replayed, in 5 ms",
         "no account — an in-memory engine, which no daemon opens — is a genesis that replayed nothing"
     );
     // ONE rendering of the base: the landing's and the warnings' alike.
@@ -671,6 +678,20 @@ fn the_flips_line_names_the_account_the_position_the_mode_and_each_head_arm() {
         at(FirstHead::Refused, "CLAIMED-PERMISSIVE"),
         "board claimed by 1.0.1 at position 42: the mode is now CLAIMED-PERMISSIVE; H.1 owed — \
          the head writer refused it"
+    );
+}
+
+/// ROW 12's WORDS — THE FIRST HEAD WRITTEN AT OPEN — at fixed figures: where
+/// `H.1`'s commits landed, how long its write took, and the committed pair it
+/// names, the claim's own position where the crash split the claim from its
+/// head. The line on the wire of a real reopen is the hazard suite's
+/// (`tests/it/hazard.rs`, the claim window).
+#[test]
+fn the_head_written_at_open_names_where_it_landed_its_duration_and_the_pair_it_names() {
+    assert_eq!(
+        HeadAtOpenLine { landed: Seq(20), duration_ms: 9, named: Seq(12) }.to_string(),
+        "the board is claimed and its journal held no head: H.1 written at open at position 20 \
+         in 9 ms, naming the committed pair at position 12"
     );
 }
 
@@ -1102,30 +1123,54 @@ fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_
     }
 }
 
+/// What a landing moved, at fixed figures, as the three lines after a
+/// landing carry it: both bounds, the volume's free space, a reading of the
+/// resident set beside the largest of the uptime's, and the feed's
+/// compaction, its fence named or nothing below the floor.
+fn after_a_landing(fence: Option<u64>) -> AfterLanding {
+    AfterLanding {
+        bytes_bound: 25_165_824,
+        floor: 268_435_456,
+        free_space: 9_000_000_000,
+        resident: ResidentRead { now: Some(412_000_256), most: Some(1_180_000_256) },
+        compaction: FeedCompaction { fence, standing: vec![] },
+    }
+}
+
+/// `after_a_landing`'s words, the feed's clause cut off at its fence.
+const AFTER_A_LANDING: &str = "the cadence's byte bound 25165824, the media floor in force \
+                               268435456, the volume's free space 9000000000; the process's \
+                               resident set 412000256 bytes, the largest of this uptime's \
+                               readings 1180000256 bytes; the change feed's files ";
+
 /// LINE 25's WORDS (`operations.md` §1.1 row 25), pinned at fixed figures:
 /// the position and the size, the duration in milliseconds, the journal
 /// bytes reclaimed — or "nothing reclaimed" at zero — each checkpoint file
 /// retention removed, by its name and its length, both bounds, the volume's
-/// free space, the resident set's peak, the compaction's fence with each
-/// file that stood named, and the inline clause present only where the
-/// count moved. A header that did not answer reads "size unread"; a resident
-/// set never read reads "unread"; a landing with nothing below the floor
-/// says so, and one that removed no checkpoint names none.
+/// free space, a reading of the resident set beside the largest of the
+/// uptime's readings — never called the process's peak — the compaction's
+/// fence with each file that stood named, and the inline clause present
+/// only where the count moved. A header that did not answer reads "size
+/// unread"; a resident set never read reads "unread", and a reading the
+/// crate could not make reads "unread" beside the largest one it made; a
+/// landing with nothing below the floor says so, and one that removed no
+/// checkpoint names none.
 #[test]
 fn the_landing_line_carries_row_25s_figures_in_its_words() {
     let full = LandingLine {
         position: Seq(4200),
         bytes: Some(1_048_576),
         duration_ms: 17,
-        reclaimed: 2_097_152,
-        removed: vec![(Seq(1024), 900_000), (Seq(2048), 950_000)],
-        bytes_bound: 25_165_824,
-        floor: 268_435_456,
-        free_space: 9_000_000_000,
-        resident_peak: Some(123_456_789),
-        compaction: FeedCompaction {
-            fence: Some(4095),
-            standing: vec!["commits.log", "feed-index.log"],
+        reclaimed: Reclaimed {
+            bytes: 2_097_152,
+            removed: vec![(Seq(1024), 900_000), (Seq(2048), 950_000)],
+        },
+        after: AfterLanding {
+            compaction: FeedCompaction {
+                fence: Some(4095),
+                standing: vec!["commits.log", "feed-index.log"],
+            },
+            ..after_a_landing(None)
         },
         inline: Some(InlineRuns { runs: 2, since: Seq(3100) }),
     };
@@ -1134,22 +1179,23 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         "checkpoint at position 4200 landed (1048576 bytes) in 17 ms; 2097152 journal bytes \
          reclaimed; checkpoint.1024 removed (900000 bytes), checkpoint.2048 removed (950000 \
          bytes); the cadence's byte bound 25165824, the media floor in force 268435456, the \
-         volume's free space 9000000000; the process's resident set peaked at 123456789 bytes; \
-         the change feed's files compacted below position 4096, commits.log standing as it \
-         was, feed-index.log standing as it was; 2 checkpoints ran inline on a writer since \
-         position 3100"
+         volume's free space 9000000000; the process's resident set 412000256 bytes, the \
+         largest of this uptime's readings 1180000256 bytes; the change feed's files compacted \
+         below position 4096, commits.log standing as it was, feed-index.log standing as it \
+         was; 2 checkpoints ran inline on a writer since position 3100"
     );
     let quiet = LandingLine {
         position: Seq(7),
         bytes: None,
         duration_ms: 0,
-        reclaimed: 0,
-        removed: vec![],
-        bytes_bound: 24 * 1024 * 1024,
-        floor: 256 * 1024 * 1024,
-        free_space: 0,
-        resident_peak: None,
-        compaction: FeedCompaction::default(),
+        reclaimed: Reclaimed { bytes: 0, removed: vec![] },
+        after: AfterLanding {
+            bytes_bound: 24 * 1024 * 1024,
+            floor: 256 * 1024 * 1024,
+            free_space: 0,
+            resident: ResidentRead { now: None, most: None },
+            compaction: FeedCompaction::default(),
+        },
         inline: None,
     };
     assert_eq!(
@@ -1159,84 +1205,107 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
          space 0; the process's resident set unread; the change feed's files hold nothing \
          below the reclaim floor"
     );
+    assert_eq!(
+        ResidentRead { now: None, most: Some(1_180_000_256) }.to_string(),
+        "the process's resident set unread, the largest of this uptime's readings 1180000256 \
+         bytes",
+        "a reading the crate could not make, beside the largest one it made"
+    );
 }
 
-/// LINE 26's WORDS (row 26; §4 row 2) at each cause: the head's position as
-/// an ordering, a full volume in the operator's words beside the OS's text,
-/// every other cause its own text, and the trailer keyed to the cause — an
-/// I/O cause retries at the next crossing, a poisoned kernel takes no
-/// checkpoint until a restart, a world that will not serialize refuses the
-/// same way until the build fixes it. A base that LANDED opens the line on
-/// its position and names which of the three steps failed, in the daemon's
-/// words and never the kernel's, the volume's words re-applied to its cause;
-/// a landed base whose header did not answer is placed at or above the head
-/// the run began at.
+/// LINE 26's WORDS (row 26; §4 row 2) at each cause: the run's duration, the
+/// head's position as an ordering, a full volume in the operator's words
+/// beside the OS's text, every other cause its own text, and the trailer
+/// keyed to the cause — an I/O cause retries at the next crossing, a
+/// poisoned kernel takes no checkpoint until a restart, a world that will
+/// not serialize refuses the same way until the build fixes it. A base that
+/// LANDED opens the line on its position, its size and the run's duration,
+/// names which of the three steps failed, in the daemon's words and never
+/// the kernel's, the volume's words re-applied to its cause, then what the
+/// re-reads off the base moved — the floor, the bound, the feed's fence —
+/// and no reclaim figure, the kernel storing none for a call that failed; a
+/// landed base whose header did not answer is placed at or above the head
+/// the run began at, what moved still said.
 #[test]
 fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step() {
     use std::io::{Error, ErrorKind};
 
     let at = Seq(90);
+    let unlanded = |error| FailureLine::Unlanded { at, duration_ms: 2400, error };
     let retry = "; the journal is not reclaimed and holds every commit; the next attempt is at \
                  the cadence's next crossing";
     let full = CheckpointError::Io(Error::new(ErrorKind::StorageFull, "No space left on device"));
     assert_eq!(
-        FailureLine { at, landed_at: None, error: &full }.to_string(),
+        unlanded(&full).to_string(),
         format!(
-            "checkpoint FAILED (the head stood at position 90 when the run began): the volume \
-             is full (No space left on device){retry}"
+            "checkpoint FAILED after 2400 ms (the head stood at position 90 when the run \
+             began): the volume is full (No space left on device){retry}"
         )
     );
     let denied = CheckpointError::Io(Error::new(ErrorKind::PermissionDenied, "denied"));
     assert_eq!(
-        FailureLine { at, landed_at: None, error: &denied }.to_string(),
+        unlanded(&denied).to_string(),
         format!(
-            "checkpoint FAILED (the head stood at position 90 when the run began): denied{retry}"
+            "checkpoint FAILED after 2400 ms (the head stood at position 90 when the run \
+             began): denied{retry}"
         )
     );
+    let poisoned = CheckpointError::Poisoned;
     assert_eq!(
-        FailureLine { at, landed_at: None, error: &CheckpointError::Poisoned }.to_string(),
-        "checkpoint FAILED (the head stood at position 90 when the run began): kernel is \
-         poisoned; no checkpoint taken; no checkpoint is taken until a restart (the kernel's \
-         halt, said above)"
+        unlanded(&poisoned).to_string(),
+        "checkpoint FAILED after 2400 ms (the head stood at position 90 when the run began): \
+         kernel is poisoned; no checkpoint taken; no checkpoint is taken until a restart (the \
+         kernel's halt, said above)"
     );
     let refused = CheckpointError::Serialize("the `m5` slice refused".into());
     assert_eq!(
-        FailureLine { at, landed_at: None, error: &refused }.to_string(),
-        "checkpoint FAILED (the head stood at position 90 when the run began): checkpoint \
-         world serialization failed: the `m5` slice refused; every crossing refuses the same \
-         way until the world encodes: the build's to fix"
+        unlanded(&refused).to_string(),
+        "checkpoint FAILED after 2400 ms (the head stood at position 90 when the run began): \
+         checkpoint world serialization failed: the `m5` slice refused; every crossing refuses \
+         the same way until the world encodes: the build's to fix"
     );
+    let full_volume = Error::new(ErrorKind::StorageFull, "No space left on device");
     for (step, words) in [
         (LandedStep::DirectorySync, "the directory's sync"),
         (LandedStep::Retention, "retention"),
         (LandedStep::Reclamation, "the journal's reclamation"),
     ] {
-        let landed = CheckpointError::Landed {
+        let line = FailureLine::Landed {
+            at,
+            duration_ms: 1200,
+            base: Some(LandedBase { position: Seq(96), bytes: 1_048_576 }),
             step,
-            cause: Error::new(ErrorKind::StorageFull, "No space left on device"),
-        };
+            cause: &full_volume,
+            after: after_a_landing(Some(95)),
+        }
+        .to_string();
         assert_eq!(
-            FailureLine { at, landed_at: Some(Seq(96)), error: &landed }.to_string(),
+            line,
             format!(
-                "a checkpoint landed at position 96 but {words} failed: the volume is full (No \
-                 space left on device){retry}"
+                "a checkpoint landed at position 96 (1048576 bytes) in 1200 ms but {words} \
+                 failed: the volume is full (No space left on device); {AFTER_A_LANDING}\
+                 compacted below position 96{retry}"
             ),
             "{step:?}"
         );
         // The kernel's own words for the step never reach the line.
-        assert!(!FailureLine { at, landed_at: Some(Seq(96)), error: &landed }
-            .to_string()
-            .contains(&step.to_string()));
+        assert!(!line.contains(&step.to_string()), "{line}");
     }
-    let squatted = CheckpointError::Landed {
-        step: LandedStep::Retention,
-        cause: Error::other("a directory stands on the name"),
-    };
+    let squatted = Error::other("a directory stands on the name");
     assert_eq!(
-        FailureLine { at, landed_at: None, error: &squatted }.to_string(),
+        FailureLine::Landed {
+            at,
+            duration_ms: 1200,
+            base: None,
+            step: LandedStep::Retention,
+            cause: &squatted,
+            after: after_a_landing(None),
+        }
+        .to_string(),
         format!(
-            "a checkpoint landed at or above position 90 (its header unread) but retention \
-             failed: a directory stands on the name{retry}"
+            "a checkpoint landed at or above position 90 (its header unread) in 1200 ms but \
+             retention failed: a directory stands on the name; {AFTER_A_LANDING}hold nothing \
+             below the reclaim floor{retry}"
         )
     );
 }
@@ -1245,23 +1314,39 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
 /// from, and of the last of them the commit that ran it, by its position,
 /// how long it held every write, and whether it landed and where or how it
 /// failed, in the kernel's rendered words; a record the line could not read
-/// is said as unread, never as a landing. The kernel's own record, which
-/// only the kernel makes, reaches the line in the integration suite
-/// (`tests/it/checkpoint.rs`), off a real backstop run.
+/// is said as unread, never as a landing. Where the wake found the newest
+/// checkpoint moved and took the landing's re-reads off it, the line goes on
+/// to the base, what its landing reclaimed where the last inline run landed
+/// it whole — never a reclaim figure for a base whose run then failed — and
+/// what the re-reads moved, the floor and the feed's fence among them. The
+/// kernel's own record, which only the kernel makes, reaches the line in the
+/// integration suite (`tests/it/checkpoint.rs`), off a real backstop run.
 #[test]
 fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_last_ended() {
-    let landed = BackstopLine {
+    let head = "checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran inline \
+                on a writer since position 0, the last run by the commit at position 1026, \
+                holding every write 412 ms, landed at position 1026";
+    let landed = |newest| BackstopLine {
         runs: 1,
         since: Seq(0),
         last: Some(LastInlineRun { after: Seq(1026), held_ms: 412, outcome: Ok(Seq(1026)) }),
+        newest,
     };
+    assert_eq!(landed(None).to_string(), head, "a wake that took no re-read says none");
     assert_eq!(
-        landed.to_string(),
-        "checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran inline on a \
-         writer since position 0, the last run by the commit at position 1026, holding every \
-         write 412 ms, landed at position 1026"
+        landed(Some(NewestLanded {
+            base: Some(LandedBase { position: Seq(1026), bytes: 1_048_576 }),
+            reclaimed: Some(Reclaimed { bytes: 2_097_152, removed: vec![(Seq(0), 4_096)] }),
+            after: after_a_landing(Some(1025)),
+        }))
+        .to_string(),
+        format!(
+            "{head}; the newest checkpoint at position 1026 (1048576 bytes): 2097152 journal \
+             bytes reclaimed; checkpoint.0 removed (4096 bytes); {AFTER_A_LANDING}compacted \
+             below position 1026"
+        )
     );
-    let failed = BackstopLine {
+    let failed = |newest| BackstopLine {
         runs: 3,
         since: Seq(512),
         last: Some(LastInlineRun {
@@ -1269,15 +1354,36 @@ fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_las
             held_ms: 3,
             outcome: Err("checkpoint I/O failure: No space left on device".to_string()),
         }),
+        newest,
     };
+    let failed_head = "checkpoint: the cadence outran the checkpoint thread; 3 checkpoints ran \
+                       inline on a writer since position 512, the last run by the commit at \
+                       position 2050, holding every write 3 ms, FAILED: checkpoint I/O \
+                       failure: No space left on device";
+    assert_eq!(failed(None).to_string(), failed_head);
     assert_eq!(
-        failed.to_string(),
-        "checkpoint: the cadence outran the checkpoint thread; 3 checkpoints ran inline on a \
-         writer since position 512, the last run by the commit at position 2050, holding every \
-         write 3 ms, FAILED: checkpoint I/O failure: No space left on device"
+        failed(Some(NewestLanded {
+            base: Some(LandedBase { position: Seq(2048), bytes: 1_048_576 }),
+            reclaimed: None,
+            after: after_a_landing(None),
+        }))
+        .to_string(),
+        format!(
+            "{failed_head}; the newest checkpoint at position 2048 (1048576 bytes): \
+             {AFTER_A_LANDING}hold nothing below the reclaim floor"
+        ),
+        "a base whose run then failed: what moved, and no reclaim figure"
     );
     assert_eq!(
-        BackstopLine { runs: 1, since: Seq(0), last: None }.to_string(),
+        failed(Some(NewestLanded { base: None, reclaimed: None, after: after_a_landing(None) }))
+            .to_string(),
+        format!(
+            "{failed_head}; the newest checkpoint's header unread: {AFTER_A_LANDING}hold \
+             nothing below the reclaim floor"
+        )
+    );
+    assert_eq!(
+        BackstopLine { runs: 1, since: Seq(0), last: None, newest: None }.to_string(),
         "checkpoint: the cadence outran the checkpoint thread; 1 checkpoints ran inline on a \
          writer since position 0, the last unread"
     );
@@ -1400,17 +1506,20 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
 /// THE STANDING LINE's WORDS at fixed reads (`operations.md` §1 THE RATES;
 /// §1.1 m11): every clause standing, each in THE RATES' words with its
 /// position or file, in THE RATES' order, joined by `; ` — the cell index's
-/// with its place held, and the journal damage a history read met after the
-/// kernel's poison (RUNBOOK §2); each of the two flag clauses alone; and no
-/// clause, which is no line at all (`stands` false).
+/// with its place held, the kernel's poison with the position its halt line
+/// named, and the journal damage a history read met by its site, after the
+/// poison (RUNBOOK §2); each of the two flag clauses alone, and the damage
+/// alone at each of its sites; and no clause, which is no line at all
+/// (`stands` false).
 #[test]
 fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     use skep_core::commits::StoppedFile;
 
+    let corrupt = HistoryError::Corruption { at: Seq(9), cause: None };
     let every = StandingLine {
         halted_at: Some(Seq(17)),
-        poisoned: true,
-        history_damaged: true,
+        poisoned: Some(Seq(17)),
+        history_damaged: Some(JournalDamageSite(&corrupt).to_string()),
         stopped_files: vec![
             StoppedFile { name: "commits.log", since: 9 },
             StoppedFile { name: "feed-index.log", since: 12 },
@@ -1424,17 +1533,17 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     assert!(every.stands());
     assert_eq!(
         every.to_string(),
-        "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned; \
-         a history read found the journal unreadable; commits.log stopped since position 9; \
-         feed-index.log stopped since position 12; the pruner's thread is gone; the feed \
-         walk's thread is gone; positions (20, 48] stay uncovered; the cell index failed to \
-         build; deposits refused at the floor (free space 1000 below the floor in force \
-         268435456); CLAIMED-PERMISSIVE"
+        "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned \
+         since position 17; a history read found the journal unreadable at position 9; \
+         commits.log stopped since position 9; feed-index.log stopped since position 12; the \
+         pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
+         uncovered; the cell index failed to build; deposits refused at the floor (free space \
+         1000 below the floor in force 268435456); CLAIMED-PERMISSIVE"
     );
     let one = StandingLine {
         halted_at: None,
-        poisoned: false,
-        history_damaged: false,
+        poisoned: None,
+        history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: true,
         feed_walk_gone: None,
@@ -1444,13 +1553,34 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     };
     assert!(one.stands());
     assert_eq!(one.to_string(), "the pruner's thread is gone");
-    let damaged = StandingLine { history_damaged: true, pruner_gone: false, ..one };
+    let unreadable =
+        HistoryError::Io(std::io::Error::other("seg-3.wal: read: Input/output error"));
+    let damaged = StandingLine {
+        history_damaged: Some(JournalDamageSite(&unreadable).to_string()),
+        pruner_gone: false,
+        ..one
+    };
     assert!(damaged.stands(), "the journal damage alone stands");
-    assert_eq!(damaged.to_string(), "a history read found the journal unreadable");
+    assert_eq!(
+        damaged.to_string(),
+        "a history read found the journal unreadable (seg-3.wal: read: Input/output error)",
+        "an I/O failure's site is its file, its act and the OS's cause"
+    );
+    let poisoned = StandingLine {
+        poisoned: Some(Seq(1203)),
+        history_damaged: None,
+        claimed_permissive: true,
+        ..damaged
+    };
+    assert_eq!(
+        poisoned.to_string(),
+        "the kernel is poisoned since position 1203; CLAIMED-PERMISSIVE",
+        "the poison names the position the halt line named"
+    );
     let none = StandingLine {
         halted_at: None,
-        poisoned: false,
-        history_damaged: false,
+        poisoned: None,
+        history_damaged: None,
         stopped_files: Vec::new(),
         pruner_gone: false,
         feed_walk_gone: None,
@@ -1531,7 +1661,8 @@ fn the_history_damage_line_names_the_kernels_account_what_serves_and_the_act() {
 /// operator stream says ONE `failure: history: …` line for the uptime, never
 /// one per read; a refusal that is no damage — the saturation, a segment a
 /// reclamation removed, a position beyond the head — says nothing; and the
-/// standing line re-says the damage at its tick, alone on a board with
+/// standing line re-says the damage at its tick by the site the first line
+/// named — the position, never a later read's file — alone on a board with
 /// nothing else standing.
 #[test]
 fn a_history_read_that_meets_the_journals_damage_says_so_once_and_is_re_said_while_it_stands() {
@@ -1568,7 +1699,10 @@ fn a_history_read_that_meets_the_journals_damage_says_so_once_and_is_re_said_whi
         "the first damage said once for the uptime, never per read"
     );
     daemon.say_the_standing_line();
-    assert_eq!(said("standing: "), ["standing: a history read found the journal unreadable"]);
+    assert_eq!(
+        said("standing: "),
+        ["standing: a history read found the journal unreadable at position 9"]
+    );
 }
 
 /// THE VOLUME's LINE (m4) at fixed figures: the free space at start in

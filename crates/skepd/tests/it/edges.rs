@@ -6,8 +6,9 @@
 //! `failure:` line when a request first meets the bound, a `landing:` line
 //! at the first act the bound admits once it has stood clear for
 //! `EDGE_HOLD_DOWN`; nothing per request; nothing on a line but the
-//! condition — no count (the upload pool's landing alone carries the
-//! episode's refusals), no path, query, principal, peer or reader. The
+//! condition — no count (the upload and write pools' landings alone carry
+//! the episode's refusals, and the accept loop's recovery its failures), no
+//! path, query, principal, peer or reader. The
 //! refusals themselves — the five `503 …_busy` bodies, the budget's clean
 //! close, `/challenge`'s answer — are the standing suites' and unchanged.
 //!
@@ -136,10 +137,10 @@ struct Pool {
 /// FIRST refusal but not the last, a request admitted → still none (M3:
 /// measured from the last refusal); the clock past the hold-down since the
 /// last refusal, the holder's next admitted act → exactly ONE `landing: the
-/// {word} pool has room again` (the upload pool's with its count); a second
-/// admission → no second landing; a refusal after it → a NEW `failure:`.
-/// The read pools' and the write pool's lines carry no digit; every line
-/// opens with its class word.
+/// {word} pool has room again` (the upload pool's and the write pool's with
+/// the episode's count); a second admission → no second landing; a refusal
+/// after it → a NEW `failure:`. The read pools' lines carry no digit; every
+/// line opens with its class word.
 fn the_pools_pair_is_said_once_per_episode(sd: &Skepd, pool: &Pool) {
     let daemon = sd.daemon();
     let needle = format!("the {} pool", pool.word);
@@ -367,7 +368,9 @@ fn the_upload_pools_pair_is_said_once_per_episode_and_its_landing_counts_the_ref
 
 /// P1 — THE WRITE POOL (`503 write_busy`; a session write, the plain
 /// sequence): its pair on the daemon's record, the word `write`, judged at
-/// the one door the three write sequences share.
+/// the one door the three write sequences share — its landing carrying the
+/// episode's refusals, writes refused and no reader, as the upload pool's
+/// does.
 #[test]
 fn the_write_pools_pair_is_said_once_per_episode() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -380,7 +383,7 @@ fn the_write_pools_pair_is_said_once_per_episode() {
         hold: Daemon::try_hold_write_permit,
         request: Box::new(move || http(port, "POST", "/op", Some(&owner), frame.as_bytes())),
         door: said,
-        counted: false,
+        counted: true,
     };
     the_pools_pair_is_said_once_per_episode(&sd, &pool);
     sd.shutdown();
@@ -746,7 +749,7 @@ fn no_edge_pair_takes_the_unclassed_door_and_the_write_pool_has_one_door() {
     let door =
         section(&op, "    fn take_write_permit(", "    /// The locked state one write sequence");
     unclassed("the write pool's door", &door);
-    assert!(door.contains("self.say(edge.class(), PoolEdgeLine::new(WRITE_POOL, edge))"));
+    assert!(door.contains("self.say(edge.class(), PoolEdgeLine::counted(WRITE_POOL, edge))"));
     assert_eq!(
         op.matches("self.write_permits.try_acquire()").count(),
         1,

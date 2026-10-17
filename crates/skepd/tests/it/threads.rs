@@ -112,7 +112,8 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 /// answers `rejected`/`poisoned`/`halt` and the record holds the ruled line
 /// ONCE, `{p}` the head the kernel halted at; a second refused write adds
 /// no line; `/health`'s `writes.halted` is true; nothing committed; and the
-/// next tick re-says it as `the kernel is poisoned`.
+/// next tick re-says it as `the kernel is poisoned since position {p}`, the
+/// position the halt line named, so the two join on the stream.
 #[test]
 fn the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -149,8 +150,8 @@ fn the_kernels_halt_is_said_once_at_the_write_paths_door_and_health_says_halted(
     wait_until("the standing line", || !standing_lines(&sd).is_empty());
     assert_eq!(
         standing_lines(&sd)[0],
-        "standing: the kernel is poisoned; CLAIMED-PERMISSIVE",
-        "the poison re-said at the tick"
+        format!("standing: the kernel is poisoned since position {at}; CLAIMED-PERMISSIVE"),
+        "the poison re-said at the tick, at the position the halt line named"
     );
     sd.shutdown();
 }

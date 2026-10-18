@@ -1,18 +1,19 @@
-//! THE UPLOAD RECORDS, `<root>/uploads.log` — PATTERNS P22's honest-null
-//! arm, as the lease log: one JSON line per change of one upload, its
-//! current record its latest line; append-only; tail-checked at open and
-//! compacted there to the current records, every retired upload dropped
-//! (`media.md` Op inventory 1, the resumable upload (1), (3), (4), (6),
-//! (7); §The media stores). A lost record reads as NO upload: its partial
-//! is then an orphan open removes, and the resume starts afresh. A record
-//! line naming a designation the store's name check refuses reads as lost
-//! too — the log's lines meet the check a caller's names meet
-//! (`parse_line`) — so a log restored from elsewhere names no path out of
-//! the root. A record line whose offset passes its length, which no act
-//! writes, reads as lost as well.
+//! The upload records, `<root>/uploads.log`.
 //!
-//! A RECORD CHANGES BY ITS HOLDER's ACTS ALONE (`media.md` §The media
-//! stores, THE UPLOAD RECORDS — written at an upload's creation and after
+//! The log is PATTERNS P22's honest-null arm, as the lease log: one JSON
+//! line per change of one upload, its current record its latest line;
+//! append-only; tail-checked at open and compacted there to the current
+//! records, every retired upload dropped (`media.md` Op inventory 1, the
+//! resumable upload (1), (3), (4), (6), (7); §The media stores). A lost
+//! record reads as no upload: its partial is then an orphan open removes,
+//! and the resume starts afresh. A record line naming a designation the
+//! store's name check refuses reads as lost too — the log's lines meet the
+//! check a caller's names meet (`parse_line`) — so a log restored from
+//! elsewhere names no path out of the root. A record line whose offset
+//! passes its length, which no act writes, reads as lost as well.
+//!
+//! **A record changes by its holder's acts alone** (`media.md` §The media
+//! stores, the upload records — written at an upload's creation and after
 //! each durable append, set back at open to a shorter partial's length,
 //! retired): [`UploadRecords::create`], [`UploadRecords::mark_received`],
 //! [`UploadRecords::set_back`] and [`UploadRecords::retire`]. Each moves the
@@ -21,13 +22,13 @@
 //! (clause (3)) — and no caller hands the holder a record: its callers
 //! choose when a record changes, never what the change is.
 //!
-//! AN IDENTIFIER (`uploads/id.rs`) ANSWERS TO ITS UPLOADER ALONE: a lookup
-//! takes the asking principal, and an identifier whose record is another
-//! principal's answers exactly as one that was never minted (the register
-//! M-I2 (e)). The check is [`UploadRecords`]' own: every lookup it answers
-//! takes the asking principal, and its one lookup by identifier alone serves
-//! the pruner's expiry, which acts on an expired upload whatever principal
-//! minted it.
+//! **An identifier (`uploads/id.rs`) answers to its uploader alone.** A
+//! lookup takes the asking principal, and an identifier whose record is
+//! another principal's answers exactly as one that was never minted (the
+//! register M-I2 (e)). The check is [`UploadRecords`]' own: every lookup it
+//! answers takes the asking principal, and its one lookup by identifier
+//! alone serves the pruner's expiry, which acts on an expired upload
+//! whatever principal minted it.
 
 // The identifier: its 128 OS bits, its spelling and its two parses — the
 // one file that makes an `UploadId`.
@@ -49,37 +50,42 @@ pub use id::{NotAnUploadId, UploadId, IDENTIFIER_BYTES};
 /// The log's file name under the root.
 const UPLOADS_LOG: &str = "uploads.log";
 
-/// A span as the whole milliseconds the logs spell and the expiries add —
-/// saturating where it passes `u64`, as every expiry the store fixes does.
+/// Returns a span as the whole milliseconds the logs spell and expiries add.
+///
+/// It saturates where it passes `u64`, as every expiry the store fixes does.
 pub(crate) fn millis(span: Duration) -> u64 {
     u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// THE ONE EXPIRY RULE, for both expiries the store fixes: `interval`
-/// past `now_ms`, saturating. An upload's is fixed at its creation from the
-/// interval handed in then, which its record keeps, and at each byte
-/// received from that kept interval (clause (3); [`UploadRecords::create`],
-/// [`UploadRecords::mark_received`]); a lease's at its PUT, from the
-/// interval handed to the finish ([`Stream::finish`](crate::Stream::finish);
-/// `media.md` Op inventory 1, "THE LEASE'S STORE, SCOPE AND EXPIRY,
-/// STATED"). No caller computes an expiry the store then trusts. An instant
-/// is unix milliseconds, the `u64` the logs and the wire spell; a span is a
-/// [`Duration`] — so the clock reading and an interval never trade places
-/// at a call and compile.
+/// Applies the one expiry rule: `interval` past `now_ms`, saturating.
+///
+/// The rule serves both expiries the store fixes. An upload's is fixed at
+/// its creation from the interval handed in then, which its record keeps,
+/// and at each byte received from that kept interval (clause (3);
+/// [`UploadRecords::create`], [`UploadRecords::mark_received`]); a lease's
+/// at its PUT, from the interval handed to the finish
+/// ([`Stream::finish`](crate::Stream::finish); `media.md` Op inventory 1,
+/// "the lease's store, scope and expiry, stated"). No caller computes an
+/// expiry the store then trusts. An instant is unix milliseconds, the `u64`
+/// the logs and the wire spell; a span is a [`Duration`] — so the clock
+/// reading and an interval never trade places at a call and compile.
 pub(crate) fn expiry(now_ms: u64, interval: Duration) -> u64 {
     now_ms.saturating_add(millis(interval))
 }
 
-/// One upload's record (clause (1)), standing or expired and not yet
-/// removed — the identifier bound to its uploader, the designation, its
-/// declared length, the DURABLE offset (bytes received), the interval fixed
-/// at its creation, and the expiry fixed from the last byte received.
+/// One upload's record (clause (1)), standing or expired and not yet removed.
 ///
-/// ITS OFFSET NEVER PASSES ITS LENGTH, in every record the store holds or
-/// answers — the store takes no record back from a caller. Each of the four
-/// gates a record passes keeps it: its creation (`UploadRecords::create`)
-/// writes 0; a byte received (`UploadRecords::mark_received`) asserts it,
-/// its precondition, which its one caller keeps by marking no more than
+/// It holds the identifier bound to its uploader, the designation, its
+/// declared length, the durable offset (bytes received), the interval fixed
+/// at its creation, and the expiry fixed from its creation or the last byte
+/// received.
+///
+/// **Its offset never passes its length**, in every record the store holds
+/// or answers — the store takes no record back from a caller. Each of the
+/// four gates a record passes keeps it: its creation
+/// (`UploadRecords::create`) writes 0; a byte received
+/// (`UploadRecords::mark_received`) asserts it, its precondition, which its
+/// one caller keeps by marking no more than
 /// [`Stream::append`](crate::Stream::append) took within the length; open's
 /// set-back (`UploadRecords::set_back`) only ever lowers an offset, to a
 /// shorter partial's length; and a line read back at open whose offset
@@ -92,31 +98,39 @@ pub(crate) fn expiry(now_ms: u64, interval: Duration) -> u64 {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct UploadRecord {
+    /// The upload's identifier.
     pub id: UploadId,
-    /// The uploader — the principal the upload answers to alone (clause
-    /// (1)), as its caller spells it.
+    /// The uploader, as its caller spells it.
+    ///
+    /// It is the principal the upload answers to alone (clause (1)).
     pub principal: String,
-    /// The designation the upload's line spells: its creation's function's
+    /// The designation the upload's line spells.
+    ///
+    /// It is its creation's function's
     /// ([`HashFunction::designation`](crate::HashFunction::designation)), or,
     /// off a log restored from elsewhere, any designation the name check
     /// admits — a name read from disk, so a string and not the type.
     pub designation: String,
+    /// The upload's declared length, in bytes.
     pub length: u64,
+    /// The durable offset: the bytes received.
     pub offset: u64,
-    /// THE UPLOAD's INTERVAL — fixed at its creation from the limits in
-    /// force then and held here (clauses (1), (3)): each byte received
-    /// re-fixes `expires` this far past it, and a later limits record never
-    /// reaches a standing upload. Held in the whole milliseconds its log
-    /// line spells, so the record read back at open is the record answered.
+    /// The upload's interval, fixed at its creation from the limits in force.
+    ///
+    /// It is held here (clauses (1), (3)): each byte received re-fixes
+    /// `expires` this far past it, and a later limits record never reaches a
+    /// standing upload. Held in the whole milliseconds its log line spells,
+    /// so the record read back at open is the record answered.
     pub interval: Duration,
     /// The instant the upload stops standing, unix milliseconds.
     pub expires: u64,
 }
 
 impl UploadRecord {
-    /// The record as its log line's value. The stored format spells the
-    /// principal's member `key`, as the lease log's line does, and the
-    /// interval in whole milliseconds.
+    /// Returns the record as its log line's value.
+    ///
+    /// The stored format spells the principal's member `key`, as the lease
+    /// log's line does, and the interval in whole milliseconds.
     fn to_value(&self) -> Value {
         json!({
             "designation": self.designation,
@@ -129,7 +143,7 @@ impl UploadRecord {
         })
     }
 
-    /// Whether the upload stands at `now_ms`: unexpired.
+    /// Returns whether the upload stands at `now_ms`: unexpired.
     pub(crate) fn stands(&self, now_ms: u64) -> bool {
         now_ms < self.expires
     }
@@ -141,19 +155,21 @@ enum Line {
     Retirement(UploadId),
 }
 
-/// A line's value read as a record or a retirement — `None` for a value of
-/// no shape this build reads. Among them, a record line lacking any member
-/// it carries (its interval included): the store holds no value of its own
-/// to put in a missing member's place. And a record line naming a
-/// designation the store's name check refuses (`designation_ok`, the check
-/// every name a caller hands [`Store`](crate::Store) meets): no creation
+/// Reads a line's value as a record or a retirement, or answers `None`.
+///
+/// `None` is for a value of no shape this build reads. Among them, a record
+/// line lacking any member it carries (its interval included): the store
+/// holds no value of its own to put in a missing member's place. And a
+/// record line naming a designation the store's name check refuses
+/// (`designation_ok`, the check a name a caller hands
+/// [`Store`](crate::Store) meets before it becomes a path): no creation
 /// writes one, but a log restored from elsewhere (`media.md` §Recovery) may,
 /// and read, its designation would be the directory open's reconciliation
 /// cuts a partial back in or removes one from — above the root through
 /// `..`, anywhere as an absolute path. It reads as a lost record does. So
 /// does a record line whose offset passes its length, the one gate of
 /// [`UploadRecord`]'s invariant a line from disk meets: no act writes one,
-/// and standing, its upload would refuse every resume, never reach a
+/// and standing, its upload would refuse every append, never reach a
 /// finish, and count past its length in its principal's pending bytes
 /// until it expired.
 fn parse_line(v: &Value) -> Option<Line> {
@@ -173,27 +189,36 @@ fn parse_line(v: &Value) -> Option<Line> {
     }))
 }
 
-/// The records as held in memory beside their log — answered by the asking
-/// principal, as the lease log answers its leases: a record goes only to
-/// the principal that minted it, save to the pruner's lookup by identifier
-/// alone ([`UploadRecords::of_any_principal`]) and open's walk of every
-/// record ([`UploadRecords::all`]). And changed only by its own acts —
-/// [`UploadRecords::create`], [`UploadRecords::mark_received`],
-/// [`UploadRecords::set_back`], [`UploadRecords::retire`] — whose one
-/// append, [`UploadRecords::write`], is private to this file: no record
-/// reaches the map or the log but one an act built.
+/// The records as held in memory beside their log.
+///
+/// They are answered by the asking principal, as the lease log answers its
+/// leases: a record goes only to the principal that minted it, save to the
+/// pruner's read of the expired uploads ([`UploadRecords::expired`]) and its
+/// lookup by identifier alone ([`UploadRecords::of_any_principal`]), open's
+/// walk of every record ([`UploadRecords::all`]), and the inspection's read
+/// of the log as found ([`UploadRecords::read_as_found`]). And they are
+/// changed only by their own acts — [`UploadRecords::create`],
+/// [`UploadRecords::mark_received`], [`UploadRecords::set_back`],
+/// [`UploadRecords::retire`] — whose appends, [`UploadRecords::write`] and
+/// the retirement's own, are private to this file: no record reaches the
+/// map or the log but one an act built.
 pub(crate) struct UploadRecords {
     log: Log,
     records: HashMap<UploadId, UploadRecord>,
 }
 
 impl UploadRecords {
-    /// Open the log under `root`: the tail checked, every line folded —
-    /// a record line replacing the one before it, a retirement dropping
-    /// it. Answers the records and what the reading found, the lines that
-    /// read as no record counted among it. Compaction is the caller's,
-    /// after the reconciliation with the partials
-    /// ([`UploadRecords::compact`]).
+    /// Opens the log under `root`, its tail checked and every line folded.
+    ///
+    /// A record line replaces the one before it, a retirement drops it.
+    /// Answers the records and what the reading found, the lines that read
+    /// as no record counted among it. Compaction is the caller's, after the
+    /// reconciliation with the partials ([`UploadRecords::compact`]).
+    ///
+    /// # Errors
+    ///
+    /// The log's read, the cut of its tail or its open for appending
+    /// failing (`Log::open`).
     pub fn open(root: &Path) -> io::Result<(UploadRecords, LogRead)> {
         let (log, values, mut found) = Log::open(root.join(UPLOADS_LOG))?;
         let (records, unread) = fold(&values);
@@ -201,9 +226,15 @@ impl UploadRecords {
         Ok((UploadRecords { log, records }, found))
     }
 
-    /// THE LOG AS FOUND, folded (`Log::read_as_found`): the current records
-    /// and what the reading found — the inspection's read, which cuts no
-    /// tail, opens nothing for appending and creates no file.
+    /// Reads the log as found, folded (`Log::read_as_found`).
+    ///
+    /// Answers the current records and what the reading found — the
+    /// inspection's read, which cuts no tail, opens nothing for appending
+    /// and creates no file.
+    ///
+    /// # Errors
+    ///
+    /// The log's read failing, save for its absence (`Log::read_as_found`).
     pub fn read_as_found(root: &Path) -> io::Result<(Vec<UploadRecord>, LogRead)> {
         let (values, mut found) = Log::read_as_found(&root.join(UPLOADS_LOG))?;
         let (records, unread) = fold(&values);
@@ -213,21 +244,25 @@ impl UploadRecords {
         Ok((records, found))
     }
 
-    /// THE PRINCIPAL's record by identifier, whatever its expiry — `None`
-    /// for an identifier `principal`'s records do not name. A stream's
-    /// appends' lookup, and a byte received's.
+    /// Returns the principal's record by identifier, whatever its expiry.
+    ///
+    /// `None` for an identifier `principal`'s records do not name. A
+    /// stream's appends' lookup, and a byte received's.
     pub fn of_principal(&self, principal: &str, id: &UploadId) -> Option<&UploadRecord> {
         self.records.get(id).filter(|r| r.principal == principal)
     }
 
-    /// THE PRINCIPAL's STANDING record by identifier — `None` for an
-    /// identifier `principal`'s records do not name or whose upload has
-    /// expired at `now_ms`, one answer for both (M-I2 (e)).
+    /// Returns the principal's standing record by identifier.
+    ///
+    /// `None` for an identifier `principal`'s records do not name or whose
+    /// upload has expired at `now_ms`, one answer for both (M-I2 (e)).
     pub fn standing(&self, principal: &str, id: &UploadId, now_ms: u64) -> Option<&UploadRecord> {
         self.of_principal(principal, id).filter(|r| r.stands(now_ms))
     }
 
-    /// THE PRINCIPAL's standing uploads at `now_ms`, in identifier order.
+    /// Returns the principal's standing uploads at `now_ms`.
+    ///
+    /// They come in identifier order.
     pub fn standing_of(&self, principal: &str, now_ms: u64) -> Vec<UploadRecord> {
         let mut out: Vec<UploadRecord> = self
             .records
@@ -239,16 +274,19 @@ impl UploadRecords {
         out
     }
 
-    /// EVERY principal's expired uploads at `now_ms`, in identifier order —
-    /// the pruner's read.
+    /// Returns every principal's expired uploads at `now_ms`.
+    ///
+    /// They come in identifier order — the pruner's read.
     pub fn expired(&self, now_ms: u64) -> Vec<UploadRecord> {
         let mut out: Vec<UploadRecord> = self.records.values().filter(|r| !r.stands(now_ms)).cloned().collect();
         out.sort_by_key(|r| r.id);
         out
     }
 
-    /// The sum of the principal's standing uploads' durable offsets at
-    /// `now_ms` — its bytes received and not yet finished.
+    /// Returns the sum of the principal's standing uploads' durable offsets.
+    ///
+    /// The uploads are those standing at `now_ms`, the sum its bytes
+    /// received and not yet finished.
     pub fn received_of(&self, principal: &str, now_ms: u64) -> u64 {
         self.records
             .values()
@@ -256,34 +294,45 @@ impl UploadRecords {
             .fold(0u64, |acc, r| acc.saturating_add(r.offset))
     }
 
-    /// The sum of every principal's standing uploads' durable offsets at
-    /// `now_ms`.
+    /// Returns every principal's standing uploads' durable offsets, summed.
+    ///
+    /// The uploads are those standing at `now_ms`.
     pub fn received_total(&self, now_ms: u64) -> u64 {
         self.records.values().filter(|r| r.stands(now_ms)).fold(0u64, |acc, r| acc.saturating_add(r.offset))
     }
 
-    /// ANY principal's record by identifier — the one lookup by identifier
-    /// alone, which serves the pruner's expiry alone
-    /// ([`Store::expire_upload`](crate::Store::expire_upload)): that act
-    /// removes an expired upload whoever minted it, and answers nothing of
-    /// the record.
+    /// Returns any principal's record by identifier.
+    ///
+    /// It is the one lookup by identifier alone, which serves the pruner's
+    /// expiry alone ([`Store::expire_upload`](crate::Store::expire_upload)):
+    /// that act removes an expired upload whoever minted it, and answers
+    /// nothing of the record.
     pub fn of_any_principal(&self, id: &UploadId) -> Option<&UploadRecord> {
         self.records.get(id)
     }
 
-    /// Every record, every principal's — the walk open's reconciliation
-    /// makes over them all, and nothing else.
+    /// Returns every record, every principal's.
+    ///
+    /// It is the walk open's reconciliation makes over them all, and open's
+    /// count of them, and nothing else.
     pub fn all(&self) -> impl Iterator<Item = &UploadRecord> {
         self.records.values()
     }
 
-    /// THE RECORD's CREATION (clause (1)): `principal`'s upload `id` of
-    /// `designation` and declared `length` — offset 0, THE UPLOAD's INTERVAL
-    /// held as its line spells it, in whole milliseconds, so the record open
-    /// reads back is the record answered here, and its first expiry that
-    /// interval past `now_ms` — written, synced and answered. The store
-    /// creates the partial first and hands the designation of the function
-    /// the creation named ([`Store::create_upload`](crate::Store::create_upload)).
+    /// Creates the record of `principal`'s upload `id` (clause (1)).
+    ///
+    /// The upload is of `designation` and declared `length` — offset 0, the
+    /// upload's interval held as its line spells it, in whole milliseconds,
+    /// so the record open reads back is the record answered here, and its
+    /// first expiry that interval past `now_ms` — written, synced and
+    /// answered. The store creates the partial first and hands the
+    /// designation of the function the creation named
+    /// ([`Store::create_upload`](crate::Store::create_upload)).
+    ///
+    /// # Errors
+    ///
+    /// The record's append failing (`Log::append_synced`): a stopped log, or
+    /// a write or sync that failed.
     pub fn create(
         &mut self,
         id: UploadId,
@@ -307,22 +356,30 @@ impl UploadRecords {
         Ok(record)
     }
 
-    /// MARK THE BYTES RECEIVED through `offset` (clause (3)): the
-    /// principal's record's offset set to it and its expiry re-fixed the
-    /// record's own interval past `now_ms`, written and synced, the rest
-    /// kept; answers the record written. `NoUpload` where `principal`'s
-    /// records do not name `id`, nothing written. The store marks only after
-    /// the partial's sync, at the bytes a stream's handle holds
+    /// Marks the bytes received through `offset` (clause (3)).
+    ///
+    /// The principal's record's offset is set to it and its expiry re-fixed
+    /// the record's own interval past `now_ms`, written and synced, the rest
+    /// kept; answers the record written. The store marks only after the
+    /// partial's sync, at the bytes a stream's handle holds
     /// ([`Stream::append`](crate::Stream::append),
     /// [`Stream::settle`](crate::Stream::settle)).
     ///
-    /// PRECONDITION: `offset` is within the record's length — the one act
-    /// that raises an offset keeps [`UploadRecord`]'s invariant by it, and
-    /// its one caller keeps it, marking only the bytes a stream's append
-    /// took within the length ([`Stream::append`](crate::Stream::append)'s
-    /// `Length`, the one check). A mark past it is a defect of this crate,
-    /// no caller's answer, so it PANICS before anything is written, where a
-    /// refusal would reach a client as `Length` over bytes it never sent.
+    /// # Errors
+    ///
+    /// `NoUpload` where `principal`'s records do not name `id`, nothing
+    /// written; `Io` where the record's append fails (`Log::append_synced`).
+    ///
+    /// # Panics
+    ///
+    /// Its precondition is that `offset` is within the record's length — the
+    /// one act that raises an offset keeps [`UploadRecord`]'s invariant by
+    /// it, and its one caller keeps it, marking only the bytes a stream's
+    /// append took within the length
+    /// ([`Stream::append`](crate::Stream::append)'s `Length`, the one check).
+    /// A mark past it is a defect of this crate, no caller's answer, so it
+    /// panics before anything is written, where a refusal would reach a
+    /// client as `Length` over bytes it never sent.
     pub fn mark_received(
         &mut self,
         principal: &str,
@@ -343,13 +400,20 @@ impl UploadRecords {
         Ok(next)
     }
 
-    /// SET AN OFFSET BACK at open (clause (4)): the record's offset lowered
-    /// to `offset`, the length of a partial shorter than it, written and
-    /// synced — its expiry KEPT: a set-back receives no byte, and nothing but
-    /// a byte received re-fixes an expiry (clause (3)). It only ever lowers:
-    /// where no record is held, or its offset is not past `offset`, there is
-    /// nothing to set back and nothing is written. Open's reconciliation's
-    /// act (`partials::reconcile`), by identifier alone as its walk is.
+    /// Sets a record's offset back at open (clause (4)).
+    ///
+    /// The record's offset is lowered to `offset`, the length of a partial
+    /// shorter than it, written and synced — its expiry kept: a set-back
+    /// receives no byte, and nothing but a byte received re-fixes an expiry
+    /// (clause (3)). It only ever lowers: where no record is held, or its
+    /// offset is not past `offset`, there is nothing to set back and nothing
+    /// is written. Open's reconciliation's act (`partials::reconcile`), by
+    /// identifier alone as its walk is.
+    ///
+    /// # Errors
+    ///
+    /// The record's append failing (`Log::append_synced`): a stopped log, or
+    /// a write or sync that failed.
     pub fn set_back(&mut self, id: &UploadId, offset: u64) -> io::Result<()> {
         let Some(mut next) = self.records.get(id).filter(|r| offset < r.offset).cloned() else {
             return Ok(());
@@ -358,25 +422,36 @@ impl UploadRecords {
         self.write(next)
     }
 
-    /// WRITE `record` as the upload's current line — appended and SYNCED —
-    /// and hold it: the one append the creation, a byte received and a
-    /// set-back share, each handing it the record its act built. A byte
-    /// counts as received only once the partial AND its record's offset are
-    /// on disk.
+    /// Appends and syncs `record` as the upload's current line, and holds it.
+    ///
+    /// It is the one append the creation, a byte received and a set-back
+    /// share, each handing it the record its act built. A byte counts as
+    /// received only once the partial *and* its record's offset are on disk.
+    ///
+    /// # Errors
+    ///
+    /// The append's refusal or failure (`Log::append_synced`): a stopped
+    /// log, or a write or sync that failed.
     fn write(&mut self, record: UploadRecord) -> io::Result<()> {
         self.log.append_synced(&record.to_value())?;
         self.records.insert(record.id, record);
         Ok(())
     }
 
-    /// Retire an upload: the record dropped, THEN its line appended — the
-    /// one write of either store whose map moves before its append returns.
-    /// Every caller retires an upload whose partial is already gone — a
-    /// finish's rename took it, an end, an expiry or open removed it — so a
-    /// record kept here over a failed line would answer as standing over
+    /// Retires an upload: the record dropped, then its line appended.
+    ///
+    /// It is the one write of either store whose map moves before its append
+    /// returns. Every caller retires an upload whose partial is already gone
+    /// — a finish's rename took it, an end, an expiry or open removed it — so
+    /// a record kept here over a failed line would answer as standing over
     /// nothing, while a lost retirement line costs nothing: open's
     /// reconciliation retires a record whose partial is gone. So the record
     /// goes first, and the line's durability is left to the OS.
+    ///
+    /// # Errors
+    ///
+    /// The line's append failing (`Log::append_unsynced`): a stopped log, or
+    /// a write that failed.
     pub fn retire(&mut self, id: &UploadId) -> io::Result<()> {
         if self.records.remove(id).is_none() {
             return Ok(());
@@ -384,23 +459,35 @@ impl UploadRecords {
         self.log.append_unsynced(&json!({"id": id.to_hex(), "retired": true}))
     }
 
-    /// Rewrite the log to the current records where any line on disk is
-    /// not one — so the log never grows with the board's upload history.
-    /// Answers the size it rewrote the log from, `None` where it left the
-    /// log as it was (`Log::compact`).
+    /// Rewrites the log to the current records.
+    ///
+    /// It rewrites where the log holds anything else, or where it has
+    /// stopped. A line on disk that is not one goes, so the log never grows
+    /// with the board's upload history. Answers the size it rewrote the log
+    /// from, `None` where it left the log as it was (`Log::compact`).
+    ///
+    /// # Errors
+    ///
+    /// The rewrite's failure (`Log::compact`).
     pub fn compact(&mut self) -> io::Result<Option<LogSize>> {
         let mut ids: Vec<&UploadId> = self.records.keys().collect();
         ids.sort();
         self.log.compact(ids.into_iter().map(|id| self.records[id].to_value()))
     }
 
-    /// THE RUNTIME COMPACTION's TRIGGER (the pruner's pass): rewrite the log
-    /// as [`UploadRecords::compact`] does where it has STOPPED, or where its
-    /// whole lines number at least `min_lines` and more than `trigger` times
-    /// the current records — so a small log is never rewritten per pass, and
-    /// a log past its trigger is. Answers the size a rewrite rewrote the log
-    /// from, `None` where none ran. The caller holds this type's lock, which
-    /// is the lock on this log's appends alone.
+    /// Runs the runtime compaction's trigger, the pruner's pass, on the log.
+    ///
+    /// It rewrites the log as [`UploadRecords::compact`] does where it has
+    /// stopped, or where its whole lines number at least `min_lines` and more
+    /// than `trigger` times the current records — so a small log that has
+    /// not stopped is never rewritten per pass, and a log past its trigger
+    /// is. Answers the size a rewrite rewrote the log from, `None` where none
+    /// ran. The caller holds this type's lock, which is the lock on this
+    /// log's appends alone.
+    ///
+    /// # Errors
+    ///
+    /// The rewrite's failure (`Log::compact`).
     pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize) -> io::Result<Option<LogSize>> {
         if !past_trigger(&self.log, self.records.len(), trigger, min_lines) {
             return Ok(None);
@@ -408,30 +495,36 @@ impl UploadRecords {
         self.compact()
     }
 
-    /// The log's stop, where it has stopped (`Log::stop`): it takes no
-    /// append until a compaction completes.
+    /// Returns the log's stop, where it has stopped (`Log::stop`).
+    ///
+    /// A stopped log takes no append until a compaction completes.
     pub fn log_stopped(&self) -> Option<LogStop> {
         self.log.stop()
     }
 
-    /// The refusal a record's append would meet, where the log has stopped,
-    /// judged ahead of the act that append follows (`Log::refuse_if_stopped`).
+    /// Judges a record's append ahead of the act that append follows.
+    ///
+    /// # Errors
+    ///
+    /// The refusal the append would meet, where the log has stopped
+    /// (`Log::refuse_if_stopped`).
     pub fn refuse_if_stopped(&mut self) -> io::Result<()> {
         self.log.refuse_if_stopped()
     }
 
-    /// The log's size (`Log::size`).
+    /// Returns the log's size (`Log::size`).
     pub fn log_size(&self) -> LogSize {
         self.log.size()
     }
 }
 
-/// Fold a log's lines into the records they leave: a record line replacing
-/// the one before it, a retirement dropping it, a line of a shape this build
-/// does not read kept on disk and folded to nothing (compaction drops it,
-/// honestly: it named no record this build holds) — and counted, the
-/// second figure: the lines read as no record, which the open's account
-/// carries ([`LogRead::unread`]).
+/// Folds a log's lines into the records they leave.
+///
+/// A record line replaces the one before it, a retirement drops it, and a
+/// line of a shape this build does not read is kept on disk and folded to
+/// nothing (compaction drops it, honestly: it named no record this build
+/// holds) — and counted, the second figure: the lines read as no record,
+/// which the open's account carries ([`LogRead::unread`]).
 fn fold(values: &[Value]) -> (HashMap<UploadId, UploadRecord>, usize) {
     let mut records = HashMap::new();
     let mut unread = 0;
@@ -449,10 +542,12 @@ fn fold(values: &[Value]) -> (HashMap<UploadId, UploadRecord>, usize) {
     (records, unread)
 }
 
-/// THE ONE TRIGGER RULE both logs read: a stopped log is rewritten
-/// whatever its count, since only a completed compaction lifts the stop;
-/// otherwise a log is rewritten once its whole lines number at least
-/// `min_lines` and more than `trigger` times its `current` records.
+/// Returns whether `log` is past the one trigger rule both logs read.
+///
+/// A stopped log is rewritten whatever its count, since only a completed
+/// compaction lifts the stop; otherwise a log is rewritten once its whole
+/// lines number at least `min_lines` and more than `trigger` times its
+/// `current` records.
 pub(crate) fn past_trigger(log: &Log, current: usize, trigger: usize, min_lines: usize) -> bool {
     log.stopped().is_some() || (log.lines() >= min_lines && log.lines() > trigger.saturating_mul(current))
 }
@@ -463,13 +558,14 @@ mod tests {
 
     use super::*;
 
-    /// EACH ACT MOVES THE FIGURES IT NAMES AND KEEPS THE REST, and writes a
-    /// line only where it changes one: the creation holds its interval as
-    /// the line spells it; a byte received moves the offset and re-fixes the
-    /// expiry the record's own interval past it, for the principal the
-    /// record answers to alone; a set-back lowers the offset and keeps the
-    /// expiry, and raises nothing — the record read back at the next open as
-    /// the last act answered it.
+    /// Each act moves the figures it names and keeps the rest.
+    ///
+    /// It writes a line only where it changes one: the creation holds its
+    /// interval as the line spells it; a byte received moves the offset and
+    /// re-fixes the expiry the record's own interval past it, for the
+    /// principal the record answers to alone; a set-back lowers the offset
+    /// and keeps the expiry, and raises nothing — the record read back at the
+    /// next open as the last act answered it.
     #[test]
     fn each_act_moves_the_figures_it_names_and_keeps_the_rest() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -502,12 +598,14 @@ mod tests {
         assert_eq!(reopened.of_principal("k", &id), Some(&set_back), "read back as the last act answered it");
     }
 
-    /// NO ACT RAISES AN OFFSET PAST ITS LENGTH (`UploadRecord`: "ITS OFFSET
-    /// NEVER PASSES ITS LENGTH"): a mark past the record's length — no
-    /// caller's answer, a defect of the store's own, its one caller marking
-    /// only what an append took within the length — STOPS, naming the
-    /// precondition it breaks, before anything is written: the record and
-    /// the log stand as they were; a mark at the length stands.
+    /// No act raises an offset past its length.
+    ///
+    /// It is `UploadRecord`'s rule, "its offset never passes its length": a
+    /// mark past the record's length — no caller's answer, a defect of the
+    /// store's own, its one caller marking only what an append took within
+    /// the length — stops, naming the precondition it breaks, before anything
+    /// is written: the record and the log stand as they were; a mark at the
+    /// length stands.
     #[test]
     fn a_mark_past_the_length_stops_as_a_defect_and_writes_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");

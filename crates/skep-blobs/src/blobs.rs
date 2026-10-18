@@ -1,42 +1,53 @@
-//! THE FILES, `<root>/<designation>/<hex>`: the spellings a designation and
-//! a hex name must have, where a file lives for names that pass them
-//! ([`blob_path`], which answers none for a malformed one), the ASIDE name a
-//! replaced instance carries until the deferred unlink, the listings of the
-//! directories that hold those names and open's sweep of the asides
-//! ([`sweep_asides`]), open's walk that holds every entry it acts on to what
-//! the store makes — no link followed, no file it writes shared, no special
-//! file read ([`refuse_links_and_special_files`]) — and its probe of the one
-//! capability of the volume no other act of the open exercises, a second
-//! name for a file ([`probe_hard_link`]); the owner-only modes every
-//! directory and file the store makes is born with ([`dir_builder`],
-//! [`file_options`]); the removals, each answering the bytes its unlink
-//! freed ([`freed_by`]): of a name another remover may have taken first
-//! ([`remove_if_present`]) and of one that stands ([`remove_standing`]);
-//! the absence rule every read of a name keeps — not found is none, any
-//! other failure an answer ([`not_found_as_none`]) — the directory fsync
-//! every install order under the root ends in (a rename is durable only at
-//! its directory's fsync — `media.md` Op inventory 1; the register M-I5
-//! (a)), and the host's two reads at the root ([`free_space`],
-//! [`capacity`]): the volume's free space, which the floor is held against
-//! at every creation and chunk, and its capacity, which the default
-//! per-account limit is a share of, read once at the start. The order that
-//! installs a file is the store's (`store.rs`); the logs' is `jsonl.rs`'s.
+//! The files at `<root>/<designation>/<hex>`, and the acts on their names.
 //!
-//! EVERY FAILURE NAMES ITS FILE AND ITS ACT ([`named`], [`label`],
-//! [`dir_label`]): an I/O error the store answers reads `{file}: {act}:
-//! {cause}` — `blobs/leases.log: cut back: Read-only file system (os error
-//! 30)` — its kind kept, the file named as it stands within the data
-//! directory (the root's own name first) and never by an absolute path, and
-//! a partial by its directory alone, its file name being an upload's
-//! identifier (`operations.md` §1.1 row 2's form, the change feed's own:
-//! a refused open names its file, the kind kept; the act added, since the
-//! store reads, cuts, renames and syncs at its open, and the act is what
-//! tells one refusal from another). The cause is the OS's, a full volume's
-//! spelled first in the operator stream's own words — `the volume is full
-//! (No space left on device (os error 28))` ([`Cause`]; `operations.md` §1)
-//! — so one search finds every act that failed for room. The operator reads
-//! it whole on the daemon's refused start (`skepd: blob store: {e}`), in the
-//! pruner's line and from the pull; a client reads it in `blob_io`'s detail.
+//! The module holds the spellings a designation and a hex name must have;
+//! where a file lives for names that pass them ([`blob_path`], which answers
+//! none for a malformed one); the aside name a replaced instance carries
+//! until the deferred unlink, and a file the pruner renames aside until its
+//! unlink; the listings of the directories that hold those names and open's
+//! sweep of the asides ([`sweep_asides`]); open's walk that holds every
+//! entry it acts on to what the store makes — no link followed, no file it
+//! writes shared, no special file read ([`refuse_links_and_special_files`])
+//! — and its probe of the one capability of the volume no other act of the
+//! open exercises, a second name for a file ([`probe_hard_link`]); the
+//! owner-only modes every directory and file the store makes is born with
+//! ([`dir_builder`], [`file_options`]); the removals, each answering the
+//! bytes its unlink freed ([`freed_by`]): of a name another remover may have
+//! taken first ([`remove_if_present`]) and of one that stands
+//! ([`remove_standing`]); the absence rule — not found is none, any other
+//! failure an answer ([`not_found_as_none`]) — which every read of a name
+//! that answers an absence keeps, save the `is_file` and `is_dir` checks of
+//! the finish, the inspection and the pull, which read any failure as
+//! absence; the directory fsync every install order under the root ends in
+//! (a rename is durable only at its directory's fsync — `media.md` Op
+//! inventory 1; the register M-I5 (a)); and the host's two reads at the
+//! root ([`free_space`], [`capacity`]): the volume's free space, which the
+//! floor is held against at every creation and chunk, and its capacity,
+//! which the default per-account limit is a share of, read once at the
+//! start. The order that installs a file is the store's (`store.rs`); the
+//! logs' is `jsonl.rs`'s.
+//!
+//! **A failure at a file names its file and its act** ([`named`],
+//! [`label`], [`dir_label`]). An I/O error the store answers there reads
+//! `{file}: {act}: {cause}` — `blobs/leases.log: cut back: Read-only file
+//! system (os error 30)` — its kind kept, the file named as it stands
+//! within the data directory (the root's own name first) and never by an
+//! absolute path, and a partial by its directory alone, its file name being
+//! an upload's identifier (`operations.md` §1.1 row 2's form, the change
+//! feed's own: a refused open names its file, the kind kept; the act added,
+//! since the store reads, cuts, renames and syncs at its open, and the act
+//! is what tells one refusal from another). The store's own refusals at a
+//! file — a stopped log, a torn stream, a short partial, a planted entry —
+//! name the file in words of their own; the OS's refusal of entropy at a
+//! creation or a pull names no file; and the operator's two doors name what
+//! they were handed as it was handed in — a source, a root or a board
+//! directory that does not stand, a hex the bytes do not hash to. The cause
+//! is the OS's, a full volume's spelled first in the operator stream's own
+//! words — `the volume is full (No space left on device (os error 28))`
+//! ([`Cause`]; `operations.md` §1) — so one search finds every act that
+//! failed for room. The operator reads it whole on the daemon's refused
+//! start (`skepd: blob store: {e}`), in the pruner's line and from the pull;
+//! a client reads it in `blob_io`'s detail.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -44,30 +55,39 @@ use std::fs::{self, DirEntry, FileType};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-/// The prefix of an aside name: `.retired-<hex>-<n>`, the second name a
-/// replaced instance carries from the finish's link until the deferred
-/// unlink. The leading dot keeps it apart from any hex name, as the
-/// partial's is. Nothing names an aside — no lease, no cell — so every
-/// reader of a designation directory passes over one, and the pruner's pass
-/// and open's sweep ([`sweep_asides`]) remove it.
+/// The prefix of an aside name, `.retired-<hex>-<n>`.
+///
+/// An aside is the second name a replaced instance carries from the
+/// finish's link until the deferred unlink, or the name a file the pruner
+/// renames aside carries until its unlink. The leading dot keeps it apart
+/// from any hex name, as the partial's is. Nothing names an aside — no
+/// lease, no cell — so every reader of a designation directory's blobs or
+/// partials passes over one, and the pruner's pass and open's sweep
+/// ([`sweep_asides`]) remove it.
 const ASIDE_PREFIX: &str = ".retired-";
 
-/// The aside name of the `n`th replace of `hex` this process makes.
+/// Returns the aside name of `hex` at serial `n`.
+///
+/// `n` is the serial of the aside names this store makes, a replace's and
+/// a rename aside's alike.
 pub(crate) fn aside_name(hex: &str, n: u64) -> String {
     format!("{ASIDE_PREFIX}{hex}-{n}")
 }
 
-/// Whether a directory entry's name is an aside's: exactly what
-/// [`aside_name`] spells — the prefix, a hex name, `-`, and a count in at
-/// most twenty decimal digits.
+/// Returns whether a directory entry's name is an aside's.
+///
+/// It has the shape [`aside_name`] spells — the prefix, a hex name, `-`,
+/// and a count in at most twenty decimal digits.
 pub(crate) fn is_aside_name(name: &str) -> bool {
     name.strip_prefix(ASIDE_PREFIX).and_then(|rest| rest.rsplit_once('-')).is_some_and(|(hex, n)| {
         hex_ok(hex) && !n.is_empty() && n.len() <= 20 && n.bytes().all(|b| b.is_ascii_digit())
     })
 }
 
-/// A designation's spelling: 1 to 32 bytes of lowercase letters, digits and
-/// `-` — no `/` and no `.`, so no path climbs out of the root by it, and no
+/// Returns whether `designation` is a designation's spelling.
+///
+/// The spelling is 1 to 32 bytes of lowercase letters, digits and `-` — no
+/// `/` and no `.`, so no path climbs out of the root by it, and no
 /// uppercase, so one designation has one spelling on a volume that folds
 /// case. A designation names a directory under the root and a hex a file
 /// inside one, so the two never share a listing — though a short hex
@@ -78,7 +98,9 @@ pub(crate) fn designation_ok(designation: &str) -> bool {
         && designation.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// A hex name's spelling: lowercase hex, an even length between 2 and 128.
+/// Returns whether `hex` is a hex name's spelling.
+///
+/// The spelling is lowercase hex, an even length between 2 and 128.
 pub(crate) fn hex_ok(hex: &str) -> bool {
     hex.len() >= 2
         && hex.len() <= 128
@@ -86,10 +108,11 @@ pub(crate) fn hex_ok(hex: &str) -> bool {
         && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The last `n` components of `path`, joined by `/` — of an entry `n − 1`
-/// below the root, the root's own name first: the name a line gives it, as
-/// it stands within the data directory. The root and prefix components of
-/// an absolute path are never among them.
+/// Returns the last `n` components of `path`, joined by `/`.
+///
+/// For an entry `n − 1` below the root they begin with the root's own name:
+/// the name a line gives it, as it stands within the data directory. The
+/// root and prefix components of an absolute path are never among them.
 fn within(path: &Path, n: usize) -> String {
     let parts: Vec<String> = path
         .components()
@@ -99,43 +122,51 @@ fn within(path: &Path, n: usize) -> String {
     parts[parts.len().saturating_sub(n)..].join("/")
 }
 
-/// A FILE's NAME as a line gives it: `path`, an entry `n − 1` below the
-/// root, by its last `n` components — `label(log, 2)` is
-/// `blobs/leases.log`, `label(blob, 3)` is `blobs/blake3/<hex>`.
+/// Returns a file's name as a line gives it.
+///
+/// `path`, an entry `n − 1` below the root, goes by its last `n` components
+/// — `label(log, 2)` is `blobs/leases.log`, `label(blob, 3)` is
+/// `blobs/blake3/<hex>`.
 pub(crate) fn label(path: &Path, n: usize) -> String {
     within(path, n)
 }
 
-/// A DIRECTORY's NAME as a line gives it, its trailing `/` marking it one:
-/// `dir_label(root, 1)` is `blobs/`, `dir_label(designation_dir, 2)` is
-/// `blobs/blake3/`.
+/// Returns a directory's name as a line gives it.
+///
+/// Its trailing `/` marks it one: `dir_label(root, 1)` is `blobs/`,
+/// `dir_label(designation_dir, 2)` is `blobs/blake3/`.
 pub(crate) fn dir_label(dir: &Path, n: usize) -> String {
     format!("{}/", within(dir, n))
 }
 
-/// A PARTIAL's NAME as a line gives it — `a partial in blobs/blake3/`, by
-/// its designation directory `dir` alone: its file name spells an upload's
-/// identifier, which no line carries (`operations.md` §1 NEVER; the D9
-/// vector), and a client's `blob_io` detail is a line of the same text.
+/// Returns a partial's name as a line gives it: `a partial in blobs/blake3/`.
+///
+/// It goes by its designation directory `dir` alone: its file name spells
+/// an upload's identifier, which no line carries (`operations.md` §1's
+/// never list; the D9 vector), and a client's `blob_io` detail is a line of
+/// the same text.
 pub(crate) fn partial_label(dir: &Path) -> String {
     format!("a partial in {}", dir_label(dir, 2))
 }
 
-/// THE FAILURE OF `act` AT `name`, as the store answers it: `{name}: {act}:
-/// {cause}`, the cause as [`Cause`] spells `e`, `e`'s kind kept, so a
-/// caller's match on the kind — the absence rule's `NotFound` among them —
-/// reads it unchanged.
+/// Returns the failure of `act` at `name`, as the store answers it.
+///
+/// It reads `{name}: {act}: {cause}`, the cause as [`Cause`] spells `e`,
+/// `e`'s kind kept, so a caller's match on the kind — the absence rule's
+/// `NotFound` among them — reads it unchanged.
 pub(crate) fn named(e: io::Error, name: impl fmt::Display, act: &str) -> io::Error {
     io::Error::new(e.kind(), format!("{name}: {act}: {}", Cause(&e)))
 }
 
-/// AN I/O FAILURE's CAUSE AS A LINE SAYS IT: the OS's text, a full volume's
-/// spelled first in the operator stream's own words — `the volume is full
-/// (No space left on device (os error 28))` (`operations.md` §1: a cause the
-/// OS gives as `StorageFull` reads `the volume is full`, the OS's text
-/// beside it) — so one search finds every act that failed for room, the
-/// store's beside the journal's and the change feed's. An error the store
-/// has already named carries its cause so spelled, and reads as it stands.
+/// An I/O failure's cause as a line says it.
+///
+/// It is the OS's text, a full volume's spelled first in the operator
+/// stream's own words — `the volume is full (No space left on device (os
+/// error 28))` (`operations.md` §1: a cause the OS gives as `StorageFull`
+/// reads `the volume is full`, the OS's text beside it) — so one search
+/// finds every act that failed for room, the store's beside the journal's
+/// and the change feed's. An error the store has already named carries its
+/// cause so spelled, and reads as it stands.
 pub(crate) struct Cause<'a>(pub(crate) &'a io::Error);
 
 impl fmt::Display for Cause<'_> {
@@ -150,8 +181,14 @@ impl fmt::Display for Cause<'_> {
     }
 }
 
-/// Every directory under `root`, by name, in name order — whatever the
-/// names; a reader of designations alone passes over the rest.
+/// Returns every directory under `root`, by name, in name order.
+///
+/// It answers them whatever the names; a reader of designations alone
+/// passes over the rest.
+///
+/// # Errors
+///
+/// The root's listing failing, named (`list`).
 pub(crate) fn dirs_under(root: &Path) -> io::Result<Vec<String>> {
     let listed = |e| named(e, dir_label(root, 1), "list");
     let mut out = Vec::new();
@@ -165,9 +202,15 @@ pub(crate) fn dirs_under(root: &Path) -> io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// The names in `<root>/<designation>/` that `keep` accepts, handed each
-/// name and its entry's kind, in name order — none where the designation
-/// is malformed or its directory absent.
+/// Returns the names in `<root>/<designation>/` that `keep` accepts.
+///
+/// `keep` is handed each name and its entry's kind; the names come in name
+/// order — none where the designation is malformed or its directory
+/// absent.
+///
+/// # Errors
+///
+/// The directory's listing failing, save for its absence, named (`list`).
 pub(crate) fn names_in(
     root: &Path,
     designation: &str,
@@ -193,14 +236,22 @@ pub(crate) fn names_in(
     Ok(out)
 }
 
-/// OPEN's SWEEP OF THE ASIDES: every aside in every designation directory
-/// under `root` removed, each directory fsynced where one went — the second
-/// names a replace left that its deferred unlink never took: a crash's
+/// Removes, at open, every aside in every designation directory under `root`.
+///
+/// Each directory is fsynced where one went. The asides are the second
+/// names a replace left that its deferred unlink never took — a crash's
 /// between the finish's answer and that unlink, or a finish's that failed
-/// past its link. Nothing names an aside, so nothing is lost. Answers the
-/// count removed and the bytes their unlinks freed — an aside that shares
-/// its inode with its hash's name, a crash's between a replace's link and
-/// its rename, frees none — for the open's account ([`Opened`](crate::Opened)).
+/// past its link — and the files the pruner renamed aside that a crash or
+/// a failure kept from their unlink. Nothing names an aside, so nothing is
+/// lost. Answers the count removed and the bytes their unlinks freed — an
+/// aside that shares its inode with its hash's name, a crash's between a
+/// replace's link and its rename, frees none — for the open's account
+/// ([`Opened`](crate::Opened)).
+///
+/// # Errors
+///
+/// A listing, an aside's removal — a name gone before it among them — or a
+/// directory's fsync failing, each named (`list`, `remove`, `fsync`).
 pub(crate) fn sweep_asides(root: &Path) -> io::Result<(usize, u64)> {
     let (mut removed, mut freed) = (0, 0);
     for dir_name in dirs_under(root)? {
@@ -218,46 +269,51 @@ pub(crate) fn sweep_asides(root: &Path) -> io::Result<(usize, u64)> {
     Ok((removed, freed))
 }
 
-/// NOTHING OPEN ACTS ON IS FOLLOWED OR SHARED: every entry under `root`, and
-/// every entry in each designation directory there, is a directory or a
-/// regular file — the two kinds this store makes — and every regular file
-/// has one link, save a file at a hex name and an aside. Open cuts the logs
-/// at their torn tails and the partials past their records, and rewrites the
-/// logs through their compaction twins; while it serves, the store appends
-/// to the logs, writes the partials, and creates, renames over and unlinks
-/// names in the designation directories. Through a symbolic link each of
-/// those acts lands outside the root; through a second hard link the cuts
-/// and writes land in a file that is also another name's — the journal's,
-/// beside `blobs/` on the board's one volume; and on a FIFO open's read of a
-/// log never ends. No build of this store makes any of them, so one standing
-/// here was planted — a compromise's, which the remediation that keeps the
-/// files leaves (`media.md` §Recovery, "A COMPROMISE's REMEDIATION DISCARDS
-/// EVERY MEDIA STORE BUT THE FILES"), or a copy's that was not the board's
-/// own — and it fails the open, named, before any act. The board directory
-/// is one volume (§Recovery, the deployment list's item (2)), so no link
-/// here is the operator's. A file at a hex name and an aside are held to
-/// their kind and never to their count of links: no act writes either in
-/// place — each is renamed onto, linked, unlinked or read — and a replace
-/// gives the replaced instance its aside as a second link, which a crash
-/// between that link and the rename leaves standing beside the hash. Every
-/// other regular file the store makes — a log, a twin, a partial — it
-/// writes in place. The walk enters the directories whose names a
-/// designation can spell, the ones every other walk of the store enters
-/// (`names_in`).
+/// Checks that nothing open acts on is followed or shared.
 ///
-/// ONE REFUSAL COUNTS EVERY ENTRY, AND IS ONE LINE OF BOUNDED LENGTH: the
-/// walk reads the whole tree first, so a tree holding several — a hard-link
-/// copy gives every log and partial a second link at once — costs the
-/// operator one refused start and not one per entry; and the refusal says
-/// what made each kind and the act that clears it ([`Refused`]). It names
-/// the entries in at most [`PLANTED_NAMED`] clauses and counts the rest by
-/// kind, so a tree of thousands — one linked back from another disk holds a
-/// symbolic link at every hex name — still refuses in one line whose acts
-/// end it, whole under a log collector's line limit. A partial is named by
-/// its directory alone, its file name being an upload's identifier, so the
-/// partials of one directory and one count of links are one clause, counted.
-/// An entry gone between its listing and its read — an inspection beside a
-/// serving daemon, whose finishes rename partials away — is passed over.
+/// Every entry under `root`, and every entry in each designation directory
+/// there, is a directory or a regular file — the two kinds this store makes
+/// — and every regular file has one link, save a file at a hex name and an
+/// aside. Open cuts the logs at their torn tails and the partials past their
+/// records, and rewrites the logs through their compaction twins; while it
+/// serves, the store appends to the logs, writes the partials, and creates,
+/// renames over and unlinks names in the designation directories. Through a
+/// symbolic link each of those acts lands outside the root; through a
+/// second hard link the cuts and writes land in a file that is also another
+/// name's — the journal's, beside `blobs/` on the board's one volume; and on
+/// a FIFO open's read of a log never ends. No build of this store makes any
+/// of them, so one standing here was planted — a compromise's, which the
+/// remediation that keeps the files leaves (`media.md` §Recovery, "a
+/// compromise's remediation discards every media store but the files"), or
+/// a copy's that was not the board's own — and it fails the open, named,
+/// before any act. The board directory is one volume (§Recovery, the
+/// deployment list's item (2)), so no link here is the operator's. A file
+/// at a hex name and an aside are held to their kind and never to their
+/// count of links: no act writes either in place — each is renamed onto,
+/// linked, unlinked or read — and a replace gives the replaced instance its
+/// aside as a second link, which a crash between that link and the rename
+/// leaves standing beside the hash. Every other regular file the store
+/// makes — a log, a twin, a partial — it writes in place. The walk enters
+/// the directories whose names a designation can spell, the ones every
+/// other walk of the store enters (`names_in`).
+///
+/// # Errors
+///
+/// **One refusal counts every entry, and is one line of bounded length**,
+/// as `InvalidData`: the walk reads the whole tree first, so a tree holding
+/// several — a hard-link copy gives every log and partial a second link at
+/// once — costs the operator one refused start and not one per entry; and
+/// the refusal says what made each kind and the act that clears it
+/// ([`Refused`]). It names the entries in at most [`PLANTED_NAMED`] clauses
+/// and counts the rest by kind, so a tree of thousands — one linked back
+/// from another disk holds a symbolic link at every hex name — still
+/// refuses in one line whose acts end it, whole under a log collector's
+/// line limit. A partial is named by its directory alone, its file name
+/// being an upload's identifier, so the partials of one directory and one
+/// count of links are one clause, counted. An entry gone between its
+/// listing and the read of its links — an inspection beside a serving
+/// daemon, whose finishes rename partials away — is passed over; any other
+/// failure of a listing or a stat is answered, named (`list`, `stat`).
 pub(crate) fn refuse_links_and_special_files(root: &Path) -> io::Result<()> {
     let listed = |e| named(e, dir_label(root, 1), "list");
     let mut planted = Vec::new();
@@ -291,23 +347,28 @@ pub(crate) fn refuse_links_and_special_files(root: &Path) -> io::Result<()> {
     Err(io::Error::new(io::ErrorKind::InvalidData, Refused { root: dir_label(root, 1), planted }.to_string()))
 }
 
-/// What stands at a name the store makes, where it is not what the store
-/// makes there — ordered as the refusal orders the clauses of one name.
+/// What stands at a name the store makes, other than what it makes there.
+///
+/// The variants are ordered as the refusal orders the clauses of one name.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Found {
     /// A symbolic link, which the store never makes and never follows.
     SymbolicLink,
-    /// A FIFO, a socket or a device, which the store never makes and never
-    /// reads.
+    /// A FIFO, a socket or a device.
+    ///
+    /// The store never makes one and never reads one.
     SpecialFile,
-    /// A file the store writes in place, sharing its inode with another
-    /// name — this many links in all.
+    /// A file the store writes in place, sharing its inode with another name.
+    ///
+    /// It holds this many links in all.
     Links(u64),
 }
 
 impl Found {
-    /// The kind it counts as among the entries past those a refusal names:
-    /// its place in [`KINDS`].
+    /// Returns the kind it counts as among the entries past the named ones.
+    ///
+    /// The named ones are those a refusal names; the kind is its place in
+    /// [`KINDS`].
     fn kind(self) -> usize {
         match self {
             Found::SymbolicLink => 0,
@@ -317,32 +378,39 @@ impl Found {
     }
 }
 
-/// The kinds a refusal counts the entries past its named clauses by, each
-/// as one and as many: `and 193 more symbolic links`.
+/// The kinds a refusal counts the entries past its named clauses by.
+///
+/// Each is spelled as one and as many: `and 193 more symbolic links`.
 const KINDS: [(&str, &str); 3] = [
     ("symbolic link", "symbolic links"),
     ("special file", "special files"),
     ("file with a second link", "files with a second link"),
 ];
 
-/// Where a refused entry stands, as a line names it — ordered as the
-/// refusal names them: the root's own entries first, the logs and their
-/// twins among them; then the partials, one name per directory; then every
-/// other entry in a designation directory, by name.
+/// Where a refused entry stands, as a line names it.
+///
+/// The variants are ordered as the refusal names them: the root's own
+/// entries first, the logs and their twins among them; then the partials,
+/// one name per directory; then every other entry in a designation
+/// directory, by name.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum At {
     /// An entry under the root, by its place: `blobs/uploads.log`.
     Root(String),
-    /// A partial, by its designation directory alone — `blobs/blake3/` —
-    /// its file name being an upload's identifier, which no line carries.
+    /// A partial, by its designation directory alone: `blobs/blake3/`.
+    ///
+    /// Its file name is an upload's identifier, which no line carries.
     PartialIn(String),
-    /// Any other entry in a designation directory, by its place:
-    /// `blobs/blake3/<hex>`.
+    /// Any other entry in a designation directory, by its place.
+    ///
+    /// Its place reads `blobs/blake3/<hex>`.
     Inner(String),
 }
 
-/// One entry, as a line names it: a partial as `a partial in {dir}`
-/// ([`partial_label`]'s words), every other entry by its place.
+/// One entry, as a line names it.
+///
+/// A partial reads `a partial in {dir}` ([`partial_label`]'s words), every
+/// other entry its place.
 impl fmt::Display for At {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -358,27 +426,31 @@ struct Planted {
     found: Found,
 }
 
-/// THE MOST CLAUSES ONE REFUSAL NAMES — eight, INTERIM: the entries past
-/// them are counted by kind, so the refusal is one line whose acts end it,
-/// however many entries a tree holds — a line of one clause per entry over
-/// ten thousand passes the 16 KiB a container's log driver splits a line at
-/// (journald's 48 KiB not long after), its act landing in a record of its
-/// own, the `skepd: ` prefix far above it.
+/// The most clauses one refusal names: eight, interim.
+///
+/// The entries past them are counted by kind, so the refusal is one line
+/// whose acts end it, however many entries a tree holds — a line of one
+/// clause per entry over ten thousand passes the 16 KiB a container's log
+/// driver splits a line at (journald's 48 KiB not long after), its act
+/// landing in a record of its own, the `skepd: ` prefix far above it.
 const PLANTED_NAMED: usize = 8;
 
-/// THE WALK's ONE REFUSAL: how many entries it found, at most
-/// [`PLANTED_NAMED`] clauses naming them — one per place and kind, the
-/// partials of one directory and one count of links one clause, counted —
-/// in [`At`]'s order and the entries past them counted by kind, then the
-/// cause and the act for each kind among them all.
+/// The walk's one refusal.
+///
+/// It says how many entries the walk found, at most [`PLANTED_NAMED`]
+/// clauses naming them — one per place and kind, the partials of one
+/// directory and one count of links one clause, counted — in [`At`]'s order
+/// and the entries past them counted by kind, then the cause and the act
+/// for each kind among them all.
 struct Refused {
     root: String,
     planted: Vec<Planted>,
 }
 
-/// One clause of a refusal: the `count` entries at `at` that `found` stands
-/// at — `blobs/leases.log is a symbolic link`, `3 partials in blobs/blake3/
-/// have 2 links`.
+/// A refusal's clause: the `count` entries at `at` that `found` stands at.
+///
+/// It reads `blobs/leases.log is a symbolic link`, or `3 partials in
+/// blobs/blake3/ have 2 links`.
 struct Clause<'a> {
     at: &'a At,
     found: Found,
@@ -457,10 +529,17 @@ impl fmt::Display for Refused {
     }
 }
 
-/// The entry's refusal, if it is not what the store makes at `at`: a
-/// directory, or a regular file — one with a single link where the store
-/// writes it in place (`written_in_place`). Its kind is read without
-/// following it; a file gone before its links are read is none.
+/// Returns the entry's refusal, if it is not what the store makes at `at`.
+///
+/// The store makes a directory, or a regular file — one with a single link
+/// where the store writes it in place (`written_in_place`). Its kind is
+/// read without following it; a file gone before its links are read is
+/// none.
+///
+/// # Errors
+///
+/// The read of its kind or of its links failing, save that absence, named
+/// (`stat`).
 fn planted_at(entry: &DirEntry, at: At, written_in_place: bool) -> io::Result<Option<Planted>> {
     let stat = |e| named(e, &at, "stat");
     let kind = entry.file_type().map_err(stat)?;
@@ -482,8 +561,9 @@ fn planted_at(entry: &DirEntry, at: At, written_in_place: bool) -> io::Result<Op
     Ok(found.map(|found| Planted { at, found }))
 }
 
-/// A regular file's count of links — on a non-unix target one, the count
-/// unread; v1 targets unix.
+/// Returns a regular file's count of links.
+///
+/// On a non-unix target it is one, the count unread; v1 targets unix.
 fn link_count(meta: &fs::Metadata) -> u64 {
     #[cfg(unix)]
     {
@@ -496,34 +576,50 @@ fn link_count(meta: &fs::Metadata) -> u64 {
     }
 }
 
-/// THE DIRECTORY THE HARD-LINK PROBE MAKES AND REMOVES under the root,
-/// `.link-probe`: its leading dot no designation spells ([`designation_ok`]),
-/// so open's walk passes over what it holds; and the open that makes it
-/// removes it before it answers, so no store that serves has one standing.
+/// The directory the hard-link probe makes and removes under the root.
+///
+/// It is `.link-probe`: its leading dot no designation spells
+/// ([`designation_ok`]), so open's walk passes over what it holds; and the
+/// open that makes it removes it before it answers, or fails — one whose
+/// probe file cannot be made, or whose removal fails, leaves it to the next
+/// open — so no store that serves has one standing.
 const LINK_PROBE: &str = ".link-probe";
 
-/// OPEN's HARD-LINK PROBE: the one capability of the volume the store needs
-/// that no other act of the open exercises — a SECOND NAME for a file,
-/// which a replace gives the replaced instance before its rename (the
-/// finish's aside, `store.rs`), so every re-PUT of a file the board holds
-/// takes one. On a volume that makes none — FAT, exFAT, a share that
-/// refuses them — the store would serve every new upload and fail every
-/// re-PUT at its install, the client's `blob_io` then telling a file
-/// already here from a fresh one (`media.md` Op inventory 1, "NO ANSWER OF
-/// THE UPLOAD SAYS WHETHER THE FILE WAS ALREADY HERE"). So the open makes
-/// one, inside a directory of its own ([`LINK_PROBE`]), and refuses where
-/// the volume refuses it ([`makes_no_link`]), naming the volume's lack and
-/// the act that clears it, the OS's kind kept; any other failure of the
-/// probe is the act's own, its file and its cause named. A probe a kill cut
-/// short is removed first, by the same names, and the probe's own after it,
-/// so the open answers with none standing; one that cannot be removed fails
-/// the open, named — an I/O failure is no absence.
+/// Probes the volume at open for a second name for a file, a hard link.
+///
+/// It is the one capability of the volume the store needs that no other act
+/// of the open exercises — a second name for a file, which a replace gives
+/// the replaced instance before its rename (the finish's aside,
+/// `store.rs`), so every re-PUT of a file the board holds takes one. On a
+/// volume that makes none — FAT, exFAT, a share that refuses them — the
+/// store would serve every new upload and fail every re-PUT at its install,
+/// the client's `blob_io` then telling a file already here from a fresh one
+/// (`media.md` Op inventory 1, "no answer of the upload says whether the
+/// file was already here"). So the open makes one, inside a directory of
+/// its own ([`LINK_PROBE`]). A probe a kill cut short, or a failed open
+/// left, is removed first, by the same names, and the probe's own after its
+/// link, so an open that succeeds answers with none standing; one whose
+/// probe file cannot be made fails, its probe directory left for the next
+/// open to remove.
+///
+/// # Errors
+///
+/// The open refuses where the volume refuses the link ([`makes_no_link`]),
+/// naming the volume's lack and the act that clears it, the OS's kind kept;
+/// any other failure of the probe is the act's own, its file and its cause
+/// named; a probe that cannot be removed fails the open, named — an I/O
+/// failure is no absence.
 pub(crate) fn probe_hard_link(root: &Path) -> io::Result<()> {
     probe_hard_link_by(root, |name, second| fs::hard_link(name, second))
 }
 
-/// [`probe_hard_link`], its second name made by `link` — the act the unit
-/// suite fails in its place.
+/// Runs [`probe_hard_link`], its second name made by `link`.
+///
+/// `link` is the act the unit suite fails in its place.
+///
+/// # Errors
+///
+/// As [`probe_hard_link`]'s, a failure of `link` among them.
 fn probe_hard_link_by(root: &Path, link: impl FnOnce(&Path, &Path) -> io::Result<()>) -> io::Result<()> {
     let dir = root.join(LINK_PROBE);
     let names = [dir.join("a"), dir.join("b")];
@@ -554,9 +650,14 @@ fn probe_hard_link_by(root: &Path, link: impl FnOnce(&Path, &Path) -> io::Result
     linked.and(cleared)
 }
 
-/// Remove the probe's two names and its directory where they stand — a
-/// kill's leftovers before the probe, the probe's own after it — any failure
-/// but absence answered, its file named.
+/// Removes the probe's two names and its directory where they stand.
+///
+/// They are a kill's or a failed open's leftovers before the probe, the
+/// probe's own after it.
+///
+/// # Errors
+///
+/// Any failure but absence, its file named (`remove`).
 fn clear_probe(dir: &Path, names: &[PathBuf; 2]) -> io::Result<()> {
     for name in names {
         not_found_as_none(fs::remove_file(name)).map_err(|e| named(e, label(name, 3), "remove"))?;
@@ -565,18 +666,27 @@ fn clear_probe(dir: &Path, names: &[PathBuf; 2]) -> io::Result<()> {
     Ok(())
 }
 
-/// Whether a link's failure is the volume's refusal of hard links: `EPERM`,
-/// Linux's answer from a filesystem that makes none (FAT, exFAT); `ENOTSUP`
-/// or `EOPNOTSUPP`, macOS's and a network share's; `ENOSYS`. Every other
-/// failure — a full volume, a failing device — is the act's own.
+/// Returns whether a link's failure is the volume's refusal of hard links.
+///
+/// The refusals are `EPERM`, Linux's answer from a filesystem that makes
+/// none (FAT, exFAT); `ENOTSUP` or `EOPNOTSUPP`, macOS's and a network
+/// share's; `ENOSYS`. Every other failure — a full volume, a failing device
+/// — is the act's own.
 fn makes_no_link(e: &io::Error) -> bool {
     use rustix::io::Errno;
     Errno::from_io_error(e).is_some_and(|n| [Errno::PERM, Errno::NOTSUP, Errno::OPNOTSUPP, Errno::NOSYS].contains(&n))
 }
 
-/// THE ABSENCE RULE, spelled once: `Ok(Some(value))` where the name stands,
-/// `Ok(None)` where nothing does (`NotFound`), and every other failure
-/// answered — an I/O failure is no absence (the register M-I5 (c)).
+/// Reads `result` by the absence rule: not found is none.
+///
+/// The rule is spelled here, and by hand in `Store::rename_aside`'s match:
+/// `Ok(Some(value))` where the name stands, and `Ok(None)` where nothing
+/// does (`NotFound`).
+///
+/// # Errors
+///
+/// Every other failure is answered — an I/O failure is no absence (the
+/// register M-I5 (c)).
 pub(crate) fn not_found_as_none<T>(result: io::Result<T>) -> io::Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
@@ -585,12 +695,17 @@ pub(crate) fn not_found_as_none<T>(result: io::Result<T>) -> io::Result<Option<T
     }
 }
 
-/// Remove the file at `path`: `Ok(Some(freed))` where a file went, the
-/// bytes its unlink freed ([`freed_by`]); `Ok(None)` where none stood — a
-/// name another remover took first (the pruner's pass, open's sweep, the
-/// deferred unlink) leaves nothing to do — and any other failure answered,
-/// the OS's alone: the caller names the file ([`named`]), a partial by its
-/// directory.
+/// Removes the file at `path`, where one stands.
+///
+/// Answers `Ok(Some(freed))` where a file went, the bytes its unlink freed
+/// ([`freed_by`]); `Ok(None)` where none stood — a name another remover took
+/// first (the pruner's pass, open's sweep, the deferred unlink) leaves
+/// nothing to do.
+///
+/// # Errors
+///
+/// Any other failure, the OS's alone: the caller names the file
+/// ([`named`]), a partial by its directory.
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<Option<u64>> {
     let Some(meta) = not_found_as_none(fs::symlink_metadata(path))? else {
         return Ok(None);
@@ -598,22 +713,28 @@ pub(crate) fn remove_if_present(path: &Path) -> io::Result<Option<u64>> {
     Ok(not_found_as_none(fs::remove_file(path))?.map(|()| freed_by(&meta)))
 }
 
-/// Remove the file at `path`, which stands — open's own removals, which
-/// nothing races, so a name gone there is a failure like any other: the
-/// bytes its unlink freed ([`freed_by`]), and any failure answered, the
-/// OS's alone, the caller naming the file ([`named`]).
+/// Removes the file at `path`, which stands.
+///
+/// These are open's own removals, which nothing races. Answers the bytes
+/// its unlink freed ([`freed_by`]).
+///
+/// # Errors
+///
+/// Any failure, the OS's alone, the caller naming the file ([`named`]): a
+/// name gone here is a failure like any other.
 pub(crate) fn remove_standing(path: &Path) -> io::Result<u64> {
     let meta = fs::symlink_metadata(path)?;
     fs::remove_file(path)?;
     Ok(freed_by(&meta))
 }
 
-/// THE BYTES AN UNLINK FREES, read off the file's metadata before it: its
-/// length where the unlink takes its last name, and nothing where another
-/// name still holds it — a replaced instance's aside sharing an inode with
-/// its hash's name, a hard-link copy's second name — so a removal's figure
-/// is what the volume regains, and an act that unlinked files and freed
-/// nothing says so.
+/// Returns the bytes an unlink frees, read off the file's metadata before it.
+///
+/// They are its length where the unlink takes its last name, and nothing
+/// where another name still holds it — a replaced instance's aside sharing
+/// an inode with its hash's name, a hard-link copy's second name — so a
+/// removal's figure is what the volume regains, and an act that unlinked
+/// files and freed nothing says so.
 fn freed_by(meta: &fs::Metadata) -> u64 {
     if link_count(meta) > 1 {
         0
@@ -622,17 +743,18 @@ fn freed_by(meta: &fs::Metadata) -> u64 {
     }
 }
 
-/// THE STORE's MODES, owner-only — a directory `0700`, a file `0600` — set
-/// at creation, so the process umask cannot loosen them: the deposited
-/// bytes are the depositors' own, owner-only from the first grain. Every
-/// directory and file the store makes is born with them, through
-/// [`dir_builder`] and [`file_options`], its one way to make either; a
-/// rename carries a file's mode onto its new name, and a directory or a file
-/// that already stands keeps the mode it has. A pin, moved by a ruling and
-/// set by no operator: the service units' umask, `077`, is a second guard
-/// beside it (`RUNBOOK.md` §9), and `tests/it/modes.rs` holds every entry
-/// the store makes to these exact bits. On a non-unix target no mode is
-/// set; v1 targets unix.
+/// A directory's mode, owner-only: `0700`, beside a file's `0600`.
+///
+/// They are set at creation, so the process umask cannot loosen them: the
+/// deposited bytes are the depositors' own, owner-only from the first
+/// grain. Every directory and file the store makes is born with them,
+/// through [`dir_builder`] and [`file_options`], its one way to make either;
+/// a rename carries a file's mode onto its new name, and a directory or a
+/// file that already stands keeps the mode it has. A pin, moved by a design
+/// decision and set by no operator: the service units' umask, `077`, is a
+/// second guard beside it (`RUNBOOK.md` §9), and `tests/it/modes.rs` holds
+/// every entry the store makes to these exact bits. On a non-unix target no
+/// mode is set; v1 targets unix.
 #[cfg(unix)]
 const DIR_MODE: u32 = 0o700;
 
@@ -640,8 +762,10 @@ const DIR_MODE: u32 = 0o700;
 #[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
-/// A builder for a directory the store makes, born owner-only (`DIR_MODE`);
-/// the caller says whether it makes the parents too.
+/// Returns a builder for a directory the store makes, born owner-only.
+///
+/// Its mode is `DIR_MODE`; the caller says whether it makes the parents
+/// too.
 pub(crate) fn dir_builder() -> fs::DirBuilder {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -649,8 +773,9 @@ pub(crate) fn dir_builder() -> fs::DirBuilder {
     builder
 }
 
-/// The options a file the store makes is opened with, born owner-only
-/// (`FILE_MODE`); the caller says how it opens.
+/// Returns the open options of a file the store makes, born owner-only.
+///
+/// Its mode is `FILE_MODE`; the caller says how it opens.
 pub(crate) fn file_options() -> fs::OpenOptions {
     let mut opts = fs::OpenOptions::new();
     #[cfg(unix)]
@@ -658,10 +783,16 @@ pub(crate) fn file_options() -> fs::OpenOptions {
     opts
 }
 
-/// Fsync a directory, so entry creations, removals and renames inside it
-/// are durable (the kernel's own discipline, `journal/segment.rs`). On a
-/// non-unix target this is a no-op; v1 targets unix. Its failure is the
-/// OS's alone: the caller names the directory by its depth ([`named`]).
+/// Fsyncs a directory, so entry changes inside it are durable.
+///
+/// The changes are creations, removals and renames (the kernel's own
+/// discipline, `journal/segment.rs`). On a non-unix target this is a no-op;
+/// v1 targets unix.
+///
+/// # Errors
+///
+/// The directory's open or sync failing, the OS's alone: the caller names
+/// the directory by its depth ([`named`]).
 pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -674,29 +805,41 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// The volume's free space at the root `path`, in bytes — what the floor
-/// reads: the blocks available to an unprivileged writer times the fragment
-/// size. Bytes alone: the volume's inodes (`f_favail`) are not read, and on
-/// a volume of many small deposits — each one file and one inode, however
-/// few its bytes — they run out first, every write then refused as the
-/// volume full while this figure says there is room (`RUNBOOK.md` §1).
+/// Returns the volume's free space at the root `path`, in bytes.
+///
+/// It is what the floor reads: the blocks available to an unprivileged
+/// writer times the fragment size. Bytes alone: the volume's inodes
+/// (`f_favail`) are not read, and on a volume of many small deposits — each
+/// one file and one inode, however few its bytes — they run out first,
+/// every write then refused as the volume full while this figure says there
+/// is room (`RUNBOOK.md` §1).
+///
+/// # Errors
+///
+/// The `statvfs` read failing, named (`statvfs`).
 pub(crate) fn free_space(path: &Path) -> io::Result<u64> {
     let v = rustix::fs::statvfs(path).map_err(|e| named(e.into(), dir_label(path, 1), "statvfs"))?;
     Ok(v.f_bavail.saturating_mul(v.f_frsize))
 }
 
-/// The volume's CAPACITY at the root `path`, in bytes — the same `statvfs`
-/// read as [`free_space`]'s, its total blocks times the fragment size: what
-/// the daemon's default per-account limit is a share of, read once at its
-/// start.
+/// Returns the volume's capacity at the root `path`, in bytes.
+///
+/// It is the same `statvfs` read as [`free_space`]'s, its total blocks
+/// times the fragment size: what the daemon's default per-account limit is
+/// a share of, read once at its start.
+///
+/// # Errors
+///
+/// The `statvfs` read failing, named (`statvfs`).
 pub(crate) fn capacity(path: &Path) -> io::Result<u64> {
     let v = rustix::fs::statvfs(path).map_err(|e| named(e.into(), dir_label(path, 1), "statvfs"))?;
     Ok(v.f_blocks.saturating_mul(v.f_frsize))
 }
 
-/// The path of a blob of `designation` and `hex` under `root`, or `None`
-/// where either name is malformed — the name check a caller's names pass
-/// before they become a blob's path
+/// Returns the path of a blob of `designation` and `hex` under `root`.
+///
+/// `None` where either name is malformed — the name check a caller's names
+/// pass before they become a blob's path
 /// ([`Store::blob_path`](crate::Store::blob_path)).
 pub(crate) fn blob_path(root: &Path, designation: &str, hex: &str) -> Option<PathBuf> {
     (designation_ok(designation) && hex_ok(hex)).then(|| root.join(designation).join(hex))
@@ -706,9 +849,11 @@ pub(crate) fn blob_path(root: &Path, designation: &str, hex: &str) -> Option<Pat
 mod tests {
     use super::*;
 
-    /// AN ASIDE NAME is exactly what `aside_name` spells — the prefix, a
-    /// hex name, `-`, a decimal count of at most twenty digits, the most
-    /// `u64::MAX` takes — and nothing else that begins with the prefix.
+    /// An aside name has the shape `aside_name` spells.
+    ///
+    /// It is the prefix, a hex name, `-`, a decimal count of at most twenty
+    /// digits, the most `u64::MAX` takes — and nothing else that begins with
+    /// the prefix.
     #[test]
     fn an_aside_name_is_exactly_what_aside_name_spells() {
         let hex = "ab".repeat(32);
@@ -729,12 +874,13 @@ mod tests {
         }
     }
 
-    /// A FAILURE NAMES ITS FILE WITHIN THE DATA DIRECTORY AND KEEPS ITS KIND:
-    /// a file, a directory and a partial each named by their place under the
-    /// root, the root's own name first — never by the absolute path a client's
-    /// `blob_io` would carry, never by a partial's identifier — and the error
-    /// reads `{name}: {act}: {cause}`, its kind the OS's, so the absence rule
-    /// and a caller's match read it unchanged.
+    /// A failure names its file within the data directory and keeps its kind.
+    ///
+    /// A file, a directory and a partial are each named by their place under
+    /// the root, the root's own name first — never by the absolute path a
+    /// client's `blob_io` would carry, never by a partial's identifier — and
+    /// the error reads `{name}: {act}: {cause}`, its kind the OS's, so the
+    /// absence rule and a caller's match read it unchanged.
     #[test]
     fn a_failure_names_its_file_within_the_data_directory_and_keeps_its_kind() {
         let root = Path::new("/srv/board/blobs");
@@ -755,11 +901,13 @@ mod tests {
         assert!(matches!(not_found_as_none::<()>(Err(absent)), Ok(None)), "a named absence is still an absence");
     }
 
-    /// A FULL VOLUME's CAUSE IS SPELLED IN THE STREAM's WORDS, ONCE (`Cause`;
-    /// `operations.md` §1: `the volume is full`, the OS's text beside it): the
-    /// OS's `ENOSPC` named at a file reads `{file}: {act}: the volume is full
-    /// ({the OS's text})`, its kind kept; named again around another act, the
-    /// words stand once; every other cause is the OS's text alone.
+    /// A full volume's cause is spelled in the stream's words, once.
+    ///
+    /// The words are `Cause`'s (`operations.md` §1: `the volume is full`, the
+    /// OS's text beside it): the OS's `ENOSPC` named at a file reads `{file}:
+    /// {act}: the volume is full ({the OS's text})`, its kind kept; named
+    /// again around another act, the words stand once; every other cause is
+    /// the OS's text alone.
     #[cfg(unix)]
     #[test]
     fn a_full_volumes_cause_reads_the_volume_is_full_once() {
@@ -773,12 +921,13 @@ mod tests {
         assert!(!other.to_string().contains("the volume is full"), "{other}");
     }
 
-    /// A REMOVAL ANSWERS THE BYTES ITS UNLINK FREED (`freed_by`): a file's
-    /// length where the unlink takes its last name; nothing where another
-    /// name still holds the inode — an aside beside its hash's name, a
-    /// hard-link copy's second name — and its length once the last goes;
-    /// none where no file stands; and a removal of a file that must stand
-    /// fails where it does not.
+    /// A removal answers the bytes its unlink freed (`freed_by`).
+    ///
+    /// It answers a file's length where the unlink takes its last name;
+    /// nothing where another name still holds the inode — an aside beside its
+    /// hash's name, a hard-link copy's second name — and its length once the
+    /// last goes; none where no file stands; and a removal of a file that
+    /// must stand fails where it does not.
     #[cfg(unix)]
     #[test]
     fn a_removal_answers_the_bytes_its_unlink_freed() {
@@ -796,13 +945,14 @@ mod tests {
         assert_eq!(remove_standing(&hash).map_err(|e| e.kind()), Err(io::ErrorKind::NotFound));
     }
 
-    /// ONE REFUSAL IS ONE LINE OF BOUNDED LENGTH (`Refused`, `PLANTED_NAMED`):
-    /// every entry counted; at most eight clauses naming them — the root's
+    /// One refusal is one line of bounded length (`Refused`, `PLANTED_NAMED`).
+    ///
+    /// Every entry is counted; at most eight clauses name them — the root's
     /// own entries first, then the partials, those of one directory and one
     /// count of links one clause however many, then every other entry by
-    /// name, whatever order the walk met them in; the entries past them
-    /// counted by kind; and the act for each kind among them all at its end —
-    /// a kind met only past the named clauses among them.
+    /// name, whatever order the walk met them in; the entries past them are
+    /// counted by kind; and the act for each kind among them all stands at
+    /// its end — a kind met only past the named clauses among them.
     #[test]
     fn a_refusal_names_eight_clauses_and_counts_the_rest_by_kind() {
         let inner = |name: String, found| Planted { at: At::Inner(format!("blobs/blake3/{name}")), found };
@@ -846,13 +996,15 @@ mod tests {
         );
     }
 
-    /// THE HARD-LINK PROBE (`probe_hard_link`): a link refused as a volume
-    /// that makes none refuses one — `EPERM`, `ENOTSUP`, `EOPNOTSUPP`,
-    /// `ENOSYS` — answers the volume's lack and the act that clears it, the
-    /// OS's kind kept, in the words `RUNBOOK.md` quotes after the daemon's
-    /// `skepd: blob store: `; any other failure of the link is the act's
-    /// own, its file named; either way the probe leaves no name under the
-    /// root, nor where it answers, as this volume's link does.
+    /// The hard-link probe refuses a volume that makes none, leaving nothing.
+    ///
+    /// In `probe_hard_link`, a link refused as a volume that makes none
+    /// refuses one — `EPERM`, `ENOTSUP`, `EOPNOTSUPP`, `ENOSYS` — answers the
+    /// volume's lack and the act that clears it, the OS's kind kept, in the
+    /// words `RUNBOOK.md` quotes after the daemon's `skepd: blob store: `;
+    /// any other failure of the link is the act's own, its file named; either
+    /// way the probe leaves no name under the root, nor where it answers, as
+    /// this volume's link does.
     #[cfg(unix)]
     #[test]
     fn the_hard_link_probe_refuses_a_volume_that_makes_none_and_leaves_nothing() {

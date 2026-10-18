@@ -1,32 +1,36 @@
-//! THE PARTIALS, `<root>/<designation>/.upload-<identifier>` — the bytes
-//! received so far of one upload, a temp file in its target's own
-//! designation directory (`media.md` Op inventory 1, the resumable upload
-//! (1), (3), (4); §The media stores). A BYTE IS RECEIVED ONCE IT IS DURABLE
-//! IN THE PARTIAL: the file is fsynced at [`SYNC_GRAIN`] and at the settle
-//! or finish that ends a request, the record's offset and expiry written
-//! after each sync, so the offset a resume continues from, the bytes
-//! received the deposit read answers and the byte the expiry is fixed from
-//! are one figure.
+//! The partials, `<root>/<designation>/.upload-<identifier>`.
+//!
+//! A partial holds the bytes received so far of one upload, a temp file in
+//! its target's own designation directory (`media.md` Op inventory 1, the
+//! resumable upload (1), (3), (4); §The media stores).
+//!
+//! **A byte is received once it is durable in the partial and in its
+//! record's offset.** The file is fsynced at [`SYNC_GRAIN`] and at the
+//! settle or finish that ends a request, the record's offset and expiry
+//! written after each sync but the finish's, which retires the record
+//! instead, so the offset a resume continues from, the bytes received the
+//! deposit read answers and the byte the expiry is fixed from are one
+//! figure.
 //!
 //! A request writes a partial through its stream's handle, opened afresh at
 //! every resume (`partials/handle.rs`: [`Handle`], [`open_at`]).
 //!
-//! AT OPEN THE TWO ARE RECONCILED BOTH WAYS: a partial no record names — a
-//! crash's orphan — is removed in every designation directory this build
+//! **At open the two are reconciled both ways.** A partial no record names —
+//! a crash's orphan — is removed in every designation directory this build
 //! pins, the directory of each [`HashFunction`] it computes, and in no
 //! other: a directory under another designation is another build's, its
 //! partials its own (clause (4), "in every designation directory under
 //! `blobs/` that this build's schemas pin"; the pruner's unlink pass halts
-//! on such a directory, ms5-T4, D13's carve-out); a record that names no
-//! partial is retired; and their lengths are set to agree — a longer
-//! partial cut back to the record's offset, a record whose offset passes
-//! its partial's length set back to that length, its expiry kept
+//! on such a directory, D13's carve-out); a record that names no partial is
+//! retired; and their lengths are set to agree — a longer partial cut back
+//! to the record's offset, a record whose offset passes its partial's
+//! length set back to that length, its expiry kept
 //! (`UploadRecords::set_back`). A partial that cannot be read fails the
-//! open, retiring nothing: it is still named, and a retirement written over
-//! it would have the next open remove it as an orphan (clause (4) retires a
-//! record that names no partial, and only that). An expired upload has its
-//! partial removed and its record retired at open too, in the order the end
-//! and the daemon's pruner take while the store serves
+//! open, its record not retired: it is still named, and a retirement
+//! written over it would have the next open remove it as an orphan (clause
+//! (4) retires a record that names no partial, and only that). An expired
+//! upload has its partial removed and its record retired at open too, in
+//! the order the end and the daemon's pruner take while the store serves
 //! ([`Store::expire_upload`](crate::Store::expire_upload) is the pass's
 //! act).
 
@@ -50,39 +54,50 @@ use crate::uploads::{UploadId, UploadRecords};
 pub use handle::HashFunction;
 pub(crate) use handle::{open_at, Handle};
 
-/// THE FSYNC GRAIN of a partial — 1 MiB, INTERIM (`media.md` Op inventory
-/// 1, the resumable upload (3), "fsynced at a grain the subsystem design
-/// pins"): the most a dropped connection re-sends, against one fsync of the
-/// partial and one of the record log per grain. A pin, moved by a ruling,
-/// and its two twins move with it: `docs/wire.md` §Media's list of pins and
-/// the media fixture's `pins.sync_grain`, which skepd's suite holds to this
-/// constant (`tests/it/blob_routes.rs`). No byte count on disk depends on
-/// it, so a build that moves it reads every log an older build wrote.
+/// The fsync grain of a partial: 1 MiB, interim.
+///
+/// The resumable upload's clause (3) (`media.md` Op inventory 1) has the
+/// partial "fsynced at a grain the subsystem design pins", and this is that
+/// grain: the most a dropped connection re-sends, against one fsync of the
+/// partial and one of the record log per grain. A pin, moved by a design
+/// decision, and its two twins move with it: `docs/wire.md` §Media's list
+/// of pins and the media fixture's `pins.sync_grain`, which skepd's suite
+/// holds to this constant (`tests/it/blob_routes.rs`). No byte count on
+/// disk depends on it, so a build that moves it reads every log an older
+/// build wrote.
 pub const SYNC_GRAIN: u64 = 1024 * 1024;
 
-/// The partial's file name inside its designation directory —
-/// `.upload-<identifier>`: the dot keeps it apart from any hex name a walk
-/// of the directory reads as a blob. The operator's pull names its temp
-/// file so too (`Store::install_file`), with a fresh identifier no record
-/// names, so an open that meets it mid-pull removes it as the orphan it is.
+/// Returns the partial's file name inside its designation directory.
+///
+/// The name is `.upload-<identifier>`: the dot keeps it apart from any hex
+/// name a walk of the directory reads as a blob. The operator's pull names
+/// its temp file so too (`Store::install_file`), with a fresh identifier no
+/// record names, so an open that meets it mid-pull removes it as the orphan
+/// it is.
 pub(crate) fn partial_name(id: &UploadId) -> String {
     format!(".upload-{id}")
 }
 
-/// The identifier a partial's file name spells, if it is one.
+/// Returns the identifier a partial's file name spells, if it is one.
 pub(crate) fn id_of_partial_name(name: &str) -> Option<UploadId> {
     name.strip_prefix(".upload-").and_then(UploadId::parse)
 }
 
-/// The partial's path.
+/// Returns the partial's path.
 pub(crate) fn partial_path(root: &Path, designation: &str, id: &UploadId) -> PathBuf {
     root.join(designation).join(partial_name(id))
 }
 
-/// Create an empty partial for a new upload, its designation directory
-/// made where absent — the directory's own entry in the root left to the
-/// finish, which fsyncs the root for any directory no root fsync since the
-/// open has made durable.
+/// Creates an empty partial for a new upload.
+///
+/// Its designation directory is made where absent — the directory's own
+/// entry in the root left to the finish, which fsyncs the root for any
+/// directory no root fsync since the open has made durable.
+///
+/// # Errors
+///
+/// The designation directory's creation, the partial's creation or its
+/// sync — named as its creation — or the directory's fsync failing.
 pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Result<()> {
     let dir = root.join(designation);
     // Both born owner-only (`blobs::dir_builder`, `blobs::file_options`):
@@ -101,8 +116,14 @@ pub(crate) fn create(root: &Path, designation: &str, id: &UploadId) -> io::Resul
     Ok(())
 }
 
-/// Remove a partial, its directory fsynced where one went; absent is fine.
+/// Removes a partial, its directory fsynced where one went; absent is fine.
+///
 /// Answers the bytes its unlink freed — none where no partial stood.
+///
+/// # Errors
+///
+/// The removal failing, save for the partial's absence, or the directory's
+/// fsync after it.
 pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Result<u64> {
     let dir = root.join(designation);
     let removed =
@@ -114,8 +135,9 @@ pub(crate) fn remove(root: &Path, designation: &str, id: &UploadId) -> io::Resul
     Ok(freed)
 }
 
-/// What the reconciliation did, by act — the open's account's figures
-/// ([`Opened`](crate::Opened)).
+/// What the reconciliation did, by act.
+///
+/// The figures are the open's account's ([`Opened`](crate::Opened)).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Reconciled {
     /// Expired uploads removed, the partial and then the record.
@@ -128,14 +150,25 @@ pub(crate) struct Reconciled {
     pub set_back: usize,
     /// Orphan partials removed — partials no record names.
     pub orphans: usize,
-    /// The bytes those acts freed: the expired uploads' and the orphans'
-    /// partials removed, and the bytes cut off the partials cut back.
+    /// The bytes those acts freed.
+    ///
+    /// They are the expired uploads' and the orphans' partials removed, and
+    /// the bytes cut off the partials cut back.
     pub bytes_freed: u64,
 }
 
-/// THE RECONCILIATION AT OPEN, both ways: every standing record held to its
-/// partial, and every orphan removed under the designations this build pins
-/// alone ([`HashFunction::ALL`]). Answers what it did ([`Reconciled`]).
+/// Reconciles the records and the partials at open, both ways.
+///
+/// Every standing record is held to its partial, and every orphan removed
+/// under the designations this build pins alone ([`HashFunction::ALL`]).
+/// Answers what it did ([`Reconciled`]).
+///
+/// # Errors
+///
+/// An expired upload's removal or retirement failing; a partial's stat
+/// failing other than for its absence; a partial's cut-back, a set-back's
+/// write or a retirement failing; or a designation directory's listing, an
+/// orphan's removal or the directory's fsync failing.
 pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -> io::Result<Reconciled> {
     let mut did = Reconciled::default();
     // The identifiers the standing records name, by designation directory.
@@ -154,7 +187,8 @@ pub(crate) fn reconcile(root: &Path, records: &mut UploadRecords, now_ms: u64) -
         let partial = |e| named(e, partial_label(&root.join(&r.designation)), "stat");
         // Absent is the one answer that retires: a record naming a partial
         // that cannot be read still names one, so that failure fails the
-        // open, and nothing is retired for a later open to remove as orphan.
+        // open, and its record is not retired for a later open to remove its
+        // partial as orphan.
         let Some(meta) = not_found_as_none(fs::metadata(&path)).map_err(partial)? else {
             records.retire(&r.id)?;
             did.without_partial += 1;

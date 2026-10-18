@@ -1,9 +1,11 @@
-//! EVERY RESUME OPENS THE PARTIAL AFRESH (`media.md` Op inventory 1, the
-//! resumable upload (3), (5); [`open_at`]): cut back to its record's offset
-//! where longer, its bytes up to that offset hashed from the first, so
-//! whatever an earlier request left past the offset — a write that failed
-//! partway, bytes synced before a record write that failed — is gone before
-//! another byte lands. No handle outlives its request ([`Handle`]).
+//! Every resume opens the partial afresh.
+//!
+//! The open (`media.md` Op inventory 1, the resumable upload (3), (5);
+//! [`open_at`]) cuts the partial back to its record's offset where longer,
+//! its bytes up to that offset hashed from the first, so whatever an earlier
+//! request left past the offset — a write that failed partway, bytes synced
+//! before a record write that failed — is gone before another byte lands.
+//! No handle outlives its request ([`Handle`]).
 //!
 //! Beside the handle, the function its hasher computes ([`HashFunction`])
 //! and the designation that function's files are filed under.
@@ -16,14 +18,15 @@ use super::partial_path;
 use crate::blobs::{named, partial_label};
 use crate::uploads::UploadId;
 
-/// THE HASH FUNCTIONS A HANDLE COMPUTES — one: BLAKE3's default hash of the
-/// file's bytes, 32 bytes spelled as 64 lowercase hex, the hash the cell's
-/// schema names (`media.md` §The design, item 4, "THE HASH IS BLAKE3";
-/// Q-sm1). A key names the function that made it ("EVERY SIDECAR KEY NAMES
-/// ITS FUNCTION, FROM THE FIRST FILE"), so a creation names one of these
-/// ([`Store::create_upload`](crate::Store::create_upload)), and its partial,
-/// record, file and lease are filed under its designation; a second
-/// schema's hash is a second variant here, beside its own hasher.
+/// The hash functions a handle computes: one, BLAKE3's default hash.
+///
+/// It hashes the file's bytes, 32 bytes spelled as 64 lowercase hex, the
+/// hash the cell's schema names (`media.md` §The design, item 4, "the hash
+/// is BLAKE3"). A key names the function that made it ("every sidecar key
+/// names its function, from the first file"), so a creation names one of
+/// these ([`Store::create_upload`](crate::Store::create_upload)), and its
+/// partial, record, file and lease are filed under its designation; a
+/// second schema's hash is a second variant here, beside its own hasher.
 ///
 /// `#[non_exhaustive]`: a caller names a variant and has no match to make
 /// over them, so a further function is an addition rather than a broken
@@ -36,17 +39,20 @@ pub enum HashFunction {
 }
 
 impl HashFunction {
-    /// EVERY FUNCTION THIS STORE COMPUTES — and so the designations this
-    /// build pins: open removes an orphan partial under these alone
-    /// (`media.md` Op inventory 1, the resumable upload (4), "in every
-    /// designation directory under `blobs/` that this build's schemas pin";
-    /// `partials::reconcile`). A variant joins this list as it joins the
-    /// enum; the unit suite walks it.
+    /// Every function this store computes.
+    ///
+    /// So their designations are the ones this build pins: open removes an
+    /// orphan partial under these alone (`media.md` Op inventory 1, the
+    /// resumable upload (4), "in every designation directory under `blobs/`
+    /// that this build's schemas pin"; `partials::reconcile`). A variant
+    /// joins this list as it joins the enum; the unit suite walks it.
     pub(crate) const ALL: [HashFunction; 1] = [HashFunction::Blake3];
 
-    /// The function's DESIGNATION — the name its keys spell it by, and the
-    /// directory under the root its files live in. Every variant's passes the
-    /// store's name check (this file's unit suite holds them to it).
+    /// Returns the function's designation, the name its keys spell it by.
+    ///
+    /// It is also the directory under the root its files live in. Every
+    /// variant's passes the store's name check (this file's unit suite holds
+    /// them to it).
     pub const fn designation(self) -> &'static str {
         match self {
             HashFunction::Blake3 => "blake3",
@@ -54,19 +60,22 @@ impl HashFunction {
     }
 }
 
-/// THE HANDLE: the partial opened for one request — by [`open_at`] at the
-/// request's resume, and dropped with its [`Stream`](crate::Stream): the
-/// partial's open file, the hasher over every byte written, the count of
-/// those bytes, and whether a write or sync has failed. The fields are this
-/// file's alone — only [`open_at`], [`Handle::write`] and [`Handle::sync`]
-/// move them — and the claim they keep holds across a failed call: the
-/// hasher is the hash of exactly the bytes written, so the hash a finish
-/// names the file by ([`Handle::hash`]) is its bytes' hash. A write or sync
-/// that fails marks the handle TORN — the file may then hold bytes no hasher
-/// covers, or bytes whose durability nothing vouches for — and a torn handle
-/// takes no further write or sync: the next resume opens the partial afresh
-/// at its record's offset. Every failure names the partial by its directory
-/// ([`partial_label`]), never by its file name, an upload's identifier.
+/// The handle: the partial opened for one request.
+///
+/// It is opened by [`open_at`] at the request's resume, and dropped with its
+/// [`Stream`](crate::Stream): the partial's open file, the hasher over every
+/// byte written, the count of those bytes, and whether a write or sync has
+/// failed. The fields are this file's alone — only [`open_at`],
+/// [`Handle::write`] and [`Handle::sync`] move them, save the unit suite's
+/// swap of the open file — and the claim they keep holds across a failed
+/// call: the hasher is the hash of exactly the bytes written, so the hash a
+/// finish names the file by ([`Handle::hash`]) is its bytes' hash. A write
+/// or sync that fails marks the handle torn — the file may then hold bytes
+/// no hasher covers, or bytes whose durability nothing vouches for — and a
+/// torn handle takes no further write or sync: the next resume opens the
+/// partial afresh at its record's offset. Every failure names the partial
+/// by its directory ([`partial_label`]), never by its file name, an
+/// upload's identifier.
 pub(crate) struct Handle {
     file: File,
     /// The partial as a line names it: `a partial in blobs/blake3/`.
@@ -76,18 +85,24 @@ pub(crate) struct Handle {
     torn: bool,
 }
 
-/// Open a partial for one request at `offset` — the record's durable
-/// offset, where a resume continues: the file cut back to it where longer,
+/// Opens a partial for one request at `offset`, the record's durable offset.
+///
+/// A resume continues there: the file is cut back to it where longer, and
 /// the hasher built over its first `offset` bytes. The record's offset
-/// never passes the file's length past open's reconciliation; a shorter
-/// file here is no state this store leaves — a disk changed under it, or
-/// two streams of one upload — answered as I/O and never extended. An
-/// absent one is I/O too, its kind `NotFound`: a finish that failed past
-/// its rename took it, and no resume continues the upload, so the error
-/// names the act that ends it — the upload's end and a PUT of its bytes
-/// again — where a client reads it, `blob_io`'s detail, and where an
-/// operator quotes the client (`RUNBOOK.md` §1), and never leads either to
-/// read the board's own files as lost.
+/// never passes the file's length past open's reconciliation.
+///
+/// # Errors
+///
+/// A shorter file here is no state this store leaves — a disk changed under
+/// it, or two streams of one upload — answered as I/O (`InvalidData`) and
+/// never extended. An absent one is I/O too, its kind `NotFound`: a finish
+/// that failed past its rename took it, or an end whose unlink went through
+/// before its directory's fsync failed, and no resume continues the upload,
+/// so the error names the act that ends it — the upload's end and a PUT of
+/// its bytes again — where a client reads it, `blob_io`'s detail, and where
+/// an operator quotes the client (`RUNBOOK.md` §1), and never leads either
+/// to read the board's own files as lost. Any other failure of the open,
+/// the stat, the cut-back or the read is named with its act.
 pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64) -> io::Result<Handle> {
     let path = partial_path(root, designation, id);
     let name = partial_label(&root.join(designation));
@@ -98,7 +113,8 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
             return e;
         }
         // Neither room nor the pruner's pass brings the partial back, and a
-        // re-PUT leases the file the rename already named.
+        // re-PUT leases the file — the one the rename already named, where a
+        // finish took the partial.
         io::Error::new(
             io::ErrorKind::NotFound,
             format!(
@@ -126,9 +142,15 @@ pub(crate) fn open_at(root: &Path, designation: &str, id: &UploadId, offset: u64
     Ok(Handle { file, name, hasher, written: offset, torn: false })
 }
 
-/// The hasher over the first `len` bytes of `file`, read from its start by
-/// blake3's own reader loop, which retries an interrupted read as `Read`'s
-/// contract asks; a file shorter than `len` answers `UnexpectedEof`.
+/// Returns the hasher over the first `len` bytes of `file`.
+///
+/// The bytes are read from its start by blake3's own reader loop, which
+/// retries an interrupted read as `Read`'s contract asks.
+///
+/// # Errors
+///
+/// A file shorter than `len` answers `UnexpectedEof`; a seek or a read that
+/// fails answers the OS's failure.
 fn hash_prefix(file: &mut File, len: u64) -> io::Result<blake3::Hasher> {
     file.seek(SeekFrom::Start(0))?;
     let mut prefix = file.take(len);
@@ -141,22 +163,28 @@ fn hash_prefix(file: &mut File, len: u64) -> io::Result<blake3::Hasher> {
 }
 
 impl Handle {
-    /// The bytes written so far, durable or not — counted by the writes
-    /// that succeeded. Past a failed write the file may hold more, which
-    /// the next resume cuts off.
+    /// Returns the bytes written so far, durable or not.
+    ///
+    /// They are the offset the handle was opened at, and the bytes of every
+    /// write that has succeeded since. Past a failed write the file may hold
+    /// more, which the next resume cuts off.
     pub fn written(&self) -> u64 {
         self.written
     }
 
-    /// The hash of every byte written so far — after [`Handle::sync`], of
-    /// every byte on disk.
+    /// Returns the hash of every byte written so far.
+    ///
+    /// After [`Handle::sync`], it is the hash of every byte on disk.
     pub fn hash(&self) -> blake3::Hash {
         self.hasher.finalize()
     }
 
-    /// Write `bytes` at the end and hash them; not yet durable. Refused on
-    /// a torn handle; a write that fails tears it, whatever part of `bytes`
-    /// reached the file.
+    /// Writes `bytes` at the end and hashes them; not yet durable.
+    ///
+    /// # Errors
+    ///
+    /// Refused on a torn handle; a write that fails tears it, whatever part
+    /// of `bytes` reached the file.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.refuse_torn()?;
         if let Err(e) = self.file.write_all(bytes) {
@@ -168,7 +196,10 @@ impl Handle {
         Ok(())
     }
 
-    /// Make every byte written durable — the one fsync a grain costs.
+    /// Makes every byte written durable — a grain's one fsync of the partial.
+    ///
+    /// # Errors
+    ///
     /// Refused on a torn handle; a sync that fails tears it, since a
     /// retried fsync can answer success over pages the failed one dropped,
     /// and no later sync vouches for those bytes.
@@ -181,7 +212,11 @@ impl Handle {
         Ok(())
     }
 
-    /// A torn handle's refusal of a write or a sync.
+    /// Refuses a write or a sync on a torn handle.
+    ///
+    /// # Errors
+    ///
+    /// The torn handle's refusal, where an earlier write or sync failed.
     fn refuse_torn(&self) -> io::Result<()> {
         if self.torn {
             return Err(io::Error::other(format!(
@@ -201,17 +236,19 @@ mod tests {
     use super::*;
     use crate::partials::create;
 
-    /// A fresh partial under `root`: its identifier, the handle opened at
-    /// offset 0, and its path.
+    /// Creates a fresh partial under `root`, its handle opened at offset 0.
+    ///
+    /// Answers its identifier, the handle, and its path.
     fn fresh_partial(root: &Path) -> (UploadId, Handle, PathBuf) {
         let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
         create(root, "blake3", &id).unwrap();
         (id, open_at(root, "blake3", &id, 0).unwrap(), partial_path(root, "blake3", &id))
     }
 
-    /// A RESUME BELOW WHAT THE FILE HOLDS hashes the file as cut back: A
-    /// written and synced, B written, the request's handle dropped with the
-    /// record's offset still 0 — its write having failed after A's sync —
+    /// A resume below what the file holds hashes the file as cut back.
+    ///
+    /// A is written and synced, B written, the request's handle dropped with
+    /// the record's offset still 0 — its write having failed after A's sync —
     /// and the next request, opened at 0, has what follows hashed over the
     /// file's bytes alone.
     #[test]
@@ -229,10 +266,12 @@ mod tests {
         assert_eq!(handle.hash(), blake3::hash(b"C"), "the hash is the file's bytes'");
     }
 
-    /// A FAILED WRITE TEARS THE HANDLE: bytes it left on disk are counted
-    /// by no hasher, so nothing is written or synced through that handle
-    /// again; the next request, opened at the record's offset, has them cut
-    /// off and continues there, its hash its file's.
+    /// A failed write tears the handle.
+    ///
+    /// Bytes it left on disk are counted by no hasher, so nothing is written
+    /// or synced through that handle again; the next request, opened at the
+    /// record's offset, has them cut off and continues there, its hash its
+    /// file's.
     #[test]
     fn a_failed_write_tears_the_handle_until_the_next_resume() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -261,11 +300,12 @@ mod tests {
         assert_eq!(handle.written(), 2);
     }
 
-    /// EVERY FUNCTION's DESIGNATION PASSES THE NAME CHECK — a creation files
-    /// under it, every read takes a name back through that check, and open's
-    /// reconciliation walks the directory of each function on the list this
-    /// build pins (`HashFunction::ALL`) — and BLAKE3's, on that list, is the
-    /// cell schema's own, `blake3` (Q-sm1).
+    /// Every function's designation passes the name check.
+    ///
+    /// A creation files under it, every read takes a name back through that
+    /// check, and open's reconciliation walks the directory of each function
+    /// on the list this build pins (`HashFunction::ALL`); and BLAKE3's, on
+    /// that list, is the cell schema's own, `blake3`.
     #[test]
     fn every_functions_designation_passes_the_name_check() {
         for function in HashFunction::ALL {
@@ -275,8 +315,9 @@ mod tests {
         assert_eq!(HashFunction::Blake3.designation(), "blake3");
     }
 
-    /// A PARTIAL SHORTER THAN ITS RECORD's OFFSET IS REFUSED, NEVER EXTENDED:
-    /// opened past its bytes, the open answers an error and leaves the file
+    /// A partial shorter than its record's offset is refused, never extended.
+    ///
+    /// Opened past its bytes, the open answers an error and leaves the file
     /// as it stands, never grown with zeros a resume would append after and a
     /// finish would hash.
     #[test]

@@ -1,148 +1,154 @@
-//! # skep-blobs — the blob store (media lane B)
+//! skep-blobs — the blob store.
 //!
-//! THE FOUR MEDIA STORES UNDER ONE ROOT (`media.md` §The media stores, the
-//! set's one home; Op inventory 1, the resumable upload's seven clauses and
-//! the lease's crash story; the register M-I5 (a), (c) and M-I6 (c)): the
-//! FILES at `<root>/<designation>/<hex>`, the PARTIALS beside them, the
-//! UPLOAD RECORDS in `<root>/uploads.log` and the LEASE LOG in
+//! The crate holds the four media stores under one root (`media.md` §The
+//! media stores, the set's one home; Op inventory 1, the resumable upload's
+//! seven clauses and the lease's crash story; the register M-I5 (a), (c) and
+//! M-I6 (c)): the files at `<root>/<designation>/<hex>`, the partials beside
+//! them, the upload records in `<root>/uploads.log` and the lease log in
 //! `<root>/leases.log`. The daemon hands this crate `blobs/` inside the
-//! board's data directory and nothing else of itself: the crate knows a
-//! PRINCIPAL only as the opaque string its caller spells it as, compared
-//! exactly and never read; it takes NO lock of its caller's — its own keep
+//! board's data directory and nothing else of itself, save the predicate a
+//! read of pending bytes takes ([`Store::pending_bytes`]): the crate knows a
+//! principal only as the opaque string its caller spells it as, compared
+//! exactly and never read; it takes no lock of its caller's — its own keep
 //! its records whole and run its finishes one at a time ([`Store`]) — and
 //! asks its caller for three exclusions: no second store over its root
 //! while one is open ([`Store::open`]); at most one stream of an upload at a
 //! time, its acts serialized ([`Store`]); and no [`Store::unlink_blob`] or
-//! [`Store::remove_aside`] while a [`Stream::finish`] runs (see there); and
-//! it reads NO limits record (it answers pending bytes and the volume's free
-//! space and capacity; what bounds them is policy, the daemon's). What it
-//! promises is the ORDER of its own acts and what each leaves behind on a
-//! crash:
+//! [`Store::rename_aside`], and no [`Store::remove_aside`] of a replace's
+//! aside, while a [`Stream::finish`] runs (see there); and it reads no
+//! limits record (it answers pending bytes and the volume's free space and
+//! capacity; what bounds them is policy, the daemon's). What it promises is
+//! the order of its own acts and what each leaves behind on a crash:
 //!
-//! * THE PUT's ORDER ([`Stream::finish`]): the partial fsynced; where the
-//!   name exists, the replaced instance LINKED ASIDE (a second name no hex
-//!   spells, so the rename frees nothing); the partial RENAMED onto
-//!   `<designation>/<hex>` — REPLACE where the name exists, never a no-op —
+//! * **The PUT's order** ([`Stream::finish`]): the partial fsynced; where the
+//!   name exists, the replaced instance linked aside (a second name no hex
+//!   spells, so the rename frees nothing); the partial renamed onto
+//!   `<designation>/<hex>` — replace where the name exists, never a no-op —
 //!   that directory fsynced, the root fsynced where no root fsync since the
-//!   open has made the designation directory durable, THEN the lease
-//!   appended and synced, THEN the upload record retired, THEN the answer —
-//!   the aside queued as the finish answers and never sooner, and UNLINKED
-//!   AFTER the answer ([`Store::unlink_asides`]), off the request's path, on
+//!   open has made the designation directory durable, then the lease
+//!   appended and synced, then the upload record retired, then the answer —
+//!   the aside queued as the finish answers and never sooner, and unlinked
+//!   after the answer ([`Store::unlink_asides`]), off the request's path, on
 //!   whatever thread drains the queue. A crash leaves at worst a file with
 //!   no lease (unreferenced, prunable), a retired-by-open record beside a
 //!   leased file, or an aside open removes, and never a lease naming bytes
 //!   the restart does not hold.
-//! * THE PRUNER's READS AND ACTS: the designation directories, the files at
-//!   hex names and the asides ([`Store::designation_dirs`],
-//!   [`Store::blobs_of`], [`Store::asides_of`]), whether ANY principal holds
-//!   a live lease on a file ([`Store::any_live_lease`]), the expired uploads
-//!   and their removal ([`Store::expired_uploads`],
-//!   [`Store::expire_upload`]), and the unlink of one file or one aside
-//!   ([`Store::unlink_blob`], [`Store::remove_aside`]) — each one act, so
-//!   the daemon's pass holds its own lock around exactly one, and each
-//!   removal the pass makes answering the bytes its unlink freed, nothing
-//!   where another name still holds the file, so the pass's line says what
-//!   it reclaimed.
-//! * A BYTE IS RECEIVED ONCE IT IS DURABLE: the partial is fsynced at
+//! * **The pruner's reads and acts**: the designation directories, the files
+//!   at hex names and the asides ([`Store::designation_dirs`],
+//!   [`Store::blobs_of`], [`Store::asides_of`]), whether *any* principal
+//!   holds a live lease on a file ([`Store::any_live_lease`]), the expired
+//!   uploads and their removal ([`Store::expired_uploads`],
+//!   [`Store::expire_upload`]), and the rename aside of one file and the
+//!   removal of one aside ([`Store::rename_aside`], [`Store::remove_aside`])
+//!   — each one act, so the daemon's pass holds its own lock around exactly
+//!   one, and each removal the pass makes answering the bytes its unlink
+//!   freed, nothing where another name still holds the file, so the pass's
+//!   line says what it reclaimed. [`Store::rename_aside`] is the pruner's
+//!   act in the unlink's place: the file renamed to an aside name under the
+//!   caller's arm, the aside removed after it under none, so the arm is
+//!   never held across the freeing of a file's blocks.
+//! * **A byte is received once it is durable**: the partial is fsynced at
 //!   [`SYNC_GRAIN`] and at [`Stream::settle`], and the record's offset and
 //!   expiry are written after each sync, the expiry re-fixed from the
 //!   interval the record took at the upload's creation — so a later limits
 //!   record reaches the next upload and never a standing one (clause (3)).
-//!   A STREAM IS ONE REQUEST's: [`Store::resume`] answers a [`Stream`], the
-//!   partial opened afresh at the record's offset — cutting off whatever an
-//!   earlier request left past it — which the request appends through and
+//!   **A stream is one request's**: [`Store::resume`] answers a [`Stream`],
+//!   the partial opened afresh at the record's offset — cutting off whatever
+//!   an earlier request left past it — which the request appends through and
 //!   ends by [`Stream::settle`] or [`Stream::finish`], or drops; the
-//!   partial's file closes with it, so the store holds no file open between
-//!   requests.
-//! * ONE ANSWER PER PRINCIPAL: an identifier the asking principal's
+//!   partial's file closes with it, so the store holds no partial open
+//!   between requests.
+//! * **One answer per principal**: an identifier the asking principal's
 //!   records do not name is [`BlobError::NoUpload`] whoever minted it (the
 //!   upload records answer by principal); a hash the principal holds no
 //!   lease on is [`LeaseState::None`] whatever the directory holds; and a
 //!   finish answers one shape whether or not the file was already here.
-//! * A TORN LINE IS ONLY EVER A LOG's TAIL: an append that fails is cut
+//! * **A torn line is only ever a log's tail**: an append that fails is cut
 //!   back off its log, and a log whose cut fails too — or whose compaction
 //!   failed past its rename — takes no further append until a compaction
-//!   completes (`jsonl.rs`), so open's tail check never cuts a whole line
-//!   and no line lands in a file no open reads. The store compacts at its
-//!   open and at its caller's runtime compaction
-//!   ([`Store::compact_logs_if_past`] — the daemon's pruner, once a log has
-//!   passed a size trigger, under the store's lock on that log's appends
-//!   alone, a lease past the horizon dropped there as at open), which
-//!   rewrites a stopped log whatever its count; between the two a stopped
-//!   log answers `Io` to every act that writes it ([`Store`]) — a finish's
-//!   before its first act, so a stop strands no upload over a partial its
-//!   rename took ([`Stream::finish`]) — naming the stop's cause, which
-//!   [`Store::stopped_logs`] answers with the stop's age and the appends it
-//!   has refused ([`LogStop`]) — a full volume told apart from a read-only
-//!   mount or a failing device. Each log's size, the room its next rewrite
-//!   needs, is answered too ([`Store::log_sizes`], [`LogSize`]), and a
-//!   compaction answers the size it rewrote a log from, a compaction that
-//!   failed short of its rename taking its twin, and the room it took, with
-//!   it.
-//! * EVERY FAILURE NAMES ITS FILE AND ITS ACT: an I/O error the store
-//!   answers reads `{file}: {act}: {cause}`, its kind kept — the file as it
-//!   stands within the data directory, `blobs/leases.log`, never by an
-//!   absolute path, and a partial by its directory alone, a full volume's
-//!   cause reading `the volume is full ({the OS's text})` (`blobs.rs`) — so
-//!   the daemon's refused start, its pruner's line, the deferred unlink's
+//!   completes (`jsonl.rs`), so no whole line the store appends lands past a
+//!   torn one for open's tail check to cut, and no line lands in a file no
+//!   open reads. The store compacts at its open and at its caller's runtime
+//!   compaction ([`Store::compact_logs_if_past`] — the daemon's pruner, once
+//!   a log has passed a size trigger, under the store's lock on that log's
+//!   appends alone, a lease past the horizon dropped there as at open),
+//!   which rewrites a stopped log whatever its count; between the two a
+//!   stopped log answers `Io` to every act that writes it ([`Store`]) — a
+//!   finish's before its first act, so a stop strands no upload over a
+//!   partial its rename took ([`Stream::finish`]) — naming the stop's cause,
+//!   which [`Store::stopped_logs`] answers with the stop's age and the
+//!   appends it has refused ([`LogStop`]) — a full volume told apart from a
+//!   read-only mount or a failing device. Each log's size, the most room its
+//!   next rewrite needs, is answered too ([`Store::log_sizes`], [`LogSize`]),
+//!   and a compaction answers the size it rewrote a log from, a compaction
+//!   that failed short of its rename taking its twin, and the room it took,
+//!   with it, best effort.
+//! * **A failure at a file names its file and its act**: an I/O error the
+//!   store answers at one of its files reads `{file}: {act}: {cause}`, its
+//!   kind kept — the file as it stands within the data directory,
+//!   `blobs/leases.log`, never by an absolute path, and a partial by its
+//!   directory alone, a full volume's cause reading `the volume is full ({the
+//!   OS's text})` (`blobs.rs`, which names the refusals worded otherwise) —
+//!   so the daemon's refused start, its pruner's line, the deferred unlink's
 //!   line, the pull's refusal and a client's `blob_io` detail each say which
 //!   file and which act, the error alone carrying both.
-//! * THE OPERATOR's TWO DOORS OPEN THE STORE AS THE DAEMON DOES NOT
+//! * **The operator's two doors open the store as the daemon does not**
 //!   (`media.md` §Recovery): [`Store::inspect`] reads the four stores as
 //!   they stand — the logs' torn tails cut in memory alone, nothing
 //!   reconciled, compacted, swept, synced or created — answering what each
 //!   log's reading found ([`Inspection::logs`]), a damaged log told from a
 //!   whole one, and refusing, as the open does, a link or a special file it
 //!   would otherwise follow or wait on; and [`Store::install_file`] writes
-//!   one file by the PUT's own order and nothing else, no lease and no
+//!   one file by the PUT's own order — the root and its designation
+//!   directory made where absent — and nothing else, no lease and no
 //!   record, beside a serving daemon or a stopped one, into a board's
 //!   directory that stands and never one it makes, its refusal saying on
-//!   which side of its rename it fell; and [`Store::rename_aside`] is the
-//!   pruner's act in the unlink's place: the file renamed to an aside name
-//!   under the caller's arm, the aside removed after it under none, so the
-//!   arm is never held across the freeing of a file's blocks.
-//! * OPEN RECONCILES AND COMPACTS, AND ANSWERS WHAT IT DID
+//!   which side of its rename it fell.
+//! * **Open reconciles and compacts, and answers what it did**
 //!   ([`Store::opened`], [`Opened`]): the store writes no operator stream,
 //!   so every repair below, and the bytes the repairs freed — and what it
 //!   found of the logs, a cut that took whole lines past its first untrusted
 //!   one ([`TailCut`]), lines read as nothing, a store or a log found absent
-//!   — is the account its embedder says. First, nothing at a name it acts on
-//!   followed or shared — a symbolic link, a special file, or a second link
-//!   to a file the store writes in place failing the open, every one it
-//!   found counted in one refusal of bounded length, up to eight clauses
-//!   naming them, with the act for each kind (`blobs.rs`). Then what frees
-//!   room before what takes it, so an open on a full volume has made the
-//!   room its own repairs make before it asks for any: every aside removed,
-//!   a crash's or a failed finish's (`blobs.rs`); the partials and the
-//!   records held to each other both ways, an orphan partial removed under
-//!   the designations this build computes alone — another build's
-//!   designation directory left to it — and a partial that cannot be read
-//!   failing the open rather than reading as absent (`partials.rs`); and only
-//!   then both logs rewritten to their current records, each tail-checked, a
-//!   line naming a designation or hex the store's name check refuses, or an
-//!   offset past its length, read as no record (see [`Store`]), so a log
-//!   restored from elsewhere names no path out of the root, and a lease past
-//!   the horizon dropped; and the volume probed for a second name for a
-//!   file, which a re-PUT of a file the board holds takes, a volume that
-//!   makes none failing the open with the act that clears it (`blobs.rs`).
-//!   Last, the root fsynced and the board's own directory after it, whose
-//!   fsync alone makes `blobs/`'s own entry durable — at every open.
-//! * A CALLER's BUG IS NO REFUSAL: a finish short of the declared length
-//!   PANICS, naming the obligation it breaks ([`Stream::finish`]), and so
+//!   — is the account it leaves its embedder to say. First, nothing at a
+//!   name it acts on under the root followed or shared — a symbolic link, a
+//!   special file, or a second link to a file the store writes in place
+//!   failing the open, every one it found counted in one refusal of bounded
+//!   length, up to eight clauses naming them, with the act for each kind
+//!   (`blobs.rs`). Then what frees room before what takes it, so an open on
+//!   a full volume has made the room its own repairs make before it asks for
+//!   any beyond the reconciliation's lines: every aside removed, a crash's, a
+//!   failed finish's or the pruner's (`blobs.rs`); the records' log
+//!   tail-checked, and the partials and the records held to each other both
+//!   ways, an orphan partial removed under the designations this build
+//!   computes alone — another build's designation directory left to it —
+//!   and a partial that cannot be read failing the open rather than reading
+//!   as absent (`partials.rs`); and only then the lease log tail-checked and
+//!   rewritten to its current leases, a lease past the horizon dropped; the
+//!   volume probed for a second name for a file, which a re-PUT of a file
+//!   the board holds takes, a volume that makes none failing the open with
+//!   the act that clears it (`blobs.rs`); and the records' log rewritten to
+//!   its current records — in either log a line naming a designation or hex
+//!   the store's name check refuses, or an offset past its length, read as
+//!   no record (see [`Store`]), so a log restored from elsewhere names no
+//!   path out of the root. Last, the root fsynced and the board's own
+//!   directory after it, whose fsync alone makes `blobs/`'s own entry
+//!   durable — at every open.
+//! * **A caller's bug is no refusal**: a finish short of the declared length
+//!   panics, naming the obligation it breaks ([`Stream::finish`]), and so
 //!   does a defect of the store's own — a byte received marked past its
 //!   record's length (`UploadRecords::mark_received`); [`BlobError`] carries
 //!   only answers a caller acts on.
-//! * A KEY NAMES THE FUNCTION THAT MADE IT: the store computes one hash,
-//!   BLAKE3's, and a creation names it by type — [`HashFunction::Blake3`],
-//!   filed under its designation, `blake3` — so no creation can name a
-//!   function the store does not compute ([`Store::create_upload`];
-//!   `media.md` §The design, item 4).
+//! * **A key a creation makes names the function that made it**: the store
+//!   computes one hash, BLAKE3's, and a creation names it by type —
+//!   [`HashFunction::Blake3`], filed under its designation, `blake3` — so no
+//!   creation can name a function the store does not compute
+//!   ([`Store::create_upload`]; `media.md` §The design, item 4).
 //!
 //! The `test-hooks` feature compiles in the test seam (`store/hooks.rs`):
 //! the hazard seam — a hold or an injected failure at a named [`Step`] of
-//! the finish — and the three methods only a test calls, `Store::install`,
-//! `Stream::written` and `Store::asides_queued`. A build without it carries
-//! none of them.
+//! the finish — and the three other methods only a test calls,
+//! `Store::install`, `Stream::written` and `Store::asides_queued`. A build
+//! without it carries none of them.
 
 #![forbid(unsafe_code)]
 
@@ -154,8 +160,8 @@ mod error;
 // what the store makes, its probe of the volume's hard links and its sweep
 // of the asides, the owner-only modes every directory and file is born
 // with, the directory fsync every install order ends in, the host's two
-// reads — the volume's free space and its capacity — and the name every
-// failure gives its file and its act.
+// reads — the volume's free space and its capacity — and the name a
+// failure at a file gives its file and its act.
 mod blobs;
 // The JSON-lines log both record logs are, `Log`: its tail check at open
 // and what each reading found (`LogRead`, `TailCut`), its append, undone
@@ -189,16 +195,18 @@ pub use partials::{HashFunction, SYNC_GRAIN};
 pub use store::{Finished, Inspection, Opened, Step, Store, Stream};
 pub use uploads::{NotAnUploadId, UploadId, UploadRecord, IDENTIFIER_BYTES};
 
-/// What this crate promises without saying so (C-SEND-SYNC, C-GOOD-ERR,
-/// C-COMMON-TRAITS). One `Store` is shared by every worker of the daemon,
-/// whose own `Daemon: Send + Sync` pin rests on this one; a request's
-/// `Stream`, and the store's answers and refusals, cross threads with the
-/// requests that carry them. An auto trait is promised by what a type
-/// contains, so a private field that is not `Send` would revoke it with no
-/// public name changing; this is where that fails to compile instead, under
-/// both arms of the test seam — the hold is bounded `Send + Sync` for this
-/// reason. And the values a caller keeps — in a set, as a map key — are
-/// held to the traits that let it, which a caller cannot add itself.
+/// What this crate promises without saying so.
+///
+/// The promises are C-SEND-SYNC, C-GOOD-ERR and C-COMMON-TRAITS. One
+/// `Store` is shared by every worker of the daemon, whose own
+/// `Daemon: Send + Sync` pin rests on this one; a request's `Stream`, and
+/// the store's answers and refusals, cross threads with the requests that
+/// carry them. An auto trait is promised by what a type contains, so a
+/// private field that is not `Send` would revoke it with no public name
+/// changing; this is where that fails to compile instead, under both arms
+/// of the test seam — the hold is bounded `Send + Sync` for this reason.
+/// And the values a caller keeps — in a set, as a map key — are held to the
+/// traits that let it, which a caller cannot add itself.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Store>();

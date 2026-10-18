@@ -3,13 +3,14 @@
 use std::fmt;
 use std::io;
 
-/// Why the store refused — one variant per answer a caller acts on
-/// differently. I/O failures ride [`BlobError::Io`] verbatim; everything
-/// else is the store's own verdict, and none of them says anything about
-/// another principal's uploads or files (the register M-I2 (e)).
+/// Why the store refused: one variant per answer a caller acts on differently.
+///
+/// I/O failures ride [`BlobError::Io`] verbatim; everything else is the
+/// store's own verdict, and none of them says anything about another
+/// principal's uploads or files (the register M-I2 (e)).
 ///
 /// A caller's bug is none of these. A finish short of the declared length
-/// PANICS, naming the obligation it breaks
+/// panics, naming the obligation it breaks
 /// ([`Stream::finish`](crate::Stream::finish)): an honest caller has ruled
 /// it out before it calls, so an answer for it would be an arm every caller
 /// handles for a state it cannot be in. Nor is a defect of the store's own:
@@ -23,33 +24,41 @@ use std::io;
 /// outside crate would answer it as whatever that arm answers.
 #[derive(Debug)]
 pub enum BlobError {
-    /// The data directory refused I/O — a write, a sync, a rename, a read —
-    /// now or earlier, or holds a partial the store cannot continue from: a
-    /// torn stream refuses every later write and sync of its partial, and a
-    /// stopped log every later append, as `Io` (see
-    /// [`Stream`](crate::Stream), [`Store`](crate::Store)); and a resume over
-    /// a partial shorter than its record's offset answers `Io`, the partial
-    /// refused and never extended ([`Store::resume`](crate::Store::resume)).
-    /// Its text names the file within the data directory and the act —
-    /// `{file}: {act}: {cause}`, a partial by its directory alone — and its
-    /// kind is the OS's.
+    /// The data directory refused I/O, now or earlier.
+    ///
+    /// The act is an open, a stat, a read, a write, a sync, a cut-back, a
+    /// link, a rename or a removal; or the directory holds a partial the
+    /// store cannot continue from. A torn stream refuses every later write
+    /// and sync of its partial, and a stopped log every later append, as
+    /// `Io` (see [`Stream`](crate::Stream), [`Store`](crate::Store)); and a
+    /// resume over a partial shorter than its record's offset answers `Io`,
+    /// the partial refused and never extended
+    /// ([`Store::resume`](crate::Store::resume)). Its text names the file
+    /// within the data directory, a partial by its directory alone. Where the
+    /// OS refused, the text is `{file}: {act}: {cause}` and the kind is the
+    /// OS's; a torn stream's and a stopped log's refusals are `Other`, and a
+    /// short partial's `InvalidData`.
     Io(io::Error),
-    /// The identifier names no upload of THIS principal's: expired,
-    /// retired, another principal's, or never minted — ONE answer for all
-    /// four, exactly as an expired one answers (`media.md` Op inventory 1,
-    /// the resumable upload (1)). Every act that judges a standing upload
-    /// answers it for all four; [`Stream::append`](crate::Stream::append),
-    /// whose resume judged the upload standing, judges only that its record
-    /// has not been retired under it.
+    /// The identifier names no upload of *this* principal's.
+    ///
+    /// The upload is expired, retired, another principal's, or never minted
+    /// — one answer for all four, exactly as an expired one answers
+    /// (`media.md` Op inventory 1, the resumable upload (1)). Every act that
+    /// judges a standing upload answers it for all four;
+    /// [`Stream::append`](crate::Stream::append), whose resume judged the
+    /// upload standing, judges only that its record has not been retired
+    /// under it.
     NoUpload,
-    /// A resume stated an offset other than the record's — the standard
-    /// shape's offset conflict — and carries the record's, the one a resume
-    /// continues from (clause (5)).
+    /// A resume stated an offset other than the record's.
+    ///
+    /// It is the standard shape's offset conflict, and carries the record's
+    /// offset, the one a resume continues from (clause (5)).
     Offset { recorded: u64 },
-    /// The bytes would pass the upload's declared length — an append's
-    /// refusal, nothing written ([`Stream::append`](crate::Stream::append)):
-    /// the record's `length` and the offset the bytes would start at (clause
-    /// (1)).
+    /// The bytes would pass the upload's declared length.
+    ///
+    /// It is an append's refusal, nothing written
+    /// ([`Stream::append`](crate::Stream::append)): the record's `length`
+    /// and the offset the bytes would start at (clause (1)).
     Length { length: u64, offset: u64 },
 }
 

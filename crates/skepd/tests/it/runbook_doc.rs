@@ -10,9 +10,9 @@
 //! service units and its Windows question. The units are WORDS here — no
 //! test loads one. So are the figures the binary's constants supply, read
 //! through those constants, §3 step 2's variables, read off the binary's
-//! own help, §2's line for the journal damage a history read meets, §1's
-//! line for a write refused for a cause but room, and §1 step 8's standing
-//! clauses.
+//! own help, §2's line for the journal damage a history read meets and step
+//! 5's reading of an attest cut, §1's line for a write refused for a cause
+//! but room, and §1 step 8's standing clauses.
 
 use std::path::Path;
 
@@ -414,6 +414,40 @@ fn runbook_says_the_journal_damage_a_history_read_meets_and_its_standing_clause(
     );
 }
 
+/// Checks that §2 step 5 reads an attest cut by the edge its lines lie above.
+///
+/// The step quotes the rebuilt ending first, as the binary writes it —
+/// `changes/mirror.rs` holds the binary to the words — then says the edge
+/// the open decides the side by: the last trusted position, the one before
+/// the position a torn line at the file's end names, and the board term's
+/// position, none attested on an unclaimed board; it quotes the lost ending
+/// from that edge, the whole lines a damaged line's cut takes with it, and
+/// the begun-afresh line, its lost span opening at the board term's position.
+#[test]
+fn runbook_reads_an_attest_cut_by_the_edge_its_lines_lie_above() {
+    let step = collapsed(&passage(
+        "\n## 2. Restore",
+        "5. **Read the open's report**",
+        &["\n6. **Put back one deposited file**"],
+    ));
+    for fact in [
+        "failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} \
+         bytes after it are cut; every cut line lies above the reclaim floor at position {floor} \
+         and is rebuilt from the journal",
+        "The open decides the ending by an edge every cut line lies above",
+        "the one before the position a torn line at the file's end names",
+        "the board term's position, `H.1`'s, since no write at or before it is attested (on an \
+         unclaimed board, none is)",
+        "the lines between position {edge} and the reclaim floor at position {floor} are LOST \
+         unless the board directory's backup is restored",
+        "`; the cut took {n} whole lines with it, positions {first}–{last}`",
+        "every signature this board kept between position {term} and position {floor} is LOST \
+         unless the board directory's backup is restored",
+    ] {
+        assert!(step.contains(fact), "§2 step 5 says {fact:?}: {step}");
+    }
+}
+
 /// Checks that §1 step 8 says what ends each standing clause.
 ///
 /// The step's fence is the binary's own standing line, every clause in its
@@ -485,7 +519,8 @@ fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_its_own_line() {
         "failure: a write was refused durability at position {position} ({detail}): no write \
          lands until its cause clears; reads serve; check the volume, its device and the board \
          user's quota — the next write succeeds by itself once the cause clears",
-        "landing: writes land again at position {position}, {n} refused since position {position}",
+        "landing: writes land again at position {position}, {n} refused over {ms} ms since \
+         position {position}",
         "`Disk quota exceeded`",
         "`Input/output error`",
         "`writes.halted` stays `false`",

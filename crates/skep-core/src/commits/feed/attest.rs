@@ -33,13 +33,17 @@
 //! file. The open names every cut on the operator stream with the last
 //! trusted position, the reclaim floor at this open and THE SIDE the cut
 //! reached ([`AttestCutLine`]) — REBUILT where every cut line lies above the
-//! floor, which is `coverage + 1 ≥ floor` since the file is position-ordered
-//! and the rebuild covers `(coverage, head]`; LOST between the last trusted
-//! position and the floor otherwise — so the board directory's backup is
-//! restored on a LOST cut alone. At HEAD no read serves a below-floor slot
-//! (`/changes` answers `410 history_reclaimed` below the feed's floor): the
-//! lines below it are kept for a read that does not yet exist, the class
-//! being the design record's and not this build's to narrow.
+//! floor, LOST between the edge they lie above and the floor otherwise. The
+//! edge is the greatest of what the open can witness: the last trusted
+//! position, the file being position-ordered; the position before the one a
+//! torn line at the file's end names, where its `at` stands whole; and the
+//! board term's, at or below which no write is attested ([`Attested`]). So a
+//! crash's tear reads as rebuilt wherever a witness names its side, and the
+//! board directory's backup is restored on a LOST cut alone. At HEAD no read
+//! serves a below-floor slot (`/changes` answers `410 history_reclaimed`
+//! below the feed's floor): the lines below it are kept for a read that does
+//! not yet exist, the class being the design record's and not this build's
+//! to narrow.
 //!
 //! DURABLE BEFORE THE NEXT COMMIT, AND A FAILED LINE HALTS WRITES (SO-I5 (d):
 //! no signature the board keeps is lost by a crash, a power loss or a failed
@@ -76,15 +80,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::{Map, Value};
-use skep_engine::Engine;
+use skep_engine::{Engine, World};
+use skep_identity::HasIdentity;
 use skep_kernel::{Attestation, HistoryError, Seq};
 use skep_util::json::hex_string;
 use skep_util::notice::Class;
 
-use super::derived::LineFile;
-use super::super::sidecar::{CommitsLog, Cut, CutHead, ForeignLinesLine, IoCause};
+use super::super::board_term;
+use super::super::sidecar::{CommitsLog, Cut, CutHead, EntryLines, ForeignLinesLine, IoCause};
 use super::super::Lines;
-use super::AttestStoreFailed;
+use super::derived::LineFile;
+use super::{AttestStoreFailed, AttestStoreFigures};
 use crate::codec::parse_lower_hex_bytes;
 
 // The file is named BESIDE the fields its records carry, and both beside the
@@ -138,7 +144,8 @@ impl AttestStore {
     /// (`CommitsLog::floor_at_open`, the feed's one probe) — the same
     /// refusal the rebuild below meets where its fence's base is gone, both
     /// the kernel's one base selection naming the oldest retained
-    /// checkpoint. Every
+    /// checkpoint — and the edge of the board's attested positions read off
+    /// the head beside it ([`Attested`]). Every
     /// failure of the open names this file, the kind kept (row 2): the
     /// replay's through `LineFile::open`, the rebuilt lines' appends, the
     /// fence, the sync and the size through one closure here. The tail is
@@ -154,10 +161,11 @@ impl AttestStore {
     ///
     /// THE OPEN'S OTHER LINES: the entry lines past the head the replay
     /// purged, signatures a copy taken before this open still holds
-    /// ([`ForeignLinesLine`]); a file ABSENT at this open on a journal that
-    /// has reclaimed, every signature it kept at or below the floor gone
-    /// ([`BegunAfreshLine`]); and, last, what the store holds — its size,
-    /// never compacted, and what the rebuild wrote back ([`AttestOpenLine`]).
+    /// ([`ForeignLinesLine`]); a file ABSENT at this open where an attested
+    /// position can lie at or below the reclaim floor, every signature it
+    /// kept there gone ([`BegunAfreshLine`]); and, last, what the store
+    /// holds — its size, never compacted, the slots resident — and what the
+    /// rebuild wrote back ([`AttestOpenLine`]).
     ///
     /// COST: O(the file) to READ it, a line at a time — holding one line and
     /// the served window, never the file, which keeps a line for every
@@ -239,31 +247,36 @@ impl AttestStore {
         }
         // The floor the log's open probed: `None` is a journal that still
         // answers genesis, so every cut line is rebuilt and an absent file
-        // lost nothing — the floor is genesis, position 0.
+        // lost nothing — the floor is genesis, position 0. Beside it, where
+        // an attested position can lie at all, read off the head.
         let floor = log.floor_at_open();
+        let attested = Attested::of(engine.kernel().snapshot().world());
         if let Some(cut) = replayed.cut {
             let rebuilt = refused.is_none();
-            lines.say(Class::Failure, AttestCutLine { cut, floor: floor.unwrap_or(0), rebuilt });
+            let floor = floor.unwrap_or(0);
+            lines.say(Class::Failure, AttestCutLine { cut, floor, attested, rebuilt });
         }
         if let (true, Some(floor)) = (absent, floor) {
-            lines.say(Class::Failure, BegunAfreshLine { floor, rebuilt: rebuilt.lines });
+            if let Some(above) = attested.edge().filter(|&edge| edge < floor) {
+                let rebuilt = rebuilt.lines;
+                lines.say(Class::Failure, BegunAfreshLine { above, floor, rebuilt });
+            }
         }
         let bytes = file.len().map_err(with_file)?;
         let elapsed_ms = started.elapsed().as_millis();
-        lines.say(Class::Open, AttestOpenLine { bytes, rebuilt, elapsed_ms });
+        let slots = served.len();
+        lines.say(Class::Open, AttestOpenLine { bytes, slots, rebuilt, elapsed_ms });
         Ok(AttestStore { file, served, lines: lines.clone() })
     }
 
-    /// Returns the store's file size in bytes, as its handle reads it.
+    /// Returns what the store holds: its file's size and the slots resident.
     ///
-    /// The file is never compacted, so this grows by one line (~6.9 KB under
-    /// tag 1) per attested commit for the life of the board.
-    ///
-    /// # Errors
-    ///
-    /// The handle's metadata could not be read.
-    pub(super) fn bytes(&self) -> io::Result<u64> {
-        self.file.len()
+    /// The file is never compacted, so it grows by one line (~6.9 KB under
+    /// tag 1) per attested commit for the life of the board; the slots
+    /// resident grow by one blob (~3.4 KB) per attested commit this uptime.
+    /// The size is `None` where the handle's metadata could not be read.
+    pub(super) fn figures(&self) -> AttestStoreFigures {
+        AttestStoreFigures { bytes: self.file.len().ok(), slots: self.served.len() }
     }
 
     /// Mirror one admitted marker slot at RECORD time — the attestation the
@@ -345,17 +358,66 @@ impl std::fmt::Display for NotDurableLine<'_> {
     }
 }
 
-/// Row 9 for the attest store (`operations.md` §1.1 row 9; §3.6 step 3; §4
-/// row 17): the head every cut line opens with, then THE SIDE.
+/// Where this board's attested positions can lie, as the head shows it.
 ///
-/// `coverage ≥ floor` is REBUILT where the rebuild answered: the file is
-/// position-ordered, so every cut line's position is above the last trusted
-/// one, and the rebuild covers `(coverage, head]` above the floor — the
-/// floor's own slot no retained base answers ([`rebuilt_tail`]). Otherwise
-/// the lines between the last trusted position and the floor were entry
-/// signatures' only copies, LOST unless the board directory's backup is
+/// A marker slot is filled by an attested write alone, which the write-path
+/// check admits on a claimed board over the board term — `H.1`'s pair, read
+/// before the member is asked for (signed-ops D13; `attestation_check`'s
+/// step 4) — so an unclaimed board holds no attested position, and a claimed
+/// one none at or below the position its board term names. The cut line and
+/// the absent store's line measure a loss against it: a line this file kept
+/// at or below that edge is no signature this journal made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Attested {
+    /// An unclaimed board: no write is attested.
+    Nowhere,
+    /// Every attested position lies above this one.
+    ///
+    /// It is the board term's position, or 0 where the head reads no `H.1`
+    /// on a claimed board.
+    Above(u64),
+}
+
+impl Attested {
+    /// Returns where `world`'s attested positions can lie.
+    fn of(world: &World) -> Attested {
+        if world.identity().claimant().is_none() {
+            return Attested::Nowhere;
+        }
+        Attested::Above(board_term(world).map_or(0, |term| term.log_position))
+    }
+
+    /// Returns the position every attested one lies above, `None` for none.
+    fn edge(self) -> Option<u64> {
+        match self {
+            Attested::Nowhere => None,
+            Attested::Above(edge) => Some(edge),
+        }
+    }
+}
+
+/// Row 9 for the attest store: the cut line's head, then the side it reached.
+///
+/// It is `operations.md` §1.1 row 9's line (§3.6 step 3; §4 row 17).
+/// **The edge.** Every cut line lies above an edge, the greatest of three
+/// witnesses: the last trusted position, the file being position-ordered;
+/// the position before the one a torn line at the file's end names, where
+/// its `at` stands whole ([`Cut`]'s `first`); and the edge of the board's
+/// attested positions ([`Attested`]), no line of this journal lying at or
+/// below it.
+///
+/// **The side.** An edge at or above the floor reads rebuilt where the
+/// rebuild answered: the rebuild covers `(coverage, head]` above the floor,
+/// the floor's own slot no retained base answers ([`rebuilt_tail`]). A crash
+/// tears a line above the floor, the store's durable-before-the-next-commit
+/// premise, so its cut reads as rebuilt wherever a witness names its side.
+/// Otherwise the lines between the edge and the floor may be entry
+/// signatures' only copies, lost unless the board directory's backup is
 /// restored; and where the journal refused the rebuild, the cut lines above
 /// the floor are lost with them ([`RebuildRefusedLine`] names the account).
+/// Each lost arm adds the whole lines the cut took with it, where it took
+/// any: `; the cut took {m} whole lines with it, positions {a}–{b}`.
+///
 /// `floor` is the reclaim floor at this open — genesis, 0, where nothing is
 /// reclaimed. Said once the rebuild has run. A pure value, pinned by
 /// `to_string()` in the unit suite; emitted under `Class::Failure` by
@@ -363,14 +425,32 @@ impl std::fmt::Display for NotDurableLine<'_> {
 struct AttestCutLine {
     cut: Cut,
     floor: u64,
+    attested: Attested,
     /// Whether the journal answered the rebuild.
     rebuilt: bool,
 }
 
 impl AttestCutLine {
+    /// Returns the position every cut line lies above.
+    fn edge(&self) -> u64 {
+        let torn = self.cut.first.map_or(0, |at| at.saturating_sub(1));
+        let attested = self.attested.edge().unwrap_or(u64::MAX);
+        self.cut.trusted.max(torn).max(attested)
+    }
+
     /// Returns whether every cut line lies above the reclaim floor.
     fn above_the_floor(&self) -> bool {
-        self.cut.trusted >= self.floor
+        self.edge() >= self.floor
+    }
+
+    /// Writes the whole lines the cut took with it, where it took any.
+    fn whole_after(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.cut.whole_after {
+            Some(EntryLines { lines, first, last }) => {
+                write!(f, "; the cut took {lines} whole lines with it, positions {first}–{last}")
+            }
+            None => Ok(()),
+        }
     }
 }
 
@@ -384,19 +464,26 @@ impl std::fmt::Display for AttestCutLine {
                  rebuilt from the journal",
                 self.floor
             ),
-            (true, false) => write!(
-                f,
-                "{head}; every cut line lies above the reclaim floor at position {}, but the \
-                 journal refused their rebuild: they are LOST unless the board directory's \
-                 backup is restored",
-                self.floor
-            ),
-            (false, _) => write!(
-                f,
-                "{head}; the lines between position {} and the reclaim floor at position {} are \
-                 LOST unless the board directory's backup is restored",
-                self.cut.trusted, self.floor
-            ),
+            (true, false) => {
+                write!(
+                    f,
+                    "{head}; every cut line lies above the reclaim floor at position {}, but the \
+                     journal refused their rebuild: they are LOST unless the board directory's \
+                     backup is restored",
+                    self.floor
+                )?;
+                self.whole_after(f)
+            }
+            (false, _) => {
+                write!(
+                    f,
+                    "{head}; the lines between position {} and the reclaim floor at position {} \
+                     are LOST unless the board directory's backup is restored",
+                    self.edge(),
+                    self.floor
+                )?;
+                self.whole_after(f)
+            }
         }
     }
 }
@@ -452,16 +539,22 @@ impl std::fmt::Display for RebuildRefusedLine<'_> {
     }
 }
 
-/// A store absent at this open on a journal that has reclaimed.
+/// A store absent at this open where it can have kept a signature alone.
 ///
 /// The words: `feed-attest.log was absent at this open and is begun afresh:
 /// the attested commits above the reclaim floor at position {f} are rebuilt
-/// from the journal ({n} lines); every signature this board kept at or below
-/// position {f} is LOST unless the board directory's backup is restored`.
-/// Below the floor the store is the only copy, so an absent file is a loss
-/// the open cannot make good. A pure value, pinned by `to_string()` in the
-/// unit suite; emitted under `Class::Failure` by [`AttestStore::open`].
+/// from the journal ({n} lines); every signature this board kept between
+/// position {p} and position {f} is LOST unless the board directory's backup
+/// is restored`. Below the floor the store is the only copy, so an absent
+/// file is a loss the open cannot make good — said where an attested
+/// position can lie at or below the floor, above `{p}`, the edge of the
+/// board's attested positions ([`Attested`]); an unclaimed board, or one
+/// whose board term stands at or above the floor, lost none. A pure value,
+/// pinned by `to_string()` in the unit suite; emitted under
+/// `Class::Failure` by [`AttestStore::open`].
 struct BegunAfreshLine {
+    /// The edge every attested position lies above.
+    above: u64,
     floor: u64,
     rebuilt: usize,
 }
@@ -473,9 +566,9 @@ impl std::fmt::Display for BegunAfreshLine {
             f,
             "{ATTEST_FILE} was absent at this open and is begun afresh: the attested commits \
              above the reclaim floor at position {floor} are rebuilt from the journal ({} \
-             lines); every signature this board kept at or below position {floor} is LOST \
-             unless the board directory's backup is restored",
-            self.rebuilt
+             lines); every signature this board kept between position {} and position {floor} \
+             is LOST unless the board directory's backup is restored",
+            self.rebuilt, self.above
         )
     }
 }
@@ -496,16 +589,19 @@ impl Rebuilt {
     }
 }
 
-/// The open's report of the store: its size and what the rebuild wrote.
+/// The open's report of the store: what it holds and what the rebuild wrote.
 ///
-/// The words: `feed-attest.log: {bytes} bytes, never compacted; {n} lines
-/// rebuilt from the journal's markers (positions {a}–{b}), in {d} ms`, the
-/// positions where any line was rebuilt — so the restart row 33 asks for
-/// says that it wrote the lost line back. A pure value, pinned by
-/// `to_string()` in the unit suite; emitted under `Class::Open` by
+/// The words: `feed-attest.log: {bytes} bytes, never compacted, {s} slots
+/// resident; {n} lines rebuilt from the journal's markers (positions
+/// {a}–{b}), in {d} ms` — the slots the served window holds resident, the
+/// one structure of the feed that grows with every attested commit for the
+/// uptime, and the positions where any line was rebuilt, so the restart row
+/// 33 asks for says that it wrote the lost line back. A pure value, pinned
+/// by `to_string()` in the unit suite; emitted under `Class::Open` by
 /// [`AttestStore::open`], once per open.
 struct AttestOpenLine {
     bytes: u64,
+    slots: usize,
     rebuilt: Rebuilt,
     elapsed_ms: u128,
 }
@@ -514,8 +610,9 @@ impl std::fmt::Display for AttestOpenLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{ATTEST_FILE}: {} bytes, never compacted; {} lines rebuilt from the journal's markers",
-            self.bytes, self.rebuilt.lines
+            "{ATTEST_FILE}: {} bytes, never compacted, {} slots resident; {} lines rebuilt from \
+             the journal's markers",
+            self.bytes, self.slots, self.rebuilt.lines
         )?;
         if let Some((first, last)) = self.rebuilt.span {
             write!(f, " (positions {first}–{last})")?;
@@ -594,191 +691,4 @@ fn attest_of_record(m: &Map<String, Value>) -> Option<Attestation> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A slot the store records is served at once and replays from its line
-    /// as the same slot — [`attest_fields`] and [`attest_of_record`] one
-    /// spelling in both directions — and a line [`attest_fields`] could not
-    /// have spelled replays as no slot: an uppercase blob, a tag of no
-    /// signature, a tag past a byte, an empty blob. A tag no `SIG_ALGS` row
-    /// names is a slot all the same: the table is its consumer's to ask.
-    #[test]
-    fn a_recorded_slot_is_served_and_replays_from_its_line_as_itself() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let lines = Lines::new();
-        let slot = Attestation::new(1, vec![0xab, 0x01]).expect("tag 1 and a non-empty blob");
-        {
-            let (file, entries, replayed) =
-                LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines)
-                    .expect("a fresh store opens");
-            assert!(entries.is_empty() && replayed.cut.is_none() && replayed.foreign.is_none());
-            let mut store = AttestStore { file, served: BTreeMap::new(), lines: lines.clone() };
-            store.record(5, slot.clone()).expect("a writable store takes the line");
-            assert_eq!(store.synced_through(), 5, "and syncs it before answering");
-            assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
-            assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
-            assert!(lines.said().lock().is_empty(), "a line that landed says nothing");
-        }
-        let (_file, entries, _) =
-            LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines).expect("reopen");
-        let replayed: Vec<(u64, Option<Attestation>)> =
-            entries.iter().map(|(at, m)| (*at, attest_of_record(m))).collect();
-        assert_eq!(replayed, [(5, Some(slot))], "the line replays as the slot it mirrors");
-
-        let record = |alg: Value, sig: &str| {
-            let mut m = Map::new();
-            m.insert(ATTEST_ALG.to_string(), alg);
-            m.insert(ATTEST_SIG.to_string(), Value::String(sig.to_string()));
-            m
-        };
-        for (alg, sig, why) in [
-            (Value::from(1u64), "AB01", "hex not in the store's own lowercase"),
-            (Value::from(0u64), "ab01", "the empty slot's tag signs nothing"),
-            (Value::from(256u64), "ab01", "a tag past a byte"),
-            (Value::from(1u64), "", "a blob of no bytes"),
-        ] {
-            assert_eq!(attest_of_record(&record(alg, sig)), None, "{why}");
-        }
-        assert_eq!(
-            attest_of_record(&record(Value::from(200u64), "ab01")),
-            Attestation::new(200, vec![0xab, 0x01]).ok(),
-            "a tag no row names replays as the slot it spells"
-        );
-    }
-
-    /// ROW 33 ON THE DOOR (`operations.md` §1.1 row 33; SO-I5 (d)): a line
-    /// the store cannot make durable — its handle read-only, the seam
-    /// `fail_next_write` — is answered [`AttestStoreFailed`] and said
-    /// through the classed door under `failure:`, in the ruled words: the
-    /// file, the position, the cause, what still serves and the act. The
-    /// slot is served this uptime all the same. ONCE by the halt above: the
-    /// write path refuses every later commit on the answer, so no later
-    /// `record` runs — the file's own refusal of a later line is the halt's
-    /// premise, not this card's rate.
-    #[test]
-    fn a_line_the_store_cannot_make_durable_is_said_through_the_door_and_answered() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let lines = Lines::new();
-        let (file, _, _) = LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines)
-            .expect("a fresh store opens");
-        let mut store = AttestStore { file, served: BTreeMap::new(), lines: lines.clone() };
-        store.fail_next_write();
-        let slot = Attestation::new(1, vec![0xab, 0x01]).expect("a slot");
-        assert!(store.record(5, slot.clone()).is_err(), "answered, so the write path halts");
-        assert_eq!(store.slot(5).as_deref(), Some(&slot), "served this uptime all the same");
-        let said = lines.said().lock().clone();
-        assert_eq!(said.len(), 1, "one line for the failure:\n{}", said.join("\n"));
-        assert!(
-            said[0].starts_with("failure: feed-attest.log: position 5's line is not durable ("),
-            "the class word, the file and the position: {}",
-            said[0]
-        );
-        assert!(
-            said[0].ends_with(
-                "); every later write is refused until a restart, whose open rebuilds the line \
-                 from the journal"
-            ),
-            "what still serves and the act: {}",
-            said[0]
-        );
-    }
-
-    /// Row 9's attest words, all three sides, and row 10's: the cut is
-    /// REBUILT exactly where `coverage ≥ floor` and the journal answered —
-    /// the last trusted position at the floor included, the floor's own slot
-    /// below every cut line — and LOST below, a last trusted position one
-    /// below the floor included, since no retained base answers the floor's
-    /// own slot; LOST above too where the journal refused the rebuild. A
-    /// journal still answering genesis is the floor at 0, every cut rebuilt.
-    #[test]
-    fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_count() {
-        let cut = Cut { valid_end: 1_400, len: 2_000, trusted: 40 };
-        let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
-                    after it are cut";
-        let line = |floor, rebuilt| AttestCutLine { cut, floor, rebuilt }.to_string();
-        let rebuilt = |floor| {
-            format!(
-                "{head}; every cut line lies above the reclaim floor at position {floor} and is \
-                 rebuilt from the journal"
-            )
-        };
-        let lost = |floor| {
-            format!(
-                "{head}; the lines between position 40 and the reclaim floor at position {floor} \
-                 are LOST unless the board directory's backup is restored"
-            )
-        };
-        assert_eq!(line(40, true), rebuilt(40), "coverage = floor: rebuilt");
-        assert_eq!(line(0, true), rebuilt(0), "nothing reclaimed: the floor is genesis");
-        assert_eq!(line(41, true), lost(41), "coverage + 1 = floor: the floor's slot is lost");
-        assert_eq!(line(42, true), lost(42), "coverage + 1 < floor: lost");
-        assert_eq!(
-            line(40, false),
-            format!(
-                "{head}; every cut line lies above the reclaim floor at position 40, but the \
-                 journal refused their rebuild: they are LOST unless the board directory's \
-                 backup is restored"
-            ),
-            "above the floor, the rebuild refused: lost"
-        );
-        assert_eq!(
-            UnreadableSlotsLine { count: 3, first: 17 }.to_string(),
-            "feed-attest.log: 3 slots this daemon cannot read, the first at position 17; their \
-             rows serve attest: null, the lines kept as written"
-        );
-    }
-
-    /// The open's other lines and row 33's two endings, at fixed inputs: the
-    /// refused rebuild with the account and the region; the absent store
-    /// with the floor and the count; the store's size with the positions
-    /// rebuilt, and with none; and the line not made durable, the act a full
-    /// volume adds after it and no other cause does.
-    #[test]
-    fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
-        assert_eq!(
-            RebuildRefusedLine { coverage: 12, head: 30, account: "journal corrupt at rest" }
-                .to_string(),
-            "feed-attest.log: the journal refused the rebuild above position 12 (journal corrupt \
-             at rest): any attested commit in (12, 30] serves attest: null, its line LOST at this \
-             store and not retried — restore this file and the segment the account names from a \
-             copy taken before this open (RUNBOOK §2)"
-        );
-        assert_eq!(
-            BegunAfreshLine { floor: 2049, rebuilt: 3 }.to_string(),
-            "feed-attest.log was absent at this open and is begun afresh: the attested commits \
-             above the reclaim floor at position 2049 are rebuilt from the journal (3 lines); \
-             every signature this board kept at or below position 2049 is LOST unless the board \
-             directory's backup is restored"
-        );
-        let mut rebuilt = Rebuilt::default();
-        let open = |rebuilt| AttestOpenLine { bytes: 20_700, rebuilt, elapsed_ms: 4 }.to_string();
-        assert_eq!(
-            open(rebuilt),
-            "feed-attest.log: 20700 bytes, never compacted; 0 lines rebuilt from the journal's \
-             markers, in 4 ms"
-        );
-        for at in [7, 9, 12] {
-            rebuilt.note(at);
-        }
-        assert_eq!(
-            open(rebuilt),
-            "feed-attest.log: 20700 bytes, never compacted; 3 lines rebuilt from the journal's \
-             markers (positions 7–12), in 4 ms"
-        );
-        let durable =
-            |kind| NotDurableLine { at: 5, error: &io::Error::new(kind, "no room") }.to_string();
-        let halt = "feed-attest.log: position 5's line is not durable";
-        let rest = "every later write is refused until a restart, whose open rebuilds the line \
-                    from the journal";
-        assert_eq!(durable(io::ErrorKind::Other), format!("{halt} (no room); {rest}"));
-        assert_eq!(
-            durable(io::ErrorKind::StorageFull),
-            format!(
-                "{halt} (the volume is full (no room)); {rest}; free room on the volume first: \
-                 the restart's open writes the line back and syncs it, and on a full volume it \
-                 refuses and reads stop with it"
-            )
-        );
-    }
-}
+mod tests;

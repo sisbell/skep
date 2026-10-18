@@ -73,7 +73,10 @@ pub const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 /// retained window writes: at a thousand boundaries a line, a window of a
 /// million positions is a thousand lines over the walk's length, and a
 /// boundary costs one whole-world reconstruction, so a thousand of them is
-/// seconds at the least.
+/// seconds at the least. The open's classification of the bare positions
+/// `feed-index.log` lost — two reconstructions a position, before the board
+/// serves — says its own `open:` line at the same figures, a position in a
+/// boundary's place.
 pub const FEED_WALK_PROGRESS_BOUNDARIES: u64 = 1_000;
 
 /// THE FEED WALK's PROGRESS CADENCE, the time half — ten seconds, INTERIM
@@ -81,7 +84,8 @@ pub const FEED_WALK_PROGRESS_BOUNDARIES: u64 = 1_000;
 /// where fewer than [`FEED_WALK_PROGRESS_BOUNDARIES`] boundaries fit in it —
 /// a large world's boundaries, each a reconstruction of seconds. Ten seconds
 /// is well under a supervisor's patience and well over the stream's own
-/// cost of a line.
+/// cost of a line. The open's classification of the bare positions
+/// `feed-index.log` lost reads it too, for its own `open:` line.
 pub const FEED_WALK_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
 /// THE EDGE PAIRS' HOLD-DOWN — 15 s, INTERIM (the register's; D1: a daemon

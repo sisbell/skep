@@ -161,7 +161,9 @@ mod sidecar;
 // The published head writer, which commits through this module's own door.
 mod head;
 
-pub use feed::{ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction, StoppedFile};
+pub use feed::{
+    AttestStoreFigures, ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction, StoppedFile,
+};
 pub(crate) use head::board_term;
 
 use self::classify::derived_journal;
@@ -292,11 +294,12 @@ pub struct Commits {
     /// THE DURABILITY REFUSALS since the last write that landed
     /// (`operations.md` §1.1 m1; §4 row 1): the I/O kinds already said in
     /// this stretch, and the refusals counted with the position the first
-    /// would have taken — each kind's line said once per stretch
-    /// ([`DurabilityRefusedLine`]), a new kind being a new condition, and the
-    /// stretch closed by the next write that lands, said once
-    /// ([`WritesLandAgainLine`]). Set, read and cleared under the
-    /// serialization guard at the door; the lock is what makes it `Sync`.
+    /// would have taken and the moment it was met — each kind's line said
+    /// once per stretch ([`DurabilityRefusedLine`]), a new kind being a new
+    /// condition, and the stretch closed by the next write that lands, said
+    /// once with its length ([`WritesLandAgainLine`]). Set, read and cleared
+    /// under the serialization guard at the door; the lock is what makes it
+    /// `Sync`.
     refused: Mutex<RefusedStretch>,
     /// THE CLASSED DOOR WITH ITS RECORD ([`Lines`]): every line said from
     /// this card and the feed beneath it goes through it — the feed files'
@@ -475,7 +478,7 @@ impl Commits {
         let at = Seq(self.stores.kernel().current_seq().0.saturating_add(1));
         let mut stretch = self.refused.lock();
         stretch.refused += 1;
-        stretch.since.get_or_insert(at);
+        stretch.since.get_or_insert_with(|| (at, Instant::now()));
         if stretch.kinds.contains(&kind) {
             return;
         }
@@ -490,9 +493,9 @@ impl Commits {
     /// The kernel's position past `pre` is the arbiter, not the answer — an
     /// idempotency replay's ack lands nothing. A write that landed after
     /// durability refusals says so once, with the position it landed at, the
-    /// refusals counted and the first refused position
-    /// ([`WritesLandAgainLine`]), and the kinds are forgotten, so the next
-    /// refusal is news again. Free where no refusal stands: one lock, one
+    /// refusals counted, how long the stretch lasted and the first refused
+    /// position ([`WritesLandAgainLine`]), and the kinds are forgotten, so the
+    /// next refusal is news again. Free where no refusal stands: one lock, one
     /// look.
     fn close_the_refused_stretch_where_landed(&self, pre: Seq) {
         let at = self.stores.kernel().current_seq();
@@ -500,11 +503,12 @@ impl Commits {
             return;
         }
         let mut stretch = self.refused.lock();
-        let Some(since) = stretch.since.take() else { return };
+        let Some((since, began)) = stretch.since.take() else { return };
         let refused = std::mem::take(&mut stretch.refused);
         stretch.kinds.clear();
         drop(stretch);
-        self.said.say(Class::Landing, WritesLandAgainLine { at, refused, since });
+        let elapsed_ms = began.elapsed().as_millis();
+        self.said.say(Class::Landing, WritesLandAgainLine { at, refused, elapsed_ms, since });
     }
 
     /// THE CLASSED DOOR, for a line of the daemon's whose site lies ABOVE
@@ -558,19 +562,17 @@ impl Commits {
         self.feed.fail_next_rewrite_past_rename();
     }
 
-    /// Returns `feed-attest.log`'s size in bytes, for a line of the daemon's.
+    /// Returns what `feed-attest.log` holds, for a line of the daemon's.
     ///
     /// The attest store is never compacted — below the reclaim floor its
     /// lines are an entry signature's only copy — so the file grows by one
     /// line (~6.9 KB under tag 1) per attested commit for the life of the
-    /// board; the open says its size once, and this reads it whenever the
-    /// daemon's own lines would. Under the feed's lock and no guard.
-    ///
-    /// # Errors
-    ///
-    /// The file's metadata could not be read.
-    pub fn attest_store_bytes(&self) -> io::Result<u64> {
-        self.feed.attest_store_bytes()
+    /// board, and its slots resident grow by one blob per attested commit for
+    /// the uptime ([`AttestStoreFigures`]); the open says both once, and the
+    /// checkpoint thread reads them at each landing for its line. Under the
+    /// feed's lock and no guard.
+    pub fn attest_store_figures(&self) -> AttestStoreFigures {
+        self.feed.attest_store_figures()
     }
 
     /// THE STOPPED FEED FILES, as a read: of `commits.log` and the four
@@ -1346,15 +1348,18 @@ impl fmt::Display for DurabilityRefusedLine<'_> {
 /// THE STRETCH's CLOSE (`operations.md` §1.1 m1): writes land again after
 /// durability refusals.
 ///
-/// The words: `writes land again at position {p}, {n} refused since
-/// position {q}` — `{p}` the position the landed write committed at, `{n}`
-/// the refusals the stretch counted and `{q}` the position the first would
+/// The words: `writes land again at position {p}, {n} refused over {d} ms
+/// since position {q}` — `{p}` the position the landed write committed at,
+/// `{n}` the refusals the stretch counted, `{d}` the outage's length, from
+/// the first refusal to this landing, and `{q}` the position the first would
 /// have taken, which its failure line named. A pure value, pinned by
 /// `to_string()` in the unit suite; emitted under `Class::Landing` through
 /// [`Commits::close_the_refused_stretch_where_landed`], once per stretch.
 pub(crate) struct WritesLandAgainLine {
     pub(crate) at: Seq,
     pub(crate) refused: u64,
+    /// The stretch's length, whole milliseconds.
+    pub(crate) elapsed_ms: u128,
     pub(crate) since: Seq,
 }
 
@@ -1362,19 +1367,21 @@ impl fmt::Display for WritesLandAgainLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "writes land again at position {}, {} refused since position {}",
-            self.at, self.refused, self.since
+            "writes land again at position {}, {} refused over {} ms since position {}",
+            self.at, self.refused, self.elapsed_ms, self.since
         )
     }
 }
 
-/// The durability refusals of one stretch: the I/O kinds said, and the
-/// refusals counted with the position the first would have taken.
+/// The durability refusals of one stretch.
+///
+/// It holds the I/O kinds said, and the refusals counted with the position
+/// the first would have taken and the moment it was met.
 #[derive(Debug, Default)]
 struct RefusedStretch {
     kinds: Vec<io::ErrorKind>,
     refused: u64,
-    since: Option<Seq>,
+    since: Option<(Seq, Instant)>,
 }
 
 /// THE CLASSED DOOR WITH ITS RECORD — `notice::emit` under a class word

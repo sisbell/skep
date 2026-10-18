@@ -76,6 +76,16 @@ fn rotate_the_segment(port: u16, session: &str, dir: &Path) {
     panic!("the fixture must rotate the journal's segment: {:?}", segments(dir));
 }
 
+/// Returns line 25's last clause, what `feed-attest.log` holds.
+///
+/// It is read off the data directory: no write of this suite is attested —
+/// each lands in a private draft — so the file's size stands from the open
+/// on and no slot is resident.
+fn attest_figures(dir: &Path) -> String {
+    let bytes = fs::metadata(dir.join("feed-attest.log")).expect("the attest store").len();
+    format!("; feed-attest.log {bytes} bytes, 0 slots resident")
+}
+
 /// The decimal figure a line carries right after `key`.
 fn figure_after(line: &str, key: &str) -> u64 {
     let at = line.find(key).unwrap_or_else(|| panic!("{key:?} missing from {line:?}"));
@@ -229,11 +239,12 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     );
     assert!(
         compacted.ends_with(&format!(
-            "; the change feed's files compacted below position {} in N ms",
-            landed.seq.0
+            "; the change feed's files compacted below position {} in N ms{}",
+            landed.seq.0,
+            attest_figures(dir.path())
         )),
         "the fence is the reclaim floor — the oldest kept base — the hold in whole milliseconds, \
-         and no file stood, no inline run moved: {line}"
+         no file stood, then what the attest store holds, and no inline run moved: {line}"
     );
 
     // THE SECOND LANDING, at the same head with nothing committed between:
@@ -266,7 +277,10 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     assert!(peak_after >= peak, "the high-water never decreases: {peak} then {peak_after}");
     assert_eq!(resident_figures(line).1, peak_after, "{line}");
     assert!(
-        line.ends_with("; the change feed's files hold nothing below the reclaim floor"),
+        line.ends_with(&format!(
+            "; the change feed's files hold nothing below the reclaim floor{}",
+            attest_figures(dir.path())
+        )),
         "{line}"
     );
     assert!(!line.contains("ran inline"), "no inline run: no clause: {line}");
@@ -347,7 +361,8 @@ fn a_landing_line_names_the_file_that_stood_beside_the_fence() {
     assert!(
         compacted.ends_with(&format!(
             "; the change feed's files compacted below position {landed} in N ms, \
-             feed-index.log standing as it was"
+             feed-index.log standing as it was{}",
+            attest_figures(dir.path())
         )),
         "the one file that stood is named, and no other: {line}"
     );

@@ -99,19 +99,22 @@
 //! WHAT A REFUSAL DOES. A driver refusal on any of the head's commits is a
 //! SURFACED failure (I11 (c), PUB-5.75: never a board left silently headless):
 //! row 38's line names it (`operations.md` §1.1 row 38; §4 row 31) — the
-//! position the head would have named and the refusal AS THE WIRE RENDERS
-//! A REJECTION, its code and its detail through M10's own lowering
-//! ([`lower_txn`]), never a store error's `Debug` — said ONCE PER CAUSE: a
-//! memo of the last refusal said is kept under the state lock, a refusal
-//! rendering as that one is not said again (the trigger stays due and every
-//! landed commit retries it, so the same cause would otherwise be said per
-//! commit), and a refusal rendering otherwise is a new cause and is said.
-//! The head is skipped for this cycle with the writer's state unadvanced,
-//! and the triggering write is untouched — it committed, and its ack is
-//! owed whatever the daemon's own write did. When a head next LANDS the
-//! memo clears with ONE `landing:` line naming the head's position and the
-//! first refused one ([`RefusalsClearedLine`]), so the next refusal is news
-//! again. The next landed commit retries a CADENCE head, whose trigger
+//! position the head would have named, the commit refused — the draft's
+//! mint, the record's insert or the shot's publish — and the refusal AS THE
+//! WIRE RENDERS A REJECTION, its code and its detail through M10's own
+//! lowering ([`lower_txn`]), never a store error's `Debug` — said ONCE PER
+//! CAUSE: a memo of the last refusal said, its commit and its cause, is kept
+//! under the state lock, a refusal at that commit rendering as that one is
+//! not said again (the trigger stays due and every landed commit retries
+//! it, so the same cause would otherwise be said per commit), and any other
+//! is a new cause and is said. Every refused attempt is counted all the
+//! same. The head is skipped for this cycle with the writer's state
+//! unadvanced, and the triggering write is untouched — it committed, and
+//! its ack is owed whatever the daemon's own write did. When a head next
+//! LANDS the memo clears with ONE `landing:` line naming the head's
+//! position, the attempts refused, the first refused position and how long
+//! the refusals lasted ([`RefusalsClearedLine`]), so the next refusal is
+//! news again. The next landed commit retries a CADENCE head, whose trigger
 //! stays due.
 //!
 //! THE CLAIM'S HEAD, OWED (l7-C1; SO-I4 (a), owner 2026-10-02: the boundary
@@ -139,6 +142,7 @@
 //! account owns `H` and its draft, and nothing in the engine is widened.
 
 use std::io;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -160,7 +164,7 @@ use skep_util::notice::Class;
 use super::feed::Feed;
 use super::sidecar::{wall_clock_millis, CommitMeta};
 use super::{write_meta, Lines, WriteMeta, Commits};
-use crate::codec::JsonCodec;
+use crate::codec::{op_name, JsonCodec};
 use crate::serial::SerialGuard;
 
 /// The head record's `format` member — the journal stamp in force (`SKJ4`),
@@ -308,19 +312,33 @@ struct HeadState {
     /// Never set on a board with a head: `write_head_if_due` reads
     /// `last_head` first.
     first_head_owed: bool,
-    /// ROW 38's MEMO (the module doc's WHAT A REFUSAL DOES): the cause of
-    /// the last refusal SAID, rendered as the line renders it —
-    /// `{code}: {detail}` ([`render_cause`]) — so a refusal rendering the
-    /// same is not said again while it stands; `None` before any refusal
-    /// and again once a head lands. Under this lock because the refusal is
-    /// met inside the head's own commit, outside the decision's lock span,
-    /// and the clearing is taken under it.
-    last_refusal: Option<String>,
-    /// THE FIRST REFUSED POSITION since a head last landed — the `{q}` the
-    /// clearing line names: set at the first refusal said after a landing,
-    /// kept through every refusal after it, cleared with the line when a
-    /// head lands. `None` while no refusal stands.
-    refusals_since: Option<u64>,
+    /// Row 38's memo: the last refusal said, its commit and its cause.
+    ///
+    /// It keeps the module doc's account of what a refusal does: the op the
+    /// head's commit ran, as the wire names it, and the cause rendered as the
+    /// line renders it, `{code}: {detail}` ([`render_cause`]), so a refusal
+    /// at the same commit rendering the same is not said again while it
+    /// stands; `None` before any refusal and again once a head lands. Under
+    /// this lock because the refusal is met inside the head's own commit,
+    /// outside the decision's lock span, and the clearing is taken under it.
+    last_refusal: Option<(&'static str, String)>,
+    /// The refusals since a head last landed ([`Refusals`]).
+    ///
+    /// They are what the clearing line names: begun at the first refusal
+    /// after a landing, counting every refused attempt after it, said again
+    /// or not, and cleared with the line when a head lands. `None` while no
+    /// refusal stands.
+    refusals: Option<Refusals>,
+}
+
+/// The refusals since a head last landed, as the clearing line names them.
+struct Refusals {
+    /// The position the first refused head would have named.
+    since: u64,
+    /// The moment the first refusal was met.
+    began: Instant,
+    /// Every refused attempt, counted whether the memo said it or not.
+    attempts: u64,
 }
 
 /// A COMMITTED PAIR — a position and the commit chain's value AT it, which
@@ -520,7 +538,7 @@ impl HeadWriter {
                 staging_draft,
                 first_head_owed: false,
                 last_refusal: None,
-                refusals_since: None,
+                refusals: None,
             }),
             clock,
             lines: lines.clone(),
@@ -698,15 +716,19 @@ impl HeadWriter {
         let mut state = self.state.lock();
         if landed {
             // THE CLEARING (row 38's second line): a head landed, so every
-            // refusal said since the last one is history — said once, naming
-            // this head's position and the first refused one, and the memo
+            // refusal since the last one is history — said once, naming this
+            // head's position, the attempts refused, the first refused
+            // position and how long the refusals lasted, and the memo
             // cleared so the next refusal is news again.
-            if let Some(since) = state.refusals_since.take() {
+            if let Some(refusals) = state.refusals.take() {
                 state.last_refusal = None;
-                self.lines.say(
-                    Class::Landing,
-                    RefusalsClearedLine { landed: due_head.record.position, since },
-                );
+                let cleared = RefusalsClearedLine {
+                    landed: due_head.record.position,
+                    attempts: refusals.attempts,
+                    since: refusals.since,
+                    elapsed_ms: refusals.began.elapsed().as_millis(),
+                };
+                self.lines.say(Class::Landing, cleared);
             }
             state.last_head = Some(due_head.record);
             state.commits_since_head = 0;
@@ -768,14 +790,11 @@ impl HeadWriter {
                 // Unreachable — the insert answered a content element start —
                 // but a silent arm is what I11 (c) forbids, so it is named:
                 // the error's own words (`RunError`'s `Display`, never its
-                // `Debug`), through the classed door.
-                self.lines.say(
-                    Class::Failure,
-                    format_args!(
-                        "head writer: the head atom's run is malformed ({e}); no head written \
-                         this cycle"
-                    ),
-                );
+                // `Debug`), as row 38 names a refusal — the head's position,
+                // the publish it could not build, once per cause, and cleared
+                // by the head that next lands.
+                let cause = format!("its atom's run is malformed: {e}");
+                self.say_the_refusal_once(position, op_name(OpKind::Publish), cause);
                 return false;
             }
         };
@@ -899,8 +918,9 @@ impl HeadWriter {
     /// refusal is a [`Rejection`] — the store's error lowered through M10's
     /// one table under the op's own kind, so it reads as the wire's refusal
     /// of the same op would — met inside the closure, where it is in hand,
-    /// said once per cause with `position`, the one the head would have
-    /// named ([`HeadWriter::say_the_refusal_once`]), and answered with a
+    /// said once per commit and cause with `position`, the one the head
+    /// would have named, and the op refused
+    /// ([`HeadWriter::say_the_refusal_once`]), and answered with a
     /// non-committing `Response` (recorded nowhere), so the head is skipped
     /// and the triggering write is untouched. The test seam's refusal is
     /// taken here too, ahead of the driver, so it rides the same path.
@@ -921,7 +941,7 @@ impl HeadWriter {
             match outcome {
                 Ok((addr, at)) => Response::AckAddr { addr, at },
                 Err(refusal) => {
-                    self.say_the_refusal_once(position, &refusal);
+                    self.say_the_refusal_once(position, op_name(kind), render_cause(&refusal));
                     // A no-op answer `record` returns None for: nothing
                     // recorded, nothing announced. Dropped below, never on
                     // the wire.
@@ -935,25 +955,35 @@ impl HeadWriter {
         Some(addr)
     }
 
-    /// ROW 38's LINE, ONCE PER CAUSE (the module doc's WHAT A REFUSAL DOES):
-    /// the refusal rendered as the wire renders a rejection — `{code}:
-    /// {detail}` ([`render_cause`]) — compared under the state lock with the
-    /// last one said: the same cause is not said again; a new one is said
-    /// with `position`, the one the head would have named, and remembered,
-    /// and the first refused position since a landing is kept for the
-    /// clearing line. Said under the lock, so this line and the clearing a
-    /// landing says are one order on the stream. Where no head stands yet
-    /// the line says what that costs a claimed board ([`HeadRefusedLine`]).
-    fn say_the_refusal_once(&self, position: u64, refusal: &Rejection) {
-        let cause = render_cause(refusal);
+    /// Says row 38's line, once per commit and cause.
+    ///
+    /// This is the line the module doc's account of a refusal names.
+    /// `act` is the op of the head's commit the refusal was met at — the
+    /// staging draft's mint, the record's insert or the shot's publish, as
+    /// the wire names it — and `cause` the refusal as the wire renders a
+    /// rejection, `{code}: {detail}` ([`render_cause`]). Compared under the
+    /// state lock with the last one said: the same commit and cause is not
+    /// said again; another is said with `position`, the one the head would
+    /// have named, and remembered. Every attempt is counted, said or not,
+    /// and the first refused position since a landing kept with the moment,
+    /// for the clearing line. Said under the lock, so this line and the
+    /// clearing a landing says are one order on the stream. Where no head
+    /// stands yet the line says what that costs a claimed board
+    /// ([`HeadRefusedLine`]).
+    fn say_the_refusal_once(&self, position: u64, act: &'static str, cause: String) {
         let mut state = self.state.lock();
-        if state.last_refusal.as_deref() == Some(cause.as_str()) {
+        let refusals = state.refusals.get_or_insert_with(|| Refusals {
+            since: position,
+            began: Instant::now(),
+            attempts: 0,
+        });
+        refusals.attempts += 1;
+        if state.last_refusal.as_ref().is_some_and(|(a, c)| *a == act && *c == cause) {
             return;
         }
-        state.refusals_since.get_or_insert(position);
         let first = state.last_head.is_none();
-        self.lines.say(Class::Failure, HeadRefusedLine { position, cause: &cause, first });
-        state.last_refusal = Some(cause);
+        self.lines.say(Class::Failure, HeadRefusedLine { position, act, cause: &cause, first });
+        state.last_refusal = Some((act, cause));
     }
 }
 
@@ -993,20 +1023,28 @@ fn wire_code(refusal: &Rejection) -> String {
         .unwrap_or_else(|| "refused".to_string())
 }
 
-/// ROW 38's LINE (`operations.md` §1.1 row 38; §4 row 31), in the operator
-/// stream's ruled words: the position the head would have named and the
-/// cause as [`render_cause`] renders it.
+/// Row 38's line: a head the driver refused, in the ruled words.
+///
+/// It is `operations.md` §1.1 row 38's line (§4 row 31), in the operator
+/// stream's ruled words: the position the head would have named, the head's
+/// commit the refusal met — the staging draft's `create_new_document`, the
+/// record's `insert` or the shot's `publish`, the last a refusal that
+/// leaves the insert's atom an orphan in the draft — and the cause as
+/// [`render_cause`] renders it: `head writer: the head at position {p} was
+/// refused at its {op} ({cause}); no head written this cycle`.
 ///
 /// Where no head stands yet, the line adds what that costs: `; no head
 /// stands yet, so a claimed board refuses every attested write
 /// attestation_invalid:board_unavailable until one lands — tried again at
 /// every write's turn` — the board term is `H.1`'s (signed-ops D13), and a
-/// first head refused is owed at every turn (the module doc's THE CLAIM'S
-/// HEAD, OWED). A pure value the unit suite pins by `to_string()`; emitted
-/// under `Class::Failure` through [`HeadWriter::say_the_refusal_once`], once
-/// per cause.
+/// first head refused is owed at every turn (the module doc's account of
+/// the claim's head, owed). A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Failure` through
+/// [`HeadWriter::say_the_refusal_once`], once per commit and cause.
 struct HeadRefusedLine<'a> {
     position: u64,
+    /// The op of the head's commit the refusal met, as the wire names it.
+    act: &'static str,
     cause: &'a str,
     /// Whether no head stands yet, so the board has no board term.
     first: bool,
@@ -1016,8 +1054,9 @@ impl std::fmt::Display for HeadRefusedLine<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "head writer: the head at position {} was refused ({}); no head written this cycle",
-            self.position, self.cause
+            "head writer: the head at position {} was refused at its {} ({}); no head written \
+             this cycle",
+            self.position, self.act, self.cause
         )?;
         if self.first {
             f.write_str(
@@ -1030,23 +1069,31 @@ impl std::fmt::Display for HeadRefusedLine<'_> {
     }
 }
 
-/// ROW 38's CLEARING LINE, in the ruled words: the position the landed head
-/// names and the first position refused since the last head — the span the
-/// refusals covered, now history. A pure value, pinned by `to_string()`;
-/// emitted under `Class::Landing` by [`HeadWriter::write_head_if_due`] where
-/// a head lands with refusals on the memo, once.
+/// Row 38's clearing line: a head landed, the refusals before it cleared.
+///
+/// In the ruled words it names the position the landed head names, then
+/// what the refusals cost — the attempts refused since the last head, the
+/// ones the memo kept unsaid among them, the first position refused and how
+/// long the refusals stood: `head writer: a head landed at position {p}; {n}
+/// refused attempts since position {q}, over {d} ms, are cleared`. A pure
+/// value, pinned by `to_string()`; emitted under `Class::Landing` by
+/// [`HeadWriter::write_head_if_due`] where a head lands with refusals on the
+/// memo, once.
 struct RefusalsClearedLine {
     landed: u64,
+    attempts: u64,
     since: u64,
+    /// From the first refusal to this landing, whole milliseconds.
+    elapsed_ms: u128,
 }
 
 impl std::fmt::Display for RefusalsClearedLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "head writer: a head landed at position {}; the refusals since position {} are \
-             cleared",
-            self.landed, self.since
+            "head writer: a head landed at position {}; {} refused attempts since position {}, \
+             over {} ms, are cleared",
+            self.landed, self.attempts, self.since, self.elapsed_ms
         )
     }
 }

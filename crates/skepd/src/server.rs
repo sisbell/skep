@@ -234,14 +234,17 @@ use skep_util::source::Source;
 
 use std::sync::{Arc, OnceLock};
 
-use skep_core::auth::{startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue};
+use skep_core::auth::session::CHALLENGE_TTL_MS;
+use skep_core::auth::{
+    startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue, MAX_LIVE_NONCES,
+};
 use skep_core::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::MAX_SMALL_BODY;
 use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
-use skep_core::commits::{FeedCompaction, FirstHead, StoppedFile, Commits};
+use skep_core::commits::{AttestStoreFigures, Commits, FeedCompaction, FirstHead, StoppedFile};
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use request::BodySource;
@@ -1982,6 +1985,7 @@ impl Daemon {
             resident: self.resident.read(),
             compaction,
             compaction_ms,
+            attest: self.commits.attest_store_figures(),
         }
     }
 
@@ -2238,9 +2242,12 @@ impl fmt::Display for Reclaimed {
 /// The figures are the thread's re-reads off the newest base
 /// ([`Daemon::re_read_after_a_landing`]): the cadence's byte bound and the
 /// media floor in force, the volume's free space as the floor reads it, a
-/// reading of the resident set, and the change feed's compaction — the fence
+/// reading of the resident set, the change feed's compaction — the fence
 /// below which `/changes` answers `410 history_reclaimed`, how long the
-/// compaction held the change feed's lock, with each file that stood named.
+/// compaction held the change feed's lock, with each file that stood named —
+/// and what the never compacted `feed-attest.log` holds, on disk and
+/// resident (`Commits::attest_store_figures`), the one structure of the core
+/// that grows for the uptime, so a resident set that climbs is told apart.
 /// Line 25 carries them, and so do the backstop's line where its wake took
 /// the re-reads and a failure after a base landed (`operations.md` §1.1 rows
 /// 25 and 26; m13; §6), so no figure a landing moves — the floor a deposit
@@ -2249,7 +2256,13 @@ impl fmt::Display for Reclaimed {
 /// takes is timed where it happens. It renders `the cadence's byte bound
 /// {b}, the media floor in force {F}, the volume's free space {f};
 /// {resident}; the change feed's files {compacted below position {p} in {d}
-/// ms | hold nothing below the reclaim floor}`.
+/// ms | wait on the walk's landing over positions ({low}, {head}] for their
+/// rewrite, the resident entries trimmed below position {p} in {d} ms | hold
+/// nothing below the reclaim floor}; feed-attest.log {bytes} bytes, {s}
+/// slots resident` — the middle arm while the walk behind the listener has
+/// a region pending, when the fence moved in memory alone and no file was
+/// written; `size unread` for the bytes where the file's metadata did not
+/// answer.
 struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
@@ -2271,6 +2284,8 @@ struct AfterLanding {
     /// waited on that lock at this landing. Said beside the fence alone:
     /// where nothing lay below the floor, nothing was rewritten.
     compaction_ms: u128,
+    /// What `feed-attest.log` holds: its size and the slots resident.
+    attest: AttestStoreFigures,
 }
 
 impl fmt::Display for AfterLanding {
@@ -2281,21 +2296,29 @@ impl fmt::Display for AfterLanding {
              {}; {}; the change feed's files ",
             self.bytes_bound, self.floor, self.free_space, self.resident
         )?;
-        match self.compaction.fence {
-            Some(fence) => {
-                write!(
-                    f,
-                    "compacted below position {} in {} ms",
-                    fence.saturating_add(1),
-                    self.compaction_ms
-                )?;
-                for file in &self.compaction.standing {
-                    write!(f, ", {file} standing as it was")?;
-                }
-                Ok(())
+        let below = |fence: u64| fence.saturating_add(1);
+        match (self.compaction.fence, self.compaction.deferred) {
+            (Some(fence), Some((low, head))) => write!(
+                f,
+                "wait on the walk's landing over positions ({low}, {head}] for their rewrite, the \
+                 resident entries trimmed below position {} in {} ms",
+                below(fence),
+                self.compaction_ms
+            )?,
+            (Some(fence), None) => {
+                write!(f, "compacted below position {} in {} ms", below(fence), self.compaction_ms)?
             }
-            None => f.write_str("hold nothing below the reclaim floor"),
+            (None, _) => f.write_str("hold nothing below the reclaim floor")?,
         }
+        for file in &self.compaction.standing {
+            write!(f, ", {file} standing as it was")?;
+        }
+        f.write_str("; feed-attest.log ")?;
+        match self.attest.bytes {
+            Some(bytes) => write!(f, "{bytes} bytes")?,
+            None => f.write_str("size unread")?,
+        }
+        write!(f, ", {} slots resident", self.attest.slots)
     }
 }
 
@@ -3499,25 +3522,31 @@ impl fmt::Display for StreamThreadLine<'_> {
 
 /// The challenge store's two lines (m12; §6's row).
 ///
-/// Their words, verbatim: `challenge store: a nonce was evicted inside its
-/// time to live; a handshake it belonged to will be refused` when a mint
-/// first evicts a nonce younger than its TTL, and `challenge store: minting
-/// without evicting a live nonce again` at the first mint that evicted no
-/// live nonce a hold-down after the last that did. No caller, count or
-/// origin (AUTH-1.48: the cap is a memory bound and never an abuse bound —
-/// the line says the fact, not who met it). Said from
-/// [`Daemon::say_the_edges_crossed`].
+/// Their words: `challenge store: a nonce was evicted inside its time to
+/// live — more than {MAX_LIVE_NONCES} challenges stood unanswered within
+/// {CHALLENGE_TTL_MS} ms; a handshake it belonged to will be refused` when a
+/// mint first evicts a nonce younger than its TTL — the bound in force, the
+/// store's cap and the TTL, so the line says the rate that trips it — and
+/// `challenge store: minting without evicting a live nonce again` at the
+/// first mint that evicted no live nonce a hold-down after the last that
+/// did. No caller, count or origin (AUTH-1.48: the cap is a memory bound and
+/// never an abuse bound — the line says the fact and the bound, not who met
+/// it). Said from [`Daemon::say_the_edges_crossed`].
 pub(super) struct ChallengeEdgeLine(pub(super) Edge);
 
 impl fmt::Display for ChallengeEdgeLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self.0 {
-            Edge::Failure => {
-                "challenge store: a nonce was evicted inside its time to live; a handshake it \
-                 belonged to will be refused"
+        match self.0 {
+            Edge::Failure => write!(
+                f,
+                "challenge store: a nonce was evicted inside its time to live — more than \
+                 {MAX_LIVE_NONCES} challenges stood unanswered within {CHALLENGE_TTL_MS} ms; a \
+                 handshake it belonged to will be refused"
+            ),
+            Edge::Landing { .. } => {
+                f.write_str("challenge store: minting without evicting a live nonce again")
             }
-            Edge::Landing { .. } => "challenge store: minting without evicting a live nonce again",
-        })
+        }
     }
 }
 

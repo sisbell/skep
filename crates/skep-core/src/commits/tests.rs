@@ -298,9 +298,11 @@ fn the_durability_and_halt_lines_render_the_ruled_words_and_the_door_records_the
          its device and the board user's quota — the next write succeeds by itself once the \
          cause clears"
     );
+    let landed =
+        WritesLandAgainLine { at: Seq(1206), refused: 3, elapsed_ms: 912, since: Seq(1204) };
     assert_eq!(
-        WritesLandAgainLine { at: Seq(1206), refused: 3, since: Seq(1204) }.to_string(),
-        "writes land again at position 1206, 3 refused since position 1204"
+        landed.to_string(),
+        "writes land again at position 1206, 3 refused over 912 ms since position 1204"
     );
     let halt = |cause| KernelHaltLine { at: Seq(1203), cause }.to_string();
     assert_eq!(
@@ -414,13 +416,16 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
     mint();
     let landed = engine.kernel().current_seq().0;
     let said = durability_lines();
-    assert_eq!(
-        said[2..],
-        [format!(
-            "landing: writes land again at position {landed}, 3 refused since position {first}"
-        )],
-        "the stretch closes once, counting every refusal in it"
-    );
+    let all = said.join("\n");
+    assert_eq!(said.len(), 3, "the stretch closes once:\n{all}");
+    let (head, tail) = said[2]
+        .split_once(" ms since position ")
+        .unwrap_or_else(|| panic!("the stretch's length and its first position: {}", said[2]));
+    let ms = head
+        .strip_prefix(&format!("landing: writes land again at position {landed}, 3 refused over "))
+        .unwrap_or_else(|| panic!("the landed position and every refusal counted: {}", said[2]));
+    assert!(ms.parse::<u128>().is_ok(), "the stretch's length in whole ms: {}", said[2]);
+    assert_eq!(tail, first.to_string(), "the first refused position: {}", said[2]);
     mint();
     assert_eq!(durability_lines().len(), 3, "a landing with no stretch standing says nothing");
     let again = engine.kernel().current_seq().0 + 1;
@@ -542,16 +547,28 @@ fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attem
         wp.lines_said()
             .lock()
             .iter()
-            .filter(|l| l.contains("compaction below the reclaim floor failed"))
+            .filter(|l| l.contains(" compaction below the reclaim floor at position "))
             .cloned()
             .collect()
     };
-    let tail = "; the file stands as it was, and the next checkpoint's compaction tries again";
+    // Rows 27 and 28 as a compaction to `fence` says them: the file, the
+    // reclaim floor the compaction ran to, the side of the rename, then the
+    // cause and the act.
+    let stood = |line: &str, file: &str, fence: u64| {
+        let floor = fence + 1;
+        let head = format!(
+            "failure: {file} compaction below the reclaim floor at position {floor} failed before \
+             its rename: "
+        );
+        let tail = "; the file stands as it was, and the next checkpoint's compaction tries again";
+        line.starts_with(&head) && line.ends_with(tail)
+    };
 
     // The checkpoint thread's act: the checkpoint, then the compaction.
     engine.kernel().checkpoint().expect("the first checkpoint lands");
     let compacted = wp.compact_feed_below_reclaim_floor(&engine);
-    assert!(compacted.fence.is_some(), "the floor moved: a fence to compact to");
+    let fence = compacted.fence.expect("the floor moved: a fence to compact to");
+    assert_eq!(compacted.deferred, None, "no walk pending: the rewrite is not deferred");
     assert_eq!(
         compacted.standing,
         ["commits.log", "feed-index.log"],
@@ -564,29 +581,18 @@ fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attem
         "one line per file that stood, through the door:\n{}",
         wp.lines_said().lock().join("\n")
     );
-    assert!(
-        first[0].starts_with(
-            "failure: commits.log compaction below the reclaim floor failed before its rename: "
-        ) && first[0].ends_with(tail),
-        "row 27: {}",
-        first[0]
-    );
-    assert!(
-        first[1].starts_with(
-            "failure: feed-index.log compaction below the reclaim floor failed before its rename: "
-        ) && first[1].ends_with(tail),
-        "row 28: {}",
-        first[1]
-    );
+    assert!(stood(&first[0], "commits.log", fence), "row 27: {}", first[0]);
+    assert!(stood(&first[1], "feed-index.log", fence), "row 28: {}", first[1]);
 
     // A SECOND LANDING THAT COMPACTS, the obstacle standing: two more
     // checkpoints move the floor past the surviving entries, and each line
-    // is said AGAIN — per attempt.
+    // is said AGAIN — per attempt, naming the floor this landing ran to.
     insert("q");
     engine.kernel().checkpoint().expect("the second checkpoint lands");
     insert("q");
     engine.kernel().checkpoint().expect("the third checkpoint lands");
     let compacted = wp.compact_feed_below_reclaim_floor(&engine);
+    let fence = compacted.fence.expect("the floor moved again: a fence to compact to");
     assert_eq!(compacted.standing, ["commits.log", "feed-index.log"], "stood again");
     let again = compaction_lines();
     assert_eq!(
@@ -595,12 +601,15 @@ fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attem
         "FINDING (rows 27/28): per attempt — two landings, two lines each:\n{}",
         again.join("\n")
     );
-    assert_eq!(again[2..], first[..], "the same two lines, again");
+    assert!(
+        stood(&again[2], "commits.log", fence) && stood(&again[3], "feed-index.log", fence),
+        "the same two lines again, at the floor this landing ran to:\n{}",
+        again[2..].join("\n")
+    );
 
     // THE NEXT OPEN, the obstacle gone, compacts what the two landings
     // could not, and says the floor and the entries the file still held
     // below it.
-    let fence = compacted.fence.expect("the floor moved: a fence to compact to");
     let below = std::fs::read_to_string(dir.path().join("commits.log"))
         .expect("the log")
         .lines()
@@ -794,11 +803,13 @@ fn the_head_writers_row_40_goes_through_the_classed_door() {
 /// over commits the feed never saw meets all three: the bare positions the
 /// index lost (`commits.log` holds two, `feed-index.log` nothing), the attest
 /// store's rebuild above its empty file, and the walk of the region the log
-/// does not cover. Each is said once in the kernel's words, the walk's at its
-/// landing beside the fence the refusal moved — and `/changes` answers 410
-/// below that fence, as the line says. A second open over what the first
-/// wrote has nothing uncovered and says none of the three; its report names
-/// the attest store's size, the figure `Commits::attest_store_bytes` reads.
+/// does not cover. Each is said once in the kernel's words, the walk's where
+/// it meets it, with the fence the refusal moved — and `/changes` answers 410
+/// below that fence once the walk lands, as the line says. The open closes
+/// with what it classified and how far back the feed answers. A second open
+/// over what the first wrote has nothing uncovered and says none of the
+/// three; its report names the attest store's size and its slots, the
+/// figures `Commits::attest_store_figures` reads.
 #[test]
 fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, SaltSource};
@@ -847,11 +858,23 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
         ),
         format!(
             "failure: commits.log's walk: the journal refused the boundaries above position 2 \
-             ({refused}): the change feed answers 410 history_reclaimed for every since below \
-             position {fence} — restore the segment the account names from a copy (RUNBOOK §2)"
+             ({refused}): once the walk lands the change feed answers 410 history_reclaimed for \
+             every since below position {fence}; the walk goes on — restore the segment the \
+             account names from a copy (RUNBOOK §2)"
         ),
     ] {
         assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{all}");
+    }
+    // The open's own closing lines: what it classified, and how far back the
+    // feed answers with the region the walk has yet to land.
+    let classified = "open: feed-index.log: 0 of 2 bare positions classified from the journal in ";
+    let reach = format!(
+        "open: the change feed answers from position 1 to position {head}: commits.log 2 \
+         entries, 2 of them bare; positions (2, {head}] wait on the walk, in "
+    );
+    for (prefix, what) in [(classified, "the classification"), (reach.as_str(), "the feed")] {
+        let found = said.iter().filter(|l| l.starts_with(prefix) && l.ends_with(" ms")).count();
+        assert_eq!(found, 1, "{what}'s closing line, once:\n{all}");
     }
     let landing = format!(
         "landing: commits.log re-covered positions (2, {head}]: 1 boundaries walked, 1 of them \
@@ -893,12 +916,21 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
         !said.iter().any(|l| l.contains("the journal refused") || l.contains("bare positions")),
         "nothing uncovered, nothing asked:\n{all}"
     );
-    let bytes = wp.attest_store_bytes().expect("the store's size");
+    let figures = wp.attest_store_figures();
+    let bytes = figures.bytes.expect("the store's size");
     let on_disk = std::fs::metadata(dir.path().join("feed-attest.log")).expect("the store").len();
-    assert_eq!(bytes, on_disk, "the size is the file's");
+    assert_eq!((bytes, figures.slots), (on_disk, 0), "the size is the file's; nothing attested");
     let report = format!(
-        "open: feed-attest.log: {bytes} bytes, never compacted; 0 lines rebuilt from the \
-         journal's markers, in "
+        "open: feed-attest.log: {bytes} bytes, never compacted, 0 slots resident; 0 lines rebuilt \
+         from the journal's markers, in "
     );
     assert!(said.iter().any(|l| l.starts_with(&report)), "the open's report:\n{all}");
+    let reach = format!(
+        "open: the change feed answers from position {head} to position {head}: commits.log 1 \
+         entries, 1 of them bare, in "
+    );
+    assert!(
+        said.iter().any(|l| l.starts_with(&reach)),
+        "the walked head alone above the fence, nothing pending:\n{all}"
+    );
 }

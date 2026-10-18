@@ -26,7 +26,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `header`, `issue_is_empty`, `log_lines`), its `BlockedHeader` and the
   reissue's two outcomes `Reissue`; the configuration warnings
   `startup_warnings` (`Warning`); `OsEntropy`, the entropy the handshake
-  mints from; and `key_set_of`, the key-table read.
+  mints from; `MAX_LIVE_NONCES`, the challenge store's cap the daemon's
+  eviction line names; and `key_set_of`, the key-table read.
 - **The sessions**, `auth::session` — `Peer` (`of`); `Nonce` (`to_hex`,
   `parse_hex`) and `Challenges` (`new`, `issue`, `burn`, `edge`), the
   store the daemon drains the edge pair of; `Token` (`to_wire`, `parse`),
@@ -49,8 +50,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   with `of`), `head_time`, `next_step` (`StreamStep`), `announced`,
   `halted_at`, `say_the_kernels_halt_once`, `feed_walk_gone`,
   `compact_feed_below_reclaim_floor` (`FeedCompaction`),
-  `stopped_feed_files` (`StoppedFile`), `attest_store_bytes`, the never
-  compacted `feed-attest.log`'s size, `checkpoint_signal`
+  `stopped_feed_files` (`StoppedFile`), `attest_store_figures`
+  (`AttestStoreFigures`), what the never compacted `feed-attest.log` holds
+  on disk and in memory, `checkpoint_signal`
   (`CheckpointSignal`: `wait`, `stop`, `is_stopped`, `Woken`), `shutdown`
   and `lines`, the classed door `Lines` (`say`) a line of the daemon's
   goes through to stand in the one record; `write_meta` (`FrameMeta`,

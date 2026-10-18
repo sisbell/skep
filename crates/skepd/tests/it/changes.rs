@@ -1170,7 +1170,9 @@ fn doctor_the_last_named_docs(path: &Path, n: usize) -> Vec<u64> {
 /// HALVES: THREE positions doctored in `commits.log` and the same three in
 /// `feed-index.log`, the first open says `commits.log: 3 positions carry
 /// malformed document names, the first at position {p}` once and the index
-/// file's own once, under `failure:`, and nothing per position; the second
+/// file's own once, under `failure:`, and nothing per position — the index's
+/// naming what becomes of its three: `commits.log` demoted them, so none
+/// answers from its testimony and all three stay unclassified; the second
 /// open, the index gone, says `commits.log`'s once again and no index line.
 #[test]
 fn a_position_carrying_a_malformed_document_name_answers_bare() {
@@ -1231,7 +1233,8 @@ fn a_position_carrying_a_malformed_document_name_answers_bare() {
     );
     let index_line = format!(
         "failure: feed-index.log: 3 positions carry malformed document names, the first at \
-         position {first}"
+         position {first}; 0 of them answer from commits.log's testimony, and 3 bare ones stay \
+         unclassified, each shown to any class that reaches it"
     );
 
     // The derived index holds the same malformed names, and the demotion is
@@ -1920,20 +1923,25 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     };
     let said = stop_lines(&sd);
     assert_eq!(said.len(), 5, "one line per stopped file:\n{}", said.join("\n"));
+    // Each names the fence its rewritten file carries — the position the
+    // standing line re-says its stop by, and the next open re-derives above.
     assert_eq!(
         said[0],
-        "failure: commits.log rewrite failed past its rename: test seam: the rewritten file's \
-         reopen refused; this file takes no further line, so the next open re-derives from its \
-         fence as bare entries"
+        format!(
+            "failure: commits.log rewrite failed past its rename: test seam: the rewritten file's \
+             reopen refused; this file takes no further line, so the next open re-derives above \
+             its fence at position {fence} as bare entries"
+        )
     );
     let rewrite_order = ["feed-index.log", "feed-masked.log", "feed-streams.log", "feed-offsets.log"];
     for (line, name) in said[1..].iter().zip(rewrite_order) {
+        let covered = after[name].1.expect("the rewritten file carries its fence");
         assert_eq!(
             line,
             &format!(
                 "failure: {name} rewrite failed past its rename: test seam: the rewritten file's \
                  reopen refused; this file takes no further line, so the next open re-derives \
-                 from its fence"
+                 above its fence at position {covered}"
             )
         );
     }

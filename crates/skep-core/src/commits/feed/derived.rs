@@ -78,7 +78,9 @@ use serde_json::{Map, Value};
 use skep_util::json::obj;
 use skep_util::notice::Class;
 
-use super::super::sidecar::{line_bytes, Cut, Foreign, IoCause, RewriteFail};
+use super::super::sidecar::{
+    line_bytes, say_a_compact_twin, Cut, EntryLines, IoCause, RewriteFail,
+};
 use super::super::Lines;
 
 // Each file below is named BESIDE the field its records carry, because this
@@ -188,27 +190,30 @@ pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 /// What a line file's replay cut and dropped, each its caller's to say.
 ///
 /// [`LineFile::open`] answers it beside the entries: the [`Cut`] where trust
-/// ended before the file's end, and the [`Foreign`] entry lines past the
-/// head it purged. A derived file re-derives both; the attest store says
+/// ended before the file's end, and the entry lines past the head it purged
+/// ([`EntryLines`]). A derived file re-derives both; the attest store says
 /// each, its lines being primary below the reclaim floor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Replayed {
     /// The cut, or `None` for a file read whole.
     pub cut: Option<Cut>,
     /// The entry lines past the head, or `None` where the file named none.
-    pub foreign: Option<Foreign>,
+    pub foreign: Option<EntryLines>,
 }
 
 impl LineFile {
     /// Replay `name` in `dir` a line at a time: truncate at the first line
     /// that is torn or does not parse — ANSWERING THE CUT to the caller
     /// ([`Cut`]: the trusted end, the length before it and the last trusted
-    /// position, which is the coverage the scan reached), never saying it
-    /// here, since the case is the caller's: a derived file re-derives the
-    /// cut part, the attest store says which side of the reclaim floor it
-    /// lies on — drop what describes another journal (rewriting the file
-    /// without it, and answering the entry lines dropped, [`Foreign`]), and
-    /// hand back the entries at or below `head` that `keep` admits, with the
+    /// position, which is the coverage the scan reached; the position the
+    /// cut line names where it is a torn line at the file's end whose `at`
+    /// stands whole; and, past a damaged line, the whole entry lines the cut
+    /// takes with it, read before the truncation), never saying it here,
+    /// since the case is the caller's: a derived file re-derives the cut
+    /// part, the attest store says which side of the reclaim floor it lies
+    /// on — drop what describes another journal (rewriting the file without
+    /// it, and answering the entry lines dropped, [`EntryLines`]), and hand
+    /// back the entries at or below `head` that `keep` admits, with the
     /// file's coverage — which counts every trusted line, kept or not. Both
     /// answers ride [`Replayed`]: `None` for the cut is a file read whole,
     /// and `None` for the foreign lines a file naming no position past the
@@ -219,7 +224,9 @@ impl LineFile {
     /// open, the read, the length, the truncation, the purge — as the
     /// blocked list's read wraps its path, so the daemon's `change-feed
     /// sidecar: {e}` reads `{name}: {e}`. `lines` is the classed door the
-    /// file keeps for its one line while serving, the rewrite's stop.
+    /// file keeps for its one line while serving, the rewrite's stop; the
+    /// open says through it a rewrite's temp file found beside the file
+    /// (`operations.md` §1.1 m8; [`say_a_compact_twin`]).
     ///
     /// The scan holds one line and the kept entries, never the file. The
     /// attest store's file is NEVER COMPACTED (`attest.rs`), so a replay that
@@ -234,6 +241,7 @@ impl LineFile {
         lines: &Lines,
     ) -> io::Result<(LineFile, Entries, Replayed)> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{name}: {e}"));
+        say_a_compact_twin(lines, dir, name);
         let path = dir.join(name);
         let file = open_line_file(&path).map_err(with_file)?;
         let mut coverage = 0u64;
@@ -260,18 +268,39 @@ impl LineFile {
                 }
                 Record::Entry(at, _) => {
                     foreign = true;
-                    foreign_entries = Some(Foreign::with(foreign_entries, at));
+                    foreign_entries = Some(EntryLines::with(foreign_entries, at));
                 }
                 Record::Fence(_) => foreign = true,
             }
         }
+        // The line the scan stopped on, read for the caller's case: a torn
+        // line — no newline, the file's end — names its own position where
+        // its `at` stands whole; a whole line that does not parse is damage,
+        // its digits no witness, and the whole lines after it are read on.
+        let (first, whole_after) = if line.ends_with(b"\n") {
+            let mut whole_after = None;
+            loop {
+                line.clear();
+                if reader.read_until(b'\n', &mut line).map_err(with_file)? == 0 {
+                    break;
+                }
+                if let Some(Record::Entry(at, _)) = line.strip_suffix(b"\n").and_then(parse_line) {
+                    if at <= head {
+                        whole_after = Some(EntryLines::with(whole_after, at));
+                    }
+                }
+            }
+            (None, whole_after)
+        } else {
+            (torn_position(&line).filter(|&at| at > coverage && at <= head), None)
+        };
         drop(reader);
         let len = file.metadata().map_err(with_file)?.len();
         let cut = if valid_end < len {
             // Cut, and answered: the caller says it, with its own case — in
             // the attest store the cut can take primary state with it.
             file.set_len(valid_end).map_err(with_file)?;
-            Some(Cut { valid_end, len, trusted: coverage })
+            Some(Cut { valid_end, len, trusted: coverage, first, whole_after })
         } else {
             None
         };
@@ -527,9 +556,10 @@ impl LineFile {
                         Class::Failure,
                         format_args!(
                             "{} rewrite failed past its rename: {}; this file takes no further \
-                             line, so the next open re-derives from its fence",
+                             line, so the next open re-derives above its fence at position {}",
                             self.name,
-                            IoCause(&e)
+                            IoCause(&e),
+                            covered
                         ),
                     );
                 }
@@ -612,6 +642,25 @@ pub(super) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Valu
 
 fn fence_line(covered: u64) -> Vec<u8> {
     line_bytes(&obj(vec![("covered", Value::Number(covered.into()))]))
+}
+
+/// Returns the position a torn line names, where its `at` stands whole.
+///
+/// A line is a key-sorted object, so `"at":` comes ahead of every string
+/// member — `alg` sorts before it and every other field after — and a torn
+/// line is a prefix of the line its append was writing. Its digits stand
+/// whole where the separator the whole line carries after them, `,` or `}`,
+/// stands too; a tear inside them, or bytes that are no prefix of a line, a
+/// volume's zero-fill among them, answer `None`.
+fn torn_position(fragment: &[u8]) -> Option<u64> {
+    const KEY: &[u8] = b"\"at\":";
+    let start = fragment.windows(KEY.len()).position(|w| w == KEY)? + KEY.len();
+    let rest = &fragment[start..];
+    let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 || !matches!(rest.get(digits), Some(b',' | b'}')) {
+        return None;
+    }
+    std::str::from_utf8(&rest[..digits]).ok()?.parse().ok()
 }
 
 /// One line's record — the line without its newline: a fence, or an entry

@@ -713,12 +713,20 @@ impl CommitsLog {
     /// ([`LogCutLine`]) — at the open, BEFORE the walk, with the walk's own
     /// fence `low` as the last trusted position — the entries past the head
     /// once with their count and positions ([`ForeignLinesLine`]), the file
-    /// rewritten without them, and the malformed names once with their
-    /// count ([`demote_malformed_names`]); the log keeps a clone for its
-    /// stop and its landing.
+    /// rewritten without them, the malformed names once with their count
+    /// ([`demote_malformed_names`]), a file absent on a journal that holds
+    /// commits once with the region the walk re-covers
+    /// ([`LogBegunAfreshLine`]), and a rewrite's temp file found beside it
+    /// (`operations.md` §1.1 m8; [`say_a_compact_twin`]); the log keeps a
+    /// clone for its stop and its landing.
     pub(super) fn open(dir: &Path, engine: &Engine, lines: &Lines) -> io::Result<CommitsLog> {
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{SIDECAR_FILE}: {e}"));
         let path = dir.join(SIDECAR_FILE);
+        say_a_compact_twin(lines, dir, SIDECAR_FILE);
+        // Absent before the open creates it: begun afresh, said once the
+        // region the walk re-covers is known. A look that cannot answer
+        // counts as present, so it never says a loss it has not seen.
+        let absent = !path.try_exists().unwrap_or(true);
         let mut file = open_sidecar(&path).map_err(with_file)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(with_file)?;
@@ -758,7 +766,7 @@ impl CommitsLog {
             for at in dropped.keys() {
                 offsets.remove(at);
             }
-            dropped.keys().fold(None, |held, &at| Some(Foreign::with(held, at)))
+            dropped.keys().fold(None, |held, &at| Some(EntryLines::with(held, at)))
         } else {
             None
         };
@@ -779,8 +787,10 @@ impl CommitsLog {
         if let Some((valid_end, before)) = cut {
             // Row 9 for this file: the last trusted position is the walk's
             // own fence, the highest surviving record at or below the head
-            // (or the fence record), from which the cut part is re-derived.
-            lines.say(Class::Failure, LogCutLine { cut: Cut { valid_end, len: before, trusted: low } });
+            // (or the fence record), from which the cut part is re-derived —
+            // whatever the cut lines named, so neither is read.
+            let cut = Cut { valid_end, len: before, trusted: low, first: None, whole_after: None };
+            lines.say(Class::Failure, LogCutLine { cut });
         }
         // THE REGION, PENDING: what the file does not cover, `(low, head]`,
         // is the walk thread's to re-cover and its landing's to write — the
@@ -846,6 +856,13 @@ impl CommitsLog {
         if let Some((low, head)) = pending {
             let low = low.max(log.min_since);
             log.pending = (head > low).then_some((low, head));
+        }
+        // A file absent on a journal that holds commits: every retained
+        // position comes back bare, its key and time lost — said, so a copy
+        // that still holds them is known to be worth restoring. A fresh
+        // board has no region, and says nothing.
+        if let (true, Some((low, head))) = (absent, log.pending) {
+            lines.say(Class::Failure, LogBegunAfreshLine { low, head });
         }
         // The entries are final here, and this is where they become ones this
         // file stands behind: a line whose document names are malformed is
@@ -1011,9 +1028,10 @@ impl CommitsLog {
                         Class::Failure,
                         format_args!(
                             "commits.log rewrite failed past its rename: {}; this file takes no \
-                             further line, so the next open re-derives from its fence as bare \
-                             entries",
-                            IoCause(&e)
+                             further line, so the next open re-derives above its fence at \
+                             position {} as bare entries",
+                            IoCause(&e),
+                            self.min_since
                         ),
                     );
                 }
@@ -1353,6 +1371,22 @@ pub(super) struct Cut {
     /// re-derived from. Every cut line's position lies above it, the files
     /// being position-ordered.
     pub trusted: u64,
+    /// The position the first cut line names, where it can be read.
+    ///
+    /// It is read where the cut is one torn line at the file's end — the
+    /// tear a crash leaves in a line's own append — whose `at` member stands
+    /// whole, above `trusted` and at or below the head. `None` otherwise: a
+    /// line ended by its newline that does not parse is damage, and its own
+    /// digits are no witness. The attest store reads it, its case turning on
+    /// which side of the reclaim floor the cut lines lie; `commits.log`'s
+    /// own open reads neither this nor `whole_after`, its cut part
+    /// re-derived whatever it named.
+    pub first: Option<u64>,
+    /// The whole entry lines the cut takes with it, at or below the head.
+    ///
+    /// They are the lines after a damaged one, read before the truncation;
+    /// `None` where the cut takes none.
+    pub whole_after: Option<EntryLines>,
 }
 
 impl Cut {
@@ -1362,16 +1396,17 @@ impl Cut {
     }
 }
 
-/// The entry lines a feed file's replay dropped as another journal's.
+/// Entry lines a feed file's replay dropped, by count and position.
 ///
-/// They are the lines past the head this open read: a live copy taken
-/// after its journal holds them, and
-/// after a journal tail cut that took intact frames they are the cut
-/// commits' own. Answered beside the [`Cut`] by each replay, and said by
-/// the two files whose lines no open re-derives — `commits.log`'s testimony
-/// and `feed-attest.log`'s signatures ([`ForeignLinesLine`]).
+/// A replay answers two such runs: the lines past the head this open read,
+/// another journal's (`LineFile::open`'s `Replayed`, and `commits.log`'s
+/// own open) — a live copy taken after its journal holds them, and after a
+/// journal tail cut that took intact frames they are the cut commits' own,
+/// said by the two files whose lines no open re-derives, `commits.log`'s
+/// testimony and `feed-attest.log`'s signatures ([`ForeignLinesLine`]); and
+/// the whole lines a cut takes with it ([`Cut`]'s `whole_after`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Foreign {
+pub(super) struct EntryLines {
     /// How many entry lines were dropped.
     pub lines: usize,
     /// The lowest position they named.
@@ -1380,12 +1415,14 @@ pub(super) struct Foreign {
     pub last: u64,
 }
 
-impl Foreign {
+impl EntryLines {
     /// Returns the report `held` with one more dropped line, at `at`.
-    pub(super) fn with(held: Option<Foreign>, at: u64) -> Foreign {
+    pub(super) fn with(held: Option<EntryLines>, at: u64) -> EntryLines {
         match held {
-            None => Foreign { lines: 1, first: at, last: at },
-            Some(f) => Foreign { lines: f.lines + 1, first: f.first.min(at), last: f.last.max(at) },
+            None => EntryLines { lines: 1, first: at, last: at },
+            Some(f) => {
+                EntryLines { lines: f.lines + 1, first: f.first.min(at), last: f.last.max(at) }
+            }
         }
     }
 }
@@ -1401,7 +1438,7 @@ impl Foreign {
 /// store's.
 pub(super) struct ForeignLinesLine {
     pub name: &'static str,
-    pub foreign: Foreign,
+    pub foreign: EntryLines,
     pub head: u64,
     /// What the lines carry: `testimony` or `signatures`.
     pub what: &'static str,
@@ -1409,7 +1446,7 @@ pub(super) struct ForeignLinesLine {
 
 impl std::fmt::Display for ForeignLinesLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Foreign { lines, first, last } = self.foreign;
+        let EntryLines { lines, first, last } = self.foreign;
         write!(
             f,
             "{} held {lines} lines past the journal's head at position {} (positions \
@@ -1500,6 +1537,75 @@ impl std::fmt::Display for LogCutLine {
     }
 }
 
+/// `commits.log` absent at an open whose journal holds commits.
+///
+/// The words: `commits.log was absent at this open and is begun afresh:
+/// every position in ({low}, {head}] is walked from the journal as a bare
+/// entry, its op recovered where the journal names it — its key and its time
+/// are LOST unless the board directory's backup is restored`. The file is
+/// the only record of a commit's testimony, so its absence is a loss the
+/// walk cannot make good; a fresh board's open walks nothing and says
+/// nothing. A pure value, pinned by `to_string()` in the unit suite; emitted
+/// under `Class::Failure` by [`CommitsLog::open`].
+pub(super) struct LogBegunAfreshLine {
+    pub low: u64,
+    pub head: u64,
+}
+
+impl std::fmt::Display for LogBegunAfreshLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{SIDECAR_FILE} was absent at this open and is begun afresh: every position in ({}, \
+             {}] is walked from the journal as a bare entry, its op recovered where the journal \
+             names it — its key and its time are LOST unless the board directory's backup is \
+             restored",
+            self.low, self.head
+        )
+    }
+}
+
+/// A rewrite's temp file found at an open (`operations.md` §1.1 m8).
+///
+/// The words: `{file}.compact stands ({bytes} bytes): a rewrite cut short
+/// before its rename left it, {file} as it stood before that rewrite; its
+/// next rewrite overwrites it`. A pure value, pinned by `to_string()` in the
+/// unit suite; emitted under `Class::Open` by [`say_a_compact_twin`].
+pub(super) struct CompactTwinLine {
+    pub name: &'static str,
+    pub bytes: u64,
+}
+
+impl std::fmt::Display for CompactTwinLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self.name;
+        write!(
+            f,
+            "{name}.compact stands ({} bytes): a rewrite cut short before its rename left it, \
+             {name} as it stood before that rewrite; its next rewrite overwrites it",
+            self.bytes
+        )
+    }
+}
+
+/// Says `{name}.compact` where one stands in `dir`, once, at an open.
+///
+/// A rewrite writes the temp whole and renames it over the file, the rename
+/// its one atomic step, so a temp left standing is a rewrite cut short — by
+/// a crash, or by a failure the stream said at the time — and the file
+/// beside it is the whole one before that rewrite. Every open of a feed file
+/// asks — `commits.log`'s and `LineFile::open`'s — so the directory holds no
+/// file its lines never named. A directory on the name is no rewrite's, and
+/// is passed over.
+pub(super) fn say_a_compact_twin(lines: &Lines, dir: &Path, name: &'static str) {
+    let path = dir.join(format!("{name}.compact"));
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.is_file() {
+            lines.say(Class::Open, CompactTwinLine { name, bytes: meta.len() });
+        }
+    }
+}
+
 /// THE WALK's FIRST LINE (`operations.md` §1.1 m15): `commits.log covers to
 /// position {c}; walking {b} boundaries to position {h}` — `{c}` the
 /// region's lower edge, covered; `{b}` the boundaries the kernel's one scan
@@ -1522,23 +1628,35 @@ impl std::fmt::Display for WalkOpenLine {
     }
 }
 
-/// THE WALK's CADENCE LINE (m15): `the walk at position {p} of {h}, {d} in`
-/// — `{p}` the boundary last proved, `{h}` the head at open, `{d}` the
+/// The walk's cadence line (m15), the walk's tell from a hang.
+///
+/// The words: `the walk at position {p} of {h}, boundary {i} of {b}, {d} ms
+/// in` — `{p}` the boundary last proved, `{h}` the head at open, `{i}` that
+/// boundary's place in the walk's list and `{b}` the list's length, the
+/// count the `open:` line named — boundaries lie unevenly across positions,
+/// so `{i}` is what says how many reconstructions remain — and `{d}` the
 /// time since the walk began, in milliseconds as the stream spells a
 /// duration. A pure value, pinned by `to_string()`; emitted under
 /// `Class::Progress` by [`reconstruct`] every
 /// [`FEED_WALK_PROGRESS_BOUNDARIES`] boundaries or
-/// [`FEED_WALK_PROGRESS_INTERVAL`], whichever comes first — the walk's
-/// tell from a hang.
+/// [`FEED_WALK_PROGRESS_INTERVAL`], whichever comes first.
 pub(super) struct WalkProgressLine {
     pub position: u64,
     pub head: u64,
+    /// The boundary's place in the walk's list, counted from 1.
+    pub boundary: usize,
+    /// The boundaries the walk's list holds.
+    pub boundaries: usize,
     pub elapsed_ms: u128,
 }
 
 impl std::fmt::Display for WalkProgressLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "the walk at position {} of {}, {} ms in", self.position, self.head, self.elapsed_ms)
+        write!(
+            f,
+            "the walk at position {} of {}, boundary {} of {}, {} ms in",
+            self.position, self.head, self.boundary, self.boundaries, self.elapsed_ms
+        )
     }
 }
 
@@ -1596,15 +1714,18 @@ impl std::fmt::Display for WalkLandingLine {
     }
 }
 
-/// THE WALK's REFUSAL by the journal (`operations.md` §3.3 step 2).
+/// The walk's refusal by the journal (`operations.md` §3.3 step 2).
 ///
 /// The words: `commits.log's walk: the journal refused position {at}
-/// ({account}): the change feed answers 410 history_reclaimed for every
-/// since below position {m} — restore the segment the account names from a
-/// copy (RUNBOOK §2)`. `{account}` is the kernel's own, and `{m}` the fence
-/// the refusal moved the walk to. Said once per walk, at its landing, the
-/// first refusal standing for the rest. A pure value, pinned by
-/// `to_string()`; emitted under `Class::Failure` by the feed's landing.
+/// ({account}): once the walk lands the change feed answers 410
+/// history_reclaimed for every since below position {m}; the walk goes on —
+/// restore the segment the account names from a copy (RUNBOOK §2)`.
+/// `{account}` is the kernel's own, and `{m}` the fence the refusal moved
+/// the walk to as it stands then — the landing's own line names the fence it
+/// writes. Said once per walk, by [`reconstruct`], where the first refusal
+/// is met: damage at rest is news while the walk still runs, and a walk of
+/// the retained window can run for hours. A pure value, pinned by
+/// `to_string()`; emitted under `Class::Failure`.
 pub(super) struct WalkRefusedLine<'a> {
     pub refusal: &'a WalkRefusal,
     pub fence: u64,
@@ -1615,9 +1736,9 @@ impl std::fmt::Display for WalkRefusedLine<'_> {
         let refused = if self.refusal.list { "the boundaries above position" } else { "position" };
         write!(
             f,
-            "commits.log's walk: the journal refused {refused} {} ({}): the change feed answers \
-             410 history_reclaimed for every since below position {} — restore the segment the \
-             account names from a copy (RUNBOOK §2)",
+            "commits.log's walk: the journal refused {refused} {} ({}): once the walk lands the \
+             change feed answers 410 history_reclaimed for every since below position {}; the \
+             walk goes on — restore the segment the account names from a copy (RUNBOOK §2)",
             self.refusal.at, self.refusal.account, self.fence
         )
     }
@@ -1683,16 +1804,46 @@ impl WalkControl {
     }
 }
 
+/// The cadence a long act's progress lines are said at.
+///
+/// A line is due every so many steps or so long, whichever comes first —
+/// the walk's cadence (m15) and the open's classification of the bare
+/// positions `feed-index.log` lost, each handing in its figures at every
+/// step, so a cadence moved while the act runs is the one it keeps.
+pub(super) struct ProgressCadence {
+    /// The steps done and the moment, at the last line said.
+    said: (usize, Instant),
+}
+
+impl ProgressCadence {
+    /// Returns a cadence counted from now, no step done.
+    pub(super) fn new() -> ProgressCadence {
+        ProgressCadence { said: (0, Instant::now()) }
+    }
+
+    /// Returns whether a line is due with `done` steps done, marking it said.
+    ///
+    /// It is due once `every` steps are done since the last line, or
+    /// `interval` has passed since it, whichever comes first.
+    pub(super) fn due(&mut self, done: usize, every: u64, interval: Duration) -> bool {
+        let steps = done.saturating_sub(self.said.0) as u64;
+        let due = steps >= every || self.said.1.elapsed() >= interval;
+        if due {
+            self.said = (done, Instant::now());
+        }
+        due
+    }
+}
+
 /// What one walk came to ([`reconstruct`]): the boundaries proved, each
 /// with its classification, in position order; the smallest `since` the
 /// feed can honor from here on where the journal stopped answering
-/// ([`CommitsLog::min_since`]'s number) and the first refusal that moved
-/// it; how many of the proved are unclassified; and the walk's start,
-/// which the landing line's duration is measured from.
+/// ([`CommitsLog::min_since`]'s number); how many of the proved are
+/// unclassified; and the walk's start, which the landing line's duration
+/// is measured from.
 pub(super) struct WalkOutcome {
     pub boundaries: Vec<Walked>,
     pub min_since: Option<u64>,
-    pub refusal: Option<WalkRefusal>,
     pub started: Instant,
 }
 
@@ -1706,12 +1857,12 @@ impl WalkOutcome {
     }
 }
 
-/// The journal's first refusal the walk met, in the kernel's own words.
+/// A journal refusal that moved the walk's fence, in the kernel's words.
 ///
-/// It is a refusal that moved the walk's fence: at-rest damage, an I/O
-/// failure, or a base that would not load — never the reclamation a
-/// checkpoint landing behind the listener makes, which moves the fence the
-/// compaction would.
+/// It is at-rest damage, an I/O failure, or a base that would not load —
+/// never the reclamation a checkpoint landing behind the listener makes,
+/// which moves the fence the compaction would. The walk says its first one
+/// where it meets it ([`WalkRefusedLine`]).
 pub(super) struct WalkRefusal {
     /// The position refused, or the one above which the list was refused.
     pub at: u64,
@@ -1952,8 +2103,9 @@ fn rewrite(
 ///
 /// SAID ONCE PER OPEN (`operations.md` §1.1 row 11): the positions demoted
 /// are counted and one line names the count and the first of them
-/// ([`report_malformed_names`]) — the file is re-read whole at every open
-/// and never rewritten over them, so each open says it once.
+/// ([`MalformedNamesLine`], its case [`MalformedCase::Demoted`]) — the file
+/// is re-read whole at every open and never rewritten over them, so each
+/// open says it once.
 ///
 /// UNREACHABLE as built — the names are rendered from validated `Address`es
 /// by [`super::feed::Feed::record`] and read back by [`parse_dotted`], which
@@ -1970,7 +2122,10 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines
         })
         .collect();
     if let Some(&first) = half_recorded.first() {
-        report_malformed_names(lines, SIDECAR_FILE, half_recorded.len(), first);
+        let positions = half_recorded.len();
+        let case = MalformedCase::Demoted;
+        let line = MalformedNamesLine { file: SIDECAR_FILE, positions, first, case };
+        lines.say(Class::Failure, line);
     }
     for at in half_recorded {
         entries.insert(at, CommitMeta::bare());
@@ -2005,14 +2160,16 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines
 /// skipped, those the walk had proved below it dropped by the landing's
 /// compaction; any other refusal (corrupt, I/O, a listed boundary the
 /// replay will not prove) — the feed reaches down to the boundary above
-/// it and no further, the first such refusal kept in the kernel's words
-/// for the landing to say ([`WalkRefusal`]). `None` where the stop was
-/// asked before the walk completed: nothing is landed.
+/// it and no further, the first such refusal said where it is met, in the
+/// kernel's words, with the fence as it then stands ([`WalkRefusedLine`]).
+/// `None` where the stop was asked before the walk completed: nothing is
+/// landed.
 ///
 /// THE HOLD AND THE FAULT (test seams): the walk parks after its `open:`
-/// line and before its first boundary while the hold is armed, and fires
-/// its panic arm there, so a suite serves against a pending region, kills
-/// a child at the notice, or drives the thread's catch.
+/// line — and the list's own refusal, where it met one — and before its
+/// first boundary while the hold is armed, and fires its panic arm there,
+/// so a suite serves against a pending region, kills a child at the
+/// notice, or drives the thread's catch.
 pub(super) fn reconstruct(
     kernel: &Kernel<World>,
     head_world: &World,
@@ -2022,8 +2179,15 @@ pub(super) fn reconstruct(
     control: &WalkControl,
 ) -> Option<WalkOutcome> {
     let started = Instant::now();
-    let (listed, mut min_since, mut refusal) = list_boundaries(kernel, low, head);
+    let (listed, mut min_since, list_refusal) = list_boundaries(kernel, low, head);
     lines.say(Class::Open, WalkOpenLine { covered: low, boundaries: listed.len(), head });
+    // The journal's first refusal, said where it is met: the list's, here;
+    // else the first boundary's that moves the fence, below.
+    let mut refusal_said = list_refusal.is_some();
+    if let Some(refusal) = &list_refusal {
+        let fence = min_since.unwrap_or(low);
+        lines.say(Class::Failure, WalkRefusedLine { refusal, fence });
+    }
     #[cfg(any(test, feature = "test-hooks"))]
     {
         FEED_WALK_HOLD.wait(control);
@@ -2049,8 +2213,8 @@ pub(super) fn reconstruct(
     // named it), and are passed without a replay each.
     let mut skip_below = 0u64;
     let mut boundaries: Vec<Walked> = Vec::with_capacity(listed.len());
-    let mut last_said = (0usize, Instant::now());
-    for &at in &listed {
+    let mut cadence = ProgressCadence::new();
+    for (i, &at) in listed.iter().enumerate() {
         if control.stopped() {
             return None;
         }
@@ -2071,8 +2235,13 @@ pub(super) fn reconstruct(
                     continue;
                 }
                 Err(e) => {
-                    min_since = Some(min_since.map_or(at, |m| m.max(at)));
-                    refusal.get_or_insert(WalkRefusal { at, list: false, account: e.to_string() });
+                    let fence = min_since.map_or(at, |m| m.max(at));
+                    min_since = Some(fence);
+                    if !refusal_said {
+                        refusal_said = true;
+                        let refusal = WalkRefusal { at, list: false, account: e.to_string() };
+                        lines.say(Class::Failure, WalkRefusedLine { refusal: &refusal, fence });
+                    }
                     below = None;
                     continue;
                 }
@@ -2085,15 +2254,18 @@ pub(super) fn reconstruct(
         // comes first — the figures read here, so a cadence set while the
         // walk parked at the hold is the one it keeps.
         let (every, interval) = control.cadence();
-        if (boundaries.len() - last_said.0) as u64 >= every || last_said.1.elapsed() >= interval {
-            lines.say(
-                Class::Progress,
-                WalkProgressLine { position: at, head, elapsed_ms: started.elapsed().as_millis() },
-            );
-            last_said = (boundaries.len(), Instant::now());
+        if cadence.due(boundaries.len(), every, interval) {
+            let progress = WalkProgressLine {
+                position: at,
+                head,
+                boundary: i + 1,
+                boundaries: listed.len(),
+                elapsed_ms: started.elapsed().as_millis(),
+            };
+            lines.say(Class::Progress, progress);
         }
     }
-    Some(WalkOutcome { boundaries, min_since, refusal, started })
+    Some(WalkOutcome { boundaries, min_since, started })
 }
 
 /// The boundaries the walk proves, `(low, head]` ascending, in ONE scan.
@@ -2306,26 +2478,41 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
     line_bytes(&obj(vec![("min_since", Value::Number(min_since.into()))]))
 }
 
-/// THE MALFORMED NAMES, said ONCE PER OPEN with a count (`operations.md`
-/// §1.1 row 11) — the notice both halves of the feed's name-parsing share:
-/// this file's own [`demote_malformed_names`] and the derived index's read
-/// of the same names, each counting the positions it met and saying the
-/// count and the first of them through `lines`, the classed door. Nothing
-/// per position: the words are [`MalformedNamesLine`]'s.
-pub(super) fn report_malformed_names(lines: &Lines, file: &'static str, positions: usize, first: u64) {
-    lines.say(Class::Failure, MalformedNamesLine { file, positions, first });
-}
-
-/// Row 11's words: `{file}: {n} positions carry malformed document names,
-/// the first at position {p}` — one line per file per open.
+/// Row 11's line: a file's malformed document names, said once per open.
 ///
-/// For `commits.log` the line adds what still serves: `; those positions
-/// serve as bare entries`, the demotion [`demote_malformed_names`] makes. A
-/// pure value, pinned by `to_string()` in the unit suite.
+/// The words: `{file}: {n} positions carry malformed document names, the
+/// first at position {p}`, then what still serves, the line's case
+/// ([`MalformedCase`]). The names are said once per open with a count
+/// (`operations.md` §1.1 row 11), by both halves of the feed's
+/// name-parsing: this file's own [`demote_malformed_names`] and the derived
+/// index's read of the same names, each counting the positions it met and
+/// saying the count, the first of them and its case through `lines`, the
+/// classed door, under `Class::Failure`. Nothing per position. A pure
+/// value, pinned by `to_string()` in the unit suite.
 pub(super) struct MalformedNamesLine {
     pub file: &'static str,
     pub positions: usize,
     pub first: u64,
+    pub case: MalformedCase,
+}
+
+/// What a file's malformed names leave serving, the line's last clause.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MalformedCase {
+    /// `commits.log`'s own: each position is demoted to a bare entry.
+    ///
+    /// The clause: `; those positions serve as bare entries`.
+    Demoted,
+    /// The index file's: a recorded position answers from the log's record.
+    ///
+    /// A bare one has no testimony to answer from, so it stays unclassified
+    /// and the per-entry mask withholds it from no class. The clause: `; {r}
+    /// of them answer from commits.log's testimony, and {b} bare ones stay
+    /// unclassified, each shown to any class that reaches it`.
+    Index {
+        /// How many of the positions are bare.
+        bare: usize,
+    },
 }
 
 impl std::fmt::Display for MalformedNamesLine {
@@ -2335,10 +2522,15 @@ impl std::fmt::Display for MalformedNamesLine {
             "{}: {} positions carry malformed document names, the first at position {}",
             self.file, self.positions, self.first
         )?;
-        if self.file == SIDECAR_FILE {
-            f.write_str("; those positions serve as bare entries")?;
+        match self.case {
+            MalformedCase::Demoted => f.write_str("; those positions serve as bare entries"),
+            MalformedCase::Index { bare } => write!(
+                f,
+                "; {} of them answer from commits.log's testimony, and {bare} bare ones stay \
+                 unclassified, each shown to any class that reaches it",
+                self.positions.saturating_sub(bare)
+            ),
         }
-        Ok(())
     }
 }
 

@@ -124,9 +124,10 @@ fn the_misminted_drafts_line_names_both_addresses_and_that_the_head_goes_on() {
     );
 }
 
-/// ROW 38's TWO LINES at fixed inputs — the refusal with its position and
-/// the cause, the clearing with the landed and the first refused
-/// positions — and THE CAUSE's RENDERING as the wire renders a
+/// ROW 38's TWO LINES at fixed inputs — the refusal with its position, the
+/// commit it was met at and the cause, the clearing with the landed
+/// position, the attempts refused, the first refused position and how long
+/// the refusals stood — and THE CAUSE's RENDERING as the wire renders a
 /// rejection: the code as the wire spells it (`durability`, never
 /// `Durability`), the detail where one is threaded, the code alone where
 /// none is (a `publish` refused `base_superseded`, lowered through M10's
@@ -138,27 +139,25 @@ fn row_38s_lines_render_the_ruled_words_and_the_cause_as_the_wire_renders_a_reje
     use skep_arrangement::{InsertError, PublishError};
     use skep_kernel::TxnError;
 
-    let refused = |first| {
-        HeadRefusedLine { position: 24, cause: "durability: the test seam's refusal", first }
-            .to_string()
-    };
+    let cause = "durability: the test seam's refusal";
+    let refused = |first| HeadRefusedLine { position: 24, act: "insert", cause, first }.to_string();
     assert_eq!(
         refused(false),
-        "head writer: the head at position 24 was refused (durability: the test seam's \
-         refusal); no head written this cycle"
+        "head writer: the head at position 24 was refused at its insert (durability: the test \
+         seam's refusal); no head written this cycle"
     );
     assert_eq!(
         refused(true),
-        "head writer: the head at position 24 was refused (durability: the test seam's \
-         refusal); no head written this cycle; no head stands yet, so a claimed board refuses \
-         every attested write attestation_invalid:board_unavailable until one lands — tried \
-         again at every write's turn",
+        "head writer: the head at position 24 was refused at its insert (durability: the test \
+         seam's refusal); no head written this cycle; no head stands yet, so a claimed board \
+         refuses every attested write attestation_invalid:board_unavailable until one lands — \
+         tried again at every write's turn",
         "no head standing: the board term's absence and when it is retried"
     );
     assert_eq!(
-        RefusalsClearedLine { landed: 31, since: 24 }.to_string(),
-        "head writer: a head landed at position 31; the refusals since position 24 are \
-         cleared"
+        RefusalsClearedLine { landed: 31, attempts: 7, since: 24, elapsed_ms: 1_830 }.to_string(),
+        "head writer: a head landed at position 31; 7 refused attempts since position 24, over \
+         1830 ms, are cleared"
     );
     let mut seam = Rejection::classified(OpKind::Insert, RejectCode::Durability, None);
     seam.detail = Some(SEAM_REFUSAL_DETAIL.to_string());
@@ -190,16 +189,18 @@ fn row_38s_lines_render_the_ruled_words_and_the_cause_as_the_wire_renders_a_reje
     }
     let lines = Lines::new();
     let cause = render_cause(&seam);
-    lines.say(Class::Failure, HeadRefusedLine { position: 24, cause: &cause, first: false });
-    lines.say(Class::Landing, RefusalsClearedLine { landed: 31, since: 24 });
+    let act = op_name(OpKind::Publish);
+    lines.say(Class::Failure, HeadRefusedLine { position: 24, act, cause: &cause, first: false });
+    let cleared = RefusalsClearedLine { landed: 31, attempts: 1, since: 24, elapsed_ms: 4 };
+    lines.say(Class::Landing, cleared);
     assert_eq!(
         lines.said().lock().as_slice(),
         [
-            "failure: head writer: the head at position 24 was refused (durability: the test \
-             seam's refusal); no head written this cycle",
-            "landing: head writer: a head landed at position 31; the refusals since position \
-             24 are cleared",
+            "failure: head writer: the head at position 24 was refused at its publish \
+             (durability: the test seam's refusal); no head written this cycle",
+            "landing: head writer: a head landed at position 31; 1 refused attempts since \
+             position 24, over 4 ms, are cleared",
         ],
-        "the class word ahead of each"
+        "the class word ahead of each, the commit named as the wire names its op"
     );
 }

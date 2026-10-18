@@ -144,18 +144,27 @@ fn the_full_volume_is_said_once_and_cleared_by_a_landing(step: Step) {
     assert_eq!(health(port), (false, head), "still no halt, still nothing committed");
 
     // Room stands: a write LANDS, by itself, clears the condition, and says
-    // so once, counting the two refusals it ends.
+    // so once, counting the two refusals it ends and how long they stood.
     let landed = acked_at(&op(port, Some(&owner), &create_frame()));
     assert!(landed > head, "the next write succeeds by itself: {landed} > {head}");
     assert_eq!(full_volume_lines(&sd).len(), 1, "a landing says no full volume");
     let first = head + 1;
-    let land_again = format!(
-        "landing: writes land again at position {landed}, 2 refused since position {first}"
-    );
+    let lead = format!("landing: writes land again at position {landed}, 2 refused over ");
+    let trail = format!(" ms since position {first}");
+    let landings: Vec<String> = sd
+        .daemon()
+        .lines_said()
+        .into_iter()
+        .filter(|l| {
+            l.strip_prefix(&lead)
+                .and_then(|rest| rest.strip_suffix(&trail))
+                .is_some_and(|ms| ms.parse::<u128>().is_ok())
+        })
+        .collect();
     assert_eq!(
-        said(&sd, &land_again),
+        landings.len(),
         1,
-        "the landing that ends the refusals is said once:\n{}",
+        "the landing that ends the refusals is said once, the refusals' span in whole ms:\n{}",
         sd.daemon().lines_said().join("\n")
     );
     let (_, head) = health(port);

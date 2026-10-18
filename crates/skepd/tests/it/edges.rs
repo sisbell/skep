@@ -7,8 +7,9 @@
 //! a `landing:` line at the first act the bound admits once it has stood
 //! clear for `EDGE_HOLD_DOWN`; nothing per request; nothing on a line but the
 //! condition — no count (the upload and write pools' landings alone carry
-//! the episode's refusals, and the accept loop's recovery its failures), no
-//! path, query, principal, peer or reader. The
+//! the episode's refusals, and the accept loop's recovery its failures; the
+//! challenge store's failure names the bound in force, its cap and its time
+//! to live, and no count), no path, query, principal, peer or reader. The
 //! refusals themselves — the five `503 …_busy` bodies, the budget's clean
 //! close, `/challenge`'s answer — are the standing suites' and unchanged.
 //!
@@ -67,9 +68,14 @@ const PAST_THE_HOLD_DOWN_MS: u64 = EDGE_HOLD_DOWN_MS + 1_000;
 const SUBSCRIBER_CAP: usize = 64;
 
 /// The challenge store's cap (`MAX_LIVE_NONCES`), restated.
+///
+/// It is also the figure the store's failure line names, so the line is
+/// pinned to the number and not to whatever the constant holds.
 const NONCE_CAP: usize = 4096;
 
 /// The challenge TTL (`CHALLENGE_TTL`), restated — the wire's `ttl_ms`.
+///
+/// It is the store's failure line's other figure.
 const CHALLENGE_TTL_MS: u64 = 60_000;
 
 /// The daemon's record, filtered to the lines holding `needle`.
@@ -539,14 +545,16 @@ fn the_stream_threads_pair_is_said_once_per_episode() {
 /// P3 — THE CHALLENGE PAIR THROUGH `GET /challenge` (m12; §6's row): the
 /// store filled to its cap says nothing; the mint past it evicts a nonce
 /// inside its time to live → `failure: challenge store: a nonce was evicted
-/// inside its time to live; a handshake it belonged to will be refused`,
-/// once, naming no caller; further mints that evict live nonces → none; a
-/// live eviction after the hold-down → still none (a refusal never lands);
-/// the clock past the TTL, a mint that evicts only an EXPIRED nonce — no
-/// handshake lost — a whole hold-down after the last live eviction →
-/// `landing: challenge store: minting without evicting a live nonce again`.
-/// The store's own claims — a live eviction's edge once, an expired
-/// eviction's none, the landing judged at a mint — are the unit suite's.
+/// inside its time to live — more than 4096 challenges stood unanswered
+/// within 60000 ms; a handshake it belonged to will be refused`, once, the
+/// bound in force its one pair of figures, naming no caller; further mints
+/// that evict live nonces → none; a live eviction after the hold-down →
+/// still none (a refusal never lands); the clock past the TTL, a mint that
+/// evicts only an EXPIRED nonce — no handshake lost — a whole hold-down
+/// after the last live eviction → `landing: challenge store: minting without
+/// evicting a live nonce again`. The store's own claims — a live eviction's
+/// edge once, an expired eviction's none, the landing judged at a mint — are
+/// the unit suite's.
 #[test]
 fn the_challenge_pair_is_said_at_a_live_eviction_once_and_at_a_clean_mint_a_hold_down_later() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -557,9 +565,12 @@ fn the_challenge_pair_is_said_at_a_live_eviction_once_and_at_a_clean_mint_a_hold
         let (st, body) = get(port, "/challenge?principal=7");
         assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     };
-    let failure = "failure: challenge store: a nonce was evicted inside its time to live; a \
-                   handshake it belonged to will be refused"
-        .to_string();
+    let bound =
+        format!("more than {NONCE_CAP} challenges stood unanswered within {CHALLENGE_TTL_MS} ms");
+    let failure = format!(
+        "failure: challenge store: a nonce was evicted inside its time to live — {bound}; a \
+         handshake it belonged to will be refused"
+    );
 
     for _ in 0..NONCE_CAP {
         mint();
@@ -594,7 +605,10 @@ fn the_challenge_pair_is_said_at_a_live_eviction_once_and_at_a_clean_mint_a_hold
         "FINDING (m12): the landing at the first clean mint after the hold-down"
     );
     assert_classed(&lines());
-    assert_no_digit(&lines());
+    // The bound in force is the pair's one pair of figures: no count, no
+    // principal and no nonce rides either line.
+    let figureless: Vec<String> = lines().iter().map(|line| line.replace(&bound, "")).collect();
+    assert_no_digit(&figureless);
     for line in lines() {
         assert!(!line.contains("principal") && !line.contains("nonce was evicted by"), "{line}");
     }

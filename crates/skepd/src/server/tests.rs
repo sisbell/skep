@@ -1189,16 +1189,18 @@ fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_
 
 /// What a landing moved, at fixed figures, as the three lines after a
 /// landing carry it: both bounds, the volume's free space, a reading of the
-/// resident set beside the largest of the uptime's, and the feed's
-/// compaction, its fence and its duration named, or nothing below the floor.
+/// resident set beside the largest of the uptime's, the feed's compaction,
+/// its fence and its duration named, or nothing below the floor, and what
+/// `feed-attest.log` holds.
 fn after_a_landing(fence: Option<u64>) -> AfterLanding {
     AfterLanding {
         bytes_bound: 25_165_824,
         floor: 268_435_456,
         free_space: 9_000_000_000,
         resident: ResidentRead { now: Some(412_000_256), most: Some(1_180_000_256) },
-        compaction: FeedCompaction { fence, standing: vec![] },
+        compaction: FeedCompaction { fence, standing: vec![], deferred: None },
         compaction_ms: 38,
+        attest: AttestStoreFigures { bytes: Some(20_700), slots: 3 },
     }
 }
 
@@ -1208,18 +1210,26 @@ const AFTER_A_LANDING: &str = "the cadence's byte bound 25165824, the media floo
                                resident set 412000256 bytes, the largest of this uptime's \
                                readings 1180000256 bytes; the change feed's files ";
 
+/// `after_a_landing`'s last clause, the attest store's figures.
+const ATTEST_FIGURES: &str = "; feed-attest.log 20700 bytes, 3 slots resident";
+
 /// LINE 25's WORDS (`operations.md` §1.1 row 25), pinned at fixed figures:
 /// the position and the size, the duration in milliseconds, the journal
 /// bytes reclaimed — or "nothing reclaimed" at zero — each checkpoint file
 /// retention removed, by its name and its length, both bounds, the volume's
 /// free space, a reading of the resident set beside the largest of the
 /// uptime's readings — never called the process's peak — the compaction's
-/// fence and its duration, with each file that stood named, and the inline
-/// clause present only where the count moved. A header that did not answer
-/// reads "size unread"; a resident set never read reads "unread", and a
-/// reading the crate could not make reads "unread" beside the largest one
-/// it made; a landing with nothing below the floor says so, and names no
-/// duration, and one that removed no checkpoint names none.
+/// fence and its duration, with each file that stood named, what
+/// `feed-attest.log` holds on disk and resident, and the inline clause
+/// present only where the count moved. A header that did not answer reads
+/// "size unread", and so does an attest store whose size did not answer; a
+/// resident set never read reads "unread", and a reading the crate could not
+/// make reads "unread" beside the largest one it made; a landing with
+/// nothing below the floor says so, and names no duration, and one that
+/// removed no checkpoint names none. While the walk behind the listener has
+/// a region pending, the fence moves in memory alone and the line says the
+/// files wait on the walk's landing, naming the region — never that they
+/// compacted.
 #[test]
 fn the_landing_line_carries_row_25s_figures_in_its_words() {
     let full = LandingLine {
@@ -1234,6 +1244,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
             compaction: FeedCompaction {
                 fence: Some(4095),
                 standing: vec!["commits.log", "feed-index.log"],
+                deferred: None,
             },
             ..after_a_landing(None)
         },
@@ -1247,7 +1258,24 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
          volume's free space 9000000000; the process's resident set 412000256 bytes, the \
          largest of this uptime's readings 1180000256 bytes; the change feed's files compacted \
          below position 4096 in 38 ms, commits.log standing as it was, feed-index.log standing \
-         as it was; 2 checkpoints ran inline on a writer since position 3100"
+         as it was; feed-attest.log 20700 bytes, 3 slots resident; 2 checkpoints ran inline on \
+         a writer since position 3100"
+    );
+    let deferred = AfterLanding {
+        compaction: FeedCompaction {
+            fence: Some(4095),
+            standing: vec![],
+            deferred: Some((4000, 4200)),
+        },
+        ..after_a_landing(None)
+    };
+    assert_eq!(
+        deferred.to_string(),
+        format!(
+            "{AFTER_A_LANDING}wait on the walk's landing over positions (4000, 4200] for their \
+             rewrite, the resident entries trimmed below position 4096 in 38 ms{ATTEST_FIGURES}"
+        ),
+        "the walk pending: no file written, the region named"
     );
     let quiet = LandingLine {
         position: Seq(7),
@@ -1261,6 +1289,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
             resident: ResidentRead { now: None, most: None },
             compaction: FeedCompaction::default(),
             compaction_ms: 0,
+            attest: AttestStoreFigures { bytes: None, slots: 0 },
         },
         inline: None,
     };
@@ -1269,7 +1298,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         "checkpoint at position 7 landed (size unread) in 0 ms; nothing reclaimed; the \
          cadence's byte bound 25165824, the media floor in force 268435456, the volume's free \
          space 0; the process's resident set unread; the change feed's files hold nothing \
-         below the reclaim floor"
+         below the reclaim floor; feed-attest.log size unread, 0 slots resident"
     );
     assert_eq!(
         ResidentRead { now: None, most: Some(1_180_000_256) }.to_string(),
@@ -1350,7 +1379,7 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
             format!(
                 "a checkpoint landed at position 96 (1048576 bytes) in 1200 ms but {words} \
                  failed: the volume is full (No space left on device); {AFTER_A_LANDING}\
-                 compacted below position 96 in 38 ms{retry}"
+                 compacted below position 96 in 38 ms{ATTEST_FIGURES}{retry}"
             ),
             "{step:?}"
         );
@@ -1371,7 +1400,7 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
         format!(
             "a checkpoint landed at or above position 90 (its header unread) in 1200 ms but \
              retention failed: a directory stands on the name; {AFTER_A_LANDING}hold nothing \
-             below the reclaim floor{retry}"
+             below the reclaim floor{ATTEST_FIGURES}{retry}"
         )
     );
 }
@@ -1409,7 +1438,7 @@ fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_las
         format!(
             "{head}; the newest checkpoint at position 1026 (1048576 bytes): 2097152 journal \
              bytes reclaimed; checkpoint.0 removed (4096 bytes); {AFTER_A_LANDING}compacted \
-             below position 1026 in 38 ms"
+             below position 1026 in 38 ms{ATTEST_FIGURES}"
         )
     );
     let failed = |newest| BackstopLine {
@@ -1436,7 +1465,7 @@ fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_las
         .to_string(),
         format!(
             "{failed_head}; the newest checkpoint at position 2048 (1048576 bytes): \
-             {AFTER_A_LANDING}hold nothing below the reclaim floor"
+             {AFTER_A_LANDING}hold nothing below the reclaim floor{ATTEST_FIGURES}"
         ),
         "a base whose run then failed: what moved, and no reclaim figure"
     );
@@ -1445,7 +1474,7 @@ fn the_backstop_line_counts_the_inline_runs_from_a_position_and_says_how_the_las
             .to_string(),
         format!(
             "{failed_head}; the newest checkpoint's header unread: {AFTER_A_LANDING}hold \
-             nothing below the reclaim floor"
+             nothing below the reclaim floor{ATTEST_FIGURES}"
         )
     );
     assert_eq!(

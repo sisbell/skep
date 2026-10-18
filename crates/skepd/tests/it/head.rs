@@ -1461,6 +1461,19 @@ fn the_claim_writes_exactly_one_head_at_its_own_position_and_the_cadence_counts_
     sd.shutdown();
 }
 
+/// Returns row 38's clearing line with how long the refusals stood read out.
+///
+/// The span's whole milliseconds are replaced by `N`, so a pin names the
+/// rest of the line whole.
+fn span_read_out(line: &str) -> String {
+    let (head, tail) =
+        line.split_once(", over ").unwrap_or_else(|| panic!("the refusals' span: {line}"));
+    let (ms, rest) = tail.split_once(" ms, ").unwrap_or_else(|| panic!("…in ms: {line}"));
+    ms.parse::<u128>()
+        .unwrap_or_else(|e| panic!("{ms:?} is no whole number of milliseconds ({e}): {line}"));
+    format!("{head}, over N ms, {rest}")
+}
+
 /// (vi) — THE HEAD AFTER A REFUSED `H.1` (SO-I4 (a), its last clause; SO-I7;
 /// round 7's l7-C1 — sweep-7 lampson 1): the claim's own `H.1` refused by
 /// the driver — injected at the test seam `refuse_the_next_head_once`, which
@@ -1487,18 +1500,20 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     assert!(board_term(port).is_none(), "no board term: the first head was refused");
     assert_eq!(head_position(port), claim_at, "the refused head landed nothing");
     // ROW 38 ON THE STREAM (H4): the refused `H.1` said ONCE, naming the
-    // claim's position — the one the head would have named — and the seam's
-    // refusal as the wire renders a rejection, the code and the detail, then
-    // what no head standing costs and when it is tried again; no clearing
-    // yet, no head having landed.
+    // claim's position — the one the head would have named — the head's
+    // commit the refusal met, the staging draft's first mint, as the wire
+    // names its op, and the seam's refusal as the wire renders a rejection,
+    // the code and the detail, then what no head standing costs and when it
+    // is tried again; no clearing yet, no head having landed.
     let head_lines = |sd: &Skepd| -> Vec<String> {
         sd.daemon().lines_said().into_iter().filter(|l| l.contains("head writer:")).collect()
     };
     let refused = format!(
-        "failure: head writer: the head at position {claim_at} was refused (durability: the \
-         test seam's refusal); no head written this cycle; no head stands yet, so a claimed \
-         board refuses every attested write attestation_invalid:board_unavailable until one \
-         lands — tried again at every write's turn"
+        "failure: head writer: the head at position {claim_at} was refused at its \
+         create_new_document (durability: the test seam's refusal); no head written this cycle; \
+         no head stands yet, so a claimed board refuses every attested write \
+         attestation_invalid:board_unavailable until one lands — tried again at every write's \
+         turn"
     );
     assert_eq!(head_lines(&sd), [refused.clone()], "the refused H.1, said once with its position");
 
@@ -1515,18 +1530,19 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     assert_eq!(h1.log_position, claim_at, "H.1 names the claim's position: nothing landed between");
     assert_eq!(head_position(port), claim_at + H1_RECORDS, "the head's records, and nothing else");
     // The landing clears the refusal: one `landing:` line naming the head's
-    // position and the first refused one — here the same, nothing having
-    // landed between — and nothing else of the head writer's.
+    // position, the one attempt refused, the first refused position — here
+    // the same, nothing having landed between — and how long it stood; and
+    // nothing else of the head writer's.
+    let said = head_lines(&sd);
+    assert_eq!(said.len(), 2, "the refusal, then its clearing: {said:?}");
+    assert_eq!(said[0], refused);
     assert_eq!(
-        head_lines(&sd),
-        [
-            refused,
-            format!(
-                "landing: head writer: a head landed at position {claim_at}; the refusals since \
-                 position {claim_at} are cleared"
-            ),
-        ],
-        "the refusal, then its clearing"
+        span_read_out(&said[1]),
+        format!(
+            "landing: head writer: a head landed at position {claim_at}; 1 refused attempts since \
+             position {claim_at}, over N ms, are cleared"
+        ),
+        "the clearing"
     );
 
     // The retry: admitted, attested, no restart; one head, never a second.
@@ -1541,16 +1557,19 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
 /// lanes' D16). H1 — ONCE PER CAUSE, WITH THE POSITION: a head due by the
 /// hour and refused by the driver (the seam, injected inside the driver as
 /// a `durability` rejection) is said once, naming the position the head
-/// would have named — the triggering write's own acked position — and the
-/// refusal as the wire renders a rejection, `({code}: {detail})`; the SAME
-/// cause met again at the next landed commit (the trigger stays due) is
-/// not said again, while ANOTHER cause is, with its own position. H2 — THE
-/// CLEARING: when a head next lands, one `landing:` line names the landed
-/// position and the first refused one; a later landing with no refusal on
-/// the memo says nothing; and the memo cleared, the first cause after a
-/// landing is news again. H3 — NEVER A TYPE NAME: no line of the head
-/// writer's carries `::`, `Error` or a brace — the `Debug` tells — and the
-/// code is the wire's spelling, `durability`.
+/// would have named — the triggering write's own acked position — the
+/// head's commit the refusal met, its `insert` (the staging draft stands
+/// from the claim's head), and the refusal as the wire renders a rejection,
+/// `({code}: {detail})`; the SAME cause at the same commit met again at the
+/// next landed commit (the trigger stays due) is not said again, while
+/// ANOTHER cause is, with its own position. H2 — THE CLEARING: when a head
+/// next lands, one `landing:` line names the landed position, every refused
+/// attempt — the one the memo kept unsaid among them — the first refused
+/// position and how long the refusals stood; a later landing with no
+/// refusal on the memo says nothing; and the memo cleared, the first cause
+/// after a landing is news again. H3 — NEVER A TYPE NAME: no line of the
+/// head writer's carries `::`, `Error` or a brace — the `Debug` tells — and
+/// the code is the wire's spelling, `durability`.
 #[test]
 fn a_refused_head_is_said_once_per_cause_with_its_position_and_cleared_when_a_head_lands() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1563,8 +1582,8 @@ fn a_refused_head_is_said_once_per_cause_with_its_position_and_cleared_when_a_he
     };
     let refused = |at: u64, cause: &str| {
         format!(
-            "failure: head writer: the head at position {at} was refused ({cause}); no head \
-             written this cycle"
+            "failure: head writer: the head at position {at} was refused at its insert ({cause}); \
+             no head written this cycle"
         )
     };
     let seam = "durability: the test seam's refusal";
@@ -1600,14 +1619,20 @@ fn a_refused_head_is_said_once_per_cause_with_its_position_and_cleared_when_a_he
     assert_eq!(head_lines(&sd), [refused(p1, seam), another.clone()], "a new cause is news");
 
     // H2 — the next commit's head LANDS: the clearing, naming the landed
-    // position and the first refused one.
+    // position, the three attempts refused — the one the memo kept unsaid
+    // among them — the first refused position and the span.
     let p4 = commit(port, &owner, CLAIMANT_ACCOUNT);
     assert_eq!(expect_latest_head(port)["position"].as_u64(), Some(p4), "the head landed");
-    let cleared = format!(
-        "landing: head writer: a head landed at position {p4}; the refusals since position {p1} \
-         are cleared"
+    let said = head_lines(&sd);
+    assert_eq!(said.len(), 3, "cleared once: {said:?}");
+    assert_eq!(said[..2], [refused(p1, seam), another]);
+    assert_eq!(
+        span_read_out(&said[2]),
+        format!(
+            "landing: head writer: a head landed at position {p4}; 3 refused attempts since \
+             position {p1}, over N ms, are cleared"
+        )
     );
-    assert_eq!(head_lines(&sd), [refused(p1, seam), another, cleared], "cleared once");
     // A landing with nothing on the memo says no clearing line.
     clock += WELL_PAST_THE_HOUR_MILLIS;
     sd.daemon().set_head_writer_clock_millis(clock);

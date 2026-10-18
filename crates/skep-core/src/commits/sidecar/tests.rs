@@ -669,23 +669,23 @@ fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_
 
 /// THE WORDS of the walk's three lines, its refusal and the landing's, each
 /// a pure value: `open:` with the covered edge, the count and the head;
-/// `progress:` with the position, the head and the elapsed milliseconds;
-/// `landing:` with the file and the region, the walked, the unclassified,
-/// the elapsed and the lock held, the fence where it stands inside the
-/// region and `in memory alone` where the rewrite was refused; the
-/// journal's refusal with its account and the fence it moved; and the
-/// rewrite refused before its rename, naming the edge the next open walks
-/// from, a full volume in the operator's words.
+/// `progress:` with the position, the head, the boundary's place in the
+/// list and the elapsed milliseconds; `landing:` with the file and the
+/// region, the walked, the unclassified, the elapsed and the lock held, the
+/// fence where it stands inside the region and `in memory alone` where the
+/// rewrite was refused; the journal's refusal with its account and the
+/// fence it moved, said while the walk goes on; and the rewrite refused
+/// before its rename, naming the edge the next open walks from, a full
+/// volume in the operator's words.
 #[test]
 fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
     assert_eq!(
         WalkOpenLine { covered: 24, boundaries: 6, head: 30 }.to_string(),
         "commits.log covers to position 24; walking 6 boundaries to position 30"
     );
-    assert_eq!(
-        WalkProgressLine { position: 26, head: 30, elapsed_ms: 1_204 }.to_string(),
-        "the walk at position 26 of 30, 1204 ms in"
-    );
+    let progress =
+        WalkProgressLine { position: 26, head: 30, boundary: 2, boundaries: 6, elapsed_ms: 1_204 };
+    assert_eq!(progress.to_string(), "the walk at position 26 of 30, boundary 2 of 6, 1204 ms in");
     let landing = |fence, in_memory_alone| {
         WalkLandingLine {
             low: 24,
@@ -713,8 +713,9 @@ fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
         )
     );
     let refusal = WalkRefusal { at: 26, list: false, account: "journal corrupt at rest".into() };
-    let restore = "the change feed answers 410 history_reclaimed for every since below position \
-                   26 — restore the segment the account names from a copy (RUNBOOK §2)";
+    let restore = "once the walk lands the change feed answers 410 history_reclaimed for every \
+                   since below position 26; the walk goes on — restore the segment the account \
+                   names from a copy (RUNBOOK §2)";
     assert_eq!(
         WalkRefusedLine { refusal: &refusal, fence: 26 }.to_string(),
         format!(
@@ -755,8 +756,8 @@ fn the_cause_and_the_foreign_lines_render_the_ruled_words() {
     let other = io::Error::other("Input/output error (os error 5)");
     assert_eq!(IoCause(&other).to_string(), "Input/output error (os error 5)");
     assert_eq!(IoCause(&other).free_room_first(), "");
-    let foreign = [31, 29, 33].into_iter().fold(None, |held, at| Some(Foreign::with(held, at)));
-    assert_eq!(foreign, Some(Foreign { lines: 3, first: 29, last: 33 }));
+    let foreign = [31, 29, 33].into_iter().fold(None, |held, at| Some(EntryLines::with(held, at)));
+    assert_eq!(foreign, Some(EntryLines { lines: 3, first: 29, last: 33 }));
     let line = ForeignLinesLine {
         name: SIDECAR_FILE,
         foreign: foreign.expect("three"),
@@ -822,13 +823,18 @@ fn the_lines_past_the_head_leave_the_file_and_are_said_once() {
     );
 }
 
-/// THE WORDS of this file's three open-time and once-per-open lines, each
-/// a pure value: row 9's head with the last trusted position and the bytes
-/// ([`CutHead`]), `commits.log`'s own case after it ([`LogCutLine`]), and
-/// row 11's count with the first position ([`MalformedNamesLine`]).
+/// THE WORDS of this file's open-time and once-per-open lines, each a pure
+/// value: row 9's head with the last trusted position and the bytes
+/// ([`CutHead`]), `commits.log`'s own case after it ([`LogCutLine`]); row
+/// 11's count with the first position and the case — `commits.log`'s
+/// demotion, the index's split of the positions its own testimony rescues
+/// from the bare ones nothing does ([`MalformedNamesLine`]); the file absent
+/// on a journal that holds commits, with the region the walk re-covers
+/// ([`LogBegunAfreshLine`]); and a rewrite's temp file found at an open
+/// (m8, [`CompactTwinLine`]).
 #[test]
 fn the_cut_and_the_malformed_names_render_the_ruled_words() {
-    let cut = Cut { valid_end: 4_096, len: 4_106, trusted: 32 };
+    let cut = Cut { valid_end: 4_096, len: 4_106, trusted: 32, first: None, whole_after: None };
     assert_eq!(
         CutHead { name: SIDECAR_FILE, cut }.to_string(),
         "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
@@ -839,15 +845,100 @@ fn the_cut_and_the_malformed_names_render_the_ruled_words() {
         "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
          cut; the cut part is re-derived as bare entries"
     );
+    let malformed = |file, case| MalformedNamesLine { file, positions: 3, first: 24, case };
     assert_eq!(
-        MalformedNamesLine { file: SIDECAR_FILE, positions: 3, first: 24 }.to_string(),
+        malformed(SIDECAR_FILE, MalformedCase::Demoted).to_string(),
         "commits.log: 3 positions carry malformed document names, the first at position 24; \
          those positions serve as bare entries"
     );
     assert_eq!(
-        MalformedNamesLine { file: "feed-index.log", positions: 3, first: 24 }.to_string(),
-        "feed-index.log: 3 positions carry malformed document names, the first at position 24",
-        "the index's read answers from the log's own testimony: no bare entry is made"
+        malformed("feed-index.log", MalformedCase::Index { bare: 1 }).to_string(),
+        "feed-index.log: 3 positions carry malformed document names, the first at position 24; \
+         2 of them answer from commits.log's testimony, and 1 bare ones stay unclassified, each \
+         shown to any class that reaches it",
+        "a recorded position answers from the log's own testimony; a bare one has none"
+    );
+    assert_eq!(
+        LogBegunAfreshLine { low: 2_048, head: 2_100 }.to_string(),
+        "commits.log was absent at this open and is begun afresh: every position in (2048, \
+         2100] is walked from the journal as a bare entry, its op recovered where the journal \
+         names it — its key and its time are LOST unless the board directory's backup is \
+         restored"
+    );
+    assert_eq!(
+        CompactTwinLine { name: SIDECAR_FILE, bytes: 812 }.to_string(),
+        "commits.log.compact stands (812 bytes): a rewrite cut short before its rename left it, \
+         commits.log as it stood before that rewrite; its next rewrite overwrites it"
+    );
+}
+
+/// Checks that a progress line is due every so many steps or so long.
+///
+/// Whichever comes first, counted from the last line said — the walk's and
+/// the open's classification's one cadence ([`ProgressCadence`]).
+#[test]
+fn a_progress_line_is_due_every_so_many_steps_or_so_long() {
+    let long = Duration::from_secs(3_600);
+    let mut cadence = ProgressCadence::new();
+    let due: Vec<usize> = (1..=7).filter(|&done| cadence.due(done, 3, long)).collect();
+    assert_eq!(due, [3, 6], "every third step, counted from the last line");
+    let mut cadence = ProgressCadence::new();
+    assert!(cadence.due(1, 1_000, Duration::ZERO), "the interval passed: due at the first step");
+    assert!(!cadence.due(2, 1_000, long), "and counted afresh from that line");
+}
+
+/// Checks that an absent log and a rewrite's temp file are said at the open.
+///
+/// `commits.log` absent on a journal that holds commits is said, once, with
+/// the region the walk re-covers — its testimony gone, a copy that still
+/// holds it worth restoring — and a rewrite's temp file beside it is said
+/// with its size; the same open over a fresh journal, nothing to walk, says
+/// neither.
+#[test]
+fn an_absent_log_and_a_compact_twin_are_said_at_the_open() {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let open = || {
+        Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            salt: SaltSource::Seeded(0),
+        })
+        .expect("in-memory genesis cannot fail")
+    };
+    let fresh = tempfile::tempdir().expect("tempdir");
+    let lines = Lines::new();
+    CommitsLog::open(fresh.path(), &open(), &lines).expect("a fresh open");
+    assert!(lines.said().lock().is_empty(), "a fresh journal walks nothing and says nothing");
+
+    let engine = open();
+    for _ in 0..3 {
+        engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("the mint commits");
+    }
+    let head = engine.kernel().current_seq().0;
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("commits.log.compact"), b"{\"at\":1}\n").expect("a temp");
+    let lines = Lines::new();
+    let log = CommitsLog::open(dir.path(), &engine, &lines).expect("the open");
+    assert_eq!(log.pending_region(), Some((0, head)), "the whole journal to walk");
+    assert_eq!(
+        lines.said().lock().as_slice(),
+        [
+            "open: commits.log.compact stands (9 bytes): a rewrite cut short before its rename \
+             left it, commits.log as it stood before that rewrite; its next rewrite overwrites it"
+                .to_string(),
+            format!(
+                "failure: commits.log was absent at this open and is begun afresh: every position \
+                 in (0, {head}] is walked from the journal as a bare entry, its op recovered \
+                 where the journal names it — its key and its time are LOST unless the board \
+                 directory's backup is restored"
+            ),
+        ],
+        "the temp first, at the head of the open, then the absence"
     );
 }
 
@@ -900,7 +991,7 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
     assert_eq!(log.stopped_since(), Some(1), "stopped since the fence");
     let stop_line = "failure: commits.log rewrite failed past its rename: test seam: the rewritten \
                      file's reopen refused; this file takes no further line, so the next open \
-                     re-derives from its fence as bare entries";
+                     re-derives above its fence at position 1 as bare entries";
     assert_eq!(log.lines.said().lock().as_slice(), [stop_line]);
     assert_eq!(
         std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read"),

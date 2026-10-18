@@ -513,17 +513,21 @@ fn three_unreadable_slots_are_said_once_with_the_count_and_the_rows_render_null(
 /// list one.
 ///
 /// THE ABSENCE IS SAID: each open over the lost store says it was begun
-/// afresh, with the floor and the count rebuilt, every signature at or
-/// below the floor LOST — and its report names the store's size and the
-/// positions rebuilt.
+/// afresh, with the floor and the count rebuilt, every signature between
+/// the board term's position — the claim's, no write before `H.1` being
+/// attested — and the floor LOST; and its report names the store's size,
+/// its slots resident and the positions rebuilt.
 ///
 /// THE CUT IS SAID, LOST (`operations.md` §1.1 row 9; §3.6 step 3; §4 row
-/// 17): the store torn into the line at the floor, trust ends at the early
-/// signed write, BELOW the floor the external checkpoint set — the open
-/// says, once, under `failure:`, the last trusted position, the bytes, and
-/// `the lines between position {c} and the reclaim floor at position {f}
-/// are LOST unless the board directory's backup is restored`, `{f}` the
-/// floor `/changes` names; the row at the floor renders `attest: null`.
+/// 17): the store torn into the line AT the floor, trust ends at the early
+/// signed write, below the floor the external checkpoint set, and the torn
+/// line names the floor's own position — the open says, once, under
+/// `failure:`, the last trusted position, the bytes, and `the lines between
+/// position {e} and the reclaim floor at position {f} are LOST unless the
+/// board directory's backup is restored`, `{f}` the floor `/changes` names
+/// and `{e}` the position before the one the torn line names, the edge it
+/// witnesses: the floor's own slot, which no retained base answers, is the
+/// one lost; the row at the floor renders `attest: null`.
 #[test]
 fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as_null() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -577,10 +581,11 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         );
         sd.shutdown();
     }
-    // The store CUT BELOW THE FLOOR: the line at the floor torn into, so
-    // trust ends at the early signed write, below the floor — said as LOST,
-    // naming the last trusted position and the floor; nothing is rebuilt
-    // between the two, and the row at the floor renders null.
+    // The store CUT AT THE FLOOR: the line at the floor torn into, so trust
+    // ends at the early signed write, below the floor — said as LOST, naming
+    // the last trusted position, the edge the torn line witnesses and the
+    // floor; nothing is rebuilt between the two, and the row at the floor
+    // renders null.
     {
         let (trusted, valid_end, len) = tear_the_last_line(&store, 37);
         assert_eq!(trusted, early_at, "the early signed write's line is the last whole one");
@@ -593,10 +598,11 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         assert_eq!(floor, last_at);
         let lost = format!(
             "failure: feed-attest.log: trust ends at position {trusted} (byte {valid_end} of \
-             {len}); the {} bytes after it are cut; the lines between position {trusted} and the \
+             {len}); the {} bytes after it are cut; the lines between position {} and the \
              reclaim floor at position {floor} are LOST unless the board directory's backup is \
              restored",
-            len - valid_end
+            len - valid_end,
+            floor - 1
         );
         let said: Vec<String> =
             sd.daemon().lines_said().into_iter().filter(|l| l.contains("trust ends at")).collect();
@@ -648,10 +654,12 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
             [format!(
                 "failure: feed-attest.log was absent at this open and is begun afresh: the \
                  attested commits above the reclaim floor at position {last_at} are rebuilt from \
-                 the journal (0 lines); every signature this board kept at or below position \
-                 {last_at} is LOST unless the board directory's backup is restored"
+                 the journal (0 lines); every signature this board kept between position \
+                 {CLAIM_POSITION} and position {last_at} is LOST unless the board directory's \
+                 backup is restored"
             )],
-            "FINDING: an absent store at a reclaimed journal is said, with the floor:\n{}",
+            "FINDING: an absent store at a reclaimed journal is said, with the board term's \
+             position and the floor:\n{}",
             sd.daemon().lines_said().join("\n")
         );
         sd.shutdown();
@@ -690,14 +698,14 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         let afresh = format!(
             "failure: feed-attest.log was absent at this open and is begun afresh: the attested \
              commits above the reclaim floor at position {last_at} are rebuilt from the journal (2 \
-             lines); every signature this board kept at or below position {last_at} is LOST \
-             unless the board directory's backup is restored"
+             lines); every signature this board kept between position {CLAIM_POSITION} and \
+             position {last_at} is LOST unless the board directory's backup is restored"
         );
         assert!(said.contains(&afresh), "the absence said, the two counted:\n{}", said.join("\n"));
         let bytes = std::fs::metadata(&store).expect("the store").len();
         let report = format!(
-            "open: feed-attest.log: {bytes} bytes, never compacted; 2 lines rebuilt from the \
-             journal's markers (positions {}–{}), in ",
+            "open: feed-attest.log: {bytes} bytes, never compacted, 2 slots resident; 2 lines \
+             rebuilt from the journal's markers (positions {}–{}), in ",
             above[0], above[1]
         );
         assert!(
@@ -732,6 +740,78 @@ fn the_attest_store_keeps_below_the_floor_and_serves_a_lost_slot_at_the_floor_as
         "the floor arm loads ONE base: the refusal above the fence loads none, the list at the \
          floor one"
     );
+}
+
+/// Checks that a line torn above the floor is rebuilt, the last trusted below.
+///
+/// It holds wherever the last trusted line lies (`operations.md` §1.1 row
+/// 9; §3.6 step 3; §4 row 17): an early signed write, then a segment
+/// rotated and a checkpoint that carries the reclaim floor past it, then a
+/// signed write above the floor — the store's coverage still at the early
+/// write, where a board of few attested writes leaves it — and the store
+/// torn into that last line, as a crash during its synced append tears it.
+/// The last trusted position lies below the floor, and the torn line names
+/// its own position above it: the open says the cut is rebuilt, and the
+/// torn position's row serves its slot again, rebuilt from the journal's
+/// marker, byte-equal to what the write's row served before the tear.
+#[test]
+fn a_line_torn_above_the_floor_is_rebuilt_though_the_last_trusted_lies_below_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = dir.path().join("feed-attest.log");
+    let (early_at, torn_at, torn_attest) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let doc = seed_flow(port);
+        let s1 = open_session(port, 1);
+        let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+        let (early_at, _) = signed_ghost_link(port, &signed, 1);
+        rotate_a_segment(port, &s1, &doc);
+        sd.daemon().service_the_checkpoint_now();
+        // The landed checkpoint made a head due (the head writer's trigger
+        // (b)): a bare commit takes it, so the signed write below is the head
+        // and the store's last line.
+        small_commit(port, &s1, &doc);
+        let (torn_at, torn_attest) = signed_ghost_link(port, &signed, 2);
+        assert_eq!(torn_at, head(port), "the signed write is the head");
+        sd.shutdown();
+        (early_at, torn_at, torn_attest)
+    };
+    let (trusted, valid_end, len) = tear_the_last_line(&store, 37);
+    assert_eq!(trusted, early_at, "the early signed write's line is the last whole one");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (st, body) = changes_raw(port, Some(&bare), "since=0");
+    assert_eq!(st, 410, "{}", text(&body));
+    let floor = json(&body)["floor"].as_u64().expect("floor");
+    assert!(
+        trusted < floor && floor < torn_at,
+        "the premise: the last trusted {trusted} below the floor {floor}, the torn {torn_at} above"
+    );
+    let rebuilt = format!(
+        "failure: feed-attest.log: trust ends at position {trusted} (byte {valid_end} of {len}); \
+         the {} bytes after it are cut; every cut line lies above the reclaim floor at position \
+         {floor} and is rebuilt from the journal",
+        len - valid_end
+    );
+    let said: Vec<String> =
+        sd.daemon().lines_said().into_iter().filter(|l| l.contains("trust ends at")).collect();
+    assert_eq!(
+        said,
+        [rebuilt],
+        "FINDING (row 9): a line torn above the floor was said LOST by the last trusted position \
+         alone:\n{}",
+        sd.daemon().lines_said().join("\n")
+    );
+    let page = changes_ok(port, Some(&bare), &format!("since={}", torn_at - 1));
+    let e = entry_at(page["changes"].as_array().expect("changes"), torn_at);
+    assert_eq!(e["attest"], torn_attest, "the torn position's slot, rebuilt: {e}");
+    let lines = attest_store_lines(dir.path());
+    assert!(
+        lines.contains_key(&early_at) && lines.contains_key(&torn_at),
+        "the early line kept below the floor, the torn one written back: {lines:?}"
+    );
+    sd.shutdown();
 }
 
 /// D11, THE ONE SCAN COUNTED (the operations design §3.3 step 2): the

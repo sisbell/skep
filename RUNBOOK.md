@@ -49,10 +49,11 @@ apart.
      ```
 
      The first write that lands after it says so once, with the
-     refusals it ends:
+     refusals it ends and how long they stood, from the first refusal to
+     this landing:
 
      ```
-     landing: writes land again at position {position}, {n} refused since position {position}
+     landing: writes land again at position {position}, {n} refused over {ms} ms since position {position}
      ```
 
    - A checkpoint fails. It is said at each attempt:
@@ -82,8 +83,8 @@ apart.
      ```
      failure: commits.log append failed at position {position}: {error}; this file takes no further line, so the next open re-derives from {position} as bare entries; every write until then is held in memory alone, its key and its time lost at that open — restart soon
      failure: {file} append failed at position {position}: {error}; this file takes no further line until a restart, whose open re-derives it — the board serves from memory, and nothing is lost
-     failure: commits.log rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives from its fence as bare entries
-     failure: {file} rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives from its fence
+     failure: commits.log rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives above its fence at position {position} as bare entries
+     failure: {file} rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives above its fence at position {position}
      ```
 
      A full volume's `{error}` reads `the volume is full ({the OS's
@@ -315,11 +316,22 @@ apart.
    held the change feed's lock: every write, `/health` probe and
    `/changes` page that came meanwhile waited behind it, so a figure
    that grows from landing to landing is the volume's syncs slowing
-   (Start, step 6).
+   (Start, step 6). While the walk behind the listener has positions
+   to re-cover (Start, step 3, item 11), the files are not rewritten
+   and the clause says so: `the change feed's files wait on the walk's
+   landing over positions ({covered}, {head}] for their rewrite, the
+   resident entries trimmed below position {position} in {ms} ms`.
+   The line ends with what `feed-attest.log` holds: `;
+   feed-attest.log {bytes} bytes, {n} slots resident`.
 
 7. **Know what no act clears.** `feed-attest.log` gains a line for
    every attested commit and is never compacted; nothing the daemon
    does shrinks it. Size the volume for the board's signed history.
+   Its slots resident — one signature, about 3.4 KB, per attested
+   commit the change feed serves — grow with the uptime's signed
+   writes and are the one figure of the core that does; each landing
+   line names both, so a resident set that climbs from landing to
+   landing is told apart from a leak.
 
 8. **Watch between the lines.** `GET /health` answers
    `writes.halted` as `true` while either halt stands. And once an
@@ -482,27 +494,51 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; every cut line lies above the reclaim floor at position {floor} and is rebuilt from the journal
    ```
 
-   These two mean signatures held nowhere else are gone from the
-   file — below the floor, or above it where the journal refused the
-   rebuild, which a line of its own names:
+   The open decides the ending by an edge every cut line lies above:
+   the greatest of the last trusted position (`{last}`); the one
+   before the position a torn line at the file's end names, where its
+   digits stand whole — a crash tears the line its own commit is
+   writing, and that line lies above the floor; and the board term's
+   position, `H.1`'s, since no write at or before it is attested (on
+   an unclaimed board, none is). An edge at or above the floor is the
+   ending above. These two mean signatures held nowhere else are gone
+   from the file — between the edge and the floor, or above the floor
+   where the journal refused the rebuild, which a line of its own
+   names:
 
    ```
-   failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; the lines between position {last} and the reclaim floor at position {floor} are LOST unless the board directory's backup is restored
+   failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; the lines between position {edge} and the reclaim floor at position {floor} are LOST unless the board directory's backup is restored
    failure: feed-attest.log: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; every cut line lies above the reclaim floor at position {floor}, but the journal refused their rebuild: they are LOST unless the board directory's backup is restored
    failure: feed-attest.log: the journal refused the rebuild above position {last} ({account}): any attested commit in ({last}, {head}] serves attest: null, its line LOST at this store and not retried — restore this file and the segment the account names from a copy taken before this open (RUNBOOK §2)
    ```
+
+   Where trust ended at a damaged line and not a torn one, either
+   LOST ending goes on with the whole lines the cut took with it —
+   the signatures the copy you restore must hold: `; the cut took {n}
+   whole lines with it, positions {first}–{last}`.
 
    Stop the daemon, put back `feed-attest.log` from a copy that
    holds it whole and took it after its journal (Back up, step 1),
    and start again. The same line on a board you did not restore,
    after a disk fault, calls for the same act. A copy with no
    `feed-attest.log` at all is begun afresh: the lines above the
-   reclaim floor are rebuilt, those below it are gone, and where the
-   journal has reclaimed, the open says so:
+   reclaim floor are rebuilt, those below it are gone, and where one
+   of them can have held a signature — the journal reclaimed past
+   the board term's position — the open says so:
 
    ```
-   failure: feed-attest.log was absent at this open and is begun afresh: the attested commits above the reclaim floor at position {floor} are rebuilt from the journal ({n} lines); every signature this board kept at or below position {floor} is LOST unless the board directory's backup is restored
+   failure: feed-attest.log was absent at this open and is begun afresh: the attested commits above the reclaim floor at position {floor} are rebuilt from the journal ({n} lines); every signature this board kept between position {term} and position {floor} is LOST unless the board directory's backup is restored
    ```
+
+   A copy with no `commits.log` loses every commit's key and time,
+   which only that file holds; the walk behind the listener re-covers
+   each position as a bare entry, and the open says so:
+
+   ```
+   failure: commits.log was absent at this open and is begun afresh: every position in ({covered}, {head}] is walked from the journal as a bare entry, its op recovered where the journal names it — its key and its time are LOST unless the board directory's backup is restored
+   ```
+
+   Put back `commits.log` from the copy, whole, and start again.
 
    A copy taken while the daemon ran may hold lines past its own
    journal's head. The open drops them, and says so for the two files
@@ -883,16 +919,20 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        open: media uploads: CLOSED ({source}): the creation and the resume are refused uploads_closed
        ```
 
-   11. Each change-feed file the open had to cut:
+   11. Each change-feed file the open had to cut, and ahead of it a
+       rewrite's temp file standing beside a file — a rewrite a crash
+       or a failure cut short before its rename, the file itself whole
+       as it stood before that rewrite:
 
        ```
+       open: {file}.compact stands ({bytes} bytes): a rewrite cut short before its rename left it, {file} as it stood before that rewrite; its next rewrite overwrites it
        failure: {file}: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; {what follows}
        ```
 
        What follows is, for `commits.log`:
        `the cut part is re-derived as bare entries`; for the four
        index files: `the cut part is re-derived`; and for
-       `feed-attest.log`, one of the two endings in Restore,
+       `feed-attest.log`, one of the three endings in Restore,
        step 5. What a file holds that this daemon cannot read is
        said once per open:
 
@@ -902,16 +942,28 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        ```
 
        For `commits.log` the second goes on `; those positions serve
-       as bare entries`. Lines a file holds past the journal's head
-       are dropped, `commits.log`'s and `feed-attest.log`'s said
-       (Restore, step 5). Where the open's compaction dropped entries
-       below the journal's reclaim floor, and before the open
-       classifies, from the journal, the positions `feed-index.log`
-       lost — two world reconstructions each, before the board serves:
+       as bare entries`; for `feed-index.log`, `; {r} of them answer
+       from commits.log's testimony, and {b} bare ones stay
+       unclassified, each shown to any class that reaches it`. Lines a
+       file holds past the journal's head are dropped, `commits.log`'s
+       and `feed-attest.log`'s said (Restore, step 5). Where the
+       open's compaction dropped entries below the journal's reclaim
+       floor, and before the open classifies, from the journal, the
+       positions `feed-index.log` lost — two world reconstructions
+       each, before the board serves:
 
        ```
        open: the change feed's files compacted below the reclaim floor at position {floor}: {n} entries dropped
        open: feed-index.log covers to position {covered}: {n} bare positions are classified from the journal before the board serves, two world reconstructions each
+       ```
+
+       While that classification runs, a line every 1,000 positions
+       or ten seconds, whichever comes first — a slow open told from a
+       hung one — and one when it is done:
+
+       ```
+       open: feed-index.log: the bare classification at position {position}, {i} of {n}, {ms} ms in
+       open: feed-index.log: {c} of {n} bare positions classified from the journal in {ms} ms
        ```
 
        Where the journal refuses that classification, each position
@@ -923,17 +975,30 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        failure: feed-attest.log: the journal refused the rebuild above position {covered} ({account}): …
        ```
 
-       Last of the change feed's, `feed-attest.log`'s size — the one
-       change-feed file never compacted, a line per attested commit
-       for the life of the board — and what the open wrote back to it:
+       Then `feed-attest.log`'s size — the one change-feed file never
+       compacted, a line per attested commit for the life of the board
+       — its slots resident, a signature for each attested commit the
+       change feed serves, and what the open wrote back to it:
 
        ```
-       open: feed-attest.log: {bytes} bytes, never compacted; {n} lines rebuilt from the journal's markers (positions {first}–{last}), in {ms} ms
+       open: feed-attest.log: {bytes} bytes, never compacted, {n} slots resident; {n} lines rebuilt from the journal's markers (positions {first}–{last}), in {ms} ms
        ```
 
-       Where `commits.log` was lost or torn, the open also starts a
-       walk that re-covers it while the board serves (Restart,
-       step 3).
+       Last of the change feed's, how far back `/changes` answers —
+       `{floor}` the oldest position a `410 history_reclaimed` names —
+       what `commits.log` holds, the region the walk has yet to
+       re-cover where one is pending, and how long the change feed's
+       open took:
+
+       ```
+       open: the change feed answers from position {floor} to position {head}: commits.log {n} entries, {b} of them bare; positions ({covered}, {head}] wait on the walk, in {ms} ms
+       ```
+
+       With no walk pending the region clause is absent; a change
+       feed holding nothing says `open: the change feed answers no
+       position yet, the head at position {head}, in {ms} ms`. Where
+       `commits.log` was lost or torn, the open also starts a walk
+       that re-covers it while the board serves (Restart, step 3).
 
    12. On a claimed board whose journal holds no head, the board's
        first head, written now:
@@ -942,10 +1007,21 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        landing: the board is claimed and its journal held no head: H.1 written at open at position {position} in {ms} ms, naming the committed pair at position {position}
        ```
 
-       Where the head writer refuses it, the open goes on and says:
+       Where the head writer refuses it, the open goes on and says,
+       `{op}` the head's commit the refusal met — `create_new_document`
+       for the staging draft's one mint, `insert` for the record,
+       `publish` for the shot into `H`, which leaves the record an
+       orphan in the draft:
 
        ```
-       failure: head writer: the head at position {position} was refused ({cause}); no head written this cycle; no head stands yet, so a claimed board refuses every attested write attestation_invalid:board_unavailable until one lands — tried again at every write's turn
+       failure: head writer: the head at position {position} was refused at its {op} ({cause}); no head written this cycle; no head stands yet, so a claimed board refuses every attested write attestation_invalid:board_unavailable until one lands — tried again at every write's turn
+       ```
+
+       When a head next lands, the refusals are cleared once, with
+       every attempt refused and how long they stood:
+
+       ```
+       landing: head writer: a head landed at position {position}; {n} refused attempts since position {position}, over {ms} ms, are cleared
        ```
 
    13. With the open done, the configuration warnings, each where
@@ -1145,8 +1221,10 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      open removes it and says so (Start, step 3). The journal that
      checkpoint would have freed is freed when a later one lands.
    - A change-feed file being rewritten leaves a `.compact` file
-     beside it, such as `commits.log.compact`. The next rewrite of
-     the file overwrites it. Nothing is said.
+     beside it, such as `commits.log.compact`, the file itself whole as
+     it stood before that rewrite. The next open says it with its size
+     (Start, step 3, item 11), and the next rewrite of the file
+     overwrites it.
    - An upload being finished: the next open reconciles the blob
      store with what the stop left. Nothing is said.
    - The pruner's pass may leave an aside, a `.retired-` file under
@@ -1212,15 +1290,23 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    `GET /changes` answers `503 feed_rebuilding` for a page that
    reaches into the positions not yet covered; `/events` is
    untouched. A torn file is cut first, said as a `failure:` line
-   (Start, step 3, item 11). The walk then says three things, the
+   (Start, step 3, item 11). An absent one is said first too, by the
+   `failure:` line that names the positions walked back as bare
+   entries (Restore, step 5); there `{covered}` below is the fence
+   under which `/changes` answers `410 history_reclaimed`, not a
+   position the file held. The walk then says three things, the
    `progress:` line every 1,000 boundaries or ten seconds, whichever
    comes first:
 
    ```
    open: commits.log covers to position {covered}; walking {n} boundaries to position {head}
-   progress: the walk at position {position} of {head}, {ms} ms in
+   progress: the walk at position {position} of {head}, boundary {i} of {n}, {ms} ms in
    landing: commits.log re-covered positions ({covered}, {head}]: {n} boundaries walked, {k} of them unclassifiable and served to every class, in {ms} ms; the landing held the change feed's lock {ms} ms
    ```
+
+   Boundaries lie unevenly among positions, so `boundary {i} of {n}`
+   is how far the walk has come: each boundary is one reconstruction
+   of the world.
 
    `{k}` counts the boundaries whose world below the journal could not
    answer: each is served to every class, its position alone. Where
@@ -1229,12 +1315,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    boundary — the line goes on `; the fence stands at position {fence}:
    /changes answers 410 history_reclaimed for every since below it`;
    where the landing's rewrite failed, the region is re-covered `in
-   memory alone`. A refusal by the journal is said before the landing,
-   `the boundaries above position {position}` where it refused the list
-   itself:
+   memory alone`. A refusal by the journal is said where the walk
+   meets it, the first one alone, with the fence as it stands then, and
+   the walk goes on; `the boundaries above position {position}` where
+   it refused the list itself, said right after the walk's first line:
 
    ```
-   failure: commits.log's walk: the journal refused position {position} ({account}): the change feed answers 410 history_reclaimed for every since below position {fence} — restore the segment the account names from a copy (RUNBOOK §2)
+   failure: commits.log's walk: the journal refused position {position} ({account}): once the walk lands the change feed answers 410 history_reclaimed for every since below position {fence}; the walk goes on — restore the segment the account names from a copy (RUNBOOK §2)
    ```
 
    Where the walk's thread dies, the positions stay uncovered until

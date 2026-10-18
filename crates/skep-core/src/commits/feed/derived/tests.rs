@@ -51,8 +51,9 @@ fn records_and_fences_replay_and_coverage_follows_them() {
         "lines are key-sorted and newline-terminated"
     );
     // A torn tail: truncated at open, coverage unaffected by it, and the
-    // cut answered — the bytes, and the last trusted position, which is the
-    // fence's 9 and not the torn line's 11.
+    // cut answered — the bytes, the last trusted position, which is the
+    // fence's 9 and not the torn line's 11, and the torn line's own 11 beside
+    // it, its digits standing whole.
     std::fs::write(&path, format!("{contents}{{\"at\":11,\"do")).expect("tear");
     let (f, replayed, answered) = open(dir.path(), MASKED_FILE, head, |_| true).expect("reopen");
     assert_eq!(replayed.iter().map(|(at, _)| *at).collect::<Vec<_>>(), vec![3, 7]);
@@ -60,11 +61,13 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     assert_eq!(std::fs::read_to_string(&path).expect("read"), contents, "the tail is cut");
     let whole = contents.len() as u64;
     assert_eq!(answered.foreign, None, "a torn line is no foreign one");
+    let cut =
+        Cut { valid_end: whole, len: whole + 12, trusted: 9, first: Some(11), whole_after: None };
     assert_eq!(
         answered.cut,
-        Some(Cut { valid_end: whole, len: whole + 12, trusted: 9 }),
+        Some(cut),
         "the cut names the trusted end, the length before it (the 12-byte fragment after the \
-         whole lines) and the last trusted position"
+         whole lines), the last trusted position and the position the torn line names"
     );
     drop(f);
     // A record and a fence above the head are another journal's: dropped
@@ -76,7 +79,7 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     assert_eq!(answered.cut, None, "foreign lines are whole lines: no cut");
     assert_eq!(
         answered.foreign,
-        Some(Foreign { lines: 1, first: 99, last: 99 }),
+        Some(EntryLines { lines: 1, first: 99, last: 99 }),
         "the entry line past the head is answered, with its position; a fence names none"
     );
     assert_eq!(f.coverage(), 9, "a foreign fence does not raise coverage");
@@ -86,6 +89,63 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     // journal's entry lines verbatim, drops every fence, and fences once
     // at the coverage.
     assert_eq!(purged, contents, "a purged file keeps this journal's lines as written");
+}
+
+/// Checks that a cut names what the last trusted position cannot.
+///
+/// A torn line at the file's end names its own position where its `at`
+/// stands whole — a tear inside the digits, zero-fill, or a position the
+/// trusted lines cover or the head does not reach names none — and past a
+/// damaged whole line, whose digits are no witness, the whole entry lines
+/// the cut takes with it are counted, the ones at or below the head alone.
+#[test]
+fn a_cut_names_the_torn_lines_position_or_the_whole_lines_it_takes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(MASKED_FILE);
+    let cut_of = |tail: &str| {
+        std::fs::write(&path, format!("{{\"at\":3}}\n{{\"covered\":9}}\n{tail}")).expect("write");
+        let (_, _, replayed) = open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+        let cut = replayed.cut.expect("a cut");
+        assert_eq!(cut.trusted, 9, "the last trusted position is the fence's");
+        (cut.first, cut.whole_after)
+    };
+    assert_eq!(cut_of("{\"at\":12,\"do"), (Some(12), None), "its digits stand whole");
+    assert_eq!(cut_of("{\"at\":12}"), (Some(12), None), "whole but for its newline");
+    assert_eq!(cut_of("{\"at\":1"), (None, None), "a tear inside the digits names nothing");
+    assert_eq!(cut_of("\0\0\0\0"), (None, None), "zero-fill names nothing");
+    assert_eq!(cut_of("{\"at\":5,"), (None, None), "a position the trusted lines cover");
+    assert_eq!(cut_of("{\"at\":21,"), (None, None), "a position past the head");
+    let damaged =
+        "{\"at\":1x}\n{\"at\":13}\n{\"covered\":14}\n{\"at\":15}\n{\"at\":40}\n{\"at\":16";
+    assert_eq!(
+        cut_of(damaged),
+        (None, Some(EntryLines { lines: 2, first: 13, last: 15 })),
+        "a damaged line's digits are no witness; the whole entry lines after it at or below the \
+         head are counted — the fence, the line past the head and the torn tail are none"
+    );
+}
+
+/// Checks that a rewrite's temp file is said at the open and taken after.
+///
+/// The temp file found beside a line file is said at its open, once, with
+/// its size — and the file's next rewrite takes it, as the line says
+/// (`operations.md` §1.1 m8).
+#[test]
+fn a_compact_twin_is_said_at_the_open_and_the_next_rewrite_takes_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let twin = dir.path().join(format!("{STREAMS_FILE}.compact"));
+    std::fs::write(&twin, b"{\"at\":3}\n").expect("a cut-short rewrite's temp");
+    let lines = Lines::new();
+    let (mut f, _, _) =
+        LineFile::open(dir.path(), STREAMS_FILE, 20, |_| true, &lines).expect("open");
+    assert_eq!(
+        lines.said().lock().as_slice(),
+        ["open: feed-streams.log.compact stands (9 bytes): a rewrite cut short before its rename \
+          left it, feed-streams.log as it stood before that rewrite; its next rewrite overwrites \
+          it"]
+    );
+    f.rewrite(vec![record_object(4, vec![])], 9).expect("the rewrite");
+    assert!(!twin.exists(), "the rewrite's rename took the temp");
 }
 
 /// A replay HOLDS only the entries its caller keeps — the attest store's
@@ -194,7 +254,7 @@ fn the_record_time_append_swallows_its_failure_and_still_stops_the_file() {
 /// disposition for `record`: reported, never failing an op): the next
 /// append and the next fence are no-ops, the on-disk file is the
 /// rewritten whole one and nothing after, and the next open replays it
-/// and re-derives from its fence. One that fails BEFORE its rename stops
+/// and re-derives above its fence. One that fails BEFORE its rename stops
 /// nothing: the old file stands and the handle still appends to it. The
 /// stop is SAID ONCE PER UPTIME (`operations.md` §1.1 row 30), under
 /// `failure:`, at its transition: a second rewrite past its rename on the
@@ -239,7 +299,7 @@ fn a_rewrite_failed_past_its_rename_stops_the_file_and_one_failed_before_it_does
     assert_eq!(f.coverage(), 9, "the fence the rewritten file carries");
     let stop_line = "failure: feed-masked.log rewrite failed past its rename: test seam: the \
                      rewritten file's reopen refused; this file takes no further line, so the \
-                     next open re-derives from its fence";
+                     next open re-derives above its fence at position 9";
     assert_eq!(lines.said().lock().as_slice(), [stop_line], "the stop, said once, as a failure");
     f.append(10, vec![]).expect("a stopped file answers Ok and writes nothing");
     f.append_or_report(11, vec![]);

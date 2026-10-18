@@ -27,9 +27,12 @@
 //!   region refused, a write admitted, the standing line's clause, and a
 //!   reopen walking again.
 //! * T10 — a checkpoint during the walk: the fence moves in memory and no
-//!   file is written; the landing's fence is the floor as it then stands,
-//!   positions below it `410 history_reclaimed` with the floor, those above
-//!   served.
+//!   file is written, line 25 saying the files wait on the walk's landing;
+//!   the landing's fence is the floor as it then stands, positions below it
+//!   `410 history_reclaimed` with the floor, those above served.
+//! * T11 — a derived file's landing rewrite refused before its rename: said
+//!   once with the fence the file stands at, the walk's landing after it,
+//!   the feed served from memory.
 //!
 //! The hold is PROCESS-WIDE, as the cell index walk's is: nextest gives
 //! each test its own process; under plain `cargo test` the tests here take
@@ -274,16 +277,21 @@ fn landing_figures(line: &str) -> (u64, u64, u64) {
     )
 }
 
-/// The position off a `progress:` line — `the walk at position {p} of
-/// {h}, {d} ms in` — with `{h}` and `{d}` checked.
-fn progress_position(line: &str, head: u64) -> u64 {
-    let rest = line.strip_prefix("progress: the walk at position ").unwrap_or_else(|| panic!("{line:?}"));
+/// Returns the figures off a `progress:` line, `{h}` and `{d}` checked.
+///
+/// The line reads `the walk at position {p} of {h}, boundary {i} of {b}, {d}
+/// ms in`; the figures are (position, boundary, boundaries).
+fn progress_figures(line: &str, head: u64) -> (u64, u64, u64) {
+    let rest =
+        line.strip_prefix("progress: the walk at position ").unwrap_or_else(|| panic!("{line:?}"));
     let (p, rest) = rest.split_once(" of ").unwrap_or_else(|| panic!("{line:?}"));
-    let (h, rest) = rest.split_once(", ").unwrap_or_else(|| panic!("{line:?}"));
+    let (h, rest) = rest.split_once(", boundary ").unwrap_or_else(|| panic!("{line:?}"));
     assert_eq!(h.parse::<u64>().expect("head"), head, "{line:?}");
+    let (i, rest) = rest.split_once(" of ").unwrap_or_else(|| panic!("{line:?}"));
+    let (b, rest) = rest.split_once(", ").unwrap_or_else(|| panic!("{line:?}"));
     let ms = rest.strip_suffix(" ms in").unwrap_or_else(|| panic!("{line:?}"));
     ms.parse::<u64>().expect("a duration in milliseconds");
-    p.parse().expect("position")
+    (p.parse().expect("position"), i.parse().expect("boundary"), b.parse().expect("boundaries"))
 }
 
 /// The offset array's agreement with the file: every `{"at":N,"offset":O}`
@@ -441,10 +449,10 @@ fn the_walk_runs_behind_the_listener_and_the_landing_restores_the_feed() {
 /// T5 — THE THREE LINES AT THE CADENCE (§1.1 m15): over a region of six
 /// boundaries with the cadence set to every two, the stream carries the
 /// `open:` line once, `progress:` lines at the second, fourth and sixth
-/// boundary with `{p}` ascending and `{h}` the head, and the walk's
-/// `landing:` line once naming the six proved; at the shipped cadence (a
-/// thousand boundaries or a minute) the same region yields no `progress:`
-/// line.
+/// boundary with `{p}` ascending, `{h}` the head and `boundary {i} of 6`
+/// the walk's place in the list, and the walk's `landing:` line once naming
+/// the six proved; at the shipped cadence (a thousand boundaries or a
+/// minute) the same region yields no `progress:` line.
 #[test]
 fn the_three_lines_come_at_the_cadence() {
     let _held = hold();
@@ -460,8 +468,14 @@ fn the_three_lines_come_at_the_cadence() {
     after_the_first_pass(&sd);
     release_and_land(&sd);
     let progress = lines_with(&sd, "progress: ");
-    let ps: Vec<u64> = progress.iter().map(|l| progress_position(l, head)).collect();
-    assert_eq!(ps, [low + 2, low + 4, low + 6], "every second boundary, ascending to the head: {progress:?}");
+    let figures: Vec<(u64, u64, u64)> =
+        progress.iter().map(|l| progress_figures(l, head)).collect();
+    assert_eq!(
+        figures,
+        [(low + 2, 2, 6), (low + 4, 4, 6), (low + 6, 6, 6)],
+        "every second boundary, ascending to the head, each with its place among the six: \
+         {progress:?}"
+    );
     let landing = walk_landings(&sd);
     assert_eq!(landing.len(), 1, "the walk's landing line once: {landing:?}");
     let (walked, unclassified, ms) = landing_figures(&landing[0]);
@@ -696,6 +710,25 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
         "FINDING: the checkpoint's compaction rewrote the file under the pending region"
     );
     assert!(sd.daemon().feed_pending_region().is_some(), "still pending");
+    // Line 25 says what the compaction did: the resident entries trimmed
+    // below B, the files' rewrite waiting on the walk's landing over the
+    // region — never that the files compacted, since no file was written.
+    let landed = format!("landing: checkpoint at position {} landed", floor.0);
+    let line_25 = sd
+        .daemon()
+        .checkpoint_lines()
+        .into_iter()
+        .rfind(|line| line.starts_with(&landed))
+        .expect("the third checkpoint's landing line");
+    assert!(
+        line_25.contains(&format!(
+            "; the change feed's files wait on the walk's landing over positions \
+             ({region_low}, {region_head}] for their rewrite, the resident entries trimmed below \
+             position {b} in "
+        )),
+        "line 25 names the region and the fence it trimmed to: {line_25}"
+    );
+    assert!(!line_25.contains("compacted below"), "no file was compacted: {line_25}");
     // The fence moved in memory: below B is reclaimed at once, as /op-at
     // answers it, the floor named B — the region's first position above
     // the fence, which the landing has yet to prove — never a position
@@ -737,5 +770,62 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
     let served = positions(&v);
     assert_eq!(served.first(), Some(&b), "the floor itself serves: {served:?}");
     assert!(served.contains(&head), "and the feed runs past the head: {served:?}");
+    sd.shutdown();
+}
+
+/// T11 — a derived file's landing rewrite refused before its rename.
+///
+/// It is §3.3 step 2's case (`operations.md` §1.1 m15): a board's
+/// `commits.log` torn back, the walk held, and a directory planted on
+/// `feed-index.log.compact` — the rewrite's temp name, which no create
+/// passes — after the open has rewritten the four derived files fenced at
+/// the region's lower edge; the release lands, and the landing's rewrite of
+/// the index is refused before its rename: said once, under `failure:`,
+/// naming the file, the fence it stands at — the region's lower edge, the
+/// position the next open re-derives above — and that the next open
+/// re-derives it; the walk's own `landing:` line follows it, the region
+/// landed in `commits.log` all the same, and the feed answers from memory.
+#[test]
+fn a_derived_files_landing_rewrite_refused_names_the_fence_it_stands_at() {
+    let _held = hold();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (head, _, _) = seeded_board(dir.path(), 4);
+    tear_to(dir.path(), head - 2);
+    let sd = spawn_holding_the_walk(dir.path());
+    let (low, region_head) = sd.daemon().feed_pending_region().expect("pending");
+    assert_eq!(region_head, head, "the region runs to the head");
+    std::fs::create_dir(dir.path().join("feed-index.log.compact")).expect("the obstacle");
+    release_and_land(&sd);
+    let refused = "failure: feed-index.log: the walk's landing rewrite failed before its rename: ";
+    let tail = format!(
+        "; the file stands fenced below the region at position {low}, and the next open \
+         re-derives it"
+    );
+    let said = sd.daemon().lines_said();
+    let at = said
+        .iter()
+        .position(|l| l.starts_with(refused))
+        .unwrap_or_else(|| panic!("the refusal is said:\n{}", said.join("\n")));
+    assert!(said[at].ends_with(&tail), "the file and the fence it stands at: {}", said[at]);
+    assert_eq!(
+        said.iter().filter(|l| l.contains("landing rewrite failed")).count(),
+        1,
+        "the index alone stood, and said so once:\n{}",
+        said.join("\n")
+    );
+    assert!(
+        said[at + 1..].iter().any(|l| is_the_walks_landing(l)),
+        "the walk's landing follows the refusal:\n{}",
+        said.join("\n")
+    );
+    let text = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
+    assert!(
+        text.lines().any(|l| l.starts_with(&format!("{{\"at\":{head}"))),
+        "the region landed in commits.log all the same: {text}"
+    );
+    let owner = open_session(sd.port(), CLAIMANT_PRINCIPAL);
+    let (st, v) = changes(sd.port(), Some(&owner), &format!("since={low}"));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(positions(&v).last(), Some(&head), "the feed answers to the head from memory: {v}");
     sd.shutdown();
 }

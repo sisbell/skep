@@ -84,8 +84,11 @@ use origin::{bare_origins, signed_origins};
 /// The challenge store's default cap on live nonces (AUTH-1.48).
 ///
 /// Past it the oldest is evicted. It is entered into the store once, at
-/// `new`.
-const MAX_LIVE_NONCES: usize = 4096;
+/// `new`, and read by the daemon's line for the store's first live
+/// eviction, which names the bound it met (`operations.md` §1.1 m12) — a
+/// memory bound and never an abuse bound, so the figure says what the store
+/// holds and nothing of who asked.
+pub const MAX_LIVE_NONCES: usize = 4096;
 
 /// The whole auth state one daemon holds.
 ///

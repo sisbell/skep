@@ -233,9 +233,14 @@ fn the_sidecars_run_is_the_smoke_scripts_with_the_record_on_stdin() {
     assert_eq!(Call::SidecarClaim(&alice(), &record()).argv(&settings()), smoke);
 }
 
-/// T4: THE SERVING RUN carries every flag of the README's serving line
-/// (`README.md`, Running the hosted image), with the public origin and the
-/// notes' bridge and label beside them.
+/// T4: the serving run carries the README's serving flags, blocked list aside.
+///
+/// Every flag of the README's serving line (`README.md`, Running the hosted
+/// image) is in it, with the public origin and the notes' bridge and label
+/// beside them — but the blocked-prefix list's mount and the variable naming
+/// it, which the README gives a board that may need a takedown: the README
+/// says the provisioning service's boards carry `SKEPD_ORIGIN` alone of the
+/// per-board settings, and the serving run sets no other and mounts no list.
 #[test]
 fn the_serving_run_carries_the_readmes_serving_flags() {
     let readme = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md")).expect("the README");
@@ -243,14 +248,17 @@ fn the_serving_run_carries_the_readmes_serving_flags() {
     let block = &readme[start..start + readme[start..].find("```").expect("its block's end")];
     let serving = Call::RunServing(&alice()).argv(&settings());
     let readme_words: Vec<String> = block.replace('\\', " ").split_whitespace().skip(2).map(str::to_owned).collect();
+    let blocked = |word: &str| word.contains("/etc/skepd/blocked");
     for pair in readme_words.windows(2) {
         let (flag, value) = (&pair[0], &pair[1]);
-        if !flag.starts_with('-') || value.starts_with('-') {
+        if !flag.starts_with('-') || value.starts_with('-') || blocked(value) {
             continue;
         }
         let value = if flag == "-e" { "SKEPD_ORIGIN=https://alice.skep.host".to_owned() } else { value.clone() };
         assert!(serving.windows(2).any(|w| w[0] == *flag && w[1] == value), "the README's `{flag} {value}` is not in {serving:?}");
     }
+    assert!(serving.iter().filter(|w| w.starts_with("SKEPD_")).all(|w| w.starts_with("SKEPD_ORIGIN=")), "a per-board setting past `SKEPD_ORIGIN`: {serving:?}");
+    assert!(!serving.iter().any(|w| blocked(w)), "the serving run mounts a blocked-prefix list: {serving:?}");
     for switch in ["-d", "--init", "--read-only"] {
         assert!(serving.contains(&switch.to_owned()), "{switch}");
     }

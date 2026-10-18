@@ -16,8 +16,10 @@
 //! container's name and a volume's; none of the names every container's
 //! hosts file answers, which never reach the board; and never hex digits
 //! alone, which a container command reads as the prefix of another
-//! container's ID. Anything else is D-4's second clause. The post's other
-//! field, the person's record, is `record`'s.
+//! container's ID. A field out of the label rule is D-4's second clause; a
+//! label Docker cannot take as a name alone is told why in words of its own,
+//! the strings table's. The post's other field, the person's record, is
+//! `record`'s.
 
 use std::fmt;
 
@@ -57,10 +59,12 @@ const HOSTS_FILE_NAMES: [&str; 7] = ["localhost", "ip6-localhost", "ip6-loopback
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Name(String);
 
-/// Why a name field is no name: each D-4's second clause.
+/// Why a name field is no name.
 ///
-/// The log names the reason and never the field, which may hold anything a
-/// person typed.
+/// The first four reasons are D-4's second clause, a field out of the label
+/// rule; the last three are a label Docker cannot take as a name alone, and
+/// the claim form says each in words of its own. The log names the reason
+/// and never the field, which may hold anything a person typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NameRefused {
     /// The field is empty.

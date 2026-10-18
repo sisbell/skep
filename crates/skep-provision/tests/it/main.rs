@@ -368,12 +368,25 @@ fn the_built_service_runs_a_post_from_the_form_to_the_live_page_over_the_fakes()
     assert!(mailed.contains("To: person@example.com\nFrom: noreply@skep.host\nReply-To: owner@skep.host\nSubject: Your board is live\n"), "{mailed}");
 
     // The refusals, each on the form at 200: a second post on the name (D-4,
-    // off the snippet, no docker call); a bad record (D-5); a preview
-    // record (D-6); an unknown code (the DRAFT row).
+    // off the snippet, no docker call); a name Docker cannot take as a name
+    // alone (a row of its own each, never D-4's, no docker call); a bad
+    // record (D-5); a preview record (D-6); an unknown code (the DRAFT row).
     let second = minted(&state_dir);
     let (status, page) = service.request("POST", "/claim", &format!("name=alice&record={}&invite={second}", form_encode(record.as_bytes())));
     assert_eq!(status, 200);
     assert!(page.contains("That name is taken, or is not one label of letters, digits and hyphens. Choose another."), "{page}");
+    for (name, why) in [
+        ("x", "That name is a single character; a board's name is two characters or more. Choose another."),
+        ("localhost", "That name is reserved for the machines the boards run on, so no board can have it. Choose another."),
+        (
+            "cafe",
+            "That name is made only of the digits 0–9 and the letters a–f, which the machines the boards run on read as one of their own identifiers. Choose another, with a letter from g to z or a hyphen inside it.",
+        ),
+    ] {
+        let (status, page) = service.request("POST", "/claim", &format!("name={name}&record={}&invite={second}", form_encode(record.as_bytes())));
+        assert_eq!(status, 200, "{name}");
+        assert!(page.contains(why) && !page.contains("That name is taken"), "{name}: {page}");
+    }
     let (_, page) = service.request("POST", "/claim", &format!("name=bob&record=%7B%22type%22%3A%22skep-enroll%22%7D&invite={second}"));
     assert!(page.contains("This is not a record skep keygen printed. Paste the whole line, exactly as printed."), "{page}");
     let preview = record_preview();
@@ -569,14 +582,17 @@ fn a_service_killed_outright_starts_again_over_its_own_directories() {
     second.terminate();
 }
 
-/// THE DESCRIPTOR WALL: the built binary under an open-file limit of
-/// twelve, its sixteen connection threads more than that limit leaves room
-/// for — on Linux a thread waiting in `accept` holds a descriptor, so the
-/// wall is met as the pool starts; on macOS a connection taken holds one, so
-/// the connections the test holds meet it — said once, however many
-/// `accept`s meet it, two more connections past it among them; and the
-/// service serves on through it, a request after the held connections are
-/// let go answered.
+/// The descriptor wall is said once, and the service serves on past it.
+///
+/// The built binary runs under an open-file limit of twelve, its sixteen
+/// connection threads more than that limit leaves room for: on Linux a
+/// thread waiting in `accept` holds a descriptor, so the wall is met as the
+/// pool starts; on macOS a connection taken holds one, so the connections the
+/// test holds meet it. The wall is said once, however many `accept`s meet
+/// it, two more connections past it among them. Then each held connection is
+/// let go — closed at the test's end and waited for at the service's, its
+/// connection thread reading the close and giving its descriptor back — and
+/// a request after them is answered.
 #[test]
 fn an_accept_at_the_open_file_limit_is_said_once_and_the_service_serves_on() {
     let dir = Scratch::new();
@@ -610,7 +626,21 @@ fn an_accept_at_the_open_file_limit_is_said_once_and_the_service_serves_on() {
     }
     thread::sleep(Duration::from_millis(300));
     assert_eq!(service.log().matches(wall).count(), 1, "said once: {}", service.log());
-    drop(held);
+    // Each held connection closed at the test's end, then waited for at the
+    // service's: a request landing while the service still holds their
+    // descriptors meets an `accept` at the wall, which macOS answers by
+    // dropping the connection unanswered.
+    for conn in &held {
+        let _ = conn.shutdown(Shutdown::Write);
+        conn.set_nonblocking(true).expect("non-blocking");
+    }
+    for (n, mut conn) in held.into_iter().enumerate() {
+        until(&format!("held connection {n} closed at the service's end"), || match conn.read(&mut [0u8; 1]) {
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => None,
+            Ok(0) | Err(_) => Some(()),
+            Ok(_) => panic!("held connection {n} answered, though it sent nothing"),
+        });
+    }
     assert_eq!(service.request("GET", "/", "").0, 200, "the service serves on, its held connections let go");
     service.terminate();
 }

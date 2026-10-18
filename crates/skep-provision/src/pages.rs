@@ -61,8 +61,9 @@ use crate::domain::Domain;
 use crate::invite_code::InviteCode;
 use crate::rates::Edge;
 use crate::strings::{
-    fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_LABEL, NAME_REFUSED, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP,
-    RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_GONE, STATUS_URL, THANKS, TOO_LARGE,
+    fill, Words, ADDRESS_LABEL, BAD_FORM, BEING_MADE, CLAIM_BUTTON, CLAIM_LEAD, FAILED, INVITE_LABEL, INVITE_REFUSED, NAME_HELP, NAME_HEX_DIGITS, NAME_LABEL, NAME_REFUSED, NAME_RESERVED,
+    NAME_TOO_SHORT, NOT_FOUND, PREVIEW_REFUSED, RECORD_HELP, RECORD_LABEL, RECORD_REFUSED, SIGNUP_BUTTON, SIGNUP_FAILED, SIGNUP_KEPT, SIGNUP_LEAD, SIGNUP_REFUSED, STATUS_GONE, STATUS_URL, THANKS,
+    TOO_LARGE,
 };
 use crate::urlform;
 
@@ -144,9 +145,19 @@ pub enum Refusal {
     Invite,
     /// The name is refused: D-4.
     ///
-    /// It is no name of the grammar, is taken — something stands under it —
-    /// or is held by a post in flight.
+    /// It is out of the label rule — empty, past 63 bytes, outside letters,
+    /// digits and hyphens, or with a hyphen at either end — or is taken,
+    /// something standing under it, or is held by a post in flight.
     Name,
+    /// The name is one character: too short for a Docker name.
+    NameTooShort,
+    /// The name is one every container's hosts file answers.
+    ///
+    /// The hosts file answers it before the bridge's DNS, so no board can
+    /// have it.
+    NameReserved,
+    /// The name is hex digits alone: Docker reads it as a container's ID.
+    NameHexDigits,
     /// The record is not one `skep keygen` printed: D-5.
     Record,
     /// The record names a preview key: D-6.
@@ -548,6 +559,9 @@ fn refusal_words(refusal: Refusal) -> Words {
     match refusal {
         Refusal::Invite => INVITE_REFUSED,
         Refusal::Name => NAME_REFUSED,
+        Refusal::NameTooShort => NAME_TOO_SHORT,
+        Refusal::NameReserved => NAME_RESERVED,
+        Refusal::NameHexDigits => NAME_HEX_DIGITS,
         Refusal::Record => RECORD_REFUSED,
         Refusal::Preview => PREVIEW_REFUSED,
         Refusal::Busy | Refusal::Failed => FAILED,

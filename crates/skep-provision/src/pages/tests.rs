@@ -138,16 +138,28 @@ fn the_invite_link_opens_the_claim_form_with_its_code() {
     assert!(form.body.contains("id=\"invite\" name=\"invite\" required autocomplete=\"off\" spellcheck=\"false\" value=\"1.1.0.1.0.3\""), "{}", form.body);
 }
 
-/// `POST /claim`: the three fields reach the desk; EACH REFUSAL shows its
-/// words on the form again at 200 — D-4, D-5, D-6, the invite's DRAFT row,
-/// D-8 for a full queue and a failure — the fields pre-filled as sent.
+/// Each claim refusal is shown on the form again, at 200.
+///
+/// The three fields reach the desk, and each refusal's words stand on the
+/// form, the fields pre-filled as sent: D-4; the rows of a name Docker
+/// cannot take as a name alone — one character, a hosts-file name, hex
+/// digits alone; D-5, D-6, the invite's `DRAFT` row, and D-8 for a full
+/// queue and a failure.
 #[test]
 fn each_claim_refusal_is_shown_on_the_form_again() {
     let desk = Scripted::default();
     let body = b"name=alice&record=%7B%22type%22%7D%0D%0A&invite=c0de";
-    for (refusal, words) in
-        [(Refusal::Name, NAME_REFUSED), (Refusal::Record, RECORD_REFUSED), (Refusal::Preview, PREVIEW_REFUSED), (Refusal::Invite, INVITE_REFUSED), (Refusal::Busy, FAILED), (Refusal::Failed, FAILED)]
-    {
+    for (refusal, words) in [
+        (Refusal::Name, NAME_REFUSED),
+        (Refusal::NameTooShort, NAME_TOO_SHORT),
+        (Refusal::NameReserved, NAME_RESERVED),
+        (Refusal::NameHexDigits, NAME_HEX_DIGITS),
+        (Refusal::Record, RECORD_REFUSED),
+        (Refusal::Preview, PREVIEW_REFUSED),
+        (Refusal::Invite, INVITE_REFUSED),
+        (Refusal::Busy, FAILED),
+        (Refusal::Failed, FAILED),
+    ] {
         *desk.admit.lock().unwrap() = Some(Err(refusal));
         let answer = answer(&request("POST", "/claim", body), &site(), &desk);
         assert_eq!(answer.status, 200, "{refusal:?}");

@@ -228,10 +228,13 @@ fn an_admission_on_a_token_admitted_before_changes_nothing() {
 /// refuse a record before any — among D-5's a record the hosted genesis can
 /// never take, a key's half that does not decode or more entries than its
 /// cap, which would fail at the dark claim — the log naming the fault's
-/// token, never the record; and D-4 a name Docker cannot take as a name
-/// alone — one byte, a hosts-file name, hex digits alone — its code still
-/// issued, never let go of by a post that fails at `docker volume create` or
-/// the health wait to be posted again.
+/// token, never the record; D-4 a field out of the label rule — empty, past
+/// 63 bytes, out of the alphabet, a hyphen at an end; and a name Docker
+/// cannot take as a name alone — one byte, a hosts-file name, hex digits
+/// alone — a refusal of its own, never D-4's; the log naming each reason,
+/// never the field, and the code still issued, never let go of by a post
+/// that fails at `docker volume create` or the health wait to be posted
+/// again.
 #[test]
 fn the_posts_refusals_come_before_any_docker_call() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
@@ -251,9 +254,17 @@ fn the_posts_refusals_come_before_any_docker_call() {
     assert_eq!(rig.post("bob", &undecodable, fresh.as_str()), Err(Refusal::Record), "a half that does not decode");
     let seventeen = encode_enroll(&(0..17u8).map(|n| Enrollment::new(decodable_key(n), false, None).expect("no label")).collect::<Vec<_>>());
     assert_eq!(rig.post("bob", &seventeen, fresh.as_str()), Err(Refusal::Record), "past the genesis's cap");
-    assert_eq!(rig.post("b_b", &record(true), fresh.as_str()), Err(Refusal::Name));
-    for name in ["x", "localhost", "ab"] {
-        assert_eq!(rig.post(name, &record(true), fresh.as_str()), Err(Refusal::Name), "{name}");
+    let long = "a".repeat(64);
+    for (name, refusal) in [
+        ("", Refusal::Name),
+        (long.as_str(), Refusal::Name),
+        ("b_b", Refusal::Name),
+        ("-ab", Refusal::Name),
+        ("x", Refusal::NameTooShort),
+        ("localhost", Refusal::NameReserved),
+        ("ab", Refusal::NameHexDigits),
+    ] {
+        assert_eq!(rig.post(name, &record(true), fresh.as_str()), Err(refusal), "{name:?}");
     }
     rig.fake.assert_done();
     assert!(rig.issued(&fresh));
@@ -261,11 +272,13 @@ fn the_posts_refusals_come_before_any_docker_call() {
     for token in ["bad_record", "preview_key", "undecodable_key", "too_many_enrolled"] {
         assert!(log.contains(&format!("bob: a post refused: the record, {token}")), "{token}: {log}");
     }
-    for refused in [NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone] {
+    for refused in
+        [NameRefused::Empty, NameRefused::TooLong, NameRefused::OutOfTheAlphabet, NameRefused::HyphenAtEitherEnd, NameRefused::TooShort, NameRefused::HostsFileName, NameRefused::HexDigitsAlone]
+    {
         assert!(log.contains(&format!("a post refused: {refused}")), "{refused:?}: {log}");
     }
     assert!(rig.logged("bob: a post refused: its invite is held by the post for alice, in flight"), "what holds the code, named: {log}");
-    for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f9f9f", "b_b"] {
+    for never in [code.as_str(), spent.as_str(), fresh.as_str(), "skep-enroll", "9f9f9f9f", "b_b", long.as_str()] {
         assert!(!log.contains(never), "the log carries {never:?}: {log}");
     }
 }

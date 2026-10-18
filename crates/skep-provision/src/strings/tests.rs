@@ -24,7 +24,7 @@ const NOTES: [(&str, &str); 11] = [
 ];
 
 /// Every row of the table.
-const TABLE: [Words; 34] = [
+const TABLE: [Words; 37] = [
     SIGNUP_LEAD,
     SIGNUP_KEPT,
     ADDRESS_LABEL,
@@ -40,6 +40,9 @@ const TABLE: [Words; 34] = [
     INVITE_LABEL,
     CLAIM_BUTTON,
     NAME_REFUSED,
+    NAME_TOO_SHORT,
+    NAME_RESERVED,
+    NAME_HEX_DIGITS,
     RECORD_REFUSED,
     PREVIEW_REFUSED,
     INVITE_REFUSED,

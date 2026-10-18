@@ -161,7 +161,7 @@ use crate::domain::Domain;
 use crate::health::{self, Waited, HEALTH_WAIT};
 use crate::invite_code::InviteCode;
 use crate::invites::{self, Invite, InviteState};
-use crate::name::Name;
+use crate::name::{Name, NameRefused};
 use crate::names;
 use crate::pages::{self, Desk, Post, Refusal, Shown, SignUpRefusal};
 use crate::process::Exit;
@@ -1352,9 +1352,17 @@ impl Desk for Service {
                 return Err(Refusal::Failed);
             }
         };
+        // A label Docker cannot take as a name alone is told why in words of
+        // its own: D-4 would call it taken, or not one label, and it is
+        // neither.
         let name = Name::parse(post.name).map_err(|refused| {
             self.log(&format!("a post refused: {refused}"));
-            Refusal::Name
+            match refused {
+                NameRefused::Empty | NameRefused::TooLong | NameRefused::OutOfTheAlphabet | NameRefused::HyphenAtEitherEnd => Refusal::Name,
+                NameRefused::TooShort => Refusal::NameTooShort,
+                NameRefused::HostsFileName => Refusal::NameReserved,
+                NameRefused::HexDigitsAlone => Refusal::NameHexDigits,
+            }
         })?;
         let record = record::admit(post.record).map_err(|refused| {
             self.log(&format!("{name}: a post refused: the record, {refused}"));

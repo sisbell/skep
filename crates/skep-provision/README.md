@@ -170,11 +170,14 @@ file and what it refuses, and once, with the count, as it ends.
   what the hosted claim's genesis admits. Then the name must be free: not
   taken — no snippet, no volume and no container stands under it — and
   not held by a post in flight. A refused post is shown on the form
-  again, and leaves no file and no queue entry; its log line names what
-  refused it — the board whose post or live board holds a held invite,
-  the posts that fill a full queue or the looks' cap, the board a spent
-  invite was spent under. An admitted post is queued and answered with
-  D-7 and its status URL, its log line naming its invite's issue date.
+  again in the words for what refused it — a name taken, held or out of
+  the label rule meets D-4, and one character, a hosts-file name or hex
+  digits alone each a sentence of its own — and leaves no file and no
+  queue entry; its log line names what refused it — the board whose post
+  or live board holds a held invite, the posts that fill a full queue or
+  the looks' cap, the board a spent invite was spent under. An admitted
+  post is queued and answered with D-7 and its status URL, its log line
+  naming its invite's issue date.
 - `GET /status/<token>` shows D-7 while the post waits or runs, the live
   reply once the board is routed, and D-8 once it failed. A token the
   service does not hold is 404, and a token from before a restart is one
@@ -341,8 +344,9 @@ Each row names where its words come from:
 
 - `D-1` … `D-9` are the deployment notes' draft rows for the form;
 - `DRAFT` rows are words this crate wrote where no ruled text exists: the
-  sign-up page, the thanks page, the invite refusal, the status URL,
-  the reply's heading, the mail's subject and the error pages;
+  sign-up page, the thanks page, the refusals of a name Docker cannot take
+  as a name alone, the invite refusal, the status URL, the reply's
+  heading, the mail's subject and the error pages;
 - `RULED` rows are carried verbatim: the public-venue statement, the
   three facts, and the two acts from the `skep` command's own format
   strings with the public origin filled in — the reply's suite reads the

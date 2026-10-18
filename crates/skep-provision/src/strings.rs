@@ -80,10 +80,29 @@ pub const CLAIM_BUTTON: Words = Words { id: "DRAFT", text: "Make my board" };
 
 // A claim post's refusals, each shown on the form again.
 
-/// The name refused: no name of the grammar, taken, or held.
+/// The name refused: taken, held by a post in flight, or not one label.
 ///
-/// It is held by a post in flight.
+/// Not one label is a field empty, past 63 bytes, holding a character
+/// outside letters, digits and hyphens, or with a hyphen at either end. A
+/// label Docker cannot take as a name alone is neither taken nor out of the
+/// label rule, so it is refused in words of its own: [`NAME_TOO_SHORT`],
+/// [`NAME_RESERVED`], [`NAME_HEX_DIGITS`].
 pub const NAME_REFUSED: Words = Words { id: "D-4", text: "That name is taken, or is not one label of letters, digits and hyphens. Choose another." };
+/// The name refused: one character, too short for a Docker name.
+pub const NAME_TOO_SHORT: Words = Words { id: "DRAFT", text: "That name is a single character; a board's name is two characters or more. Choose another." };
+/// The name refused: one every container's hosts file answers.
+///
+/// It is `localhost` or one of the six `ip6-` names, which a container's own
+/// hosts file answers before the bridge's DNS, so none reaches a board.
+pub const NAME_RESERVED: Words = Words { id: "DRAFT", text: "That name is reserved for the machines the boards run on, so no board can have it. Choose another." };
+/// The name refused: hex digits alone, which Docker reads as a container's ID.
+///
+/// Its advice is the grammar's: a name holding a letter past `f`, or a hyphen
+/// inside it, is not hex digits alone.
+pub const NAME_HEX_DIGITS: Words = Words {
+    id: "DRAFT",
+    text: "That name is made only of the digits 0–9 and the letters a–f, which the machines the boards run on read as one of their own identifiers. Choose another, with a letter from g to z or a hyphen inside it.",
+};
 /// The record refused: not a record `skep keygen` printed.
 pub const RECORD_REFUSED: Words = Words { id: "D-5", text: "This is not a record skep keygen printed. Paste the whole line, exactly as printed." };
 /// The record refused: a preview-kind key.

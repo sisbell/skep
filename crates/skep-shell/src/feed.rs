@@ -12,8 +12,9 @@
 //! announces `stopped` once — [`Feeder::unreachable`]), and the consumer's
 //! state for the `index` event, each emitted where it moved. The thread's
 //! state is THE FEEDER ([`Feeder`]), the board index's one writer.
-//! The bridge's `search` call is answered on this thread too, over a
-//! channel, so the consumer never crosses a thread: two threads per board,
+//! The bridge's two calls over the index, `search` and the listing
+//! `places`, are answered on this thread too, each over a channel, so the
+//! consumer never crosses a thread: two threads per board,
 //! the `/events` stream's reader and the feed thread, each borrowing the
 //! board from the `Arc` it holds. A death signal this thread's reads meet
 //! ends the session by the one sequence the shell runs too (`Sessions::end`).
@@ -59,9 +60,10 @@ use std::thread;
 use std::time::Instant;
 
 use serde_json::{json, Value};
+use skep_address::Address;
 use skep_client::board::{ChangesAnswer, ChangesQuery};
 use skep_client::derive::Mode;
-use skep_client::search::{events, Consumer, Lost, Newer, Place, QueryTooLong, Range, SearchAnswer, SearchDir, SearchOpts, State, Stop, Who};
+use skep_client::search::{events, Consumer, Lost, Newer, Place, PlacesAnswer, QueryTooLong, Range, SearchAnswer, SearchDir, SearchOpts, State, Stop, Who};
 use skep_client::Board;
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
 
@@ -72,8 +74,10 @@ use crate::refusal::{Name, Refusal};
 use crate::sessions::{SessionEntry, Sessions, Supplements};
 use crate::Talk;
 
-/// Who searches, as it crosses to the feed thread: the guest, or a session
-/// the table holds, whole.
+/// Who reads a board's index, as it crosses to the feed thread.
+///
+/// It is the guest, or a session the table holds, whole — for a search or
+/// the listing alike.
 #[derive(Debug, Clone)]
 pub enum Searcher {
     Guest,
@@ -117,6 +121,8 @@ enum Cmd {
     Probe,
     /// The bridge's search call.
     Search { who: Searcher, query: String, opts: BridgeSearchOpts, reply: Sender<Result<Value, Refusal>> },
+    /// The bridge's listing call, its prefix where one is named.
+    Places { who: Searcher, under: Option<Address>, reply: Sender<Value> },
     /// The consumer closed; the thread ends.
     Stop(Sender<()>),
 }
@@ -175,6 +181,21 @@ impl Feed {
             return Err(Refusal::shell(Name::FEED_STOPPED, json!({})));
         }
         rx.recv().unwrap_or_else(|_| Err(Refusal::shell(Name::FEED_STOPPED, json!({}))))
+    }
+
+    /// Returns the bridge's listing of the document index (A-255).
+    ///
+    /// It is answered on the feed thread, under `under` where given.
+    ///
+    /// # Errors
+    ///
+    /// `feed_stopped` once the thread has stopped.
+    pub fn places(&self, who: Searcher, under: Option<Address>) -> Result<Value, Refusal> {
+        let (reply, rx) = channel();
+        if self.cmds.send(Cmd::Places { who, under, reply }).is_err() {
+            return Err(Refusal::shell(Name::FEED_STOPPED, json!({})));
+        }
+        rx.recv().map_err(|_| Refusal::shell(Name::FEED_STOPPED, json!({})))
     }
 }
 
@@ -383,6 +404,9 @@ impl<'b> Feeder<'b> {
                 }
                 Ok(Cmd::Search { who, query, opts, reply }) => {
                     let _ = reply.send(feeder.search(who.as_who(), &query, opts));
+                }
+                Ok(Cmd::Places { who, under, reply }) => {
+                    let _ = reply.send(feeder.places(who.as_who(), under.as_ref()));
                 }
                 Ok(Cmd::Stop(reply)) => {
                     feeder.close_consumer();
@@ -593,6 +617,16 @@ impl<'b> Feeder<'b> {
         let value = answer_json(&answer);
         self.emit_index();
         Ok(value)
+    }
+
+    /// Returns the board's document index listed as `who` reads it (A-255).
+    ///
+    /// Where no index stands open it is `places_without_index`'s answer: the
+    /// call dials nothing to open one (§4b.1's "PURE LOCAL", as `search`'s),
+    /// `tick` and `widen` opening the index.
+    fn places(&self, who: Who<'_>, under: Option<&Address>) -> Value {
+        let Some(c) = &self.consumer else { return places_without_index() };
+        places_answer_json(&c.places(who, under))
     }
 
     /// The consumer closed and saved, at the stop; a failed save said.
@@ -829,6 +863,27 @@ fn answer_json(a: &SearchAnswer) -> Value {
 /// index for.
 pub fn answer_without_index() -> Value {
     answer_json(&SearchAnswer { hits: Vec::new(), total: 0, truncated: false, more_terms: false, fuzzy_bounded: false, positions_bounded: false, places: Vec::new(), state: State::None })
+}
+
+/// Returns the listing's answer as the `places` row shapes it.
+///
+/// It is `{docs, counts, state}`: each document a place, and each count an
+/// `{account, documents}` pair, in address order.
+fn places_answer_json(a: &PlacesAnswer) -> Value {
+    json!({
+        "docs": a.docs.iter().map(place_json).collect::<Vec<_>>(),
+        "counts": a.counts.iter().map(|(account, documents)| json!({"account": account.to_string(), "documents": documents})).collect::<Vec<_>>(),
+        "state": state_json(&a.state),
+    })
+}
+
+/// Returns the listing where no index stands, in the row's whole shape.
+///
+/// It holds no document, no count and the state `none`: the listing of a
+/// board whose consumer has not opened its index, and the guest form's over
+/// an origin this shell holds no index for.
+pub fn places_without_index() -> Value {
+    places_answer_json(&PlacesAnswer { docs: Vec::new(), counts: BTreeMap::new(), state: State::None })
 }
 
 /// THE QUERY's BOUND refused — the shell's own (§4b.1's `search` row): the

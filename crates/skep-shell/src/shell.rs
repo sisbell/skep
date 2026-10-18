@@ -5,21 +5,22 @@
 //! token"); the SESSION MODE the shell was started in — BARE as the
 //! claimant on the permissive board, or SIGNED content-scoped with a dev
 //! key in the store (both ruled selectable per run); and ONE METHOD PER
-//! ROW of `client.md` §4b.1, each taking the row's input as a value and
-//! answering the row's output or a [`Refusal`] under the row's armed name,
-//! the board's own refusals carried verbatim. The row methods are this
-//! module's alone behind ONE DOOR, [`Shell::call`], which dispatches on the
-//! bridge's spelling — one arm per call, the compiler holding the match
-//! exhaustive — and logs every call, so no call reaches a row past the log;
-//! [`Shell::fetch`] alone is public beside it, because it streams; it logs
-//! its own call as `call` does. The ten ceremonial rows — the key store's
-//! two and the eight walks over `skep_client::ceremony` — are the child
-//! module `ceremony`'s, `pub(super)` to the door; a transport runs each call
-//! on the connection's thread. The page's two answers, [`Shell::answer`]
-//! and [`Shell::cancel`], route to the walk that asked. A death signal a
-//! call meets ends the session by the one sequence the board's feed thread
-//! runs too (`Sessions::end`), and the call answers `session_died` with the
-//! reason that sequence derived.
+//! ROW of `client.md` §4b.1 — and of `places`, the document index's
+//! listing beside `search` (A-255) — each taking the row's input as a
+//! value and answering the row's output or a [`Refusal`] under the row's
+//! armed name, the board's own refusals carried verbatim. The row methods
+//! are this module's alone behind ONE DOOR, [`Shell::call`], which
+//! dispatches on the bridge's spelling — one arm per call, the compiler
+//! holding the match exhaustive — and logs every call, so no call reaches a
+//! row past the log; [`Shell::fetch`] alone is public beside it, because it
+//! streams; it logs its own call as `call` does. The ten ceremonial rows —
+//! the key store's two and the eight walks over `skep_client::ceremony` —
+//! are the child module `ceremony`'s, `pub(super)` to the door; a transport
+//! runs each call on the connection's thread. The page's two answers,
+//! [`Shell::answer`] and [`Shell::cancel`], route to the walk that asked. A
+//! death signal a call meets ends the session by the one sequence the
+//! board's feed thread runs too (`Sessions::end`), and the call answers
+//! `session_died` with the reason that sequence derived.
 //!
 //! WHAT THE SHELL REFUSES WITHOUT ASKING (ps3-5): a WRITE frame in the
 //! guest form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so
@@ -49,6 +50,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::{json, Value};
+use skep_address::Address;
 use skep_client::address::is_address_text;
 use skep_client::board::{AtAnswer, Board, Rejection};
 use skep_client::derive::Mode;
@@ -60,7 +62,7 @@ use skep_client::Origin;
 
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
-use crate::feed::{answer_without_index, query_too_long, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
+use crate::feed::{answer_without_index, places_without_index, query_too_long, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
 use crate::person::Pending;
@@ -68,7 +70,7 @@ use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::script;
 use crate::sessions::{self, SessionEntry, Sessions};
-use crate::wire::json_len;
+use crate::wire::{bounded_address, json_len};
 use crate::Talk;
 
 mod ceremony;
@@ -182,10 +184,12 @@ pub const WRITE_KINDS: [&str; 16] = [
     "edit_link",
 ];
 
-/// One CALL of §4b.1, as [`Shell::call`] dispatches it: one arm per call,
-/// which the compiler holds exhaustive, and the list a transport admits a
-/// call by, [`CALLS`], spelled from `Call::ALL` — so no call is listed that
-/// the dispatch does not answer.
+/// One call of the bridge, as [`Shell::call`] dispatches it.
+///
+/// It is a call of §4b.1, or the document index's listing `places` (A-255):
+/// one arm per call, which the compiler holds exhaustive, and the list a
+/// transport admits a call by, [`CALLS`], spelled from `Call::ALL` — so no
+/// call is listed that the dispatch does not answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Call {
     Boards,
@@ -208,13 +212,14 @@ enum Call {
     Fetch,
     Restore,
     Search,
+    Places,
     Held,
     Resolve,
 }
 
 impl Call {
-    /// Every call, in §4b.1's order.
-    const ALL: [Call; 22] = [
+    /// Every call, in §4b.1's order, `places` beside `search`.
+    const ALL: [Call; 23] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -235,6 +240,7 @@ impl Call {
         Call::Fetch,
         Call::Restore,
         Call::Search,
+        Call::Places,
         Call::Held,
         Call::Resolve,
     ];
@@ -262,6 +268,7 @@ impl Call {
             Call::Fetch => "fetch",
             Call::Restore => "restore",
             Call::Search => "search",
+            Call::Places => "places",
             Call::Held => "held",
             Call::Resolve => "resolve",
         }
@@ -273,8 +280,10 @@ impl Call {
     }
 }
 
-/// The twenty-two calls of §4b.1, as the bridge spells them, in its order:
-/// the list a transport admits a call by, every name of it one
+/// The bridge's twenty-three calls, as it spells them, in its order.
+///
+/// They are §4b.1's twenty-two and the document index's listing, `places`
+/// (A-255): the list a transport admits a call by, every name of it one
 /// [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
@@ -414,6 +423,23 @@ fn search_opts(args: &Value) -> Result<BridgeSearchOpts, Refusal> {
     let defaults = SearchOpts::default();
     let bounds = SearchOpts { limit: limit.map_or(defaults.limit, saturate), offset: offset.map_or(defaults.offset, saturate) };
     Ok(BridgeSearchOpts { bounds, reindex: reindex.unwrap_or(false) })
+}
+
+/// Returns a `places` call's prefix, its `opts.under`, where it names one.
+///
+/// The prefix is an address in its one spelling (`is_address_text`), within
+/// the component budget (`wire::bounded_address`); absent, the call lists
+/// the whole index.
+///
+/// # Errors
+///
+/// In this order: `malformed_args` naming `opts` where it is present and no
+/// object, then naming `opts.under` where that is present and no such
+/// address.
+fn places_under(args: &Value) -> Result<Option<Address>, Refusal> {
+    optional(args, "opts", |v| v.is_object().then_some(()))?;
+    let address = |v: &Value| v.as_str().filter(|text| is_address_text(text)).and_then(bounded_address);
+    optional(&args["opts"], "under", address).map_err(|_| Refusal::malformed("opts.under"))
 }
 
 /// Where a guest form reads (§4b.1): one of this shell's boards, or a
@@ -654,6 +680,7 @@ impl Shell {
             Some(Call::Fetch) => Err(Refusal::shell(Name::STREAMED_CALL, json!({"call": "fetch", "detail": "fetch streams its bytes: a transport serves it on its own route, and a direct caller takes `Shell::fetch`"}))),
             Some(Call::Restore) => self.restore(args),
             Some(Call::Search) => self.search(args),
+            Some(Call::Places) => self.places(args),
             Some(Call::Held) => self.held(args),
             Some(Call::Resolve) => self.resolve(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
@@ -922,20 +949,61 @@ impl Shell {
             return Err(query_too_long(QueryTooLong { bound: QUERY_BOUND, length: query.len() }));
         }
         let opts = search_opts(args)?;
-        let (board_reference, who) = if guest_form(args)? {
-            match self.guest_target(args)? {
-                GuestTarget::Board(entry) => (entry.reference.clone(), Searcher::Guest),
-                // A followed link's origin this shell holds no index for.
-                GuestTarget::Origin(_) => return Ok(answer_without_index()),
-            }
-        } else {
-            let session = self.session(&args["session"])?;
-            if optional(args, "board", Value::as_str)?.is_some_and(|board| board != session.board_reference) {
-                return Err(Refusal::malformed("board"));
-            }
-            (session.board_reference.clone(), Searcher::Session(session))
-        };
-        self.feed(&board_reference).search(who, query, opts)
+        match self.index_reader(args)? {
+            Some((feed, who)) => feed.search(who, query, opts),
+            None => Ok(answer_without_index()),
+        }
+    }
+
+    /// Lists the board's document index: `places(session|guest, board, opts)`.
+    ///
+    /// It answers `{docs, counts, state}` off the board's consumer: the
+    /// document index read whole at the call's class (A-255; foundations §2),
+    /// as `search` draws its `places` — the session form at the session's own
+    /// board, the guest form at the board its reference or its canonical
+    /// origin names, an origin this shell holds no board at answered with no
+    /// index (`state: none`). `opts.under`, where given, narrows the
+    /// documents and their counts to that prefix.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `opts`, then `opts.under`; the
+    /// form's and the target's, as `search` meets them; `feed_stopped` once
+    /// the board's feed thread has stopped.
+    fn places(&self, args: &Value) -> Result<Value, Refusal> {
+        let under = places_under(args)?;
+        match self.index_reader(args)? {
+            Some((feed, who)) => feed.places(who, under),
+            None => Ok(places_without_index()),
+        }
+    }
+
+    /// Returns the feed of the board whose index a call reads, and who reads.
+    ///
+    /// The session form reads at the session's own board, the guest form at
+    /// the board its reference or its canonical origin names
+    /// ([`Shell::guest_target`]); `None` for an origin this shell holds no
+    /// board at — a followed link's — whose index it does not hold.
+    ///
+    /// # Errors
+    ///
+    /// In this order: the form's (`guest_form`); for the guest form, the
+    /// target's (`guest_target`); for the session form, `malformed_args`
+    /// naming `session` where it is no string, then `session_ended`, then
+    /// `malformed_args` naming `board` where one given beside the session is
+    /// no string or names another board.
+    fn index_reader(&self, args: &Value) -> Result<Option<(&Feed, Searcher)>, Refusal> {
+        if guest_form(args)? {
+            return Ok(match self.guest_target(args)? {
+                GuestTarget::Board(entry) => Some((self.feed(&entry.reference), Searcher::Guest)),
+                GuestTarget::Origin(_) => None,
+            });
+        }
+        let session = self.session(&args["session"])?;
+        if optional(args, "board", Value::as_str)?.is_some_and(|board| board != session.board_reference) {
+            return Err(Refusal::malformed("board"));
+        }
+        Ok(Some((self.feed(&session.board_reference), Searcher::Session(session))))
     }
 
     /// `held(session)` → the acting principal's held bursts at the session's

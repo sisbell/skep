@@ -7,9 +7,10 @@
 //! off the real walk, the stale and foreign references, the token's text, a
 //! seed the walk made and the store's location in no answer, no event and
 //! no log entry — a paper claim's among them — a scripted claim's anchors
-//! placed where its script says, a search's query recorded nowhere, every
-//! event held to its declaration, and a closed session's drafts rows ahead
-//! of its `session-died`; a death signal at a call's own dial ending its
+//! placed where its script says, a search's query recorded nowhere, the
+//! document index listed at the call's class, every event held to its
+//! declaration, and a closed session's drafts rows ahead of its
+//! `session-died`; a death signal at a call's own dial ending its
 //! session, a released supplement keeping its drafts cursor, and a session
 //! opened after its principal's narrow fed from its own open; then the
 //! signed mode over the same store: a publish-class write acked — the
@@ -864,6 +865,78 @@ fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
     assert_eq!(fed.data["update"]["session"], second, "{fed:?}");
     let fed_before = seen.lock().unwrap().iter().filter(|e| drafts_row(before)(e)).count();
     assert_eq!(fed_before, 1, "the first draft's row reaches the page once");
+    shell.shutdown();
+    sd.shutdown();
+}
+
+/// The board's documents are listed at the call's class (A-255).
+///
+/// Foundations §2's far scale is "drawn from the client's index read
+/// whole", masked at the reader's class. Against the real daemon, a draft
+/// written under a session reaches the session's listing, labelled by its
+/// first line and `yours_to_read`, beside the board's own published
+/// documents; the guest's listing is the same documents, its drafts aside.
+/// Each answer and its parts are held to their declarations, the counts
+/// tallied over the documents listed, a prefix narrows both, and a
+/// session's listing at another board is refused. The mutants that list the
+/// published part alone for a session, the principal's part for the guest,
+/// or counts the documents listed do not make, hand the page a plane of the
+/// wrong class.
+#[test]
+fn places_lists_the_boards_documents_at_the_calls_class() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
+    shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello\nworld"]}})).unwrap();
+    let place = json!({"doc": draft, "kind": "draft", "label": "hello", "standing": "yours_to_read"});
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let own = loop {
+        let listing = shell.call("places", &json!({"session": session})).unwrap();
+        if listing["docs"].as_array().is_some_and(|docs| docs.contains(&place)) {
+            break listing;
+        }
+        assert!(Instant::now() < deadline, "the draft never reached the listing: {listing}");
+        thread::sleep(Duration::from_millis(50));
+    };
+    let declared = |listing: &Value| {
+        crate::shapes::assert_declared("PlacesAnswer", listing);
+        listing["docs"].as_array().unwrap().iter().for_each(|p| crate::shapes::assert_declared("Place", p));
+        listing["counts"].as_array().unwrap().iter().for_each(|c| crate::shapes::assert_declared("AccountCount", c));
+    };
+    // The account a document address lies under: its components before the
+    // second `0`.
+    let account_of = |doc: &str| {
+        let comps: Vec<&str> = doc.split('.').collect();
+        let second_zero = comps.iter().enumerate().filter(|(_, c)| **c == "0").nth(1).map(|(i, _)| i).expect("a document address");
+        comps[..second_zero].join(".")
+    };
+    let tally = |listing: &Value| {
+        let mut tally = std::collections::BTreeMap::<String, u64>::new();
+        listing["docs"].as_array().unwrap().iter().for_each(|p| *tally.entry(account_of(p["doc"].as_str().unwrap())).or_default() += 1);
+        let counted: std::collections::BTreeMap<String, u64> =
+            listing["counts"].as_array().unwrap().iter().map(|c| (c["account"].as_str().unwrap().to_string(), c["documents"].as_u64().unwrap())).collect();
+        assert_eq!(counted, tally, "the counts are the documents listed: {listing}");
+    };
+    declared(&own);
+    tally(&own);
+    let guest = shell.call("places", &json!({"guest": true, "board": board})).unwrap();
+    declared(&guest);
+    tally(&guest);
+    let editions: Vec<&Value> = own["docs"].as_array().unwrap().iter().filter(|p| p["kind"] == "edition").collect();
+    assert!(!editions.is_empty(), "the claim's published documents are listed: {own}");
+    assert_eq!(guest["docs"].as_array().unwrap().iter().collect::<Vec<_>>(), editions, "the guest's listing is the session's, its drafts aside");
+    let narrowed = shell.call("places", &json!({"session": session, "opts": {"under": draft}})).unwrap();
+    assert_eq!((narrowed["docs"].clone(), narrowed["counts"].clone()), (json!([place]), json!([{"account": "1.0.1", "documents": 1}])), "a document's own address lists it alone");
+    let elsewhere = shell.call("places", &json!({"session": session, "opts": {"under": "1.0.9"}})).unwrap();
+    assert_eq!((elsewhere["docs"].clone(), elsewhere["counts"].clone()), (json!([]), json!([])));
+    let refused = shell.call("places", &json!({"session": session, "board": "b-elsewhere"})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board")), "a session lists its own board");
     shell.shutdown();
     sd.shutdown();
 }

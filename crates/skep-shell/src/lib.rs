@@ -2,11 +2,12 @@
 //!
 //! The bridge of `client.md` §4b — "the contract between the bundled app's
 //! shell and its page" — as a library over `skep-client`: [`Shell`] answers
-//! every call of §4b.1 through ONE DOOR, [`Shell::call`], which logs each,
-//! and pushes every event of §4b.2 on one stream; and the three things the
-//! library does not hold and every shell needs are written here once, so
-//! the dev provider (`skep-dev serve`) and the desktop shell share them and
-//! rewrite the transport alone. A transport reaches the crate through this
+//! every call of §4b.1, and `places`, the document index's listing (A-255),
+//! through ONE DOOR, [`Shell::call`], which logs each, and pushes every
+//! event of §4b.2 on one stream; and the three things the library does not
+//! hold and every shell needs are written here once, so the dev provider
+//! (`skep-dev serve`) and the desktop shell share them and rewrite the
+//! transport alone. A transport reaches the crate through this
 //! root — [`Shell`] and what opens it, [`Refusal`] and its [`Name`], [`Log`]
 //! and its [`CallOutcome`], [`Event`] and its [`EventName`] (an
 //! [`UnknownEventName`] where a spelling names none), [`Talk`], [`CALLS`] —
@@ -84,20 +85,22 @@
 //!   waiting read, the published feed read from the head the board first
 //!   answers with, the `/changes` pages re-read to the head by one reader
 //!   for the `feed` events, the `index`, `mode` and `daemon` events as the
-//!   state moves, and the bridge's `search` call answered off it; it also
+//!   state moves, and the bridge's two calls over the index — `search` and
+//!   the listing `places` — answered off it; it also
 //!   hands each tick's `/health` read to the hold, which reads its
 //!   `writes.halted`, and runs THE PROBE on a deadline of its own and at a
 //!   hand-over.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, or signed with a dev key), and one private
-//!   method per §4b.1 row behind [`Shell::call`], whose dispatch the
-//!   compiler holds to one arm per call — the ten ceremonial rows in its
-//!   child `ceremony` — each row taking and answering values shaped
-//!   exactly as the row's columns — an argument of another form refused,
-//!   never read as absent; [`Shell::fetch`] is public beside it because it
-//!   streams, and logs its own call. Dropping a shell stops it: no feed
-//!   thread, open session or `held/<chain>/` lock of it outlives it, and
-//!   each board's `/events` reader, asked to stop, ends at its next read.
+//!   method per §4b.1 row, and per `places`, behind [`Shell::call`], whose
+//!   dispatch the compiler holds to one arm per call — the ten ceremonial
+//!   rows in its child `ceremony` — each row taking and answering values
+//!   shaped exactly as the row's columns — an argument of another form
+//!   refused, never read as absent; [`Shell::fetch`] is public beside it
+//!   because it streams, and logs its own call. Dropping a shell stops it:
+//!   no feed thread, open session or `held/<chain>/` lock of it outlives
+//!   it, and each board's `/events` reader, asked to stop, ends at its next
+//!   read.
 //! * [`shapes`] — THE DECLARATIONS: [`shapes::declarations`], a TypeScript
 //!   declaration file for every value that crosses the bridge, pinned by a
 //!   test that round-trips each type's JSON against the declared fields.

@@ -9,14 +9,15 @@
 //! the wire undialed and reading the board its reference or its origin
 //! names, the reference first and the target before the frame; a search's
 //! `opts` read as one value, and its query held to the shell's bound at
-//! every target; a `select` of two keys or none refused by its name, a
+//! every target; a listing where no index stands its whole shape with no
+//! document; a `select` of two keys or none refused by its name, a
 //! label the box refuses `empty_label` naming its cause, and the signed
 //! mode's check naming a keyless store; a probe of an own node that does
 //! not answer `unreachable`; the shell's options printing no seed and the
 //! open's preconditions stopped loudly; every day dated as the calendar
 //! counts it; and the stop abandoning a walk that waits on the page, a walk
-//! begun after it asking the page nothing, and a search after it answered
-//! `feed_stopped`.
+//! begun after it asking the page nothing, and a search or a listing after
+//! it answered `feed_stopped`.
 
 use std::io::{Read, Write};
 
@@ -43,17 +44,19 @@ fn an_op_at_refusal_is_the_boards_verdict_under_the_wires_status() {
 }
 
 /// THE DISPATCH's NAMES: every call parses back from its own spelling, so no
-/// two calls share one; `CALLS` is those spellings in §4b.1's order; a name
-/// of no call names none, and `call` answers it `unknown_call`; and `fetch`,
-/// which streams on its transport's own route, is answered `streamed_call`
-/// through the door, whatever its arguments.
+/// two calls share one; `CALLS` is those spellings in §4b.1's order, the
+/// document index's listing `places` beside `search`; a name of no call
+/// names none, and `call` answers it `unknown_call`; and `fetch`, which
+/// streams on its transport's own route, is answered `streamed_call` through
+/// the door, whatever its arguments.
 #[test]
 fn every_call_is_named_by_its_own_spelling() {
     for call in Call::ALL {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[21]), (22, "boards", "resolve"));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[22]), (23, "boards", "resolve"));
+    assert_eq!((CALLS[19], CALLS[20]), ("search", "places"));
     assert_eq!(Call::named("verify"), None);
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
     let shell = Shell::open(ShellOptions::new(Vec::new(), dir.path().join("store"), SessionMode::Bare { principal: 1 }, talk));
@@ -104,14 +107,15 @@ fn nowhere() -> String {
 /// A PRESENT ARGUMENT OF ANOTHER FORM is refused `malformed_args` naming it,
 /// never read as absent and so never the row's default: a principal spelled
 /// as a string or past 2^53 − 1, a label, a select, a paper flag, a lost
-/// fingerprint, a search limit of another type, and an `op` naming neither
-/// form or both — each before any dial, the shell's board one nothing
-/// answers at, where a dial would answer `unreachable`, and the guest
-/// origin a listener counting every dial (the mutants that read such a
-/// member as absent act as the mode's principal, open the label box, list
-/// every key, or dial a guest read the page never asked for). A `null` is
-/// the row's default: the session opens as the mode's principal and meets
-/// the board's silence.
+/// fingerprint, a search limit of another type, a listing's `opts` of no
+/// object and its `under` of no address or of another spelling, and an `op`
+/// naming neither form or both — each before any dial, the shell's board
+/// one nothing answers at, where a dial would answer `unreachable`, and the
+/// guest origin a listener counting every dial (the mutants that read such
+/// a member as absent act as the mode's principal, open the label box, list
+/// every key or the whole index, or dial a guest read the page never asked
+/// for). A `null` is the row's default: the session opens as the mode's
+/// principal and meets the board's silence.
 #[test]
 fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
     let dir = TempDir::new().unwrap();
@@ -128,6 +132,9 @@ fn a_present_argument_of_another_form_is_refused_never_read_as_absent() {
         ("claim", json!({"board": board, "paper": "yes"}), "paper"),
         ("recover", json!({"board": board, "lost": [7]}), "lost"),
         ("search", json!({"guest": true, "board": board, "query": "x", "opts": {"limit": "5"}}), "opts.limit"),
+        ("places", json!({"guest": true, "board": board, "opts": 7}), "opts"),
+        ("places", json!({"guest": true, "board": board, "opts": {"under": 7}}), "opts.under"),
+        ("places", json!({"guest": true, "board": board, "opts": {"under": "01.0.1"}}), "opts.under"),
         ("op", json!({"origin": listener, "frame": read}), "session"),
         ("op", json!({"guest": true, "session": "s-x", "origin": listener, "frame": read}), "session"),
     ];
@@ -205,6 +212,28 @@ fn a_guest_search_reads_the_board_its_reference_or_origin_names() {
     let refused = shell.call("search", &json!({"guest": true, "origin": "not an origin", "query": "x"})).unwrap_err();
     assert_eq!(refused.name(), "not_canonical", "{refused}");
     let refused = shell.call("search", &json!({"guest": true, "query": "x"})).unwrap_err();
+    assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
+}
+
+/// A listing where no index stands is its whole shape with no document.
+///
+/// At an origin this shell holds no board at, and at its own board whose
+/// index never opened, prefix or none, the listing (A-255) is `{docs: [],
+/// counts: [], state: none}`; and the guest form naming no target is refused
+/// as `search`'s is. The mutants that answer the search's shape, or read the
+/// foreign origin as a refusal, hand the page a listing it cannot draw.
+#[test]
+fn a_listing_where_no_index_stands_is_its_whole_shape_with_no_document() {
+    let dir = TempDir::new().unwrap();
+    let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let empty = json!({"docs": [], "counts": [], "state": {"arm": "none"}});
+    for args in [json!({"guest": true, "origin": "http://127.0.0.1:9"}), json!({"guest": true, "board": board}), json!({"guest": true, "board": board, "opts": {"under": "1.0.1"}})] {
+        let listing = shell.call("places", &args).unwrap();
+        crate::shapes::assert_declared("PlacesAnswer", &listing);
+        assert_eq!(listing, empty, "{args}");
+    }
+    let refused = shell.call("places", &json!({"guest": true})).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board or origin")), "{refused}");
 }
 
@@ -566,18 +595,21 @@ fn the_signed_modes_check_names_a_keyless_store() {
     assert!(bare.check_signed_key().unwrap().is_empty(), "the bare mode's sessions sign nothing");
 }
 
-/// A SEARCH AFTER THE STOP answers `feed_stopped` at once: the board's feed
-/// thread joined, its handle's send meets no receiver, and the call is
-/// refused — never a panic at the send, never a wait (the mutant that
-/// unwraps the send panics the transport's connection thread).
+/// A search or a listing after the stop answers `feed_stopped` at once.
+///
+/// The board's feed thread is joined, its handle's send meets no receiver,
+/// and the call is refused — never a panic at the send, never a wait. The
+/// mutant that unwraps the send panics the transport's connection thread.
 #[test]
-fn a_search_after_the_stop_answers_feed_stopped() {
+fn a_search_or_a_listing_after_the_stop_answers_feed_stopped() {
     let dir = TempDir::new().unwrap();
     let (shell, _) = open_shell(&nowhere(), &dir.path().join("store"), SessionMode::Bare { principal: 1 });
     let board = shell.board_references().remove(0);
     shell.shutdown();
     let started = Instant::now();
     let refused = shell.call("search", &json!({"guest": true, "board": board, "query": "x"})).unwrap_err();
+    assert_eq!(refused.name(), "feed_stopped", "{refused}");
+    let refused = shell.call("places", &json!({"guest": true, "board": board})).unwrap_err();
     assert_eq!(refused.name(), "feed_stopped", "{refused}");
     assert!(started.elapsed() < Duration::from_secs(1), "answered at once, not after {:?}", started.elapsed());
 }

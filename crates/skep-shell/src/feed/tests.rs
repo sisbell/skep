@@ -1,14 +1,15 @@
 //! THE FEED's FENCE: the index state's ten arms and the search words as
 //! the bridge spells them — every arm, standing and mark a declared word,
-//! and the search answer built as its declarations say; THE FEED THREAD's
-//! START, one `/health` read, and a search where no index stands dialing
-//! nothing; THE OUTAGE's THREE STATES, said once and announced where no
-//! deliberate stop stands; and THE COMMIT STREAM COALESCED — the waiting
-//! tick's mark, and a board committing far faster than the feed thread
-//! reads costing it a read per turn, never a read per commit, with a search
-//! queued behind them answered after one read at most. ONE READ TO THE
-//! HEAD meeting every answer as its paging rule says, and A DRAFTS CURSOR
-//! THE RETENTION FLOOR PASSED resumed at the floor, its rows still fed.
+//! and the search answer and the listing's built as their declarations say;
+//! THE FEED THREAD's START, one `/health` read, and a search or a listing
+//! where no index stands dialing nothing; THE OUTAGE's THREE STATES, said
+//! once and announced where no deliberate stop stands; and THE COMMIT
+//! STREAM COALESCED — the waiting tick's mark, and a board committing far
+//! faster than the feed thread reads costing it a read per turn, never a
+//! read per commit, with a search queued behind them answered after one
+//! read at most. ONE READ TO THE HEAD meeting every answer as its paging
+//! rule says, and A DRAFTS CURSOR THE RETENTION FLOOR PASSED resumed at the
+//! floor, its rows still fed.
 
 use std::io::{self, Read};
 use std::sync::atomic::AtomicUsize;
@@ -164,6 +165,39 @@ fn the_search_answer_is_built_as_its_declarations_say() {
     }
     crate::shapes::assert_declared("Matched", &hit["matched"][0]);
     crate::shapes::assert_declared("Place", &answer["places"][0]);
+}
+
+/// The listing's answer is built as its declarations say (A-255).
+///
+/// An edition with its label, a draft held under a departed grant and an
+/// edition with none are held member by member to `PlacesAnswer`, `Place`
+/// and `AccountCount`, the counts in address order — `1.0.9` before
+/// `1.0.10`, which their spelling's order would reverse. The mutant that
+/// spells the counts as an object, or sorts them as text, hands the page an
+/// order its plane cannot draw.
+#[test]
+fn the_places_answer_is_built_as_its_declarations_say() {
+    let address = |text: &str| skep_client::address::parse_address(text).unwrap();
+    let held = Standing::Held { kind: GrantKind::Named, rung: Rung::Document, issuer: address("1.0.10") };
+    let docs = vec![
+        Place { doc: address("1.0.9.0.1"), kind: Kind::Edition, label: Some("a first line".into()), standing: Standing::Public },
+        Place { doc: address("1.0.10.0.1"), kind: Kind::Draft, label: Some("held words".into()), standing: held },
+        Place { doc: address("1.0.10.0.2"), kind: Kind::Edition, label: None, standing: Standing::Public },
+    ];
+    let counts = BTreeMap::from([(address("1.0.10"), 2), (address("1.0.9"), 1)]);
+    let answer = places_answer_json(&PlacesAnswer { docs, counts, state: State::Complete { as_of: 7, floor: None } });
+    crate::shapes::assert_declared("PlacesAnswer", &answer);
+    let docs = answer["docs"].as_array().expect("the listed documents");
+    assert_eq!(docs.len(), 3);
+    for place in docs {
+        crate::shapes::assert_declared("Place", place);
+    }
+    assert_eq!(docs[1]["standing"], json!({"held": {"kind": "named", "rung": "document", "issuer": "1.0.10"}}));
+    for count in answer["counts"].as_array().expect("the counts") {
+        crate::shapes::assert_declared("AccountCount", count);
+    }
+    assert_eq!(answer["counts"], json!([{"account": "1.0.9", "documents": 1}, {"account": "1.0.10", "documents": 2}]), "in address order");
+    assert_eq!(answer["state"]["arm"], "complete");
 }
 
 /// A `feed` update's class spells S-24 (b)'s two words: `published` for a
@@ -382,14 +416,16 @@ impl Dialer for Unopenable {
     }
 }
 
-/// A SEARCH DIALS NOTHING WHERE NO INDEX STANDS (§4b.1's `search` row:
-/// "PURE LOCAL: no board read on the call's path"): the feed thread's start
-/// tries the index once and the board does not answer, and a guest search
-/// after it answers `state: none` with no dial of its own (the mutant that
-/// opens the index on the call's path reads the board's head again, a
-/// connect timeout on every keystroke while the board is down).
+/// A search or a listing dials nothing where no index stands (§4b.1).
+///
+/// The `search` row says "PURE LOCAL: no board read on the call's path".
+/// The feed thread's start tries the index once and the board does not
+/// answer; a guest search after it answers `state: none`, and a listing the
+/// whole shape with no document, each with no dial of its own. The mutant
+/// that opens the index on the call's path reads the board's head again, a
+/// connect timeout on every keystroke while the board is down.
 #[test]
-fn a_search_dials_nothing_where_no_index_stands() {
+fn a_search_or_a_listing_dials_nothing_where_no_index_stands() {
     let fake = Arc::new(Unopenable { op_dials: AtomicUsize::new(0) });
     let entry = entry_over(Arc::clone(&fake));
     let store = TempDir::new().unwrap();
@@ -408,11 +444,13 @@ fn a_search_dials_nothing_where_no_index_stands() {
     };
     let tried = fake.op_dials.load(Ordering::SeqCst);
     let answer = threads.feed().search(Searcher::Guest, "x", BridgeSearchOpts::default());
+    let listing = threads.feed().places(Searcher::Guest, None);
     let dials = fake.op_dials.load(Ordering::SeqCst);
     threads.stop();
     assert!(started && tried == 1, "the start tried the index once: {tried}");
     assert_eq!(answer.map(|v| v["state"]["arm"].clone()), Ok(json!("none")), "the search answers with no index");
-    assert_eq!(dials, tried, "the search dialed the board");
+    assert_eq!(listing, Ok(json!({"docs": [], "counts": [], "state": {"arm": "none"}})), "the listing answers with no index");
+    assert_eq!(dials, tried, "the search or the listing dialed the board");
 }
 
 /// A board whose history below `FLOOR` is reclaimed: a drafts read from

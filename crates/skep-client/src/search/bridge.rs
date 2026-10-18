@@ -1,7 +1,9 @@
-//! The bridge call (`client.md` §4e.5; §4b.1's `search` row).
+//! The bridge's two calls over the index (`client.md` §4e.5; A-255).
 //!
-//! It is `search(session | guest, board, query, opts) → {hits, places,
-//! state}` as a library call on the consumer.
+//! They are `search(session | guest, board, query, opts) → {hits, places,
+//! state}` (§4b.1's `search` row) and the document index's listing,
+//! `places(session | guest, board, under) → {docs, counts, state}`, each a
+//! library call on the consumer.
 //!
 //! **The query is untrusted input.** Its length is bounded at
 //! [`QUERY_BOUND`] bytes (interim) before the crate's `Query::parse` sees
@@ -25,11 +27,21 @@
 //! subtree. The crate's flags — `truncated`, `more_terms`, `fuzzy_bounded`,
 //! `positions_bounded` — are forwarded; `state` is the pair's.
 //!
-//! **Pure local.** No board read on the call's path (fact 10), and no
+//! **The listing** is the document index read whole at the call's class,
+//! as `places` is drawn (foundations §2: the far scale is "drawn from the
+//! client's index read whole", its counts per account "masked at the
+//! reader's class", A-260): every document of the published part, and of
+//! the principal's part for a session whose supplement is mounted, each
+//! with the standing a match carries, narrowed to those under a prefix
+//! where the call names one. The counts per account are tallied over the
+//! documents listed, so the two never disagree.
+//!
+//! **Pure local.** No board read on either call's path (fact 10), and no
 //! record of a search: no log line, refusal detail or panic payload of this
-//! module carries the query or a hit. Nothing in the answer names a file, a
+//! module carries the query or a hit. Nothing in an answer names a file, a
 //! path or a principal's directory.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use skep_address::{is_prefix, Address};
@@ -38,6 +50,7 @@ use skep_search::{Hit, Index, Kind, Pair, Prefix, Query, QueryOpts, RangeRecord,
 use crate::board::Token;
 
 use super::consumer::{Consumer, Mount, Slot};
+use super::places::{account_of, PlaceRecord};
 use super::state::State;
 
 /// A signed session as the search half takes it.
@@ -124,9 +137,10 @@ impl Default for SearchOpts {
     }
 }
 
-/// One of the document index's exact matches (§4e.5).
+/// One document of the document index, as a call answers it (§4e.5).
 ///
-/// It carries a standing at the document grain.
+/// It is an exact match of [`Consumer::search`] or a document of
+/// [`Consumer::places`]' listing, with a standing at the document grain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
     /// The document.
@@ -139,7 +153,7 @@ pub struct Place {
     pub standing: Standing,
 }
 
-/// The bridge call's answer.
+/// The search call's answer.
 ///
 /// It holds the crate's hits with its five facts forwarded, the shell's
 /// places, and the pair's state.
@@ -165,8 +179,24 @@ pub struct SearchAnswer {
     pub state: State,
 }
 
+/// The listing's answer (the module doc).
+///
+/// It holds every document of the document index at the call's class, the
+/// counts per account over them, and the pair's state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacesAnswer {
+    /// The documents, in address order, each once.
+    pub docs: Vec<Place>,
+    /// How many of the documents listed lie under each account (A-255).
+    ///
+    /// The accounts are in address order.
+    pub counts: BTreeMap<Address, usize>,
+    /// The state of the pair this call read.
+    pub state: State,
+}
+
 impl Consumer<'_> {
-    /// Makes the bridge call (the module doc).
+    /// Makes the search call (the module doc).
     ///
     /// A board the consumer holds no index for answers `State::None` and no
     /// hit; a held lock, or a resume left pending, `State::Busy` and no hit;
@@ -203,16 +233,7 @@ impl Consumer<'_> {
         let supplement = who.principal().and_then(|n| live.supplements.get(&n));
         let parsed = Query::parse(query);
         let query_opts = QueryOpts { offset: opts.offset, limit: opts.limit };
-        let mut places: Vec<Place> = published
-            .places
-            .matching(query)
-            .into_iter()
-            .filter_map(|doc| {
-                let record = published.places.get(doc)?;
-                let standing = if record.kind == Kind::Draft { Standing::YoursToRead } else { Standing::Public };
-                Some(Place { doc: doc.clone(), kind: record.kind, label: record.label.clone(), standing })
-            })
-            .collect();
+        let mut places: Vec<Place> = published.places.matching(query).into_iter().filter_map(|doc| Some(published_place(doc, published.places.get(doc)?))).collect();
         let answer = match supplement {
             Some(s) => match &s.slot {
                 Slot::Engine(engine) => {
@@ -220,8 +241,7 @@ impl Consumer<'_> {
                     let pair = Pair::session(&published.index, &engine.index, &engine.header.ranges, &honored);
                     for doc in engine.places.matching(query) {
                         let Some(record) = engine.places.get(doc) else { continue };
-                        let standing = standing_of(doc, &engine.header.ranges, &honored);
-                        places.push(Place { doc: doc.clone(), kind: record.kind, label: record.label.clone(), standing });
+                        places.push(principal_place(doc, record, &engine.header.ranges, &honored));
                     }
                     Index::query(pair, &parsed, &query_opts)
                 }
@@ -242,6 +262,62 @@ impl Consumer<'_> {
             state,
         })
     }
+
+    /// Lists the document index at the call's class (the module doc).
+    ///
+    /// `under`, where given, keeps the documents under that prefix alone — an
+    /// account's, or a document's own. A board the consumer holds no index
+    /// for answers `State::None` and no document; a held lock, or a resume
+    /// left pending, `State::Busy` and none; a faced file `State::NewerSkep`
+    /// and none.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the engines' lock is poisoned.
+    pub fn places(&self, who: Who<'_>, under: Option<&Address>) -> PlacesAnswer {
+        let state = self.state(who);
+        let empty = |state: State| PlacesAnswer { docs: Vec::new(), counts: BTreeMap::new(), state };
+        if matches!(state, State::None | State::Busy | State::NewerSkep { .. }) {
+            return empty(state);
+        }
+        let guard = self.mount.read().expect("the engines' lock");
+        let Mount::Live(live) = &*guard else { return empty(state) };
+        let Slot::Engine(published) = &live.published else { return empty(state) };
+        let listed = |doc: &Address| under.is_none_or(|under| is_prefix(under.tumbler(), doc.tumbler()));
+        let mut docs: Vec<Place> = published.places.docs().filter(|(doc, _)| listed(doc)).map(|(doc, record)| published_place(doc, record)).collect();
+        if let Some(s) = who.principal().and_then(|n| live.supplements.get(&n)) {
+            if let Slot::Engine(engine) = &s.slot {
+                let honored: Vec<Prefix> = s.honored.iter().map(|h| Prefix::new(h.prefix.clone())).collect();
+                let ranges = &engine.header.ranges;
+                docs.extend(engine.places.docs().filter(|(doc, _)| listed(doc)).map(|(doc, record)| principal_place(doc, record, ranges, &honored)));
+            }
+        }
+        docs.sort_by(|a, b| a.doc.cmp(&b.doc));
+        docs.dedup_by(|a, b| a.doc == b.doc);
+        let mut counts = BTreeMap::new();
+        for place in &docs {
+            if let Some(account) = account_of(&place.doc) {
+                *counts.entry(account).or_insert(0) += 1;
+            }
+        }
+        PlacesAnswer { docs, counts, state }
+    }
+}
+
+/// Returns a document of the published part as a [`Place`].
+///
+/// Its standing is `Public`, save a draft's, which is `YoursToRead`.
+fn published_place(doc: &Address, record: &PlaceRecord) -> Place {
+    let standing = if record.kind == Kind::Draft { Standing::YoursToRead } else { Standing::Public };
+    Place { doc: doc.clone(), kind: record.kind, label: record.label.clone(), standing }
+}
+
+/// Returns a document of a principal's part as a [`Place`].
+///
+/// Its standing is `standing_of`'s, over the supplement's header ranges and
+/// its honored set.
+fn principal_place(doc: &Address, record: &PlaceRecord, ranges: &[RangeRecord], honored: &[Prefix]) -> Place {
+    Place { doc: doc.clone(), kind: record.kind, label: record.label.clone(), standing: standing_of(doc, ranges, honored) }
 }
 
 /// Returns a document's standing at the document grain.

@@ -15,7 +15,8 @@ readme = "README.md"
 [dependencies]
 # The library every acting client embeds, its `search` feature on: the
 # shell's half of search — the feed consumer, the index directory, the
-# bridge call and the state event's ten arms — is what `feed` consumes,
+# bridge's two calls over the index (the search and the document index's
+# listing) and the state event's ten arms — is what `feed` consumes,
 # `shell`'s `search` row reading the call's bound and options beside it.
 # `acting` (default on) holds the store, the signer, the person seam and
 # the walks.

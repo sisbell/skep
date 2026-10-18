@@ -178,7 +178,8 @@ pub(crate) const SILENCE_BOUND: Duration = Duration::from_secs(30);
 /// Every method but `close` takes `&self`: the mutating ones — `poll`,
 /// `widen`, `narrow`, `reindex`, `forget`, `save` — serialize on one feed
 /// mutex, the one writer, and may be called from the shell's feed thread;
-/// `search` and `state` read under the engines' read side from any thread.
+/// `search`, `places`, `state` and `counts` read under the engines' read
+/// side from any thread.
 pub struct Consumer<'b> {
     board: &'b Board,
     dir: SearchDir,
@@ -1823,10 +1824,10 @@ impl<'b> Consumer<'b> {
         }
     }
 
-    /// Returns the counts per account the plane reads (A-255).
+    /// Returns the counts per account at the call's class (A-255).
     ///
-    /// They are at the call's class: the published part's, with the
-    /// principal's part's added for a session whose supplement is mounted.
+    /// They are the published part's, with the principal's part's added for
+    /// a session whose supplement is mounted.
     ///
     /// # Panics
     ///

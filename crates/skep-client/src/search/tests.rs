@@ -30,7 +30,7 @@ use super::directory::{BoardDir, SearchDir};
 use super::jump::{land, landing_of, Correspondence, Landing};
 use super::places::{PlaceRecord, Places};
 use super::state::{Facts, Lost, Newer, Part, Range, State};
-use super::{events, Consumer, QueryTooLong, SearchDir as _SearchDir, SearchOpts, SessionRef, Who, QUERY_BOUND};
+use super::{events, Consumer, Place, PlacesAnswer, QueryTooLong, SearchDir as _SearchDir, SearchOpts, SessionRef, Who, QUERY_BOUND};
 
 // ── THE SCRIPTED BOARD ───────────────────────────────────────────────────
 
@@ -468,6 +468,7 @@ fn an_unclaimed_board_mounts_nothing_and_answers_none_until_the_claim_lands() {
     assert!(!dir.root().exists(), "no directory for an unclaimed board");
     let answer = consumer.search(Who::Guest, "anything", &SearchOpts::default()).unwrap();
     assert!(answer.hits.is_empty() && answer.places.is_empty() && answer.state == State::None);
+    assert_eq!(consumer.places(Who::Guest, None), PlacesAnswer { docs: Vec::new(), counts: BTreeMap::new(), state: State::None }, "no listing without an index");
     *world.lock().unwrap() = World::claimed();
     world.lock().unwrap().publish("1.0.1.0.2", "the claim landed");
     consumer.poll().expect("polls");
@@ -1152,6 +1153,7 @@ fn a_discovered_grant_widens_a_range_and_its_revocation_leaves_the_hit_held_with
     let answer = consumer.search(who, "granted words", &SearchOpts::default()).unwrap();
     assert_eq!(answer.hits[0].standing, held, "the hit stands, marked Held with the departed grant's cell");
     assert_eq!(answer.places[0].standing, held, "the place at the document grain");
+    assert_eq!(consumer.places(who, Some(&addr("1.0.2.0.5"))).docs[0].standing, held, "and the listed document");
     let answer = consumer.search(who, "universal", &SearchOpts::default()).unwrap();
     assert_eq!(answer.hits[0].standing, Standing::Held { kind: GrantKind::AnyPrincipal, rung: Rung::Account, issuer: addr("1.0.3") });
     consumer.save().unwrap();
@@ -1182,6 +1184,7 @@ fn narrow_unmounts_the_supplement_keeps_its_file_and_a_re_widening_resumes_from_
     assert!(hits(&consumer, who, "draft").is_empty(), "the published index alone");
     assert_eq!(hits(&consumer, who, "published"), ["1.0.1.0.2"]);
     assert!(consumer.search(who, "my draft", &SearchOpts::default()).unwrap().places.is_empty(), "the principal's part retired from `places`");
+    assert!(consumer.places(who, Some(&addr(SUB_ACCOUNT))).docs.is_empty(), "and from the listing");
     let file = board_dir(consumer.dir(), &world).file(&BoardDir::supplement_name(7));
     assert!(file.is_file(), "the file stays");
     dialer.clear();
@@ -1260,6 +1263,54 @@ fn the_query_is_bounded_at_1024_bytes_the_refusal_echoes_nothing_and_the_call_di
     let exact = "n".repeat(QUERY_BOUND);
     assert!(consumer.search(Who::Guest, &exact, &SearchOpts::default()).is_ok(), "the bound admits 1,024 bytes");
     assert_eq!(hits(&consumer, Who::Guest, "needle"), ["1.0.1.0.2"]);
+    assert!(dialer.lines().is_empty(), "no board read on the call's path: {:?}", dialer.lines());
+}
+
+/// The listing is every document of the parts the call reads (A-255).
+///
+/// Foundations §2's far scale is "drawn from the client's index read
+/// whole", its counts per account "masked at the reader's class" (A-260),
+/// as `places` is drawn at the call's class (§4e.5). The listing holds every
+/// document of the parts the call reads — the guest's no draft, a session's
+/// the guest's and its own part's — in address order, each the place a
+/// match of its address answers; its counts are tallied over the documents
+/// listed, a prefix narrows both, and the call dials nothing.
+#[test]
+fn the_listing_is_every_document_of_the_parts_at_the_calls_class() {
+    let mut w = World::claimed();
+    w.publish("1.0.1.0.2", "alpha\nbeta");
+    w.publish("1.0.2.0.1", "elsewhere");
+    w.draft("1.0.1.2.0.1", b"my draft\nbody");
+    let world = shared(w);
+    let (b, dialer) = board(&world);
+    let tmp = tempfile::tempdir().unwrap();
+    let consumer = Consumer::open(&b, SearchDir::new(tmp.path())).unwrap();
+    consumer.poll().unwrap();
+    let tok = token();
+    consumer.widen(session(&tok)).unwrap();
+    let who = Who::Session(session(&tok));
+    dialer.clear();
+    let docs = |answer: &PlacesAnswer| answer.docs.iter().map(|p| p.doc.to_string()).collect::<Vec<_>>();
+    let counts = |pairs: &[(&str, usize)]| pairs.iter().map(|(account, n)| (addr(account), *n)).collect::<BTreeMap<_, _>>();
+    let guest = consumer.places(Who::Guest, None);
+    assert_eq!(docs(&guest), ["1.0.1.0.1", "1.0.1.0.2", "1.0.2.0.1", HEAD_DOCUMENT], "the published part alone, in address order");
+    assert_eq!(guest.counts, counts(&[("1.0.1", 2), ("1.0.2", 1), ("1.1.0.1", 1)]));
+    assert_eq!(guest.state, consumer.state(Who::Guest));
+    let own = consumer.places(who, None);
+    assert_eq!(docs(&own), ["1.0.1.0.1", "1.0.1.0.2", "1.0.1.2.0.1", "1.0.2.0.1", HEAD_DOCUMENT], "the published part and the principal's");
+    assert_eq!(own.counts, counts(&[("1.0.1", 2), ("1.0.1.2", 1), ("1.0.2", 1), ("1.1.0.1", 1)]));
+    assert_eq!(own.state, consumer.state(who));
+    let draft = Place { doc: addr("1.0.1.2.0.1"), kind: Kind::Draft, label: Some("my draft".into()), standing: Standing::YoursToRead };
+    assert_eq!(own.docs[2], draft);
+    assert!(guest.docs.iter().all(|p| p.kind == Kind::Edition && p.standing == Standing::Public), "{:?}", guest.docs);
+    for place in &own.docs {
+        let matched = consumer.search(who, &place.doc.to_string(), &SearchOpts::default()).unwrap().places;
+        assert_eq!(matched.iter().find(|m| m.doc == place.doc), Some(place), "the listed place is the match of its address");
+    }
+    let under = |prefix: &str| consumer.places(who, Some(&addr(prefix)));
+    assert_eq!((docs(&under("1.0.1")), under("1.0.1").counts), (vec!["1.0.1.0.1".to_string(), "1.0.1.0.2".into(), "1.0.1.2.0.1".into()], counts(&[("1.0.1", 2), ("1.0.1.2", 1)])));
+    assert_eq!((under("1.0.1.2.0.1").docs, under("1.0.1.2.0.1").counts), (vec![draft], counts(&[("1.0.1.2", 1)])), "a document's own address lists it alone");
+    assert!(under("1.0.9").docs.is_empty() && under("1.0.9").counts.is_empty());
     assert!(dialer.lines().is_empty(), "no board read on the call's path: {:?}", dialer.lines());
 }
 

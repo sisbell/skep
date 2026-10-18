@@ -75,7 +75,8 @@ recorded.
 
 `skep-dev serve` is THE DEV PROVIDER: the shell's core (`skep-shell`)
 served to a page in a browser over loopback HTTP and server-sent events —
-`POST /bridge/<call>` for the twenty-two calls of `client.md` §4b.1
+`POST /bridge/<call>` for the twenty-three calls of `skep-shell`'s `CALLS`,
+`client.md` §4b.1's twenty-two and `places`, the document index's listing
 (`{result}` or `{refused}` back, HTTP 200 either way; a 4xx is the
 provider's own refusal), `GET /bridge/events` for the seven events of
 §4b.2 (`event:` and `data:` lines, a `:ka` comment every fifteen seconds),

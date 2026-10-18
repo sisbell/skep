@@ -34,8 +34,8 @@ only those above it (held by `tests/it/tidy.rs`):
 | `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones, and the NATIVE statements (`NATIVE_RULES`), sent to the dev arm |
 | `sessions` | `Sessions`, the session table: each session's token beside the board it stands at, the two openings, the attest a session's key signs, a session's end run once whichever caller met the death signal, under the key store the table holds, and a leaving session's drafts supplement released to another of its principal |
 | `hold` | `Holds`: the one path of every `/op` under a session (`Holds::send`) — a burst's door (`Burst::admit`) and its hold among it — each answer read through the classification table (`classify`), and the per-(board, principal) queue over `held`'s file; `hold/resend.rs`, the probe and the resend walk, its lines sent in `k` order across the documents |
-| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call, the held-burst probe on its cadence |
-| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; `shell/ceremony.rs`, the ten ceremonial rows |
+| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call and the document index's listing `places`, the held-burst probe on its cadence |
+| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row — and per `places`, the document index's listing at the call's class (A-255) — behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; `shell/ceremony.rs`, the ten ceremonial rows |
 | `shapes` | `declarations()`, the TypeScript declaration file for every value that crosses the bridge, pinned by a round-trip of each type's sample |
 
 ## The `feed` update's shape

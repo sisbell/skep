@@ -252,8 +252,9 @@ foundation and on the stores above it.
   `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
-  record, ruled P-1 … P-12): the bridge's twenty-two calls and seven
-  events over `skep-client`, the board and session references the page is
+  record, ruled P-1 … P-12): the bridge's twenty-three calls — §4b.1's
+  twenty-two and the document index's listing — and seven events over
+  `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC
   moments to the page and answers SECRET and CONSENT ones from a dev arm,
   the feed thread per board, the attest a signed session composes for the
@@ -1160,9 +1161,11 @@ each ceremony:
   stream as the loop's input; `search/places.rs` the document index's one
   part, a file per part beside its index (P39); `search/state.rs` the
   state event's ten arms as a typed enum and their one composition order;
-  `search/bridge.rs` the bridge call — the query's bound, the pair by
-  role, `places` at the call's class with a standing at the document
-  grain; `search/jump.rs` the landing rule over a `compare` answer's pairs
+  `search/bridge.rs` the bridge's two calls — the search, with the
+  query's bound, the pair by role, `places` at the call's class with a
+  standing at the document grain, and the document index's listing at the
+  same class, its counts per account over the documents listed (A-255);
+  `search/jump.rs` the landing rule over a `compare` answer's pairs
   — its unit suite in `search/tests.rs` over a scripted board, its
   daemon suites in `tests/it/search/`.
 - Under `merge` (default off; the design's merge record,
@@ -1241,8 +1244,8 @@ Rules that hold across its files:
   index** (`search.md` §4, §5.6). The `Consumer` is the one writer of a
   board's directory — the feeder's `flock` for its life, a second process
   refused as busy — and its mutating calls serialize on one feed mutex,
-  while `search` and `state` read under the read side of the one
-  read-write lock around the engines: `prepare` outside it, `merge` under
+  while `search`, `places` and `state` read under the read side of the
+  one read-write lock around the engines: `prepare` outside it, `merge` under
   the write side, `compacted` under the read side then `install` under the
   write side. The published index is fed by token-free reads alone and a
   supplement by its session's, so the crate's class check never fires; a
@@ -1277,11 +1280,12 @@ served; the search module's over a scripted board of its own
 ## The shell's core, `skep-shell`
 
 `skep-shell` is the bridge of `client.md` §4b as a library — one method
-per call of §4b.1, every event of §4b.2 on one stream — and the three
-things `skep-client` does not hold and every shell needs, written once so
-the dev provider (`skep-dev serve`) and the desktop shell share them and
-rewrite the transport alone (the dev provider record §2.2, §6; ruled P-1
-(B), P-2 (B1)). A transport reaches it through the crate root — `Shell` and
+per call of §4b.1 and of the document index's listing `places` (A-255),
+every event of §4b.2 on one stream — and the three things `skep-client`
+does not hold and every shell needs, written once so the dev provider
+(`skep-dev serve`) and the desktop shell share them and rewrite the
+transport alone (the dev provider record §2.2, §6; ruled P-1 (B), P-2
+(B1)). A transport reaches it through the crate root — `Shell` and
 what opens it, `Refusal` and its `Name`, `Log` and its `CallOutcome`,
 `Event`, its `EventName` and `UnknownEventName`, `Talk`, `CALLS` — and two
 public modules, `script` and `shapes`; the rest is private. Its modules,
@@ -1336,8 +1340,8 @@ an item the root re-exports counted as the module it is brought from
   through the hold's one reader.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder` — the `feed`, `index`, `mode` and
-  `daemon` events, the `search` call, the held-burst probe on its cadence
-  and at every hand-over.
+  `daemon` events, the `search` call and the document index's listing
+  `places`, the held-burst probe on its cadence and at every hand-over.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the private
   row methods behind `call`, which logs each; `fetch`, `answer`, `cancel`,
   `shutdown`; `ShellOptions` and `set_node_state`.
@@ -1767,13 +1771,14 @@ short resumes, the refusals halt before any write, the insert frame the
 seed shares with the search budgets is one size, and a `--bin skep` build
 yields one binary; `serve`, the dev provider driven as the page would
 drive it over loopback HTTP with the admission headers — every call of
-`client.md` §4b.1 in the bare mode, the events on the stream, the claim's
-PUBLIC moments answered and cancelled through the bridge, the admission's
-refusals before any dial, the signed mode's attested publish-class write,
-the fault doors under `dev-hooks`, the isolation of the shipped builds
-from `skepd`, the declarations served, and the conformance of the crate
-and the provider over one sequence; and `tidy`, the arrangement above
-over both roots, read off the source. `common` holds the spawn — alone,
+`client.md` §4b.1 and the document index's listing in the bare mode, the
+events on the stream, the claim's PUBLIC moments answered and cancelled
+through the bridge, the admission's refusals before any dial, the signed
+mode's attested publish-class write, the fault doors under `dev-hooks`,
+the isolation of the shipped builds from `skepd`, the declarations served,
+and the conformance of the crate and the provider over one sequence; and
+`tidy`, the arrangement above over both roots, read off the source.
+`common` holds the spawn — alone,
 or behind a tap that keeps what a client put on the wire — a canned board
 that answers whatever bytes a test chose, and the runs, every setting's
 variable (`VARIABLES`, the one list `tidy` holds `src/args.rs` to) and

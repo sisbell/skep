@@ -85,7 +85,14 @@ const SHAPES: &[Shape] = &[
     Shape { name: "Snippet", open: false, doc: "the paragraph window around a hit's span", fields: &[req("text", "string"), req("start", "number"), req("marks", "Mark[]")] },
     Shape { name: "Mark", open: false, doc: "one mark of a snippet", fields: &[req("offset", "number"), req("len", "number"), req("kind", "{ span: true } | { term: string } | { gap: { width: number } }")] },
     Shape { name: "Matched", open: false, doc: "a query word matched by one edit", fields: &[req("word", "string"), req("term", "string")] },
-    Shape { name: "Place", open: false, doc: "one exact address or label match of the document index", fields: &[req("doc", "string"), req("kind", "'edition' | 'draft'"), req("label", "string | null"), req("standing", "Standing")] },
+    Shape { name: "Place", open: false, doc: "one document of the document index — an exact address or label match `search` answers, or a document `places` lists", fields: &[req("doc", "string"), req("kind", "'edition' | 'draft'"), req("label", "string | null"), req("standing", "Standing")] },
+    Shape {
+        name: "PlacesAnswer",
+        open: false,
+        doc: "`places(…)` — every document of the board's document index at the call's class, in address order, under `opts.under` where given; the counts per account over them; the pair's state",
+        fields: &[req("docs", "Place[]"), req("counts", "AccountCount[]"), req("state", "IndexState")],
+    },
+    Shape { name: "AccountCount", open: false, doc: "how many of a listing's documents lie under one account, the counts in address order", fields: &[req("account", "string"), req("documents", "number")] },
     Shape { name: "RefusedByBoard", open: false, doc: "a refusal: the board's own verdict, verbatim", fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("body", "unknown")] },
     Shape { name: "HaltFace", open: false, doc: "a refusal: a halt's face under the armed name", fields: &[req("kind", "'halt'"), req("name", "string"), req("state", "string"), req("cause", "string"), req("act", "string")] },
     Shape { name: "BlockedFace", open: false, doc: "a refusal: the block", fields: &[req("kind", "'blocked'"), req("name", "'blocked'"), req("record", "string"), req("named_by", "string"), req("ground", "string | null")] },
@@ -181,6 +188,11 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
         ],
         result: "SearchAnswer",
     },
+    CallRow {
+        name: "places",
+        forms: &[&[req("session", "string"), opt("board", "string"), opt("opts", "PlacesOpts")], &[req("guest", "true"), opt("board", "string"), opt("origin", "string"), opt("opts", "PlacesOpts")]],
+        result: "PlacesAnswer",
+    },
     CallRow { name: "held", forms: &[&[req("session", "string")]], result: "HeldRow[]" },
     CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
 ];
@@ -208,6 +220,7 @@ pub fn declarations() -> String {
     out.push_str("export type Empty = Record<string, never>;\n");
     out.push_str("export type Standing = 'public' | 'yours_to_read' | { held: { kind: 'named' | 'any_principal'; rung: 'document' | 'account'; issuer: string } };\n");
     out.push_str("export interface SearchOpts { limit?: number; offset?: number; reindex?: boolean }\n");
+    out.push_str("export interface PlacesOpts { under?: string }\n");
     out.push_str("export type Refusal = RefusedByBoard | HaltFace | BlockedFace | Unreachable | ShellRefusal;\n");
     out.push_str("export type Outcome<T> = { result: T } | { refused: Refusal };\n");
     let event_names: Vec<String> = EventName::ALL.iter().map(|name| format!("'{name}'")).collect();
@@ -223,7 +236,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1, and the document index's listing `places`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

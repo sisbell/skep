@@ -1,15 +1,15 @@
 //! The shell's half of search (`client.md` §4e), behind the `search` feature.
 //!
 //! It is what the design gives the embedder of `skep-search` and the index
-//! crate does not hold — "The shell owns three things the crate does not:
-//! the index's directory (§4e.4), its feed consumer (§4e.2) and the bridge's
-//! one call and one event (§4e.5)". The feature is off by default, as `tls`
-//! is, so the default build of this library holds no feed consumer and
-//! makes none of its content reads — `client.md` §1.1's "no `/changes` feed
-//! consumer" true of it as written — and the shell, skep-shell, turns it on,
-//! as §7 has the shell turn `tls` on ("`tls` on in the shell"). Everything
-//! here is a library API an embedder calls, and nothing assumes a page or a
-//! webview.
+//! crate does not hold: the index's directory (§4e.4), its feed consumer
+//! (§4e.2), and the bridge's calls over it — §4e.5's search with the state
+//! its event carries, and the document index's listing (A-255; foundations
+//! §2). The feature is off by default, as `tls` is, so the default build of
+//! this library holds no feed consumer and makes none of its content reads
+//! — `client.md` §1.1's "no `/changes` feed consumer" true of it as written
+//! — and the shell, skep-shell, turns it on, as §7 has the shell turn `tls`
+//! on ("`tls` on in the shell"). Everything here is a library API an
+//! embedder calls, and nothing assumes a page or a webview.
 //!
 //! The parts, each under the design rule it realizes:
 //!
@@ -36,12 +36,15 @@
 //! * [`state`] — [`State`], the `index` event's ten arms as a typed enum
 //!   (§4b.2): positions, units, bytes, ranges, a version — never a UI
 //!   string; the words are the UX's.
-//! * [`bridge`] — the bridge call (§4e.5): `search(session | guest, query,
-//!   opts) → {hits, places, state}` — the query length-bounded before the
-//!   crate's grammar sees it, the pair composed by role with the
-//!   supplement's header ranges and the honored set, `places` drawn at the
-//!   call's class with a standing at the document grain, the crate's flags
-//!   forwarded, the state the pair's.
+//! * [`bridge`] — the bridge's two calls (§4e.5; A-255): `search(session |
+//!   guest, query, opts) → {hits, places, state}` — the query
+//!   length-bounded before the crate's grammar sees it, the pair composed by
+//!   role with the supplement's header ranges and the honored set, `places`
+//!   drawn at the call's class with a standing at the document grain, the
+//!   crate's flags forwarded, the state the pair's — and the listing,
+//!   `places(session | guest, under) → {docs, counts, state}`, the document
+//!   index read whole at the same class, under a prefix where one is named,
+//!   its counts per account over the documents listed.
 //! * [`jump`] — the jump's landing rule (`search.md` §3.4), a pure function
 //!   over the `compare` answer's pairs: `Carried`, `Partial`, `Absent` — and
 //!   `Pinned` where the board refused the re-projection on its budgets.
@@ -61,7 +64,7 @@ pub mod state;
 #[cfg(test)]
 mod tests;
 
-pub use bridge::{Place, QueryTooLong, SearchAnswer, SearchOpts, SessionRef, Who, QUERY_BOUND};
+pub use bridge::{Place, PlacesAnswer, QueryTooLong, SearchAnswer, SearchOpts, SessionRef, Who, QUERY_BOUND};
 pub use consumer::{
     events, Consumer, Events, Orphan, Poll, Stop, MAX_DELIVERY_ITEMS, SAVE_EVERY, SAVE_EVERY_UNITS,
 };

@@ -13,15 +13,16 @@ use skep_client::search::{Range, State};
 use skep_client::DialError;
 
 use super::*;
-use crate::feed::{answer_without_index, state_json};
+use crate::feed::{answer_without_index, places_without_index, state_json};
 use crate::refusal::{Name, Refusal};
 use crate::sessions;
 
 /// One sample per declared type: the value the crate's code answers or
 /// emits for it — the refusals through `Refusal::to_value`, the search
-/// answer through `feed::answer_without_index`, the index state through
-/// `feed::state_json`, the death through `sessions`, the rest in the shape
-/// `shell`'s `json!` spells.
+/// answer through `feed::answer_without_index`, the listing through
+/// `feed::places_without_index`, the index state through `feed::state_json`,
+/// the death through `sessions`, the rest in the shape `shell`'s `json!`
+/// spells.
 fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
@@ -46,6 +47,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Mark", json!({"offset": 0, "len": 1, "kind": {"span": true}})),
         ("Matched", json!({"word": "w", "term": "t"})),
         ("Place", json!({"doc": "1.0.1.0.1", "kind": "draft", "label": null, "standing": "yours_to_read"})),
+        ("PlacesAnswer", places_without_index()),
+        ("AccountCount", json!({"account": "1.0.1", "documents": 2})),
         ("RefusedByBoard", Refusal::Board(Refused { status: 200, code: "credential_refused".into(), detail: Some("signed_session_required".into()), op: Some("publish".into()), body: json!({}) }).to_value()),
         ("HaltFace", Refusal::named(Name::NO_KEY, Face { state: "s".into(), cause: "c".into(), act: "a".into() }).to_value()),
         ("BlockedFace", Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }).to_value()),
@@ -95,11 +98,12 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
     }
 }
 
-/// The file names every shape, every call of §4b.1 — its rows the
-/// dispatch's calls, in the dispatch's order, each form of a row's argument
-/// object its members in their order, the forms joined as a union and a
-/// form of no member `{}` — both answers and the seven events; a field's
-/// optionality renders as `?`, as the field spells itself.
+/// The file names every shape, every call of §4b.1 and the document index's
+/// listing — its rows the dispatch's calls, in the dispatch's order, each
+/// form of a row's argument object its members in their order, the forms
+/// joined as a union and a form of no member `{}` — both answers and the
+/// seven events; a field's optionality renders as `?`, as the field spells
+/// itself.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
     assert_eq!([req("position", "number").to_string(), opt("warning", "string").to_string()], ["position: number", "warning?: string"], "a field spells itself as the declarations spell it");
@@ -110,12 +114,14 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", row.name)), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 22, "the twenty-two calls");
+    assert_eq!(CALL_ROWS.len(), 23, "the twenty-three calls: §4b.1's and the document index's listing");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
         "  op(args: { session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
+        "  places(args: { session: string; board?: string; opts?: PlacesOpts } | { guest: true; board?: string; origin?: string; opts?: PlacesOpts }): Promise<Outcome<PlacesAnswer>>;\n",
+        "export interface PlacesOpts { under?: string }\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }

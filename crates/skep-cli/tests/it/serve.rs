@@ -1,10 +1,11 @@
 //! THE DEV PROVIDER's FENCE: `skep-dev serve` driven through argv against
 //! boards the suite spawns in-process, the suite standing in for the page
 //! over loopback HTTP with the admission headers. F1 every call of
-//! `client.md` §4b.1 in the bare mode — the reads and the draft write
-//! acked, the publish-class write refused `signed_session_required`
-//! verbatim, the three guest forms, `keygen` and `fingerprint`, `search`,
-//! the ceremonial calls to their first refusal, the stale session and the
+//! `client.md` §4b.1 and the document index's listing in the bare mode —
+//! the reads and the draft write acked, the publish-class write refused
+//! `signed_session_required` verbatim, the three guest forms, `keygen` and
+//! `fingerprint`, `search` and `places`, the ceremonial calls to their
+//! first refusal, the stale session and the
 //! foreign board, the token in no answer and no event, the log listing
 //! every call; F2 the events — `feed` with the board reference and the
 //! entry, `index`, `mode` at a claim's landing, `session-died` on `close`
@@ -463,6 +464,14 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     let guest_search = keep(provider.result("search", json!({"guest": true, "board": board, "query": "hello"})));
     assert!(guest_search["hits"].is_array());
     assert_eq!(keep(provider.refused("search", json!({"session": session, "query": "x".repeat(1025)})))["name"], "query_too_long");
+    // places, the document index's listing: the session form and the guest
+    // form under the claimant's account, which lists no draft.
+    let listed = keep(provider.result("places", json!({"session": session})));
+    assert!(listed["docs"].is_array() && listed["counts"].is_array() && listed["state"]["arm"].is_string(), "{listed}");
+    let guest_listed = keep(provider.result("places", json!({"guest": true, "board": board, "opts": {"under": "1.0.1"}})));
+    assert!(guest_listed["docs"].as_array().unwrap().iter().all(|p| p["kind"] == "edition"), "{guest_listed}");
+    let not_an_address = keep(provider.refused("places", json!({"guest": true, "board": board, "opts": {"under": "not an address"}})));
+    assert_eq!((not_an_address["name"].as_str(), not_an_address["what"].as_str()), (Some("malformed_args"), Some("opts.under")), "{not_an_address}");
     // held and resolve: no burst is held on this up board, so `held` is empty
     // and `resolve` of an ordinal that does not stand is `no_such_held`.
     assert_eq!(keep(provider.result("held", json!({"session": session}))), json!([]));
@@ -515,7 +524,7 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     assert_eq!(status, 200);
     let log: Value = serde_json::from_slice(&body).unwrap();
     let calls: Vec<&str> = log.as_array().unwrap().iter().filter(|e| e["kind"] == "call").filter_map(|e| e["call"].as_str()).collect();
-    for name in ["boards", "health", "probe", "session", "op", "keygen", "fingerprint", "search", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "fetch", "close"] {
+    for name in ["boards", "health", "probe", "session", "op", "keygen", "fingerprint", "search", "places", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "fetch", "close"] {
         assert!(calls.contains(&name), "the log lists {name}: {calls:?}");
     }
     assert!(log.as_array().unwrap().iter().any(|e| e["kind"] == "dial" && e["path"] == "/op"), "the dials are logged");

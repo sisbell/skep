@@ -1,11 +1,13 @@
-//! §B Entity operations — *transact-wrapped*: M3 drives the transaction
-//! (called by M10). Each op opens ONE M2 `transact`, evaluates its race-prone
-//! gates inside the closure against `stg.base().m3()` under the held locks
-//! (§6/§8), mints off `stg.working().m3()`, stages its [`M3Rec`] deltas
-//! lifted via the `W::Record: From<M3Rec>` bound, and returns
-//! `(Address, Seq)` — the new address plus `transact`'s committed `last_seq`
-//! (the linearization coordinate) — only after commit
-//! (commit-before-acknowledge).
+//! §B Entity operations — *transact-wrapped*: M3 drives the transaction.
+//!
+//! M10 calls them. Each op opens one M2 `transact`, evaluates its race-prone
+//! gates inside the closure under the held locks (§6/§8) — against
+//! `stg.base().m3()`, or for `delegate`'s next-form against the account
+//! mint's answer off `stg.working().m3()` — mints, where it mints, off
+//! `stg.working().m3()`, stages its [`M3Rec`] deltas lifted via the
+//! `W::Record: From<M3Rec>` bound, and returns `(Address, Seq)` — the new
+//! address plus `transact`'s committed `last_seq` (the linearization
+//! coordinate) — only after commit (commit-before-acknowledge).
 
 use std::fmt;
 
@@ -19,22 +21,23 @@ use crate::state::{
 };
 use crate::HasM3;
 
-/// M3's transact-driving op handle over M2 (§B): a thin borrow of the
-/// engine's kernel and, on an attested handle, of the attestation its two
-/// document mints commit under. The pure mints and queries live on
-/// [`M3State`] (reached through [`HasM3`]); this type owns only the four
-/// entity operations M10 dispatches.
+/// M3's transact-driving op handle over M2 (§B).
+///
+/// It is a thin borrow of the engine's kernel and, on an attested handle, of
+/// the attestation its two document mints commit under. The pure mints and
+/// queries live on [`M3State`] (reached through [`HasM3`]); this type owns
+/// only the four entity operations M10 dispatches.
 ///
 /// Two facts each op inherits from M2's `transact`, written here because they
 /// bind its callers.
 ///
-/// PRECONDITION — an op is not called from inside a `transact` closure on the
-/// same kernel: it opens a transaction of its own, and M2 answers the nested
-/// one with a panic naming that obligation. The calls exempt are those
-/// refused before any transaction opens: an op's pre-work, and `fork`'s
-/// unknown id.
+/// **Precondition.** An op is not called from inside a `transact` closure on
+/// the same kernel: it opens a transaction of its own, and M2 answers the
+/// nested one with a panic naming that obligation. The calls exempt are
+/// those refused before any transaction opens: an op's pre-work, and
+/// `fork`'s unknown id.
 ///
-/// PRECEDENCE — every `TxnError` other than `Rejected` is M2's, passed
+/// **Precedence.** Every `TxnError` other than `Rejected` is M2's, passed
 /// through unchanged, and it speaks in M2's stated order around this
 /// module's own refusals: the refusals made before any transaction opens
 /// come first — an op's pre-work, and `fork`'s unknown id, which `fork`
@@ -46,63 +49,68 @@ use crate::HasM3;
 /// and `Durability`.
 pub struct Namespace<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
-    /// THE ATTESTATION this handle's two document mints commit under (signed
-    /// ops) — [`Namespace::create_new_document`] and [`Namespace::fork`],
+    /// The attestation its two document mints commit under (signed ops).
+    ///
+    /// They are [`Namespace::create_new_document`] and [`Namespace::fork`],
     /// which opens that same transaction — the two ops of this surface in
-    /// the daemon's checked set (skepd's name for the writes an attestation
-    /// is admitted on), a mint born published signing an EMPTY body over its
-    /// parent account: handed to the kernel's `transact_attested` arm at the
-    /// one transaction each opens, filling THAT commit marker's signature
-    /// slot; `None` — the plain handle every other constructor site builds —
-    /// leaves that signature slot empty. A BORROW, so the handle stays `Copy`
-    /// and the value cannot outlive the caller that owns it; that an attested
-    /// handle serves ONE call is its producer's obligation, which
-    /// [`Namespace::attested`] states. `delegate` and `register_node` lie
-    /// outside the checked set and take the plain arm whatever this field
-    /// holds.
+    /// the daemon's checked set (skep-core's `in_checked_set`, the writes an
+    /// attestation is admitted on), a mint born published signing an empty
+    /// body over its parent account: handed to the kernel's
+    /// `transact_attested` arm at the one transaction each opens, filling
+    /// that commit marker's signature slot; `None` — the plain handle every
+    /// other constructor site builds — leaves that signature slot empty. A
+    /// borrow, so the handle stays `Copy` and the value cannot outlive the
+    /// caller that owns it; that an attested handle serves one call is its
+    /// producer's obligation, which [`Namespace::attested`] states.
+    /// `delegate` and `register_node` lie outside the checked set and take
+    /// the plain arm whatever this field holds.
     attest: Option<&'k Attestation>,
 }
 
 impl<'k, W: WorldState> Namespace<'k, W> {
-    /// Borrow the engine's kernel — the plain handle, whose transactions
-    /// commit with the signature slot EMPTY.
+    /// Returns the plain handle over the engine's kernel.
+    ///
+    /// Its transactions commit with the signature slot empty.
     pub fn new(kernel: &'k Kernel<W>) -> Namespace<'k, W> {
         Namespace::attested(kernel, None)
     }
 
-    /// THE ATTESTED CONSTRUCTOR (signed ops; the attestation rides the
-    /// handle, as M5's `Vstream::attested` and M7's `LinkWriter::attested`
-    /// carry theirs): a handle whose `create_new_document` and `fork` commit
-    /// under `attest`. Its callers are the signature slot's producer set (the
-    /// signed-ops design record §5.5) — M10's dispatch, with a value the
-    /// daemon's check admitted — and nothing else; `None` is
-    /// [`Namespace::new`].
+    /// Returns a handle whose two document mints commit under `attest`.
     ///
-    /// ONE CALL PER ATTESTED HANDLE is the PRODUCER's obligation, and the type
-    /// does not hold it. An attestation signs ONE act — this principal, this
-    /// kind of mint, against this parent account, over an empty body and no
-    /// minted address — while every `create_new_document` and `fork` the
-    /// handle makes, or a copy of it makes, the handle being `Copy`, commits
-    /// under the one value it carries. A second mint by another principal, of
-    /// the other kind or into another account carries a signature over a
-    /// frame not its own, which no verifier of that entry can verify; a second
-    /// mint that matches all three frames the same bytes, so it commits an act
-    /// its principal never sent under a signature that verifies. M10's
-    /// `dispatch_write` builds one handle per call, for the one mint the
-    /// daemon's check admitted the value for.
+    /// They are `create_new_document` and `fork`: this is the attested
+    /// constructor (signed ops; the attestation rides the handle, as M5's
+    /// `Vstream::attested` and M7's `LinkWriter::attested` carry theirs). Its
+    /// callers are the signature slot's producer set (the signed-ops design
+    /// record §5.5) — M10's dispatch, with a value the daemon's check admitted
+    /// — and nothing else; `None` is [`Namespace::new`].
+    ///
+    /// **Precondition.** One call per attested handle is the producer's
+    /// obligation, and the type does not hold it. An attestation signs one
+    /// act — this principal, this kind of mint, against this parent account,
+    /// over an empty body and no minted address — while every
+    /// `create_new_document` and `fork` the handle makes, or a copy of it
+    /// makes, the handle being `Copy`, commits under the one value it carries.
+    /// A second mint by another principal, of the other kind or into another
+    /// account carries a signature over a frame not its own, which no verifier
+    /// of that entry can verify; a second mint that matches all three frames
+    /// the same bytes, so it commits an act its principal never sent under a
+    /// signature that verifies. M10's `dispatch_write` builds one handle per
+    /// call, for the one mint the daemon's check admitted the value for.
     pub fn attested(kernel: &'k Kernel<W>, attest: Option<&'k Attestation>) -> Namespace<'k, W> {
         Namespace { kernel, attest }
     }
 }
 
-/// The handle renders as what it drives and how: the kernel it borrows,
-/// whose own `Debug` reports the coordinate, the poison flag and the
-/// configuration, lock-free, and nothing of the world; and whether it carries
-/// an attestation — the one fact about the handle that changes what its two
-/// document mints commit, as M5's `Vstream` prints its own — but never the
-/// attestation's bytes, a blob as wide as M2's `MAX_SIG_BYTES` that is no
-/// thing to print into a diagnostic. Written out because a derive would also
-/// bound the impl on `W: Debug`, which no `WorldState` owes.
+/// Renders the handle as what it drives and how.
+///
+/// That is the kernel it borrows, whose own `Debug` reports the coordinate,
+/// the poison flag, the checkpoint-due flag and the configuration, lock-free,
+/// and nothing of the world; and whether it carries an attestation — the one
+/// fact about the handle that changes what its two document mints commit, as
+/// M5's `Vstream` prints its own — but never the attestation's bytes, a blob
+/// as wide as M2's `MAX_SIG_BYTES` that is no thing to print into a
+/// diagnostic. Written out because a derive would also bound the impl on
+/// `W: Debug`, which no `WorldState` owes.
 impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Namespace")
@@ -112,14 +120,16 @@ impl<W: WorldState> fmt::Debug for Namespace<'_, W> {
     }
 }
 
-/// Two borrows — the kernel and, on an attested handle, the attestation — so
-/// a copy of the handle is a copy of two references: it drives the same
+/// Copies the handle, which is two borrows.
+///
+/// They are the kernel and, on an attested handle, the attestation — so a
+/// copy of the handle is a copy of two references: it drives the same
 /// kernel and, attested, commits under the same attestation, so a copy is no
 /// handle for a second call ([`Namespace::attested`]). Written out, as
 /// `Debug` is: the derives would bound the impls on `W: Clone` / `W: Copy`,
 /// and no `WorldState` is `Copy` — the choice M5's `Vstream` and M6's `Query`
 /// make for the same reason. `Copy` holds because the handle is those borrows
-/// and nothing else; a field of its own would end it.
+/// and nothing else; a field of its own that is not `Copy` would end it.
 impl<W: WorldState> Clone for Namespace<'_, W> {
     fn clone(&self) -> Self {
         *self
@@ -131,16 +141,7 @@ impl<W: WorldState + HasM3> Namespace<'_, W>
 where
     W::Record: From<M3Rec>,
 {
-    /// Baptize a fresh empty document under `account` [ASN-0103; §7].
-    ///
-    /// Authorization is by EFFECTIVE owner ω, never bare containment (O5 —
-    /// the ownership-divergence trap): `CreateDocumentError::NotOwner` if
-    /// ω(`account`) is absent or names another principal. ω is judged inside
-    /// this op's one transaction, against the very state the document is
-    /// minted into, so no delegation of `account` lands between the
-    /// authorization and the mint. With auth passed, the structural mint gate
-    /// surfaces as `CreateDocumentError::Mint` (`NotAnAccount` covers
-    /// unregistered and non-account alike — P8).
+    /// Baptizes a fresh empty document under `account` [ASN-0103; §7].
     ///
     /// Registers d only — no M5 arrangement write (lazy — Conflicts §3). No
     /// idempotency key (identity is the address; a retried lost-ack yields a
@@ -148,32 +149,50 @@ where
     /// address and its commit `Seq` only after commit
     /// (commit-before-acknowledge).
     ///
-    /// `published` is the CREATE path's three-valued flag (PUB-8.16:
-    /// `absent | true | false`, `None` being absent), and THIS op resolves it
+    /// `published` is the create path's three-valued flag (PUB-8.16:
+    /// `absent | true | false`, `None` being absent), and this op resolves it
     /// to the bit the mint journals (PUB-7.10, PUB-8.18) — the mint applies
     /// no default of its own. The rule is PUB-8.21's empty-account rule,
     /// judged in the same transaction as the mint, so exactly one mint is
     /// ever the account's first:
     ///
-    /// | the account has documents | flag          | the bit journaled |
-    /// |---------------------------|---------------|-------------------|
-    /// | no                        | absent        | `true` — doc 1, PUB's *home*, is born published (PUB-1.17) |
-    /// | no                        | `Some(true)`  | `true` |
-    /// | no                        | `Some(false)` | `false` — minted PRIVATE, not refused here |
-    /// | yes                       | any           | `flag.unwrap_or(false)` — private by default (PUB-1.1) |
+    /// | the account has documents | flag          | the bit journaled       |
+    /// |---------------------------|---------------|-------------------------|
+    /// | no                        | absent        | `true`                  |
+    /// | no                        | `Some(true)`  | `true`                  |
+    /// | no                        | `Some(false)` | `false`                 |
+    /// | yes                       | any           | `flag.unwrap_or(false)` |
     ///
-    /// The explicit-`false` FIRST mint is refused at the DAEMON's door
-    /// (PUB-8.20; owner ruling D2c), not in this transaction — here it mints
+    /// On an empty account the flagless mint is doc 1, PUB's *home*, which is
+    /// born published (PUB-1.17), and a `Some(false)` there is minted private,
+    /// not refused here; on an account with documents the bit is private by
+    /// default (PUB-1.1).
+    ///
+    /// The explicit-`false` first mint is refused at the daemon's door
+    /// (PUB-8.20; PUB-kickoff D2c), not in this transaction — here it mints
     /// private, and no `MintError`/`CreateDocumentError` variant names it
     /// (the one departure from PUB-8.19's letter). "Has documents" is
     /// [`M3State::has_documents`], M3's own read of the account's document
     /// chain.
     ///
-    /// THE ATTESTED ARM (signed ops): the transaction commits under the
+    /// **The attested arm (signed ops).** The transaction commits under the
     /// handle's attestation where it carries one — a mint born published is
     /// a publish-class act, signed over its parent account — and with its
     /// commit marker's signature slot empty otherwise; the kernel's arm is
     /// `transact` itself under `None`.
+    ///
+    /// # Errors
+    ///
+    /// Authorization is by effective owner ω, never bare containment (O5 —
+    /// the ownership-divergence trap): `CreateDocumentError::NotOwner` if
+    /// ω(`account`) is absent or names another principal. ω is judged inside
+    /// this op's one transaction, against the very state the document is
+    /// minted into, so no delegation of `account` lands between the
+    /// authorization and the mint. With auth passed, the structural mint gate
+    /// surfaces as `CreateDocumentError::Mint` (`NotAnAccount` covers
+    /// unregistered and non-account alike — P8). Both come back as
+    /// `TxnError::Rejected`; the kernel's own failures come back as `transact`
+    /// returns them, in the order [`Namespace`] states.
     pub fn create_new_document(
         &self,
         caller: PrincipalId,
@@ -199,8 +218,8 @@ where
                 return Err(CreateDocumentError::NotOwner);
             }
             let m3 = stg.working().m3();
-            // PUB-8.21, off WORKING state under the held chain key: the
-            // flagless FIRST mint is born published; every other flagless
+            // PUB-8.21, off working state under the held chain key: the
+            // flagless first mint is born published; every other flagless
             // mint is private (PUB-1.1); an explicit flag is honored as sent.
             let published = published.unwrap_or_else(|| !m3.has_documents(account));
             let (addr, rec) = m3.mint_document(account, published)?;
@@ -209,15 +228,16 @@ where
         })
     }
 
-    /// Delegation [ASN-0042 O15/O17b/O17c; §6]: the O15 five-condition gate
-    /// — with (iii) NARROWED to `zeros == 1` (account-tier only; Conflicts
-    /// §7) — PLUS id-freshness PLUS P8 (parent registered — Conflicts §5)
-    /// PLUS next-form; then baptizes the new account prefix AND registers
-    /// the principal in ONE transaction (a two-phase baptize-then-register
-    /// could half-fail).
+    /// Delegates `new_prefix` to `new_id` [ASN-0042 O15/O17b/O17c; §6].
+    ///
+    /// It runs the O15 five-condition gate — with (iii) narrowed to
+    /// `zeros == 1` (account-tier only; Conflicts §7) — plus id-freshness,
+    /// plus P8 (parent registered — Conflicts §5), plus next-form; then
+    /// baptizes the new account prefix and registers the principal in one
+    /// transaction (a two-phase baptize-then-register could half-fail).
     ///
     /// Because it is the account chain's sole allocator and seats every
-    /// prefix it mints, an account's SEAT is its allocation: on any state
+    /// prefix it mints, an account's seat is its allocation: on any state
     /// M3's own ops produce — genesis seeds its one account seated too — an
     /// account-tier address is registered iff a principal is seated exactly
     /// at it, [`M3State::is_registered_account`]`(a)` iff
@@ -234,48 +254,54 @@ where
     /// it, since a document is owned at its own account only while that
     /// account holds its seat ([`M3State::effective_owner_prefix`]).
     ///
-    /// The three refusals `new_prefix` alone decides — `NotValid`,
-    /// `NotAccountTier`, `TooDeep` — are made via `TxnError::Rejected` before
-    /// any transaction opens. Every other is judged inside the op's one
-    /// transaction, against the state the delegation commits into, so two
-    /// delegations racing for one prefix, or for one `new_id` under two
-    /// prefixes, leave exactly one winner.
-    ///
     /// The depth guard is a resource refusal, not a shape one, and it is the
     /// twin of [`Namespace::register_node`]'s: this is the other path by
     /// which a caller's chosen component count enters a permanent,
     /// uncompressed registry — one Π walks on every ω query besides — and
     /// `new_prefix` arrives unvalidated off the wire, so the count is bounded
-    /// here or nowhere (see [`MAX_PRINCIPAL_COMPONENTS`]).
+    /// here or only by the daemon codec's looser wire cap (see
+    /// [`MAX_PRINCIPAL_COMPONENTS`]).
     ///
-    /// The COUNT is bounded nowhere in M3: the gate admits every fresh,
-    /// next-form prefix its delegator is ω of, and every account holder is ω
-    /// of its own sub-account chain, so one holder seats principals without
-    /// limit — and every ω call walks all of them
-    /// ([`M3State::effective_owner`] states the cost). How many delegations
-    /// one key holder may make is the daemon's to bound, and the unit is the
-    /// opening key set rather than the session, since one holder opens
-    /// sessions at will — as itself and, by AUTH-4.30 (i), as every keyless
-    /// account it seats.
+    /// The number of seats is bounded nowhere in M3: the gate admits every
+    /// fresh, next-form prefix under the depth cap that its delegator is ω
+    /// of, and every account holder is ω of its own sub-account chain, so one
+    /// holder seats principals without limit — and every ω call walks all of
+    /// them ([`M3State::effective_owner`] states the cost). How many
+    /// delegations one key holder may make is the daemon's to bound, and the
+    /// unit is the opening key set rather than the session, since one holder
+    /// opens sessions at will — as itself and, by AUTH-4.30 (i), as every
+    /// keyless account it seats.
     ///
-    /// Rejection order is PINNED (§6) and is [`DelegateError`]'s declaration
-    /// order, which states it. Obtain the required next-form `new_prefix`
-    /// from [`M3State::next_account_prefix`] instead of guess-and-retry; it
+    /// Obtain the required next-form `new_prefix` from
+    /// [`M3State::next_account_prefix`] instead of guess-and-retry; it
     /// answers `None` once a chain's next slot would pass the depth cap, so a
-    /// caller is never handed a prefix this op refuses ON DEPTH. It is a peek
+    /// caller is never handed a prefix this op refuses on depth. It is a peek
     /// and not a reservation: the rest of the gate still runs against it, and
     /// two callers holding one peeked value leave exactly one winner.
     ///
     /// Returns the new account prefix — `new_prefix` itself, since next-form
-    /// admits no other — and its commit `Seq`. A RETRIED call whose first
-    /// attempt committed but whose acknowledgement was lost is REFUSED, not
-    /// duplicated: ω(`new_prefix`) is the new principal now, so (ii) answers
-    /// `NotAuthorized`. That is the same code a caller earns by losing the
-    /// race to another delegator, and the two are told apart by a published
-    /// query — [`M3State::principal_prefix`]`(new_id) == Some(new_prefix)`
-    /// iff this delegation is the one that committed. Exactly-once is M10's;
-    /// what M3 owes is that a retry allocates nothing and that its outcome is
+    /// admits no other — and its commit `Seq`. A retried call whose first
+    /// attempt committed but whose acknowledgement was lost is refused, not
+    /// duplicated: ω(`new_prefix`) is by then the new principal, so (ii)
+    /// answers `NotAuthorized`. That is the same code a caller earns by losing
+    /// the race to another delegation, and the two are told apart by a
+    /// published query —
+    /// [`M3State::principal_prefix`]`(new_id) == Some(new_prefix)` iff this
+    /// delegation is the one that committed. Exactly-once is M10's; what M3
+    /// owes is that a retry allocates nothing and that its outcome is
     /// decidable without reading this crate.
+    ///
+    /// # Errors
+    ///
+    /// The rejection order is pinned (§6) and is [`DelegateError`]'s
+    /// declaration order, which states it. The three refusals `new_prefix`
+    /// alone decides — `NotValid`, `NotAccountTier`, `TooDeep` — are made via
+    /// `TxnError::Rejected` before any transaction opens. Every other is
+    /// judged inside the op's one transaction, against the state the
+    /// delegation commits into, so two delegations racing for one prefix, or
+    /// for one `new_id` under two prefixes, leave exactly one winner. The
+    /// kernel's own failures come back as `transact` returns them, in the
+    /// order [`Namespace`] states.
     pub fn delegate(
         &self,
         delegator: PrincipalId,
@@ -295,13 +321,13 @@ where
         if new_prefix.tumbler().len() > MAX_PRINCIPAL_COMPONENTS {
             return Err(TxnError::Rejected(DelegateError::TooDeep));
         }
-        // The chain's anchor, and with it the ONE key this op names: the lock
-        // taken here and the frontier `mint_account` reads inside are the same
-        // `account_ns(parent)` (§1/§6).
+        // The chain's anchor, and with it the one chain key this op names: the
+        // lock taken here and the frontier `mint_account` reads inside are the
+        // same `account_ns(parent)` (§1/§6).
         let parent = parent(&new_prefix)
             .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
         // Beside the chain's key, the single global principals key: the
-        // id-freshness race is CROSS-namespace — one `new_id` under two
+        // id-freshness race is cross-namespace — one `new_id` under two
         // prefixes — so no per-namespace key could serialize it (§8).
         let keys = [
             M3State::account_lock_key(&parent),
@@ -333,12 +359,12 @@ where
             // (v) freshness: unallocated (T4-validity was the pre-work lift)
             // [non-monotone]. Never reached with an allocated prefix on a
             // state M3's ops produce: there an allocated account is seated,
-            // so (ii) has already refused it. On the state they never
-            // produce — an account allocated without its seat — next-form
-            // below would refuse the same input too (allocated ⇒ ordinal ≤ m,
-            // while the value it compares carries m + 1), and this gate fixes
-            // the code that state earns; relax next-form and it is that
-            // state's only guard.
+            // so (i) or (ii) has already refused it. On the states they never
+            // produce — an account allocated without its seat, or seated
+            // under an id the delegator also carries — next-form below would
+            // refuse the same input too (allocated ⇒ ordinal ≤ m, while the
+            // value it compares carries m + 1), and this gate fixes the code
+            // those states earn; relax next-form and it is their only guard.
             if base.is_allocated(&new_prefix) {
                 return Err(DelegateError::NotFresh);
             }
@@ -347,11 +373,11 @@ where
             if base.principal_prefix(new_id).is_some() {
                 return Err(DelegateError::DuplicateId);
             }
-            // P8 + next-form (O17c) from ONE answer: the account mint refuses
+            // P8 + next-form (O17c) from one answer: the account mint refuses
             // an unregistered parent [monotone — E append-only] and otherwise
             // returns the frontier's next address together with the record
             // that advances it, so the value the gate compares and the record
-            // the closure stages cannot come apart. Next-form is MANDATORY
+            // the closure stages cannot come apart. Next-form is mandatory
             // under the counter representation (§6).
             let Some((next, rec)) = stg.working().m3().mint_account(&parent) else {
                 return Err(DelegateError::ParentNotRegistered);
@@ -373,29 +399,25 @@ where
         })
     }
 
-    /// Admit an externally-originated node [ASN-0047 NodeBaptism; §7]: the
-    /// ADDRESS is chosen by provisioning, not minted here — the one
-    /// validate-not-mint path (Conflicts §1). Guards, in order: T4-validity
-    /// (`NotValid`), node level (`NotNode`), depth
-    /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — a
-    /// concurrent duplicate surfaces typed rather than silently coalescing,
-    /// §7/§8), and bootstrap lineage `[1] ≼ addr`
-    /// (`NotDescendantOfBootstrap`). There is NO parent-exists check: P8
-    /// gates the creation of docuverse entities (`delegate`'s
+    /// Admits an externally-originated node [ASN-0047 NodeBaptism; §7].
+    ///
+    /// The address is chosen by provisioning, not minted here — the one
+    /// validate-not-mint path (Conflicts §1). There is no parent-exists check:
+    /// P8 gates the creation of docuverse entities (`delegate`'s
     /// `ParentNotRegistered`, [`M3State::mint_document`]'s account gate) and
     /// not admission, because a node address names a provisioning path
-    /// originated OUTSIDE the docuverse and `nodes` is deliberately
+    /// originated outside the docuverse and `nodes` is deliberately
     /// non-contiguous — `[1, 5, 7]` is admissible with `[1, 5]` unregistered.
     ///
-    /// Returns the node address and its commit `Seq`. A RETRIED admission
-    /// whose first attempt committed is REFUSED, not duplicated: it answers
+    /// Returns the node address and its commit `Seq`. A retried admission
+    /// whose first attempt committed is refused, not duplicated: it answers
     /// `NotFresh`, the same code a caller earns when another provisioner
     /// admitted that node first. The two need not be told apart —
     /// [`M3State::entity_level`]`(addr) == Some(Level::Node)` says the node is
-    /// admitted, and admission grants no ownership (below), so WHICH call
+    /// admitted, and admission grants no ownership (below), so *which* call
     /// admitted it changes nothing a caller can act on.
     ///
-    /// Admission grants NO ownership: only a `RegisterNode` is staged, so no
+    /// Admission grants no ownership: only a `RegisterNode` is staged, so no
     /// principal is seated at `addr` and ω(`addr`) stays whoever owns the
     /// covering prefix — π₀ for every node under `[1]`, since no account-tier
     /// seat contains a node address and π₀'s is the one node-tier seat (O14;
@@ -403,22 +425,29 @@ where
     /// node is a subsequent [`Namespace::delegate`] by that owner, at the
     /// prefix [`M3State::next_account_prefix`]`(addr)` names.
     ///
-    /// The first three guards are pure pre-work — validity, level and depth
-    /// are decidable from the address alone — so a malformed or oversized
-    /// input rejects via `TxnError::Rejected` with NO transaction opened.
-    /// Freshness and lineage are judged inside the op's transaction, in that
-    /// order, so an off-lineage address opens a transaction before it is
-    /// refused.
-    ///
     /// The depth guard is a resource refusal, not a shape one: this is the
     /// single path by which bytes a caller chose enter a permanent,
     /// uncompressed node registry, and the op takes no `caller`, so ω cannot
-    /// gate it here — the component COUNT of an entry is what M3 can bound,
+    /// gate it here — the component count of an entry is what M3 can bound,
     /// and it does; magnitude is M1-unbounded and carries no amplification
-    /// (see [`MAX_NODE_COMPONENTS`]). How MANY admissions one key holder may
+    /// (see [`MAX_NODE_COMPONENTS`]). How many admissions one key holder may
     /// make is the daemon's to bound — per opening key set, as `delegate`'s
     /// count is, and not per session, since one holder opens sessions at
     /// will.
+    ///
+    /// # Errors
+    ///
+    /// Guards, in order: T4-validity (`NotValid`), node level (`NotNode`),
+    /// depth ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — a
+    /// concurrent duplicate surfaces typed rather than silently coalescing,
+    /// §7/§8), and bootstrap lineage `[1] ≼ addr`
+    /// (`NotDescendantOfBootstrap`). The first three guards are pure pre-work
+    /// — validity, level and depth are decidable from the address alone — so
+    /// a malformed or oversized input rejects via `TxnError::Rejected` with no
+    /// transaction opened. Freshness and lineage are judged inside the op's
+    /// transaction, in that order, so an off-lineage address opens a
+    /// transaction before it is refused. The kernel's own failures come back
+    /// as `transact` returns them, in the order [`Namespace`] states.
     pub fn register_node(
         &self,
         addr: Tumbler,
@@ -439,7 +468,7 @@ where
                 return Err(RegisterNodeError::NotFresh);
             }
             // Lineage reads no state, yet is judged here and not in the
-            // pre-work above: the PINNED order puts NotFresh first, and
+            // pre-work above: the pinned order puts NotFresh first, and
             // NotFresh must read the registry, so a hoisted lineage check
             // would give an already-registered off-lineage node the wrong
             // code. The price is a transaction per off-lineage call.
@@ -451,44 +480,54 @@ where
         })
     }
 
-    /// Denial-as-fork, allocation half [ASN-0042 O10, account-tier case
-    /// ONLY; §7]: a fresh document in the caller's OWN account. Resolves
-    /// `pfx(caller)` off a snapshot — value-stable, since prefixes are
-    /// immutable (O13) — so the resolution takes no transaction; an unknown
-    /// id returns `Err(TxnError::Rejected(CreateDocumentError::NotOwner))`
-    /// directly, opening NO transaction — so it speaks ahead of M2's
-    /// `Poisoned`, M2 serving that snapshot even from a poisoned kernel
-    /// (PRECEDENCE on [`Namespace`]). Then reduces to
+    /// Baptizes a fresh document in the caller's own account.
+    ///
+    /// This is denial-as-fork, allocation half [ASN-0042 O10, account-tier
+    /// case only; §7]. It resolves `pfx(caller)` off a snapshot — value-stable,
+    /// since prefixes are immutable (O13) — so the resolution takes no
+    /// transaction. Then it reduces to
     /// [`Namespace::create_new_document`]`(caller, pfx(caller))`, whose
-    /// ω-auth passes by construction (SelfOwnershipAtPrefix), and returns
-    /// its `(Address, Seq)`: that op's one transaction is the only one `fork`
+    /// ω-auth passes by construction (SelfOwnershipAtPrefix), and returns its
+    /// `(Address, Seq)`: that op's one transaction is the only one `fork`
     /// opens.
     ///
-    /// A node-tier caller is rejected with the typed
-    /// `CreateDocumentError::Mint(MintError::NotAnAccount)` — the node-tier
-    /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6).
-    ///
-    /// It shares no content — the content-sharing fork is M5's VERSION — and
-    /// it cannot run inside a composite: past its unknown-id refusal it opens
-    /// `create_new_document`'s transaction, and M2 answers a nested one with
-    /// a panic (the PRECONDITION on [`Namespace`]). A composite that forks
-    /// WITH content builds the fork from M3's pure parts instead:
-    /// [`M3State::principal_prefix`], read off a snapshot, names the caller's
-    /// account and so the [`M3State::document_lock_key`] the composite takes,
-    /// and [`M3State::mint_document`] mints there inside the composite's own
+    /// It shares no content — the content-sharing fork is M5's VERSION. A
+    /// composite that forks *with* content builds the fork from M3's pure
+    /// parts instead of calling this op: [`M3State::principal_prefix`], read
+    /// off a snapshot, names the caller's account and so the
+    /// [`M3State::document_lock_key`] the composite takes, and
+    /// [`M3State::mint_document`] mints there inside the composite's own
     /// transaction.
     ///
     /// `published` is `fork`'s own three-valued flag (PUB-8.16, PUB-8.17's
     /// sibling on the create path), handed through the literal reduction to
     /// [`Namespace::create_new_document`], which resolves it exactly as it
-    /// resolves its own (PUB-8.21, owner ruling 2026-09-05 — one rule, one
-    /// place): an empty account with an absent flag is the born-published
-    /// doc 1, and otherwise the bit is the flag's value or PRIVATE. The doc-1
-    /// case is the one the daemon's mint-first door refuses before this op is
-    /// reached (PUB-1.18, PUB-8.22), and the explicit-`false` first mint is
-    /// the daemon's door too (PUB-8.20); here both mint what the rule says.
-    /// The one transaction it opens is `create_new_document`'s, so it
-    /// commits under the handle's attestation exactly as that op does.
+    /// resolves its own (PUB-8.21 — one rule, one place): an empty account
+    /// with an absent flag is the born-published doc 1, and otherwise the bit
+    /// is the flag's value or private. The doc-1 case is the one the daemon's
+    /// mint-first door refuses before this op is reached (PUB-1.18,
+    /// PUB-8.22), and the explicit-`false` first mint is refused there too —
+    /// that door refuses a `fork` into an empty account whatever its flag,
+    /// where PUB-8.20's door is `create_new_document`'s; here both mint what
+    /// the rule says. The one transaction it opens is `create_new_document`'s,
+    /// so it commits under the handle's attestation exactly as that op does.
+    ///
+    /// # Errors
+    ///
+    /// An unknown id returns
+    /// `Err(TxnError::Rejected(CreateDocumentError::NotOwner))` directly,
+    /// opening no transaction — so it speaks ahead of M2's `Poisoned`, M2
+    /// serving that snapshot even from a poisoned kernel (the precedence
+    /// [`Namespace`] states). A node-tier caller is rejected with the typed
+    /// `CreateDocumentError::Mint(MintError::NotAnAccount)` — the node-tier
+    /// O10 case is dropped, not relocated to `delegate` (Conflicts §6). Past
+    /// the unknown id, every refusal is [`Namespace::create_new_document`]'s.
+    ///
+    /// # Panics
+    ///
+    /// Panics inside a composite: past its unknown-id refusal it opens
+    /// `create_new_document`'s transaction, and M2 answers a nested one with
+    /// a panic (the precondition on [`Namespace`]).
     pub fn fork(
         &self,
         caller: PrincipalId,

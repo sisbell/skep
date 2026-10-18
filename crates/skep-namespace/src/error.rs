@@ -1,48 +1,59 @@
-//! The typed rejections of M3's public surface (§Public interface). Where an
-//! op pins the order its guards run in, the variants are declared in that
-//! order — [`CreateDocumentError`] (§7), [`DelegateError`] (§6) and
+//! The typed rejections of M3's public surface (§Public interface).
+//!
+//! Where an op pins the order its guards run in, the variants are declared in
+//! that order — [`CreateDocumentError`] (§7), [`DelegateError`] (§6) and
 //! [`RegisterNodeError`] (§7) all do, so the declaration reads as the contract
-//! and a multiply-defective input earns the FIRST applicable rejection.
+//! and a multiply-defective input earns the first applicable rejection.
 
 use std::error::Error;
 use std::fmt;
 
 use skep_address::GateViolation;
 
-/// Frontier-mint rejection (§A) — the ONE vocabulary all four PUBLIC mints
-/// share, so M5 and M7 lift a mint refusal through a single `From`. Each mint
-/// can produce exactly one of the structural variants:
-/// `mint_content`/`mint_link` ⇒ `HomeNotRegistered`, `mint_version` ⇒
-/// `SourceNotRegistered`, `mint_document` ⇒ `NotAnAccount`. Those
-/// preconditions are the only active gates (§4). `Gate` is the M1 inc-gate
-/// (B6/TA5a) routed defensively, and NO state reaches it, corrupted or not.
-/// The gate sees only the anchor of the key a mint builds, and a mint never
-/// reads a key out of storage: it builds its key fresh from its argument, so
-/// neither a frontier count nor a stored frontier key is ever what the gate
-/// is asked about. Of the four public mints only `mint_document` builds a
-/// next-field key, and it would be the refused one — a next-field generator
-/// over an Element-level anchor — only for an element `account`, which its
-/// `NotAnAccount` gate refuses first. So `Gate` fires only if a mint's own
-/// structural gate regresses: an M3 defect, never a store condition.
+/// A frontier mint's rejection (§A).
 ///
-/// The fifth mint, the account chain's, is crate-private and answers `Option`
-/// rather than adding a leaf here: `delegate` is its only caller and already
-/// has a typed rejection for its one refusal, so a fifth variant would be a
-/// permanently dead arm in M5's, M7's and M10's vocabularies.
+/// It is the one vocabulary all five public mints share, so M5 and M7 lift a
+/// mint refusal through a single `From`. Each mint can produce exactly one of
+/// the structural variants: `mint_content`/`mint_content_range`/`mint_link` ⇒
+/// `HomeNotRegistered`, `mint_version` ⇒ `SourceNotRegistered`,
+/// `mint_document` ⇒ `NotAnAccount`. Those preconditions are the only active
+/// gates (§4). `Gate` is the M1 inc-gate (B6/TA5a) routed defensively, and no
+/// state reaches it, corrupted or not. The gate sees only the anchor of the
+/// key a mint builds, and a mint never reads a key out of storage: it builds
+/// its key fresh from its argument, so neither a frontier count nor a stored
+/// frontier key is ever what the gate is asked about. Of the five public
+/// mints only `mint_document` builds a next-field key, and it would be the
+/// refused one — a next-field generator over an Element-level anchor — only
+/// for an element `account`, which its `NotAnAccount` gate refuses first. So
+/// `Gate` fires only if a mint's own structural gate regresses: an M3 defect,
+/// never a store condition.
+///
+/// The sixth mint, the account chain's, is crate-private and answers `Option`
+/// rather than adding a leaf here: its callers are `delegate`, which already
+/// has a typed rejection for its one refusal, and the peek
+/// `next_account_prefix`, which answers the `None` as its own, so a fifth
+/// variant would be a permanently dead arm in M5's, M7's and M10's
+/// vocabularies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MintError {
-    /// `mint_content`/`mint_link`: home is not a registered Document (P6/C2/L1a).
+    /// The home is not a registered Document (P6/C2/L1a).
+    ///
+    /// `mint_content`, `mint_content_range` and `mint_link` earn it.
     HomeNotRegistered,
-    /// `mint_version`: source is NOT a registered Document (V-WF) — covers both
-    /// an unregistered address AND a registered non-document.
+    /// `mint_version`: the source is not a registered Document (V-WF).
+    ///
+    /// It covers both an unregistered address and a registered non-document.
     SourceNotRegistered,
-    /// `mint_document`: target is not a registered Account (P8/CND.pre) —
-    /// covers both unregistered AND non-account.
+    /// `mint_document`: the target is not a registered Account (P8/CND.pre).
+    ///
+    /// It covers both unregistered and non-account.
     NotAnAccount,
-    /// M1's TA5a inc gate refused (B6) — defensive: reachable by no input and
-    /// no state, corrupted or not; it would mean a mint's own structural gate
-    /// admitted an element (an M3 defect — see [`MintError`]). Its message
-    /// names this layer only; M1's refusal is its `source`.
+    /// M1's TA5a inc gate refused (B6).
+    ///
+    /// It is defensive: reachable by no input and no state, corrupted or not;
+    /// it would mean a mint's own structural gate admitted an element (an M3
+    /// defect — see [`MintError`]). Its message names this layer only; M1's
+    /// refusal is its `source`.
     Gate(GateViolation),
 }
 
@@ -72,11 +83,12 @@ impl Error for MintError {
     }
 }
 
-/// Document-baptism rejection, shared by the two ops that create a document
-/// — `create_new_document` and `fork` (§B). "Not an account" and "not
-/// registered" BOTH surface via `Mint(MintError::NotAnAccount)`.
+/// A document baptism's rejection, shared by the two ops that create one.
 ///
-/// The variants are declared in the PINNED order both ops evaluate them:
+/// They are `create_new_document` and `fork` (§B). "Not an account" and "not
+/// registered" both surface via `Mint(MintError::NotAnAccount)`.
+///
+/// The variants are declared in the pinned order both ops evaluate them:
 /// `NotOwner` before `Mint`. ω is read first and the mint's structural gate
 /// only after, so a caller who is not the effective owner of the target
 /// learns nothing about whether the target exists — the same probe returns
@@ -84,21 +96,24 @@ impl Error for MintError {
 /// the order by reducing to `create_new_document`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateDocumentError {
-    /// Refused for want of effective ownership ω (O5) — authorization is by
-    /// ω (longest match), never bare prefix containment. The two producers
-    /// refuse for two different reasons and the message says which: from
-    /// `create_new_document`, ω(`account`) is absent or names another
-    /// principal; from `fork`, which has no target address, the caller's id
-    /// names no principal at all, so it is the effective owner of nothing —
-    /// and the remedy there is an account, not another principal's
+    /// Refused for want of effective ownership ω (O5).
+    ///
+    /// Authorization is by ω (longest match), never bare prefix containment.
+    /// The two producers refuse for two different reasons and the message
+    /// names both: from `create_new_document`, ω(`account`) is absent or names
+    /// another principal; from `fork`, which has no target address, the
+    /// caller's id names no principal at all, so it is the effective owner of
+    /// nothing — and the remedy there is an account, not another principal's
     /// permission.
     NotOwner,
-    /// The op's mint failed structurally. Both ops mint through
-    /// `mint_document`, so only two [`MintError`] leaves can come out of it:
-    /// `NotAnAccount`, and `Gate`, which no state reaches (see [`MintError`])
-    /// yet the type still carries. A caller matching on this owes no arm for
-    /// `HomeNotRegistered` or `SourceNotRegistered`. Its message names this
-    /// layer only; the mint's refusal is its `source`.
+    /// The op's mint failed structurally.
+    ///
+    /// Both ops mint through `mint_document`, so only two [`MintError`] leaves
+    /// can come out of it: `NotAnAccount`, and `Gate`, which no state reaches
+    /// (see [`MintError`]) yet the type still carries. A caller matching on
+    /// this owes `HomeNotRegistered` and `SourceNotRegistered` no handling:
+    /// neither can arrive. Its message names this layer only; the mint's
+    /// refusal is its `source`.
     Mint(MintError),
 }
 
@@ -114,9 +129,11 @@ impl fmt::Display for CreateDocumentError {
     }
 }
 
-/// The standard lift of the shared mint vocabulary — the same conversion M5
-/// and M7 provide into their own op errors, so a mint composes with `?`
-/// wherever a document is being created.
+/// The standard lift of the shared mint vocabulary.
+///
+/// It is the same conversion M5 provides into its own op errors and M7 into
+/// the internal error its link-write errors are mapped from, so a mint
+/// composes with `?` wherever a document is being created.
 impl From<MintError> for CreateDocumentError {
     fn from(e: MintError) -> CreateDocumentError {
         CreateDocumentError::Mint(e)
@@ -132,26 +149,34 @@ impl Error for CreateDocumentError {
     }
 }
 
-/// `delegate` rejection — the O15 five-condition gate with (iii) NARROWED to
-/// `zeros == 1` (§6 / Conflicts §7), PLUS id-freshness PLUS P8 PLUS next-form.
+/// The `delegate` rejection.
 ///
-/// The variants are declared in `delegate`'s PINNED rejection order (§6):
+/// Its gate is the O15 five-condition gate with (iii) narrowed to
+/// `zeros == 1` (§6 / Conflicts §7), plus id-freshness, plus P8, plus
+/// next-form.
+///
+/// The variants are declared in `delegate`'s pinned rejection order (§6):
 /// `NotValid`, `NotAccountTier` and `TooDeep` are pure pre-work — all three
-/// `Rejected` with NO transaction opened — and the rest are the in-closure
+/// `Rejected` with no transaction opened — and the rest are the in-closure
 /// gate, in the order it evaluates them. A multiply-defective input earns the
-/// FIRST applicable rejection; conformance tests and M10's error handling may
+/// first applicable rejection; conformance tests and M10's error handling may
 /// rely on this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DelegateError {
     /// O15(v) validity: `new_prefix` is not T4-valid.
     NotValid,
-    /// O15(iii), narrowed `≤1 → ==1` and hoisted to pre-work: `new_prefix` is
-    /// node-tier (zeros = 0) or document-tier (zeros ≥ 2), not account-tier.
+    /// O15(iii): `new_prefix` is not account-tier.
+    ///
+    /// The condition is narrowed `≤1 → ==1` and hoisted to pre-work:
+    /// `new_prefix` is node-tier (zeros = 0), or document- or element-tier
+    /// (zeros ≥ 2).
     NotAccountTier,
-    /// `new_prefix` has more than
-    /// [`MAX_PRINCIPAL_COMPONENTS`](crate::MAX_PRINCIPAL_COMPONENTS)
-    /// components — a principal prefix names a delegation path, whose depth is
-    /// bounded by the authority hierarchy and not by the request (§6).
+    /// `new_prefix` has more components than the principal registry admits.
+    ///
+    /// The cap is
+    /// [`MAX_PRINCIPAL_COMPONENTS`](crate::MAX_PRINCIPAL_COMPONENTS): a
+    /// principal prefix names a delegation path, whose depth is bounded by the
+    /// authority hierarchy and not by the request (§6).
     TooDeep,
     /// The delegator id names no principal (§5 scan).
     DelegatorUnknown,
@@ -161,22 +186,27 @@ pub enum DelegateError {
     NotAuthorized,
     /// O15(iv): a principal already sits strictly under `new_prefix`.
     NotTopDown,
-    /// O15(v) freshness: `new_prefix` is already allocated. Earned only on a
-    /// state M3's own ops never produce — an account allocated without its
-    /// seat. On every state they do produce an allocated account is seated
+    /// O15(v) freshness: `new_prefix` is already allocated.
+    ///
+    /// Earned only on a state M3's own ops never produce — an account
+    /// allocated without its seat, or seated under an id the delegator also
+    /// carries. On every state they do produce an allocated account is seated
     /// (an account's seat is its allocation), so ω(`new_prefix`) is the
-    /// principal seated AT it — never a delegator `NotAncestor` let through,
+    /// principal seated *at* it — never a delegator `NotAncestor` let through,
     /// which sits strictly above — and `NotAuthorized` refuses first: that is
     /// the code a retried or raced delegation earns
     /// ([`crate::Namespace::delegate`]).
     NotFresh,
-    /// `new_id` is already carried by a principal — id-injectivity, the
-    /// id-axis mirror of O1b (§6).
+    /// `new_id` is already carried by a principal.
+    ///
+    /// This is id-injectivity, the id-axis mirror of O1b (§6).
     DuplicateId,
-    /// P8: the parent of `new_prefix` is not a registered entity (Conflicts §5).
+    /// P8: `new_prefix`'s parent is not a registered entity (Conflicts §5).
     ParentNotRegistered,
-    /// O17c: `new_prefix` is not the namespace's next address — obtain the
-    /// exact value from `next_account_prefix` instead of guess-and-retry.
+    /// O17c: `new_prefix` is not the namespace's next address.
+    ///
+    /// Obtain the exact value from `next_account_prefix` instead of
+    /// guess-and-retry.
     NotNextForm,
 }
 
@@ -216,26 +246,30 @@ impl fmt::Display for DelegateError {
 
 impl Error for DelegateError {}
 
-/// `register_node` rejection (ASN-0047 NodeBaptism; §7). The variants are
-/// declared in the order the guards run: `NotValid`, `NotNode` and `TooDeep`
-/// are pure pre-work — `Rejected` with NO transaction opened — and `NotFresh`
-/// and `NotDescendantOfBootstrap` follow inside the closure under the held
-/// node key, the first because it reads the registry, the second because this
-/// order puts it after the first (it reads no state; see
-/// [`crate::Namespace::register_node`]).
+/// The `register_node` rejection (ASN-0047 NodeBaptism; §7).
+///
+/// The variants are declared in the order the guards run: `NotValid`,
+/// `NotNode` and `TooDeep` are pure pre-work — `Rejected` with no transaction
+/// opened — and `NotFresh` and `NotDescendantOfBootstrap` follow inside the
+/// closure under the held node key, the first because it reads the registry,
+/// the second because this order puts it after the first (it reads no state;
+/// see [`crate::Namespace::register_node`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisterNodeError {
     /// The supplied address is not T4-valid.
     NotValid,
     /// The supplied address is not node-level (zeros ≠ 0).
     NotNode,
-    /// The supplied address has more than
-    /// [`MAX_NODE_COMPONENTS`](crate::MAX_NODE_COMPONENTS) components — a
-    /// node address names a provisioning path, whose depth is bounded by the
+    /// The supplied address has too many components for the node registry.
+    ///
+    /// The cap is [`MAX_NODE_COMPONENTS`](crate::MAX_NODE_COMPONENTS): a node
+    /// address names a provisioning path, whose depth is bounded by the
     /// provisioning hierarchy and not by the request (§7).
     TooDeep,
-    /// The node is already registered — surfaced (rather than silently
-    /// coalescing) under the held coarse node-registry key (§7/§8).
+    /// The node is already registered.
+    ///
+    /// It is surfaced (rather than silently coalescing) under the held coarse
+    /// node-registry key (§7/§8).
     NotFresh,
     /// Bootstrap lineage `[1] ≼ addr` fails.
     NotDescendantOfBootstrap,

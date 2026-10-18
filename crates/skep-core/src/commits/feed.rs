@@ -72,13 +72,17 @@
 //! the twins and no file ([`Inner::fold_into_maps`]); a checkpoint's
 //! compaction moves the fence in memory and writes nothing. The walk LANDS
 //! under this feed's lock ([`Feed::land`]): the region's classifications
-//! folded into the twins as the record step folds a position, ONE rewrite
-//! of `commits.log` — the walked boundaries bare among the held positions,
-//! in position order, every offset assigned — then the four derived files
-//! rewritten whole from the twins, the same rewrite the open and the
-//! checkpoint thread run; the attest store is untouched, its lines appended
-//! as today and its open having served the region's slots off the kernel's
-//! markers.
+//! folded into the twins as the record step folds a position; the index,
+//! the bitmap and the streams rewritten whole from the twins, the same
+//! rewrite the open and the checkpoint thread run; then ONE rewrite of
+//! `commits.log` — the walked boundaries bare among the held positions, in
+//! position order, every offset assigned — and last the offset array that
+//! names its lines. So a kill between two of them leaves the region to a
+//! walk behind the listener again, never to a classification before the
+//! board serves; and a derived file whose landing rewrite fails before its
+//! rename, short of the region, takes no further line. The attest store is
+//! untouched, its lines appended as today and its open having served the
+//! region's slots off the kernel's markers.
 //!
 //! # The supplement (PUB-7.22–7.28)
 //!
@@ -854,7 +858,7 @@ impl Feed {
         let failures = if compacted || pending.is_some() {
             inner.rewrite_derived_files(covered)
         } else if !offsets_agree {
-            inner.rewrite_offsets_file(covered)
+            inner.rewrite_offsets_file(covered, None)
         } else {
             Vec::new()
         };
@@ -911,26 +915,41 @@ impl Feed {
         self.land(outcome, kernel, snapshot.world(), control, lines);
     }
 
-    /// THE LANDING, under this feed's lock — the record step's and the
-    /// page's one lock, so a write's record and a page wait on it for the
-    /// rewrite's length and never see a half-landed feed: the walk's
-    /// classifications folded into the twins as the record step folds a
-    /// position ([`Inner::fold_into_maps`]), classified against `world` —
-    /// the open's head, PUB-7.7's one snapshot; ONE rewrite of
-    /// `commits.log` ([`CommitsLog::land`]) with the fence as the floor
-    /// stands AT the landing — a checkpoint that landed during the walk
-    /// moved it, its compaction deferred to this rewrite — the twins
-    /// trimmed to the same fence; then the four derived files rewritten
-    /// whole from the twins, fenced at the last position the log holds —
-    /// the compaction's own rewrite ([`Inner::rewrite_derived_files`]), the
-    /// open's and the checkpoint thread's; the attest store untouched; the
-    /// region cleared; the `landing:` line said. A rewrite that fails is
-    /// said as the compaction's is — before its rename the file stands,
-    /// the four derived ones fenced at the region's lower edge since the
-    /// open and so re-derived by the next open, `commits.log` stopped
-    /// ([`CommitsLog::land`] says why); past it the file is in place and
-    /// has said its own stop — and fails no op. A stop asked while the
-    /// walk ran writes nothing.
+    /// Lands the walk under this feed's lock, the five files written in order.
+    ///
+    /// The lock is the record step's and the page's, so a write's record and
+    /// a page wait on it for the rewrites' length and never see a half-landed
+    /// feed. The walk's classifications are folded into the twins as the
+    /// record step folds a position ([`Inner::fold_into_maps`]), classified
+    /// against `world` — the open's head, PUB-7.7's one snapshot — and into
+    /// `commits.log`'s resident entries behind the fence as the floor stands
+    /// at the landing ([`CommitsLog::fold_the_walk`]: a checkpoint that
+    /// landed during the walk moved it, its compaction deferred to this
+    /// landing), the twins trimmed to the same fence. Then the files, each
+    /// whole, in the order that keeps a kill between any two inside the walk
+    /// behind the listener (`operations.md` §3.3 step 2): the index, the
+    /// bitmap and the streams from the twins, fenced at the last position the
+    /// log holds ([`Inner::rewrite_classified_files`]); then `commits.log`
+    /// ([`CommitsLog::write_the_landing`]); then the offset array, which names
+    /// the lines that rewrite placed. Killed before `commits.log`'s rewrite,
+    /// the file stands as the open found it, so the next open's region pends
+    /// again and the three are fenced back at its lower edge; killed after
+    /// it, the three cover the region, so that open classifies nothing from
+    /// the journal before it serves. The attest store is untouched; the
+    /// `landing:` line is said last.
+    ///
+    /// A rewrite that fails is said and fails no op. Before its rename a
+    /// derived file stands whole and fenced at the region's lower edge,
+    /// short of the region and of every write held while it pended, so it is
+    /// stopped there ([`LineFile::stop_at`]): a later append would raise its
+    /// coverage claim over the gap, and a position at or below a claim with
+    /// no record is a `[]`-docs entry, which no mask withholds. The next open
+    /// re-derives that file, classifying the region's bare positions from the
+    /// journal before it serves, two world reconstructions each.
+    /// `commits.log` stops at the same edge
+    /// ([`CommitsLog::write_the_landing`] says why). Past its rename a file
+    /// is in place and has said its own stop. A stop asked while the walk ran
+    /// writes nothing.
     fn land(
         &self,
         outcome: WalkOutcome,
@@ -955,32 +974,26 @@ impl Feed {
         // (`at_or_above`'s `partition_point` reads it), restored here as
         // the open restores the replayed streams'.
         inner.sort_the_lists();
-        let region = inner.log.pending_region();
-        let landed = inner.log.land(&outcome.boundaries, outcome.min_since, floor_fence);
-        let in_memory_alone = matches!(landed, Err(RewriteFail::BeforeRename(_)));
-        let fence = match landed {
-            Ok(fence) => fence,
-            // Said at the log: before its rename as the landing's own
-            // refusal, past it as the file's stop. The resident entries are
-            // complete either way, and the twins follow them below.
-            Err(_) => inner.log.min_since_in_force(),
+        let Some(((low, head), fence)) =
+            inner.log.fold_the_walk(&outcome.boundaries, outcome.min_since, floor_fence)
+        else {
+            return;
         };
         inner.drop_at_or_below(fence);
         let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
-        let (low, head) = region.unwrap_or((fence, fence));
-        for (name, failed) in inner.rewrite_derived_files(covered) {
-            if let RewriteFail::BeforeRename(e) = failed {
-                lines.say(
-                    Class::Failure,
-                    format_args!(
-                        "{name}: the walk's landing rewrite failed before its rename: {}; the \
-                         file stands fenced below the region at position {low}, and the next \
-                         open re-derives it",
-                        IoCause(&e)
-                    ),
-                );
-            }
+        let classified = inner.rewrite_classified_files(covered, Some(low));
+        say_the_landings_refusals(lines, low, classified);
+        #[cfg(test)]
+        if CUT_THE_NEXT_LANDING.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            return;
         }
+        // Said at the log: before its rename as the landing's own refusal,
+        // past it as the file's stop. The resident entries are complete
+        // either way.
+        let landed = inner.log.write_the_landing(low);
+        let in_memory_alone = matches!(landed, Err(RewriteFail::BeforeRename(_)));
+        let offsets = inner.rewrite_offsets_file(covered, Some(low));
+        say_the_landings_refusals(lines, low, offsets);
         lines.say(
             Class::Landing,
             WalkLandingLine {
@@ -1356,6 +1369,68 @@ fn with_file(name: &'static str) -> impl Fn(io::Error) -> io::Error {
     move |e| io::Error::new(e.kind(), format!("{name}: {e}"))
 }
 
+/// Says each derived file the walk's landing left unrewritten.
+///
+/// Each failed before its rename and stands fenced at the region's lower
+/// edge `low`, stopped there (`Feed::land`); a failure past the rename the
+/// file has said itself. The line says the stop, what serves and the act
+/// owed before the restart whose open re-derives the file: `{file}: the
+/// walk's landing rewrite failed before its rename: {cause}; the file stands
+/// fenced below the region at position {low} and takes no further line, so
+/// the next open re-derives it — the board serves from memory, and nothing
+/// is lost`, then [`IoCause::before_the_restart`]'s clause.
+fn say_the_landings_refusals(lines: &Lines, low: u64, failures: Vec<(&'static str, RewriteFail)>) {
+    for (name, failed) in failures {
+        if let RewriteFail::BeforeRename(e) = failed {
+            let cause = IoCause(&e);
+            lines.say(
+                Class::Failure,
+                format_args!(
+                    "{name}: the walk's landing rewrite failed before its rename: {cause}; the \
+                     file stands fenced below the region at position {low} and takes no further \
+                     line, so the next open re-derives it — the board serves from memory, and \
+                     nothing is lost{}",
+                    cause.before_the_restart()
+                ),
+            );
+        }
+    }
+}
+
+/// Rewrites one derived file whole, stopping it where a landing left it short.
+///
+/// The rewrite is [`LineFile::rewrite`]'s, fenced at `covered`. Where
+/// `stop_below` names the walk's region's lower edge and the rewrite failed
+/// before its rename, the file stands fenced at that edge, short of the
+/// region, and is stopped there ([`LineFile::stop_at`]).
+///
+/// # Errors
+///
+/// The rewrite's failure, either side of its rename.
+fn rewrite_or_stop(
+    file: &mut LineFile,
+    records: Vec<Value>,
+    covered: u64,
+    stop_below: Option<u64>,
+) -> Result<(), RewriteFail> {
+    let rewritten = file.rewrite(records, covered);
+    if let (Err(RewriteFail::BeforeRename(_)), Some(low)) = (&rewritten, stop_below) {
+        file.stop_at(low);
+    }
+    rewritten
+}
+
+/// The test seam: the next walk's landing ends between its rewrites, once.
+///
+/// Armed, the landing ends after the index, the bitmap and the streams are
+/// rewritten and before `commits.log` is — the data directory a kill between
+/// the two leaves — and disarms. It writes no further file and says no
+/// `landing:` line, so the suite drops the write path and opens over what
+/// the cut left.
+#[cfg(test)]
+pub(super) static CUT_THE_NEXT_LANDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Row 9 for a derived file, said where its replay answered a cut: the head,
 /// then this file's case — the cut part is re-derived, by the tail
 /// derivation [`Feed::open`] runs from the last trusted position.
@@ -1603,34 +1678,59 @@ impl Inner {
 
     /// Rewrite the FOUR derived files whole from the twins, each fenced at
     /// `covered` — the compaction's rewrite, at open and after a checkpoint
-    /// alike — answering each file that failed with how
-    /// ([`RewriteFail`]), every file attempted whatever the one before it
-    /// answered. A fifth derived structure owes a line here, beside its
-    /// fold and its replay.
+    /// alike: the index, the bitmap and the streams
+    /// ([`Inner::rewrite_classified_files`]), then the offset array —
+    /// answering each file that failed with how ([`RewriteFail`]), every
+    /// file attempted whatever the one before it answered. A fifth derived
+    /// structure owes a line here, beside its fold and its replay.
     fn rewrite_derived_files(&mut self, covered: u64) -> Vec<(&'static str, RewriteFail)> {
+        let mut failures = self.rewrite_classified_files(covered, None);
+        failures.extend(self.rewrite_offsets_file(covered, None));
+        failures
+    }
+
+    /// Rewrites the index, the bitmap and the streams whole from the twins.
+    ///
+    /// Each is fenced at `covered`, each attempted whatever the one before it
+    /// answered, and each that failed is answered with how. `stop_below` is
+    /// the walk's landing's (`Feed::land`): the region's lower edge, where a
+    /// file whose rewrite failed before its rename is stopped
+    /// ([`rewrite_or_stop`]).
+    fn rewrite_classified_files(
+        &mut self,
+        covered: u64,
+        stop_below: Option<u64>,
+    ) -> Vec<(&'static str, RewriteFail)> {
         let mut failures = Vec::new();
         let records = self.index_records();
-        if let Err(failed) = self.files.index.rewrite(records, covered) {
+        if let Err(failed) = rewrite_or_stop(&mut self.files.index, records, covered, stop_below) {
             failures.push((INDEX_FILE, failed));
         }
         let records = self.masked_records();
-        if let Err(failed) = self.files.masked.rewrite(records, covered) {
+        if let Err(failed) = rewrite_or_stop(&mut self.files.masked, records, covered, stop_below) {
             failures.push((MASKED_FILE, failed));
         }
         let records = self.stream_records();
-        if let Err(failed) = self.files.streams.rewrite(records, covered) {
+        if let Err(failed) = rewrite_or_stop(&mut self.files.streams, records, covered, stop_below)
+        {
             failures.push((STREAMS_FILE, failed));
         }
-        failures.extend(self.rewrite_offsets_file(covered));
         failures
     }
 
     /// Rewrite the offset array alone from the log's offsets — the open's
     /// answer where the log stands and the file's offsets disagree with it,
-    /// and the fourth file of [`Inner::rewrite_derived_files`].
-    fn rewrite_offsets_file(&mut self, covered: u64) -> Vec<(&'static str, RewriteFail)> {
+    /// the fourth file of [`Inner::rewrite_derived_files`], and the walk's
+    /// landing's last file, written after `commits.log` because it names
+    /// that file's lines; `stop_below` as [`Inner::rewrite_classified_files`]
+    /// reads it.
+    fn rewrite_offsets_file(
+        &mut self,
+        covered: u64,
+        stop_below: Option<u64>,
+    ) -> Vec<(&'static str, RewriteFail)> {
         let records = self.offset_records();
-        match self.files.offsets.rewrite(records, covered) {
+        match rewrite_or_stop(&mut self.files.offsets, records, covered, stop_below) {
             Ok(()) => Vec::new(),
             Err(failed) => vec![(OFFSETS_FILE, failed)],
         }

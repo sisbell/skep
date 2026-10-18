@@ -335,12 +335,15 @@ fn a_rewrite_failed_past_its_rename_stops_the_file_and_one_failed_before_it_does
     assert!(!reopened.is_stopped());
 }
 
-/// ROW 32 ON THE DOOR (`operations.md` §1.1 row 32): a derived file's first
-/// failed append — the handle read-only, the one condition the stop rule
-/// is about — STOPS the file and is said ONCE through the classed door
-/// under `failure:`, naming the file, the position and the cause; the
-/// next append, which the stop takes, says nothing more, and the claim on
-/// disk never rises past the stop.
+/// Checks row 32 on the door: a failed append stops the file, said once.
+///
+/// A derived file's first failed append (`operations.md` §1.1 row 32) —
+/// the handle read-only, the one condition the stop rule is about — stops
+/// the file and is said once through the classed door under `failure:`,
+/// naming the file, the position, the cause and, the cause no full volume,
+/// the volume, its device and the quota to check before the restart whose
+/// open writes the file; the next append, which the stop takes, says
+/// nothing more, and the claim on disk never rises past the stop.
 #[test]
 fn a_failed_append_is_said_once_through_the_door_and_the_stop_is_silent_after() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -361,9 +364,10 @@ fn a_failed_append_is_said_once_through_the_door_and_the_stop_is_silent_after() 
     assert!(
         said[0].ends_with(
             "; this file takes no further line until a restart, whose open re-derives it — the \
-             board serves from memory, and nothing is lost"
+             board serves from memory, and nothing is lost; check the volume, its device and the \
+             board user's quota before that restart: its open writes this file"
         ),
-        "the stop, what serves and that nothing is lost; no full volume, no room clause: {}",
+        "the stop, what serves, that nothing is lost and the act before the restart: {}",
         said[0]
     );
     f.append_or_report(8, vec![]);

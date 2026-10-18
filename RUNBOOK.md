@@ -45,7 +45,7 @@ apart.
      OS's words (`seg-{n}.wal: append: No space left on device …`):
 
      ```
-     failure: a write was refused at a full volume at position {position} ({detail}): no write lands until room is freed on the volume; reads serve; the next write succeeds by itself once room stands, and no restart is owed
+     failure: a write was refused at a full volume at position {position} ({detail}): no write lands until room is freed on the volume; reads serve; the next write succeeds by itself once room stands, and no restart is owed — a restart before room stands runs its open into the full volume, and where the open refuses, reads stop with it
      ```
 
      The first write that lands after it says so once, with the
@@ -73,7 +73,10 @@ apart.
      On a full volume `{error}` reads `the volume is full (…)`, and the
      line goes on: `; free room on the volume first: the restart's open
      writes the line back and syncs it, and on a full volume it refuses
-     and reads stop with it`.
+     and reads stop with it`. For every other cause it goes on: `; check
+     the volume, its device and the board user's quota first: the
+     restart's open writes the line back and syncs it, and where its
+     cause stands it refuses and reads stop with it`.
 
    - A change-feed file stops taking lines, and the board serves on
      from what it holds in memory. `{file}` is one of the four index
@@ -83,13 +86,19 @@ apart.
      ```
      failure: commits.log append failed at position {position}: {error}; this file takes no further line, so the next open re-derives from {position} as bare entries; every write until then is held in memory alone, its key and its time lost at that open — restart soon
      failure: {file} append failed at position {position}: {error}; this file takes no further line until a restart, whose open re-derives it — the board serves from memory, and nothing is lost
-     failure: commits.log rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives above its fence at position {position} as bare entries
+     failure: commits.log rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives above position {position} as bare entries; every write until then is held in memory alone, its key and its time lost at that open — restart soon
      failure: {file} rewrite failed past its rename: {error}; this file takes no further line, so the next open re-derives above its fence at position {position}
      ```
 
      A full volume's `{error}` reads `the volume is full ({the OS's
      text})`, and an append's line then goes on `; free room before
-     that restart: its open writes this file`.
+     that restart: its open writes this file`; for every other cause
+     it goes on `; check the volume, its device and the board user's
+     quota before that restart: its open writes this file`. In
+     `commits.log`'s rewrite line `{position}` is the last entry the
+     rewritten file holds; in an index file's, the fence it was
+     rewritten behind. Each is the position the standing line re-says
+     the stop by (step 8).
 
    - An upload is answered `500 blob_io`, its detail naming the
      file, the act and the OS's cause, and the pruner's hourly line
@@ -145,7 +154,7 @@ apart.
    (`seg-{n}.wal: append: {error}`):
 
    ```
-   failure: a write was refused durability at position {position} ({detail}): no write lands until its cause clears; reads serve; check the volume, its device and the board user's quota — the next write succeeds by itself once the cause clears
+   failure: a write was refused durability at position {position} ({detail}): no write lands until its cause clears; reads serve; check the volume, its device and the board user's quota — the next write succeeds by itself once the cause clears; a restart before then runs its open into the same cause, and where the open refuses, reads stop with it
    ```
 
    No commit lands, so no checkpoint line comes; `writes.halted`
@@ -235,10 +244,14 @@ apart.
 
 5. **Then act on the line you saw.**
 
-   - `feed-attest.log`'s line: make room, then restart. The open
-     writes the missing line back from the journal and syncs it; on
-     a volume still full, the open fails.
-   - A change-feed file's stop: make room, then restart — soon where
+   - `feed-attest.log`'s line: make room, or clear the cause its line
+     names, then restart. The open writes the missing line back from
+     the journal and syncs it; where the cause still stands, the open
+     fails, and reads stop with it. While the walk behind the listener
+     has positions to re-cover, let its `landing:` line come first
+     (Restart, step 3).
+   - A change-feed file's stop: make room, or clear the cause its line
+     names, then restart — soon where
      the file is `commits.log`, since every write after its stop is
      held in memory alone and the next open re-covers each as a bare
      entry, its key and its time lost. The open rewrites the file and
@@ -249,10 +262,15 @@ apart.
      checkpoint's size in journal bytes (never less than 24 MiB),
      whichever comes first.
    - The write refused at a full volume: make room. The next write
-     succeeds by itself, and no restart is owed.
+     succeeds by itself, and no restart is owed: one before room
+     stands runs its open into the full volume (step 4).
    - A write refused `durability` for a cause but room (step 1): act
      on the cause its line names — a quota as step 2 says,
-     `Input/output error` as `500 blob_io`'s does below.
+     `Input/output error` as `500 blob_io`'s does below — and do not
+     restart before it clears: the open writes first, and where the
+     cause refuses it, reads stop with it. On a volume remounted
+     read-only, or a device answering `Input/output error`, copy the
+     data directory while it still reads, then repair the volume.
    - `500 blob_io`, or a log the pruner names `STOPPED`: act on the
      words its detail or its cause carries.
      - `the volume is full (No space left on device …)`: make room.
@@ -286,7 +304,9 @@ apart.
        it is never a case for Restore.
    - The kernel's halt, or writes refused `poisoned` with no
      `feed-attest.log` line: where the volume is full, make room;
-     then restart. The halt ends with the process.
+     then restart. The halt ends with the process. While the walk
+     behind the listener has positions to re-cover, let its
+     `landing:` line come first (Restart, step 3).
 
 6. **Know what the floor keeps meanwhile.** The floor in force is
    the larger of 256 MiB and twice the newest checkpoint's size
@@ -445,9 +465,15 @@ is the evidence, and the way back. Then act on the account:
 - `corrupt run … {segment} is closed — {next} follows it …`:
   restore that one segment, alone, from a copy that holds the
   segment named after it, and start again; nothing is lost, and the
-  open verifies the file by the commit chain. `… {segment} is the
-  active segment …`: restore the data directory whole from one
-  copy (the steps below), which rewinds the board to that copy.
+  open verifies the file by the commit chain. Where `commits.log`'s
+  walk met the same damage first (`commits.log's walk: the journal
+  refused …`, Restart, step 3), its landing wrote the fence into
+  `commits.log`, which the segment alone does not move: put back
+  `commits.log` too, from a copy taken before the open the walk ran
+  in, and every write since that open comes back as a bare entry,
+  its key and its time lost. `… {segment} is the active segment …`:
+  restore the data directory whole from one copy (the steps below),
+  which rewinds the board to that copy.
 - `{segment} is {n} bytes, past …` or `{segment}'s frames could not
   be enumerated …`: where the file is not one of this board's
   segments, move it out of the data directory; where it is, restore
@@ -944,7 +970,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        ```
 
        What follows is, for `commits.log`:
-       `the cut part is re-derived as bare entries`; for the four
+       `the cut part is re-derived as bare entries`, and where trust
+       ended at a damaged line rather than a torn one, `; the cut took
+       {n} whole lines with it, positions {first}–{last}: their keys
+       and times are LOST unless the board directory's backup is
+       restored` — the walk brings each back bare, so put back that
+       copy's `commits.log` (Restore) where the testimony matters; for
+       the four
        index files: `the cut part is re-derived`; and for
        `feed-attest.log`, one of the three endings in Restore,
        step 5. What a file holds that this daemon cannot read is
@@ -1255,7 +1287,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    Under a container, mount the directory that holds the file, never
    the file itself: a mounted file keeps the identity it had when the
    container started, so a rename on the host is never seen, and the
-   old list stays in force with nothing said.
+   old list stays in force with nothing said. Keep the file on a
+   filesystem local to the host, as the data directory is: the daemon
+   looks at the file's identity at the head of every request,
+   `/health` and `/events` included, so a mount that stops answering
+   holds every request until the pool reports itself saturated, and a
+   start waits in the same read.
 
    The next request installs the new list, before it resolves its
    own session; on a quiet board send one (`curl -s
@@ -1329,7 +1366,8 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    - The walk that re-covers a lost `commits.log` (Restart,
      step 3): the file is left as the open found it, and the next
      open walks again. Writes made during the walk come back as
-     bare entries, without their operation or key.
+     bare entries: their key and their time are lost, and their
+     operation too, save where the journal names it.
 
 3. **Know how it ends on its own.** The library's orderly stop is
    for programs that embed the daemon; the `skepd` binary never
@@ -1406,8 +1444,39 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    it refused the list itself, said right after the walk's first line:
 
    ```
-   failure: commits.log's walk: the journal refused position {position} ({account}): once the walk lands the change feed answers 410 history_reclaimed for every since below position {fence}; the walk goes on — restore the segment the account names from a copy (RUNBOOK §2)
+   failure: commits.log's walk: the journal refused position {position} ({account}): once the walk lands the change feed answers 410 history_reclaimed for every since below position {fence}; the walk goes on, and its landing writes that fence into commits.log, which a segment restored alone does not move — to re-cover the positions, stop the daemon, put back the segment the account names and commits.log from a copy taken before this open, and start again (RUNBOOK §2)
    ```
+
+   A refused list leaves the head alone to prove, so the landing
+   follows the line at once. The fence is then in `commits.log`, and
+   every later open reads it back: the segment restored alone mends
+   the journal and nothing of the feed. Put back `commits.log` beside
+   it, from a copy taken before this open, and the next open walks the
+   positions again; every write since this open then comes back as a
+   bare entry, its key and its time lost.
+
+   A landing rewrite that fails before its rename is said once per
+   file, and the file takes no further line. `commits.log` stands as
+   the open found it, so the next open walks the positions again; an
+   index file stands fenced below them, so the next open classifies
+   them from the journal before the board serves, two world
+   reconstructions a position:
+
+   ```
+   failure: commits.log: the walk's landing rewrite failed before its rename: {error}; the file stands as it was and takes no further line, so the next open walks again from position {covered}; every write since this open is held in memory alone, its key and its time lost at that open — restart soon
+   failure: {file}: the walk's landing rewrite failed before its rename: {error}; the file stands fenced below the region at position {covered} and takes no further line, so the next open re-derives it — the board serves from memory, and nothing is lost
+   ```
+
+   Each goes on with the act owed before that restart, as a stopped
+   file's line does (The full volume, step 1).
+
+   A restart while the walk has positions to re-cover walks them
+   again, and every write made since the open comes back as a bare
+   entry, its key and its time lost: until the landing those writes
+   are held in memory alone. Where a line asks for a restart while
+   the walk runs — `feed-attest.log`'s, the kernel's halt — let the
+   walk's `landing:` line come first, after making room where the
+   volume is full; neither halt stops the walk.
 
    Where the walk's thread dies, the positions stay uncovered until
    a restart:

@@ -24,10 +24,50 @@ impl RngCore for OsEntropy {
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        // Fail-stop: a board that cannot draw OS entropy must not mint
-        // credentials from anything weaker.
-        getrandom::fill(dest).expect("OS entropy unavailable");
+        stop_unless_drawn(getrandom::fill(dest));
     }
 }
 
 impl CryptoRng for OsEntropy {}
+
+/// Stops the process where the OS refused its entropy.
+///
+/// Fail-stop: a board that cannot draw OS entropy must not mint credentials
+/// from anything weaker (AUTH-4.13). The panic's payload is a literal, which
+/// the binary's panic hook carries on the operator stream; a formatted one
+/// the hook drops, leaving a panic at this file and nothing of its cause —
+/// a container whose profile refuses `getrandom` would read as a defect.
+///
+/// # Panics
+///
+/// Panics where `drawn` is the OS's refusal.
+fn stop_unless_drawn(drawn: Result<(), getrandom::Error>) {
+    if drawn.is_err() {
+        panic!("OS entropy unavailable: no nonce or session token is minted from anything weaker");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that a refused draw stops with a payload the hook carries.
+    ///
+    /// The binary's panic hook carries a `&'static str` payload alone, so the
+    /// refusal's words reach the operator stream only as a literal.
+    #[test]
+    fn a_refused_draw_stops_with_a_literal_the_hook_carries() {
+        stop_unless_drawn(Ok(()));
+        let payload = std::panic::catch_unwind(|| {
+            stop_unless_drawn(Err(getrandom::Error::UNSUPPORTED));
+        })
+        .expect_err("a refused draw stops");
+        assert_eq!(
+            payload.downcast_ref::<&'static str>().copied(),
+            Some(
+                "OS entropy unavailable: no nonce or session token is minted from anything weaker"
+            ),
+            "the payload is the literal itself"
+        );
+    }
+}

@@ -42,7 +42,8 @@ fn full_volume_line(at: u64, detail: &str) -> String {
     format!(
         "failure: a write was refused at a full volume at position {at} ({detail}): no write \
          lands until room is freed on the volume; reads serve; the next write succeeds by itself \
-         once room stands, and no restart is owed"
+         once room stands, and no restart is owed — a restart before room stands runs its open \
+         into the full volume, and where the open refuses, reads stop with it"
     )
 }
 
@@ -237,7 +238,9 @@ fn a_write_refused_for_a_cause_but_room_is_refused_durability_and_said_by_its_ow
         [format!(
             "failure: a write was refused durability at position {} ({detail}): no write lands \
              until its cause clears; reads serve; check the volume, its device and the board \
-             user's quota — the next write succeeds by itself once the cause clears",
+             user's quota — the next write succeeds by itself once the cause clears; a restart \
+             before then runs its open into the same cause, and where the open refuses, reads \
+             stop with it",
             head + 1
         )],
         "RUNBOOK §1 step 1: one line, its own cause and acts"

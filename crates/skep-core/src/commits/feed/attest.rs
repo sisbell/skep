@@ -285,7 +285,7 @@ impl AttestStore {
     /// A failed write or sync stops the file for the uptime, is said ONCE
     /// through the classed door (`operations.md` §1.1 row 33) — this file,
     /// the position, the cause ([`IoCause`]), what still serves and the act,
-    /// on a full volume room before the restart — and is answered
+    /// the cause cleared before the restart — and is answered
     /// [`AttestStoreFailed`], on which the write path halts, so no later
     /// commit runs to say it twice. This uptime still serves the slot, and
     /// the restart's open rebuilds the line from the journal.
@@ -331,7 +331,10 @@ impl AttestStore {
 /// rebuilds the line from the journal`, `{cause}` as [`IoCause`] words it.
 /// On a full volume it adds `; free room on the volume first: the restart's
 /// open writes the line back and syncs it, and on a full volume it refuses
-/// and reads stop with it` — a restart before room stands would take down a
+/// and reads stop with it`, and for every other cause `; check the volume,
+/// its device and the board user's quota first: the restart's open writes
+/// the line back and syncs it, and where its cause stands it refuses and
+/// reads stop with it` — a restart before the cause clears would take down a
 /// board that still serves reads. A pure value, pinned by `to_string()` in
 /// the unit suite; emitted under `Class::Failure` by [`AttestStore::record`].
 struct NotDurableLine<'a> {
@@ -348,13 +351,14 @@ impl std::fmt::Display for NotDurableLine<'_> {
              refused until a restart, whose open rebuilds the line from the journal",
             self.at
         )?;
-        if cause.is_full() {
-            f.write_str(
-                "; free room on the volume first: the restart's open writes the line back and \
-                 syncs it, and on a full volume it refuses and reads stop with it",
-            )?;
-        }
-        Ok(())
+        f.write_str(if cause.is_full() {
+            "; free room on the volume first: the restart's open writes the line back and syncs \
+             it, and on a full volume it refuses and reads stop with it"
+        } else {
+            "; check the volume, its device and the board user's quota first: the restart's open \
+             writes the line back and syncs it, and where its cause stands it refuses and reads \
+             stop with it"
+        })
     }
 }
 

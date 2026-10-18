@@ -31,8 +31,8 @@
 //!   the landing's fence is the floor as it then stands, positions below it
 //!   `410 history_reclaimed` with the floor, those above served.
 //! * T11 — a derived file's landing rewrite refused before its rename: said
-//!   once with the fence the file stands at, the walk's landing after it,
-//!   the feed served from memory.
+//!   once with the fence the file stands at, the file stopped there, the
+//!   walk's landing after it, the feed served from memory.
 //!
 //! The hold is PROCESS-WIDE, as the cell index walk's is: nextest gives
 //! each test its own process; under plain `cargo test` the tests here take
@@ -782,9 +782,11 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
 /// the region's lower edge; the release lands, and the landing's rewrite of
 /// the index is refused before its rename: said once, under `failure:`,
 /// naming the file, the fence it stands at — the region's lower edge, the
-/// position the next open re-derives above — and that the next open
-/// re-derives it; the walk's own `landing:` line follows it, the region
-/// landed in `commits.log` all the same, and the feed answers from memory.
+/// position the next open re-derives above — that it takes no further line
+/// and that the next open re-derives it, the board serving from memory; the
+/// file stopped since that fence; the walk's own `landing:` line follows it,
+/// the region landed in `commits.log` all the same, and the feed answers
+/// from memory.
 #[test]
 fn a_derived_files_landing_rewrite_refused_names_the_fence_it_stands_at() {
     let _held = hold();
@@ -798,8 +800,10 @@ fn a_derived_files_landing_rewrite_refused_names_the_fence_it_stands_at() {
     release_and_land(&sd);
     let refused = "failure: feed-index.log: the walk's landing rewrite failed before its rename: ";
     let tail = format!(
-        "; the file stands fenced below the region at position {low}, and the next open \
-         re-derives it"
+        "; the file stands fenced below the region at position {low} and takes no further line, \
+         so the next open re-derives it — the board serves from memory, and nothing is lost; \
+         check the volume, its device and the board user's quota before that restart: its open \
+         writes this file"
     );
     let said = sd.daemon().lines_said();
     let at = said
@@ -818,6 +822,7 @@ fn a_derived_files_landing_rewrite_refused_names_the_fence_it_stands_at() {
         "the walk's landing follows the refusal:\n{}",
         said.join("\n")
     );
+    assert_eq!(sd.daemon().stopped_feed_files(), ["feed-index.log"], "the index alone stopped");
     let text = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
     assert!(
         text.lines().any(|l| l.starts_with(&format!("{{\"at\":{head}"))),

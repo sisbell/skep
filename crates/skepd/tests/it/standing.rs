@@ -21,8 +21,9 @@
 //!   (feed-attest.log)`, `{p}` the failed position, beside `/health`'s
 //!   `writes.halted` — false before, true after, false after the restart.
 //! * A STOPPED FILE: `{file} stopped since position {p}` for each of the
-//!   five, `{p}` the position each stop names — the fence for
-//!   `commits.log`'s rewrite, the coverage for the derived files'.
+//!   five, `{p}` the position each stop names — the last entry
+//!   `commits.log`'s rewritten file holds, the coverage for the derived
+//!   files'.
 //! * THE FAILED INDEX (`operations.md` §4 row 26): the walk at open died
 //!   under the seam's fault — `the cell index failed to build` at every
 //!   tick, the pruner's `no pass runs` line once, no pass ever, and no
@@ -366,10 +367,11 @@ fn the_write_paths_halt_is_re_said_with_its_position_and_health_says_halted_unti
 /// m11 — A STOPPED FILE, RE-SAID WITH THE POSITION ITS STOP NAMES: each of
 /// the five files' next compaction rewrite failed past its rename (the
 /// existing drive), on a landing that compacts; the next tick names each
-/// file with its position — `commits.log` the fence it rewrote behind (the
-/// landing line's "compacted below position" less one), the four derived
-/// files the coverage they fenced at, the head — beside the board's
-/// permissive clause.
+/// file with its position — `commits.log` the last entry its rewritten file
+/// holds, the head, which the next open re-derives above and not the fence
+/// it rewrote behind (the landing line's "compacted below position" less
+/// one), the four derived files the coverage they fenced at, the head too —
+/// beside the board's permissive clause.
 #[test]
 fn a_stopped_feed_file_is_re_said_with_the_position_its_stop_names() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -382,13 +384,14 @@ fn a_stopped_feed_file_is_re_said_with_the_position_its_stop_names() {
     sd.daemon().service_the_checkpoint_now();
     let landing = sd.daemon().checkpoint_lines().last().cloned().expect("the landing's line");
     let fence = figure_after(&landing, "compacted below position ") - 1;
+    assert!(fence < head, "the compaction's fence lies below the head: {landing}");
     assert_eq!(sd.daemon().stopped_feed_files().len(), 5, "every file stopped: {landing}");
     sd.daemon().set_standing_interval_millis(50);
     wait_until("the stopped files' clauses", || !standing_lines(&sd).is_empty());
     assert_eq!(
         standing_lines(&sd)[0],
         format!(
-            "standing: commits.log stopped since position {fence}; feed-index.log stopped \
+            "standing: commits.log stopped since position {head}; feed-index.log stopped \
              since position {head}; feed-offsets.log stopped since position {head}; \
              feed-masked.log stopped since position {head}; feed-streams.log stopped since \
              position {head}; CLAIMED-PERMISSIVE"

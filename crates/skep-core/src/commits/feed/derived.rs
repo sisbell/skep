@@ -62,7 +62,10 @@
 //!   handle naming the replaced file, so it STOPS the file as a failed
 //!   append does, said once per uptime — the later landings' rewrites still
 //!   run, the stop moving to each newest fence in silence (P22: a slower
-//!   answer at the next open, never an outage).
+//!   answer at the next open, never an outage). The walk's landing rewrites
+//!   too, over files fenced below its region, so one that fails there before
+//!   its rename leaves a file short of the region, which the landing stops
+//!   at the region's lower edge as the gap rule above asks.
 //!
 //! Loss unmasks nothing: no derived file is consulted for WHAT an entry
 //! says (that is `commits.log`'s) or for WHETHER a class may see it (that
@@ -134,13 +137,16 @@ pub(super) struct LineFile {
     lines: Lines,
     /// Set by the first FAILED [`LineFile::append`] of this uptime — or
     /// failed [`LineFile::sync`], or a [`LineFile::rewrite`] that failed
-    /// PAST its rename — after which this file takes no further APPEND and
-    /// no FENCE. `Some` carries THE POSITION THE STOP WAS SET AT — the
-    /// position the stop's own line names, an ordering the standing line
-    /// re-says the stop by (`operations.md` §1 THE RATES, `{file} stopped
-    /// since position {p}`): the failed append's position; the coverage a
-    /// failed sync was asked to make durable; the fence a rewrite failed
-    /// past its rename at, which is what the next open re-derives from.
+    /// PAST its rename, or the walk's landing over a rewrite that failed
+    /// before it ([`LineFile::stop_at`]) — after which this file takes no
+    /// further APPEND and no FENCE. `Some` carries THE POSITION THE STOP WAS
+    /// SET AT — the position the stop's own line names, an ordering the
+    /// standing line re-says the stop by (`operations.md` §1 THE RATES,
+    /// `{file} stopped since position {p}`): the failed append's position;
+    /// the coverage a failed sync was asked to make durable; the fence a
+    /// rewrite failed past its rename at, or the region's lower edge a
+    /// landing left the file fenced at, which is what the next open
+    /// re-derives from.
     ///
     /// [`LineFile::rewrite`] is not GUARDED by it: it writes the file WHOLE
     /// from the resident twin and fences at the coverage it has just made
@@ -384,8 +390,9 @@ impl LineFile {
     /// no caller pairs a handle with a file-name constant, and goes through
     /// the classed door this file holds (`operations.md` §1.1 row 32): the
     /// position, the cause ([`IoCause`]), the stop, that the board serves
-    /// from memory and loses nothing, and on a full volume that the
-    /// restart's open writes the file. ONE per file per uptime:
+    /// from memory and loses nothing, and the act owed before the restart,
+    /// whose open writes the file ([`IoCause::before_the_restart`]). ONE per
+    /// file per uptime:
     /// [`LineFile::stopped`] answers `Ok` and writes nothing after the first
     /// failure, so a busy board's stream carries it alone, and that field's
     /// own card says what the stop buys.
@@ -399,7 +406,7 @@ impl LineFile {
                      until a restart, whose open re-derives it — the board serves from memory, \
                      and nothing is lost{}",
                     self.name,
-                    cause.free_room_first()
+                    cause.before_the_restart()
                 ),
             );
         }
@@ -479,6 +486,17 @@ impl LineFile {
         self.stopped
     }
 
+    /// Stops the file at `at`, as a failed append stops it.
+    ///
+    /// It is the walk's landing's stop: a rewrite there that failed before
+    /// its rename leaves the file whole and fenced at the region's lower edge
+    /// `at`, short of the region and of every write held while it pended, so
+    /// a later append would raise its coverage claim over that gap. A file
+    /// already stopped keeps its stop.
+    pub(crate) fn stop_at(&mut self, at: u64) {
+        self.stopped.get_or_insert(at);
+    }
+
     /// The unit suite's reading of the stop: whether this file takes no
     /// further line. Not a stable API.
     #[cfg(test)]
@@ -508,7 +526,9 @@ impl LineFile {
     /// Which side of the rename a failure fell on travels as
     /// [`RewriteFail`], since the two leave different files behind: BEFORE
     /// it the old file stands whole and this handle still names it, nothing
-    /// lost, the next checkpoint's compaction trying again; PAST it the new
+    /// lost, the next checkpoint's compaction trying again — save at the
+    /// walk's landing, where the old file is short of the region and the
+    /// landing stops it ([`LineFile::stop_at`]); PAST it the new
     /// file is in place and this handle names the REPLACED one, which no
     /// open reads, so the file is STOPPED for the uptime as a failed append
     /// stops it — said ONCE PER UPTIME, here, at the stop's transition

@@ -81,7 +81,9 @@ fn a_line_the_store_cannot_make_durable_is_said_through_the_door_and_answered() 
     assert!(
         said[0].ends_with(
             "); every later write is refused until a restart, whose open rebuilds the line \
-             from the journal"
+             from the journal; check the volume, its device and the board user's quota first: \
+             the restart's open writes the line back and syncs it, and where its cause stands \
+             it refuses and reads stop with it"
         ),
         "what still serves and the act: {}",
         said[0]
@@ -203,12 +205,14 @@ fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot
     );
 }
 
-/// The open's other lines and row 33's two endings, at fixed inputs: the
-/// refused rebuild with the account and the region; the absent store
-/// with the floor, the edge above which a signature can have been lost
-/// and the count; the store's size and slots with the positions rebuilt,
-/// and with none; and the line not made durable, the act a full volume
-/// adds after it and no other cause does.
+/// Checks the open's other lines and row 33's two endings, at fixed inputs.
+///
+/// They are the refused rebuild with the account and the region; the absent
+/// store with the floor, the edge above which a signature can have been lost
+/// and the count; the store's size and slots with the positions rebuilt, and
+/// with none; and the line not made durable with the act its cause adds
+/// after it, room for a full volume and the volume, its device and the
+/// quota for any other.
 #[test]
 fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
     assert_eq!(
@@ -247,7 +251,14 @@ fn the_open_and_the_halt_say_what_the_store_holds_and_what_is_lost() {
     let halt = "feed-attest.log: position 5's line is not durable";
     let rest = "every later write is refused until a restart, whose open rebuilds the line \
                 from the journal";
-    assert_eq!(durable(io::ErrorKind::Other), format!("{halt} (no room); {rest}"));
+    assert_eq!(
+        durable(io::ErrorKind::Other),
+        format!(
+            "{halt} (no room); {rest}; check the volume, its device and the board user's quota \
+             first: the restart's open writes the line back and syncs it, and where its cause \
+             stands it refuses and reads stop with it"
+        )
+    );
     assert_eq!(
         durable(io::ErrorKind::StorageFull),
         format!(

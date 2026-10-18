@@ -1878,9 +1878,10 @@ fn the_checkpoint_threads_landing_compacts_the_five_feed_files_while_serving() {
 /// rewrite that fails PAST its rename — the new file in place, the handle
 /// naming the replaced one — STOPS its file for the uptime, said once, and
 /// the next append is a no-op; the write it followed is acked and served
-/// this uptime from the resident entries; the next open re-derives the
-/// unrecorded position as a bare entry. Driven through the seam that refuses
-/// the reopen of each of the five files.
+/// this uptime from the resident entries; the next open re-derives above the
+/// rewritten log's last entry, the unrecorded position a bare entry and
+/// every position the rewritten file holds keeping its testimony. Driven
+/// through the seam that refuses the reopen of each of the five files.
 ///
 /// SAID ONCE PER UPTIME (`operations.md` §1.1 rows 29 and 30): a SECOND
 /// landing that compacts — the floor moved past the surviving entries by
@@ -1923,14 +1924,17 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     };
     let said = stop_lines(&sd);
     assert_eq!(said.len(), 5, "one line per stopped file:\n{}", said.join("\n"));
-    // Each names the fence its rewritten file carries — the position the
-    // standing line re-says its stop by, and the next open re-derives above.
+    // Each names the position the next open re-derives above, the one the
+    // standing line re-says its stop by: the rewritten log's last entry, for
+    // the next open walks above it, and each derived file's own fence.
+    let last = *after["commits.log"].0.last().expect("the rewritten file holds an entry");
     assert_eq!(
         said[0],
         format!(
             "failure: commits.log rewrite failed past its rename: test seam: the rewritten file's \
              reopen refused; this file takes no further line, so the next open re-derives above \
-             its fence at position {fence} as bare entries"
+             position {last} as bare entries; every write until then is held in memory alone, its \
+             key and its time lost at that open — restart soon"
         )
     );
     let rewrite_order = ["feed-index.log", "feed-masked.log", "feed-streams.log", "feed-offsets.log"];
@@ -1971,7 +1975,7 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     sd.daemon().checkpoint_now();
     let second = sd.daemon().newest_checkpoint().expect("the second checkpoint").seq.0;
     assert!(second > head, "a checkpoint above the first: {second} > {head}");
-    small_commit(port, &s1, &doc);
+    let kept = small_commit(port, &s1, &doc);
     sd.daemon().fail_the_feeds_next_rewrite_past_rename();
     sd.daemon().service_the_checkpoint_now();
     let third = sd.daemon().newest_checkpoint().expect("the third checkpoint").seq.0;
@@ -1980,6 +1984,8 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     let new_fence = again["commits.log"].1.expect("the fence");
     assert_eq!(new_fence, second - 1, "compacted to the floor the second checkpoint set");
     assert!(again["commits.log"].0.iter().all(|&at| at > new_fence), "the rewrite ran: {again:?}");
+    assert!(again["commits.log"].0.contains(&kept), "the rewrite wrote the stopped file's writes");
+    let new_last = *again["commits.log"].0.last().expect("the rewritten file holds an entry");
     assert_eq!(sd.daemon().stopped_feed_files(), FIVE.to_vec(), "still stopped, every one");
     assert_eq!(
         stop_lines(&sd),
@@ -2006,8 +2012,8 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
         );
     }
     assert!(
-        standing.contains(&format!("commits.log stopped since position {new_fence}")),
-        "commits.log's stop moved to the newest fence: {standing}"
+        standing.contains(&format!("commits.log stopped since position {new_last}")),
+        "commits.log's stop moved to the newest rewritten file's last entry: {standing}"
     );
     // A write after the final stop: acked, served this uptime, and no file
     // takes its line — the second rewrite wrote the earlier ones whole from
@@ -2026,6 +2032,15 @@ fn a_feed_rewrite_failed_past_its_rename_stops_the_file_and_fails_no_op() {
     assert!(entries.iter().any(|e| e["at"].as_u64() == Some(at)), "re-derived: {v}");
     let bare = entries.iter().find(|e| e["at"].as_u64() == Some(at)).unwrap();
     assert!(bare["docs"].is_null() && bare["time"].is_null(), "bare, never invented: {bare}");
+    // A write the second rewrite wrote whole keeps its testimony.
+    let v = changes_ok(port, Some(&s1), &format!("since={new_fence}"));
+    let entries = v["changes"].as_array().expect("changes");
+    let whole = entries.iter().find(|e| e["at"].as_u64() == Some(kept));
+    let whole = whole.unwrap_or_else(|| panic!("{kept} is served: {v}"));
+    assert!(
+        whole["op"].is_string() && whole["key"].is_string() && whole["time"].is_u64(),
+        "the rewritten file kept its op, key and time: {whole}"
+    );
     assert!(sd.daemon().stopped_feed_files().is_empty(), "a fresh open stops nothing");
     let again = small_commit(port, &s1, &doc);
     assert!(feed_files_positions(dir.path())["commits.log"].0.contains(&again));

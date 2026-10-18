@@ -40,7 +40,9 @@
 //!   at the first unparseable line; the daemon never wedges on its own
 //!   testimony. The cut is said on the operator stream once, with the last
 //!   trusted position and the bytes ([`Cut`]), and its case: the cut part
-//!   is re-derived as bare entries by the walk below.
+//!   is re-derived as bare entries by the walk below, and past a damaged
+//!   line the whole lines the cut took are counted, their keys and times
+//!   lost unless a copy holds them.
 //! * Positions whose record was lost, or that predate the feature, are
 //!   reconstructed as BARE positions and answer `docs`/`key`/`time` as
 //!   `null`. NEVER an invented value. The op's own TERMS, and the op where
@@ -68,7 +70,8 @@
 //!   records the uncovered region `(low, head]` as PENDING and returns with
 //!   the file as parsed; a thread of the write path's walks it while reads
 //!   are served and writes admitted, and lands it by ONE whole rewrite of
-//!   this file ([`CommitsLog::land`]), so the walk runs once per uncovered
+//!   this file ([`CommitsLog::fold_the_walk`], then
+//!   [`CommitsLog::write_the_landing`]), so the walk runs once per uncovered
 //!   region, not once per open. While the region is pending, a page of
 //!   `/changes` whose rows would have to come from it is refused
 //!   retry-class (`feed_rebuilding`), a write's record is kept in memory
@@ -500,9 +503,10 @@ pub(super) struct LineOffset(pub u64);
 /// What [`CommitsLog::record`] did with a NEW position: appended its line,
 /// at the [`LineOffset`] it landed at, or HELD it in the resident entries
 /// alone while the walk's region is pending — the line written, and its
-/// offset assigned, by the landing's rewrite ([`CommitsLog::land`]). The
-/// feed folds a held position into its twins and appends nothing to the
-/// four derived files, whose lines the same landing rewrites whole.
+/// offset assigned, by the landing's rewrite
+/// ([`CommitsLog::write_the_landing`]). The feed folds a held position into
+/// its twins and appends nothing to the four derived files, whose lines the
+/// same landing rewrites whole.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Recorded {
     Appended(LineOffset),
@@ -605,14 +609,15 @@ pub(super) struct CommitsLog {
     floor_at_open: Option<u64>,
     /// THE REGION PENDING — `(low, head]`, the positions the file did not
     /// cover at open, which the walk behind the listener re-covers
-    /// ([`reconstruct`]) and the landing writes ([`CommitsLog::land`]);
-    /// `None` where the file covered the head, and again once the landing
-    /// has written. `low` is COVERED (the highest surviving entry, or the
-    /// fence), `head` UNCOVERED, the last of the region. While it stands:
-    /// `entries` lacks every position in it; [`CommitsLog::record`] keeps a
-    /// new position in memory alone (`Recorded::Held`); the file takes no
-    /// line; and the feed refuses a page whose rows would have to come from
-    /// it. Read outside this file through [`CommitsLog::pending_region`].
+    /// ([`reconstruct`]) and the landing writes
+    /// ([`CommitsLog::write_the_landing`]); `None` where the file covered the
+    /// head, and again once the landing has folded it in. `low` is COVERED
+    /// (the highest surviving entry, or the fence), `head` UNCOVERED, the
+    /// last of the region. While it stands: `entries` lacks every position in
+    /// it; [`CommitsLog::record`] keeps a new position in memory alone
+    /// (`Recorded::Held`); the file takes no line; and the feed refuses a
+    /// page whose rows would have to come from it. Read outside this file
+    /// through [`CommitsLog::pending_region`].
     pending: Option<(u64, u64)>,
     /// Monotone clamp for recorded wall-clock times.
     last_time: u64,
@@ -621,9 +626,10 @@ pub(super) struct CommitsLog {
     /// The classed door with the daemon's record ([`Lines`]): what the
     /// rewrite's stop is said through, once per uptime.
     lines: Lines,
-    /// Set by the first FAILED append of this uptime — or a compaction's
-    /// rewrite failed PAST its rename ([`CommitsLog::compact_to`]), after
-    /// which the handle names a file no open reads — after which this file
+    /// Set by the first FAILED append of this uptime — or a rewrite failed
+    /// PAST its rename ([`CommitsLog::compact_to`]), after which the handle
+    /// names a file no open reads, or the walk's landing failed before its
+    /// rename ([`CommitsLog::write_the_landing`]) — after which this file
     /// takes no further line.
     ///
     /// THE REOPEN WALK CANNOT REACH AN INTERIOR LOSS. [`CommitsLog::open`]
@@ -642,9 +648,10 @@ pub(super) struct CommitsLog {
     /// what the next open reads. `Some` carries THE POSITION THE STOP WAS SET
     /// AT — the position the stop's own line names, an ordering the standing
     /// line re-says the stop by (`operations.md` §1 THE RATES, `{file}
-    /// stopped since position {p}`): the failed append's position, or the
-    /// fence a rewrite failed past its rename at, which is what the next
-    /// open re-derives from.
+    /// stopped since position {p}`): the failed append's position, which the
+    /// next open re-derives from; the region's lower edge a landing left the
+    /// file torn at, which it walks again from; or the last entry a rewrite
+    /// failed past its rename wrote, which it re-derives above.
     stopped: Option<u64>,
     /// The test seam behind `skepd::Daemon::fail_the_feeds_next_rewrite_past_rename`:
     /// the next compaction's rewrite fails AFTER its rename, at the reopen
@@ -660,8 +667,8 @@ impl CommitsLog {
     /// above it — and record any uncovered `(last recorded, head]` region as
     /// PENDING, to be reconstructed as bare positions by the walk behind the
     /// listener ([`reconstruct`]) and written by its landing
-    /// ([`CommitsLog::land`]). Returns the replayed log with the file AS
-    /// PARSED: no bare line appended, no fence line written.
+    /// ([`CommitsLog::write_the_landing`]). Returns the replayed log with the
+    /// file AS PARSED: no bare line appended, no fence line written.
     ///
     /// COST — the open's own: O(the file) to replay it, and the floor
     /// probe. THE WALK IS NOT THE OPEN's (`operations.md` §3.3 step 2; §4
@@ -737,7 +744,7 @@ impl CommitsLog {
             // positions by the walk below — said once the walk's own fence
             // `low` is known, which is the position trust ends at.
             file.set_len(valid_end as u64).map_err(with_file)?;
-            Some((valid_end as u64, bytes.len() as u64))
+            Some(valid_end)
         } else {
             None
         };
@@ -784,12 +791,15 @@ impl CommitsLog {
             min_since = 0;
         }
         let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
-        if let Some((valid_end, before)) = cut {
+        if let Some(valid_end) = cut {
             // Row 9 for this file: the last trusted position is the walk's
             // own fence, the highest surviving record at or below the head
             // (or the fence record), from which the cut part is re-derived —
-            // whatever the cut lines named, so neither is read.
-            let cut = Cut { valid_end, len: before, trusted: low, first: None, whole_after: None };
+            // whatever a torn line named; the whole lines past a damaged one
+            // are counted, since their testimony no walk brings back.
+            let whole_after = whole_lines_past(&bytes[valid_end..], head);
+            let (valid_end, len) = (valid_end as u64, bytes.len() as u64);
+            let cut = Cut { valid_end, len, trusted: low, first: None, whole_after };
             lines.say(Class::Failure, LogCutLine { cut });
         }
         // THE REGION, PENDING: what the file does not cover, `(low, head]`,
@@ -881,38 +891,31 @@ impl CommitsLog {
         self.pending
     }
 
-    /// THE LANDING (`operations.md` §3.3 step 2: "the walk accumulates in
-    /// memory and lands by ONE whole rewrite of `commits.log` under the
-    /// feed's lock"): fold the walk's boundaries into the resident entries as
-    /// BARE positions carrying the journal's answer — beside every position
-    /// recorded in memory while the region was pending — move the fence to
-    /// the greatest of the fence in force, the walk's own (`walk_min_since`,
-    /// where the journal stopped answering) and the reclaim floor's as read
-    /// AT the landing (`floor_fence`, a checkpoint having landed meanwhile),
-    /// drop what lies at or below it, and REWRITE the file whole through
-    /// [`rewrite`]'s path: one `min_since` line, then every entry in position
-    /// order — so file order is position order, and every offset, the
-    /// held positions' among them, is assigned here. Answers the fence the
-    /// file was written behind, which the feed trims its twins to.
+    /// Folds the walk into the resident entries and fences them.
     ///
-    /// The region is CLEARED whatever the rewrite answers: the resident
-    /// entries are complete from here, and this uptime serves them. A
-    /// rewrite that fails BEFORE its rename leaves the old file whole —
-    /// torn at `low`, the held positions unwritten — and STOPS this file,
-    /// said once: a later append would raise the file's highest entry past
-    /// the region, which the next open's walk could then never re-cover
-    /// (the `stopped` field's card), where a stopped file keeps `low` where
-    /// it was and the next open walks again from it. One that fails PAST
-    /// its rename is [`CommitsLog::rewrite_whole`]'s stop, said there.
-    pub(super) fn land(
+    /// It is the landing's first half, and writes nothing (`operations.md`
+    /// §3.3 step 2: "the walk accumulates in memory and lands by ONE whole
+    /// rewrite of `commits.log` under the feed's lock"): the walk's
+    /// boundaries enter the resident entries as bare positions carrying the
+    /// journal's answer, beside every position recorded in memory while the
+    /// region was pending, and the fence moves to the greatest of the fence
+    /// in force, the walk's own (`walk_min_since`, where the journal stopped
+    /// answering) and the reclaim floor's as read at the landing
+    /// (`floor_fence`, a checkpoint having landed meanwhile), what lies at or
+    /// below it dropped. The region is cleared: the resident entries are
+    /// complete from here, and this uptime serves them. Answers the region
+    /// taken, `(low, head]`, and the fence, which the feed trims its twins
+    /// to; `None` where no region was pending, nothing folded. The file is
+    /// [`CommitsLog::write_the_landing`]'s to write, which the feed calls
+    /// once the files classified from it are written (`Feed::land` gives the
+    /// order).
+    pub(super) fn fold_the_walk(
         &mut self,
         walked: &[Walked],
         walk_min_since: Option<u64>,
         floor_fence: Option<u64>,
-    ) -> Result<u64, RewriteFail> {
-        let Some((low, _)) = self.pending.take() else {
-            return Ok(self.min_since);
-        };
+    ) -> Option<((u64, u64), u64)> {
+        let region = self.pending.take()?;
         for w in walked {
             // A position the walk proved; never over one recorded meanwhile,
             // which cannot share it — the region lies at or below the head
@@ -922,8 +925,29 @@ impl CommitsLog {
         let fence = self.min_since.max(walk_min_since.unwrap_or(0)).max(floor_fence.unwrap_or(0));
         self.min_since = fence;
         self.entries = self.entries.split_off(&fence.saturating_add(1));
+        Some((region, fence))
+    }
+
+    /// Writes the landing: the file rewritten whole from the resident entries.
+    ///
+    /// It is the landing's second half, through [`rewrite`]'s path: one
+    /// `min_since` line, then every entry in position order, so file order
+    /// is position order and every offset, the held positions' among them,
+    /// is assigned here. `low` is the lower edge of the region
+    /// [`CommitsLog::fold_the_walk`] took.
+    ///
+    /// # Errors
+    ///
+    /// The rewrite's failure ([`RewriteFail`]), each side with its stop.
+    /// Before its rename the old file stands whole — torn at `low`, the held
+    /// positions unwritten — and this file stops at `low`, said once
+    /// ([`LandingRefusedLine`]): a later append would raise the file's
+    /// highest entry past the region, which the next open's walk could then
+    /// never re-cover (the `stopped` field's card), where a stopped file
+    /// keeps `low` where it was and the next open walks again from it. Past
+    /// its rename the stop is [`CommitsLog::rewrite_whole`]'s, said there.
+    pub(super) fn write_the_landing(&mut self, low: u64) -> Result<(), RewriteFail> {
         match self.rewrite_whole() {
-            Ok(()) => Ok(fence),
             Err(RewriteFail::BeforeRename(e)) => {
                 let first = self.stopped.is_none();
                 self.stopped = Some(low);
@@ -932,7 +956,7 @@ impl CommitsLog {
                 }
                 Err(RewriteFail::BeforeRename(e))
             }
-            Err(past) => Err(past),
+            answered => answered,
         }
     }
 
@@ -955,10 +979,11 @@ impl CommitsLog {
     /// REPLACED file, which no open reads, so the file is STOPPED for the
     /// uptime as a failed append stops it — the resident entries are
     /// trimmed all the same and serve this uptime, and the next open
-    /// re-derives from the rewritten file's own fence. Said ONCE PER UPTIME
-    /// (`operations.md` §1.1 row 29): this method has no stop guard, so a
-    /// stopped log is rewritten at every compacting landing — each rewrite
-    /// running, the stop's position moving to the newest fence — and the
+    /// re-derives above the rewritten file's last entry, every write since
+    /// held in memory alone. Said ONCE PER UPTIME (`operations.md` §1.1 row
+    /// 29): this method has no stop guard, so a stopped log is rewritten at
+    /// every compacting landing — each rewrite running, one that fails past
+    /// its rename again moving the stop to its own last entry — and the
     /// line is said at the stop's transition alone, the standing line
     /// re-saying it while it stands.
     pub(super) fn compact_to(&mut self, min_since: u64) -> Result<bool, RewriteFail> {
@@ -974,9 +999,10 @@ impl CommitsLog {
     /// `since` the feed honors.
     ///
     /// WHILE THE WALK's REGION IS PENDING the rewrite is DEFERRED to the
-    /// landing ([`CommitsLog::land`]): the fence moves and the entries at or
-    /// below it are dropped, in memory, and the file — which the landing
-    /// rewrites whole behind the fence as it then stands — takes nothing.
+    /// landing ([`CommitsLog::write_the_landing`]): the fence moves and the
+    /// entries at or below it are dropped, in memory, and the file — which
+    /// the landing rewrites whole behind the fence as it then stands — takes
+    /// nothing.
     /// The open's own compaction runs before the region is recorded, so it
     /// writes.
     fn compact_inner(&mut self, min_since: u64, force: bool) -> Result<bool, RewriteFail> {
@@ -994,16 +1020,11 @@ impl CommitsLog {
         Ok(true)
     }
 
-    /// The fence in force — [`CommitsLog::min_since`]'s number, read by the
-    /// feed's landing where the log's own landing refused, to trim the twins
-    /// to what the entries hold.
-    pub(super) fn min_since_in_force(&self) -> u64 {
-        self.min_since
-    }
-
     /// Rewrite the whole file from the resident entries behind the fence in
     /// force ([`rewrite`]), the handle, the offsets and the length moving
-    /// with it; the stop on a failure past the rename.
+    /// with it; the stop on a failure past the rename, at the last entry the
+    /// new file holds — the position the next open's walk starts above, and
+    /// so the one the stop's line and the standing line name.
     fn rewrite_whole(&mut self) -> Result<(), RewriteFail> {
         #[cfg(any(test, feature = "test-hooks"))]
         let fail_past_rename = std::mem::take(&mut self.fail_next_rewrite_past_rename);
@@ -1017,21 +1038,22 @@ impl CommitsLog {
                 self.rewritten = true;
             }
             Err(RewriteFail::PastRename(e)) => {
-                // Said where the stop is SET, not where it is re-set: a
-                // stopped log is rewritten again at the next compacting
-                // landing, its stop moving to the newest fence in silence.
+                // Said where the stop is set, not where it is set again: a
+                // stopped log is rewritten at the next compacting landing,
+                // its stop moving to that rewrite's last entry in silence.
                 let first = self.stopped.is_none();
-                self.stopped = Some(self.min_since);
+                let last = self.entries.keys().next_back().copied().unwrap_or(self.min_since);
+                self.stopped = Some(last);
                 self.rewritten = true;
                 if first {
                     self.lines.say(
                         Class::Failure,
                         format_args!(
                             "commits.log rewrite failed past its rename: {}; this file takes no \
-                             further line, so the next open re-derives above its fence at \
-                             position {} as bare entries",
-                            IoCause(&e),
-                            self.min_since
+                             further line, so the next open re-derives above position {last} as \
+                             bare entries; every write until then is held in memory alone, its \
+                             key and its time lost at that open — restart soon",
+                            IoCause(&e)
                         ),
                     );
                 }
@@ -1163,8 +1185,8 @@ impl CommitsLog {
         // instead of above it. The failure is REPORTED through the classed
         // door (`operations.md` §1.1 row 31) — once, since the stop takes
         // every later line — which states why a notice may not panic. The
-        // line names what the stop costs until the restart, and on a full
-        // volume that the restart's open writes this file.
+        // line names what the stop costs until the restart, and the act
+        // owed before it, since the restart's open writes this file.
         let line = entry_line(at, &meta);
         if self.stopped.is_none() {
             match self.file.write_all(&line) {
@@ -1179,7 +1201,7 @@ impl CommitsLog {
                              takes no further line, so the next open re-derives from {at} as \
                              bare entries; every write until then is held in memory alone, its \
                              key and its time lost at that open — restart soon{}",
-                            cause.free_room_first()
+                            cause.before_the_restart()
                         ),
                     );
                 }
@@ -1379,13 +1401,14 @@ pub(super) struct Cut {
     /// line ended by its newline that does not parse is damage, and its own
     /// digits are no witness. The attest store reads it, its case turning on
     /// which side of the reclaim floor the cut lines lie; `commits.log`'s
-    /// own open reads neither this nor `whole_after`, its cut part
-    /// re-derived whatever it named.
+    /// own open does not, its cut part re-derived whatever it named.
     pub first: Option<u64>,
     /// The whole entry lines the cut takes with it, at or below the head.
     ///
     /// They are the lines after a damaged one, read before the truncation;
-    /// `None` where the cut takes none.
+    /// `None` where the cut takes none. The attest store's lost endings and
+    /// `commits.log`'s cut line name them: what they held, a copy alone
+    /// holds now.
     pub whole_after: Option<EntryLines>,
 }
 
@@ -1472,16 +1495,18 @@ impl IoCause<'_> {
         self.0.kind() == io::ErrorKind::StorageFull
     }
 
-    /// Returns the act a stopped file's line ends with on a full volume.
+    /// Returns the act a stopped file's line ends with, ahead of the restart.
     ///
-    /// The restart that re-derives the file writes it first, so on a
-    /// volume still full that open refuses and reads stop with it; the
-    /// clause is empty for every other cause.
-    pub(super) fn free_room_first(&self) -> &'static str {
+    /// The restart that re-derives the file writes it first, so where the
+    /// cause still stands that open refuses and reads stop with it: on a full
+    /// volume the act is room, and for every other cause the volume, its
+    /// device and the board user's quota, checked first.
+    pub(super) fn before_the_restart(&self) -> &'static str {
         if self.is_full() {
             "; free room before that restart: its open writes this file"
         } else {
-            ""
+            "; check the volume, its device and the board user's quota before that restart: its \
+             open writes this file"
         }
     }
 }
@@ -1519,10 +1544,16 @@ impl std::fmt::Display for CutHead {
     }
 }
 
-/// Row 9 for `commits.log`: the head, then this file's own case — the cut
-/// part is re-derived as bare entries, by the walk the open runs from the
-/// last trusted position (the file's own recovery, which line 31 names for
-/// a failed append). Emitted under `Class::Failure` by [`CommitsLog::open`].
+/// Row 9 for `commits.log`: the head, then this file's own case.
+///
+/// The cut part is re-derived as bare entries, by the walk the open runs
+/// from the last trusted position (the file's own recovery, which line 31
+/// names for a failed append). Where trust ended at a damaged line and not a
+/// torn one, the line goes on with the whole lines the cut took with it:
+/// `; the cut took {n} whole lines with it, positions {a}–{b}: their keys
+/// and times are LOST unless the board directory's backup is restored` —
+/// their testimony is held by no file the open reads, and the walk brings
+/// each back bare. Emitted under `Class::Failure` by [`CommitsLog::open`].
 pub(super) struct LogCutLine {
     pub cut: Cut,
 }
@@ -1533,7 +1564,15 @@ impl std::fmt::Display for LogCutLine {
             f,
             "{}; the cut part is re-derived as bare entries",
             CutHead { name: SIDECAR_FILE, cut: self.cut }
-        )
+        )?;
+        match self.cut.whole_after {
+            Some(EntryLines { lines, first, last }) => write!(
+                f,
+                "; the cut took {lines} whole lines with it, positions {first}–{last}: their keys \
+                 and times are LOST unless the board directory's backup is restored"
+            ),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1718,13 +1757,19 @@ impl std::fmt::Display for WalkLandingLine {
 ///
 /// The words: `commits.log's walk: the journal refused position {at}
 /// ({account}): once the walk lands the change feed answers 410
-/// history_reclaimed for every since below position {m}; the walk goes on —
-/// restore the segment the account names from a copy (RUNBOOK §2)`.
-/// `{account}` is the kernel's own, and `{m}` the fence the refusal moved
-/// the walk to as it stands then — the landing's own line names the fence it
-/// writes. Said once per walk, by [`reconstruct`], where the first refusal
-/// is met: damage at rest is news while the walk still runs, and a walk of
-/// the retained window can run for hours. A pure value, pinned by
+/// history_reclaimed for every since below position {m}; the walk goes on,
+/// and its landing writes that fence into commits.log, which a segment
+/// restored alone does not move — to re-cover the positions, stop the
+/// daemon, put back the segment the account names and commits.log from a
+/// copy taken before this open, and start again (RUNBOOK §2)`. `{account}`
+/// is the kernel's own, and `{m}` the fence the refusal moved the walk to
+/// as it stands then — the landing's own line names the fence it writes.
+/// From the landing on that fence is the file's first line, which every
+/// later open reads and none lowers, so the act that re-covers the
+/// positions puts back, beside the segment, a `commits.log` that holds no
+/// such line. Said once per walk, by [`reconstruct`], where the first
+/// refusal is met: damage at rest is news while the walk still runs, and a
+/// walk of the retained window can run for hours. A pure value, pinned by
 /// `to_string()`; emitted under `Class::Failure`.
 pub(super) struct WalkRefusedLine<'a> {
     pub refusal: &'a WalkRefusal,
@@ -1738,17 +1783,28 @@ impl std::fmt::Display for WalkRefusedLine<'_> {
             f,
             "commits.log's walk: the journal refused {refused} {} ({}): once the walk lands the \
              change feed answers 410 history_reclaimed for every since below position {}; the \
-             walk goes on — restore the segment the account names from a copy (RUNBOOK §2)",
+             walk goes on, and its landing writes that fence into commits.log, which a segment \
+             restored alone does not move — to re-cover the positions, stop the daemon, put \
+             back the segment the account names and commits.log from a copy taken before this \
+             open, and start again (RUNBOOK §2)",
             self.refusal.at, self.refusal.account, self.fence
         )
     }
 }
 
-/// THE LANDING REFUSED before its rename: the file stands as the open found
-/// it and takes no further line, so the next open walks again from the
-/// region's lower edge — [`CommitsLog::land`] states why the stop is the
-/// honest half. A pure value, pinned by `to_string()`; emitted under
-/// `Class::Failure`, once per uptime.
+/// The walk's landing, refused before its rename.
+///
+/// The file stands as the open found it and takes no further line, so the
+/// next open walks again from the region's lower edge —
+/// [`CommitsLog::write_the_landing`] states why the stop is the honest half
+/// — and every write since this open, held in memory alone, comes back at
+/// that open as a bare entry. The words: `commits.log: the walk's landing
+/// rewrite failed before its rename: {cause}; the file stands as it was and
+/// takes no further line, so the next open walks again from position {low};
+/// every write since this open is held in memory alone, its key and its time
+/// lost at that open — restart soon`, then the act owed before that restart
+/// ([`IoCause::before_the_restart`]). A pure value, pinned by `to_string()`;
+/// emitted under `Class::Failure`, once per uptime.
 pub(super) struct LandingRefusedLine<'a> {
     pub low: u64,
     pub error: &'a io::Error,
@@ -1756,13 +1812,15 @@ pub(super) struct LandingRefusedLine<'a> {
 
 impl std::fmt::Display for LandingRefusedLine<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cause = IoCause(self.error);
         write!(
             f,
-            "commits.log: the walk's landing rewrite failed before its rename: {}; the file \
+            "commits.log: the walk's landing rewrite failed before its rename: {cause}; the file \
              stands as it was and takes no further line, so the next open walks again from \
-             position {}",
-            IoCause(self.error),
-            self.low
+             position {}; every write since this open is held in memory alone, its key and its \
+             time lost at that open — restart soon{}",
+            self.low,
+            cause.before_the_restart()
         )
     }
 }
@@ -2327,6 +2385,25 @@ fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
         pos += nl + 1;
     }
     (out, pos)
+}
+
+/// Returns the whole entry lines past the line a replay stopped on.
+///
+/// `tail` opens at that line. A torn line — no newline, the file's end —
+/// takes none with it; a whole line that does not parse is damage, and the
+/// entry lines at or below `head` after it are the testimony the cut takes.
+fn whole_lines_past(tail: &[u8], head: u64) -> Option<EntryLines> {
+    let mut lines = tail.split_inclusive(|&b| b == b'\n');
+    if !lines.next()?.ends_with(b"\n") {
+        return None;
+    }
+    lines
+        .filter_map(|line| line.strip_suffix(b"\n").and_then(parse_line))
+        .filter_map(|record| match record {
+            Record::Entry(at, _) if at <= head => Some(at),
+            Record::Entry(..) | Record::MinSince(_) => None,
+        })
+        .fold(None, |held, at| Some(EntryLines::with(held, at)))
 }
 
 /// One file line. The file is daemon-private; unknown keys are ignored (a

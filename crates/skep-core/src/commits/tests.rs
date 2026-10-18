@@ -307,19 +307,23 @@ fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
     );
 }
 
-/// m1's TWO LINES AND THEIR CLOSE (`operations.md` §1.1 m1; §4 row 1), in
-/// the ruled words: a full volume's with the kernel's account after the
-/// position; every other kind's with its cause and the acts that clear it;
-/// the account left out where the refusal carried none; the kernel's halt
-/// with its own cause, and with the three classes where it kept none; and
-/// the stretch's close with the landed position, the count and the first
-/// refused one. The door they go through keeps them in the record under
-/// their class words.
+/// Checks m1's two lines and their close in the ruled words.
+///
+/// They are (`operations.md` §1.1 m1; §4 row 1) a full volume's with the
+/// kernel's account after the position; every other kind's with its cause
+/// and the acts that clear it; each with what a restart before the cause
+/// clears meets at its open; the account left out where the refusal
+/// carried none; the kernel's halt with its own cause, and with the three
+/// classes where it kept none; and the stretch's close with the landed
+/// position, the count and the first refused one. The door they go through
+/// keeps them in the record under their class words.
 #[test]
 fn the_durability_and_halt_lines_render_the_ruled_words_and_the_door_records_them() {
     let refused = |full, detail| DurabilityRefusedLine { at: Seq(1204), full, detail }.to_string();
     let room = "no write lands until room is freed on the volume; reads serve; the next write \
-                succeeds by itself once room stands, and no restart is owed";
+                succeeds by itself once room stands, and no restart is owed — a restart before \
+                room stands runs its open into the full volume, and where the open refuses, reads \
+                stop with it";
     assert_eq!(
         refused(true, Some("seg-3.wal: append: No space left on device (os error 28)")),
         format!(
@@ -336,7 +340,8 @@ fn the_durability_and_halt_lines_render_the_ruled_words_and_the_door_records_the
         "a write was refused durability at position 1204 (seg-3.wal: append: Disk quota exceeded \
          (os error 69)): no write lands until its cause clears; reads serve; check the volume, \
          its device and the board user's quota — the next write succeeds by itself once the \
-         cause clears"
+         cause clears; a restart before then runs its open into the same cause, and where the \
+         open refuses, reads stop with it"
     );
     let landed =
         WritesLandAgainLine { at: Seq(1206), refused: 3, elapsed_ms: 912, since: Seq(1204) };
@@ -465,7 +470,9 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
             format!(
                 "failure: a write was refused at a full volume at position {again} (no room): no \
                  write lands until room is freed on the volume; reads serve; the next write \
-                 succeeds by itself once room stands, and no restart is owed"
+                 succeeds by itself once room stands, and no restart is owed — a restart before \
+                 room stands runs its open into the full volume, and where the open refuses, \
+                 reads stop with it"
             )
             .as_str()
         ),
@@ -817,6 +824,7 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, SaltSource};
     use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
+    let _walks = one_walk_at_a_time();
     let dir = tempfile::tempdir().expect("tempdir");
     let engine = Engine::open(KernelConfig {
         durability: Durability::InMemory,
@@ -861,8 +869,10 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
         format!(
             "failure: commits.log's walk: the journal refused the boundaries above position 2 \
              ({refused}): once the walk lands the change feed answers 410 history_reclaimed for \
-             every since below position {fence}; the walk goes on — restore the segment the \
-             account names from a copy (RUNBOOK §2)"
+             every since below position {fence}; the walk goes on, and its landing writes that \
+             fence into commits.log, which a segment restored alone does not move — to \
+             re-cover the positions, stop the daemon, put back the segment the account names \
+             and commits.log from a copy taken before this open, and start again (RUNBOOK §2)"
         ),
     ] {
         assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{all}");
@@ -935,4 +945,505 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
         said.iter().any(|l| l.starts_with(&reach)),
         "the walked head alone above the fence, nothing pending:\n{all}"
     );
+}
+
+/// The feed walk's hold and its seams are process-wide.
+///
+/// A test here that opens the write path over a pending region, or arms a
+/// seam, takes this for its span, so under plain `cargo test` no walk parks
+/// behind another test's hold or meets another test's seam.
+static WALKS: Mutex<()> = Mutex::new(());
+
+/// The walks taken for one test's span ([`WALKS`]).
+///
+/// Its drop releases the hold, pass or fail, so a red leaves no later walk
+/// parked.
+struct OneWalk(#[allow(dead_code)] parking_lot::MutexGuard<'static, ()>);
+
+impl Drop for OneWalk {
+    fn drop(&mut self) {
+        FEED_WALK_HOLD.release();
+    }
+}
+
+/// Takes the walks for a test's span.
+fn one_walk_at_a_time() -> OneWalk {
+    OneWalk(WALKS.lock())
+}
+
+/// Opens the write path over `dir`, as the daemon's open does.
+///
+/// # Panics
+///
+/// Panics where the open fails.
+fn open_the_write_path(dir: &std::path::Path, engine: &Engine) -> Commits {
+    Commits::open(dir, engine, Arc::new(CellIndex::new())).expect("the write path opens")
+}
+
+/// Mints one draft under the system account through the session door.
+///
+/// It is minted as the system principal and is one record, so the position
+/// advances by one; the answer is the draft and its position.
+///
+/// # Panics
+///
+/// Panics where the mint is refused.
+fn mint_a_draft(wp: &Commits, stores: &EngineStores) -> (Address, u64) {
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let account = system_account();
+    let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
+    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let serial = wp.serial_lock();
+    let resp = wp.commit_under(&serial, meta, || {
+        let (addr, at) = stores
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
+            .expect("the mint commits");
+        Response::AckAddr { addr, at }
+    });
+    let Response::AckAddr { addr, at } = resp else { panic!("the mint is acked") };
+    (addr, at.0)
+}
+
+/// Mints four drafts and tears `commits.log` back to the first.
+///
+/// The answer is the four positions; the next open's region is the three
+/// above the first.
+///
+/// # Panics
+///
+/// Panics where the write path does not open or a mint is refused.
+fn a_torn_board(dir: &std::path::Path, engine: &Engine) -> Vec<u64> {
+    let wp = open_the_write_path(dir, engine);
+    let stores = engine.stores();
+    let board: Vec<u64> = (0..4).map(|_| mint_a_draft(&wp, &stores).1).collect();
+    drop(wp);
+    tear_to(dir, board[0]);
+    board
+}
+
+/// Tears `commits.log` back to the entry at `low`.
+///
+/// Every line whose `at` lies above `low` is dropped, so the next open's
+/// region is `(low, head]`; the answer is the file's bytes after the tear.
+///
+/// # Panics
+///
+/// Panics where the file cannot be read or written, or a line is no JSON.
+fn tear_to(dir: &std::path::Path, low: u64) -> Vec<u8> {
+    let path = dir.join("commits.log");
+    let text = std::fs::read_to_string(&path).expect("commits.log");
+    let kept: String = text
+        .lines()
+        .filter(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).expect("a line is JSON");
+            v.get("at").and_then(serde_json::Value::as_u64).is_none_or(|at| at <= low)
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&path, &kept).expect("tear the file");
+    kept.into_bytes()
+}
+
+/// Polls until `done`, within a minute.
+///
+/// # Panics
+///
+/// Panics where `done` has not held within the minute, naming `what`.
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Returns `class`'s page from `since`: every visible entry above it.
+fn page_from(wp: &Commits, class: &FeedClass<'_>, since: u64) -> ChangesAnswer {
+    let limit = std::num::NonZeroUsize::new(4096).expect("non-zero");
+    wp.changes(class, &ChangesQuery { since, limit, under: None, drafts_only: false })
+}
+
+/// Returns a served page's entries by position.
+///
+/// # Panics
+///
+/// Panics where the feed refused the page.
+fn served(answer: ChangesAnswer) -> std::collections::BTreeMap<u64, serde_json::Value> {
+    let ChangesAnswer::Page { entries, .. } = answer else {
+        panic!("the feed serves the page: {answer:?}")
+    };
+    entries.into_iter().map(|e| (e["at"].as_u64().expect("at"), e)).collect()
+}
+
+/// Checks that a derived file whose landing rewrite fails takes no line.
+///
+/// At the walk's landing a derived file rewritten from memory carries the
+/// region and every write the walk held; where its rewrite fails before the
+/// rename it stands fenced at the region's lower edge without them, so it
+/// stops there, as `commits.log` does on the same failure. An append after
+/// the landing would raise its coverage over the region, and the next open
+/// would read the region's draft writes as touching no document, which no
+/// class's mask withholds (PUB-6.45). Over this suite's own kernel config
+/// ([`fsync_engine`]): four draft mints with `commits.log` torn back to the
+/// first, a draft minted while the walk is held, a directory on the index's
+/// and the bitmap's temp names, the landing, and a draft minted after it.
+/// Each refusal is said once with the fence the file stands at, and both
+/// files are stopped since it; the next open classifies the region from the
+/// journal, the guest's page from the fence carries none of the drafts, and
+/// the owner's names each recorded draft by its document.
+#[test]
+fn a_derived_file_whose_landing_rewrite_fails_takes_no_line_after_it() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let board = a_torn_board(dir.path(), &engine);
+    let (low, head) = (board[0], board[3]);
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends");
+    let (held_doc, held_at) = mint_a_draft(&wp, &stores);
+    let obstacles = ["feed-index.log", "feed-masked.log"].map(|name| {
+        let obstacle = dir.path().join(format!("{name}.compact"));
+        std::fs::create_dir(&obstacle).expect("a directory on the temp's name");
+        obstacle
+    });
+    FEED_WALK_HOLD.release();
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    let tail = format!(
+        "; the file stands fenced below the region at position {low} and takes no further line, \
+         so the next open re-derives it — the board serves from memory, and nothing is lost; \
+         check the volume, its device and the board user's quota before that restart: its open \
+         writes this file"
+    );
+    for name in ["feed-index.log", "feed-masked.log"] {
+        let head =
+            format!("failure: {name}: the walk's landing rewrite failed before its rename: ");
+        let found = said.iter().filter(|l| l.starts_with(&head) && l.ends_with(&tail)).count();
+        assert_eq!(found, 1, "{name}'s refusal, once:\n{all}");
+    }
+    assert_eq!(
+        wp.stopped_feed_files(),
+        [
+            StoppedFile { name: "feed-index.log", since: low },
+            StoppedFile { name: "feed-masked.log", since: low },
+        ],
+        "both files stopped at the fence they stand at"
+    );
+    let (after_doc, after_at) = mint_a_draft(&wp, &stores);
+    drop(wp);
+    for obstacle in &obstacles {
+        std::fs::remove_dir(obstacle).expect("the obstacle goes");
+    }
+    let wp = open_the_write_path(dir.path(), &engine);
+    let classifying = format!(
+        "open: feed-index.log covers to position {low}: 3 bare positions are classified from the \
+         journal before the board serves, two world reconstructions each"
+    );
+    let said = wp.lines_said().lock().clone();
+    assert!(said.contains(&classifying), "the next open re-derives:\n{}", said.join("\n"));
+    let snap = engine.kernel().snapshot();
+    let guest = served(page_from(&wp, &FeedClass::of(snap.world(), None), low));
+    assert!(guest.is_empty(), "no draft reaches the guest: {guest:?}");
+    let owner = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    let owner = served(page_from(&wp, &owner, low));
+    let positions: Vec<u64> = owner.keys().copied().collect();
+    assert_eq!(positions, [board[1], board[2], board[3], held_at, after_at]);
+    for (at, doc) in [(held_at, &held_doc), (after_at, &after_doc)] {
+        let docs = serde_json::json!([doc.to_string()]);
+        assert_eq!(owner[&at]["docs"], docs, "position {at} names its draft");
+    }
+}
+
+/// Checks that `commits.log`'s landing refusal leaves the region to walk.
+///
+/// The landing writes the region into `commits.log` by one rewrite; where
+/// that rewrite fails before its rename the file stands torn at the region's
+/// lower edge and stops there, so no later write's line raises its highest
+/// entry over the region and the next open walks the region again, the
+/// writes held in memory since among it. Driven as the derived files' case:
+/// a directory on the log's temp name during the held walk. The refusal is
+/// said once, and the walk's landing says the region is re-covered in
+/// memory alone; the log is stopped since the fence, a later write is served
+/// from memory with its testimony and the file stands as the open found it.
+/// The next open pends from the fence to the head; once it lands that write
+/// is a bare entry, and the guest's page from the fence carries no draft.
+#[test]
+fn commits_logs_landing_refusal_leaves_the_region_to_the_next_opens_walk() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let board = a_torn_board(dir.path(), &engine);
+    let (low, head) = (board[0], board[3]);
+    let torn = std::fs::read(dir.path().join("commits.log")).expect("the torn file");
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends");
+    let (_, held_at) = mint_a_draft(&wp, &stores);
+    let obstacle = dir.path().join("commits.log.compact");
+    std::fs::create_dir(&obstacle).expect("a directory on the temp's name");
+    FEED_WALK_HOLD.release();
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    let tail = format!(
+        "; the file stands as it was and takes no further line, so the next open walks again from \
+         position {low}; every write since this open is held in memory alone, its key and its \
+         time lost at that open — restart soon; check the volume, its device and the board \
+         user's quota before that restart: its open writes this file"
+    );
+    let head_words = "failure: commits.log: the walk's landing rewrite failed before its rename: ";
+    let refused = said.iter().filter(|l| l.starts_with(head_words) && l.ends_with(&tail)).count();
+    assert_eq!(refused, 1, "the landing's refusal, once:\n{all}");
+    let in_memory =
+        format!("landing: commits.log re-covered positions ({low}, {head}] in memory alone: ");
+    assert!(said.iter().any(|l| l.starts_with(&in_memory)), "the landing's line:\n{all}");
+    assert_eq!(wp.stopped_feed_files(), [StoppedFile { name: "commits.log", since: low }]);
+    let (later_doc, later_at) = mint_a_draft(&wp, &stores);
+    let snap = engine.kernel().snapshot();
+    let owner = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), low));
+    assert_eq!(owner[&later_at]["key"], "bare", "served from memory with its testimony");
+    assert_eq!(owner[&later_at]["docs"], serde_json::json!([later_doc.to_string()]));
+    let file = std::fs::read(dir.path().join("commits.log")).expect("commits.log");
+    assert_eq!(file, torn, "the file stands as the open found it");
+    drop(wp);
+    std::fs::remove_dir(&obstacle).expect("the obstacle goes");
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), Some((low, later_at)), "the region pends again");
+    FEED_WALK_HOLD.release();
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let snap = engine.kernel().snapshot();
+    let owner = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), low));
+    let positions: Vec<u64> = owner.keys().copied().collect();
+    assert_eq!(positions, [board[1], board[2], board[3], held_at, later_at]);
+    for field in ["key", "time", "docs"] {
+        let lost = &owner[&later_at][field];
+        assert_eq!(*lost, serde_json::Value::Null, "the later write comes back bare: {field}");
+    }
+    let guest = served(page_from(&wp, &FeedClass::of(snap.world(), None), low));
+    assert!(guest.is_empty(), "the journal's classification masks every draft: {guest:?}");
+}
+
+/// Checks that a walk whose thread the OS refuses runs at the open.
+///
+/// The walk's thread is spawned fallibly, as the daemon's other threads
+/// are: where the OS refuses it the region is walked inline before the open
+/// returns, the board serving once the walk lands, and the refusal is said
+/// with its cause. Over `commits.log` torn back three entries, the seam's
+/// refusal: the line said once, the walk's landing said before the open
+/// returns, nothing pending when it does, no thread to have ended, and the
+/// region's positions served.
+#[test]
+fn a_walk_whose_thread_the_os_refuses_is_walked_at_the_open() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let board = a_torn_board(dir.path(), &engine);
+    let (low, head) = (board[0], board[3]);
+    REFUSE_THE_FEED_WALKS_THREAD.store(true, Ordering::Release);
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert!(!REFUSE_THE_FEED_WALKS_THREAD.load(Ordering::Acquire), "the seam fired once");
+    assert_eq!(wp.feed_pending_region(), None, "the open walked the region before it returned");
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    let refused = format!(
+        "failure: the feed walk: the OS refused its thread (test seam: the walk's thread \
+         refused); positions ({low}, {head}] are walked at the open instead, the board serving \
+         once the walk lands"
+    );
+    assert_eq!(said.iter().filter(|l| **l == refused).count(), 1, "the refusal, once:\n{all}");
+    let landing =
+        format!("landing: commits.log re-covered positions ({low}, {head}]: 3 boundaries walked");
+    assert!(said.iter().any(|l| l.starts_with(&landing)), "the walk landed at the open:\n{all}");
+    assert_eq!(wp.feed_walk_gone(), None, "no thread was there to end");
+    let snap = engine.kernel().snapshot();
+    let owner = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), low));
+    let positions: Vec<u64> = owner.keys().copied().collect();
+    assert_eq!(positions, board[1..]);
+}
+
+/// Checks that a landing cut between its rewrites leaves the region pending.
+///
+/// The landing rewrites the classified files first and `commits.log` after
+/// them, so a kill between the two leaves `commits.log` as the open found it
+/// and the next open walks the region again behind the listener. The other
+/// order would leave the log whole over derived files fenced below the
+/// region, and the next open would classify every bare position of it, two
+/// world reconstructions each, before the board serves. The seam ends the
+/// landing between its rewrites, leaving the files as a kill there leaves
+/// them; opened again with the walk held, the region pends from its lower
+/// edge, no bare position is classified at the open, and the walk lands it.
+#[test]
+fn a_landing_cut_between_its_rewrites_leaves_the_region_to_walk_again() {
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let board = a_torn_board(dir.path(), &engine);
+    let (low, head) = (board[0], board[3]);
+    feed::CUT_THE_NEXT_LANDING.store(true, Ordering::Release);
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("the landing's cut", || !feed::CUT_THE_NEXT_LANDING.load(Ordering::Acquire));
+    drop(wp);
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends from its edge");
+    let said = wp.lines_said().lock().clone();
+    assert!(
+        !said.iter().any(|l| l.contains("bare positions are classified from the journal")),
+        "no bare position is classified at the open:\n{}",
+        said.join("\n")
+    );
+    FEED_WALK_HOLD.release();
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+}
+
+/// Checks that the walk's fence over damage lifts once its two files return.
+///
+/// A walk the journal refuses below the head fences the feed at the
+/// position below the head, and its landing writes that fence into
+/// `commits.log`, which every later open reads back: the damaged segment
+/// restored alone moves nothing, and `commits.log` put back beside it from
+/// the copy taken before the open re-covers the region. Over this suite's
+/// own kernel config ([`fsync_engine`]): a checkpoint inside the first
+/// segment and one past the segment it closes, so the walk's base lies
+/// below the damage and the open's start point above it; that segment
+/// damaged and `commits.log` torn back below the damage. The walk's list is
+/// refused and said with the act, and the landing fences the feed; the
+/// segment restored alone, the feed still answers `410` below the fence;
+/// `commits.log` restored too, the region pends again and, landed, the feed
+/// answers every position it answered before.
+#[test]
+fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
+    use skep_address::Nat;
+    use skep_arrangement::Caller;
+    use skep_febe::{Deposit, VPos};
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let (doc, low) = mint_a_draft(&wp, &stores);
+    engine.kernel().checkpoint().expect("the checkpoint inside the first segment");
+    // Five inserts of the codec's whole cap, each one stretch: the fifth
+    // rotates the journal's segment, closing the first.
+    let bulk: Vec<Val> = "z".repeat(262_144).bytes().map(|b| Val::new([b])).collect();
+    let at = || VPos::content(Nat::from(1u32));
+    for _ in 0..5 {
+        let op = Op::Insert {
+            doc: doc.clone(),
+            at: at(),
+            values: bulk.clone(),
+            deposit: Deposit::Undeclared,
+        };
+        let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, meta, || {
+            let (addr, at) = stores
+                .vstream()
+                .insert(
+                    Caller::Principal(SYSTEM_PRINCIPAL),
+                    &doc,
+                    at(),
+                    bulk.clone(),
+                    Deposit::Undeclared,
+                )
+                .expect("the insert commits");
+            Response::AckAddr { addr, at }
+        });
+        assert!(matches!(resp, Response::AckAddr { .. }), "the insert is acked");
+    }
+    engine.kernel().checkpoint().expect("the checkpoint past the closed segment");
+    let head = engine.kernel().current_seq().0;
+    let snap = engine.kernel().snapshot();
+    let owner = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    let before: Vec<u64> = served(page_from(&wp, &owner, low)).into_keys().collect();
+    drop(wp);
+    let mut segments: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(dir.path())
+        .expect("the journal directory")
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().into_string().ok()?;
+            let first: u64 = name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()?;
+            Some((first, entry.path()))
+        })
+        .collect();
+    segments.sort();
+    assert!(segments.len() >= 2, "the fifth insert rotated the segment: {segments:?}");
+    let newest = engine.kernel().newest_checkpoint().expect("a checkpoint").seq.0;
+    assert!(newest >= segments[1].0, "the open's start point lies past the closed segment");
+    let closed = &segments[0].1;
+    let whole = std::fs::read(closed).expect("the closed segment");
+    let flip = (whole.len() / 2..whole.len()).find(|&i| whole[i] == b'z').expect("a stretch byte");
+    let mut damaged = whole.clone();
+    damaged[flip] = b'y';
+    std::fs::write(closed, &damaged).expect("damage the segment");
+    let torn = tear_to(dir.path(), low);
+    let fence = head - 1;
+    let reclaimed = |wp: &Commits| {
+        let snap = engine.kernel().snapshot();
+        page_from(wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), low)
+    };
+
+    // The walk's list refused: said with the act, and the fence landed.
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    let head_words = format!(
+        "failure: commits.log's walk: the journal refused the boundaries above position {low} \
+         (journal corrupt at rest; "
+    );
+    let tail = format!(
+        "): once the walk lands the change feed answers 410 history_reclaimed for every since \
+         below position {fence}; the walk goes on, and its landing writes that fence into \
+         commits.log, which a segment restored alone does not move — to re-cover the positions, \
+         stop the daemon, put back the segment the account names and commits.log from a copy \
+         taken before this open, and start again (RUNBOOK §2)"
+    );
+    let refused = said.iter().filter(|l| l.starts_with(&head_words) && l.ends_with(&tail)).count();
+    assert_eq!(refused, 1, "the walk's refusal, with the act:\n{all}");
+    let answer = reclaimed(&wp);
+    assert!(
+        matches!(answer, ChangesAnswer::Reclaimed { floor: Some(f) } if f == head),
+        "410 below the fence: {answer:?}"
+    );
+    drop(wp);
+    let first_line = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
+    let first_line = first_line.lines().next().map(str::to_string);
+    assert_eq!(first_line, Some(format!("{{\"min_since\":{fence}}}")), "the fence is written");
+
+    // The segment restored alone: the fence the file holds stands.
+    std::fs::write(closed, &whole).expect("restore the segment");
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), None, "the file covers the head");
+    let answer = reclaimed(&wp);
+    assert!(
+        matches!(answer, ChangesAnswer::Reclaimed { floor: Some(f) } if f == head),
+        "still 410 below the fence: {answer:?}"
+    );
+    drop(wp);
+
+    // `commits.log` put back beside it: the region pends and lands again.
+    std::fs::write(dir.path().join("commits.log"), &torn).expect("restore the log");
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends again");
+    FEED_WALK_HOLD.release();
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let after: Vec<u64> = served(reclaimed(&wp)).into_keys().collect();
+    assert_eq!(after, before, "the feed answers every position it answered before");
 }

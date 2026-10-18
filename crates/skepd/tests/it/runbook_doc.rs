@@ -520,7 +520,9 @@ fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_its_own_line() {
         "A write can be refused for a cause other than room, and it is said by its own line",
         "failure: a write was refused durability at position {position} ({detail}): no write \
          lands until its cause clears; reads serve; check the volume, its device and the board \
-         user's quota — the next write succeeds by itself once the cause clears",
+         user's quota — the next write succeeds by itself once the cause clears; a restart \
+         before then runs its open into the same cause, and where the open refuses, reads stop \
+         with it",
         "landing: writes land again at position {position}, {n} refused over {ms} ms since \
          position {position}",
         "`Disk quota exceeded`",

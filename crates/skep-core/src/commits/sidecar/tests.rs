@@ -551,7 +551,7 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
     assert!(log.entries.contains_key(&10), "and this uptime answers it in full");
     // ROW 31 ON THE DOOR (`operations.md` §1.1 row 31): the failure said
     // ONCE through the classed door under `failure:` — the position, the
-    // cause, the stop and the recovery.
+    // cause, the stop, the recovery and the act owed before it.
     let said = log.lines.said().lock().clone();
     assert_eq!(said.len(), 1, "one line for the stop:\n{}", said.join("\n"));
     assert!(
@@ -563,10 +563,11 @@ fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
         said[0].ends_with(
             "; this file takes no further line, so the next open re-derives from 10 as bare \
              entries; every write until then is held in memory alone, its key and its time lost \
-             at that open — restart soon"
+             at that open — restart soon; check the volume, its device and the board user's \
+             quota before that restart: its open writes this file"
         ),
-        "the stop, the recovery and what it costs until the restart; no full volume, no room \
-         clause: {}",
+        "the stop, the recovery, what it costs until the restart and, no full volume, the \
+         cause checked before it: {}",
         said[0]
     );
 
@@ -635,7 +636,7 @@ fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_
     assert!(log.head_time().is_some(), "the held write is above the head: head_time is its");
 
     assert!(log.compact_to(20).expect("deferred"), "the fence moves");
-    assert_eq!((log.min_since_in_force(), log.entries.contains_key(&20)), (20, false));
+    assert_eq!((log.min_since, log.entries.contains_key(&20)), (20, false));
     assert_eq!(std::fs::read(&path).expect("read"), parsed, "the compaction's rewrite is deferred");
 
     let walked = vec![
@@ -643,8 +644,10 @@ fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_
         Walked { at: 28, docs: None, journal: JournalTerms::default() },
         Walked { at: 30, docs: Some(vec![]), journal: JournalTerms::default() },
     ];
-    let fence = log.land(&walked, Some(25), None).expect("the landing's one rewrite");
-    assert_eq!((fence, log.pending_region()), (25, None));
+    let folded = log.fold_the_walk(&walked, Some(25), None);
+    assert_eq!((folded, log.pending_region()), (Some(((24, 30), 25)), None));
+    assert_eq!(std::fs::read(&path).expect("read"), parsed, "the fold writes nothing");
+    log.write_the_landing(24).expect("the landing's one rewrite");
     let bytes = std::fs::read(&path).expect("read");
     let (records, valid_end) = parse_records(&bytes);
     assert_eq!(valid_end, bytes.len(), "every line whole");
@@ -667,16 +670,18 @@ fn the_landing_is_one_rewrite_in_position_order_with_every_held_position_at_its_
     assert!(log.entries().keys().eq([26, 28, 30, 31].iter()));
 }
 
-/// THE WORDS of the walk's three lines, its refusal and the landing's, each
-/// a pure value: `open:` with the covered edge, the count and the head;
-/// `progress:` with the position, the head, the boundary's place in the
-/// list and the elapsed milliseconds; `landing:` with the file and the
+/// Checks the words of the walk's three lines, its refusal and the landing's.
+///
+/// Each is a pure value: `open:` with the covered edge, the count and the
+/// head; `progress:` with the position, the head, the boundary's place in
+/// the list and the elapsed milliseconds; `landing:` with the file and the
 /// region, the walked, the unclassified, the elapsed and the lock held, the
 /// fence where it stands inside the region and `in memory alone` where the
-/// rewrite was refused; the journal's refusal with its account and the
-/// fence it moved, said while the walk goes on; and the rewrite refused
-/// before its rename, naming the edge the next open walks from, a full
-/// volume in the operator's words.
+/// rewrite was refused; the journal's refusal with its account, the fence it
+/// moved and the act that re-covers the positions, said while the walk goes
+/// on; and the rewrite refused before its rename, naming the edge the next
+/// open walks from, what the stop costs and the act owed before the restart,
+/// a full volume's and any other cause's.
 #[test]
 fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
     assert_eq!(
@@ -714,8 +719,10 @@ fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
     );
     let refusal = WalkRefusal { at: 26, list: false, account: "journal corrupt at rest".into() };
     let restore = "once the walk lands the change feed answers 410 history_reclaimed for every \
-                   since below position 26; the walk goes on — restore the segment the account \
-                   names from a copy (RUNBOOK §2)";
+                   since below position 26; the walk goes on, and its landing writes that fence \
+                   into commits.log, which a segment restored alone does not move — to re-cover \
+                   the positions, stop the daemon, put back the segment the account names and \
+                   commits.log from a copy taken before this open, and start again (RUNBOOK §2)";
     assert_eq!(
         WalkRefusedLine { refusal: &refusal, fence: 26 }.to_string(),
         format!(
@@ -731,31 +738,50 @@ fn the_walks_three_lines_and_the_landings_refusal_render_the_ruled_words() {
              corrupt at rest): {restore}"
         )
     );
-    let e = io::Error::new(io::ErrorKind::StorageFull, "no room");
+    let refused = |e: &io::Error| LandingRefusedLine { low: 24, error: e }.to_string();
+    let lost = "the file stands as it was and takes no further line, so the next open walks again \
+                from position 24; every write since this open is held in memory alone, its key and \
+                its time lost at that open — restart soon";
     assert_eq!(
-        LandingRefusedLine { low: 24, error: &e }.to_string(),
-        "commits.log: the walk's landing rewrite failed before its rename: the volume is full (no \
-         room); the file stands as it was and takes no further line, so the next open walks \
-         again from position 24"
+        refused(&io::Error::new(io::ErrorKind::StorageFull, "no room")),
+        format!(
+            "commits.log: the walk's landing rewrite failed before its rename: the volume is full \
+             (no room); {lost}; free room before that restart: its open writes this file"
+        )
+    );
+    assert_eq!(
+        refused(&io::Error::other("Input/output error (os error 5)")),
+        format!(
+            "commits.log: the walk's landing rewrite failed before its rename: Input/output error \
+             (os error 5); {lost}; check the volume, its device and the board user's quota before \
+             that restart: its open writes this file"
+        )
     );
 }
 
-/// THE CAUSE AND THE FOREIGN LINES, each a pure value: a full volume in
-/// the operator's words with the act a stopped file's line ends with, any
-/// other kind in the error's own words and no act; and the lines past the
-/// head an open dropped, counted with their positions and what they carry.
+/// Checks the cause's words and the foreign lines', each a pure value.
+///
+/// A full volume reads in the operator's words, the act a stopped file's
+/// line ends with room before the restart; any other kind reads in the
+/// error's own words, its act the volume, its device and the quota checked
+/// before it; and the lines past the head an open dropped are counted with
+/// their positions and what they carry.
 #[test]
 fn the_cause_and_the_foreign_lines_render_the_ruled_words() {
     let full = io::Error::new(io::ErrorKind::StorageFull, "No space left on device (os error 28)");
     let cause = IoCause(&full);
     assert_eq!(cause.to_string(), "the volume is full (No space left on device (os error 28))");
     assert_eq!(
-        cause.free_room_first(),
+        cause.before_the_restart(),
         "; free room before that restart: its open writes this file"
     );
     let other = io::Error::other("Input/output error (os error 5)");
     assert_eq!(IoCause(&other).to_string(), "Input/output error (os error 5)");
-    assert_eq!(IoCause(&other).free_room_first(), "");
+    assert_eq!(
+        IoCause(&other).before_the_restart(),
+        "; check the volume, its device and the board user's quota before that restart: its open \
+         writes this file"
+    );
     let foreign = [31, 29, 33].into_iter().fold(None, |held, at| Some(EntryLines::with(held, at)));
     assert_eq!(foreign, Some(EntryLines { lines: 3, first: 29, last: 33 }));
     let line = ForeignLinesLine {
@@ -834,6 +860,14 @@ fn the_cut_and_the_malformed_names_render_the_ruled_words() {
         "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
          cut; the cut part is re-derived as bare entries"
     );
+    let damaged = Cut { whole_after: Some(EntryLines { lines: 2, first: 33, last: 35 }), ..cut };
+    assert_eq!(
+        LogCutLine { cut: damaged }.to_string(),
+        "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
+         cut; the cut part is re-derived as bare entries; the cut took 2 whole lines with it, \
+         positions 33–35: their keys and times are LOST unless the board directory's backup is \
+         restored"
+    );
     let malformed = |file, case| MalformedNamesLine { file, positions: 3, first: 24, case };
     assert_eq!(
         malformed(SIDECAR_FILE, MalformedCase::Demoted).to_string(),
@@ -858,6 +892,72 @@ fn the_cut_and_the_malformed_names_render_the_ruled_words() {
         CompactTwinLine { name: SIDECAR_FILE, bytes: 812 }.to_string(),
         "commits.log.compact stands (812 bytes): a rewrite cut short before its rename left it, \
          commits.log as it stood before that rewrite; its next rewrite overwrites it"
+    );
+}
+
+/// Checks that a cut past a damaged line names the whole lines it takes.
+///
+/// A `commits.log` whose third line is damaged — whole, ended by its
+/// newline, and no record — is cut there at the open, and the whole lines
+/// after it go with it: the two at or below the head are counted with their
+/// positions, the one past the head is not, and the line says what they held
+/// is lost unless a copy holds it. A torn line at the file's end takes no
+/// whole line with it, and the cut line says none.
+#[test]
+fn a_cut_past_a_damaged_line_names_the_whole_lines_it_takes() {
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
+
+    let engine = Engine::open(KernelConfig {
+        durability: Durability::InMemory,
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(0),
+    })
+    .expect("in-memory genesis cannot fail");
+    while engine.kernel().current_seq().0 < 6 {
+        engine
+            .namespace()
+            .create_new_document(SYSTEM_PRINCIPAL, &system_account(), Some(false))
+            .expect("the mint commits");
+    }
+    let head = engine.kernel().current_seq().0;
+    let line = |at| entry_line(at, &recorded("insert", &["1.0.1.0.1"], 1, Some("bare")));
+    let trusted = [line(1), line(2)].concat();
+    let cut_line = |file: &[u8]| -> Vec<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(SIDECAR_FILE), file).expect("the file");
+        let lines = Lines::new();
+        CommitsLog::open(dir.path(), &engine, &lines).expect("the open");
+        let on_disk = std::fs::read(dir.path().join(SIDECAR_FILE)).expect("read");
+        assert_eq!(on_disk, trusted, "cut at the last whole record");
+        let said = lines.said().lock().clone();
+        said.into_iter().filter(|l| l.contains("trust ends at")).collect()
+    };
+    let head_words =
+        format!("failure: commits.log: trust ends at position 2 (byte {} of ", trusted.len());
+    let damaged =
+        [trusted.clone(), b"{\"at\":3,\"docs\":[\n".to_vec(), line(4), line(5), line(head + 7)]
+            .concat();
+    let said = cut_line(&damaged);
+    assert_eq!(said.len(), 1, "the cut said once: {said:?}");
+    assert!(said[0].starts_with(&head_words), "{}", said[0]);
+    assert!(
+        said[0].ends_with(
+            "; the cut part is re-derived as bare entries; the cut took 2 whole lines with it, \
+             positions 4–5: their keys and times are LOST unless the board directory's backup is \
+             restored"
+        ),
+        "the two whole lines at or below the head, named: {}",
+        said[0]
+    );
+    let torn = [trusted.clone(), b"{\"at\":3,\"do".to_vec()].concat();
+    let said = cut_line(&torn);
+    assert_eq!(said.len(), 1, "the cut said once: {said:?}");
+    assert!(
+        said[0].starts_with(&head_words)
+            && said[0].ends_with("; the cut part is re-derived as bare entries"),
+        "a torn line takes no whole line with it: {}",
+        said[0]
     );
 }
 
@@ -963,10 +1063,14 @@ fn malformed_names_are_said_once_with_the_count_and_the_first_position() {
     assert!(lines.said().lock().is_empty(), "nothing malformed left: no line");
 }
 
-/// `commits.log`'s rewrite past its rename STOPS the log and says so ONCE
-/// PER UPTIME (`operations.md` §1.1 row 29): a second compacting rewrite on
-/// the stopped log still runs — the file rewritten behind the new fence,
-/// the stop's position moved to it — and adds no line.
+/// Checks that a rewrite failed past its rename stops the log, said once.
+///
+/// The line (`operations.md` §1.1 row 29) names the last entry the
+/// rewritten file holds — the position the next open's walk starts above —
+/// and what the stop costs until the restart. A second compacting rewrite
+/// on the stopped log still runs: the file rewritten behind the new fence,
+/// the write held in memory since the stop written whole into it, the
+/// stop's position moved to its last entry, and no line added.
 #[test]
 fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -977,10 +1081,11 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
     log.fail_next_rewrite_past_rename();
     let refused = log.compact_to(1).expect_err("the reopen is refused");
     assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
-    assert_eq!(log.stopped_since(), Some(1), "stopped since the fence");
+    assert_eq!(log.stopped_since(), Some(4), "stopped at the rewritten file's last entry");
     let stop_line = "failure: commits.log rewrite failed past its rename: test seam: the rewritten \
                      file's reopen refused; this file takes no further line, so the next open \
-                     re-derives above its fence at position 1 as bare entries";
+                     re-derives above position 4 as bare entries; every write until then is held \
+                     in memory alone, its key and its time lost at that open — restart soon";
     assert_eq!(log.lines.said().lock().as_slice(), [stop_line]);
     assert_eq!(
         std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read"),
@@ -988,14 +1093,23 @@ fn a_rewrite_failed_past_its_rename_is_said_once_and_later_ones_run_in_silence()
         "the first rewrite is in place"
     );
 
+    // A write after the stop, held in memory alone.
+    let serial = crate::serial::Serial::new();
+    let held = log.record(&serial.lock(), 10, "insert", vec![], "bare".into(), None, None);
+    assert!(matches!(held, Some(Recorded::Appended(_))), "recorded, its line not written");
     log.fail_next_rewrite_past_rename();
     let refused = log.compact_to(2).expect_err("refused again");
     assert!(matches!(refused, RewriteFail::PastRename(_)), "{refused:?}");
-    assert_eq!(log.stopped_since(), Some(2), "the stop moved to the newest fence");
+    assert_eq!(log.stopped_since(), Some(10), "the stop moved to the second rewrite's last entry");
+    let rewritten = std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read");
+    let at = rewritten.find("{\"at\":10,").expect("the held write is in the rewritten file");
+    let (kept, held) = rewritten.split_at(at);
+    assert_eq!(kept, "{\"min_since\":2}\n{\"at\":3}\n{\"at\":4}\n", "the second rewrite ran");
+    let held: serde_json::Value = serde_json::from_str(held).expect("the file's one last line");
     assert_eq!(
-        std::fs::read_to_string(dir.path().join(SIDECAR_FILE)).expect("read"),
-        "{\"min_since\":2}\n{\"at\":3}\n{\"at\":4}\n",
-        "the second rewrite still ran"
+        (held["op"].as_str(), held["key"].as_str()),
+        (Some("insert"), Some("bare")),
+        "the held write whole in it: {held}"
     );
     // The record read ONCE into a local: a failing assertion that took the
     // lock again for its message would deadlock instead of failing.

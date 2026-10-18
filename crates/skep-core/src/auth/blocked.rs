@@ -446,7 +446,11 @@ pub enum Reissue {
 /// identity. Under a container the operator mounts the directory that
 /// holds the file, never the file itself: a file's bind mount keeps the
 /// inode it was made over, so a rename on the host moves no identity this
-/// daemon can see, and the list in force stands with nothing said.
+/// daemon can see, and the list in force stands with nothing said. And the
+/// file lives on a filesystem local to the host, as the data directory
+/// does: its identity is a `stat` at the head of every request, ahead of
+/// every lock and route, so a mount that stops answering holds every
+/// request, `/health` included, and a start waits in the same read.
 #[derive(Debug)]
 pub(super) struct BlockedSupply {
     pub(super) path: PathBuf,

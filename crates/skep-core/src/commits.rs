@@ -205,6 +205,14 @@ pub use self::sidecar::{arm_the_feed_walks_fault, FEED_WALK_HOLD, FEED_WALK_HOLD
 /// The walk thread's name, as `ps` and the hook's line show it.
 const FEED_WALK_THREAD: &str = "skepd-feed-walk";
 
+/// The test seam: the OS refuses the next feed walk's thread, once.
+///
+/// Armed, the next `FeedWalk::spawn` meets the refusal its `Err` arm
+/// answers — the walk run at the open, the board serving once it lands —
+/// and disarms.
+#[cfg(test)]
+static REFUSE_THE_FEED_WALKS_THREAD: AtomicBool = AtomicBool::new(false);
+
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
 /// as the wire's `:ka` comment, so proxies and clients can detect liveness —
@@ -1169,7 +1177,15 @@ impl FeedWalk {
                 }
             }
         };
-        let spawned = thread::Builder::new().name(FEED_WALK_THREAD.into()).spawn(body);
+        #[cfg(test)]
+        let refused = REFUSE_THE_FEED_WALKS_THREAD.swap(false, Ordering::AcqRel);
+        #[cfg(not(test))]
+        let refused = false;
+        let spawned = if refused {
+            Err(io::Error::other("test seam: the walk's thread refused"))
+        } else {
+            thread::Builder::new().name(FEED_WALK_THREAD.into()).spawn(body)
+        };
         let handle = match spawned {
             Ok(handle) => Some(handle),
             Err(e) => {
@@ -1306,16 +1322,22 @@ impl fmt::Display for KernelHaltLine<'_> {
 /// A full volume keeps m1's words, the account after the position: `a write
 /// was refused at a full volume at position {p} ({detail}): no write lands
 /// until room is freed on the volume; reads serve; the next write succeeds
-/// by itself once room stands, and no restart is owed`. Every other kind —
-/// a quota, the device's `Input/output error` where the repair succeeded, a
-/// read-only remount, the OS refusing entropy for the salt — is a write
-/// refused `durability`: `… at position {p} ({detail}): no write lands until
-/// its cause clears; reads serve; check the volume, its device and the
-/// board user's quota — the next write succeeds by itself once the cause
-/// clears`. A pure value, pinned by `to_string()` in the unit suite; emitted
-/// under `Class::Failure` through [`Commits::say_the_durability_refusal`],
-/// once per kind per stretch. Here beside [`KernelHaltLine`] for its
-/// reason: the site is this card's, below the daemon.
+/// by itself once room stands, and no restart is owed — a restart before
+/// room stands runs its open into the full volume, and where the open
+/// refuses, reads stop with it`. Every other kind — a quota, the device's
+/// `Input/output error` where the repair succeeded, a read-only remount, the
+/// OS refusing entropy for the salt — is a write refused `durability`: `…
+/// at position {p} ({detail}): no write lands until its cause clears; reads
+/// serve; check the volume, its device and the board user's quota — the
+/// next write succeeds by itself once the cause clears; a restart before
+/// then runs its open into the same cause, and where the open refuses,
+/// reads stop with it`. The open writes before it serves, so either cause
+/// can refuse it; the line says so, since the act it would otherwise invite
+/// is that restart. A pure value, pinned by `to_string()` in the unit suite;
+/// emitted under `Class::Failure` through
+/// [`Commits::say_the_durability_refusal`], once per kind per stretch. Here
+/// beside [`KernelHaltLine`] for its reason: the site is this card's, below
+/// the daemon.
 pub(crate) struct DurabilityRefusedLine<'a> {
     /// `Kernel::current_seq() + 1` at the site — the first position the
     /// refused write would have taken.
@@ -1336,11 +1358,14 @@ impl fmt::Display for DurabilityRefusedLine<'_> {
         }
         f.write_str(if self.full {
             ": no write lands until room is freed on the volume; reads serve; the next write \
-             succeeds by itself once room stands, and no restart is owed"
+             succeeds by itself once room stands, and no restart is owed — a restart before room \
+             stands runs its open into the full volume, and where the open refuses, reads stop \
+             with it"
         } else {
             ": no write lands until its cause clears; reads serve; check the volume, its device \
              and the board user's quota — the next write succeeds by itself once the cause \
-             clears"
+             clears; a restart before then runs its open into the same cause, and where the \
+             open refuses, reads stop with it"
         })
     }
 }

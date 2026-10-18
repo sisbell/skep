@@ -913,11 +913,8 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
         matches!(below, ChangesAnswer::Reclaimed { floor: Some(f) } if f == head),
         "below the fence, 410: {below:?}"
     );
-    let at = wp.changes(&class, &query(fence));
-    assert!(
-        matches!(&at, ChangesAnswer::Page { entries, .. } if entries.len() == 1),
-        "at the fence, the head's row: {at:?}"
-    );
+    let at = served(wp.changes(&class, &query(fence)));
+    assert_eq!(at.keys().copied().collect::<Vec<_>>(), [head], "at the fence, the head's row");
     drop(wp);
 
     let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("reopen");
@@ -989,15 +986,38 @@ fn open_the_write_path(dir: &std::path::Path, engine: &Engine) -> Commits {
 ///
 /// Panics where the mint is refused.
 fn mint_a_draft(wp: &Commits, stores: &EngineStores) -> (Address, u64) {
+    mint_a_draft_attested(wp, stores, None)
+}
+
+/// Mints one draft as [`mint_a_draft`] does, attested by `slot` where given.
+///
+/// With a slot the mint is attested as the plain sequence attests an
+/// admitted write: the kernel writes `slot` into the commit's marker
+/// (`Stores::namespace_attested`), and the write path records the entry
+/// signed by it, its testimony a fingerprint's hex; with none it is
+/// [`mint_a_draft`]'s bare mint.
+///
+/// # Panics
+///
+/// Panics where the mint is refused.
+fn mint_a_draft_attested(
+    wp: &Commits,
+    stores: &EngineStores,
+    slot: Option<&Attestation>,
+) -> (Address, u64) {
     use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
     let account = system_account();
     let op = Op::CreateNewDocument { account: account.clone(), published: Some(false) };
-    let meta = write_meta(&op).expect("a write").attributed("bare".to_string(), None);
+    let (testimony, signed) = match slot {
+        Some(slot) => ("cd".repeat(32), Some(Signed::Marker(slot.clone()))),
+        None => ("bare".to_string(), None),
+    };
+    let meta = write_meta(&op).expect("a write").attributed(testimony, signed);
     let serial = wp.serial_lock();
     let resp = wp.commit_under(&serial, meta, || {
         let (addr, at) = stores
-            .namespace()
+            .namespace_attested(slot)
             .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
             .expect("the mint commits");
         Response::AckAddr { addr, at }
@@ -1065,15 +1085,26 @@ fn page_from(wp: &Commits, class: &FeedClass<'_>, since: u64) -> ChangesAnswer {
     wp.changes(class, &ChangesQuery { since, limit, under: None, drafts_only: false })
 }
 
+/// Returns a served page's object, parsed from the bytes the feed marshaled.
+///
+/// # Panics
+///
+/// Panics where the feed refused the page, or its body is no JSON.
+fn page_object(answer: ChangesAnswer) -> serde_json::Value {
+    let ChangesAnswer::Page { body } = answer else {
+        panic!("the feed serves the page: {answer:?}")
+    };
+    serde_json::from_slice(&body).expect("the page's body is JSON")
+}
+
 /// Returns a served page's entries by position.
 ///
 /// # Panics
 ///
 /// Panics where the feed refused the page.
 fn served(answer: ChangesAnswer) -> std::collections::BTreeMap<u64, serde_json::Value> {
-    let ChangesAnswer::Page { entries, .. } = answer else {
-        panic!("the feed serves the page: {answer:?}")
-    };
+    let page = page_object(answer);
+    let entries = page["changes"].as_array().expect("the page's changes").clone();
     entries.into_iter().map(|e| (e["at"].as_u64().expect("at"), e)).collect()
 }
 
@@ -1446,4 +1477,265 @@ fn the_walks_fence_over_damage_lifts_once_the_segment_and_the_log_return() {
     wait_until("the walk's landing", || wp.feed_pending_region().is_none());
     let after: Vec<u64> = served(reclaimed(&wp)).into_keys().collect();
     assert_eq!(after, before, "the feed answers every position it answered before");
+}
+
+/// Checks that the attest store's served window is trimmed with the feed.
+///
+/// The slots resident are one per attested position the feed serves, so a
+/// compaction that drops positions below the reclaim floor drops their
+/// slots with the twins (`Inner::drop_at_or_below`), and the store's file,
+/// primary state below the floor (BW-01), keeps every line. Over this
+/// suite's own kernel config ([`fsync_engine`]): six attested bulk inserts
+/// into one draft rotate the journal's segment, a checkpoint taken by hand
+/// moves the reclaim floor past some of them, and the compaction leaves a
+/// slot for each attested position above its fence alone, the file's bytes
+/// and lines unchanged. One more attested write adds its slot, and the
+/// system principal's page from the fence serves that row's `attest`.
+#[test]
+fn the_attest_stores_served_window_is_trimmed_with_the_feed_and_its_file_kept() {
+    use skep_address::Nat;
+    use skep_arrangement::Caller;
+    use skep_febe::{Deposit, VPos};
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let (doc, _) = mint_a_draft(&wp, &stores);
+    let slot = Attestation::new(1, vec![0xab; 8]).expect("tag 1 and a non-empty blob");
+    // One attested insert through the session door, the kernel writing the
+    // slot into its marker and the write path mirroring it.
+    let insert = |value: &str| -> u64 {
+        let values: Vec<Val> = value.bytes().map(|b| Val::new([b])).collect();
+        let at = VPos::content(Nat::from(1u32));
+        let op = Op::Insert {
+            doc: doc.clone(),
+            at: at.clone(),
+            values: values.clone(),
+            deposit: Deposit::Undeclared,
+        };
+        let signed = Some(Signed::Marker(slot.clone()));
+        let meta = write_meta(&op).expect("a write").attributed("cd".repeat(32), signed);
+        let serial = wp.serial_lock();
+        let resp = wp.commit_under(&serial, meta, || {
+            let (addr, at) = stores
+                .vstream_attested(Some(&slot))
+                .insert(Caller::Principal(SYSTEM_PRINCIPAL), &doc, at, values, Deposit::Undeclared)
+                .expect("the insert commits");
+            Response::AckAddr { addr, at }
+        });
+        let Response::AckAddr { at, .. } = resp else { panic!("the insert is acked") };
+        at.0
+    };
+    let bulk = "z".repeat(262_144);
+    let attested: Vec<u64> = (0..6).map(|_| insert(&bulk)).collect();
+    let lines_of_the_file = || {
+        std::fs::read_to_string(dir.path().join("feed-attest.log"))
+            .expect("the attest store's file")
+            .lines()
+            .filter(|l| l.contains(r#""at":"#))
+            .count()
+    };
+    let held = wp.attest_store_figures();
+    assert_eq!((held.slots, lines_of_the_file()), (6, 6), "a slot and a line per attested insert");
+
+    // The checkpoint thread's act: the checkpoint, then the compaction.
+    engine.kernel().checkpoint().expect("the checkpoint lands");
+    let fence = wp.compact_feed_below_reclaim_floor(&engine).fence.expect("a fence to compact to");
+    let above = attested.iter().filter(|&&at| at > fence).count();
+    assert!(above < attested.len(), "the premise: the floor passed an attested position");
+    let trimmed = wp.attest_store_figures();
+    assert_eq!(trimmed.slots, above, "a slot for each attested position above the fence alone");
+    assert_eq!(trimmed.bytes, held.bytes, "the file is never compacted");
+    assert_eq!(lines_of_the_file(), 6, "every line kept: below the floor it is primary state");
+
+    let at = insert("q");
+    assert_eq!(wp.attest_store_figures().slots, above + 1, "the next attested write's slot");
+    let snap = engine.kernel().snapshot();
+    let page = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), fence));
+    assert_eq!(
+        page[&at]["attest"],
+        serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
+        "the page from the fence serves the slot"
+    );
+}
+
+/// Checks that a principal's page merges one stream per owner account.
+///
+/// PUB-7.28 prices a page by the streams it merges, and PUB-7.24 rules out
+/// one list per visible draft document, so the merge's width
+/// ([`Feed::merge_width`]) is a function of the accounts a class opens and
+/// never of how many drafts they hold. The system principal opens its own
+/// account's stream beside the published walk: two sources over three
+/// drafts, and two again over six, every draft on the page.
+#[test]
+fn a_principals_page_merges_one_stream_per_owner_account_whatever_its_drafts() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let limit = std::num::NonZeroUsize::new(4096).expect("non-zero");
+    let query = ChangesQuery { since: 0, limit, under: None, drafts_only: false };
+    let mut drafts = Vec::new();
+    for _ in 0..2 {
+        drafts.extend((0..3).map(|_| mint_a_draft(&wp, &stores)));
+        let snap = engine.kernel().snapshot();
+        let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+        assert_eq!(
+            wp.feed.merge_width(&class, &query),
+            2,
+            "the published walk and the account's one stream, over {} drafts",
+            drafts.len()
+        );
+        let page = served(page_from(&wp, &class, 0));
+        for (doc, at) in &drafts {
+            assert_eq!(page[at]["docs"], serde_json::json!([doc.to_string()]), "{doc} on the page");
+        }
+    }
+}
+
+/// Checks that an attested write's sync holds no lock a page takes.
+///
+/// The record step writes the attest line under the change feed's lock and
+/// makes it durable once that lock is released, under the serialization
+/// guard alone (SO-I5 (d); `Feed::sync_the_attest_line`). With the record
+/// step held between the two by the feed's test seam, `head_time` and a page
+/// answer — the page serving the held write's row and its `attest`, the
+/// journal's marker already durable — and, the hold released, the line is
+/// synced through the write's own position and the write path admits writes.
+#[test]
+fn an_attested_writes_sync_holds_no_lock_a_page_takes() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let slot = Attestation::new(1, vec![0xab; 8]).expect("tag 1 and a non-empty blob");
+    let hold = &wp.feed.attest_sync_hold;
+    hold.hold();
+    let (answered, at) = thread::scope(|s| {
+        let writer = s.spawn(|| mint_a_draft_attested(&wp, &stores, Some(&slot)).1);
+        wait_until("the record step parks at the attest line's sync", || hold.parked());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (wp, engine) = (&wp, &engine);
+        let reader = s.spawn(move || {
+            let snap = engine.kernel().snapshot();
+            let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+            let _ = tx.send((wp.head_time(), page_from(wp, &class, 0)));
+        });
+        let answered = rx.recv_timeout(Duration::from_secs(10));
+        hold.release();
+        reader.join().expect("the reader returns");
+        (answered, writer.join().expect("the attested mint is acked"))
+    });
+    let (head_time, page) = answered.expect("head_time and a page answer while the sync is owed");
+    assert!(head_time.is_some(), "the held write is the head, its time recorded");
+    assert_eq!(
+        served(page)[&at]["attest"],
+        serde_json::json!({"alg": "mldsa65-ed25519", "sig": "ab".repeat(8)}),
+        "the held write's row, served"
+    );
+    assert_eq!(wp.attest_store_synced_through(), at, "the line synced once the hold released");
+    assert_eq!(wp.halted_at(), None, "and the write path admits writes");
+}
+
+/// Checks that a page is marshaled once into the bytes the wire carries.
+///
+/// `Feed::page` writes each row into the page object's bytes as it measures
+/// it, so the body is the object `obj` would build — compact, its keys and
+/// every row's sorted — and is its own parse marshaled again: a whole page
+/// (`more` false, `last` its final row), a page cut at its limit (`more`
+/// true), and the two empty pages, `since` at the head and at the top of the
+/// range, spelled out byte for byte.
+#[test]
+fn a_page_is_marshaled_once_into_the_bytes_the_wire_carries() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let wp = open_the_write_path(dir.path(), &engine);
+    let stores = engine.stores();
+    let board: Vec<u64> = (0..3).map(|_| mint_a_draft(&wp, &stores).1).collect();
+    let snap = engine.kernel().snapshot();
+    let class = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    let body = |since: u64, limit: usize| -> Vec<u8> {
+        let limit = std::num::NonZeroUsize::new(limit).expect("non-zero");
+        match wp.changes(&class, &ChangesQuery { since, limit, under: None, drafts_only: false }) {
+            ChangesAnswer::Page { body } => body,
+            other => panic!("the feed serves the page: {other:?}"),
+        }
+    };
+    let canonical = |body: Vec<u8>| -> serde_json::Value {
+        let page: serde_json::Value = serde_json::from_slice(&body).expect("the body is JSON");
+        let again = crate::codec::to_bytes(&page);
+        assert_eq!(
+            String::from_utf8(again).expect("utf-8"),
+            String::from_utf8(body).expect("utf-8"),
+            "the body is its own parse marshaled again"
+        );
+        page
+    };
+    let at = |page: &serde_json::Value| -> Vec<u64> {
+        let rows = page["changes"].as_array().expect("the page's changes");
+        rows.iter().map(|row| row["at"].as_u64().expect("at")).collect()
+    };
+    let whole = canonical(body(0, 4096));
+    assert_eq!(at(&whole), board, "every row, oldest first");
+    assert_eq!((&whole["last"], &whole["more"]), (&board[2].into(), &false.into()));
+    let cut = canonical(body(0, 1));
+    assert_eq!(at(&cut), board[..1], "the first row alone");
+    assert_eq!((&cut["last"], &cut["more"]), (&board[0].into(), &true.into()));
+    let head = board[2];
+    assert_eq!(
+        String::from_utf8(body(head, 4096)).expect("utf-8"),
+        format!(r#"{{"changes":[],"last":{head},"more":false}}"#),
+        "the empty page at the head"
+    );
+    assert_eq!(
+        String::from_utf8(body(u64::MAX, 1)).expect("utf-8"),
+        format!(r#"{{"changes":[],"last":{},"more":false}}"#, u64::MAX),
+        "the empty page at the top of the range"
+    );
+}
+
+/// Checks that the walk loads one base per boundary it proves.
+///
+/// `operations.md` §3.3 step 2 prices the walk behind the listener at one
+/// world reconstruction per boundary, and a reconstruction's cost is the
+/// base its history read loads, which the kernel counts at its one site
+/// (`Kernel::bases_loaded`). Over eight draft mints with `commits.log` torn
+/// back to the second, the walk proves six boundaries, held past its `open:`
+/// line, where the list's one scan is already paid: released, it loads the
+/// world at the region's edge, one per boundary but the head, whose world is
+/// the open's own snapshot, and the landing's floor probe — one more base
+/// than the boundaries it proves.
+#[test]
+fn the_walk_loads_one_base_per_boundary_it_proves() {
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let board: Vec<u64> = (0..8).map(|_| mint_a_draft(&wp, &stores).1).collect();
+    drop(wp);
+    let (low, head) = (board[1], board[7]);
+    tear_to(dir.path(), low);
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let walking = format!(
+        "open: commits.log covers to position {low}; walking 6 boundaries to position {head}"
+    );
+    wait_until("the walk's open line", || wp.lines_said().lock().contains(&walking));
+    let before = engine.kernel().bases_loaded();
+    FEED_WALK_HOLD.release();
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    assert_eq!(
+        engine.kernel().bases_loaded() - before,
+        6 + 1,
+        "one base per boundary proved: the region's edge, five boundaries but the head, the floor"
+    );
 }

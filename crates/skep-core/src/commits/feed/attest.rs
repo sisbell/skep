@@ -45,28 +45,31 @@
 //! not yet exist, the class being the design record's and not this build's
 //! to narrow.
 //!
-//! DURABLE BEFORE THE NEXT COMMIT, AND A FAILED LINE HALTS WRITES (SO-I5 (d):
-//! no signature the board keeps is lost by a crash, a power loss or a failed
-//! write). The checkpoint that reclaims a position's journal segment is
-//! TRIGGERED by a LATER commit than the position's own and runs on the
-//! daemon's checkpoint thread — the kernel's cadence crosses within a
-//! commit and sets the flag that thread services, the thread notified after
-//! that commit's record step, and the backstop running inline within the
-//! later commit itself — and it reclaims only below the oldest checkpoint
-//! the kernel retains, which is strictly below the root it embodies; and
-//! every commit opens after the previous write's record step, under the
-//! write path's serialization lock. So [`AttestStore::record`]
-//! SYNCS the line before it returns ([`LineFile::append_synced`]), and the
-//! line is on disk before any commit that could take the journal's copy away
-//! can begin; the open syncs what it rebuilt before the first commit, for the
-//! same reason. The four derived files are not synced: what they lose, the
-//! next open re-derives. A write or a sync that FAILS stops this file as a
-//! failed append stops theirs, and — the file being primary where theirs are
-//! projections — it HALTS the write path: the record answers
-//! [`super::AttestStoreFailed`], and the daemon refuses every later write until a
-//! restart, since any commit could trigger the checkpoint that deletes the
-//! journal copy the lost line depends on. The restart's open rebuilds the
-//! line from the journal, which the halt kept.
+//! **Durable before the next commit, and a failed line halts writes**
+//! (SO-I5 (d): no signature the board keeps is lost by a crash, a power loss or
+//! a failed write). The checkpoint that reclaims a position's journal segment
+//! is triggered by a later commit than the position's own and runs on the
+//! daemon's checkpoint thread — the kernel's cadence crosses within a commit
+//! and sets the flag that thread services, the thread notified after that
+//! commit's record step, and the backstop running inline within the later
+//! commit itself — and it reclaims only below the oldest checkpoint the kernel
+//! retains, which is strictly below the root it embodies; and every commit
+//! opens after the previous write's record step, under the write path's
+//! serialization lock. So the record step syncs the line before it returns —
+//! [`AttestStore::record`] appends it under the feed's lock, owing its sync
+//! ([`LineFile::append_owing_sync`]), and the feed makes it durable through the
+//! file's own [`SyncHandle`] once that lock is released, under the
+//! serialization guard the record step holds (`Feed::record`), so no page or
+//! `/health` probe waits on the fsync — and the line is on disk before any
+//! commit that could take the journal's copy away can begin; the open syncs
+//! what it rebuilt before the first commit, for the same reason. The four
+//! derived files are not synced: what they lose, the next open re-derives. A
+//! write or a sync that fails stops this file as a failed append stops theirs,
+//! and — the file being primary where theirs are projections — it halts the
+//! write path: the record answers [`super::AttestStoreFailed`], and the daemon
+//! refuses every later write until a restart, since any commit could trigger
+//! the checkpoint that deletes the journal copy the lost line depends on. The
+//! restart's open rebuilds the line from the journal, which the halt kept.
 //!
 //! What keeps the class is this card's privacy: [`AttestStore`]'s file is its
 //! own, and nothing rewrites it but [`LineFile::open`]'s purge of the lines
@@ -89,7 +92,7 @@ use skep_util::notice::Class;
 use super::super::board_term;
 use super::super::sidecar::{CommitsLog, Cut, CutHead, EntryLines, ForeignLinesLine, IoCause};
 use super::super::Lines;
-use super::derived::LineFile;
+use super::derived::{LineFile, OwedSync, SyncHandle};
 use super::{AttestStoreFailed, AttestStoreFigures};
 use crate::codec::parse_lower_hex_bytes;
 
@@ -105,12 +108,14 @@ const ATTEST_ALG: &str = "alg";
 /// Its records' second field: the signature blob, lowercase hex.
 const ATTEST_SIG: &str = "sig";
 
-/// THE ATTEST STORE: its file, and the slots of the positions `commits.log`
-/// serves — resident at one blob (~3.4 KB under tag 1) per attested position
-/// it serves: the retained window at open, then every attested commit this
-/// uptime records — nothing prunes it before the next open. The FILE holds
-/// more: every line ever appended, the positions the log compacted away
-/// included, where the store is primary state.
+/// The attest store: its file, and the slots of the positions the feed serves.
+///
+/// The slots are resident at one blob (~3.4 KB under tag 1) per attested
+/// position `commits.log` serves, the window above the reclaim floor, trimmed
+/// with the log at every compaction ([`AttestStore::drop_at_or_below`]), so the
+/// journal's retained window bounds them. The file holds more: every line ever
+/// appended, the positions the log compacted away included, where the store is
+/// primary state.
 pub(super) struct AttestStore {
     /// `feed-attest.log`: appended, replayed and fenced, and never compacted.
     file: LineFile,
@@ -125,72 +130,77 @@ pub(super) struct AttestStore {
 }
 
 impl AttestStore {
-    /// Open the store beside the replayed `log`: replay every line at or
-    /// below the head, a line at a time, holding resident the SERVED window
-    /// alone — the lines below the log's fence are read past and stay in the
-    /// FILE, untouched — then rebuild the missing tail from the journal's
-    /// markers in ONE scan, then fence at the head and SYNC, so every line
-    /// the open rebuilt is on disk before the first commit can begin (SO-I5
-    /// (d)).
+    /// Opens the store beside the replayed `log`, and its file's sync handle.
+    ///
+    /// It replays every line at or below the head, a line at a time, holding
+    /// resident the served window alone — the lines below the log's fence are
+    /// read past and stay in the file, untouched — then rebuilds the missing
+    /// tail from the journal's markers in one scan, then fences at the head and
+    /// syncs, so every line the open rebuilt is on disk before the first commit
+    /// can begin (SO-I5 (d)). Beside the store it answers the file's
+    /// [`SyncHandle`], duplicated once the replay is done: what the record step
+    /// makes each line durable through, off the feed's lock.
     ///
     /// A line this daemon cannot read (a tag of no signature, a blob of none,
-    /// hex it did not write) is counted and not held — said ONCE PER OPEN
-    /// with the count and the first position (`operations.md` §1.1 row 10),
-    /// the file never compacted and the line never rewritten, so each open
-    /// meets it again: the row then renders `attest: null` where its line
-    /// records the marker filled, never an invented slot. A CUT the replay
-    /// made is said once the rebuild has run, with the floor and the side it
-    /// reached ([`AttestCutLine`]), the floor the log's open probed
-    /// (`CommitsLog::floor_at_open`, the feed's one probe) — the same
-    /// refusal the rebuild below meets where its fence's base is gone, both
-    /// the kernel's one base selection naming the oldest retained
-    /// checkpoint — and the edge of the board's attested positions read off
-    /// the head beside it ([`Attested`]). Every
-    /// failure of the open names this file, the kind kept (row 2): the
-    /// replay's through `LineFile::open`, the rebuilt lines' appends, the
-    /// fence, the sync and the size through one closure here. The tail is
-    /// every committed boundary above the file's coverage whose slot is
-    /// filled, listed by `Kernel::boundaries_above` in one scan from one base
-    /// ([`rebuilt_tail`]: the floor arm, and what a refusal leaves), kept
-    /// where the log serves the position — the marker-mirroring rebuild,
-    /// above the floor alone. An empty slot contributes nothing; a refusal
-    /// rebuilds nothing and drops nothing, and the fence still closes over
-    /// it: the journal will not answer it on a later open either, and the
-    /// row's own line says LOST — so the refusal is said once, in the
-    /// kernel's words ([`RebuildRefusedLine`]).
+    /// hex it did not write) is counted and not held — said once per open with
+    /// the count and the first position (`operations.md` §1.1 row 10), the file
+    /// never compacted and the line never rewritten, so each open meets it
+    /// again: the row then renders `attest: null` where its line records the
+    /// marker filled, never an invented slot. A cut the replay made is said
+    /// once the rebuild has run, with the floor and the side it reached
+    /// ([`AttestCutLine`]), the floor the log's open probed
+    /// (`CommitsLog::floor_at_open`, the feed's one probe) — the same refusal
+    /// the rebuild below meets where its fence's base is gone, both the
+    /// kernel's one base selection naming the oldest retained checkpoint — and
+    /// the edge of the board's attested positions read off the head beside it
+    /// ([`Attested`]). The tail is every committed boundary above the file's
+    /// coverage whose slot is filled, listed by `Kernel::boundaries_above` in
+    /// one scan from one base ([`rebuilt_tail`]: the floor arm, and what a
+    /// refusal leaves), kept where the log serves the position — the
+    /// marker-mirroring rebuild, above the floor alone. An empty slot
+    /// contributes nothing; a refusal rebuilds nothing and drops nothing, and
+    /// the fence still closes over it: the journal will not answer it on a
+    /// later open either, and the row's own line says its slot is lost — so the
+    /// refusal is said once, in the kernel's words ([`RebuildRefusedLine`]).
     ///
-    /// THE OPEN'S OTHER LINES: the entry lines past the head the replay
+    /// **The open's other lines**: the entry lines past the head the replay
     /// purged, signatures a copy taken before this open still holds
-    /// ([`ForeignLinesLine`]); a file ABSENT at this open where an attested
-    /// position can lie at or below the reclaim floor, every signature it
-    /// kept there gone ([`BegunAfreshLine`]); and, last, what the store
-    /// holds — its size, never compacted, the slots resident — and what the
-    /// rebuild wrote back ([`AttestOpenLine`]).
+    /// ([`ForeignLinesLine`]); a file absent at this open where an attested
+    /// position can lie at or below the reclaim floor, every signature it kept
+    /// there gone ([`BegunAfreshLine`]); and, last, what the store holds — its
+    /// size, never compacted, the slots resident — and what the rebuild wrote
+    /// back ([`AttestOpenLine`]).
     ///
-    /// COST: O(the file) to READ it, a line at a time — holding one line and
-    /// the served window, never the file, which keeps a line for every
-    /// attested commit the board ever made — and, for the tail, ONE
-    /// `Kernel::boundaries_above`: the base at or below the fence LOADED and
-    /// seeded — a whole checkpoint file read and deserialized, dropped
-    /// unfolded — then ONE scan from that base to the journal's end, the
-    /// retained window at most, one entry kept per committed transaction
-    /// above the base and a signature per attested one; a second such read
-    /// where the fence's base is gone (the floor arm). Where nothing is
-    /// uncovered — the fence at the head, the last commit attested or the
-    /// board reopened twice — no base is loaded and no segment read. What it
-    /// does not pay is a base and a scan PER uncovered position: a whole
-    /// checkpoint decoded per commit made since the last open, which the
-    /// fence's own motion — at an attested commit and at this open's end,
-    /// never at an unattested commit — made every reopen of a board that
-    /// took only unattested writes pay, a restart measured in minutes to
-    /// hours at a large world. Never a compaction: the store keeps what the
-    /// log drops.
+    /// **Cost**: O(the file) to read it, a line at a time — holding one line
+    /// and the served window, never the file, which keeps a line for every
+    /// attested commit the board ever made — and, for the tail, one
+    /// `Kernel::boundaries_above`: the base at or below the fence loaded and
+    /// seeded — a whole checkpoint file read and deserialized, dropped unfolded
+    /// — then one scan from that base to the journal's end, the retained window
+    /// at most, one entry kept per committed transaction above the base and a
+    /// signature per attested one; a second such read where the fence's base is
+    /// gone (the floor arm). Where nothing is uncovered — the fence at the
+    /// head, the last commit attested or the board reopened twice — no base is
+    /// loaded and no segment read. What it does not pay is a base and a scan
+    /// per uncovered position: a whole checkpoint decoded per commit made since
+    /// the last open, which the fence's own motion — at an attested commit and
+    /// at this open's end, never at an unattested commit — made every reopen of
+    /// a board that took only unattested writes pay, a restart measured in
+    /// minutes to hours at a large world. Never a compaction: the store keeps
+    /// what the log drops.
+    ///
+    /// # Errors
+    ///
+    /// Every failure names this file, the kind kept (`operations.md` §1.1 row
+    /// 2): the replay's through `LineFile::open`; the rebuilt lines' appends,
+    /// the fence, the sync, the size and the handle's duplication through one
+    /// closure here.
     pub(super) fn open(
         dir: &Path,
         engine: &Engine,
         log: &CommitsLog,
         lines: &Lines,
-    ) -> io::Result<AttestStore> {
+    ) -> io::Result<(AttestStore, SyncHandle)> {
         let started = Instant::now();
         let with_file = |e: io::Error| io::Error::new(e.kind(), format!("{ATTEST_FILE}: {e}"));
         let head = log.open_head();
@@ -263,39 +273,82 @@ impl AttestStore {
             }
         }
         let bytes = file.len().map_err(with_file)?;
+        let sync = file.sync_handle().map_err(with_file)?;
         let elapsed_ms = started.elapsed().as_millis();
         let slots = served.len();
         lines.say(Class::Open, AttestOpenLine { bytes, slots, rebuilt, elapsed_ms });
-        Ok(AttestStore { file, served, lines: lines.clone() })
+        Ok((AttestStore { file, served, lines: lines.clone() }, sync))
     }
 
     /// Returns what the store holds: its file's size and the slots resident.
     ///
     /// The file is never compacted, so it grows by one line (~6.9 KB under
     /// tag 1) per attested commit for the life of the board; the slots
-    /// resident grow by one blob (~3.4 KB) per attested commit this uptime.
-    /// The size is `None` where the handle's metadata could not be read.
+    /// resident are one blob (~3.4 KB) per attested position the feed serves,
+    /// trimmed at every compaction ([`AttestStore::drop_at_or_below`]). The
+    /// size is `None` where the handle's metadata could not be read.
     pub(super) fn figures(&self) -> AttestStoreFigures {
         AttestStoreFigures { bytes: self.file.len().ok(), slots: self.served.len() }
     }
 
-    /// Mirror one admitted marker slot at RECORD time — the attestation the
-    /// plain sequence's check admitted and handed the kernel — into the file,
-    /// SYNCED before this returns, and into the served window (SO-I5 (d)).
-    /// A failed write or sync stops the file for the uptime, is said ONCE
-    /// through the classed door (`operations.md` §1.1 row 33) — this file,
-    /// the position, the cause ([`IoCause`]), what still serves and the act,
-    /// the cause cleared before the restart — and is answered
-    /// [`AttestStoreFailed`], on which the write path halts, so no later
-    /// commit runs to say it twice. This uptime still serves the slot, and
-    /// the restart's open rebuilds the line from the journal.
-    pub(super) fn record(&mut self, at: u64, slot: Attestation) -> Result<(), AttestStoreFailed> {
-        let durable = self.file.append_synced(at, attest_fields(&slot));
+    /// Drops the served slots at or below `fence`.
+    ///
+    /// The positions are the ones the feed's compaction has just dropped from
+    /// its twins (`Inner::drop_at_or_below`), at or below the fence one under
+    /// the reclaim floor, where `/changes` answers `410 history_reclaimed` and
+    /// no page renders a slot. The file keeps every line: below the floor it
+    /// is primary state (BW-01), and nothing here touches it.
+    pub(super) fn drop_at_or_below(&mut self, fence: u64) {
+        self.served = self.served.split_off(&fence.saturating_add(1));
+    }
+
+    /// Mirrors one admitted marker slot into the file and the served window.
+    ///
+    /// The slot is the attestation the plain sequence's check admitted and
+    /// handed the kernel, mirrored at record time (SO-I5 (d)): into the file,
+    /// its sync owed ([`OwedSync`]: the record step makes it through the file's
+    /// [`SyncHandle`] before it returns, off the feed's lock), and into the
+    /// served window. This uptime serves the slot whatever the file answers,
+    /// and where the line is lost the restart's open rebuilds it from the
+    /// journal.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestStoreFailed`] where the line could not be written: the file
+    /// stops for the uptime and row 33 is said once through the classed door
+    /// (`operations.md` §1.1 row 33) — this file, the position, the cause
+    /// ([`IoCause`]), what still serves and the act, the cause cleared before
+    /// the restart — and the write path halts on the answer, so no later commit
+    /// runs to say it twice. A failed sync is said and answered alike
+    /// ([`AttestStore::sync_failed`]).
+    pub(super) fn record(
+        &mut self,
+        at: u64,
+        slot: Attestation,
+    ) -> Result<OwedSync, AttestStoreFailed> {
+        let appended = self.file.append_owing_sync(at, attest_fields(&slot));
         self.served.insert(at, Arc::new(slot));
-        durable.map_err(|e| {
+        appended.map_err(|e| {
             self.lines.say(Class::Failure, NotDurableLine { at, error: &e });
             AttestStoreFailed
         })
+    }
+
+    /// Stops the file where `owed`'s sync failed, and says row 33 once.
+    ///
+    /// It is [`AttestStore::record`]'s failure, met after the record step
+    /// released the feed's lock: the line, the halt it answers and the act,
+    /// as a failed write says them ([`NotDurableLine`]).
+    pub(super) fn sync_failed(&mut self, owed: OwedSync, error: &io::Error) {
+        let at = owed.at;
+        self.file.stop_after_a_failed_sync(owed);
+        self.lines.say(Class::Failure, NotDurableLine { at, error });
+    }
+
+    /// Settles `owed`, its sync made: the test seam's mark moves to it.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn settle(&mut self, owed: OwedSync) {
+        self.file.settle(owed);
     }
 
     /// The test seam behind `skepd::Daemon::attest_store_synced_through`:
@@ -323,10 +376,10 @@ impl AttestStore {
     }
 }
 
-/// Row 33's words (`operations.md` §1.1 row 33; SO-I5 (d)): the line the
-/// store could not make durable, and what the halt it answers costs.
+/// Row 33's words: the line the store could not make durable, and its cost.
 ///
-/// The words: `feed-attest.log: position {at}'s line is not durable
+/// It is `operations.md` §1.1 row 33's line (SO-I5 (d)): the line and what
+/// the halt it answers costs. The words: `feed-attest.log: position {at}'s line is not durable
 /// ({cause}); every later write is refused until a restart, whose open
 /// rebuilds the line from the journal`, `{cause}` as [`IoCause`] words it.
 /// On a full volume it adds `; free room on the volume first: the restart's
@@ -336,7 +389,8 @@ impl AttestStore {
 /// the line back and syncs it, and where its cause stands it refuses and
 /// reads stop with it` — a restart before the cause clears would take down a
 /// board that still serves reads. A pure value, pinned by `to_string()` in
-/// the unit suite; emitted under `Class::Failure` by [`AttestStore::record`].
+/// the unit suite; emitted under `Class::Failure` by [`AttestStore::record`]
+/// and [`AttestStore::sync_failed`].
 struct NotDurableLine<'a> {
     at: u64,
     error: &'a io::Error,
@@ -597,12 +651,12 @@ impl Rebuilt {
 ///
 /// The words: `feed-attest.log: {bytes} bytes, never compacted, {s} slots
 /// resident; {n} lines rebuilt from the journal's markers (positions
-/// {a}–{b}), in {d} ms` — the slots the served window holds resident, the
-/// one structure of the feed that grows with every attested commit for the
-/// uptime, and the positions where any line was rebuilt, so the restart row
-/// 33 asks for says that it wrote the lost line back. A pure value, pinned
-/// by `to_string()` in the unit suite; emitted under `Class::Open` by
-/// [`AttestStore::open`], once per open.
+/// {a}–{b}), in {d} ms` — the slots the served window holds resident, one
+/// per attested position above the reclaim floor, and the positions where
+/// any line was rebuilt, so the restart row 33 asks for says that it wrote
+/// the lost line back. A pure value, pinned by `to_string()` in the unit
+/// suite; emitted under `Class::Open` by [`AttestStore::open`], once per
+/// open.
 struct AttestOpenLine {
     bytes: u64,
     slots: usize,

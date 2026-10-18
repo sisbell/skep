@@ -294,14 +294,8 @@ impl Daemon {
                 };
                 refuse_feed_rebuilding(low, head, walk)
             }
-            ChangesAnswer::Page { entries, last, more } => Reply::json(
-                200,
-                obj(vec![
-                    ("changes", Value::Array(entries)),
-                    ("last", Value::Number(last.into())),
-                    ("more", Value::Bool(more)),
-                ]),
-            ),
+            // The page object as the feed marshaled it, sent as it stands.
+            ChangesAnswer::Page { body } => Reply::bodied(200, "application/json", body),
         }
     }
 

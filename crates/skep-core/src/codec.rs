@@ -400,16 +400,31 @@ fn parse_key_set(v: Value) -> PResult<DaemonOp> {
     Ok(DaemonOp::KeySet { account })
 }
 
-/// Serialize a finished `Value` tree — the one place this crate turns a
-/// `Value` into bytes, so the proof that it cannot fail is written once and
-/// holds everywhere it is used: wire responses, transport-error bodies, the
-/// commit stream's event payloads, and the sidecar's own file lines are all
-/// trees built HERE, out of [`obj`] and the leaf marshalers, which means
+/// Returns a finished `Value` tree's bytes, compact JSON.
+///
+/// It is the one place this crate turns a `Value` into bytes, with
+/// `append_bytes` its form into a buffer the caller holds, so the proof
+/// that it cannot fail is written once and holds everywhere it is used:
+/// wire responses, transport-error bodies, the change feed's pages, the
+/// commit stream's event payloads and the sidecar's own file lines are all
+/// trees built here, out of [`obj`] and the leaf marshalers, which means
 /// string keys only and no foreign `Serialize` impl to fault. The tree is
-/// borrowed: serializing reads it, so a caller that still needs the value —
-/// the change feed measuring a row it then serves — keeps it without a copy.
+/// borrowed: serializing reads it, so a caller that still needs the value
+/// keeps it without a copy.
 pub fn to_bytes(v: &Value) -> Vec<u8> {
-    serde_json::to_vec(v).expect("serializing a serde_json::Value with string keys cannot fail")
+    let mut out = Vec::with_capacity(128);
+    append_bytes(&mut out, v);
+    out
+}
+
+/// Appends a `Value` tree's bytes to `out`, as [`to_bytes`] writes them.
+///
+/// It is that marshal into a buffer the caller holds, for a document marshaled
+/// a part at a time — the change feed's page, a row at a time — under the
+/// same proof.
+pub(crate) fn append_bytes(out: &mut Vec<u8>, v: &Value) {
+    serde_json::to_writer(out, v)
+        .expect("serializing a serde_json::Value with string keys cannot fail");
 }
 
 // ── parse (wire → Request) ──────────────────────────────────────────────

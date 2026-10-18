@@ -193,7 +193,7 @@ pub enum FirstHead {
 }
 use self::sidecar::{OpTerms, WalkControl};
 use crate::codec::op_name;
-use crate::serial::{Serial, SerialGuard};
+use crate::serial::{Serial, SerialFigures, SerialGuard};
 use feed::Feed;
 
 // The feed walk's test seams, for the daemon's hooks: the hold the walk
@@ -572,13 +572,13 @@ impl Commits {
 
     /// Returns what `feed-attest.log` holds, for a line of the daemon's.
     ///
-    /// The attest store is never compacted — below the reclaim floor its
-    /// lines are an entry signature's only copy — so the file grows by one
-    /// line (~6.9 KB under tag 1) per attested commit for the life of the
-    /// board, and its slots resident grow by one blob per attested commit for
-    /// the uptime ([`AttestStoreFigures`]); the open says both once, and the
-    /// checkpoint thread reads them at each landing for its line. Under the
-    /// feed's lock and no guard.
+    /// The attest store's file is never compacted — below the reclaim floor
+    /// its lines are an entry signature's only copy — so it grows by one line
+    /// (~6.9 KB under tag 1) per attested commit for the life of the board;
+    /// its slots resident are one blob per attested position the feed serves,
+    /// trimmed at every compaction ([`AttestStoreFigures`]). The open says
+    /// both once, and the checkpoint thread reads them at each landing for
+    /// its line. Under the feed's lock and no guard.
     pub fn attest_store_figures(&self) -> AttestStoreFigures {
         self.feed.attest_store_figures()
     }
@@ -682,6 +682,16 @@ impl Commits {
     /// guard lets a commit land between what a gate read and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
         self.serial.lock()
+    }
+
+    /// Returns the write-serialization guard's takes and waits since the open.
+    ///
+    /// The share of takes that waited is how busy the serialization point is
+    /// ([`SerialFigures`]); the checkpoint thread reads the figures at each
+    /// landing for its line, the counts since the reading before. Two atomic
+    /// loads, under no lock and no guard.
+    pub fn serial_figures(&self) -> SerialFigures {
+        self.serial.figures()
     }
 
     /// One write, whole, under a serialization guard the CALLER already

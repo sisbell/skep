@@ -245,6 +245,7 @@ use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
 use skep_core::commits::{AttestStoreFigures, Commits, FeedCompaction, FirstHead, StoppedFile};
+use skep_core::serial::SerialFigures;
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
 use request::BodySource;
@@ -1035,6 +1036,9 @@ impl Daemon {
         // so a wake with no flag and no landing re-reads nothing off a header
         // the open did not size by.
         let newest_at_open = engine.kernel().newest_checkpoint().map(|header| header.seq);
+        // The head at the open: where the write guard's first figures on a
+        // landing's line are counted from.
+        let head_at_open = engine.kernel().current_seq();
         // The blob store, opened under `blobs/` beside the journal: its
         // reconciliation and compaction complete here, before anything is
         // served (the record: "OPEN's PASSES OVER BOTH STORES … COMPLETE
@@ -1107,7 +1111,7 @@ impl Daemon {
             uploads,
             write_permits: Permits::new(MAX_CONCURRENT_WRITES),
             write_edge: EdgeTracker::new(EDGE_HOLD_DOWN),
-            checkpointer: CheckpointMemory::at_open(start_point, newest_at_open),
+            checkpointer: CheckpointMemory::at_open(start_point, newest_at_open, head_at_open),
             resident: ResidentHighWater::new(),
             threads: ThreadLiveness {
                 pruner_ended: AtomicBool::new(false),
@@ -1811,6 +1815,12 @@ impl Daemon {
 /// arms rendered this uptime, since no suite captures stderr in-process.
 struct CheckpointMemory {
     looked: Mutex<Looked>,
+    /// The write guard's figures and the head, as the last such line read them.
+    ///
+    /// They are what the next line that carries the clause counts from
+    /// (`GuardTakes`). Apart from `looked`, because the backstop's arm takes
+    /// the landing's re-reads while it holds that lock.
+    guard_said: Mutex<(SerialFigures, Seq)>,
     /// The lines rendered this uptime, each `{class}: {text}` (a test seam).
     #[cfg(any(test, feature = "test-hooks"))]
     lines: Mutex<Vec<String>>,
@@ -1850,11 +1860,13 @@ struct Looked {
 impl CheckpointMemory {
     /// Returns the memory at the open.
     ///
-    /// Nothing is said, the count is counted from the start point, and the
-    /// newest checkpoint is as the open found it.
-    fn at_open(start_point: Seq, newest: Option<Seq>) -> CheckpointMemory {
+    /// Nothing is said, the inline count is counted from the start point, the
+    /// write guard's takes from `head`, the head at the open, and the newest
+    /// checkpoint is as the open found it.
+    fn at_open(start_point: Seq, newest: Option<Seq>, head: Seq) -> CheckpointMemory {
         CheckpointMemory {
             looked: Mutex::new(Looked { inline_said: 0, since: start_point, newest }),
+            guard_said: Mutex::new((SerialFigures::default(), head)),
             #[cfg(any(test, feature = "test-hooks"))]
             lines: Mutex::new(Vec::new()),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -1972,13 +1984,16 @@ impl Daemon {
     /// `/changes` answers `410` — timed by the daemon's own `Instant`, the
     /// one span of a landing that holds a lock every write takes, and beside
     /// them the volume's free space as the floor's refusal reads it, through
-    /// the gate's one door, and a reading of the resident set. One function,
-    /// so the three arms cannot disagree about what follows a landing, and
-    /// the answer is what each arm's line says of it ([`AfterLanding`]): no
-    /// figure a landing moves moves unsaid. The newest header is the
-    /// caller's one read of it, its length handed in. Where the floor has not
-    /// moved — a reclamation that failed, a landing below the retained window
-    /// — the compaction finds nothing below the floor and writes nothing.
+    /// the gate's one door, a reading of the resident set, and the write
+    /// guard's takes since the line before (`Commits::serial_figures`), its
+    /// baseline moved to this reading — each call's answer is said on a
+    /// line, so the baseline is the last line's. One function, so the three
+    /// arms cannot disagree about what follows a landing, and the answer is
+    /// what each arm's line says of it ([`AfterLanding`]): no figure a
+    /// landing moves moves unsaid. The newest header is the caller's one read
+    /// of it, its length handed in. Where the floor has not moved — a
+    /// reclamation that failed, a landing below the retained window — the
+    /// compaction finds nothing below the floor and writes nothing.
     fn re_read_after_a_landing(&self, newest_len: Option<u64>) -> AfterLanding {
         let bytes_bound = cadence_bytes_for(newest_len);
         self.engine.kernel().set_cadence_bytes(bytes_bound);
@@ -1986,11 +2001,17 @@ impl Daemon {
         let began = Instant::now();
         let compaction = self.commits.compact_feed_below_reclaim_floor(&self.engine);
         let compaction_ms = began.elapsed().as_millis();
+        let guard = {
+            let now = (self.commits.serial_figures(), self.engine.kernel().current_seq());
+            let (said, since) = std::mem::replace(&mut *self.checkpointer.guard_said.lock(), now);
+            GuardTakes { figures: now.0.since(said), since }
+        };
         AfterLanding {
             bytes_bound: bytes_bound.get(),
             floor,
             free_space: self.media.free_space(),
             resident: self.resident.read(),
+            guard,
             compaction,
             compaction_ms,
             attest: self.commits.attest_store_figures(),
@@ -2250,27 +2271,28 @@ impl fmt::Display for Reclaimed {
 /// The figures are the thread's re-reads off the newest base
 /// ([`Daemon::re_read_after_a_landing`]): the cadence's byte bound and the
 /// media floor in force, the volume's free space as the floor reads it, a
-/// reading of the resident set, the change feed's compaction — the fence
-/// below which `/changes` answers `410 history_reclaimed`, how long the
-/// compaction held the change feed's lock, with each file that stood named —
-/// and what the never compacted `feed-attest.log` holds, on disk and
-/// resident (`Commits::attest_store_figures`), the one structure of the core
-/// that grows for the uptime, so a resident set that climbs is told apart.
-/// Line 25 carries them, and so do the backstop's line where its wake took
-/// the re-reads and a failure after a base landed (`operations.md` §1.1 rows
-/// 25 and 26; m13; §6), so no figure a landing moves — the floor a deposit
-/// is refused at, the fence a mirror is refused below — moves with no line
-/// naming it, and the one span of a landing that holds a lock every write
-/// takes is timed where it happens. It renders `the cadence's byte bound
-/// {b}, the media floor in force {F}, the volume's free space {f};
-/// {resident}; the change feed's files {compacted below position {p} in {d}
-/// ms | wait on the walk's landing over positions ({low}, {head}] for their
-/// rewrite, the resident entries trimmed below position {p} in {d} ms | hold
-/// nothing below the reclaim floor}; feed-attest.log {bytes} bytes, {s}
-/// slots resident` — the middle arm while the walk behind the listener has
-/// a region pending, when the fence moved in memory alone and no file was
-/// written; `size unread` for the bytes where the file's metadata did not
-/// answer.
+/// reading of the resident set, the write guard's takes since the line
+/// before ([`GuardTakes`]), the change feed's compaction — the fence below
+/// which `/changes` answers `410 history_reclaimed`, how long the compaction
+/// held the change feed's lock, with each file that stood named — and what
+/// the never compacted `feed-attest.log` holds, on disk and resident
+/// (`Commits::attest_store_figures`): the file grows with every attested
+/// commit, and its slots resident with the journal's retained window, so a
+/// resident set that climbs is told apart. Line 25 carries them, and so do
+/// the backstop's line where its wake took the re-reads and a failure after
+/// a base landed (`operations.md` §1.1 rows 25 and 26; m13; §6), so no
+/// figure a landing moves — the floor a deposit is refused at, the fence a
+/// mirror is refused below — moves with no line naming it, and the one span
+/// of a landing that holds a lock every write takes is timed where it
+/// happens. It renders `the cadence's byte bound {b}, the media floor in
+/// force {F}, the volume's free space {f}; {resident}; {guard}; the change
+/// feed's files {compacted below position {p} in {d} ms | wait on the walk's
+/// landing over positions ({low}, {head}] for their rewrite, the resident
+/// entries trimmed below position {p} in {d} ms | hold nothing below the
+/// reclaim floor}; feed-attest.log {bytes} bytes, {s} slots resident` — the
+/// middle arm while the walk behind the listener has a region pending, when
+/// the fence moved in memory alone and no file was written; `size unread`
+/// for the bytes where the file's metadata did not answer.
 struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
@@ -2280,6 +2302,8 @@ struct AfterLanding {
     free_space: u64,
     /// A reading of the resident set, beside the uptime's largest.
     resident: ResidentRead,
+    /// The write guard's takes since the line before, and its waits.
+    guard: GuardTakes,
     /// The feed's compaction: the fence, and the files that stood.
     compaction: FeedCompaction,
     /// The compaction's duration, whole milliseconds, the daemon's own
@@ -2301,8 +2325,8 @@ impl fmt::Display for AfterLanding {
         write!(
             f,
             "the cadence's byte bound {}, the media floor in force {}, the volume's free space \
-             {}; {}; the change feed's files ",
-            self.bytes_bound, self.floor, self.free_space, self.resident
+             {}; {}; {}; the change feed's files ",
+            self.bytes_bound, self.floor, self.free_space, self.resident, self.guard
         )?;
         let below = |fence: u64| fence.saturating_add(1);
         match (self.compaction.fence, self.compaction.deferred) {
@@ -2327,6 +2351,34 @@ impl fmt::Display for AfterLanding {
             None => f.write_str("size unread")?,
         }
         write!(f, ", {} slots resident", self.attest.slots)
+    }
+}
+
+/// The write guard's takes since the line before, as a landing says them.
+///
+/// It renders `the write guard taken {t} times since position {p}, {w} of
+/// them after a wait`: the takes of the write-serialization guard
+/// (`Commits::serial_figures`) since the last line that carried the clause,
+/// `{p}` the head position then — the open's head before any such line — and
+/// how many of those takes found another writer holding the guard. The
+/// share that waited is how busy the serialization point is, so a share that
+/// climbs from landing to landing is the write path nearing its limit before
+/// the write pool refuses `write_busy` (`operations.md` §1.1 row 25). Counts
+/// of writes, never of a reader.
+struct GuardTakes {
+    /// The takes and the waits since `since`.
+    figures: SerialFigures,
+    /// The head position the count runs from.
+    since: Seq,
+}
+
+impl fmt::Display for GuardTakes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the write guard taken {} times since position {}, {} of them after a wait",
+            self.figures.takes, self.since, self.figures.waits
+        )
     }
 }
 

@@ -32,5 +32,5 @@ pub mod commits;
 pub mod codec;
 // The bounds this crate reads, each `pub`, two of them the daemon's too.
 pub mod limits;
-// The write-serialization lock and its guard.
+// The write-serialization lock, its guard and its takes.
 pub mod serial;

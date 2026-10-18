@@ -171,7 +171,10 @@ fn newest_clause(line: &str) -> (&str, &str) {
 /// the largest of the uptime's readings beside it, that one is the daemon's
 /// high-water and never decreases across two landings; both bounds are the
 /// small board's, and the compaction fence is the reclaim floor, its
-/// duration whole milliseconds.
+/// duration whole milliseconds; and the write guard's takes are the writes
+/// since the line before, none of them waiting — one client writes in turn —
+/// so a second landing with nothing committed between counts none, from the
+/// first landing's position.
 #[test]
 fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_the_resident_peak() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -232,6 +235,17 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     let (_, largest) = resident_figures(line);
     assert_eq!(largest, peak, "the largest reading is the daemon's high-water: {line}");
     assert!(!line.contains("peaked"), "the largest reading is no peak of the process's: {line}");
+    let taken = figure_after(line, "; the write guard taken ");
+    let since =
+        figure_after(line, &format!("; the write guard taken {taken} times since position "));
+    assert!(taken > 0 && since < landed.seq.0, "the writes since the open's head: {line}");
+    assert!(
+        line.contains(&format!(
+            "; the write guard taken {taken} times since position {since}, 0 of them after a \
+             wait; the change feed's files "
+        )),
+        "one client writing in turn waits on no other writer: {line}"
+    );
     let compacted = ms_read_out(
         line,
         &format!("; the change feed's files compacted below position {} in ", landed.seq.0),
@@ -276,6 +290,13 @@ fn a_landing_line_carries_the_kernels_reclaimed_bytes_the_hosts_free_space_and_t
     let peak_after = sd.daemon().resident_set_peak().expect("a second reading");
     assert!(peak_after >= peak, "the high-water never decreases: {peak} then {peak_after}");
     assert_eq!(resident_figures(line).1, peak_after, "{line}");
+    assert!(
+        line.contains(&format!(
+            "; the write guard taken 0 times since position {}, 0 of them after a wait; ",
+            landed.seq.0
+        )),
+        "nothing taken since the first landing's line, counted from its position: {line}"
+    );
     assert!(
         line.ends_with(&format!(
             "; the change feed's files hold nothing below the reclaim floor{}",

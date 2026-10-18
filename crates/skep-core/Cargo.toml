@@ -103,4 +103,10 @@ skep-core = { path = ".", features = ["test-hooks"] }
 # hooks supply. `skep-signature` is the one crate that links the signature
 # libraries, so no test names `ed25519-dalek`.
 skep-signature = { path = "../skep-signature", features = ["test-hooks"] }
+# The kernel with its test seam on, for its count of the bases a history
+# read loads (`Kernel::bases_loaded`): the commits suite pins the feed walk's
+# cost by it (`operations.md` §3.3 step 2). This crate's own `test-hooks`
+# forwards nothing to the kernel; a build that compiles no test never reads
+# this table.
+skep-kernel = { path = "../skep-kernel", features = ["test-hooks"] }
 tempfile.workspace = true

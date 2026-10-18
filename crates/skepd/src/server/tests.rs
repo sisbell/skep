@@ -1192,15 +1192,16 @@ fn the_cadence_byte_bound_is_a_quarter_of_the_newest_checkpoint_and_never_below_
 
 /// What a landing moved, at fixed figures, as the three lines after a
 /// landing carry it: both bounds, the volume's free space, a reading of the
-/// resident set beside the largest of the uptime's, the feed's compaction,
-/// its fence and its duration named, or nothing below the floor, and what
-/// `feed-attest.log` holds.
+/// resident set beside the largest of the uptime's, the write guard's takes
+/// since the line before, the feed's compaction, its fence and its duration
+/// named, or nothing below the floor, and what `feed-attest.log` holds.
 fn after_a_landing(fence: Option<u64>) -> AfterLanding {
     AfterLanding {
         bytes_bound: 25_165_824,
         floor: 268_435_456,
         free_space: 9_000_000_000,
         resident: ResidentRead { now: Some(412_000_256), most: Some(1_180_000_256) },
+        guard: GuardTakes { figures: SerialFigures { takes: 1_204, waits: 17 }, since: Seq(3100) },
         compaction: FeedCompaction { fence, standing: vec![], deferred: None },
         compaction_ms: 38,
         attest: AttestStoreFigures { bytes: Some(20_700), slots: 3 },
@@ -1211,7 +1212,9 @@ fn after_a_landing(fence: Option<u64>) -> AfterLanding {
 const AFTER_A_LANDING: &str = "the cadence's byte bound 25165824, the media floor in force \
                                268435456, the volume's free space 9000000000; the process's \
                                resident set 412000256 bytes, the largest of this uptime's \
-                               readings 1180000256 bytes; the change feed's files ";
+                               readings 1180000256 bytes; the write guard taken 1204 times \
+                               since position 3100, 17 of them after a wait; the change \
+                               feed's files ";
 
 /// `after_a_landing`'s last clause, the attest store's figures.
 const ATTEST_FIGURES: &str = "; feed-attest.log 20700 bytes, 3 slots resident";
@@ -1259,10 +1262,11 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
          reclaimed; checkpoint.1024 removed (900000 bytes), checkpoint.2048 removed (950000 \
          bytes); the cadence's byte bound 25165824, the media floor in force 268435456, the \
          volume's free space 9000000000; the process's resident set 412000256 bytes, the \
-         largest of this uptime's readings 1180000256 bytes; the change feed's files compacted \
-         below position 4096 in 38 ms, commits.log standing as it was, feed-index.log standing \
-         as it was; feed-attest.log 20700 bytes, 3 slots resident; 2 checkpoints ran inline on \
-         a writer since position 3100"
+         largest of this uptime's readings 1180000256 bytes; the write guard taken 1204 times \
+         since position 3100, 17 of them after a wait; the change feed's files compacted below \
+         position 4096 in 38 ms, commits.log standing as it was, feed-index.log standing as it \
+         was; feed-attest.log 20700 bytes, 3 slots resident; 2 checkpoints ran inline on a \
+         writer since position 3100"
     );
     let deferred = AfterLanding {
         compaction: FeedCompaction {
@@ -1290,6 +1294,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
             floor: 256 * 1024 * 1024,
             free_space: 0,
             resident: ResidentRead { now: None, most: None },
+            guard: GuardTakes { figures: SerialFigures::default(), since: Seq(7) },
             compaction: FeedCompaction::default(),
             compaction_ms: 0,
             attest: AttestStoreFigures { bytes: None, slots: 0 },
@@ -1300,8 +1305,9 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         quiet.to_string(),
         "checkpoint at position 7 landed (size unread) in 0 ms; nothing reclaimed; the \
          cadence's byte bound 25165824, the media floor in force 268435456, the volume's free \
-         space 0; the process's resident set unread; the change feed's files hold nothing \
-         below the reclaim floor; feed-attest.log size unread, 0 slots resident"
+         space 0; the process's resident set unread; the write guard taken 0 times since \
+         position 7, 0 of them after a wait; the change feed's files hold nothing below the \
+         reclaim floor; feed-attest.log size unread, 0 slots resident"
     );
     assert_eq!(
         ResidentRead { now: None, most: Some(1_180_000_256) }.to_string(),

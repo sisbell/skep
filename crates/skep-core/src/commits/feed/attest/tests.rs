@@ -1,11 +1,13 @@
 use super::*;
 
-/// A slot the store records is served at once and replays from its line
-/// as the same slot — [`attest_fields`] and [`attest_of_record`] one
-/// spelling in both directions — and a line [`attest_fields`] could not
-/// have spelled replays as no slot: an uppercase blob, a tag of no
-/// signature, a tag past a byte, an empty blob. A tag no `SIG_ALGS` row
-/// names is a slot all the same: the table is its consumer's to ask.
+/// Checks that a recorded slot is served and replays from its line as itself.
+///
+/// [`attest_fields`] and [`attest_of_record`] are one spelling in both
+/// directions, the line owing a sync the store's second handle makes and the
+/// store settles; and a line [`attest_fields`] could not have spelled replays
+/// as no slot: an uppercase blob, a tag of no signature, a tag past a byte, an
+/// empty blob. A tag no `SIG_ALGS` row names is a slot all the same: the table
+/// is its consumer's to ask.
 #[test]
 fn a_recorded_slot_is_served_and_replays_from_its_line_as_itself() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -16,9 +18,13 @@ fn a_recorded_slot_is_served_and_replays_from_its_line_as_itself() {
             LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines)
                 .expect("a fresh store opens");
         assert!(entries.is_empty() && replayed.cut.is_none() && replayed.foreign.is_none());
+        let sync = file.sync_handle().expect("the store's second handle");
         let mut store = AttestStore { file, served: BTreeMap::new(), lines: lines.clone() };
-        store.record(5, slot.clone()).expect("a writable store takes the line");
-        assert_eq!(store.synced_through(), 5, "and syncs it before answering");
+        let owed = store.record(5, slot.clone()).expect("a writable store takes the line");
+        assert_eq!(store.synced_through(), 0, "written, its sync owed");
+        sync.sync().expect("the second handle syncs the line the store wrote");
+        store.settle(owed);
+        assert_eq!(store.synced_through(), 5, "the sync settled with the store");
         assert_eq!(store.slot(5).as_deref(), Some(&slot), "served at once");
         assert_eq!(store.slot(4).as_deref(), None, "and only where recorded");
         assert_eq!(store.figures().slots, 1, "one slot resident");
@@ -88,6 +94,36 @@ fn a_line_the_store_cannot_make_durable_is_said_through_the_door_and_answered() 
         "what still serves and the act: {}",
         said[0]
     );
+}
+
+/// Checks that a failed sync is said as a failed write is, and stops the file.
+///
+/// The sync is made off the feed's lock and its failure met there, so the
+/// store hears of it after its record: row 33, in the ruled words, with the
+/// position the sync was owed for and the cause — a full volume's act among
+/// them — and the file stopped there, as a failed write stops it.
+#[test]
+fn a_failed_sync_is_said_through_the_door_and_stops_the_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let lines = Lines::new();
+    let (file, _, _) =
+        LineFile::open(dir.path(), ATTEST_FILE, 9, |_| true, &lines).expect("a fresh store opens");
+    let mut store = AttestStore { file, served: BTreeMap::new(), lines: lines.clone() };
+    let slot = Attestation::new(1, vec![0xab, 0x01]).expect("a slot");
+    let owed = store.record(5, slot.clone()).expect("the line is written");
+    store.sync_failed(owed, &io::Error::new(io::ErrorKind::StorageFull, "no room"));
+    let said = lines.said().lock().clone();
+    assert_eq!(
+        said,
+        [format!(
+            "failure: {}",
+            NotDurableLine { at: 5, error: &io::Error::new(io::ErrorKind::StorageFull, "no room") }
+        )],
+        "row 33, once, for the sync that failed"
+    );
+    assert!(said[0].contains("(the volume is full (no room))"), "the cause: {}", said[0]);
+    assert_eq!(store.file.stopped_since(), Some(5), "the file stops where the sync was owed");
+    assert_eq!(store.slot(5).as_deref(), Some(&slot), "served this uptime all the same");
 }
 
 /// Row 9's attest words, all three sides, and row 10's. With the last

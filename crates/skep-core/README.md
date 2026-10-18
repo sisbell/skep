@@ -46,11 +46,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `RegistryRefusal` (each `token`, `disposition`) and the attestation's
   causes `AttestFault`.
 - **The commits**, `commits` — `Commits`: `open`, `serial_lock`,
-  `commit_under`, `take_turn_after_refusal`, `write_first_head`
-  (`FirstHead`), `changes` (`ChangesQuery`, `ChangesAnswer`, `FeedClass`
-  with `of`), `head_time`, `next_step` (`StreamStep`), `announced`,
-  `halted_at`, `say_the_kernels_halt_once`, `feed_walk_gone`,
-  `compact_feed_below_reclaim_floor` (`FeedCompaction`),
+  `serial_figures`, `commit_under`, `take_turn_after_refusal`,
+  `write_first_head` (`FirstHead`), `changes` (`ChangesQuery`,
+  `ChangesAnswer`, `FeedClass` with `of`), `head_time`, `next_step`
+  (`StreamStep`), `announced`, `halted_at`, `say_the_kernels_halt_once`,
+  `feed_walk_gone`, `compact_feed_below_reclaim_floor` (`FeedCompaction`),
   `stopped_feed_files` (`StoppedFile`), `attest_store_figures`
   (`AttestStoreFigures`), what the never compacted `feed-attest.log` holds
   on disk and in memory, `checkpoint_signal`
@@ -71,7 +71,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `FEED_WALK_PROGRESS_BOUNDARIES`, `FEED_WALK_PROGRESS_INTERVAL` and
   `MAX_CHANGES_PAGE_BYTES`, the core's own.
 - **The lock**, `serial` — `SerialGuard`, the write-serialization guard
-  the routes hold across the door.
+  the routes hold across the door, and `SerialFigures` (`since`), its
+  takes and waits, which the daemon's landing line says.
 - **The test seam** (`test-hooks`, default off; every item of it
   `#[doc(hidden)]`) — the feed walk's hold, its notice and its panic arm,
   the walk's pending region and progress cadence, the head writer's clock

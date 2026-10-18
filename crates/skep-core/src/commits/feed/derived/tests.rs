@@ -375,19 +375,30 @@ fn a_failed_append_is_said_once_through_the_door_and_the_stop_is_silent_after() 
     assert_eq!(f.coverage(), 3, "the claim never rises past the stop");
 }
 
-/// The attest store's append (SO-I5 (d)) is synced through its own line,
-/// ANSWERS its failure rather than reporting it, and on a stopped file
-/// answers every later line an error, never `Ok`: a line the file did
-/// not write is no durable line.
+/// Checks that an owed sync is made through the file's second handle.
+///
+/// The attest store's append (SO-I5 (d)) owes its sync, made through the file's
+/// second handle and settled with the file; it answers its failure rather than
+/// reporting it, and on a stopped file answers every later line an error, never
+/// `Ok`: a line the file did not write is no durable line. An owed sync that
+/// failed stops the file at the position it was owed for.
 #[test]
-fn a_synced_append_answers_its_failure_and_a_stopped_file_holds_no_line_durable() {
+fn an_owed_sync_is_made_through_the_files_second_handle_and_a_stopped_file_owes_none() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut f, _, _) = open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
-    f.append_synced(3, vec![]).expect("a writable file takes and syncs the line");
+    let handle = f.sync_handle().expect("a second handle on the file");
+    let owed = f.append_owing_sync(3, vec![]).expect("a writable file takes the line");
+    assert_eq!(f.synced(), 0, "written, and owed its sync");
+    handle.sync().expect("the second handle syncs the line the first wrote");
+    f.settle(owed);
     assert_eq!(f.synced(), 3, "the sync covers the line it follows");
+    let owed = f.append_owing_sync(7, vec![]).expect("the next line");
+    f.stop_after_a_failed_sync(owed);
+    assert_eq!(f.stopped_since(), Some(7), "a failed sync stops the file where it was owed");
+    assert!(f.append_owing_sync(8, vec![]).is_err(), "a stopped file owes no later line a sync");
     let mut f = LineFile::over_unwritable(dir.path(), INDEX_FILE, 3);
-    assert!(f.append_synced(4, vec![]).is_err(), "a read-only handle refuses the line");
-    assert!(f.append_synced(5, vec![]).is_err(), "a stopped file answers no later line Ok");
+    assert!(f.append_owing_sync(4, vec![]).is_err(), "a read-only handle refuses the line");
+    assert!(f.append_owing_sync(5, vec![]).is_err(), "a stopped file answers no later line Ok");
     assert_eq!((f.coverage(), f.synced()), (3, 0), "nothing covered past it, nothing synced");
 }
 

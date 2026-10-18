@@ -52,20 +52,21 @@
 //!   `feed-index.log` is a `[]`-docs entry, and those are never masked.
 //! * appends are flushed to the OS, not fsynced (the trade `commits.log`
 //!   makes: testimony never doubles a write's fsync) — the attest store's
-//!   alone excepted, each of its lines synced before its record step
-//!   returns ([`LineFile::append_synced`]; SO-I5 (d), which `attest.rs`
-//!   states); a rewrite goes to `<file>.compact` and is renamed over the
-//!   original — whole old file or whole new one, never half of either. A
-//!   rewrite runs at open and, since the reclaim floor moves at a checkpoint
-//!   and at no other moment, after each checkpoint the daemon's checkpoint
-//!   thread lands; one that fails PAST its rename while serving leaves the
-//!   handle naming the replaced file, so it STOPS the file as a failed
-//!   append does, said once per uptime — the later landings' rewrites still
-//!   run, the stop moving to each newest fence in silence (P22: a slower
-//!   answer at the next open, never an outage). The walk's landing rewrites
-//!   too, over files fenced below its region, so one that fails there before
-//!   its rename leaves a file short of the region, which the landing stops
-//!   at the region's lower edge as the gap rule above asks.
+//!   alone excepted, each of its lines synced before its record step returns
+//!   ([`LineFile::append_owing_sync`], through the file's [`SyncHandle`];
+//!   SO-I5 (d), which `attest.rs` states); a rewrite goes to
+//!   `<file>.compact` and is renamed over the original — whole old file or
+//!   whole new one, never half of either. A rewrite runs at open and, since
+//!   the reclaim floor moves at a checkpoint and at no other moment, after
+//!   each checkpoint the daemon's checkpoint thread lands; one that fails
+//!   past its rename while serving leaves the handle naming the replaced
+//!   file, so it stops the file as a failed append does, said once per
+//!   uptime — the later landings' rewrites still run, the stop moving to
+//!   each newest fence in silence (P22: a slower answer at the next open,
+//!   never an outage). The walk's landing rewrites too, over files fenced
+//!   below its region, so one that fails there before its rename leaves a
+//!   file short of the region, which the landing stops at the region's lower
+//!   edge as the gap rule above asks.
 //!
 //! Loss unmasks nothing: no derived file is consulted for WHAT an entry
 //! says (that is `commits.log`'s) or for WHETHER a class may see it (that
@@ -135,48 +136,51 @@ pub(super) struct LineFile {
     /// The classed door with the daemon's record ([`Lines`]): what the
     /// rewrite's stop is said through, once per uptime.
     lines: Lines,
-    /// Set by the first FAILED [`LineFile::append`] of this uptime — or
-    /// failed [`LineFile::sync`], or a [`LineFile::rewrite`] that failed
-    /// PAST its rename, or the walk's landing over a rewrite that failed
-    /// before it ([`LineFile::stop_at`]) — after which this file takes no
-    /// further APPEND and no FENCE. `Some` carries THE POSITION THE STOP WAS
-    /// SET AT — the position the stop's own line names, an ordering the
+    /// Where this file stopped this uptime, `None` while it takes lines.
+    ///
+    /// It is set by the first failed [`LineFile::append`] of this uptime — or
+    /// failed [`LineFile::sync`], or an owed sync that failed
+    /// ([`LineFile::stop_after_a_failed_sync`]), or a [`LineFile::rewrite`]
+    /// that failed past its rename, or the walk's landing over a rewrite that
+    /// failed before it ([`LineFile::stop_at`]) — after which this file takes
+    /// no further append and no fence. `Some` carries the position the stop was
+    /// set at — the position the stop's own line names, an ordering the
     /// standing line re-says the stop by (`operations.md` §1 THE RATES,
-    /// `{file} stopped since position {p}`): the failed append's position;
-    /// the coverage a failed sync was asked to make durable; the fence a
-    /// rewrite failed past its rename at, or the region's lower edge a
-    /// landing left the file fenced at, which is what the next open
-    /// re-derives from.
+    /// `{file} stopped since position {p}`): the failed append's position; the
+    /// coverage a failed sync was asked to make durable; the fence a rewrite
+    /// failed past its rename at, or the region's lower edge a landing left the
+    /// file fenced at, which is what the next open re-derives from.
     ///
-    /// [`LineFile::rewrite`] is not GUARDED by it: it writes the file WHOLE
-    /// from the resident twin and fences at the coverage it has just made
-    /// true, so it CLOSES a gap rather than claiming over one — the opposite
-    /// of what this flag guards against — and a stopped file rewritten
-    /// whole is right on disk again while the flag stands for the uptime.
-    /// What a rewrite can do is SET it, and a rewrite past its rename on a
-    /// file already stopped MOVES it to the newest fence. At open every
-    /// rewrite's failure is fatal — `?`-propagated into
-    /// `DaemonError::Sidecar` before any append — so the flag is moot there;
-    /// but the checkpoint thread's compaction runs the same rewrite while
-    /// serving, and one that fails past its rename leaves this handle naming
-    /// the REPLACED file, which no open reads: the file stops, said once per
-    /// uptime at the transition, and the next open re-derives from the
-    /// rewritten file's own fence.
+    /// [`LineFile::rewrite`] is not guarded by it: it writes the file whole
+    /// from the resident twin and fences at the coverage it has just made true,
+    /// so it closes a gap rather than claiming over one — the opposite of what
+    /// this flag guards against — and a stopped file rewritten whole is right
+    /// on disk again while the flag stands for the uptime. What a rewrite can
+    /// do is set it, and a rewrite past its rename on a file already stopped
+    /// moves it to the newest fence. At open every rewrite's failure is fatal —
+    /// `?`-propagated into `DaemonError::Sidecar` before any append — so the
+    /// flag is moot there; but the checkpoint thread's compaction runs the same
+    /// rewrite while serving, and one that fails past its rename leaves this
+    /// handle naming the replaced file, which no open reads: the file stops,
+    /// said once per uptime at the transition, and the next open re-derives
+    /// from the rewritten file's own fence.
     ///
-    /// COVERAGE IS A CLAIM, and a gap beneath it is the one loss the check
+    /// **Coverage is a claim**, and a gap beneath it is the one loss the check
     /// cannot close: a position at or below coverage with no record reads as
     /// "contributed nothing", which for `feed-index.log` is a `[]`-docs entry
-    /// and so is never masked. A failed append leaves coverage where it
-    /// stands, and the NEXT successful one would raise it past the gap — so
-    /// the file stops instead, its on-disk coverage stays below the failure,
-    /// and the next open's tail derivation re-covers the failure and every
-    /// position after it from `commits.log`. The resident twin is updated
-    /// ahead of every append, so this uptime still answers correctly; what
-    /// stops is the testimony, which is what the next open reads.
+    /// and so is never masked. A failed append leaves coverage where it stands,
+    /// and the next successful one would raise it past the gap — so the file
+    /// stops instead, its on-disk coverage stays below the failure, and the
+    /// next open's tail derivation re-covers the failure and every position
+    /// after it from `commits.log`. The resident twin is updated ahead of every
+    /// append, so this uptime still answers correctly; what stops is the
+    /// testimony, which is what the next open reads.
     stopped: Option<u64>,
-    /// The coverage the last successful [`LineFile::sync`] made durable —
-    /// set in that sync's own success arm, so no line reads as synced that
-    /// no `sync_data` covered.
+    /// The coverage the last successful sync made durable.
+    ///
+    /// It is set in [`LineFile::sync`]'s own success arm, or where an owed sync
+    /// that succeeded is settled ([`LineFile::settle`]), so no line reads as
+    /// synced that no `sync_data` covered.
     #[cfg(any(test, feature = "test-hooks"))]
     synced: u64,
     /// The test seam behind `skepd::Daemon::fail_the_feeds_next_rewrite_past_rename`:
@@ -185,6 +189,41 @@ pub(super) struct LineFile {
     /// without a disk that fails on cue.
     #[cfg(any(test, feature = "test-hooks"))]
     fail_next_rewrite_past_rename: bool,
+}
+
+/// A line appended and its sync owed, [`LineFile::append_owing_sync`]'s answer.
+///
+/// It names the position whose line is written and not yet durable. The
+/// caller makes it durable through the file's [`SyncHandle`] and then spends
+/// this: where the sync failed, on [`LineFile::stop_after_a_failed_sync`];
+/// where it was made, by dropping it — under the test seam, on
+/// `LineFile::settle`, which moves the seam's mark to it.
+#[must_use = "the line is not durable until its sync is made and settled"]
+pub(super) struct OwedSync {
+    /// The position whose line awaits its sync.
+    pub(super) at: u64,
+}
+
+/// A second handle on a line file, for its sync alone.
+///
+/// It is the file's own open handle duplicated ([`LineFile::sync_handle`]),
+/// one open file, so a sync through it makes durable every line the file's
+/// handle wrote; and it syncs through a shared borrow, so the attest store's
+/// line is made durable off the change feed's lock (`Feed::record`). The
+/// attest store's file is rewritten at its open alone, ahead of the
+/// handle's duplication, so the handle names that file for the uptime.
+pub(super) struct SyncHandle(File);
+
+impl SyncHandle {
+    /// Syncs the file's data to disk (`sync_data`).
+    ///
+    /// # Errors
+    ///
+    /// The OS refused the sync; whether the lines reached the disk is then
+    /// unknown.
+    pub(super) fn sync(&self) -> io::Result<()> {
+        self.0.sync_data()
+    }
 }
 
 /// The ENTRIES a line file replays — the position-carrying records its
@@ -412,23 +451,62 @@ impl LineFile {
         }
     }
 
-    /// Append one record and SYNC the file before answering — the attest
-    /// store's record-time append (SO-I5 (d)): there a line below the
-    /// reclaim floor is an entry signature's only copy, so it must be on disk
-    /// before any later commit, which could reclaim the journal's copy, can
-    /// begin. The four derived files never take it; what they lose the next
-    /// open re-derives.
+    /// Appends one record whose sync the caller owes, refusing a stopped file.
     ///
-    /// A failed write or sync STOPS the file and is ANSWERED, never reported
-    /// here: the caller owes the failure a disposition of its own. A stopped
-    /// file takes nothing and answers an error, never `Ok` — a line it did
-    /// not write is no durable line.
-    pub(crate) fn append_synced(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
+    /// It is the attest store's record-time append (SO-I5 (d)): there a line
+    /// below the reclaim floor is an entry signature's only copy, so it must
+    /// be on disk before any later commit, which could reclaim the journal's
+    /// copy, can begin. The line is written here and made durable through
+    /// the file's [`SyncHandle`] — off any lock the caller holds over this
+    /// file — and the answer ([`OwedSync`]) is the sync owed, which a failed
+    /// sync spends on [`LineFile::stop_after_a_failed_sync`]. The four
+    /// derived files never take it; what they lose the next open re-derives.
+    ///
+    /// # Errors
+    ///
+    /// A failed write, which stops the file, or a file already stopped: a
+    /// stopped file takes nothing and answers an error, never `Ok` — a line
+    /// it did not write is no durable line. Either is answered, never
+    /// reported here: the caller owes the failure a disposition of its own.
+    pub(crate) fn append_owing_sync(
+        &mut self,
+        at: u64,
+        fields: Vec<(&'static str, Value)>,
+    ) -> io::Result<OwedSync> {
         if self.stopped.is_some() {
             return Err(io::Error::other(format!("{} stopped at an earlier failure", self.name)));
         }
         self.append(at, fields)?;
-        self.sync()
+        Ok(OwedSync { at })
+    }
+
+    /// Returns a second handle on this file, for its sync alone.
+    ///
+    /// It is this file's open handle duplicated ([`SyncHandle`]).
+    ///
+    /// # Errors
+    ///
+    /// The OS refused to duplicate the handle.
+    pub(crate) fn sync_handle(&self) -> io::Result<SyncHandle> {
+        self.file.try_clone().map(SyncHandle)
+    }
+
+    /// Settles `owed`, its sync through the file's [`SyncHandle`] made.
+    ///
+    /// It moves the test seam's mark ([`LineFile::synced`]) and nothing else.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn settle(&mut self, owed: OwedSync) {
+        self.synced = owed.at;
+    }
+
+    /// Stops the file after `owed`'s sync failed, as a failed sync stops it.
+    ///
+    /// Whether the lines reached the disk is then unknown, so the file takes
+    /// no further line from the position the sync was owed for
+    /// ([`LineFile::sync`]'s failure arm); a file already stopped keeps its
+    /// stop.
+    pub(crate) fn stop_after_a_failed_sync(&mut self, owed: OwedSync) {
+        self.stopped.get_or_insert(owed.at);
     }
 
     /// Sync the file's data to disk (`sync_data`): every line appended so
@@ -451,10 +529,11 @@ impl LineFile {
         }
     }
 
-    /// The test seam behind `skepd::Daemon::attest_store_synced_through`:
-    /// the coverage the last successful [`LineFile::sync`] made durable —
-    /// every position at or below it whose line this file holds is on disk.
-    /// Not a stable API.
+    /// The test seam behind `skepd::Daemon::attest_store_synced_through`.
+    ///
+    /// It answers the coverage the last successful sync made durable — every
+    /// position at or below it whose line this file holds is on disk. Not a
+    /// stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn synced(&self) -> u64 {
         self.synced

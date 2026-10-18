@@ -331,27 +331,34 @@ apart.
    `; checkpoint.{n} removed ({bytes} bytes)`. The daemon keeps two;
    the one removed is the older past them, or a checkpoint the open
    passed over (Start, step 3, item 5), whose file this is the last
-   word on. Further on, the line's `the change feed's files compacted
-   below position {position} in {ms} ms` is how long that landing
-   held the change feed's lock: every write, `/health` probe and
-   `/changes` page that came meanwhile waited behind it, so a figure
-   that grows from landing to landing is the volume's syncs slowing
-   (Start, step 6). While the walk behind the listener has positions
-   to re-cover (Start, step 3, item 11), the files are not rewritten
-   and the clause says so: `the change feed's files wait on the walk's
-   landing over positions ({covered}, {head}] for their rewrite, the
-   resident entries trimmed below position {position} in {ms} ms`.
-   The line ends with what `feed-attest.log` holds: `;
+   word on. Further on, `the write guard taken {n} times since
+   position {position}, {n} of them after a wait` counts the writes
+   that reached the write path's serialization point since the line
+   before, and those that found another write holding it: the share
+   that waited is how busy writing is, and a share that climbs from
+   landing to landing is writing nearing the load at which writes are
+   refused `503 write_busy`. After it, the line's `the change feed's
+   files compacted below position {position} in {ms} ms` is how long
+   that landing held the change feed's lock: every write, `/health`
+   probe and `/changes` page that came meanwhile waited behind it, so
+   a figure that grows from landing to landing is the volume's syncs
+   slowing (Start, step 6). While the walk behind the listener has
+   positions to re-cover (Start, step 3, item 11), the files are not
+   rewritten and the clause says so: `the change feed's files wait on
+   the walk's landing over positions ({covered}, {head}] for their
+   rewrite, the resident entries trimmed below position {position}
+   in {ms} ms`. The line ends with what `feed-attest.log` holds: `;
    feed-attest.log {bytes} bytes, {n} slots resident`.
 
 7. **Know what no act clears.** `feed-attest.log` gains a line for
    every attested commit and is never compacted; nothing the daemon
    does shrinks it. Size the volume for the board's signed history.
    Its slots resident — one signature, about 3.4 KB, per attested
-   commit the change feed serves — grow with the uptime's signed
-   writes and are the one figure of the core that does; each landing
-   line names both, so a resident set that climbs from landing to
-   landing is told apart from a leak.
+   commit the change feed serves — are held for the positions above
+   the reclaim floor alone, and fall back at each landing that
+   compacts the change feed's files; each landing line names both, so
+   a resident set that climbs from landing to landing is told apart
+   from a leak.
 
 8. **Watch between the lines.** `GET /health` answers
    `writes.halted` as `true` while either halt stands. And once an

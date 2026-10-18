@@ -139,8 +139,8 @@ use skep_util::notice::Class;
 
 use self::attest::AttestStore;
 use self::derived::{
-    LineFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
-    STREAMS_OWNERS,
+    LineFile, OwedSync, SyncHandle, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE,
+    OFFSETS_OFFSET, STREAMS_FILE, STREAMS_OWNERS,
 };
 use super::sidecar::{
     reclaim_floor, reclaim_floor_of, reconstruct, Carrier, CommitMeta, CommitsLog, Cut, CutHead,
@@ -149,7 +149,7 @@ use super::sidecar::{
 };
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::{Lines, Signed};
-use crate::codec::to_bytes;
+use crate::codec::append_bytes;
 use crate::limits::{
     FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL, MAX_CHANGES_PAGE_BYTES,
 };
@@ -322,10 +322,11 @@ pub struct FeedCompaction {
 ///
 /// The file is never compacted — below the reclaim floor its lines are an
 /// entry signature's only copy — so it grows by one line per attested
-/// commit, ~6.9 KB under tag 1, for the life of the board; and the slots
-/// resident for the positions the feed serves (~3.4 KB each) grow with every
-/// attested commit for the uptime, the one structure of the core that does.
-/// Read by the checkpoint thread at each landing, for its line.
+/// commit, ~6.9 KB under tag 1, for the life of the board; the slots
+/// resident are one per attested position the feed serves (~3.4 KB each),
+/// trimmed with the feed's other twins at every compaction, so the journal's
+/// retained window bounds them. Read by the checkpoint thread at each
+/// landing, for its line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AttestStoreFigures {
     /// The file's size in bytes, or `None` where its metadata did not answer.
@@ -370,17 +371,16 @@ pub enum ChangesAnswer {
         /// The oldest position still answerable, or `None` where none is.
         floor: Option<u64>,
     },
-    /// The visible entries in `(since, head]`, oldest first, rendered,
-    /// capped at `limit`; `last` is the final entry's position (or `since`
-    /// echoed when the page is empty) and `more` says whether a visible
-    /// entry remains past it (PUB-6.44).
+    /// The visible entries in `(since, head]`, oldest first, marshaled.
+    ///
+    /// The page is capped at `limit` and carried as the wire carries it
+    /// (PUB-6.44): `{"changes":[…],"last":N,"more":B}`, its keys in the order
+    /// [`obj`](skep_util::json::obj) sorts them — `last` the final entry's
+    /// position (or `since` echoed when the page is empty), `more` whether a
+    /// visible entry remains past it.
     Page {
-        /// The rendered rows, oldest first.
-        entries: Vec<Value>,
-        /// The final entry's position, or `since` where the page is empty.
-        last: u64,
-        /// Whether a visible entry remains past `last`.
-        more: bool,
+        /// The page object's bytes, each row marshaled into them once.
+        body: Vec<u8>,
     },
     /// THE PAGE BYTE BUDGET (bu7-2 = reg-H1; SO-I9; P29): the page the query
     /// asks for, marshaled, would pass [`MAX_CHANGES_PAGE_BYTES`] — so it is
@@ -417,6 +417,14 @@ pub enum ChangesAnswer {
 /// under one lock.
 pub(super) struct Feed {
     inner: Mutex<Inner>,
+    /// The attest store's second handle, its lines' syncs made through it.
+    ///
+    /// The record step makes each attest line durable through it once the
+    /// feed's lock is released ([`Feed::sync_the_attest_line`]).
+    attest_sync: SyncHandle,
+    /// The test seam's hold on the attest line's sync ([`SyncHold`]).
+    #[cfg(test)]
+    pub(super) attest_sync_hold: SyncHold,
 }
 
 /// A feed file STOPPED this uptime — `commits.log` or one of the four
@@ -499,9 +507,12 @@ struct Inner {
     /// which is what establishes the invariant [`at_or_above`]'s
     /// `partition_point` reads.
     streams: BTreeMap<Address, Vec<u64>>,
-    /// THE ATTEST STORE — its own card, [`AttestStore`], whose class keeps it
-    /// out of `files` and out of every rewrite here. Read per rendered entry
-    /// by [`Feed::page`], which is the one consumer.
+    /// The attest store, on its own card ([`AttestStore`]).
+    ///
+    /// Its class keeps it out of `files` and out of every rewrite here; its
+    /// served window is trimmed beside the twins ([`Inner::drop_at_or_below`]),
+    /// its file never. Read per rendered entry by [`Feed::page`], the one
+    /// consumer.
     attest: AttestStore,
     files: Files,
 }
@@ -821,8 +832,9 @@ impl Feed {
             f_offsets.fence(covered).map_err(with_file(OFFSETS_FILE))?;
         }
 
-        // ── the attest store, on its own card ──
-        let attest = AttestStore::open(dir, engine, &log, lines)?;
+        // ── the attest store, on its own card, and the handle its lines are
+        //    made durable through ──
+        let (attest, attest_sync) = AttestStore::open(dir, engine, &log, lines)?;
 
         // ── compaction: the log dropped what the journal reclaimed, so the
         //    derived files drop it too, rewritten from the twins — the SAME
@@ -878,7 +890,13 @@ impl Feed {
             elapsed_ms: started.elapsed().as_millis(),
         };
         lines.say(Class::Open, reach);
-        Ok((Feed { inner: Mutex::new(inner) }, pending.map(|_| snap)))
+        let feed = Feed {
+            inner: Mutex::new(inner),
+            attest_sync,
+            #[cfg(test)]
+            attest_sync_hold: SyncHold::new(),
+        };
+        Ok((feed, pending.map(|_| snap)))
     }
 
     /// Returns what the attest store holds ([`AttestStoreFigures`]).
@@ -935,8 +953,8 @@ impl Feed {
     /// the file stands as the open found it, so the next open's region pends
     /// again and the three are fenced back at its lower edge; killed after
     /// it, the three cover the region, so that open classifies nothing from
-    /// the journal before it serves. The attest store is untouched; the
-    /// `landing:` line is said last.
+    /// the journal before it serves. The attest store's file is untouched;
+    /// the `landing:` line is said last.
     ///
     /// A rewrite that fails is said and fails no op. Before its rename a
     /// derived file stands whole and fenced at the region's lower edge,
@@ -1009,49 +1027,50 @@ impl Feed {
         );
     }
 
-    /// COMPACT THE FIVE FILES TO THE JOURNAL's RECLAIM FLOOR, while serving —
-    /// what the daemon's checkpoint thread runs after each checkpoint lands,
-    /// under this feed's lock, which is the one lock the record step and the
-    /// page take: the same rewrite [`Feed::open`] runs, the fence found by
-    /// the same probe ([`reclaim_floor`]). `commits.log` drops every entry
-    /// at or below the fence just under the floor and rewrites itself around
-    /// the survivors ([`CommitsLog::compact_to`]); the four twins drop the
-    /// same positions and the four derived files are rewritten from them
-    /// whole, fenced at the last recorded position; the attest store is
-    /// untouched (its class: below the floor its lines are primary). Answers
-    /// what it did ([`FeedCompaction`]): the fence compacted to, or none
-    /// where the floor has not moved past the oldest entry — the ordinary
-    /// answer between reclaiming checkpoints — and nothing is written; and
-    /// beside the fence, by name, each file that STOOD.
+    /// Compacts the five files to the journal's reclaim floor, while serving.
     ///
-    /// THE DISPOSITION while serving is the record step's own (the settled
+    /// It is what the daemon's checkpoint thread runs after each checkpoint
+    /// lands, under this feed's lock, which is the one lock the record step and
+    /// the page take: the same rewrite [`Feed::open`] runs, the fence found by
+    /// the same probe ([`reclaim_floor`]). `commits.log` drops every entry at
+    /// or below the fence just under the floor and rewrites itself around the
+    /// survivors ([`CommitsLog::compact_to`]); the four twins and the attest
+    /// store's served window drop the same positions and the four derived files
+    /// are rewritten from the twins whole, fenced at the last recorded
+    /// position; the attest store's file is untouched (its class: below the
+    /// floor its lines are primary). Answers what it did ([`FeedCompaction`]):
+    /// the fence compacted to, or none where the floor has not moved past the
+    /// oldest entry — the ordinary answer between reclaiming checkpoints — and
+    /// nothing is written; and beside the fence, by name, each file that stood.
+    ///
+    /// **The disposition** while serving is the record step's own (the settled
     /// rule for `record`): reported on the operator stream, never failing an
-    /// op. A rewrite that fails BEFORE its rename leaves that file whole and
-    /// standing and is said here, the next checkpoint's compaction trying
-    /// again — and that file is named in the answer, so the checkpoint
-    /// thread's landing line is truthful of it; one that fails PAST its
-    /// rename stops its file for the uptime and is said by the file itself,
-    /// once — the new file is in place, so it is not one that stood — the
-    /// resident twins are trimmed either way and serve this uptime, and the
-    /// next open re-derives (P22).
+    /// op. A rewrite that fails before its rename leaves that file whole and
+    /// standing and is said here, the next checkpoint's compaction trying again
+    /// — and that file is named in the answer, so the checkpoint thread's
+    /// landing line is truthful of it; one that fails past its rename stops its
+    /// file for the uptime and is said by the file itself, once — the new file
+    /// is in place, so it is not one that stood — the resident twins are
+    /// trimmed either way and serve this uptime, and the next open re-derives
+    /// (P22).
     ///
-    /// WHILE THE WALK's REGION IS PENDING the rewrite is DEFERRED: the fence
-    /// moves in memory — the log's entries and the twins trimmed, so a page
-    /// below it answers 410 at once, as `/op-at` does — and no file is
+    /// **While the walk's region is pending** the rewrite is deferred: the
+    /// fence moves in memory — the log's entries and the twins trimmed, so a
+    /// page below it answers 410 at once, as `/op-at` does — and no file is
     /// written, the twins lacking the region the files must carry; the
     /// landing's one rewrite writes the fence, which it reads from the floor
     /// again then ([`Feed::land`]). The deferral's record is that fence:
-    /// `commits.log`'s `min_since` ahead of the line its file holds until
-    /// the landing. The answer names the fence and the region the files'
-    /// rewrite waits on (`deferred`), and no file standing, so the
-    /// checkpoint thread's line says the files were not written.
+    /// `commits.log`'s `min_since` ahead of the line its file holds until the
+    /// landing. The answer names the fence and the region the files' rewrite
+    /// waits on (`deferred`), and no file standing, so the checkpoint thread's
+    /// line says the files were not written.
     ///
-    /// THE LINES (`operations.md` §1.1 rows 27 and 28) go through `lines`,
-    /// the write path's classed door, handed at the call as the walk's
-    /// landing is handed it: a rewrite that failed BEFORE its rename, with
-    /// the reclaim floor's position it compacted to, said per ATTEMPT — each
-    /// landing while the cause stands is a fresh act whose failure is news,
-    /// the rule's named exception — under `Class::Failure`.
+    /// **The lines** (`operations.md` §1.1 rows 27 and 28) go through `lines`,
+    /// the write path's classed door, handed at the call as the walk's landing
+    /// is handed it: a rewrite that failed before its rename, with the reclaim
+    /// floor's position it compacted to, said per attempt — each landing while
+    /// the cause stands is a fresh act whose failure is news, the rule's named
+    /// exception — under `Class::Failure`.
     pub(super) fn compact_below_reclaim_floor(
         &self,
         engine: &Engine,
@@ -1144,31 +1163,38 @@ impl Feed {
         stopped
     }
 
-    /// Record one committed write at ack time — under the write-serialization
-    /// guard, between a commit and its ack, which is [`CommitsLog::record`]'s
-    /// contract and this method's; the guard argument is that contract's
-    /// cheap half — and classify it against `world` — the POST-COMMIT head, so
-    /// the minted document's registration and bit are in it — into the four
-    /// derived structures: the offset array, the index (docs non-empty), the
-    /// bitmap or the published stream, and each named draft's owner stream —
-    /// and, where the write's marker slot was filled, into the attest store
-    /// ([`AttestStore::record`]), the admitted value itself. Declined exactly
-    /// when the log declines (an old commit's re-ack).
+    /// Records one committed write at ack time, and classifies it.
     ///
-    /// The derived appends are testimony too: a failed one is reported and
-    /// the resident twin stays right, so this uptime answers correctly and
-    /// the next open's tail check re-derives what the file missed. The attest
-    /// store's line is the exception (SO-I5 (d)): synced before this
-    /// returns, and where its write or its sync fails, answered
-    /// [`AttestStoreFailed`], on which the write path halts — the slot still served
-    /// this uptime, the line rebuilt from the journal by the restart's open.
+    /// It runs under the write-serialization guard, between a commit and its
+    /// ack, which is [`CommitsLog::record`]'s contract and this method's; the
+    /// guard argument is that contract's cheap half. The write is classified
+    /// against `world` — the post-commit head, so the minted document's
+    /// registration and bit are in it — into the four derived structures: the
+    /// offset array, the index (docs non-empty), the bitmap or the published
+    /// stream, and each named draft's owner stream — and, where the write's
+    /// marker slot was filled, into the attest store ([`AttestStore::record`]),
+    /// the admitted value itself. Declined exactly when the log declines (an
+    /// old commit's re-ack).
     ///
-    /// `docs` arrives as ADDRESSES and is rendered once, here, for the
+    /// The derived appends are testimony too: a failed one is reported and the
+    /// resident twin stays right, so this uptime answers correctly and the next
+    /// open's tail check re-derives what the file missed. The attest store's
+    /// line is the exception (SO-I5 (d)): synced before this returns, off the
+    /// feed's lock ([`Feed::sync_the_attest_line`]), and where its write or its
+    /// sync fails the slot is still served this uptime, the line rebuilt from
+    /// the journal by the restart's open.
+    ///
+    /// `docs` arrives as addresses and is rendered once, here, for the
     /// authority file alone: the classification reads them as addresses, so
-    /// text handed down from the write path would be parsed straight back —
-    /// and a parse that could not read a name would have nowhere to report
-    /// it, leaving the position classified short and, where every name
-    /// dropped, served to every class as a `[]`-docs entry.
+    /// text handed down from the write path would be parsed straight back — and
+    /// a parse that could not read a name would have nowhere to report it,
+    /// leaving the position classified short and, where every name dropped,
+    /// served to every class as a `[]`-docs entry.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestStoreFailed`] where the attest store's line could not be written
+    /// or synced, on which the write path halts.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn record(
         &self,
@@ -1181,18 +1207,22 @@ impl Feed {
         terms: Option<OpTerms>,
         world: &World,
     ) -> Result<(), AttestStoreFailed> {
-        let mut inner = self.inner.lock();
-        let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
-        let (carrier, attest) = match signed {
-            Some(Signed::Marker(a)) => (Some(Carrier::Marker), Some(a)),
-            Some(Signed::RecordSig) => (Some(Carrier::RecordSig), None),
-            None => (None, None),
+        let owed = {
+            let mut inner = self.inner.lock();
+            let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
+            let (carrier, attest) = match signed {
+                Some(Signed::Marker(a)) => (Some(Carrier::Marker), Some(a)),
+                Some(Signed::RecordSig) => (Some(Carrier::RecordSig), None),
+                None => (None, None),
+            };
+            let Some(recorded) =
+                inner.log.record(serial, at, op, rendered, testimony, carrier, terms)
+            else {
+                return Ok(());
+            };
+            inner.fold_position(at, recorded, classify(world, docs), attest)?
         };
-        let Some(recorded) = inner.log.record(serial, at, op, rendered, testimony, carrier, terms)
-        else {
-            return Ok(());
-        };
-        inner.fold_position(at, recorded, classify(world, docs), attest)
+        self.sync_the_attest_line(serial, owed)
     }
 
     /// THE THIRD ARM's RECORD (`operations.md` §4 row 34): one BARE entry at
@@ -1221,11 +1251,51 @@ impl Feed {
         attest: Option<Attestation>,
         world: &World,
     ) -> Result<(), AttestStoreFailed> {
-        let mut inner = self.inner.lock();
-        let Some(recorded) = inner.log.record_bare(serial, at, journal) else {
-            return Ok(());
+        let owed = {
+            let mut inner = self.inner.lock();
+            let Some(recorded) = inner.log.record_bare(serial, at, journal) else {
+                return Ok(());
+            };
+            inner.fold_position(at, recorded, classify(world, docs), attest)?
         };
-        inner.fold_position(at, recorded, classify(world, docs), attest)
+        self.sync_the_attest_line(serial, owed)
+    }
+
+    /// Makes the attest line the record step appended durable, off the lock.
+    ///
+    /// The line was written under the feed's lock ([`AttestStore::record`]),
+    /// its sync owed; it is synced here through the store's second handle
+    /// ([`SyncHandle`]) with that lock released, so a page, a `/health` probe
+    /// or a compaction that comes meanwhile waits on no fsync. The guard
+    /// argument is what keeps the line durable before the next commit
+    /// (SO-I5 (d)): the record step's caller holds the serialization guard
+    /// across this, and every commit — the one whose crossing calls for the
+    /// checkpoint that reclaims the line's journal copy among them — opens
+    /// under it.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestStoreFailed`] where the sync failed: the failure is said and the
+    /// file stopped, under the lock again ([`AttestStore::sync_failed`]).
+    fn sync_the_attest_line(
+        &self,
+        _serial: &SerialGuard<'_>,
+        owed: Option<OwedSync>,
+    ) -> Result<(), AttestStoreFailed> {
+        let Some(owed) = owed else { return Ok(()) };
+        #[cfg(test)]
+        self.attest_sync_hold.park();
+        match self.attest_sync.sync() {
+            Ok(()) => {
+                #[cfg(any(test, feature = "test-hooks"))]
+                self.inner.lock().attest.settle(owed);
+                Ok(())
+            }
+            Err(e) => {
+                self.inner.lock().attest.sync_failed(owed, &e);
+                Err(AttestStoreFailed)
+            }
+        }
     }
 
     /// The test seam behind `skepd::Daemon::attest_store_synced_through`:
@@ -1243,47 +1313,51 @@ impl Feed {
         self.inner.lock().attest.fail_next_write();
     }
 
-    /// The data behind `GET /changes` at `class`.
+    /// Returns the data behind `GET /changes` at `class`.
     ///
-    /// The rows are COLLECTED under the feed's lock and RENDERED after it is
+    /// The rows are collected under the feed's lock and rendered after it is
     /// released: [`Feed::record`], the write path's step under the
     /// serialization lock, waits on that lock, and an attested row's render —
     /// its `attest` member, 6,746 hex characters under tag 1 — is the dearest
     /// part of a page. Under the lock: the merge, the mask, and a clone per
     /// row, the slot an `Arc`.
     ///
-    /// THE PAGE BYTE BUDGET (bu7-2; SO-I9): the rows are MEASURED as they
-    /// are rendered — each entry's marshaled bytes and the comma between
-    /// entries, the page object's own envelope (`changes`, `last`, `more`:
-    /// under forty bytes) aside — and where the sum passes
-    /// [`MAX_CHANGES_PAGE_BYTES`] the whole request is refused
-    /// ([`ChangesAnswer::OverBudget`]), naming the budget and the rows that
-    /// fit, never a page shorter than `limit` (PUB-6.44). The budget is
-    /// paid at the layer that produces the page (P29), so a guest asking
-    /// the maximum `limit` over attested rows costs the daemon the render of
-    /// at most the budget's worth of rows and one more.
+    /// **The page's bytes.** Each row is rendered and marshaled straight into
+    /// the page object's body, once, and its tree dropped — so a page costs one
+    /// marshal per row and holds the body and one row's tree at a time, and the
+    /// route sends the body as it stands.
     ///
-    /// THE REGION PENDING (`operations.md` §3.3 step 2: "for any page whose
-    /// range reaches into the uncovered region, not only a `since` inside
-    /// it — a page starting below the region would otherwise silently skip
-    /// its positions"): after the reclaimed check and before the merge
-    /// serves a row, where `(low, head]` is pending and `since < head`, the
-    /// page is refused [`ChangesAnswer::Rebuilding`] UNLESS its `limit`
-    /// rows all lie at or below `low` — the merge walked up to `low` and no
-    /// further, since the twins hold nothing of the region and the next
-    /// candidate past `low` would be a position recorded above the head,
-    /// the region skipped between. THE ARITHMETIC, pinned by the walk
-    /// suite: `low` is covered (a page's last row may be it), `head`
-    /// uncovered (the last of the region); a page refused by the position
-    /// test `since + limit > low` is refused here too, since fewer than
-    /// `limit` positions, hence rows, lie in `(since, low]`, and a page
-    /// that test would serve over sparse positions — fewer than `limit`
-    /// rows below `low`, the merge then reaching past the region — is
-    /// refused as well. A page served below the region answers `more:
-    /// true`: the region holds positions this class may see, which the
-    /// next page meets as the refusal or, landed, as rows. A page with
-    /// `since` at or above `head` serves from the twins as ever — every
-    /// position recorded since the open is in them.
+    /// **The page byte budget** (bu7-2; SO-I9): the rows are measured as they
+    /// are marshaled — each entry's bytes and the comma between entries, the
+    /// page object's own envelope (`changes`, `last`, `more`: under forty
+    /// bytes) aside — and where the sum passes [`MAX_CHANGES_PAGE_BYTES`] the
+    /// whole request is refused ([`ChangesAnswer::OverBudget`]), naming the
+    /// budget and the rows that fit, never a page shorter than `limit`
+    /// (PUB-6.44). The budget is paid at the layer that produces the page
+    /// (P29), so a guest asking the maximum `limit` over attested rows costs
+    /// the daemon the render of at most the budget's worth of rows and one
+    /// more.
+    ///
+    /// **The region pending** (`operations.md` §3.3 step 2: "for any page whose
+    /// range reaches into the uncovered region, not only a `since` inside it —
+    /// a page starting below the region would otherwise silently skip its
+    /// positions"): after the reclaimed check and before the merge serves a
+    /// row, where `(low, head]` is pending and `since < head`, the page is
+    /// refused [`ChangesAnswer::Rebuilding`] unless its `limit` rows all lie at
+    /// or below `low` — the merge walked up to `low` and no further, since the
+    /// twins hold nothing of the region and the next candidate past `low` would
+    /// be a position recorded above the head, the region skipped between. The
+    /// arithmetic, pinned by the walk suite: `low` is covered (a page's last
+    /// row may be it), `head` uncovered (the last of the region); a page
+    /// refused by the position test `since + limit > low` is refused here too,
+    /// since fewer than `limit` positions, hence rows, lie in `(since, low]`,
+    /// and a page that test would serve over sparse positions — fewer than
+    /// `limit` rows below `low`, the merge then reaching past the region — is
+    /// refused as well. A page served below the region answers `more: true`:
+    /// the region holds positions this class may see, which the next page meets
+    /// as the refusal or, landed, as rows. A page with `since` at or above
+    /// `head` serves from the twins — every position recorded since the open is
+    /// in them.
     pub(crate) fn page(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         let (rows, more) = {
             let inner = self.inner.lock();
@@ -1291,7 +1365,8 @@ impl Feed {
                 return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
             }
             let Some(start) = query.since.checked_add(1) else {
-                return ChangesAnswer::Page { entries: Vec::new(), last: query.since, more: false };
+                let body = page_body(PAGE_HEAD.to_vec(), query.since, false);
+                return ChangesAnswer::Page { body };
             };
             let region = inner.log.pending_region().filter(|&(_, head)| query.since < head);
             let mut rows = Vec::new();
@@ -1319,9 +1394,8 @@ impl Feed {
             (rows, more)
         };
         let last = rows.last().map_or(query.since, |(at, ..)| *at);
-        let mut entries = Vec::with_capacity(rows.len());
-        let mut bytes = 0usize;
-        for (at, meta, reduced, whole, slot) in rows {
+        let mut body = PAGE_HEAD.to_vec();
+        for (before, (at, meta, reduced, whole, slot)) in rows.into_iter().enumerate() {
             let mut entry = meta.entry(at, reduced, slot.as_deref());
             // THE THIRD ABSENCE (mi7-E2; SO-I5 (e)): a row whose `docs` this
             // class REDUCES — a straddle, a draft-homed `nullify` of a public
@@ -1334,18 +1408,29 @@ impl Feed {
             if !whole {
                 entry.as_object_mut().expect("an entry is an object").remove("attest");
             }
-            // The entry's marshaled length — key order moves no byte of it
-            // — and the comma that joins it to the one before.
-            bytes += to_bytes(&entry).len() + usize::from(!entries.is_empty());
-            if bytes > MAX_CHANGES_PAGE_BYTES {
-                return ChangesAnswer::OverBudget {
-                    budget: MAX_CHANGES_PAGE_BYTES,
-                    fits: entries.len(),
-                };
+            // The comma that joins the entry to the one before, then its
+            // bytes, measured as they land: past the budget, the rows before
+            // this one are the ones that fit.
+            if before > 0 {
+                body.push(b',');
             }
-            entries.push(entry);
+            append_bytes(&mut body, &entry);
+            if body.len() - PAGE_HEAD.len() > MAX_CHANGES_PAGE_BYTES {
+                return ChangesAnswer::OverBudget { budget: MAX_CHANGES_PAGE_BYTES, fits: before };
+            }
         }
-        ChangesAnswer::Page { entries, last, more }
+        ChangesAnswer::Page { body: page_body(body, last, more) }
+    }
+
+    /// Returns how many candidate sources `class`'s page merges for `query`.
+    ///
+    /// It is the width [`Inner::sources`] hands [`Merge`], the term PUB-7.28
+    /// prices a page by: the published walk and one stream per owner account
+    /// the class opens — never one list per visible draft document (PUB-7.24).
+    #[cfg(test)]
+    pub(super) fn merge_width(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> usize {
+        let start = query.since.saturating_add(1);
+        self.inner.lock().sources(class, query, start).len()
     }
 
     /// The HEAD position's recorded wall-clock time — `CommitsLog::head_time`.
@@ -1358,6 +1443,21 @@ impl Feed {
     pub(crate) fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.inner.lock().log.entries_above(position)
     }
+}
+
+/// The page object's head, `{"changes":[`, ahead of its rows' bytes.
+///
+/// The keys are `obj`'s order, `changes` < `last` < `more`, so the head and
+/// [`page_body`]'s tail spell the object `obj` would build.
+const PAGE_HEAD: &[u8] = br#"{"changes":["#;
+
+/// Returns the page object's body: its head and rows in `body`, closed.
+///
+/// `body` is [`PAGE_HEAD`] and the rows marshaled after it, joined by
+/// commas; `last` and `more` close the object.
+fn page_body(mut body: Vec<u8>, last: u64, more: bool) -> Vec<u8> {
+    body.extend_from_slice(format!(r#"],"last":{last},"more":{more}}}"#).as_bytes());
+    body
 }
 
 /// An open-time failure on a derived file, naming the file — the closure
@@ -1430,6 +1530,56 @@ fn rewrite_or_stop(
 #[cfg(test)]
 pub(super) static CUT_THE_NEXT_LANDING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// The test seam: a hold on the attest line's sync, one per feed.
+///
+/// Armed, a record step that owes an attest line its sync parks between the
+/// feed's lock and the sync ([`Feed::sync_the_attest_line`]), so a suite
+/// reads the feed while it stands there; [`SyncHold::parked`] answers once
+/// one does.
+#[cfg(test)]
+pub(super) struct SyncHold {
+    held: Mutex<bool>,
+    released: parking_lot::Condvar,
+    parked: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+impl SyncHold {
+    fn new() -> SyncHold {
+        SyncHold {
+            held: Mutex::new(false),
+            released: parking_lot::Condvar::new(),
+            parked: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Arms the hold: the next record step that owes a sync parks.
+    pub(super) fn hold(&self) {
+        *self.held.lock() = true;
+    }
+
+    /// Releases the hold: a parked record step makes its sync.
+    pub(super) fn release(&self) {
+        *self.held.lock() = false;
+        self.released.notify_all();
+    }
+
+    /// Returns whether a record step stands parked at the hold.
+    pub(super) fn parked(&self) -> bool {
+        self.parked.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Parks the record step while the hold is armed.
+    fn park(&self) {
+        let mut held = self.held.lock();
+        while *held {
+            self.parked.store(true, std::sync::atomic::Ordering::Release);
+            self.released.wait(&mut held);
+        }
+        self.parked.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
 
 /// Row 9 for a derived file, said where its replay answered a cut: the head,
 /// then this file's case — the cut part is re-derived, by the tail
@@ -1657,11 +1807,15 @@ impl Inner {
         }
     }
 
-    /// Drop every position at or below `min_since` from the four twins —
-    /// the positions the log has just dropped ([`CommitsLog::compact_to`]),
-    /// unreachable by every route — so the twins and the log name one set
-    /// of positions, and a rewrite from the twins writes that set.
+    /// Drops every position at or below `min_since` from the twins.
+    ///
+    /// The four twins and the attest store's served window drop them — the
+    /// positions the log has just dropped ([`CommitsLog::compact_to`]),
+    /// unreachable by every route — so the twins and the log name one set of
+    /// positions, a rewrite from the twins writes that set, and no slot stays
+    /// resident for a position no page renders.
     fn drop_at_or_below(&mut self, min_since: u64) {
+        self.attest.drop_at_or_below(min_since);
         let keep_from = min_since.saturating_add(1);
         self.docs = self.docs.split_off(&keep_from);
         self.masked = self.masked.split_off(&keep_from);
@@ -1773,45 +1927,49 @@ impl Inner {
             .collect()
     }
 
-    /// Fold one classified position into the four twins and append its
-    /// lines — and, where `attest` is the marker slot this write filled,
-    /// mirror it into the attest store ([`AttestStore::record`]) — the ONE
-    /// path at RECORD time, so a live commit cannot leave a twin and its file
+    /// Folds one classified position into the twins and appends its lines.
+    ///
+    /// The four twins take the position and their four files its lines; where
+    /// `attest` is the marker slot this write filled, it is mirrored into the
+    /// attest store ([`AttestStore::record`]) too. This is the one path at
+    /// record time, so a live commit cannot leave a twin and its file
     /// disagreeing about what a position contributed.
     ///
-    /// It is NOT the only path that contribution takes, and a fifth derived
+    /// It is not the only path that contribution takes, and a fifth derived
     /// structure owes all three: this fold; [`Feed::open`]'s
-    /// replay-then-derive, where the file is the authority for a position at
-    /// or below its coverage and the classification for one above it; and the
+    /// replay-then-derive, where the file is the authority for a position at or
+    /// below its coverage and the classification for one above it; and the
     /// compaction rewrite that renders the twin back to lines
     /// ([`Inner::rewrite_derived_files`], with the trim before it). A structure
     /// wired here alone is empty from every open until the next commit, with
     /// its file's fence reporting it covered — which is a short candidate set
-    /// claiming completeness, not the silent incompleteness the coverage
-    /// check closes. (The attest store owes its own two, on its own card, and
-    /// by its class no third.)
+    /// claiming completeness, not the silent incompleteness the coverage check
+    /// closes. (The attest store owes its own two, on its own card, and by its
+    /// class no third.)
     ///
-    /// Answers the attest store's [`AttestStoreFailed`] where its line failed
-    /// (SO-I5 (d)); the four twins and their files are folded whatever it
-    /// answers.
+    /// Answers the attest line's sync, owed where this write filled its marker
+    /// slot ([`OwedSync`]: the caller makes it off the lock); the four twins
+    /// and their files are folded whatever it answers.
     ///
-    /// WHILE THE WALK's REGION IS PENDING (`Recorded::Held`) the twins alone
-    /// take the position and the four files take no line — the offset the
+    /// **While the walk's region is pending** (`Recorded::Held`) the twins
+    /// alone take the position and the four files take no line — the offset the
     /// array's line would carry does not exist until the landing's rewrite
     /// assigns it, and the landing rewrites the four files whole from the
-    /// twins, this position among them; the attest store's line is
-    /// appended and synced as ever, the store's file being its own.
+    /// twins, this position among them; the attest store's line is appended and
+    /// its sync owed all the same, the store's file being its own.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestStoreFailed`] where the attest store's line could not be written
+    /// (SO-I5 (d)).
     fn fold_position(
         &mut self,
         at: u64,
         recorded: Recorded,
         docs: Vec<Doc>,
         attest: Option<Attestation>,
-    ) -> Result<(), AttestStoreFailed> {
-        let stored = match attest {
-            Some(slot) => self.attest.record(at, slot),
-            None => Ok(()),
-        };
+    ) -> Result<Option<OwedSync>, AttestStoreFailed> {
+        let stored = attest.map(|slot| self.attest.record(at, slot)).transpose();
         let folded = self.fold_into_maps(at, docs);
         let Recorded::Appended(offset) = recorded else {
             return stored;

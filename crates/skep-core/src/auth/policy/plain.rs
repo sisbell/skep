@@ -421,7 +421,7 @@ fn board_state_admission(
         if signer.is_none() {
             return Err(CredentialRefusal::SignedSessionRequired);
         }
-        attestation_check(world, op, principal, presented)
+        attestation_check(world, op, principal, signer, presented)
     } else {
         // A5: the unclaimed board's span — the `attest` is dropped whole.
         match pre_claim_gate(world, op, principal) {

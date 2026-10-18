@@ -36,9 +36,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   reports `lapsed` by), `uploads_open`, `health_object`, `startup_line`;
   the floor — `note_checkpoint`, the daemon's note of the newest
   checkpoint's size, from which the gate keeps the floor in force, `floor`,
-  `floor_binding`, the creation's own test the standing line re-says, and
-  `free_space` (the binding's refusal is said once, at its first refusal,
-  and its lift once, at a finish, by the gate itself); the install's
+  `floor_binding`, the creation's own test the standing line re-says — a
+  figure below the floor, or the host's refusal of the read — and
+  `free_space`, the host's figure or its refusal in the store's words, which
+  the daemon's open line and landing line carry and no reader takes for a
+  figure (the binding's refusal is said once, at its first refusal, and its
+  lift once, at a finish, by the gate itself); the install's
   refusal, `LimitsRefused` — a record naming a
   per-file cap past the route's refused whole, said once, never clamped —
   compiled with the install under `test-hooks` until the serving layer's

@@ -2587,8 +2587,10 @@ gate from the checkpoint sizes the daemon notes, at open the start point's
 (the base that loaded, never a skipped header's claim) and after any
 landing, the thread's own or a backstop's, and answered binding or not to
 the daemon's standing line by the creation's own test; and the volume's
-free space as the floor reads it, the one figure the daemon's landing line
-carries too, the refusal said once per binding and its lift once at a
+free space as the floor reads it — the one reading the daemon's open line
+and its landing line carry too, and, where the host refuses the read, that
+refusal in the store's words, which binds the floor and is never read as a
+figure — the refusal said once per binding and its lift once at a
 finish — THE DEPOSIT's TERMS, the creation and the finish of an upload
 under the principal's key, the deposit's function (the store's for the
 schema's designation, the pairing checked at compile time) and the lease

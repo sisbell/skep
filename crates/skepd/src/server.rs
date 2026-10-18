@@ -1057,8 +1057,9 @@ impl Daemon {
         media.note_checkpoint(start_point_len);
         say_open_line(media.startup_line());
         // The volume's free space beside the floor just named (m4): a start
-        // below the floor says so here, where the floor's own line waits for
-        // the first refused upload and the standing line for the first tick.
+        // below the floor, or one whose read the host refuses, says so here,
+        // where the floor's own line waits for the first refused upload and
+        // the standing line for the first tick.
         say_open_line(VolumeLine { free_space: media.free_space(), floor: media.floor() });
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let commits = Commits::open(data_dir, &engine, Arc::clone(media.index()))
@@ -1664,13 +1665,14 @@ impl Daemon {
     /// (6) the feed walk's liveness flag with the region its death left
     /// uncovered, (7) the cell index's failed state, the media gate's
     /// (`operations.md` §4 row 26), (8) the media gate's floor binding — its
-    /// free space below its floor in force, the creation's own test
-    /// (`MediaGate::floor_binding`, both figures read fresh, so the floor's
-    /// clause stops by itself once room stands) — and (9) the
-    /// `CLAIMED-PERMISSIVE` bit as `log_config_warnings` reads the claim; and
-    /// one line, [`StandingLine`], under `Class::Standing`, where at least
-    /// one clause stands; nothing otherwise. No clause for the checkpoint
-    /// thread's own death — it is the carrier.
+    /// free space below its floor in force, or a read of it the host
+    /// refused, the creation's own test (`MediaGate::floor_binding`, read
+    /// fresh, so the floor's clause stops by itself once the read answers
+    /// room) — and (9) the `CLAIMED-PERMISSIVE` bit as `log_config_warnings`
+    /// reads the claim; and one line, [`StandingLine`], under
+    /// `Class::Standing`, where at least one clause stands; nothing
+    /// otherwise. No clause for the checkpoint thread's own death — it is the
+    /// carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let kernel = self.engine.kernel();
         let line = StandingLine {
@@ -2009,7 +2011,7 @@ impl Daemon {
         AfterLanding {
             bytes_bound: bytes_bound.get(),
             floor,
-            free_space: self.media.free_space(),
+            free_space: self.media.free_space().ok(),
             resident: self.resident.read(),
             guard,
             compaction,
@@ -2291,15 +2293,20 @@ impl fmt::Display for Reclaimed {
 /// entries trimmed below position {p} in {d} ms | hold nothing below the
 /// reclaim floor}; feed-attest.log {bytes} bytes, {s} slots resident` — the
 /// middle arm while the walk behind the listener has a region pending, when
-/// the fence moved in memory alone and no file was written; `size unread`
-/// for the bytes where the file's metadata did not answer.
+/// the fence moved in memory alone and no file was written; `unread` for the
+/// free space where the host refused the read, its cause said by the floor's
+/// own line and the standing line; `size unread` for the bytes where the
+/// file's metadata did not answer.
 struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
     /// The media floor in force after the re-read.
     floor: u64,
     /// The volume's free space as the media floor reads it.
-    free_space: u64,
+    ///
+    /// It is `None` where the host refused the read
+    /// (`MediaGate::free_space`), which the line says as `unread`.
+    free_space: Option<u64>,
     /// A reading of the resident set, beside the uptime's largest.
     resident: ResidentRead,
     /// The write guard's takes since the line before, and its waits.
@@ -2324,10 +2331,14 @@ impl fmt::Display for AfterLanding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the cadence's byte bound {}, the media floor in force {}, the volume's free space \
-             {}; {}; {}; the change feed's files ",
-            self.bytes_bound, self.floor, self.free_space, self.resident, self.guard
+            "the cadence's byte bound {}, the media floor in force {}, the volume's free space ",
+            self.bytes_bound, self.floor
         )?;
+        match self.free_space {
+            Some(free_space) => write!(f, "{free_space}")?,
+            None => f.write_str("unread")?,
+        }
+        write!(f, "; {}; {}; the change feed's files ", self.resident, self.guard)?;
         let below = |fence: u64| fence.saturating_add(1);
         match (self.compaction.fence, self.compaction.deferred) {
             (Some(fence), Some((low, head))) => write!(
@@ -3043,19 +3054,33 @@ fn say_open_line(line: impl fmt::Display) {
 /// deposit is refused until room stands; every other write serves` — the
 /// figure the floor's refusal reads (`MediaGate::free_space`, one reading's)
 /// beside the floor the open has just set, said after the media limits'
-/// line that names the floor. A start below the floor says so here: the
-/// floor's own line comes at the first refused upload, and the standing
-/// line at its first tick, an hour on. A pure value the unit suite pins by
-/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
+/// line that names the floor. Where the host refused the read, it reads
+/// `the volume's free space at start: unread ({cause}): every deposit is
+/// refused until the read answers; every other write serves`, the cause in
+/// the store's words, and never a figure. A start below the floor, or
+/// unread, says so here: the floor's own line comes at the first refused
+/// upload, and the standing line at its first tick, an hour on. A pure value
+/// the unit suite pins by `to_string()`; emitted under `Class::Open` through
+/// [`say_open_line`].
 struct VolumeLine {
-    free_space: u64,
+    free_space: std::io::Result<u64>,
     floor: u64,
 }
 
 impl fmt::Display for VolumeLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "the volume's free space at start: {} bytes", self.free_space)?;
-        if self.free_space < self.floor {
+        let free_space = match &self.free_space {
+            Ok(free_space) => *free_space,
+            Err(cause) => {
+                return write!(
+                    f,
+                    "the volume's free space at start: unread ({cause}): every deposit is \
+                     refused until the read answers; every other write serves"
+                );
+            }
+        };
+        write!(f, "the volume's free space at start: {free_space} bytes")?;
+        if free_space < self.floor {
             write!(
                 f,
                 ", below the floor in force {}: every deposit is refused until room stands; \
@@ -3261,12 +3286,14 @@ impl fmt::Display for JournalDamageSite<'_> {
 /// dead on a caught panic, its region pending for the uptime —
 /// `operations.md` §3.3 step 2; row 41); `the cell index failed to
 /// build`; `deposits refused at the floor (free space {f} below the floor
-/// in force {F})`; `CLAIMED-PERMISSIVE`. A pure value over the reads
-/// ([`Daemon::say_the_standing_line`] makes them), pinned by `to_string()`
-/// in the unit suite; emitted under `Class::Standing` at a tick where
-/// [`StandingLine::stands`], and never otherwise. States, positions, files
-/// and the floor's two figures alone — no principal, token, path, query or
-/// reader rides it. The index's clause reads the media gate's failed state
+/// in force {F})`, or `… (free space unread: {cause})` where the host
+/// refused the read, the cause in the store's words; `CLAIMED-PERMISSIVE`.
+/// A pure value over the reads ([`Daemon::say_the_standing_line`] makes
+/// them), pinned by `to_string()` in the unit suite; emitted under
+/// `Class::Standing` at a tick where [`StandingLine::stands`], and never
+/// otherwise. States, positions, files and the floor's two figures or its
+/// read's cause alone — no principal, token, path, query or reader rides
+/// it. The index's clause reads the media gate's failed state
 /// (`operations.md` §4 row 26).
 pub(super) struct StandingLine {
     /// The write path's halt and the position it was set at.
@@ -3293,18 +3320,20 @@ pub(super) struct StandingLine {
     ///
     /// It is `MediaGate::index_failed`'s.
     pub(super) index_failed: bool,
-    /// The floor binding: the free space read below the floor in force.
+    /// The floor binding: the free space read below the floor in force, or
+    /// a read of it the host refused.
     pub(super) floor: Option<FloorBinding>,
     /// Whether the board is `CLAIMED-PERMISSIVE`.
     pub(super) claimed_permissive: bool,
 }
 
-/// The floor's two figures at the tick.
+/// The floor's binding at the tick: the free space read, and the floor.
 ///
-/// They are as the media gate answered its binding standing
-/// (`MediaGate::floor_binding`).
+/// It is as the media gate answered its binding standing
+/// (`MediaGate::floor_binding`): the free space below the floor in force, or
+/// the host's refusal of the read, which the clause names by its cause.
 pub(super) struct FloorBinding {
-    pub(super) free_space: u64,
+    pub(super) free_space: std::io::Result<u64>,
     pub(super) floor: u64,
 }
 
@@ -3352,10 +3381,14 @@ impl fmt::Display for StandingLine {
             clauses.push("the cell index failed to build".to_string());
         }
         if let Some(floor) = &self.floor {
-            clauses.push(format!(
-                "deposits refused at the floor (free space {} below the floor in force {})",
-                floor.free_space, floor.floor
-            ));
+            clauses.push(match &floor.free_space {
+                Ok(free_space) => format!(
+                    "deposits refused at the floor (free space {free_space} below the floor in \
+                     force {})",
+                    floor.floor
+                ),
+                Err(cause) => format!("deposits refused at the floor (free space unread: {cause})"),
+            });
         }
         if self.claimed_permissive {
             clauses.push("CLAIMED-PERMISSIVE".to_string());

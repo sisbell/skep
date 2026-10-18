@@ -36,6 +36,29 @@ apart.
    landing: deposits admitted again: an upload of {bytes} bytes finished with the volume's free space {free} bytes above the floor in force {floor}
    ```
 
+   Where the host will not read the volume's free space at all, the
+   floor binds the same way, since it admits no deposit it cannot
+   weigh, and its line names the failed read where the figure would
+   stand:
+
+   ```
+   failure: deposits refused at the floor: the volume's free space is unread ({cause}), so the floor in force {floor} admits no deposit; every write but a deposit serves; the act: check the volume's mount, its device and the data directory's permissions, as the cause names; room on the volume clears nothing
+   ```
+
+   `{cause}` is the blob store's account, `blobs/: statvfs:
+   {error}`, the OS's own words last. Room clears nothing here, and
+   neither does the pruner's pass: the read failed, not the room.
+   `No such file or directory` is a volume unmounted from under the
+   data directory, or `blobs/` removed; `Permission denied`, a
+   permission on the data directory or a directory above it;
+   `Input/output error`, the device; `Stale file handle`, a network
+   volume. `df` run on the data directory's `blobs/` reads what the
+   daemon reads, and fails the same way. Where the volume was
+   unmounted, mount it again before any restart: an open without it
+   finds no journal and begins a new board (Start, step 3, item 6).
+   Once the read answers with room, the next upload is admitted and
+   the next finish says the lift.
+
    *Full*, the board's own writes are refused. Any one of these
    says so:
 
@@ -244,6 +267,9 @@ apart.
 
 5. **Then act on the line you saw.**
 
+   - The floor's line with the free space unread: clear the cause it
+     names, as step 1 reads it. Room and the pass clear nothing, and
+     where the volume was unmounted, mount it before any restart.
    - `feed-attest.log`'s line: make room, or clear the cause its line
      names, then restart. The open writes the missing line back from
      the journal and syncs it; where the cause still stands, the open
@@ -326,7 +352,9 @@ apart.
    ```
 
    `{reclaimed}` reads `{bytes} journal bytes reclaimed` or
-   `nothing reclaimed`. Where the landing's retention removed a
+   `nothing reclaimed`. `{free}` reads `unread` where the host
+   refused the read; the floor's line and the standing line name its
+   cause (step 1). Where the landing's retention removed a
    checkpoint, the clause after it names each file and its length:
    `; checkpoint.{n} removed ({bytes} bytes)`. The daemon keeps two;
    the one removed is the older past them, or a checkpoint the open
@@ -381,7 +409,10 @@ apart.
    Each clause carries the position or the file its first line
    named: the kernel's halt line's position, and the damage's site —
    `at position {position}`, or `({file}: {act}: {error})` where the
-   read failed. What ends each:
+   read failed. Where the host refused the free space's read, the
+   floor's clause names the cause in place of the figures: `deposits
+   refused at the floor (free space unread: {cause})` (step 1). What
+   ends each:
 
    - the write path's halt and the kernel's: a restart, once the
      volume has room and the device answers (step 5);
@@ -400,8 +431,9 @@ apart.
    - the cell index: a restart; uploads and the listing of one's
      deposits are answered `503 index_failed` until it (Start, step 3,
      item 18);
-   - the floor: room (steps 2 and 3); the refusals end at the next
-     upload;
+   - the floor: room (steps 2 and 3), the refusals ending at the
+     next upload; where its clause reads the free space unread, the
+     cause it names, cleared (step 1);
    - `CLAIMED-PERMISSIVE`: a restart with `--no-local-trust`, where
      local trust on a claimed board was not meant (Start, step 3,
      item 13).
@@ -956,7 +988,11 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       free space stands below the floor, the second line goes on:
       `…, below the floor in force {floor}: every deposit is refused
       until room stands; every other write serves` — make room (The
-      full volume, step 2).
+      full volume, step 2). Where the host refused the read, it
+      names the cause in place of a figure: `open: the volume's free
+      space at start: unread ({cause}): every deposit is refused
+      until the read answers; every other write serves` — clear the
+      cause (The full volume, step 1).
 
    10. The upload setting, `{source}` being `the default`, the flag
        as typed, or the variable with its value:

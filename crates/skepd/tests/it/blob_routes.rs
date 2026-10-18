@@ -1019,6 +1019,71 @@ fn the_lift_is_said_once_at_the_first_finish_above_the_floor_and_never_at_an_adm
     sd.shutdown();
 }
 
+/// Checks that a refused free-space read is said unread, with its cause.
+///
+/// The store's root is removed from under the live daemon, so `statvfs` at
+/// `blobs/` answers `ENOENT` — the shape of a volume unmounted under the data
+/// directory, a stale network handle or a failing device (`operations.md`
+/// §1.1 m9; §4 row 7; M-I5 (f)). Two creations are refused `507
+/// deposit_refused` scope `floor`, as at any binding; the gate's stream
+/// carries one `failure:` line, naming the free space unread with the store's
+/// own account of the refusal and the act it names, never a byte count the
+/// host did not give and never room; the standing line's floor clause names
+/// the same cause at each tick meanwhile; and nothing of the D9 list rides
+/// the floor's line.
+#[test]
+fn a_free_space_the_host_does_not_answer_is_said_unread_with_its_cause() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    after_the_first_pass(&sd);
+    assert!(media_lines(&sd).is_empty(), "a healthy board: no line of the gate's");
+    let floor = sd.daemon().media_floor_in_force();
+    std::fs::remove_dir_all(dir.path().join("blobs")).expect("the store's root removed");
+    for attempt in 1..=2 {
+        let (st, _, body) = blob_create(port, Some(&token), 10, b"");
+        assert_eq!(st, 507, "attempt {attempt}: {}", String::from_utf8_lossy(&body));
+        let v = json(&body);
+        assert_eq!(v["error"].as_str(), Some("deposit_refused"), "{v}");
+        assert_eq!(v["scope"].as_str(), Some("floor"), "{v}");
+    }
+    let said = media_lines(&sd);
+    assert_eq!(said.len(), 1, "FINDING (m9): the binding is said once, at its first refusal: {said:?}");
+    let line = &said[0];
+    assert!(
+        line.starts_with(
+            "failure: deposits refused at the floor: the volume's free space is unread (blobs/: \
+             statvfs: "
+        ),
+        "FINDING: the read named unread, with the store's own account of the refusal: {line}"
+    );
+    assert!(
+        line.contains(&format!(
+            "), so the floor in force {floor} admits no deposit; every write but a deposit serves; \
+             the act: "
+        )),
+        "the floor in force and what still serves: {line}"
+    );
+    assert!(line.ends_with("; room on the volume clears nothing"), "never room: {line}");
+    assert!(!line.contains(" bytes is below"), "FINDING: a figure the host never gave: {line}");
+    assert!(!line.contains(&token), "FINDING (D9): the token rides the floor's line: {line}");
+    assert!(!names_a_hex_id(line), "FINDING (D9): an identifier rides the floor's line: {line}");
+    let principal = CLAIMANT_PRINCIPAL.to_string();
+    assert!(
+        !line.split(|c: char| !c.is_ascii_digit()).any(|word| word == principal),
+        "FINDING (D9): the principal's number rides the floor's line: {line}"
+    );
+    // The standing line's floor clause names the cause too. It opens the
+    // line; a claimed board's `CLAIMED-PERMISSIVE` clause rides it after.
+    sd.daemon().set_standing_interval_millis(40);
+    let standing = "standing: deposits refused at the floor (free space unread: blobs/: statvfs: ";
+    wait_until("the standing line's unread floor clause", || {
+        sd.daemon().lines_said().iter().any(|l| l.starts_with(standing))
+    });
+    sd.shutdown();
+}
+
 /// (1) THE IDENTIFIER REACHES THE UPLOADER BEFORE THE UPLOAD's FIRST BODY
 /// BYTE on the ONE request (M-I5 (c)): a creation-with-upload sent with
 /// `Expect: 100-continue` is answered the interim `100 Continue` carrying

@@ -41,18 +41,21 @@
 //! index's three readers: refused `index_rebuilding` until the walk at open
 //! completes (ms5-R).
 //!
-//! THE FLOOR's LINE (`operations.md` §1.1 m9; §4 row 7): a BINDING — the
-//! free space read below the floor in force at a creation or a chunk — is
-//! said ONCE, at its first refusal, through the classed door with the
-//! host's two figures, what still serves and the two acts; a once-flag on
-//! the gate holds it said, the daemon's standing line re-says the binding
-//! while the gate answers it standing ([`MediaGate::floor_binding`], the
-//! creation's own test), and the first upload that FINISHES with the free
-//! space back at or above the floor says the lift once
-//! ([`MediaGate::finish_upload`], the one door every finish takes) and
-//! clears the flag — never an admission alone, which the next chunk may
-//! re-refuse. Neither line names a principal, an upload or a token (D9): the
-//! condition is the host's, said in the host's figures.
+//! **The floor's line** (`operations.md` §1.1 m9; §4 row 7). A binding is
+//! the free space read below the floor in force at a creation or a chunk,
+//! or a read of it the host refused: the floor admits no deposit it cannot
+//! weigh, and a failed read is never a figure. The binding is said once, at
+//! its first refusal, through the classed door — the host's two figures,
+//! what still serves and the two acts; or, for a refused read, the store's
+//! account of the refusal and the act it names, since room clears nothing
+//! there. A once-flag on the gate holds it said, and the daemon's standing
+//! line re-says the binding while the gate answers it standing
+//! ([`MediaGate::floor_binding`], the creation's own test). The first upload
+//! that finishes with the free space read back at or above the floor says
+//! the lift once ([`MediaGate::finish_upload`], the one door every finish
+//! takes) and clears the flag — never an admission alone, which the next
+//! chunk may re-refuse. Neither line names a principal, an upload or a token
+//! (D9): the condition is the host's, said in the host's figures or words.
 //!
 //! THE BINDING reads THE INDEX FIRST (`MediaGate::binding`): a hash the
 //! requester's own cells already name is a REFERENCE, kept by no lease —
@@ -643,16 +646,22 @@ impl MediaGate {
         floor
     }
 
-    /// THE FLOOR's BINDING, as it stands now (`operations.md` §1.1 m9; §4
-    /// row 7): `(free_space, floor)` — the volume's free space as the floor
-    /// reads it ([`MediaGate::free_space`]) and the floor in force — where
-    /// the free space stands below the floor, `None` where it does not. The
-    /// creation's own test ([`MediaGate::admit_creation`]), and the one the
-    /// daemon's standing line re-says the binding by, so the line and the
-    /// creation's refusal cannot disagree on whether the floor binds.
-    pub fn floor_binding(&self) -> Option<(u64, u64)> {
-        let (free_space, floor) = (self.free_space(), self.floor());
-        (free_space < floor).then_some((free_space, floor))
+    /// Returns the floor's binding as it stands now, or `None` where none does.
+    ///
+    /// A binding (`operations.md` §1.1 m9; §4 row 7; M-I5 (f)) is the read of
+    /// the volume's free space ([`MediaGate::free_space`]) beside the floor in
+    /// force: a figure below the floor, or the host's refusal of the read,
+    /// which leaves no deposit weighed against it. `None` is a figure at or
+    /// above the floor. It is the creation's own test
+    /// ([`MediaGate::admit_creation`]) and the one the daemon's standing line
+    /// re-says the binding by, so the line and the creation's refusal cannot
+    /// disagree on whether the floor binds, or on why.
+    pub fn floor_binding(&self) -> Option<(io::Result<u64>, u64)> {
+        let floor = self.floor();
+        match self.free_space() {
+            Ok(free_space) if free_space >= floor => None,
+            read => Some((read, floor)),
+        }
     }
 
     /// The floor's half of the startup line: the floor in force and the
@@ -884,14 +893,25 @@ impl MediaGate {
         Ok(())
     }
 
-    /// THE GATE AT THE CREATION, after the own scope's read of the declared
-    /// total ([`MediaGate::admit_declared`]) and before the partial and the
-    /// record (P13; M-I5 (f), M-I6 (b)): THE STANDING-UPLOADS BOUND first —
-    /// the principal's own record, counted off its standing uploads — then
-    /// THE FLOOR, read on no declared length: the volume's free space
-    /// already below the floor in force ([`MediaGate::floor_binding`], never
-    /// the constant alone) refuses the creation that would append a record
-    /// no scope counts. The resume reads neither: it creates nothing.
+    /// Admits a creation at the gate, or answers the scope that refuses it.
+    ///
+    /// It runs after the own scope's read of the declared total
+    /// ([`MediaGate::admit_declared`]) and before the partial and the record
+    /// (P13; M-I5 (f), M-I6 (b)). The resume reads neither of its checks: it
+    /// creates nothing.
+    ///
+    /// # Errors
+    ///
+    /// In the order the checks run:
+    ///
+    /// 1. [`DepositScope::Standing`]: the principal already holds
+    ///    [`MAX_STANDING_UPLOADS`] standing uploads, counted off its own
+    ///    records.
+    /// 2. [`DepositScope::Floor`]: the floor binds, read on no declared
+    ///    length ([`MediaGate::floor_binding`], never the constant alone) —
+    ///    the volume's free space already below the floor in force, or a read
+    ///    of it the host refused. Either refuses the creation that would
+    ///    append a record no scope counts.
     pub fn admit_creation(&self, principal: PrincipalId, now_ms: u64) -> Result<(), DepositScope> {
         let key = Self::key(principal);
         if self.store.uploads_of(&key, now_ms).len() >= MAX_STANDING_UPLOADS {
@@ -949,26 +969,30 @@ impl MediaGate {
             }
         }
         // The figure compared is the free space the chunk would leave, and
-        // the line's figure where it refuses.
-        let (left, floor) = (self.free_space().saturating_sub(n), self.floor());
-        if left < floor {
-            return Err(self.refused_at_the_floor(left, floor));
+        // the line's figure where it refuses; a read the host refused leaves
+        // nothing to weigh the chunk against, and refuses it.
+        let floor = self.floor();
+        match self.free_space().map(|free_space| free_space.saturating_sub(n)) {
+            Ok(left) if left >= floor => Ok(()),
+            left => Err(self.refused_at_the_floor(left, floor)),
         }
-        Ok(())
     }
 
-    /// THE FLOOR's REFUSAL, SAID ONCE PER BINDING (`operations.md` §1.1 m9;
-    /// §4 row 7): the scope answered for a creation or a chunk the floor
-    /// refuses — and, where this is the binding's FIRST refusal (the
-    /// once-flag was clear), the failure line through the classed door
-    /// ([`FloorBoundLine`]): the two figures as the gate compared them, what
-    /// still serves, the two acts. The flag stays set until a finish above
-    /// the floor ([`MediaGate::note_finish`]) clears it; the daemon's
-    /// standing line re-says the binding meanwhile, off the gate's own
-    /// answer ([`MediaGate::floor_binding`]). No principal, upload or token
-    /// rides the line (D9): a condition of the host's, said in the host's
-    /// figures.
-    fn refused_at_the_floor(&self, free_space: u64, floor: u64) -> DepositScope {
+    /// Returns the floor's scope for a refused creation or chunk.
+    ///
+    /// Where this is the binding's first refusal — the once-flag was clear —
+    /// it says the binding once (`operations.md` §1.1 m9; §4 row 7): the
+    /// failure line through the classed door ([`FloorBoundLine`]), with the
+    /// read as the gate weighed it — the free space as a creation read it or
+    /// as a chunk would leave it, or the host's refusal of the read — the
+    /// floor in force, what still serves and the act. The flag stays set
+    /// until a finish that reads room ([`MediaGate::note_finish`]) clears it,
+    /// whichever read refused first; the daemon's standing line re-says the
+    /// binding meanwhile, off the gate's own answer
+    /// ([`MediaGate::floor_binding`]). No principal, upload or token rides the
+    /// line (D9): a condition of the host's, said in the host's figures or
+    /// words.
+    fn refused_at_the_floor(&self, free_space: io::Result<u64>, floor: u64) -> DepositScope {
         if !self.floor_said.swap(true, Ordering::AcqRel) {
             self.say(Class::Failure, FloorBoundLine { free_space, floor });
         }
@@ -990,46 +1014,56 @@ impl MediaGate {
         Ok(finished)
     }
 
-    /// A FINISH, NOTED (`operations.md` §1.1 m9): the finish's own note, as
-    /// an upload of `bytes` bytes finishes ([`MediaGate::finish_upload`]) —
-    /// THE LIFT's one site. Where the floor's binding has been said and the
-    /// volume's free space now stands at or above the floor in force, the
-    /// lift is said ONCE
-    /// (`FloorLiftedLine`: the finished size, the two figures) and the
-    /// once-flag cleared, so the next binding is said again; nothing
-    /// otherwise. A finish and never an admission: a creation admitted can
-    /// still be refused at its next chunk, so an admission proves nothing an
-    /// operator can act on, while a finish is proof the volume held a whole
-    /// file above the floor.
+    /// Notes an upload of `bytes` bytes as finished, for the floor's lift.
+    ///
+    /// It is the finish's own note ([`MediaGate::finish_upload`]) and the
+    /// lift's one site (`operations.md` §1.1 m9). Where the floor's binding
+    /// has been said and the volume's free space now reads at or above the
+    /// floor in force, the lift is said once ([`FloorLiftedLine`]: the
+    /// finished size, the two figures) and the once-flag cleared, so the next
+    /// binding is said again; nothing otherwise. A read the host refuses
+    /// shows no room, and lifts nothing. A finish and never an admission: a
+    /// creation admitted can still be refused at its next chunk, so an
+    /// admission proves nothing an operator can act on, while a finish is
+    /// proof the volume held a whole file above the floor.
     fn note_finish(&self, bytes: u64) {
         if !self.floor_said.load(Ordering::Acquire) {
             return;
         }
-        let (free_space, floor) = (self.free_space(), self.floor());
+        let Ok(free_space) = self.free_space() else { return };
+        let floor = self.floor();
         if free_space >= floor && self.floor_said.swap(false, Ordering::AcqRel) {
             self.say(Class::Landing, FloorLiftedLine { bytes, free_space, floor });
         }
     }
 
-    /// THE VOLUME's FREE SPACE AS THE FLOOR READS IT — the seam's figure
-    /// where `set_free_space` pinned one (a `test-hooks` build), else the
-    /// host's: one `statvfs` at the store's root
-    /// ([`skep_blobs::Store::free_space`]), a host that cannot answer read as
-    /// having no room, so the floor refuses rather than admitting a deposit
-    /// it cannot price. `pub` for ONE reader beyond the floor's two gates:
-    /// the daemon's checkpoint thread, whose landing line carries the
-    /// volume's free space — read through this door and never by a second
-    /// read of the store, so the figure the floor refuses on and the figure
-    /// the line carries are one reading's, and a suite that pins the floor's
-    /// figure has pinned the line's.
-    pub fn free_space(&self) -> u64 {
+    /// Returns the volume's free space as the floor reads it, in bytes.
+    ///
+    /// It is one `statvfs` at the store's root
+    /// ([`skep_blobs::Store::free_space`]), or the test seam's figure where
+    /// `set_free_space` pinned one (a `test-hooks` build). The floor's two
+    /// gates and its lift read it here (M-I5 (f)), and it is `pub` for the
+    /// daemon's two lines that carry the figure: the open's (`operations.md`
+    /// §1.1 m4) and each checkpoint landing's (row 25). Every one reads
+    /// through this door and never by a second read of the store, so the
+    /// figure the floor refuses on and the figure a line carries are one
+    /// reading's, and a suite that pins the floor's figure has pinned the
+    /// lines'.
+    ///
+    /// # Errors
+    ///
+    /// The host's refusal of the read, as the store names it: `blobs/:
+    /// statvfs: {cause}`, the OS's own words last — a volume unmounted under
+    /// the data directory, a stale network handle, a failing device, a
+    /// permission. It is never read as a figure: the floor refuses every
+    /// creation and every chunk while the read fails, and every line that
+    /// would carry the figure says it unread instead.
+    pub fn free_space(&self) -> io::Result<u64> {
         #[cfg(any(test, feature = "test-hooks"))]
         if let Some(n) = *self.free_space_override.lock() {
-            return n;
+            return Ok(n);
         }
-        // A host that cannot answer is read as having no room: the floor
-        // refuses rather than admitting a deposit it cannot price.
-        self.store.free_space().unwrap_or(0)
+        self.store.free_space()
     }
 
     /// THE FILE's LENGTH AS THE BINDING READS IT: the bytes on disk under
@@ -1129,25 +1163,40 @@ impl MediaGate {
     }
 }
 
-/// THE FLOOR's BINDING LINE (`operations.md` §1.1 m9), the ruled words:
-/// the volume's free space as the gate compared it and the floor in force,
-/// what still serves, the two acts. A pure value the unit suite pins by
-/// `to_string()`; said under `Class::Failure` once per binding
+/// The floor's binding line (`operations.md` §1.1 m9; §4 row 7).
+///
+/// Where the free space was read, it carries the ruled words: the figure as
+/// the gate compared it and the floor in force, what still serves, the two
+/// acts. Where the host refused the read, it says the free space unread,
+/// with the store's account of the refusal, the floor in force, what still
+/// serves and the act the cause names — never a figure the host did not
+/// give, and never room, which clears nothing there. A pure value the unit
+/// suite pins by `to_string()`; said under `Class::Failure` once per binding
 /// ([`MediaGate::refused_at_the_floor`]). No principal, upload or token.
 struct FloorBoundLine {
-    free_space: u64,
+    free_space: io::Result<u64>,
     floor: u64,
 }
 
 impl fmt::Display for FloorBoundLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "deposits refused at the floor: the volume's free space {} bytes is below the floor \
-             in force {}; every write but a deposit serves; the acts: room on the volume, a pass \
-             run early",
-            self.free_space, self.floor
-        )
+        match &self.free_space {
+            Ok(free_space) => write!(
+                f,
+                "deposits refused at the floor: the volume's free space {free_space} bytes is \
+                 below the floor in force {}; every write but a deposit serves; the acts: room on \
+                 the volume, a pass run early",
+                self.floor
+            ),
+            Err(cause) => write!(
+                f,
+                "deposits refused at the floor: the volume's free space is unread ({cause}), so \
+                 the floor in force {} admits no deposit; every write but a deposit serves; the \
+                 act: check the volume's mount, its device and the data directory's permissions, \
+                 as the cause names; room on the volume clears nothing",
+                self.floor
+            ),
+        }
     }
 }
 

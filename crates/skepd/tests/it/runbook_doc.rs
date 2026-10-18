@@ -12,7 +12,8 @@
 //! through those constants, §3 step 2's variables, read off the binary's
 //! own help, §2's line for the journal damage a history read meets and step
 //! 5's reading of an attest cut, §1's line for a write refused for a cause
-//! but room, and §1 step 8's standing clauses.
+//! but room and its floor's line for a free space unread, and §1 step 8's
+//! standing clauses.
 
 use std::path::Path;
 
@@ -537,6 +538,59 @@ fn runbook_says_a_write_refused_for_a_cause_but_room_is_said_by_its_own_line() {
         &["6. **Know what the floor keeps meanwhile.**"],
     ));
     assert!(acts.contains("A write refused `durability` for a cause but room"), "{acts}");
+}
+
+/// Checks that §1 says the floor binds on a free space the host will not read.
+///
+/// Step 1 quotes the floor's line for a refused read as the binary writes it
+/// — `skep-media`'s `gate/tests.rs` pins the words, and `blob_routes.rs` the
+/// line a refused read says — and names the store's account the cause is,
+/// that room and the pruner's pass clear nothing, and the mount before any
+/// restart; step 5 acts on the line, step 8 gives the standing clause's
+/// unread form, and §3 step 3's item 9 the open's (`server/tests.rs` pins
+/// both).
+#[test]
+fn runbook_says_the_floor_binds_on_a_free_space_unread_and_names_its_cause() {
+    let step = collapsed(&passage(
+        "\n## 1. The full volume",
+        "1. **Tell the two states apart.**",
+        &["2. **Make room first.**"],
+    ));
+    for fact in [
+        "failure: deposits refused at the floor: the volume's free space is unread ({cause}), so \
+         the floor in force {floor} admits no deposit; every write but a deposit serves; the act: \
+         check the volume's mount, its device and the data directory's permissions, as the cause \
+         names; room on the volume clears nothing",
+        "`blobs/: statvfs: {error}`",
+        "Room clears nothing here, and neither does the pruner's pass",
+        "mount it again before any restart",
+    ] {
+        assert!(step.contains(fact), "§1 step 1 says {fact:?}: {step}");
+    }
+    let acts = collapsed(&passage(
+        "\n## 1. The full volume",
+        "5. **Then act on the line you saw.**",
+        &["6. **Know what the floor keeps meanwhile.**"],
+    ));
+    assert!(acts.contains("The floor's line with the free space unread"), "{acts}");
+    let watch = passage("\n## 1. The full volume", "8. **Watch between the lines.**", &["\n## 2."]);
+    let (_, after) = fenced(&watch);
+    assert!(
+        collapsed(after).contains("`deposits refused at the floor (free space unread: {cause})`"),
+        "§1 step 8 gives the floor clause's unread form: {after}"
+    );
+    let open = collapsed(&passage(
+        "\n## 3. Start",
+        "the daemon writes them:",
+        &["\n4. **Read the one line on stdout**"],
+    ));
+    assert!(
+        open.contains(
+            "`open: the volume's free space at start: unread ({cause}): every deposit is refused \
+             until the read answers; every other write serves`"
+        ),
+        "§3 step 3 quotes the open's unread form: {open}"
+    );
 }
 
 /// §9.3 WINDOWS — A QUESTION, NO COMMAND (the runbook states only what this

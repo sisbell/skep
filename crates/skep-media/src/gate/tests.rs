@@ -215,6 +215,14 @@ fn the_creation_is_refused_at_the_standing_bound_and_at_the_floor_before_any_rec
     assert_eq!(DepositScope::Standing.token(), "standing");
 }
 
+/// Returns the floor's binding in a form a suite compares.
+///
+/// It is the free space read, `None` where the host refused the read, beside
+/// the floor in force: a refused read has no equality to compare by.
+fn binding(gate: &MediaGate) -> Option<(Option<u64>, u64)> {
+    gate.floor_binding().map(|(read, floor)| (read.ok(), floor))
+}
+
 /// THE FLOOR IN FORCE (M-I5 (f), the floor sized to keep the journal
 /// writable THROUGH ITS NEXT CHECKPOINT; M-I6 (f), (h)): never below the
 /// constant, and never below twice the newest checkpoint's size plus one
@@ -256,18 +264,18 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
     let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
     assert_eq!(gate.note_checkpoint(None), FLOOR_BYTES, "genesis noted: the constant");
     gate.set_free_space(Some(400 * mib));
-    assert_eq!(gate.floor_binding(), None, "no binding stands");
+    assert_eq!(binding(&gate), None, "no binding stands");
     assert_eq!(gate.admit_creation(p, now), Ok(()), "400 MiB free clears the constant");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()));
     let scaled = 600 * mib + MAX_SEGMENT_LEN;
     assert_eq!(gate.note_checkpoint(Some(300 * mib)), scaled, "noted: the floor it keeps, answered");
     assert_eq!(gate.floor(), scaled);
-    assert_eq!(gate.floor_binding(), Some((400 * mib, scaled)), "the binding, the two figures");
+    assert_eq!(binding(&gate), Some((Some(400 * mib), scaled)), "the binding, the two figures");
     assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor), "the floor in force refuses it");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(DepositScope::Floor), "…and a chunk");
     assert_eq!(DepositScope::Floor.token(), "floor", "the scope, and no figure");
     gate.set_free_space(Some(scaled + 64 * 1024));
-    assert_eq!(gate.floor_binding(), None, "room above the floor: no binding");
+    assert_eq!(binding(&gate), None, "room above the floor: no binding");
     assert_eq!(gate.admit_creation(p, now), Ok(()), "room above the floor in force admits");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Ok(()), "a chunk that leaves it at the floor");
     assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024 + 1, now), Err(DepositScope::Floor), "one byte more");
@@ -303,7 +311,7 @@ fn the_floor_in_force_scales_with_the_newest_checkpoint_and_never_below_the_cons
 #[test]
 fn the_floors_binding_is_said_once_and_its_lift_once_at_the_first_finish_above_the_floor() {
     assert_eq!(
-        FloorBoundLine { free_space: 1_000, floor: 268_435_456 }.to_string(),
+        FloorBoundLine { free_space: Ok(1_000), floor: 268_435_456 }.to_string(),
         "deposits refused at the floor: the volume's free space 1000 bytes is below the floor in \
          force 268435456; every write but a deposit serves; the acts: room on the volume, a pass \
          run early"
@@ -371,6 +379,75 @@ fn the_floors_binding_is_said_once_and_its_lift_once_at_the_first_finish_above_t
         assert!(!line.contains("11") || line.contains("1111"), "no principal rides a floor line: {line}");
         assert!(!line.contains(&id.to_hex()), "no upload rides a floor line: {line}");
     }
+}
+
+/// Checks that a refused free-space read is said unread and still refuses.
+///
+/// The store's root is removed from under a live gate, so `statvfs` answers
+/// `ENOENT`, the shape of a volume unmounted under the data directory
+/// (`operations.md` §1.1 m9; §4 row 7; M-I5 (f)). The read answers the
+/// store's own account (`blobs/: statvfs: {cause}`) and never a figure; the
+/// floor still refuses a creation and a chunk at scope `floor`; the one line
+/// it says names the read unread with that account and the act the cause
+/// names, and no byte count; the binding stands with the refusal in it; a
+/// finish while the read fails lifts nothing; and once the read answers room
+/// again, the next finish says the ordinary lift. The unread line's words
+/// are pinned at a fixed cause.
+#[test]
+fn a_free_space_the_host_does_not_answer_is_said_unread_with_its_cause_and_still_refuses() {
+    assert_eq!(
+        FloorBoundLine {
+            free_space: Err(io::Error::other("blobs/: statvfs: Input/output error (os error 5)")),
+            floor: 268_435_456,
+        }
+        .to_string(),
+        "deposits refused at the floor: the volume's free space is unread (blobs/: statvfs: \
+         Input/output error (os error 5)), so the floor in force 268435456 admits no deposit; \
+         every write but a deposit serves; the act: check the volume's mount, its device and the \
+         data directory's permissions, as the cause names; room on the volume clears nothing"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let now = gate.now_ms();
+    let p = PrincipalId(13);
+    let id = UploadId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    let floor = gate.floor();
+    std::fs::remove_dir_all(dir.path().join("blobs")).expect("the store's root removed");
+    let cause = gate.free_space().expect_err("the host refuses the read").to_string();
+    assert!(cause.starts_with("blobs/: statvfs: "), "the store's own account of the refusal: {cause}");
+    assert_eq!(gate.admit_creation(p, now), Err(DepositScope::Floor), "a creation refused at the floor");
+    assert_eq!(gate.admit_bytes(p, &id, 0, 64 * 1024, now), Err(DepositScope::Floor), "…and a chunk");
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 1, "the binding is said once, at its first refusal: {said:?}");
+    assert!(
+        said[0].starts_with(&format!(
+            "failure: deposits refused at the floor: the volume's free space is unread ({cause}), so \
+             the floor in force {floor} admits no deposit; every write but a deposit serves; the act:"
+        )),
+        "the read named unread with its cause: {}",
+        said[0]
+    );
+    assert!(!said[0].contains(" bytes is below"), "no figure the host never gave: {}", said[0]);
+    assert!(
+        matches!(gate.floor_binding(), Some((Err(_), f)) if f == floor),
+        "the binding stands, the refusal in it"
+    );
+    gate.note_finish(10);
+    assert_eq!(gate.lines_said().len(), 1, "a finish over an unread volume lifts nothing");
+    assert!(gate.floor_said.load(Ordering::Acquire), "the binding stays said");
+    let room = floor + 1_000_000;
+    gate.set_free_space(Some(room));
+    gate.note_finish(4_096);
+    let lifted = format!(
+        "landing: deposits admitted again: an upload of 4096 bytes finished with the volume's free \
+         space {room} bytes above the floor in force {floor}"
+    );
+    assert_eq!(
+        gate.lines_said(),
+        [said[0].clone(), lifted],
+        "the read answering room, the next finish says the ordinary lift"
+    );
+    assert!(!gate.floor_said.load(Ordering::Acquire), "the flag cleared by the lift");
 }
 
 /// THE INSTALL's REFUSAL (op-D6 (a); `operations.md` §2.3 F10; the

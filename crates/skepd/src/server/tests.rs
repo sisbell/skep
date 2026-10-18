@@ -1199,7 +1199,7 @@ fn after_a_landing(fence: Option<u64>) -> AfterLanding {
     AfterLanding {
         bytes_bound: 25_165_824,
         floor: 268_435_456,
-        free_space: 9_000_000_000,
+        free_space: Some(9_000_000_000),
         resident: ResidentRead { now: Some(412_000_256), most: Some(1_180_000_256) },
         guard: GuardTakes { figures: SerialFigures { takes: 1_204, waits: 17 }, since: Seq(3100) },
         compaction: FeedCompaction { fence, standing: vec![], deferred: None },
@@ -1219,23 +1219,25 @@ const AFTER_A_LANDING: &str = "the cadence's byte bound 25165824, the media floo
 /// `after_a_landing`'s last clause, the attest store's figures.
 const ATTEST_FIGURES: &str = "; feed-attest.log 20700 bytes, 3 slots resident";
 
-/// LINE 25's WORDS (`operations.md` §1.1 row 25), pinned at fixed figures:
-/// the position and the size, the duration in milliseconds, the journal
-/// bytes reclaimed — or "nothing reclaimed" at zero — each checkpoint file
-/// retention removed, by its name and its length, both bounds, the volume's
-/// free space, a reading of the resident set beside the largest of the
-/// uptime's readings — never called the process's peak — the compaction's
-/// fence and its duration, with each file that stood named, what
-/// `feed-attest.log` holds on disk and resident, and the inline clause
-/// present only where the count moved. A header that did not answer reads
-/// "size unread", and so does an attest store whose size did not answer; a
-/// resident set never read reads "unread", and a reading the crate could not
-/// make reads "unread" beside the largest one it made; a landing with
-/// nothing below the floor says so, and names no duration, and one that
-/// removed no checkpoint names none. While the walk behind the listener has
-/// a region pending, the fence moves in memory alone and the line says the
-/// files wait on the walk's landing, naming the region — never that they
-/// compacted.
+/// Checks line 25's words at fixed figures (`operations.md` §1.1 row 25).
+///
+/// The line carries the position and the size, the duration in
+/// milliseconds, the journal bytes reclaimed — or "nothing reclaimed" at
+/// zero — each checkpoint file retention removed, by its name and its
+/// length, both bounds, the volume's free space, a reading of the resident
+/// set beside the largest of the uptime's readings — never called the
+/// process's peak — the compaction's fence and its duration, with each file
+/// that stood named, what `feed-attest.log` holds on disk and resident, and
+/// the inline clause present only where the count moved. A header that did
+/// not answer reads "size unread", and so does an attest store whose size
+/// did not answer; a free space the host would not read reads "unread",
+/// never a figure; a resident set never read reads "unread", and a reading
+/// the crate could not make reads "unread" beside the largest one it made; a
+/// landing with nothing below the floor says so, and names no duration, and
+/// one that removed no checkpoint names none. While the walk behind the
+/// listener has a region pending, the fence moves in memory alone and the
+/// line says the files wait on the walk's landing, naming the region — never
+/// that they compacted.
 #[test]
 fn the_landing_line_carries_row_25s_figures_in_its_words() {
     let full = LandingLine {
@@ -1292,7 +1294,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         after: AfterLanding {
             bytes_bound: 24 * 1024 * 1024,
             floor: 256 * 1024 * 1024,
-            free_space: 0,
+            free_space: None,
             resident: ResidentRead { now: None, most: None },
             guard: GuardTakes { figures: SerialFigures::default(), since: Seq(7) },
             compaction: FeedCompaction::default(),
@@ -1305,7 +1307,7 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
         quiet.to_string(),
         "checkpoint at position 7 landed (size unread) in 0 ms; nothing reclaimed; the \
          cadence's byte bound 25165824, the media floor in force 268435456, the volume's free \
-         space 0; the process's resident set unread; the write guard taken 0 times since \
+         space unread; the process's resident set unread; the write guard taken 0 times since \
          position 7, 0 of them after a wait; the change feed's files hold nothing below the \
          reclaim floor; feed-attest.log size unread, 0 slots resident"
     );
@@ -1607,14 +1609,17 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
     );
 }
 
-/// THE STANDING LINE's WORDS at fixed reads (`operations.md` §1 THE RATES;
-/// §1.1 m11): every clause standing, each in THE RATES' words with its
-/// position or file, in THE RATES' order, joined by `; ` — the cell index's
-/// with its place held, the kernel's poison with the position its halt line
-/// named, and the journal damage a history read met by its site, after the
-/// poison (RUNBOOK §2); each of the two flag clauses alone, and the damage
-/// alone at each of its sites; and no clause, which is no line at all
-/// (`stands` false).
+/// Checks the standing line's words at fixed reads.
+///
+/// The reads (`operations.md` §1, the rates; §1.1 m11) are: every clause
+/// standing, each in the rates' words with its position or file, in the
+/// rates' order, joined by `; ` — the cell index's with its place held, the
+/// kernel's poison with the position its halt line named, and the journal
+/// damage a history read met by its site, after the poison (RUNBOOK §2);
+/// each of the two flag clauses alone, and the damage alone at each of its
+/// sites; no clause, which is no line at all (`stands` false); and the
+/// floor's clause alone where the host refused the free space's read, its
+/// cause in the store's words and no figure.
 #[test]
 fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     use skep_core::commits::StoppedFile;
@@ -1631,7 +1636,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         pruner_gone: true,
         feed_walk_gone: Some((20, 48)),
         index_failed: true,
-        floor: Some(FloorBinding { free_space: 1000, floor: 268_435_456 }),
+        floor: Some(FloorBinding { free_space: Ok(1000), floor: 268_435_456 }),
         claimed_permissive: true,
     };
     assert!(every.stands());
@@ -1694,6 +1699,20 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     };
     assert!(!none.stands(), "nothing on a healthy board");
     assert_eq!(none.to_string(), "");
+    let unread = StandingLine {
+        floor: Some(FloorBinding {
+            free_space: Err(std::io::Error::other("blobs/: statvfs: Input/output error (os error 5)")),
+            floor: 268_435_456,
+        }),
+        ..none
+    };
+    assert!(unread.stands(), "a read the host refused stands as the floor's clause");
+    assert_eq!(
+        unread.to_string(),
+        "deposits refused at the floor (free space unread: blobs/: statvfs: Input/output error (os \
+         error 5))",
+        "the read's cause in the store's words, never a figure"
+    );
 }
 
 /// Checks that RUNBOOK §1 step 8 lists the standing line as it is written.
@@ -1729,7 +1748,7 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         pruner_gone: true,
         feed_walk_gone: Some((9002, 9003)),
         index_failed: true,
-        floor: Some(FloorBinding { free_space: 9004, floor: 9005 }),
+        floor: Some(FloorBinding { free_space: Ok(9004), floor: 9005 }),
         claimed_permissive: true,
     };
     let written = [
@@ -1882,25 +1901,36 @@ fn a_history_read_that_meets_the_journals_damage_says_so_once_and_is_re_said_whi
     );
 }
 
-/// THE VOLUME's LINE (m4) at fixed figures: the free space at start in
-/// bytes, and, where it stands below the floor in force — the creation's own
-/// test, so at the floor exactly a deposit is admitted — the floor beside
-/// it, what is refused and what serves.
+/// Checks the volume's line (`operations.md` §1.1 m4) at fixed figures.
+///
+/// It carries the free space at start in bytes, and, where it stands below
+/// the floor in force — the creation's own test, so at the floor exactly a
+/// deposit is admitted — the floor beside it, what is refused and what
+/// serves; and, where the host refused the read, the free space unread with
+/// the store's account of the refusal, what is refused and what serves —
+/// never a figure the host did not give.
 #[test]
 fn the_volume_line_names_the_free_space_and_where_the_floor_binds_what_it_refuses() {
     assert_eq!(
-        VolumeLine { free_space: 9_000_000_000, floor: 268_435_456 }.to_string(),
+        VolumeLine { free_space: Ok(9_000_000_000), floor: 268_435_456 }.to_string(),
         "the volume's free space at start: 9000000000 bytes"
     );
     assert_eq!(
-        VolumeLine { free_space: 268_435_456, floor: 268_435_456 }.to_string(),
+        VolumeLine { free_space: Ok(268_435_456), floor: 268_435_456 }.to_string(),
         "the volume's free space at start: 268435456 bytes",
         "at the floor exactly, deposits are admitted"
     );
     assert_eq!(
-        VolumeLine { free_space: 1_000, floor: 268_435_456 }.to_string(),
+        VolumeLine { free_space: Ok(1_000), floor: 268_435_456 }.to_string(),
         "the volume's free space at start: 1000 bytes, below the floor in force 268435456: \
          every deposit is refused until room stands; every other write serves"
+    );
+    let refused = std::io::Error::other("blobs/: statvfs: Permission denied (os error 13)");
+    assert_eq!(
+        VolumeLine { free_space: Err(refused), floor: 268_435_456 }.to_string(),
+        "the volume's free space at start: unread (blobs/: statvfs: Permission denied (os error \
+         13)): every deposit is refused until the read answers; every other write serves",
+        "a read the host refused: its cause, never a figure"
     );
 }
 

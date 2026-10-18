@@ -1,68 +1,69 @@
-//! THE QUERY (`search.md` §3.2): [`Query::parse`], THE ONE GRAMMAR, and the
-//! EVALUATOR over the pair behind `Index::query` (§1.4; the `pair` module).
-//! The shell bounds the string's length as untrusted input ahead of it
-//! (`client.md` §4e.5); the crate takes what it is given and parses it to
-//! §3.2's FORMS, each a [`Form`]:
+//! The query: the one grammar, [`Query::parse`], and the evaluator.
 //!
-//! * A WORD — one term, cut by the tokenizer's own rule (`token::segments`),
+//! The evaluator runs over the pair behind `Index::query` (`search.md` §3.2;
+//! §1.4; the `pair` module). The shell bounds the string's length as
+//! untrusted input ahead of it (`client.md` §4e.5); the crate takes what it
+//! is given and parses it to §3.2's forms, each a [`Form`]:
+//!
+//! * A word — one term, cut by the tokenizer's own rule (`token::segments`),
 //!   "tokenized by §2.3's rule as the text was".
-//! * A PREFIX — "the LAST word of the string is a prefix unless the string
+//! * A prefix — "the last word of the string is a prefix unless the string
 //!   ends in whitespace: the keystroke's case", expanded over the sorted
 //!   dictionary by binary search, the terms taken "by document frequency
-//!   descending until the next would pass the bound, the term EQUAL TO THE
-//!   PREFIX taken first wherever the dictionary holds it, and the bound
+//!   descending until the next would pass the bound, the term equal to the
+//!   prefix taken first wherever the dictionary holds it, and the bound
 //!   reported as `more_terms: true`" — [`EXPANSION_BOUND_ENTRIES`].
-//! * A PHRASE — a quoted run `"…"`, "matched by ADJACENT token ordinals in
+//! * A phrase — a quoted run `"…"`, "matched by adjacent token ordinals in
 //!   one unit, never across a `Gap`"; a quoted single word is a word.
-//! * A PHRASE-PREFIX — "a quoted run whose closing quote is absent, the last
+//! * A phrase-prefix — "a quoted run whose closing quote is absent, the last
 //!   word a prefix": its fixed words first, "and its last word expands over
-//!   the terms that OCCUR AT THE ORDINAL AFTER the fixed phrase's occurrences
+//!   the terms that occur at the ordinal after the fixed phrase's occurrences
 //!   and lie in the prefix's dictionary range — each read off the stored text
 //!   at the occurrence's end …, one token cut there, the occurrences bounded
-//!   as the keystroke's positions are — those terms then taken in the ruled
-//!   order", so `"the publish s` finds `shot`.
-//! * A SPLIT CHUNK — "a whitespace-delimited chunk the tokenizer splits into
+//!   as the keystroke's positions are", those terms then taken in the
+//!   expansion's order, so `"the publish s` finds `shot`.
+//! * A split chunk — "a whitespace-delimited chunk the tokenizer splits into
 //!   two or more tokens (a rule id, a hyphenated word, an unspaced CJK run, a
-//!   URL) — is an IMPLICIT PHRASE, matched as a quoted run is, and a
-//!   PHRASE-PREFIX while it is the string's last chunk and no whitespace
+//!   URL) — is an implicit phrase, matched as a quoted run is, and a
+//!   phrase-prefix while it is the string's last chunk and no whitespace
 //!   follows it": `PUB-5.115` finds the unit that holds it and not
 //!   `AUTH-5.115` beside `PUB-1.2`; `東京都` finds the run.
-//! * SEVERAL BARE WORDS — a CONJUNCTION: "every term (or its expansion)
-//!   present in the unit", ranked by BM25 with the TIGHTEST WINDOW holding
+//! * Several bare words — a conjunction: "every term (or its expansion)
+//!   present in the unit", ranked by BM25 with the tightest window holding
 //!   one occurrence of each as the hit's span (`hit`).
-//! * A FUZZY WORD (D15 RULED, its shape PROPOSED) — "a COMPLETE query word of
-//!   FIVE OR MORE CHARACTERS that is no term of the pair's dictionary … is
-//!   expanded to the terms within ONE EDIT of it — an insertion, a deletion,
-//!   a substitution or an adjacent transposition of one CHARACTER (a Unicode
+//! * A fuzzy word (D15, its shape proposed) — "a complete query word of five
+//!   or more characters that is no term of the pair's dictionary … is
+//!   expanded to the terms within one edit of it — an insertion, a deletion,
+//!   a substitution or an adjacent transposition of one character (a Unicode
 //!   scalar value …; a Cyrillic substitution is one edit, not two bytes') —
 //!   the candidates ranked by document frequency, at most the expansion's
-//!   bound PER WORD, counted in the same postings entries; and at most THREE
+//!   bound per word, counted in the same postings entries; and at most three
 //!   complete words of one query are expanded …, the three nearest the
 //!   string's end, the others matched as typed and the `Answer` saying so by
-//!   `fuzzy_bounded: true`"; "a word that IS a term takes no expansion"; "The
-//!   LAST word while it is still a prefix is NOT fuzzy"; "Inside a phrase a
+//!   `fuzzy_bounded: true`"; "a word that is a term takes no expansion"; "The
+//!   last word while it is still a prefix is not fuzzy"; "Inside a phrase a
 //!   fuzzy word matches at its ordinal as any term does"; every hit matched
 //!   through a correction says so (`matched`).
-//! * NO OPERATORS: "what parses as none of the above is a word".
+//! * No operators: "what parses as none of the above is a word".
 //!
-//! THE EVALUATOR, bounded and flagged (PATTERNS P29 as sr-P1 amended it — a
-//! FLAGGED RANKED TOP-K "when it carries a FLAG the caller reads and states
-//! its ORDER"): "A keystroke's WHOLE evaluation is BOUNDED BY THE POSITIONS
-//! IT MERGES — the fixed words' and the expansion's alike, an entry being ONE
-//! OCCURRENCE (a token ordinal and its range), never a (term, unit) pair …:
+//! **The evaluator, bounded and flagged** (PATTERNS P29's except clause — a
+//! flagged ranked top-k "when it carries a flag the caller reads and states
+//! its order"): "A keystroke's whole evaluation is bounded by the positions
+//! it merges — the fixed words' and the expansion's alike, an entry being one
+//! occurrence (a token ordinal and its range), never a (term, unit) pair …:
 //! the evaluator walks the query's words rarest first, and where the next
 //! merge would pass the bound it stops and answers the units it has scored,
 //! ranked, with `Answer.positions_bounded: true` …, its order stated: the
 //! units a rarest-first walk reaches first, in the rarest word's postings
-//! order" — [`POSITIONS_BOUND`]. As landed: the forms are walked rarest
-//! first — the fewest live entries first — the first form's postings merged
-//! by unit, the published index's then the supplement's, each unit matched
+//! order" — [`POSITIONS_BOUND`]. Here the forms are walked rarest first —
+//! the fewest live entries first — the first form's postings merged by
+//! unit, the published index's then the supplement's, each unit matched
 //! whole before the next is reached; every later form checked over the
 //! units so far, in that order; a stop keeps the units matched on every form
 //! walked when it came, scored on those, and drops the rest; `total` is then
 //! a lower bound and `truncated` is set. Each keystroke's query is evaluated
-//! FROM SCRATCH. The three bounds are INTERIM pins whose constants quote
-//! §7.1; each is a FLAG on the answer and never a silent cut.
+//! from scratch. The three bounds are interim pins whose constants quote
+//! §7.1; each is a flag on the answer and never a silent cut.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -74,71 +75,87 @@ use crate::rank::{self, Statistics};
 use crate::token::segments;
 use crate::unit::{Item, Unit};
 
-/// THE EXPANSION's BOUND, in POSTINGS ENTRIES (§3.2: "the expansion BOUNDED
-/// by the POSTINGS ENTRIES it merges — an INTERIM pin, reported at M2"; §7.1:
-/// "the prefix expansion's bound, in postings entries merged"), an entry one
-/// occurrence. INTERIM PIN, derived from §7.1's M2 pin as the design states
-/// none: the per-keystroke phrase-prefix answer at 10⁴ documents is pinned
-/// at "≤ 16 ms (ONE FRAME) — the crate's `Answer` timed against the whole
-/// frame"; the merge is given half the frame, 8 ms, the other half the
-/// ranking's sort and `limit`'s snippets; an occurrence merged costs at most
-/// one dependent memory access, about 100 ns at DRAM latency — the
-/// pessimistic floor a sequential walk of 16-byte occurrences beats by an
-/// order — so 8 ms merges 80,000 occurrences, and the power of two at or
-/// below it is the bound, in the form the workspace writes its budgets
-/// (`1 << 17` delivery items, `1 << 16` compare pairs). A bare prefix is the
-/// keystroke's commonest form — M2's sample draws 0–2 full words before the
-/// prefix — so the expansion alone may fill the merge's budget, and the
-/// positions bound is what stops a keystroke with fixed words beside it. The
-/// fuzzy word's per-word cap is this same figure. CONFIRMED at M2,
-/// 2026-10-07 (lane SR-4, `tests/it/budgets.rs`, a release build over the
-/// 10⁴ cut fed through a dev board): the evaluator's cost came to 54 ns per
+/// The expansion's bound, in postings entries, an entry one occurrence.
+///
+/// The bound is §3.2's "the expansion bounded by the postings entries it
+/// merges — an interim pin, reported at M2" and §7.1's "the prefix
+/// expansion's bound, in postings entries merged". An interim pin, derived
+/// from §7.1's M2 pin as the design states none: the per-keystroke
+/// phrase-prefix answer at 10⁴ documents is pinned at "≤ 16 ms (one frame) —
+/// the crate's `Answer` timed against the whole frame"; the merge is given
+/// half the frame, 8 ms, the other half the ranking's sort and `limit`'s
+/// snippets; an occurrence merged costs at most one dependent memory
+/// access, about 100 ns at DRAM latency — the pessimistic floor a
+/// sequential walk of 16-byte occurrences beats by an order — so 8 ms merges
+/// 80,000 occurrences, and the power of two at or below it is the bound, in
+/// the form the workspace writes its budgets (`1 << 17` delivery items,
+/// `1 << 16` compare pairs). A bare prefix is the keystroke's commonest form
+/// — M2's sample draws 0–2 full words before the prefix — so the expansion
+/// alone may fill the merge's budget, and the positions bound is what stops
+/// a keystroke with fixed words beside it. The fuzzy word's per-word cap is
+/// this same figure.
+///
+/// Confirmed at M2 (`tests/it/budgets.rs`, a release build over the 10⁴ cut
+/// fed through a dev board): the evaluator's cost measures 54 ns per
 /// position merged, with 0.8 µs per unit scored beside it, over 1,500 bare
 /// prefixes drawn by token frequency — within a factor of two of the 100 ns
 /// assumed, so the figure stands (half a frame over the measured cost would
-/// admit `1 << 17`); the keystroke sample's p99 was 15.7 ms at this bound,
+/// admit `1 << 17`); the keystroke sample's p99 is 15.7 ms at this bound,
 /// with `more_terms` on 555 of 1,200 keystrokes. What the measurement also
-/// showed, for the design: at 10⁴ the commonest completions — `the`, 827,000
+/// shows, for the design: at 10⁴ the commonest completions — `the`, 827,000
 /// occurrences — exceed the bound alone, so a one-letter prefix expands to
 /// its own term and the bound's flag, never to them.
 pub const EXPANSION_BOUND_ENTRIES: usize = 1 << 16;
 
-/// THE POSITIONS BOUND on a keystroke's WHOLE evaluation (§3.2: "BOUNDED BY
-/// THE POSITIONS IT MERGES — the fixed words' and the expansion's alike, an
-/// entry being ONE OCCURRENCE …, never a (term, unit) pair — an INTERIM pin,
-/// reported at M2"; §7.1: "the keystroke's whole evaluation's bound, in
-/// POSITIONS merged, an entry one occurrence"). INTERIM PIN, derived as
-/// [`EXPANSION_BOUND_ENTRIES`] is: half of M2's one frame at a pessimistic
-/// 100 ns an occurrence, 80,000 positions, the power of two at or below it.
-/// Every posting consulted counts — a form's own, a phrase's other words',
-/// an intersection's — and where the next would pass it the evaluation stops
-/// with `positions_bounded: true`. CONFIRMED at M2, 2026-10-07, with
-/// [`EXPANSION_BOUND_ENTRIES`] and by the same measurement (54 ns per
-/// position merged; the keystrokes at the bound p50 6.8 ms, p99 15.4 ms);
-/// `positions_bounded` fired on 281 of 1,200 keystrokes at 10⁴, and the
-/// phrase-prefix `"of the d` the design names answered in 3.3 ms under it.
-/// What it costs, for the design: a quoted phrase of common words over long
-/// units admits each fixed word's whole occurrence list per unit walked, so
-/// a five-word title phrase holding `the` stopped at the bound over the
-/// records tier before reaching the record that bears it.
+/// The positions bound on a keystroke's whole evaluation.
+///
+/// The bound is §3.2's "bounded by the positions it merges — the fixed
+/// words' and the expansion's alike, an entry being one occurrence …, never
+/// a (term, unit) pair — an interim pin, reported at M2" and §7.1's "the
+/// keystroke's whole evaluation's bound, in positions merged, an entry one
+/// occurrence". An interim pin, derived as [`EXPANSION_BOUND_ENTRIES`] is:
+/// half of M2's one frame at a pessimistic 100 ns an occurrence, 80,000
+/// positions, the power of two at or below it. Every live unit's posting the
+/// walk merges counts — a form's own, a phrase's other words', an
+/// intersection's — and where the next would pass it the evaluation stops
+/// with `positions_bounded: true`; the reads that size an expansion or
+/// count a df are not merges and count nothing.
+///
+/// Confirmed at M2 with [`EXPANSION_BOUND_ENTRIES`] and by the same
+/// measurement (54 ns per position merged; the keystrokes at the bound p50
+/// 6.8 ms, p99 15.4 ms); `positions_bounded` is set on 281 of 1,200
+/// keystrokes at 10⁴, and the phrase-prefix `"of the d` the design names
+/// answers in 3.3 ms under it. What it costs, for the design: a quoted
+/// phrase of common words over long units admits each fixed word's whole
+/// occurrence list per unit walked, so a five-word title phrase holding
+/// `the` stops at the bound over the records tier before reaching the record
+/// that bears it.
 pub const POSITIONS_BOUND: usize = 1 << 16;
 
-/// THE FUZZY WORDS BOUND (§3.2, §7.1's fuzzy M2 row, as stated): "at most
-/// THREE complete words of one query are expanded (an INTERIM pin, reported
-/// at the fuzzy M2 row), the three nearest the string's end, the others
-/// matched as typed and the `Answer` saying so by `fuzzy_bounded: true`".
+/// The fuzzy words bound: at most three complete words of a query expand.
+///
+/// §3.2 and §7.1's fuzzy M2 row state it: "at most three complete words of
+/// one query are expanded (an interim pin, reported at the fuzzy M2 row),
+/// the three nearest the string's end, the others matched as typed and the
+/// `Answer` saying so by `fuzzy_bounded: true`".
 pub const FUZZY_WORDS: usize = 3;
 
-/// THE FUZZY WORD's MINIMUM LENGTH (§3.2, §7.1, as stated): "a COMPLETE query
-/// word of FIVE OR MORE CHARACTERS", counted in Unicode scalar values.
+/// The fuzzy word's minimum length, counted in Unicode scalar values.
+///
+/// §3.2 and §7.1 state it: "a complete query word of five or more
+/// characters".
 pub const FUZZY_MIN_CHARS: usize = 5;
 
-/// THE PREFIX MINIMUM (§7.1, as stated): "the prefix minimum, 1 character" —
-/// a trailing word of this many characters or more is a prefix.
+/// The prefix minimum: the fewest characters a trailing prefix word holds.
+///
+/// §7.1 states it: "the prefix minimum, 1 character" — a trailing word of
+/// this many characters or more is a prefix.
 pub const PREFIX_MIN_CHARS: usize = 1;
 
-/// One query word (§3.2): as the person typed it — the segment's own bytes,
-/// what `matched` reports — and the TERM it is, cut by the tokenizer's rule.
+/// One query word: as the person typed it, and the term it is.
+///
+/// The typed form is the segment's own bytes, what `matched` reports; the
+/// term is cut by the tokenizer's rule (§3.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word {
     /// The word as typed, unfolded.
@@ -156,8 +173,10 @@ pub enum Form {
     Prefix(Word),
     /// A quoted run, or a split chunk's implicit phrase: adjacent ordinals.
     Phrase(Vec<Word>),
-    /// An unclosed quote, or a split chunk at the string's end: the fixed
-    /// words, then a prefix over the terms that follow them.
+    /// An unclosed quote, or a split chunk at the string's end.
+    ///
+    /// The fixed words come first, then a prefix over the terms that follow
+    /// them.
     PhrasePrefix {
         /// The complete words, adjacent.
         fixed: Vec<Word>,
@@ -172,8 +191,9 @@ pub struct Query {
     forms: Vec<Form>,
 }
 
-/// One chunk of the string: a quoted run, closed or not, or a
-/// whitespace-delimited chunk.
+/// One chunk of the string.
+///
+/// A chunk is a quoted run, closed or not, or a whitespace-delimited chunk.
 struct Chunk<'a> {
     text: &'a str,
     closed: bool,
@@ -211,14 +231,16 @@ fn chunks(text: &str) -> Vec<Chunk<'_>> {
 }
 
 impl Query {
-    /// THE ONE GRAMMAR (§3.2): the string's chunks — a quoted run, closed or
-    /// unclosed, or a whitespace-delimited chunk — each cut by the
-    /// tokenizer's rule into words; a chunk of one word a [`Form::Word`], of
-    /// several a [`Form::Phrase`]; the string's last chunk, where it is no
-    /// closed quote and no whitespace follows it, a [`Form::Prefix`] or a
+    /// Parses `text` by the one grammar (§3.2).
+    ///
+    /// The string's chunks — a quoted run, closed or unclosed, or a
+    /// whitespace-delimited chunk — are each cut by the tokenizer's rule into
+    /// words; a chunk of one word is a [`Form::Word`], of several a
+    /// [`Form::Phrase`]; the string's last chunk, where it is no closed quote
+    /// and no whitespace follows it, is a [`Form::Prefix`] or a
     /// [`Form::PhrasePrefix`] instead; a chunk the rule cuts to nothing —
-    /// punctuation alone — no form. An empty string, or one of no words, is
-    /// the empty query, which answers no hit.
+    /// punctuation alone — is no form. An empty string, or one of no words,
+    /// is the empty query, which answers no hit.
     pub fn parse(text: &str) -> Query {
         let open_end = !text.ends_with(char::is_whitespace);
         let chunks = chunks(text);
@@ -248,19 +270,21 @@ impl Query {
         Query { forms }
     }
 
-    /// The forms in the string's order.
+    /// Returns the forms in the string's order.
     pub fn forms(&self) -> &[Form] {
         &self.forms
     }
 
-    /// Whether the query holds no form.
+    /// Returns whether the query holds no form.
     pub fn is_empty(&self) -> bool {
         self.forms.is_empty()
     }
 }
 
-/// The two bounds as values — the suites' seam, so a unit test meets each
-/// bound at a size it holds; `Index::query` passes [`Bounds::PINNED`].
+/// The two bounds as values: the suites' seam.
+///
+/// A unit test meets each bound at a size it holds; `Index::query` passes
+/// [`Bounds::PINNED`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Bounds {
     /// The expansion's bound and the fuzzy word's per-word cap, in entries.
@@ -290,11 +314,13 @@ struct TermRef<'a> {
     term: &'a str,
 }
 
-/// One element of a form, scored as ONE COMBINED TERM (§3.3): a word's one
-/// term on each member holding it, or the union a prefix's expansion or a
-/// fuzzy word's candidates make; `df` the units of the pair in the union,
-/// `entries` its live postings entries — the walk's cost and order — and
-/// `fuzzy` the typed word this element corrects, for `matched`.
+/// One element of a form, scored as one combined term (§3.3).
+///
+/// It is a word's one term on each member holding it, or the union a
+/// prefix's expansion or a fuzzy word's candidates make; `df` the units of
+/// the pair in the union, `entries` its live postings entries — the walk's
+/// cost and order — and `fuzzy` the typed word this element corrects, for
+/// `matched`.
 #[derive(Debug, Default)]
 struct Element<'a> {
     terms: Vec<TermRef<'a>>,
@@ -309,8 +335,9 @@ enum Resolved<'a> {
     Union(Element<'a>),
     /// A phrase: its words' elements, adjacent.
     Phrase(Vec<Element<'a>>),
-    /// A phrase-prefix: the fixed words' elements, and the prefix whose
-    /// candidates the walk supplies.
+    /// A phrase-prefix: the fixed words' elements, and the prefix.
+    ///
+    /// The walk supplies the prefix's candidates.
     Completion { fixed: Vec<Element<'a>>, prefix: String },
 }
 
@@ -322,8 +349,9 @@ impl<'a> Resolved<'a> {
         }
     }
 
-    /// The element walked first: the fewest live entries, the first of
-    /// equals.
+    /// Returns the element walked first: the one of fewest live entries.
+    ///
+    /// Of equals, it is the first.
     fn driver(&self) -> usize {
         let elements = self.elements();
         (0..elements.len())
@@ -331,14 +359,16 @@ impl<'a> Resolved<'a> {
             .expect("a form holds at least one element")
     }
 
-    /// The walk's cost: the driver's live entries.
+    /// Returns the walk's cost: the driver's live entries.
     fn cost(&self) -> usize {
         self.elements()[self.driver()].entries
     }
 
-    /// Whether some element has no term — a word that is no term and takes
-    /// no expansion, or an expansion that found none — so the form, and the
-    /// conjunction, match nothing.
+    /// Returns whether some element has no term.
+    ///
+    /// Such an element is a word that is no term and takes no expansion, or
+    /// an expansion that found none; the form, and the conjunction, then
+    /// match nothing.
     fn matches_nothing(&self) -> bool {
         self.elements().iter().any(|e| e.terms.is_empty())
     }
@@ -361,9 +391,10 @@ struct Next {
     term: String,
 }
 
-/// One match of a form in a unit: its extent in offsets from the unit's
-/// start, its tokens, and — for a phrase-prefix's fixed occurrence — the
-/// token that follows it.
+/// One match of a form in a unit.
+///
+/// It holds its extent in offsets from the unit's start, its tokens, and —
+/// for a phrase-prefix's fixed occurrence — the token that follows it.
 #[derive(Debug, Clone)]
 struct Match<'a> {
     start: u64,
@@ -383,8 +414,13 @@ struct Walk {
 struct Stopped;
 
 impl Walk {
-    /// Whether `n` more positions may be merged; where they may not, the
-    /// walk is stopped and nothing more is merged.
+    /// Admits `n` more positions to the merge where the bound allows them.
+    ///
+    /// # Errors
+    ///
+    /// `Stopped` where the walk is already stopped or `n` more positions
+    /// would pass the bound; the walk is then stopped and nothing more is
+    /// merged.
     fn admit(&mut self, n: usize) -> Result<(), Stopped> {
         if self.stopped || self.merged + n > self.bound {
             self.stopped = true;
@@ -414,7 +450,7 @@ enum Decision {
     AsTyped,
 }
 
-/// THE EVALUATOR (§3.2, §3.3, §3.1), `Index::query`'s body.
+/// Evaluates `query` over the pair: `Index::query`'s body (§3.2, §3.3, §3.1).
 pub(crate) fn evaluate(pair: &Pair<'_>, query: &Query, opts: &QueryOpts, bounds: Bounds) -> Answer {
     let sides: Vec<&Index> = pair.indexes().collect();
     let stats = Statistics::merged(sides.iter().copied());
@@ -500,7 +536,7 @@ pub(crate) fn evaluate(pair: &Pair<'_>, query: &Query, opts: &QueryOpts, bounds:
     flags.positions_bounded = walk.stopped;
 
     // The phrase-prefixes' candidates, off the tokens that follow their
-    // fixed occurrences, in the ruled order and bounded.
+    // fixed occurrences, in the expansion's order and bounded.
     let mut completions: Vec<Option<Element<'_>>> = (0..forms.len()).map(|_| None).collect();
     for f in 0..forms.len() {
         if let Resolved::Completion { fixed, prefix } = &forms[f] {
@@ -625,7 +661,7 @@ struct Scored<'a> {
     per: Vec<Option<Vec<Match<'a>>>>,
 }
 
-/// The answer from the hits listed and the facts about them (§3.1).
+/// Builds the answer from the hits listed and the facts about them (§3.1).
 fn answer(hits: Vec<Hit>, total: usize, opts: &QueryOpts, flags: &Flags) -> Answer {
     let truncated = total > opts.offset + hits.len() || flags.positions_bounded;
     Answer {
@@ -638,9 +674,11 @@ fn answer(hits: Vec<Hit>, total: usize, opts: &QueryOpts, flags: &Flags) -> Answ
     }
 }
 
-/// The forms resolved against the pair's dictionaries (§3.2): each complete
-/// word a term, a fuzzy expansion within the budget, or nothing; each prefix
-/// its bounded expansion; a phrase-prefix's prefix left to the walk.
+/// Resolves the forms against the pair's dictionaries (§3.2).
+///
+/// Each complete word becomes a term, a fuzzy expansion within the budget,
+/// or nothing; each prefix its bounded expansion; a phrase-prefix's prefix
+/// is left to the walk.
 fn resolve<'a>(
     sides: &[&'a Index],
     query: &Query,
@@ -699,7 +737,9 @@ fn resolve<'a>(
     resolved
 }
 
-/// A term's refs on every member holding it live, and its df over the pair.
+/// Looks `term` up on every member that holds it live.
+///
+/// It returns the term's refs on those members and its df over the pair.
 fn lookup<'a>(sides: &[&'a Index], term: &str) -> (Vec<TermRef<'a>>, usize) {
     let mut refs = Vec::new();
     let mut df = 0;
@@ -712,7 +752,9 @@ fn lookup<'a>(sides: &[&'a Index], term: &str) -> (Vec<TermRef<'a>>, usize) {
     (refs, df)
 }
 
-/// A word that is a term: BM25's one term (§3.3), on each member holding it.
+/// Returns the element of a word that is a term: BM25's one term (§3.3).
+///
+/// The element holds the term on each member holding it.
 fn exact<'a>(sides: &[&'a Index], term: &str) -> Element<'a> {
     let (terms, df) = lookup(sides, term);
     let entries = terms.iter().map(|t| sides[t.side].body.live_entries(t.id)).sum();
@@ -725,8 +767,10 @@ struct Candidate<'a> {
     df: usize,
 }
 
-/// The candidates keyed by the dictionary's own spelling, merged over the
-/// members: `terms` yields each member's live terms to admit.
+/// Returns the candidates keyed by the dictionary's own spelling.
+///
+/// They are merged over the members: `terms` yields each member's live
+/// terms to admit.
 fn candidates<'a>(
     sides: &[&'a Index],
     terms: impl Fn(usize, &'a Index) -> Vec<(&'a str, TermId)>,
@@ -742,14 +786,16 @@ fn candidates<'a>(
     out
 }
 
-/// THE EXPANSION (§3.2): the candidates "taken by document frequency
-/// descending until the next would pass the bound, the term EQUAL TO THE
-/// PREFIX taken first wherever the dictionary holds it, and the bound
-/// reported as `more_terms: true`" — equal frequencies in the dictionary's
-/// order. The prefix's own term is the word as typed, assured its place
-/// (the check of `expansion-priced-in-terms`), its merge the positions
-/// bound's to stop; the completions after it are counted in their live
-/// entries. The union is ONE COMBINED TERM (§3.3): df the units in the union.
+/// Expands the candidates into one element under the expansion's bound.
+///
+/// The candidates are, by §3.2, "taken by document frequency descending
+/// until the next would pass the bound, the term equal to the prefix taken
+/// first wherever the dictionary holds it, and the bound reported as
+/// `more_terms: true`" — equal frequencies in the dictionary's order. The
+/// prefix's own term, the term the word itself is, is assured its place,
+/// its merge the positions bound's to stop; the completions after it are
+/// counted in their live entries. The union is one combined term (§3.3): df
+/// the units in the union.
 fn expand<'a>(
     sides: &[&'a Index],
     candidates: BTreeMap<&'a str, Candidate<'a>>,
@@ -782,7 +828,7 @@ fn expand<'a>(
     Element { terms, df, entries, fuzzy: None }
 }
 
-/// The units of the pair holding any term of the union — each counted once.
+/// Counts the units of the pair holding any term of the union, each once.
 fn union_df(sides: &[&Index], terms: &[TermRef<'_>]) -> usize {
     if let [one] = terms {
         return sides[one.side].body.terms[one.id].live_units;
@@ -799,16 +845,20 @@ fn union_df(sides: &[&Index], terms: &[TermRef<'_>]) -> usize {
     units.len()
 }
 
-/// A PREFIX's expansion (§3.2): the dictionary range under the prefix on
-/// each member, by binary search, then [`expand`].
+/// Returns a prefix's expansion (§3.2).
+///
+/// The expansion takes the dictionary range under the prefix on each
+/// member, by binary search, then [`expand`].
 fn prefix<'a>(sides: &[&'a Index], term: &str, bound: usize, flags: &mut Flags) -> Element<'a> {
     let found = candidates(sides, |_, index| index.body.live_terms_under(term));
     expand(sides, found, Some(term), bound, &mut flags.more_terms)
 }
 
-/// A FUZZY word's expansion (§3.2 D15): every live term within one edit of
-/// the word, by a linear scan of each member's dictionary, then [`expand`]
-/// at the per-word cap; the element names the word it corrects.
+/// Returns a fuzzy word's expansion (`search.md` §3.2 D15).
+///
+/// The expansion takes every live term within one edit of the word, by a
+/// linear scan of each member's dictionary, then [`expand`] at the per-word
+/// cap; the element names the word it corrects.
 fn fuzzy<'a>(sides: &[&'a Index], word: &Word, bound: usize, flags: &mut Flags) -> Element<'a> {
     let found = candidates(sides, |_, index| {
         index.body.live_terms().filter(|(term, _)| one_edit_apart(&word.term, term)).collect()
@@ -818,10 +868,12 @@ fn fuzzy<'a>(sides: &[&'a Index], word: &Word, bound: usize, flags: &mut Flags) 
     element
 }
 
-/// ONE EDIT (§3.2): whether `b` is `a` with one character inserted, deleted
-/// or substituted, or two adjacent characters transposed — characters being
-/// Unicode scalar values, "a Cyrillic substitution is one edit, not two
-/// bytes'". Equal strings are no edit apart.
+/// Returns whether `b` is one edit from `a`, by §3.2's one edit.
+///
+/// One edit is one character inserted, deleted or substituted, or two
+/// adjacent characters transposed — characters being Unicode scalar values,
+/// "a Cyrillic substitution is one edit, not two bytes'". Equal strings are
+/// no edit apart.
 pub fn one_edit_apart(a: &str, b: &str) -> bool {
     let (la, lb) = (a.chars().count(), b.chars().count());
     if la.abs_diff(lb) > 1 {
@@ -856,9 +908,11 @@ pub fn one_edit_apart(a: &str, b: &str) -> bool {
     rest.as_str() == shorter
 }
 
-/// The driver's walk over one element on one member: the union's postings
-/// merged by unit id, each unit yielded once with its postings of every term
-/// in the union — "the rarest word's postings order".
+/// The driver's walk over one element on one member.
+///
+/// The union's postings are merged by unit id, each unit yielded once with
+/// its postings of every term in the union — "the rarest word's postings
+/// order".
 struct Merge<'a> {
     lists: Vec<(&'a [Posting], &'a str)>,
     cursors: Vec<usize>,
@@ -895,8 +949,9 @@ impl<'a> Merge<'a> {
     }
 }
 
-/// A unit's occurrences over several postings, in ordinal order, each with
-/// its term.
+/// Returns a unit's occurrences over several postings, in ordinal order.
+///
+/// Each occurrence comes with its term.
 fn by_ordinal<'a>(group: Vec<(&'a Posting, &'a str)>) -> Vec<(Occurrence, &'a str)> {
     let mut out: Vec<(Occurrence, &'a str)> = group
         .into_iter()
@@ -906,8 +961,13 @@ fn by_ordinal<'a>(group: Vec<(&'a Posting, &'a str)>) -> Vec<(Occurrence, &'a st
     out
 }
 
-/// An element's occurrences in one unit, each term's posting found by
-/// binary search and admitted to the walk; `Err` where the bound stopped it.
+/// Returns an element's occurrences in one unit, admitted to the walk.
+///
+/// Each term's posting is found by binary search.
+///
+/// # Errors
+///
+/// `Stopped` where the positions bound stopped the walk.
 fn at<'a>(
     sides: &[&'a Index],
     element: &Element<'a>,
@@ -925,10 +985,16 @@ fn at<'a>(
     Ok(by_ordinal(group))
 }
 
-/// A form's matches in one unit (§3.2): a union's every occurrence; a
-/// phrase's adjacent ordinals; a phrase-prefix's fixed occurrences, each with
-/// the token that follows it. `driver` is the element already walked with
-/// its occurrences; every other element is fetched here.
+/// Returns a form's matches in one unit (§3.2).
+///
+/// A union matches at its every occurrence; a phrase at its adjacent
+/// ordinals; a phrase-prefix at its fixed occurrences, each with the token
+/// that follows it. `driver` is the element already walked with its
+/// occurrences; every other element is fetched here.
+///
+/// # Errors
+///
+/// `Stopped` where fetching an element meets the positions bound.
 fn matches_of<'a>(
     sides: &[&'a Index],
     form: &Resolved<'a>,
@@ -970,10 +1036,12 @@ fn matches_of<'a>(
     Ok(matches)
 }
 
-/// A phrase's matches (§3.2: "matched by ADJACENT token ordinals in one
-/// unit"): for each occurrence of the driver element, the other elements at
-/// the ordinals before and after it, each found by binary search; the match
-/// runs from the first token's offset to the last's end.
+/// Returns a phrase's matches: adjacent token ordinals in one unit.
+///
+/// §3.2's phrase is "matched by adjacent token ordinals in one unit": for
+/// each occurrence of the driver element, the other elements are found at
+/// the ordinals before and after it, each by binary search; the match runs
+/// from the first token's offset to the last's end.
 fn adjacent<'a>(lists: &[Vec<(Occurrence, &'a str)>], driver: usize) -> Vec<Match<'a>> {
     let mut matches = Vec::new();
     for &(anchor, _) in &lists[driver] {
@@ -1002,18 +1070,22 @@ fn adjacent<'a>(lists: &[Vec<(Occurrence, &'a str)>], driver: usize) -> Vec<Matc
     matches
 }
 
-/// The lookahead a next-token cut starts with, doubled while the segment
-/// found reaches its end.
+/// The lookahead a next-token cut starts with.
+///
+/// It is doubled while the segment found reaches its end.
 const LOOKAHEAD: usize = 256;
 
-/// THE PHRASE-PREFIX's CUT (§3.2): the token at the ordinal after a fixed
-/// occurrence ending at `end`, "read off the stored text at the occurrence's
-/// end …, one token cut there" — the first segment the tokenizer's rule
-/// keeps in the text item's valid stretch after `end`; none where the item
-/// ends, a `Gap` follows, or an invalid byte breaks the stretch, each a
-/// token break the item table already marks. The stretch is read in a
-/// bounded lookahead, widened while the segment found reaches its edge, so a
-/// long item is never scanned whole.
+/// Returns the token at the ordinal after a fixed occurrence ending at `end`.
+///
+/// This is the phrase-prefix's cut (§3.2), "read off the stored text at the
+/// occurrence's end …, one token cut there" — the first segment the
+/// tokenizer's rule keeps in the text item's valid stretch after `end`; none
+/// where the item ends, a `Gap` follows, or an invalid byte breaks the
+/// stretch, each a token break the item table already marks, and none where
+/// the first `LOOKAHEAD` bytes hold no segment the rule keeps, though the
+/// tokenizer's next token may stand past them. The stretch is read in a
+/// bounded lookahead, widened while the segment found reaches its edge, so
+/// the read grows with the token found and not with the item.
 fn next_token(unit: &Unit, end: u64) -> Option<Next> {
     let index = unit.item_at(end.checked_sub(1)?)?;
     let Item::Text { start, bytes } = &unit.items()[index] else { return None };
@@ -1036,16 +1108,18 @@ fn next_token(unit: &Unit, end: u64) -> Option<Next> {
     }
 }
 
-/// THE COMPLETION (§3.2's phrase-prefix): over form `f`'s fixed occurrences
-/// in every unit reached, the terms that follow them and lie in the prefix's
-/// range are the candidates, "taken in the ruled order, the prefix's own
-/// term first and document frequency descending" and bounded as an
-/// expansion is; each fixed occurrence whose next token is a taken term
-/// becomes a match through it, the rest fall, and a unit left with none
-/// leaves the answer. Where the fixed phrase passed the positions bound the
-/// candidates are those the units reached supply — the dictionary range's
-/// terms that follow them — and the answer is flagged. The union element
-/// returned scores as one combined term beside the fixed words' (§3.3).
+/// Completes phrase-prefix `f` from the terms that follow its occurrences.
+///
+/// Over form `f`'s fixed occurrences in every unit reached, the terms that
+/// follow them and lie in the prefix's range are the candidates (§3.2's
+/// phrase-prefix), taken in the order "the prefix's own term first and
+/// document frequency descending" and bounded as an expansion is; each
+/// fixed occurrence whose next token is a taken term becomes a match through
+/// it, the rest fall, and a unit left with none leaves the answer. Where the
+/// fixed phrase passed the positions bound the candidates are those the
+/// units reached supply — the dictionary range's terms that follow them —
+/// and the answer is flagged. The union element returned scores as one
+/// combined term beside the fixed words' (§3.3).
 fn complete<'a>(
     sides: &[&'a Index],
     f: usize,

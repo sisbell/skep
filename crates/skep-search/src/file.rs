@@ -1,21 +1,23 @@
-//! THE FILE (`search.md` §5.1, §5.3, §5.4; §1.4's `save` and `load`): ONE
-//! VERSIONED FILE PER INDEX, written WHOLE to the one writer the embedder
-//! hands [`Index::save`] and loaded WHOLE from the one reader it hands
-//! [`Index::load`]. The crate opens, renames and moves no file: the atomic
-//! replace, the modes and the lock are the shell's (`client.md` §4e.4,
-//! §3.3), and so is THE ASIDE's rename, whose spelling alone is here
-//! ([`aside_name`]). The file is DERIVED STATE (PATTERNS P22, P38), so its
-//! refusals are DISPOSITIONS ([`LoadError`]) and never a halt: a newer `v`
-//! or a newer tokenizer revision is FACED and the file left untouched, an
-//! older tokenizer revision is MIGRATED from the file's own stored text, a
-//! damaged file is REBUILT with its loss stated, another class's file is
-//! MOVED ASIDE.
+//! The file: one versioned file per index, written and loaded whole.
+//!
+//! The file (`search.md` §5.1, §5.3, §5.4; §1.4's `save` and `load`) is
+//! written whole to the one writer the embedder hands [`Index::save`] and
+//! loaded whole from the one reader it hands [`Index::load`]. The crate
+//! opens, renames and moves no file: the atomic replace, the modes and the
+//! lock are the shell's (`client.md` §4e.4, §3.3), and so is the aside's
+//! rename, whose spelling alone is here ([`aside_name`]). The file is
+//! derived state (PATTERNS P22, P38), so its refusals are dispositions
+//! ([`LoadError`]) and never a halt: a newer `v` or a newer tokenizer
+//! revision is faced and the file left untouched, an older tokenizer
+//! revision is migrated from the file's own stored text, a damaged file is
+//! rebuilt with its loss stated, another class's file is moved aside.
 //!
 //! ## The layout
 //!
 //! ```text
-//! <header line>   `header`'s one spelling; its `body` member is the body's length
-//! <body>          seven sections, each a varint LENGTH and then its bytes:
+//! <header line>   `header`'s one spelling; its `body` member is the
+//!                 body's length
+//! <body>          seven sections, each a varint length and then its bytes:
 //!   1 ranges      the `Header`'s per-range records — a count, then per range:
 //!                 `under` (0, or 1 and an address), `held` (a position and a
 //!                 chain), the refusals (a count; per refusal a document and a
@@ -24,17 +26,18 @@
 //!   2 head        the newest head's `H.k` — 0, or 1 and its member, its
 //!                 position and its chain
 //!   3 seen        the units offered past the ceiling (§7.4)
-//!   4 dictionary  the terms, SORTED, each a string
+//!   4 dictionary  a count, then the terms, sorted, each a string
 //!   5 units       a count, then per record: 0 for a tombstone, or 1 and the
 //!                 key, the member, the kind, the class, `as_of`, the item
-//!                 table — each text item carrying the STORED TEXT (§6) — and
-//!                 the unit's TERM LIST
+//!                 table — each text item carrying the stored text (§6) — and
+//!                 the unit's term list
 //!   6 postings    per term in dictionary order: a count, then per posting the
 //!                 unit id, a count of occurrences and each one's ordinal,
-//!                 offset and length — the ids, ordinals and offsets delta-coded
+//!                 offset and length — the ids, ordinals and offsets
+//!                 delta-coded
 //!   7 counts      the live counts: units, terms, postings, bytes, tombstones,
 //!                 dead postings
-//! <trailer>       CRC-32C over the HEADER LINE's bytes, its `\n` included, and
+//! <trailer>       CRC-32C over the header line's bytes, its `\n` included, and
 //!                 the body — u32 little-endian
 //! ```
 //!
@@ -43,7 +46,7 @@
 //! the length and the little-endian bytes of its magnitude; a chain is its
 //! thirty-two bytes; a flag is one byte, 0 or 1. Each section's length is
 //! checked as it is read, so a section that overruns or underruns its length
-//! is DAMAGED by name, as is one that fails to parse. The term ids in the file
+//! is damaged by name, as is one that fails to parse. The term ids in the file
 //! are the sorted dictionary's positions, whatever ids the index held in
 //! memory, so one index has one file.
 //!
@@ -51,13 +54,15 @@
 //!
 //! The header line first, `v` first inside it (`header`); then `kind` and
 //! `principal` against the class expected — a mismatch is
-//! [`LoadError::OtherClass`], both named, BEFORE the body is read (§5.4: the
-//! file is a misplaced holding, moved aside); then `tokenizer` — NEWER than
+//! [`LoadError::OtherClass`], both named, before the body is read (§5.4: the
+//! file is a misplaced holding, moved aside); then `tokenizer` — newer than
 //! the running crate's is [`LoadError::NewerTokenizer`], faced, the body
-//! unread, never migrated down; then the body under its trailer — a trailer
-//! that disagrees, a section that overruns, a section that fails to parse, a
-//! term list or the counts that disagree with the postings:
-//! [`LoadError::Damaged`], naming what; then an OLDER tokenizer revision:
+//! unread, never migrated down; then the body under its trailer — a file
+//! whose length disagrees with the header's `body`, a trailer that
+//! disagrees, a section that overruns, fails to parse or underruns, a term
+//! list that disagrees with the postings, two live units under one key, the
+//! counts that disagree with the units and the postings:
+//! [`LoadError::Damaged`], naming what; then an older tokenizer revision:
 //! every live unit re-tokenized from its stored text under the running
 //! revision, the postings rebuilt, the index tagged by
 //! [`Index::migrated_from`] so the embedder saves it, "under the running
@@ -83,53 +88,65 @@ use crate::unit::{Class, GapKind, Item, Kind, Unit, UnitKey};
 /// The trailer's bytes: one `u32`, little-endian.
 const TRAILER_LEN: usize = 4;
 
-/// A load's refusal (§5.1; P38): every disposition the design names, each
-/// carrying what its face states — the UX writes the words. Non-exhaustive:
-/// the next format version brings dispositions of its own.
+/// A load's refusal (§5.1; P38): every disposition the design names.
+///
+/// Each carries what its face states — the UX writes the words.
+/// Non-exhaustive: the next format version brings dispositions of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LoadError {
-    /// FACED, the file left untouched: `v` above 1 — "this index was written
-    /// by a newer skep than this one"; this skep searches nothing from the
-    /// file and writes none in its place.
+    /// Faced, the file left untouched: `v` above 1.
+    ///
+    /// It is "this index was written by a newer skep than this one"; this
+    /// skep searches nothing from the file and writes none in its place.
     NewerVersion {
         /// The version the header names.
         v: u64,
     },
-    /// FACED, as a newer `v` is: the file was cut under a tokenizer revision
-    /// newer than the running crate's — searched not, written not, never
-    /// migrated down, so two builds alternating on one file re-migrate at no
-    /// launch.
+    /// Faced, as a newer `v` is: the file's tokenizer revision is newer.
+    ///
+    /// The file was cut under a tokenizer revision newer than the running
+    /// crate's — searched not, written not, never migrated down, so two
+    /// builds alternating on one file re-migrate at no launch.
     NewerTokenizer {
         /// The revision the header names.
         revision: Revision,
     },
-    /// REFUSED before the body is read, the file MOVED ASIDE (§5.4): the
-    /// file's `kind` and `principal` name another class than the one the
-    /// embedder opened it as — another board's holding, another principal's
-    /// — CRC-valid or not.
+    /// Refused before the body is read, the file moved aside (§5.4).
+    ///
+    /// The file's `kind` and `principal` name another class than the one the
+    /// embedder opened it as — another principal's holding, or a published
+    /// index opened as a supplement or the reverse — CRC-valid or not.
+    /// Another board's holding of this class is no `OtherClass`: its `board`
+    /// is the embedder's to check.
     OtherClass {
         /// The class the file names.
         file: Class,
         /// The class the embedder expected.
         expected: Class,
     },
-    /// DAMAGED and REBUILT: a member this crate does not know, at the file's
-    /// own `v`.
+    /// Damaged and rebuilt: a member this crate does not know.
+    ///
+    /// The member is unknown at the file's own `v`.
     UnknownMember {
         /// The member's name.
         name: String,
     },
-    /// DAMAGED and REBUILT, the loss stated: the header in another spelling,
-    /// a trailer that disagrees, a section that overruns its length or fails
-    /// to parse, counts that disagree with the postings — `what` names the
-    /// check.
+    /// Damaged and rebuilt, the loss stated.
+    ///
+    /// It is the header line missing or in another spelling, a file whose
+    /// length disagrees with the header's `body`, a trailer that disagrees, a
+    /// section that overruns or underruns its length or fails to parse, a
+    /// term list that disagrees with the postings, two live units under one
+    /// key, counts that disagree with the units and the postings — `what`
+    /// names the check.
     Damaged {
         /// The check that refused the file, and where.
         what: String,
     },
-    /// The embedder's reader failed before any byte was judged: no
-    /// disposition of the file's own.
+    /// The embedder's reader failed before any byte was judged.
+    ///
+    /// It is no disposition of the file's own.
     Read {
         /// The failure's kind.
         kind: io::ErrorKind,
@@ -175,26 +192,30 @@ impl From<HeaderError> for LoadError {
     }
 }
 
-/// THE ASIDE's spelling (§5.4; `client.md` §4e.4): `<name>.aside.<chain>.<n>`
-/// — `published.index.aside.<64 hex>.1`, `principal-<n>.index.aside.<64
-/// hex>.1` — `chain` the misplaced file's OWN board's chain, off its header,
-/// and `n` the first free ordinal, so a second misplaced file of the same
-/// board lands beside the first at 2 and nothing is ever overwritten. The
-/// name alone: no file is moved, renamed or opened by this crate — the rename
-/// is the shell's, as the save's rename is, and no open re-adopts the aside.
+/// Returns the aside's spelling: `<name>.aside.<chain>.<n>`.
+///
+/// The spelling (§5.4; `client.md` §4e.4) gives
+/// `published.index.aside.<64 hex>.1` and
+/// `principal-<n>.index.aside.<64 hex>.1` — `chain` the misplaced file's own
+/// board's chain, off its header, and `n` the first free ordinal, so a
+/// second misplaced file of the same board lands beside the first at 2 and
+/// nothing is ever overwritten. The name alone: no file is moved, renamed or
+/// opened by this crate — the rename is the shell's, as the save's rename
+/// is, and no open re-adopts the aside.
 pub fn aside_name(name: &str, chain: &Chain, n: u32) -> String {
     format!("{name}.aside.{chain}.{n}")
 }
 
-/// CRC-32C (Castagnoli, the polynomial `0x1EDC6F41`, reflected) over `bytes`
-/// — the trailer's checksum, computed in-crate over the header line and the
-/// body (§5.1). The standard check value: `crc32c(b"123456789")` is
-/// `0xE3069283`.
+/// Returns the CRC-32C of `bytes`: the trailer's checksum.
+///
+/// The CRC-32C is Castagnoli's, the polynomial `0x1EDC6F41`, reflected,
+/// computed in-crate over the header line and the body (§5.1). The standard
+/// check value: `crc32c(b"123456789")` is `0xE3069283`.
 pub fn crc32c(bytes: &[u8]) -> u32 {
     extend(0, bytes)
 }
 
-/// The checksum continued: `extend(crc32c(a), b) == crc32c(a ++ b)`.
+/// Continues the checksum: `extend(crc32c(a), b) == crc32c(a ++ b)`.
 fn extend(crc: u32, bytes: &[u8]) -> u32 {
     let mut register = !crc;
     for &byte in bytes {
@@ -223,16 +244,23 @@ const fn crc_table() -> [u32; 256] {
 }
 
 impl Index {
-    /// THE WHOLE INDEX TO ONE WRITER (§1.4, §5.1): the header line — `board`
-    /// and `floor` from the typed `Header` the embedder composes, `kind`,
-    /// `principal` and `tokenizer` from the `Index` ALONE (the class it was
-    /// made or loaded with, the running crate's tokenizer revision) — then the
-    /// body, the `Header`'s per-range records and the head's pair in their
-    /// sections, then the trailer. A READ of the index, serialized beside
-    /// queries under the embedder's read side (§5.6); the tombstoned units'
-    /// postings are written as they stand, so the embedder compacts AHEAD of
-    /// a save that is due (§5.1). The writer is the embedder's `<name>.tmp`
+    /// Saves the whole index to one writer (§1.4, §5.1).
+    ///
+    /// It writes the header line — `board` and `floor` from the typed
+    /// `Header` the embedder composes, `kind`, `principal` and `tokenizer`
+    /// from the `Index` alone (the class it was made or loaded with, the
+    /// running crate's tokenizer revision) — then the body, the `Header`'s
+    /// per-range records and the head's pair in their sections, then the
+    /// trailer. A read of the index, serialized beside queries under the
+    /// embedder's read side (§5.6); the tombstoned units' postings are
+    /// written as they stand, so the embedder compacts ahead of a save where
+    /// compaction is due (§5.1). The writer is the embedder's `<name>.tmp`
     /// (`client.md` §4e.4); the sync and the rename are its.
+    ///
+    /// # Errors
+    ///
+    /// [`IndexError::Write`] where the writer fails a write or the flush, the
+    /// failure's kind and text carried.
     pub fn save(&self, header: &Header, to: &mut dyn Write) -> Result<(), IndexError> {
         let body = self.body_bytes(header);
         let line = header::encode(header, self.class, self.revision, body.len() as u64);
@@ -244,16 +272,26 @@ impl Index {
         to.flush().map_err(failed)
     }
 
-    /// THE WHOLE FILE FROM ONE READER (§1.4, §5.1), in the module doc's
-    /// order: the header read back typed by the one canonical parser, its `v`
-    /// first; a file whose `kind` and `principal` name another class than
-    /// `expected` refused, both named, before any query can run over it and
-    /// before its body is read (§5.4: moved aside); a newer `v`, a newer
-    /// tokenizer revision, an unknown member or a damaged file a typed
-    /// refusal carrying its disposition; an older tokenizer revision
-    /// MIGRATED from the stored text, the result at the running revision and
-    /// tagged by [`Index::migrated_from`]. The index comes back under the
-    /// running crate's ceiling with `seen` as the file holds it.
+    /// Loads the whole file from one reader (§1.4, §5.1).
+    ///
+    /// The header is read back typed by the one canonical parser, its `v`
+    /// first; an older tokenizer revision is migrated from the stored text,
+    /// the result at the running revision and tagged by
+    /// [`Index::migrated_from`]. The index comes back under the running
+    /// crate's ceiling with `seen` as the file holds it.
+    ///
+    /// # Errors
+    ///
+    /// In the module doc's order, each a typed refusal carrying its
+    /// disposition: [`LoadError::Read`] where the reader fails, before any
+    /// byte is judged; the header line's refusals —
+    /// [`LoadError::NewerVersion`], [`LoadError::UnknownMember`], and
+    /// [`LoadError::Damaged`] for a line missing or in another spelling; a
+    /// file whose `kind` and `principal` name another class than `expected`,
+    /// [`LoadError::OtherClass`], both named, before any query can run over
+    /// it and before its body is read (§5.4: moved aside); a newer tokenizer
+    /// revision, [`LoadError::NewerTokenizer`]; and a damaged body,
+    /// [`LoadError::Damaged`], naming what.
     pub fn load(from: &mut dyn Read, expected: Class) -> Result<(Index, Header), LoadError> {
         let mut bytes = Vec::new();
         from.read_to_end(&mut bytes)
@@ -322,7 +360,7 @@ impl Index {
         Ok((index, header))
     }
 
-    /// The body's seven sections, each length-prefixed.
+    /// Returns the body's seven sections, each length-prefixed.
     fn body_bytes(&self, header: &Header) -> Vec<u8> {
         let body = &self.body;
         // The file's term ids are the sorted dictionary's positions.
@@ -349,15 +387,18 @@ impl Index {
     }
 }
 
-/// Whether `found` is newer than the running crate's revision: the rule's
-/// version first, then the Unicode version of the tables.
+/// Returns whether `found` is newer than the running crate's revision.
+///
+/// The rule's version is compared first, then the Unicode version of the
+/// tables.
 fn newer(found: Revision) -> bool {
     (found.rule, found.unicode) > (REVISION.rule, REVISION.unicode)
 }
 
-/// The live units re-indexed under the running revision (§5.1, §6): every
-/// live unit's stored text re-tokenized and its postings rebuilt; a tombstone
-/// has no text and is dropped, so the migrated body is compacted.
+/// Re-indexes the live units under the running revision (§5.1, §6).
+///
+/// Every live unit's stored text is re-tokenized and its postings rebuilt; a
+/// tombstone has no text and is dropped, so the migrated body is compacted.
 fn migrated(old: Body) -> Body {
     let mut fresh = Body::default();
     for record in old.units {
@@ -413,8 +454,15 @@ fn put_chain_at(out: &mut Vec<u8>, at: &ChainAt) {
     out.extend_from_slice(at.chain.as_bytes());
 }
 
-/// The delta of a strictly ascending sequence: the first value whole, each
-/// next one as the gap past its predecessor.
+/// Returns the delta of a strictly ascending sequence's next value.
+///
+/// The first value stands whole, each next one as the gap past its
+/// predecessor.
+///
+/// # Panics
+///
+/// Panics in a debug build where the sequence is not strictly ascending,
+/// `value` not past `prev`.
 fn gap(prev: Option<u64>, value: u64) -> u64 {
     match prev {
         None => value,
@@ -568,8 +616,10 @@ fn counts_section(counts: Counts) -> Vec<u8> {
 
 // ---- the reader ---------------------------------------------------------
 
-/// A bounded cursor over one section's bytes — the body's for the section
-/// lengths themselves — every read checked against the section's end.
+/// A bounded cursor over one section's bytes.
+///
+/// It runs over the body's bytes for the section lengths themselves; every
+/// read is checked against the section's end.
 struct Reader<'a> {
     section: &'static str,
     bytes: &'a [u8],
@@ -608,7 +658,12 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A canonical unsigned LEB128 varint.
+    /// Reads a canonical unsigned LEB128 varint.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Damaged`] where the section ends inside the varint, the
+    /// varint overflows `u64`, or it is overlong.
     fn varint(&mut self) -> Result<u64, LoadError> {
         let mut value = 0u64;
         let mut shift = 0u32;
@@ -650,7 +705,14 @@ impl<'a> Reader<'a> {
             .map_err(|_| self.damaged("a string that is not UTF-8"))
     }
 
-    /// An address: its components in their one spelling, T4-valid.
+    /// Reads an address: its components in their one spelling, T4-valid.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Damaged`] where the section ends inside the address, a
+    /// varint is refused or a count passes the address space, a component is
+    /// not in its one spelling, the address has no component, or it is not a
+    /// valid address.
     fn address(&mut self) -> Result<Address, LoadError> {
         let n = self.len()?;
         let mut components = Vec::new();
@@ -681,7 +743,12 @@ impl<'a> Reader<'a> {
         Ok(ChainAt { position, chain })
     }
 
-    /// The next value of a strictly ascending, delta-coded sequence.
+    /// Reads the next value of a strictly ascending, delta-coded sequence.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Damaged`] where the delta's varint is refused or the
+    /// value overflows `u64`.
     fn ascending(&mut self, prev: Option<u64>) -> Result<u64, LoadError> {
         let delta = self.varint()?;
         match prev {
@@ -693,7 +760,13 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// One section's bytes, read by `read`, which must consume them whole.
+    /// Reads one section's bytes by `read`, which must consume them whole.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Damaged`] where the section's length cannot be read or
+    /// overruns the body — either named an overrun — or `read` leaves bytes
+    /// of it unread, and whatever `read` refuses.
     fn section<T>(
         &mut self,
         name: &'static str,
@@ -751,7 +824,13 @@ fn read_head(r: &mut Reader<'_>) -> Result<Option<HeadRecord>, LoadError> {
     Ok(Some(HeadRecord { member: r.address()?, at: r.chain_at()? }))
 }
 
-/// The terms, strictly ascending.
+/// Reads the terms, strictly ascending.
+///
+/// # Errors
+///
+/// [`LoadError::Damaged`] where the section ends early, a varint is refused
+/// or a count passes the address space, a term is not UTF-8, or a term is
+/// out of the sorted order.
 fn read_dictionary(r: &mut Reader<'_>) -> Result<Vec<String>, LoadError> {
     let n = r.len()?;
     let mut terms: Vec<String> = Vec::new();
@@ -765,8 +844,9 @@ fn read_dictionary(r: &mut Reader<'_>) -> Result<Vec<String>, LoadError> {
     Ok(terms)
 }
 
-/// The unit records: `None` for a tombstone, else the unit and its stored
-/// term list.
+/// The unit records as the file holds them.
+///
+/// `None` stands for a tombstone, else the unit and its stored term list.
 type Records = Vec<Option<(Unit, Vec<TermId>)>>;
 
 fn read_units(r: &mut Reader<'_>, class: Class, terms: usize) -> Result<Records, LoadError> {
@@ -825,7 +905,13 @@ fn read_units(r: &mut Reader<'_>, class: Class, terms: usize) -> Result<Records,
     Ok(records)
 }
 
-/// Per term in dictionary order, its postings.
+/// Reads the postings, per term in dictionary order.
+///
+/// # Errors
+///
+/// [`LoadError::Damaged`] where the section ends early, a varint is refused
+/// or a count passes the address space, a delta or an offset overflows, a
+/// unit id passes the unit records, or an ordinal or a length passes `u32`.
 fn read_postings(
     r: &mut Reader<'_>,
     terms: usize,
@@ -876,8 +962,16 @@ fn read_counts(r: &mut Reader<'_>) -> Result<Counts, LoadError> {
     })
 }
 
-/// The body assembled and checked: each unit's stored term list against the
-/// postings, the live keys distinct, the counts against the recomputation.
+/// Assembles the body from its sections and checks it.
+///
+/// Each unit's stored term list is checked against the postings, the live
+/// keys distinct, the counts against the recomputation.
+///
+/// # Errors
+///
+/// [`LoadError::Damaged`] at the first fault: a term list that disagrees
+/// with the postings or two live units under one key, unit by unit; then
+/// counts that disagree with the units and the postings.
 fn assemble(
     dictionary: Vec<String>,
     records: Records,

@@ -1,32 +1,34 @@
-//! The file's HEADER (`search.md` §5.1; §1.4's `save` and `load`): the typed
-//! [`Header`] the embedder composes and hands `save`, and `load` hands back —
-//! `board`, `floor`, the PER-RANGE RECORDS and the newest head's `H.k` — and
-//! the HEADER LINE, the file's first line: ONE JSON OBJECT in the key file's
-//! conventions (`client.md` §3.2 — members in one order, no whitespace
-//! outside strings, lowercase hex, a `v`, no other member, one `\n` after the
-//! brace), written by [`encode`] and read by [`parse`], the crate's ONE
-//! canonical parser. Of the `Header`'s members, `board` and `floor` go on the
-//! line; the range records and the head's pair go into a body section (the
-//! `file` module), so the line stays one line of the file's own facts under
-//! the CRC. The line's other members are the INDEX's own — `kind` and
-//! `principal` from its class, `tokenizer` from the running revision — and
-//! `body`, the body's length in bytes, which `save` computes.
+//! The file's header: the typed [`Header`] and the header line.
+//!
+//! The typed header (`search.md` §5.1; §1.4's `save` and `load`) is the
+//! [`Header`] the embedder composes and hands `save`, and `load` hands back
+//! — `board`, `floor`, the per-range records and the newest head's `H.k`.
+//! The header line is the file's first line: one JSON object in the key
+//! file's conventions (`client.md` §3.2 — members in one order, no
+//! whitespace outside strings, lowercase hex, a `v`, no other member, one
+//! `\n` after the brace), written by [`encode`] and read by [`parse`], the
+//! crate's one canonical parser. Of the `Header`'s members, `board` and
+//! `floor` go on the line; the range records and the head's pair go into a
+//! body section (the `file` module), so the line stays one line of the
+//! file's own facts under the CRC. The line's other members are the index's
+//! own — `kind` and `principal` from its class, `tokenizer` from the running
+//! revision — and `body`, the body's length in bytes, which `save` computes.
 //!
 //! ```text
 //! {"type":"skep-index","v":1,"board":"<64 hex>","kind":"published","floor":<F|null>,"tokenizer":"<revision>","body":<bytes>}
 //! {"type":"skep-index","v":1,"board":"<64 hex>","kind":"supplement","principal":<n>,"floor":<F|null>,"tokenizer":"<revision>","body":<bytes>}
 //! ```
 //!
-//! THE ONE SPELLING, READ CANONICALLY (§5.1; PATTERNS P35, P38): `parse`
-//! reads `v` FIRST — a `v` above 1 is [`HeaderError::NewerVersion`], "written
-//! by a newer skep", before any other member is judged, so an older skep
-//! never calls a newer skep's header damaged — then, under `v = 1`, admits
-//! the line only where `b == encode(parse(b))`, P35's form: a member out of
-//! its order, a space, an uppercase hex digit, a second spelling of a number,
-//! a missing newline are each [`HeaderError::Damaged`], and a member this
-//! crate does not know is [`HeaderError::UnknownMember`], named. No JSON crate
-//! reads it (§1.3): the object's members are written and read by the bounded
-//! code below, the key file's writer applied to one line.
+//! **The one spelling, read canonically** (§5.1; PATTERNS P35, P38): `parse`
+//! reads `v` first — a `v` above 1 is [`HeaderError::NewerVersion`],
+//! "written by a newer skep", before any other member is judged, so an older
+//! skep never calls a newer skep's header damaged — then, under `v = 1`,
+//! admits the line only where `b == encode(parse(b))`, P35's form: a member
+//! out of its order, a space, an uppercase hex digit, a second spelling of a
+//! number, a missing newline are each [`HeaderError::Damaged`], and a member
+//! this crate does not know is [`HeaderError::UnknownMember`], named. No
+//! JSON crate reads it (§1.3): the object's members are written and read by
+//! the bounded code below, the key file's writer applied to one line.
 
 use std::fmt;
 use std::fmt::Write as _;
@@ -36,18 +38,22 @@ use skep_address::Address;
 use crate::token::Revision;
 use crate::unit::Class;
 
-/// A commit chain's value — the 64 lowercase hex `/health` serves as
-/// `chain_head` and `GET /chain?at=<position>` serves as `chain` (wire.md §The
-/// other endpoints): `H.1`'s names the board and its directory (§5.2;
-/// `client.md` §4e.4), a range's `held` pair fixes a position by one (§5.1).
-/// Thirty-two bytes, so it has one spelling: lowercase on the way out, and
-/// lowercase alone on the way in.
+/// A commit chain's value, as `/health` and `/chain?at` serve it.
+///
+/// It is the 64 lowercase hex `/health` serves as `chain_head` and `GET
+/// /chain?at=<position>` serves as `chain` (wire.md §The other endpoints):
+/// `H.1`'s names the board and its directory (§5.2; `client.md` §4e.4), a
+/// range's `held` pair fixes a position by one (§5.1). Thirty-two bytes, so
+/// it has one spelling: lowercase on the way out, and lowercase alone on the
+/// way in.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Chain([u8; 32]);
 
 impl Chain {
-    /// The chain from its 64 lowercase hex; `None` for any other text — an
-    /// uppercase digit, a shorter or longer run, a character outside hex.
+    /// Parses the chain from its 64 lowercase hex.
+    ///
+    /// `None` for any other text — an uppercase digit, a shorter or longer
+    /// run, a character outside hex.
     pub fn parse(text: &str) -> Option<Chain> {
         let bytes = text.as_bytes();
         if bytes.len() != 64 {
@@ -60,12 +66,12 @@ impl Chain {
         Some(Chain(out))
     }
 
-    /// The chain from its thirty-two bytes.
+    /// Builds the chain from its thirty-two bytes.
     pub fn from_bytes(bytes: [u8; 32]) -> Chain {
         Chain(bytes)
     }
 
-    /// The thirty-two bytes.
+    /// Returns the thirty-two bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
@@ -80,7 +86,7 @@ fn nibble(c: u8) -> Option<u8> {
 }
 
 impl fmt::Display for Chain {
-    /// The 64 lowercase hex.
+    /// Writes the 64 lowercase hex.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in self.0 {
             write!(f, "{byte:02x}")?;
@@ -95,10 +101,11 @@ impl fmt::Debug for Chain {
     }
 }
 
-/// A `(position, chain)` pair (§5.1, §5.4): `/health`'s `(log_position,
-/// chain_head)`, read off one kernel snapshot before a draining poll, or
-/// `/chain?at=<position>`'s answer — the pair a range's `held` is fixed as,
-/// and the pair an `H.k` record names.
+/// A `(position, chain)` pair (§5.1, §5.4).
+///
+/// It is `/health`'s `(log_position, chain_head)`, read off one kernel
+/// snapshot before a draining poll, or `/chain?at=<position>`'s answer — the
+/// pair a range's `held` is fixed as, and the pair an `H.k` record names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChainAt {
     /// The board position.
@@ -107,76 +114,99 @@ pub struct ChainAt {
     pub chain: Chain,
 }
 
-/// The typed header the EMBEDDER composes (§5.1, §1.4): what `save` takes
-/// beside the index and `load` hands back beside it, written in one file with
-/// the body and parsed by the one reader, so the shell reads `board` and
-/// `held` off `load` and parses no line of its own. `board` and `floor` go on
-/// the header line; the range records and the head's pair go into a body
-/// section. `kind`, `principal` and `tokenizer` are NOT here: they are the
-/// index's own, set by `new`, read at `load`, written by `save` from the
-/// `Index` alone (sweep-2 lampson `header-holds-the-crates-facts`).
+/// The typed header the embedder composes (§5.1, §1.4).
+///
+/// It is what `save` takes beside the index and `load` hands back beside it,
+/// written in one file with the body and parsed by the one reader, so the
+/// shell reads `board` and `held` off `load` and parses no line of its own.
+/// `board` and `floor` go on the header line; the range records and the
+/// head's pair go into a body section. `kind`, `principal` and `tokenizer`
+/// are not here: they are the index's own, set by `new`, read at `load`,
+/// written by `save` from the `Index` alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
-    /// The board's key: `H.1`'s chain (§5.2 D7 (β)), the directory's name.
+    /// The board's key: `H.1`'s chain (`search.md` §5.2 D7 (β)).
+    ///
+    /// It is the directory's name.
     pub board: Chain,
-    /// The reclaim floor the consumer last saw, so the file states its own
-    /// completeness (§5.4); `None` where no answer has carried one.
+    /// The reclaim floor the consumer last saw (§5.4).
+    ///
+    /// With it the file states its own completeness; `None` where no answer
+    /// has carried one.
     pub floor: Option<u64>,
-    /// The per-range records (§4 WIDEN, §5.1): the published index's one
-    /// range, the board; a supplement's one per widened range.
+    /// The per-range records (§4's widening, §5.1).
+    ///
+    /// The published index has one range, the board; a supplement one per
+    /// widened range.
     pub ranges: Vec<RangeRecord>,
-    /// The newest head member `H.k` the feed delivered at or below `held`,
-    /// with the `(position, chain)` its record names (§5.4; ITEM 1 (a)'s
-    /// first rider) — the below-floor check's input; `None` before the feed
-    /// has delivered one.
+    /// The newest head member `H.k` the feed delivered at or below `held`.
+    ///
+    /// It comes with the `(position, chain)` its record names (§5.4) — the
+    /// below-floor check's input; `None` before the feed has delivered one.
     pub head: Option<HeadRecord>,
 }
 
-/// One range's record (§5.1's body; §4 WIDEN; §5.4): what a restart keeps
-/// beside the range's `held` — every recorded refusal and the bare-row count
-/// — and, for a granted range, the cell's keys the `Held` standing is
-/// composed from (§3.1).
+/// One range's record: what a restart keeps beside the range's `held`.
+///
+/// It keeps (§5.1's body; §4's widening; §5.4) every recorded refusal and
+/// the bare-row count — and, for a granted range, the cell's keys the `Held`
+/// standing is composed from (§3.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RangeRecord {
-    /// The prefix the widening named as `under=` — an account's or a
-    /// document's; `None` for the board's whole feed, the published index's
-    /// one range. The range's shape yields the rung (§3.1: by document or by
-    /// account); the grant below carries the kind and the issuer.
+    /// The prefix the widening named as `under=`.
+    ///
+    /// It is an account's or a document's; `None` for the board's whole
+    /// feed, the published index's one range. The range's shape yields the
+    /// rung (§3.1: by document or by account); the grant below carries the
+    /// kind and the issuer.
     pub under: Option<Address>,
-    /// The consumer's last-held position for this range, as a `(position,
-    /// chain)` pair (§5.1): the `/health` pair read before the draining poll
-    /// that indexed everything at or below it, or `/chain?at`'s answer where
-    /// no poll fenced the save.
+    /// The consumer's last-held position for this range (§5.1).
+    ///
+    /// It is a `(position, chain)` pair: the `/health` pair read before the
+    /// draining poll that indexed everything at or below it, or
+    /// `/chain?at`'s answer where no poll fenced the save.
     pub held: ChainAt,
-    /// The RETRY-ABLE refusals recorded beside the range (§4): a `withheld`
-    /// rejection, `too_many_items` on a part — each naming the document and
-    /// its reason, retried at the next widening over it. The ceiling's
-    /// refusals are counted in `seen` and listed nowhere; a transport error
+    /// The retry-able refusals recorded beside the range (§4).
+    ///
+    /// They are a `withheld` rejection, `too_many_items` on a part, any other
+    /// refusal the board gives a read, or the shell's own word for a read it
+    /// refused — each naming the document and its reason, retried at the
+    /// next widening over it. The ceiling's refusals at `merge` are counted
+    /// in `seen` and listed nowhere, while a unit the shell refuses as past
+    /// the ceiling before reading it is listed here; a transport error
     /// records nothing.
     pub refusals: Vec<Refusal>,
-    /// The BARE ROWS counted against this range (§5.4): changes the feed
-    /// could not name a document for, so `complete` is withheld while the
-    /// count stands and a REFRESH of the range clears it.
+    /// The bare rows counted against this range (§5.4).
+    ///
+    /// They are changes the feed could not name a document for, so
+    /// `complete` is withheld while the count stands and a refresh of the
+    /// range clears it.
     pub bare_rows: u64,
-    /// For a granted range, the grant's kind and issuer (§3.1, §5.1), written
-    /// when the widening added the range; `None` for the board's feed and
-    /// for the subtree's own and ancestors' ranges, which are never `Held`.
+    /// For a granted range, the grant's kind and issuer (§3.1, §5.1).
+    ///
+    /// They are written when the widening added the range; `None` for the
+    /// board's feed and for the subtree's own and ancestors' ranges, which
+    /// are never `Held`.
     pub grant: Option<Grant>,
 }
 
-/// A refusal recorded beside a range (§4): the document and the reason the
-/// board gave, as the shell spells it.
+/// A refusal recorded beside a range (§4).
+///
+/// It names the document and the reason, as the shell spells it: the
+/// board's word, or a word of the shell's own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
     /// The document whose read was refused.
     pub doc: Address,
-    /// The reason — the wire's word, kept as the shell's string.
+    /// The reason — the wire's word or the shell's own, kept as the shell's
+    /// string.
     pub reason: String,
 }
 
-/// A granted range's cell keys (§3.1; PUB-5.115's KIND × RUNG split): the
-/// kind, and the issuer the departure face names; the rung is the range's
-/// own shape.
+/// A granted range's cell keys: the kind and the issuer.
+///
+/// They are §3.1's (PUB-5.115's kind × rung split): the kind, and the issuer
+/// the departure face names; the rung is the range's own shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
     /// Named, or any-principal.
@@ -194,11 +224,12 @@ pub enum GrantKind {
     AnyPrincipal,
 }
 
-/// The newest head member `H.k` the feed delivered (§5.4): its address and
-/// the `(position, chain)` its pinned record names — "pinned forever", and it
-/// "survives reclamation as checkpoint state" (wire.md §The other endpoints),
-/// so the shell re-reads it where `/chain?at=<held>` answers
-/// `history_reclaimed`.
+/// The newest head member `H.k` the feed delivered (§5.4).
+///
+/// It holds its address and the `(position, chain)` its pinned record names
+/// — "pinned forever", and it "survives reclamation as checkpoint state"
+/// (wire.md §The other endpoints), so the shell re-reads it where
+/// `/chain?at=<held>` answers `history_reclaimed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadRecord {
     /// The head member's address, `H.k`.
@@ -207,9 +238,10 @@ pub struct HeadRecord {
     pub at: ChainAt,
 }
 
-/// The header LINE's facts (§5.1), as [`parse`] reads them and as
-/// [`Parsed::encode`] writes them: the `Header`'s two line members, the
-/// index's three, and the body's length.
+/// The header line's facts (§5.1).
+///
+/// [`parse`] reads them and [`Parsed::encode`] writes them: the `Header`'s
+/// two line members, the index's three, and the body's length.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parsed {
     /// `board`: the board's chain.
@@ -224,16 +256,18 @@ pub struct Parsed {
     pub body: u64,
 }
 
-/// A header line's refusal (§5.1; P38): what the parser found, each the
-/// fact a disposition names — a newer version is FACED, the other two are
-/// DAMAGED and the file is rebuilt (§5.4). Non-exhaustive: the next format
-/// version brings refusals of its own.
+/// A header line's refusal (§5.1; P38): what the parser found.
+///
+/// Each is the fact a disposition names — a newer version is faced, the
+/// other two are damaged and the file is rebuilt (§5.4). Non-exhaustive: the
+/// next format version brings refusals of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HeaderError {
-    /// `v` above 1: "this index was written by a newer skep than this one",
-    /// never "not an index" (the key file's rule, `client.md` §3.2); judged
-    /// before any other member.
+    /// `v` above 1: "this index was written by a newer skep than this one".
+    ///
+    /// It is never "not an index" (the key file's rule, `client.md` §3.2),
+    /// and it is judged before any other member.
     NewerVersion {
         /// The version the line names.
         v: u64,
@@ -243,8 +277,9 @@ pub enum HeaderError {
         /// The member's name.
         name: String,
     },
-    /// Any other spelling than the one `save` writes — or no header line at
-    /// all; `what` says which check refused it.
+    /// A spelling other than the one `save` writes, or no header line at all.
+    ///
+    /// `what` says which check refused it.
     Damaged {
         /// The check that refused the line.
         what: &'static str,
@@ -267,17 +302,18 @@ impl fmt::Display for HeaderError {
 
 impl std::error::Error for HeaderError {}
 
-/// The header line's one spelling (§5.1; `client.md` §3.2), from the
-/// `Header`'s line members, the index's class and revision, and the body's
-/// length: members in the order the module doc shows, no whitespace outside
-/// strings, hex lowercase, one `\n` after the brace. `save` calls this and
-/// nothing else writes the line.
+/// Encodes the header line in its one spelling (§5.1; `client.md` §3.2).
+///
+/// The line is spelled from the `Header`'s line members, the index's class
+/// and revision, and the body's length: members in the order the module doc
+/// shows, no whitespace outside strings, hex lowercase, one `\n` after the
+/// brace. `save` calls this and nothing else writes the line.
 pub fn encode(header: &Header, class: Class, tokenizer: Revision, body: u64) -> Vec<u8> {
     Parsed { board: header.board, class, floor: header.floor, tokenizer, body }.encode()
 }
 
 impl Parsed {
-    /// The line in its one spelling: `encode`'s bytes for these facts.
+    /// Returns the line in its one spelling: `encode`'s bytes for these facts.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = String::from("{\"type\":\"skep-index\",\"v\":1,\"board\":\"");
         write!(out, "{}\",\"kind\":", self.board).expect("a String takes every write");
@@ -298,14 +334,21 @@ impl Parsed {
     }
 }
 
-/// THE ONE CANONICAL PARSER (§5.1; P35, P38) over a header line, its `\n`
-/// included. `v` is read FIRST: the version member is found and its integer
-/// read before any other member is judged, and a `v` above 1 answers
-/// [`HeaderError::NewerVersion`] whatever follows it. Under `v = 1` the
-/// members are walked — a member this crate does not know answers
-/// [`HeaderError::UnknownMember`] by name — and the line is admitted only
-/// where `b == encode(parse(b))`: every other spelling is
-/// [`HeaderError::Damaged`].
+/// Parses a header line by the one canonical parser (§5.1; P35, P38).
+///
+/// The line is read with its `\n` included.
+///
+/// # Errors
+///
+/// In this order: `v` is read first — the version member is found and its
+/// integer read before any other member is judged, a missing or
+/// non-canonical `v` [`HeaderError::Damaged`] — and a `v` above 1 answers
+/// [`HeaderError::NewerVersion`] whatever follows it, a `v` of 0
+/// [`HeaderError::Damaged`]. Under `v = 1` the members are walked in the
+/// line's order, the first fault answering: a member this crate does not
+/// know is [`HeaderError::UnknownMember`] by name, one misspelled or met
+/// twice [`HeaderError::Damaged`]. Then the line is admitted only where
+/// `b == encode(parse(b))`: every other spelling is [`HeaderError::Damaged`].
 pub fn parse(line: &[u8]) -> Result<Parsed, HeaderError> {
     let v = version_first(line)?;
     if v > 1 {
@@ -391,10 +434,17 @@ fn damaged(what: &'static str) -> HeaderError {
     HeaderError::Damaged { what }
 }
 
-/// `v` FIRST (§5.1): the version member — the first `"v":` at a member
-/// boundary — and the canonical integer after it, read before any other
-/// member is judged. A run of digits past `u64` is above 1 for certain and
-/// saturates, so it is faced and never called damage.
+/// Reads `v` first (§5.1): the version member's canonical integer.
+///
+/// The version member is the first `"v":` at a member boundary, and its
+/// integer is read before any other member is judged. A run of digits past
+/// `u64` is above 1 for certain and saturates, so it is faced and never
+/// called damage.
+///
+/// # Errors
+///
+/// [`HeaderError::Damaged`] where no `"v":` stands at a member boundary, or
+/// the integer after it is not canonical.
 fn version_first(line: &[u8]) -> Result<u64, HeaderError> {
     const KEY: &[u8] = b"\"v\":";
     let mut from = 0;
@@ -418,8 +468,10 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|window| window == needle)
 }
 
-/// A canonical non-negative integer at the start of `bytes` — `0`, or a
-/// digit 1–9 and digits after it, within `u64` — and the bytes after it.
+/// Reads a canonical non-negative integer at the start of `bytes`.
+///
+/// The integer is `0`, or a digit 1–9 and digits after it, within `u64`;
+/// the bytes after it come back beside it.
 fn integer(bytes: &[u8]) -> Option<(u64, &[u8])> {
     let run = bytes.iter().take_while(|b| b.is_ascii_digit()).count();
     if run == 0 || (run > 1 && bytes[0] == b'0') {
@@ -429,8 +481,10 @@ fn integer(bytes: &[u8]) -> Option<(u64, &[u8])> {
     Some((value, &bytes[run..]))
 }
 
-/// `tokenizer`'s text, `Revision`'s own spelling: `<rule>/<major>.<minor>.<update>`,
-/// each a canonical integer, the rule within `u32`.
+/// Parses `tokenizer`'s text, `Revision`'s own spelling.
+///
+/// The spelling is `<rule>/<major>.<minor>.<update>`, each a canonical
+/// integer, the rule within `u32`.
 fn revision(text: &[u8]) -> Option<Revision> {
     let (rule, rest) = integer(text)?;
     let rule = u32::try_from(rule).ok()?;
@@ -447,7 +501,7 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    /// `literal` consumed where it stands here.
+    /// Consumes `literal` where it stands here.
     fn take(&mut self, literal: &[u8]) -> bool {
         if self.line[self.at..].starts_with(literal) {
             self.at += literal.len();
@@ -465,15 +519,27 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// `"name":` — the member's name.
+    /// Reads `"name":`, the member's name.
+    ///
+    /// # Errors
+    ///
+    /// [`HeaderError::Damaged`] where no string stands here or no `:`
+    /// follows it.
     fn key(&mut self) -> Result<&'a [u8], HeaderError> {
         let name = self.string()?;
         self.expect(b":", "a member name is not followed by `:`")?;
         Ok(name)
     }
 
-    /// A string of no escapes — none of the line's members needs one — its
-    /// quotes consumed.
+    /// Reads a string of no escapes, its quotes consumed.
+    ///
+    /// None of the line's members needs an escape.
+    ///
+    /// # Errors
+    ///
+    /// [`HeaderError::Damaged`] where no quote opens a string here, the
+    /// string is unterminated, or an escape or a control character stands
+    /// inside it.
     fn string(&mut self) -> Result<&'a [u8], HeaderError> {
         self.expect(b"\"", "a string is expected")?;
         let rest = &self.line[self.at..];
@@ -487,7 +553,11 @@ impl<'a> Cursor<'a> {
         Ok(text)
     }
 
-    /// A canonical integer.
+    /// Reads a canonical integer.
+    ///
+    /// # Errors
+    ///
+    /// [`HeaderError::Damaged`] where the number is not in its one spelling.
     fn integer(&mut self) -> Result<u64, HeaderError> {
         let (value, rest) =
             integer(&self.line[self.at..]).ok_or(damaged("a number is not in its one spelling"))?;
@@ -496,7 +566,11 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// A member met for the first time takes its slot; a second time is refused.
+/// Fills a member's slot the first time the member is met.
+///
+/// # Errors
+///
+/// [`HeaderError::Damaged`] the second time: a member stands twice.
 fn set<T>(slot: &mut Option<T>, value: T) -> Result<(), HeaderError> {
     if slot.is_some() {
         return Err(damaged("a member stands twice"));
@@ -519,8 +593,16 @@ struct Members {
 }
 
 impl Members {
-    /// The line's facts, every required member present and `principal` on a
-    /// supplement's header alone.
+    /// Returns the line's facts, every required member present.
+    ///
+    /// `principal` stands on a supplement's header alone.
+    ///
+    /// # Errors
+    ///
+    /// [`HeaderError::Damaged`] at the first fault in this order: a missing
+    /// `type`, `v` or `board`; a missing `kind`, or a `principal` on a
+    /// published header or missing from a supplement's; a missing `floor`,
+    /// `tokenizer` or `body`.
     fn parsed(self) -> Result<Parsed, HeaderError> {
         self.typed.ok_or(damaged("no `type` member"))?;
         self.versioned.ok_or(damaged("no `v` member"))?;

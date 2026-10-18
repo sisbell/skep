@@ -1,30 +1,33 @@
-//! THE HIT (`search.md` §3.1) — THE CONTRACT THE UX DESIGNS TO (§3.5: "the
+//! The hit, the contract the UX designs to, with its answer and snippet.
+//!
+//! The hit (`search.md` §3.1) is the contract the UX designs to (§3.5: "the
 //! box, the results and the jump's face are designed to §3.1's hit, §3.2's
-//! forms and §3.4's jump — never to the index"). [`Hit`] carries every member
-//! §3.1 names, by the design's names: `doc`, the bare document address, which
-//! floats (R20); `member`, the pinned member an edition was read at or the
-//! draft's own address, absent for a published document without a member;
-//! `as_of`, the board position of the read; `span`, the matched passage at
-//! `member`/`as_of` in V-ordinals, BYTE-EXACT off the postings' ranges (§2.3,
-//! §5.1; fact 11), the first occurrence or a conjunction's tightest window
-//! (§3.2); `score`, BM25 over the pair's merged statistics (§3.3); `snippet`,
-//! the paragraph window around the span cut from the stored text (§6);
-//! `kind`, edition or draft; `standing`; `occurrences`, how many matches the
-//! unit holds; and `matched`, each query word corrected by one edit and the
-//! term it matched (§3.2 D15) — "what the UX renders as 'matching
-//! transclusion'". A hit IS a V-spec (`{doc, span}`) plus a version and a
-//! position, what R9d's later `make_link` would name (fact 3) and what the
-//! LEAP lands by (§3.4, the shell's). No member of a hit names a file, a
-//! path, a principal's directory or another principal's index.
+//! forms and §3.4's jump — never to the index"). [`Hit`] carries every
+//! member §3.1 names, by the design's names: `doc`, the bare document
+//! address, which floats (R20); `member`, the pinned member an edition was
+//! read at or the draft's own address, absent for a published document
+//! without a member; `as_of`, the board position of the read; `span`, the
+//! matched passage at `member`/`as_of` in V-ordinals, byte-exact off the
+//! postings' ranges (§2.3, §5.1; fact 11), the tightest window holding one
+//! match of every form — for one form, its narrowest match, the earliest of
+//! equal widths (§3.2); `score`, BM25 over the pair's merged statistics
+//! (§3.3); `snippet`, the paragraph window around the span cut from the
+//! stored text (§6); `kind`, edition or draft; `standing`; `occurrences`,
+//! how many matches the unit holds; and `matched`, each query word corrected
+//! by one edit and the term it matched (§3.2 D15) — "what the UX renders as
+//! 'matching transclusion'". A hit is a V-spec (`{doc, span}`) plus a
+//! version and a position, what R9d's later `make_link` would name (fact 3)
+//! and what the LEAP lands by (§3.4, the shell's). No member of a hit names
+//! a file, a path, a principal's directory or another principal's index.
 //!
 //! [`Standing`] says what `kind` cannot (§3.1): `Public` where every reader
 //! reads the span — the published member's edition; `YoursToRead` where this
 //! class admits the span and the guest does not — a draft's, so a draft's hit
 //! is never `Public`; `Held` where the unit's document lies under a header
-//! range the honored set no longer admits (§4's REVOCATION), carrying the
-//! CELL of PUB-5.115's KIND × RUNG split and the issuer the departure face
-//! names — `kind` and `issuer` off the range's grant record, the `rung` the
-//! range's own shape (a document's prefix or an account's; `header`'s
+//! range the honored set does not admit (§4's revocation), carrying the cell
+//! of PUB-5.115's kind × rung split and the issuer the departure face names —
+//! `kind` and `issuer` off the range's grant record, the `rung` the range's
+//! own shape (a document's prefix or an account's; `header`'s
 //! `RangeRecord`). The composition is the pair's (`Pair::standing`): the
 //! crate sets `Public` and `YoursToRead` from the member of the pair the unit
 //! came from, and `Held` by prefix arithmetic over the shell's three inputs,
@@ -33,21 +36,21 @@
 //! never `Held`; no read is made.
 //!
 //! [`Answer`] is the list with its six members (§3.1): `total` the matching
-//! units — EXACT where every candidate was scored, else a LOWER BOUND (§3.2's
+//! units — exact where every candidate was scored, else a lower bound (§3.2's
 //! bounded expansion and positions bound); `truncated` where more units match
 //! than `offset + hits.len()` holds, whether or not `total` counts them;
 //! `more_terms`, `fuzzy_bounded` and `positions_bounded`, each true exactly
-//! where its bound was met (§3.2) — EVERY BOUND IS A FLAG, never a silent cut
-//! (PATTERNS P29 as sr-P1 amended it).
+//! where its bound was met (§3.2) — every bound is a flag, never a silent cut
+//! (PATTERNS P29's except clause).
 //!
-//! THE SNIPPET (§6; §3.1's `{ text, start, marks }`) is a RENDERING AND NEVER
-//! A COPY SOURCE (§3.1): "a paragraph window around the span — the text
-//! between the nearest two blank-line or paragraph breaks, bounded to an
-//! INTERIM 240 bytes either side, each bound moved inward to the nearest
-//! CHARACTER boundary; a `Gap` inside the window cut out of `text` and
+//! **The snippet** (§6; §3.1's `{ text, start, marks }`) is a rendering and
+//! never a copy source (§3.1): "a paragraph window around the span — the
+//! text between the nearest two blank-line or paragraph breaks, bounded to
+//! an interim 240 bytes either side, each bound moved inward to the nearest
+//! character boundary; a `Gap` inside the window cut out of `text` and
 //! carried as a `gap` mark at its offset, the page rendering it (the UX's),
 //! an invalid byte of a `hex` stretch (§2.2) the same; a conjunction's window
-//! wider than the bound centred on its RAREST matched word (the highest idf),
+//! wider than the bound centred on its rarest matched word (the highest idf),
 //! the others marked where they fall inside" — `start` the V-ordinal of the
 //! window's first position, `marks` the `(offset, len, kind)` byte ranges
 //! inside `text` of the span, of every occurrence of a matched term and of
@@ -63,16 +66,21 @@ use skep_address::{Address, Level};
 use crate::header::GrantKind;
 use crate::unit::{Item, Kind, Unit};
 
-/// THE SNIPPET's BOUND (§6; §7.1's INTERIM pin): "bounded to an INTERIM 240
-/// bytes either side" of the span — or of the rarest matched word, where a
-/// conjunction's span is wider than this.
+/// The snippet's bound either side of the span (§6; §7.1's interim pin).
+///
+/// The window is "bounded to an interim 240 bytes either side" of the span —
+/// or of the rarest form's match inside it, where a conjunction's span is
+/// wider than this.
 pub const SNIPPET_BOUND: u64 = 240;
 
-/// The matched passage (§3.1): `{ start: V-position (subspace 1, ordinal),
-/// width: natural }` — `start` the V-ordinal of its first byte, `width` its
-/// bytes through the last matched token's end, both read off the postings'
+/// The matched passage: a start V-ordinal and a width (§3.1).
+///
+/// §3.1 writes it `{ start: V-position (subspace 1, ordinal), width:
+/// natural }` — `start` the V-ordinal of its first byte, `width` its
+/// positions through the last matched token's end, a `Gap` inside a
+/// conjunction's window counted at its width, both read off the postings'
 /// ranges from the unit's start (fact 11: a byte offset inside a `content`
-/// item IS a V-ordinal offset).
+/// item is a V-ordinal offset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     /// The V-ordinal of the passage's first byte.
@@ -81,21 +89,25 @@ pub struct Span {
     pub width: u64,
 }
 
-/// The RUNG of PUB-5.115's KIND × RUNG split (§3.1; R90): a grant by DOCUMENT
-/// or by ACCOUNT — "the rung is the range's own shape", read off the prefix
-/// the widening named as `under=`.
+/// The rung of PUB-5.115's kind × rung split: by document or by account.
+///
+/// A grant's rung (§3.1; R90) is "the range's own shape", read off the
+/// prefix the widening named as `under=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Rung {
     /// The range is a document's prefix: all its versions, one `under=`.
+    ///
+    /// A prefix at a position under a document yields it too.
     Document,
-    /// The range is an account's prefix.
+    /// The range is an account's prefix, the node's, or the board's feed.
     Account,
 }
 
 impl Rung {
-    /// The rung a range's shape yields: a document's prefix — or a position
-    /// under one — the Document rung, an account's or the node's the Account
-    /// rung, the coarser.
+    /// Returns the rung a range's shape yields.
+    ///
+    /// A document's prefix — or a position under one — yields the Document
+    /// rung, an account's or the node's the Account rung, the coarser.
     pub fn of(under: &Address) -> Rung {
         match under.level() {
             Level::Document | Level::Element => Rung::Document,
@@ -104,20 +116,23 @@ impl Rung {
     }
 }
 
-/// The hit's STANDING (§3.1), what `kind` cannot say.
+/// The hit's standing (§3.1): what `kind` cannot say.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Standing {
     /// Every reader reads the span: the published member's edition.
     Public,
-    /// This class admits the span and the guest does not: a draft's, under a
-    /// range the session's subtree or an honored grant still admits — or a
-    /// grant dead with its issuer, "announced by nothing" (R90), which never
-    /// leaves the honored set.
+    /// This class admits the span and the guest does not.
+    ///
+    /// It is a draft's, under a range the session's subtree or an honored
+    /// grant admits — or a grant dead with its issuer, "announced by nothing"
+    /// (R90), which never leaves the honored set.
     YoursToRead,
-    /// The unit's document lies under a header range the honored set no
-    /// longer admits (§4's REVOCATION), under no prefix another grant or the
-    /// subtree admits: the departed grant's cell and issuer, composed from
-    /// the range's own record, "where several departed grants cover the
+    /// The unit's document lies under a departed grant's range.
+    ///
+    /// The range is a header range the honored set does not admit (§4's
+    /// revocation), and the document lies under no prefix another grant or
+    /// the subtree admits: the departed grant's cell and issuer, composed
+    /// from the range's own record, "where several departed grants cover the
     /// span, the narrowest prefix's".
     Held {
         /// Named, or any-principal: the grant's kind.
@@ -129,13 +144,15 @@ pub enum Standing {
     },
 }
 
-/// One correction (§3.1's `matched`; §3.2 D15): a query word matched by ONE
-/// EDIT, as typed, and the term it matched.
+/// One correction: a word as typed and the term it matched by one edit.
+///
+/// It is §3.1's `matched` (`search.md` §3.2 D15).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Matched {
     /// The word as the person typed it.
     pub word: String,
-    /// The dictionary term within one edit of it that the unit holds.
+    /// The dictionary term the unit holds, within one edit of the word's
+    /// folded term.
     pub term: String,
 }
 
@@ -149,9 +166,10 @@ pub enum MarkKind {
         /// The dictionary term the occurrence matched.
         term: String,
     },
-    /// A `Gap` cut out of the text — an atom, a withheld run, an unknown
-    /// item, or one invalid byte of a `hex` stretch — at its width in
-    /// positions; its `len` in the text is zero.
+    /// A `Gap` cut out of the text, at its width in positions.
+    ///
+    /// It is an atom, a withheld run, an unknown item, or one invalid byte of
+    /// a `hex` stretch; its `len` in the text is zero.
     Gap {
         /// The positions the gap occupies inside the window.
         width: u64,
@@ -169,36 +187,42 @@ pub struct Mark {
     pub kind: MarkKind,
 }
 
-/// The paragraph window around the span, cut from the stored text (§6;
-/// §3.1).
+/// The paragraph window around the span, cut from the stored text (§6, §3.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snippet {
-    /// The window's text, the gaps cut out of it: valid UTF-8, never split
-    /// inside a character.
+    /// The window's text, the gaps cut out of it.
+    ///
+    /// It is valid UTF-8, never split inside a character.
     pub text: String,
-    /// The V-ordinal of the window's first position — its first byte, or the
-    /// gap the mark at offset zero names where the window opens on one.
+    /// The V-ordinal of the window's first position.
+    ///
+    /// That position is its first byte, or the gap the mark at offset zero
+    /// names where the window opens on one.
     pub start: u64,
-    /// The span, every occurrence of a matched term and every gap inside the
-    /// window, by offset.
+    /// The marks inside the window, by offset.
+    ///
+    /// They mark the span, every occurrence of a matched term and every gap.
     pub marks: Vec<Mark>,
 }
 
-/// THE HIT (§3.1), every member by the design's name.
+/// The hit (§3.1), every member by the design's name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
     /// The bare document address — the chain's prefix; floats (R20).
     pub doc: Address,
-    /// The PINNED member the unit was read at (an edition's), or the draft's
-    /// own address; absent for a published document without a member, read
-    /// at its one address (§2.1).
+    /// The pinned member the unit was read at, or the draft's own address.
+    ///
+    /// The pinned member is an edition's; the member is absent for a
+    /// published document without a member, read at its one address (§2.1).
     pub member: Option<Address>,
     /// The board position the unit's read was made at — the last part's.
     pub as_of: u64,
     /// The matched passage at `member`/`as_of`, byte-exact.
     pub span: Span,
-    /// BM25 over the pair's merged statistics, one score per query form
-    /// summed; a HIGHER score the better match (§3.3).
+    /// BM25 over the pair's merged statistics (§3.3).
+    ///
+    /// It is one score per query form, summed; a higher score is the better
+    /// match.
     pub score: f64,
     /// The paragraph window around the span; absent where no text is stored.
     pub snippet: Option<Snippet>,
@@ -206,41 +230,53 @@ pub struct Hit {
     pub kind: Kind,
     /// What `kind` cannot say: who reads the span.
     pub standing: Standing,
-    /// How many matches this unit holds — every occurrence of the query's
-    /// forms, each a mark the snippet would carry; `span` is the first, or
-    /// the tightest window.
+    /// How many matches this unit holds.
+    ///
+    /// They are every match of the forms the evaluation walked, a phrase's
+    /// match counted once though the snippet marks each of its tokens;
+    /// `span` is the tightest window holding one match of every form — for
+    /// one form, its narrowest match.
     pub occurrences: usize,
-    /// Each query word matched by one edit and the term it matched; empty
-    /// for an exact match.
+    /// Each query word matched by one edit, and the term it matched.
+    ///
+    /// Empty for an exact match.
     pub matched: Vec<Matched>,
 }
 
-/// THE ANSWER (§3.1): the hits `opts` bounds and the five facts about them.
+/// The answer (§3.1): the hits `opts` bounds and the five facts about them.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Answer {
     /// The hits from `offset`, at most `limit`, in §3.3's order.
     pub hits: Vec<Hit>,
-    /// The matching units — EXACT where every candidate was scored, else a
-    /// LOWER BOUND: where the expansion met its bound or the evaluation
-    /// stopped at its positions bound.
+    /// The matching units: exact where every candidate was scored.
+    ///
+    /// Else it is a lower bound: where the expansion met its bound or the
+    /// evaluation stopped at its positions bound.
     pub total: usize,
-    /// Whether more units match than `offset + hits.len()` holds — the list
-    /// cut by `limit`, or the evaluation stopped with candidates left —
-    /// whether or not `total` counts them.
+    /// Whether more units match than `offset + hits.len()` holds.
+    ///
+    /// The list is cut by `limit`, or the evaluation stopped with candidates
+    /// left — whether or not `total` counts them.
     pub truncated: bool,
-    /// Whether an expansion — a prefix's, a phrase-prefix's or a fuzzy word's
-    /// candidates — met its bound in postings entries (§3.2).
+    /// Whether an expansion met its bound in postings entries (§3.2).
+    ///
+    /// The expansion is a prefix's, a phrase-prefix's or a fuzzy word's
+    /// candidates.
     pub more_terms: bool,
-    /// Whether a complete word of the query was matched as typed because the
-    /// fuzzy bound left it unexpanded (§3.2).
+    /// Whether the fuzzy bound left a complete word of the query unexpanded.
+    ///
+    /// Such a word is matched as typed (§3.2).
     pub fuzzy_bounded: bool,
-    /// Whether the keystroke's whole evaluation stopped at its positions
-    /// bound, the hits ranked among the units reached (§3.2).
+    /// Whether the whole evaluation stopped at its positions bound (§3.2).
+    ///
+    /// The evaluation is the keystroke's; the hits are ranked among the units
+    /// reached.
     pub positions_bounded: bool,
 }
 
-/// A token the snippet marks: its range from the unit's start and the term
-/// it matched.
+/// A token the snippet marks: its range and the term it matched.
+///
+/// The range is from the unit's start.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Marked<'a> {
     pub(crate) offset: u64,
@@ -248,13 +284,15 @@ pub(crate) struct Marked<'a> {
     pub(crate) term: &'a str,
 }
 
-/// THE TIGHTEST WINDOW (§3.2's conjunction: "ranked by BM25 with the TIGHTEST
-/// WINDOW holding one occurrence of each as the hit's span"): over one
-/// match list per form, each a `(start, end)` in offsets from the unit's
-/// start and sorted by start, the window of least width holding one match of
-/// every form — of equal widths the earliest — as `(start, end, the chosen
-/// match per form)`. `None` where some form has no match. For one form the
-/// window is its first match.
+/// Returns the tightest window holding one match of every form.
+///
+/// §3.2's conjunction is "ranked by BM25 with the tightest window holding
+/// one occurrence of each as the hit's span": over one match list per form,
+/// each a `(start, end)` in offsets from the unit's start and sorted by
+/// start, the window of least width holding one match of every form — of
+/// equal widths the earliest — as `(start, end, the chosen match per form)`.
+/// `None` where there is no form or some form has no match. For one form the
+/// window is its narrowest match, the earliest of equal widths.
 pub(crate) fn tightest(forms: &[Vec<(u64, u64)>]) -> Option<(u64, u64, Vec<usize>)> {
     if forms.is_empty() || forms.iter().any(Vec::is_empty) {
         return None;
@@ -314,14 +352,15 @@ pub(crate) fn tightest(forms: &[Vec<(u64, u64)>]) -> Option<(u64, u64, Vec<usize
     best
 }
 
-/// THE SNIPPET's CUT (§6), over the unit's stored text: the window around
-/// the span — or around `focus`, the rarest matched word's occurrence, where
-/// the span is wider than the bound — narrowed to the nearest paragraph
-/// breaks, bounded to [`SNIPPET_BOUND`] positions either side, each bound
-/// moved inward to a character boundary; the window's text with every gap
-/// and invalid byte cut out and marked, the span and each marked token
-/// placed inside it. Offsets in `span` are V-ordinals; `focus` and `marked`
-/// are offsets from the unit's start.
+/// Cuts the snippet (§6) from the unit's stored text.
+///
+/// The window stands around the span — or around `focus`, the span's match
+/// of the rarest form walked, where the span is wider than the bound —
+/// narrowed to the nearest paragraph breaks, bounded to [`SNIPPET_BOUND`]
+/// positions either side, each bound moved inward to a character boundary;
+/// the window's text has every gap and invalid byte cut out and marked, the
+/// span and each marked token placed inside it. Offsets in `span` are
+/// V-ordinals; `focus` and `marked` are offsets from the unit's start.
 pub(crate) fn snippet(
     unit: &Unit,
     span: Span,
@@ -418,9 +457,11 @@ pub(crate) fn snippet(
     Snippet { text, start: base + lo, marks }
 }
 
-/// The marks' order: by offset, then a gap — which sits before the text at
-/// its offset, having been cut out there — before the span before a term,
-/// then by length and the term's spelling — one order on every run.
+/// Orders two marks by offset, then kind, then length and spelling.
+///
+/// At one offset a gap — which sits before the text at its offset, having
+/// been cut out there — comes before the span, and the span before a term;
+/// then the length and the term's spelling decide — one order on every run.
 fn mark_order(a: &Mark, b: &Mark) -> Ordering {
     fn rank(kind: &MarkKind) -> (u8, &str) {
         match kind {
@@ -433,10 +474,12 @@ fn mark_order(a: &Mark, b: &Mark) -> Ordering {
     a.offset.cmp(&b.offset).then(ra.0.cmp(&rb.0)).then(a.len.cmp(&b.len)).then(ra.1.cmp(rb.1))
 }
 
-/// The paragraph breaks inside `bytes`, each as `(start, end)`: a BLANK LINE
-/// — a line feed, horizontal whitespace or carriage returns, and a second
-/// line feed — or U+2029 PARAGRAPH SEPARATOR. A lone line feed is a soft
-/// wrap, not a break: the project's own prose is hard-wrapped.
+/// Returns the paragraph breaks inside `bytes`, each as `(start, end)`.
+///
+/// A break is a blank line — a line feed, horizontal whitespace or carriage
+/// returns, and a second line feed — or U+2029 PARAGRAPH SEPARATOR. A lone
+/// line feed is a soft wrap, not a break: the project's own prose is
+/// hard-wrapped.
 fn breaks(bytes: &[u8]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -464,8 +507,9 @@ fn breaks(bytes: &[u8]) -> Vec<(usize, usize)> {
     out
 }
 
-/// The text items overlapping the offsets `[lo, hi)`, each as the overlap's
-/// start offset and its bytes.
+/// Returns the text items overlapping the offsets `[lo, hi)`.
+///
+/// Each comes as the overlap's start offset and its bytes.
 fn text_within(unit: &Unit, lo: u64, hi: u64) -> impl Iterator<Item = (u64, &[u8])> {
     let base = unit.start();
     unit.items().iter().filter_map(move |item| match item {
@@ -482,7 +526,7 @@ fn text_within(unit: &Unit, lo: u64, hi: u64) -> impl Iterator<Item = (u64, &[u8
     })
 }
 
-/// The offset after the last paragraph break inside `[lo, until)`.
+/// Returns the offset after the last paragraph break inside `[lo, until)`.
 fn last_break_before(unit: &Unit, lo: u64, until: u64) -> Option<u64> {
     let mut found = None;
     for (at, bytes) in text_within(unit, lo, until) {
@@ -493,7 +537,7 @@ fn last_break_before(unit: &Unit, lo: u64, until: u64) -> Option<u64> {
     found
 }
 
-/// The offset of the first paragraph break inside `[from, hi)`.
+/// Returns the offset of the first paragraph break inside `[from, hi)`.
 fn first_break_after(unit: &Unit, from: u64, hi: u64) -> Option<u64> {
     text_within(unit, from, hi)
         .find_map(|(at, bytes)| breaks(bytes).first().map(|&(start, _)| at + start as u64))
@@ -503,7 +547,7 @@ fn is_continuation(byte: u8) -> bool {
     byte & 0xC0 == 0x80
 }
 
-/// The text item holding the offset, as its start offset and its bytes.
+/// Returns the text item holding the offset: its start offset and its bytes.
 fn text_at(unit: &Unit, offset: u64) -> Option<(u64, &[u8])> {
     match &unit.items()[unit.item_at(offset)?] {
         Item::Text { start, bytes } => Some((start - unit.start(), bytes)),
@@ -511,8 +555,15 @@ fn text_at(unit: &Unit, offset: u64) -> Option<(u64, &[u8])> {
     }
 }
 
-/// `lo` moved forward to a character boundary where it falls inside a text
-/// item, never past `limit`.
+/// Returns `lo` moved forward to a character boundary, never past `limit`.
+///
+/// It moves only where `lo` falls inside a text item.
+///
+/// # Panics
+///
+/// Panics where every byte of the text item from `lo` to its end continues a
+/// character and `limit` lies past the item's end: the walk indexes past the
+/// item.
 fn boundary_forward(unit: &Unit, mut lo: u64, limit: u64) -> u64 {
     if let Some((from, bytes)) = text_at(unit, lo) {
         while lo < limit && lo > from && is_continuation(bytes[(lo - from) as usize]) {
@@ -522,8 +573,9 @@ fn boundary_forward(unit: &Unit, mut lo: u64, limit: u64) -> u64 {
     lo
 }
 
-/// `hi` moved back to a character boundary where the byte at it continues a
-/// character begun before it, never below `limit`.
+/// Returns `hi` moved back to a character boundary, never below `limit`.
+///
+/// It moves only where the byte at it continues a character begun before it.
 fn boundary_back(unit: &Unit, mut hi: u64, limit: u64) -> u64 {
     if let Some((from, bytes)) = text_at(unit, hi) {
         while hi > limit && hi > from && is_continuation(bytes[(hi - from) as usize]) {

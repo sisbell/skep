@@ -1,39 +1,46 @@
-//! THE FORM's BODY, decoded: `application/x-www-form-urlencoded`, what a
-//! browser's `<form method="post">` sends — the record's `{`, `"`, `:` and
-//! spaces percent-encoded and a textarea's line breaks sent as CRLF, as the
-//! provisioning record §8 item 5 knows browsers (UNVERIFIED HERE). Decoded
-//! strictly: the fields in the order sent, `+` a space, `%XX` the byte it
-//! names, and a `%` that two hex digits do not follow REFUSED rather than
-//! passed through, so no field reaches a check as bytes other than the
-//! browser meant. Every other byte is kept as given, a CR and an LF among
-//! them. A value stays BYTES: the record field reaches `parse_enroll` as
-//! sent, whose `not_utf8` is the verdict on bytes that are not text. AT
-//! MOST [`MAX_FIELDS`] FIELDS, the most any page of this site posts: a body
-//! naming more is no form of this site's, and is refused before its next
-//! field is copied, so a decoded form holds no more bytes than were sent.
-//! The claim page's query, `invite=<code>`, is the same encoding and is read
-//! through the same decoder.
+//! The form's body, decoded: `application/x-www-form-urlencoded`, strictly.
+//!
+//! It is what a browser's `<form method="post">` sends — the record's `{`,
+//! `"`, `:` and spaces percent-encoded and a textarea's line breaks sent as
+//! CRLF, as the provisioning record §8 item 5 knows browsers (unverified
+//! here). It is decoded strictly: the fields in the order sent, `+` a space,
+//! `%XX` the byte it names, and a `%` that two hex digits do not follow
+//! refused rather than passed through, so no field reaches a check as bytes
+//! other than the browser meant. Every other byte is kept as given, a CR and
+//! an LF among them. A value stays bytes: the record field reaches
+//! `parse_enroll` as sent — but for `record`'s trim of a text's trailing
+//! line breaks — whose `not_utf8` is the verdict on bytes that are not text.
+//! A form holds at most [`MAX_FIELDS`] fields, the most any page of this
+//! site posts: a body naming more is no form of this site's, and is refused
+//! before its next field is copied, so a decoded form holds no more bytes
+//! than were sent. The claim page's query, `invite=<code>`, is the same
+//! encoding and is read through the same decoder.
 
 use std::fmt;
 
-/// THE FIELDS' CAP: three — the claim form's named controls, the most any
-/// page of this site posts (the sign-up form posts one; the claim page's
-/// query carries one). A body naming more is no form of this site's,
-/// refused before its fourth field is copied: uncapped, every `a&` of a
-/// body would be a field — a 48-byte pair in a list grown by doubling and a
-/// one-byte allocation — some 19 MB for a body at the pages' cap, 48 times
-/// what was sent, and as many times over as connections are open.
+/// The fields' cap: three, the claim form's named controls.
+///
+/// It is the most any page of this site posts (the sign-up form posts one;
+/// the claim page's query carries one). A body naming more is no form of
+/// this site's, refused before its fourth field is copied: uncapped, every
+/// `a&` of a body would be a field — a 48-byte pair in a list grown by
+/// doubling and a one-byte allocation — some 19 MB for a body at the pages'
+/// cap, 48 times what was sent, and as many times over as connections are
+/// open.
 const MAX_FIELDS: usize = 3;
 
-/// A decoded form: its fields in the order sent, each name and value the
-/// bytes it decodes to.
+/// A decoded form: its fields in the order sent.
+///
+/// Each name and value is the bytes it decodes to.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Form {
     fields: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-/// The count of fields alone: a form carries a record, an invite code or an
-/// address, none of them a log line's.
+/// The count of fields alone.
+///
+/// A form carries a record, an invite code or an address, none of them a
+/// log line's.
 impl fmt::Debug for Form {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Form").field("fields", &self.fields.len()).finish()
@@ -41,20 +48,23 @@ impl fmt::Debug for Form {
 }
 
 impl Form {
-    /// The value of the first field named `name` — the first, where the
-    /// form names one twice — or `None` where it names none.
+    /// Returns the value of the first field named `name`.
+    ///
+    /// It is the first where the form names one twice, and `None` where it
+    /// names none.
     pub fn get(&self, name: &str) -> Option<&[u8]> {
         self.fields().iter().find(|(n, _)| n == name.as_bytes()).map(|(_, v)| v.as_slice())
     }
 
-    /// Every field, in the order sent.
+    /// Returns every field, in the order sent.
     fn fields(&self) -> &[(Vec<u8>, Vec<u8>)] {
         &self.fields
     }
 }
 
-/// A body the decoder refuses: the `%` at byte `at` of the body is not
-/// followed by two hex digits.
+/// A body the decoder refuses: a `%` not followed by two hex digits.
+///
+/// The `%` is at byte `at` of the body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BadEscape {
     /// The `%`'s offset in the body, in bytes from 0.
@@ -96,10 +106,17 @@ impl fmt::Display for FormRefused {
 
 impl std::error::Error for FormRefused {}
 
-/// THE DECODE: `body` split at each `&` and each part at its first `=` —
-/// a part with no `=` is a name with an empty value, an empty part
-/// (`a=1&&b=2`) no field at all — and each side unescaped; a part past the
-/// [`MAX_FIELDS`]th field refused, whatever its shape, before it is copied.
+/// Decodes `body`: split at each `&`, and each part at its first `=`.
+///
+/// A part with no `=` is a name with an empty value, an empty part
+/// (`a=1&&b=2`) no field at all, and each side is unescaped.
+///
+/// # Errors
+///
+/// The first refusal met in the body's order: [`FormRefused::Escape`] for a
+/// `%` that two hex digits do not follow, or [`FormRefused::TooManyFields`]
+/// for a non-empty part past the [`MAX_FIELDS`]th field, refused whatever
+/// its shape, before it is copied.
 pub fn decode(body: &[u8]) -> Result<Form, FormRefused> {
     let mut fields = Vec::new();
     let mut start = 0;
@@ -119,8 +136,12 @@ pub fn decode(body: &[u8]) -> Result<Form, FormRefused> {
     Ok(Form { fields })
 }
 
-/// One side of a field unescaped; `offset` is where it starts in the body,
-/// which the refusal counts from.
+/// Unescapes one side of a field; `offset` is where it starts in the body.
+///
+/// # Errors
+///
+/// [`BadEscape`] at the first `%` that two hex digits do not follow; the
+/// refusal counts its byte from `offset`.
 fn unescape(bytes: &[u8], offset: usize) -> Result<Vec<u8>, BadEscape> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -146,7 +167,7 @@ fn unescape(bytes: &[u8], offset: usize) -> Result<Vec<u8>, BadEscape> {
     Ok(out)
 }
 
-/// A hex digit's value, in either case.
+/// Returns a hex digit's value, in either case.
 fn hex(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),

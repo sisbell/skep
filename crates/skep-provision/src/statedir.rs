@@ -1,22 +1,25 @@
-//! THE STATE DIRECTORY and what its two files share — the sign-up file
-//! (`signups`) and the invite file (`invites`), whose every line carries an
-//! address (`mail_address`'s value) and a date:
+//! The state directory and what its two files share.
 //!
-//! * THE STATE DIRECTORY ([`StateDir`]) — `--state-dir`, owner-only: made
-//!   `0700` where it does not stand, and REFUSED at start where it stands
+//! The two files are the sign-up file (`signups`) and the invite file
+//! (`invites`), whose every line this program composes carries an address
+//! (`mail_address`'s value) and a date:
+//!
+//! * The state directory ([`StateDir`]) — `--state-dir`, owner-only: made
+//!   `0700` where it does not stand, and refused at start where it stands
 //!   with any group or other bit set, as the daemon refuses its data
 //!   directory (`skepd`'s `LooseDataDir`), or where it stands another user's
-//!   — root's, an `invite` run without `sudo -u` — whose service could not
-//!   read a file this process made there: the path, what was found and the
-//!   one act that fixes it, nothing repaired, and the directory left as it
-//!   stood. Every file in it is born `0600`: the two files through the one
-//!   writer below, and a lock file beside them through
+//!   — the service's, to an `invite` run as root without `sudo -u` — whose
+//!   service could not read a file this process made there: the path, what
+//!   was found and the one act that fixes it, nothing repaired, and the
+//!   directory left as it stood. Every file in it is born `0600`: the two
+//!   files through the one writer below, and a lock file beside them through
 //!   [`StateDir::open_lock_file`], held at that mode.
-//! * THE STATE FILES' ONE WRITER ([`write_whole`]) — `whole`'s replacement
+//! * The state files' one writer ([`write_whole`]) — `whole`'s replacement
 //!   at [`STATE_FILE_MODE`], so every file in the directory is replaced
-//!   whole by rename and born owner-only; the sign-up file and the invite
-//!   file are written through it alone.
-//! * THE DATE ([`today`]) — `yyyy-mm-dd` in UTC, the date a line carries.
+//!   whole by rename and born owner-only; the sign-up file is written
+//!   through it alone, and the invite file through [`write_whole_with`], the
+//!   same writer with its seam.
+//! * The date ([`today`]) — `yyyy-mm-dd` in UTC, the date a line carries.
 
 use std::fmt;
 use std::fs;
@@ -26,21 +29,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::whole;
 
-/// THE STATE FILES' MODE: `0600`, owner-only — the sign-up addresses and
-/// the invite codes are no other user's to read — set exactly, whatever this
-/// process's umask.
+/// The state files' mode: `0600`, owner-only.
+///
+/// The sign-up addresses and the invite codes are no other user's to read;
+/// the mode is set exactly, whatever this process's umask.
 const STATE_FILE_MODE: u32 = 0o600;
 
-/// THE OWNER's PROBE: a file the door makes in a state directory that
-/// stands, reads its owner off and removes at once — std holding no other
-/// way to this process's own uid without `unsafe` — so the door knows,
+/// The owner's probe: a file the door makes in a state directory that stands.
+///
+/// The door reads its owner off and removes it at once — std holding no
+/// other way to this process's own uid without `unsafe` — so the door knows,
 /// before any state file is written there, whether this process is the
 /// directory's owner. A name no state file takes; a stop's leftover is
 /// removed first, as `whole` removes its temp file's.
 #[cfg(unix)]
 const OWNER_PROBE: &str = "owner.probe";
 
-/// THE STATE DIRECTORY, opened: owner-only, standing, and this process's.
+/// The state directory, opened: owner-only, standing, and this process's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDir {
     path: PathBuf,
@@ -49,16 +54,20 @@ pub struct StateDir {
 /// A state directory refused at start.
 #[derive(Debug)]
 pub enum StateDirRefused {
-    /// It stands, and other users of this machine can read it.
+    /// It stands with any group or other bit set.
+    ///
+    /// Such a bit may open it to other users of this machine.
     Loose {
         /// The directory as the operator named it.
         path: PathBuf,
         /// The mode found.
         mode: u32,
     },
-    /// It stands another user's — this process, root among them, is not its
-    /// owner — so a file this process made there would be one the owner's
-    /// service could not read or replace.
+    /// It stands another user's.
+    ///
+    /// This process, root among them, is not its owner — so a file this
+    /// process made there would be one the owner's service could not read or
+    /// replace.
     OwnedByAnother {
         /// The directory as the operator named it.
         path: PathBuf,
@@ -67,8 +76,11 @@ pub enum StateDirRefused {
         /// This process's uid, as the door's probe read it.
         process: u32,
     },
-    /// It could not be made or read, or its path names no directory —
-    /// empty, or something other than a directory standing at it.
+    /// It could not be made, read or written, or its path names no directory.
+    ///
+    /// The write is the door's probe ([`OWNER_PROBE`]). A path names no
+    /// directory where it is empty, or where something other than a
+    /// directory stands at it.
     Io {
         /// The directory as the operator named it.
         path: PathBuf,
@@ -99,11 +111,23 @@ impl fmt::Display for StateDirRefused {
 impl std::error::Error for StateDirRefused {}
 
 impl StateDir {
-    /// THE DOOR: `path` made `0700` where nothing stands; where a directory
-    /// stands, refused if any group or other bit is set, or where this
-    /// process is not its owner ([`OWNER_PROBE`] telling) — refuse, never
-    /// repair; and refused where `path` is empty or something other than a
-    /// directory stands at it.
+    /// Opens the state directory: the door, which refuses and never repairs.
+    ///
+    /// `path` is made `0700` where nothing stands.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal met, in this order:
+    ///
+    /// 1. [`StateDirRefused::Io`] where `path` is empty, or where something
+    ///    other than a directory stands at it.
+    /// 2. Where a directory stands: [`StateDirRefused::Loose`] if any group or
+    ///    other bit is set; then [`StateDirRefused::Io`] where the door's
+    ///    probe ([`OWNER_PROBE`]) cannot be made, read or removed; then
+    ///    [`StateDirRefused::OwnedByAnother`] where this process is not its
+    ///    owner, the probe telling.
+    /// 3. [`StateDirRefused::Io`] where nothing stands and the directory
+    ///    cannot be made, or where whether anything stands cannot be read.
     pub fn open(path: &Path) -> Result<StateDir, StateDirRefused> {
         let io_refused = |error| StateDirRefused::Io { path: path.to_path_buf(), error };
         // An empty path names no directory: none stands at it, and a
@@ -148,16 +172,22 @@ impl StateDir {
         Ok(StateDir { path: path.to_path_buf() })
     }
 
-    /// A file's path in it.
+    /// Returns a file's path in it.
     pub fn file(&self, name: &str) -> PathBuf {
         self.path.join(name)
     }
 
-    /// A LOCK FILE in it, by name, OPENED AND NOT LOCKED — its lock the
-    /// caller's to take, and closing the file releases it: open for
-    /// writing, made where it does not stand at [`STATE_FILE_MODE`], so never
-    /// wider for an instant, and held at that mode exactly, whatever this
-    /// process's umask, as every file in the directory is.
+    /// Opens a lock file in it, by name, and does not lock it.
+    ///
+    /// Its lock is the caller's to take, and closing the file releases it: it
+    /// is open for writing, made where it does not stand at
+    /// [`STATE_FILE_MODE`], so never wider for an instant, and held at that
+    /// mode exactly, whatever this process's umask, as every file in the
+    /// directory is.
+    ///
+    /// # Errors
+    ///
+    /// The open's, or the mode's where it cannot be set.
     pub fn open_lock_file(&self, name: &str) -> io::Result<fs::File> {
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create(true).truncate(false);
@@ -176,10 +206,15 @@ impl StateDir {
     }
 }
 
-/// THE OWNER's RULE: a state directory is opened by its owner alone. Each
-/// file in it is `0600`, its maker's, so a file another user makes there —
-/// root among them — is one the owner's service cannot read or replace, and
-/// every post and sign-up after it fails.
+/// Checks the owner's rule: a state directory is opened by its owner alone.
+///
+/// Each file in it is `0600`, its maker's, so a file another user makes
+/// there — root among them — is one the owner's service cannot read or
+/// replace, and every post or sign-up that needs it fails after it.
+///
+/// # Errors
+///
+/// [`StateDirRefused::OwnedByAnother`] where `owner` is not `process`.
 #[cfg(unix)]
 fn owner_rule(path: &Path, owner: u32, process: u32) -> Result<(), StateDirRefused> {
     if owner == process {
@@ -188,9 +223,15 @@ fn owner_rule(path: &Path, owner: u32, process: u32) -> Result<(), StateDirRefus
     Err(StateDirRefused::OwnedByAnother { path: path.to_path_buf(), owner, process })
 }
 
-/// THIS PROCESS's UID, read off [`OWNER_PROBE`] made in `dir` and removed
-/// at once: the error is the directory's — one this process cannot write is
-/// refused at the door, never at its first sign-up.
+/// Reads this process's uid off [`OWNER_PROBE`], made in `dir`.
+///
+/// The probe is removed at once.
+///
+/// # Errors
+///
+/// The directory's: a leftover probe that cannot be removed, or a probe
+/// that cannot be made, read or removed — so one this process cannot write
+/// is refused at the door, never at its first sign-up.
 #[cfg(unix)]
 fn probed_uid(dir: &Path) -> io::Result<u32> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -204,25 +245,43 @@ fn probed_uid(dir: &Path) -> io::Result<u32> {
     uid
 }
 
-/// THE STATE FILES' WRITER: `bytes` become the file at `path`, whole, by
-/// rename from its sibling `<file>.tmp`, at [`STATE_FILE_MODE`] —
-/// [`whole::replace`]'s contract passed on whole: an error before the rename
-/// leaves the old file and no temp file, one from the directory's sync after
-/// it the new file in place, not known durable; and its PRECONDITION, the
-/// caller's: no other write of `path` runs at once, which the sign-up file's
-/// lock and the invite file's lock file keep — nothing here checks it.
+/// Writes `bytes` as the file at `path`, whole: the state files' writer.
+///
+/// The file is replaced by rename from its sibling `<file>.tmp`, at
+/// [`STATE_FILE_MODE`] — [`whole::replace`]'s contract passed on whole.
+///
+/// **Precondition.** The caller's: no other write of `path` runs at once,
+/// which the sign-up file's lock and the invite file's lock file keep —
+/// nothing here checks it.
+///
+/// # Errors
+///
+/// An error before the rename leaves the old file and no temp file of this
+/// call's; one from the directory's sync after it leaves the new file in
+/// place, not known durable.
 pub fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_whole_with(path, bytes, &|| Ok(()))
 }
 
-/// [`write_whole`] with `between` run after the temp file is written and
-/// synced and before the rename — the seam a test fails, to show a failure
-/// there leaves the old file whole and no temp file behind.
+/// Writes as [`write_whole`] does, with `between` run before the rename.
+///
+/// `between` runs after the temp file is written and synced and before the
+/// rename — the seam a test fails, to show a failure there leaves the old
+/// file whole and no temp file behind.
+///
+/// # Errors
+///
+/// As [`write_whole`]'s; an error `between` answers is one before the
+/// rename.
 pub fn write_whole_with(path: &Path, bytes: &[u8], between: &dyn Fn() -> io::Result<()>) -> io::Result<()> {
     whole::replace(path, bytes, STATE_FILE_MODE, between)
 }
 
-/// A file's text, or empty where it does not stand.
+/// Reads a file's text, or empty where it does not stand.
+///
+/// # Errors
+///
+/// The read's, where the file stands and cannot be read as text.
 pub fn read_or_empty(path: &Path) -> io::Result<String> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(text),
@@ -231,13 +290,14 @@ pub fn read_or_empty(path: &Path) -> io::Result<String> {
     }
 }
 
-/// TODAY, `yyyy-mm-dd` in UTC: the date a line carries.
+/// Returns today, `yyyy-mm-dd` in UTC: the date a line carries.
 pub fn today() -> String {
     civil_date(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))
 }
 
-/// `yyyy-mm-dd` from unix seconds (Howard Hinnant's civil-from-days), as
-/// `skep keygen` dates its boxes.
+/// Returns `yyyy-mm-dd` from unix seconds, as `skep keygen` dates its boxes.
+///
+/// It is Howard Hinnant's civil-from-days.
 fn civil_date(secs: u64) -> String {
     let z = (secs / 86400) as i64 + 719_468;
     let era = z.div_euclid(146_097);

@@ -1,27 +1,28 @@
-//! THE DESK, what the pages ask, over the two fakes: the flow's halves of T8
-//! (two posts on one name; a fifth past the queue; a post for a name admitted
-//! while its reads ran, refused at its own admission; a name Docker cannot
-//! take as a name alone, refused with no docker call), T9 (a spent, an
-//! unknown and a held code refused; the invite first, so an uninvited post
-//! learns nothing about names; a code spent while a post's reads ran, refused
-//! at its admission; a live board's code held until its spend is written,
-//! kept held where the spend could not be written, and let go of after it —
-//! or where the spend finds it no longer issued, the operator's hand having
-//! marked it; no code in the log, the line to mark named by its issue date)
-//! and T10 (a sign-up, its address in no log line, said with the file's
-//! fill; one past the file's cap, refused, the cap said once for its stretch
-//! and its end once with the count); a record the hosted genesis can never
-//! take, refused D-5 with no docker call; a fifth post past the looks' cap,
-//! refused D-8 with no docker call, the posts at their looks named, and the
-//! looks' permits given back; one code holding one look at a time, let go on
-//! every refusal and an unwind; where two of a post's faults hold, the first
-//! in its order speaking; a refusal for a held code naming what holds it,
-//! and one for a full queue the posts in it; a stranger's refusals said once
-//! a stretch with their count, and the invite file and the sign-up file
-//! unread each said as it starts and once, with its count, as it ends; and
-//! THE BOOK keeping its own rules — what blocks a new post, first of three,
-//! what holds a code, and what admitting, taking, going live, letting a code
-//! go and failing do, an admission whole or not made.
+//! The desk, what the pages ask, over the two fakes.
+//!
+//! The suite holds the flow's halves of T8 (two posts on one name; a fifth
+//! past the queue; a post for a name admitted while its reads ran, refused at
+//! its own admission; a name Docker cannot take as a name alone, refused with
+//! no docker call), T9 (a spent, an unknown and a held code refused; the invite
+//! first, so an uninvited post learns nothing about names; a code spent while a
+//! post's reads ran, refused at its admission; a live board's code held until
+//! its spend is written, kept held where the spend could not be written, and
+//! let go of after it — or where the spend finds it no longer issued, the
+//! operator's hand having marked it; no code in the log, the line to mark named
+//! by its issue date) and T10 (a sign-up, its address in no log line, said with
+//! the file's fill; one past the file's cap, refused, the cap said once for its
+//! stretch and its end once with the count); a record the hosted genesis can
+//! never take, refused D-5 with no docker call; a fifth post past the looks'
+//! cap, refused D-8 with no docker call, the posts at their looks named, and
+//! the looks' permits given back; one code holding one look at a time, let go
+//! on every refusal and an unwind; where two of a post's faults hold, the first
+//! in its order speaking; a refusal for a held code naming what holds it, and
+//! one for a full queue the posts in it; a stranger's refusals said once a
+//! stretch with their count, and the invite file and the sign-up file unread
+//! each said as it starts and once, with its count, as it ends; and the book
+//! keeping its own rules — what blocks a new post, first of three, what holds
+//! a code, and what admitting, taking, going live, letting a code go and
+//! failing do, an admission whole or not made.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -33,8 +34,10 @@ use crate::docker::Call;
 use crate::name::NameRefused;
 use crate::record::{decodable_key, undecodable_key};
 
-/// T8: TWO POSTS ON ONE NAME — the second meets D-4 at the post, held by
-/// the first in flight, with no docker call made for it.
+/// T8: of two posts on one name, the second meets D-4 at the post.
+///
+/// The name is held by the first in flight, and no docker call is made for
+/// the second.
 #[test]
 fn a_second_post_on_one_name_meets_d4_at_the_post() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
@@ -46,8 +49,10 @@ fn a_second_post_on_one_name_meets_d4_at_the_post() {
     assert!(rig.issued(&second));
 }
 
-/// T8: A FIFTH POST PAST THE QUEUE meets D-8, "try again later", and leaves
-/// no entry — no token, no queued post, no held code, no docker call.
+/// T8: a fifth post past the queue meets D-8, "try again later".
+///
+/// It leaves no entry — no token, no queued post, no held code, no docker
+/// call.
 #[test]
 fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
     let names = ["alice", "bob", "carol", "dave"];
@@ -68,11 +73,13 @@ fn a_fifth_post_past_the_queue_meets_d8_and_leaves_no_entry() {
     assert!(rig.logged("erin: a post refused: 4 posts already wait: alice, bob, carol, dave"), "the posts that fill the queue, in order: {:?}", rig.log());
 }
 
-/// THE LOOKS' CAP: four posts paused inside their looks at what stands, a
-/// fifth meets D-8, "try again later", at once and with no docker call, its
-/// invite still issued, the refusal naming the four posts at their looks;
-/// the four, let go, meet D-4 off the volumes standing under their names,
-/// and their permits are given back — a sixth post looks and is admitted.
+/// The looks' cap: four posts paused inside their looks, a fifth refused.
+///
+/// The four are paused at what stands; the fifth meets D-8, "try again
+/// later", at once and with no docker call, its invite still issued, the
+/// refusal naming the four posts at their looks; the four, let go, meet D-4
+/// off the volumes standing under their names, and their permits are given
+/// back — a sixth post looks and is admitted.
 #[test]
 fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
     let names = ["alice", "bob", "carol", "dave"];
@@ -110,8 +117,10 @@ fn a_post_past_the_looks_cap_meets_d8_with_no_docker_call() {
     rig.fake.assert_done();
 }
 
-/// A PERMIT UNDER A CAP is taken where fewer than the cap are held, refused
-/// where the cap are, and given back when dropped — the count back at none.
+/// A permit under a cap is taken where fewer than the cap are held.
+///
+/// It is refused where the cap are, and given back when dropped — the count
+/// back at none.
 #[test]
 fn a_permit_is_given_back_when_dropped() {
     let held = AtomicUsize::new(0);
@@ -125,15 +134,17 @@ fn a_permit_is_given_back_when_dropped() {
     assert_eq!(held.load(Ordering::SeqCst), 0);
 }
 
-/// THE BOOK KEEPS ITS OWN RULES. A code whose post is looking at what
-/// stands is held, by that post. Admitted, a post waits with its code and its
-/// name held, its page D-7. What blocks a new post is the first of a full
-/// queue, a held code and a held name: four waiting block a fifth even on a
-/// free name and code, and a post on a held code and a held name meets the
-/// code, held by the post in flight. Taken, the oldest post runs, still
-/// holding both. Gone live, it holds its name no more, and its code stays
-/// held — by the live board — until it is let go of. Failed, it lets its
-/// code go at once and holds its name no more.
+/// The book keeps its own rules.
+///
+/// A code whose post is looking at what stands is held, by that post.
+/// Admitted, a post waits with its code and its name held, its page D-7.
+/// What blocks a new post is the first of a full queue, a held code and a
+/// held name: four waiting block a fifth even on a free name and code, and a
+/// post on a held code and a held name meets the code, held by the post in
+/// flight. Taken, the oldest post runs, still holding both. Gone live, it
+/// holds its name no more, and its code stays held — by the live board —
+/// until it is let go of. Failed, it lets its code go at once and holds its
+/// name no more.
 #[test]
 fn the_book_keeps_its_own_rules() {
     let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
@@ -182,9 +193,11 @@ fn the_book_keeps_its_own_rules() {
     assert_eq!(book.queue.len(), 2);
 }
 
-/// AN ADMISSION IS WHOLE OR NOT MADE: a job under a token the map holds
-/// panics at the map's gate before the book changes — its code not held,
-/// nothing queued, the post the token names untouched, its name not held.
+/// An admission is whole or not made.
+///
+/// A job under a token the map holds panics at the map's gate before the
+/// book changes — its code not held, nothing queued, the post the token
+/// names untouched, its name not held.
 #[test]
 fn an_admission_on_a_token_admitted_before_changes_nothing() {
     let name = |n: &str| Name::parse(n.as_bytes()).expect("a name");
@@ -208,15 +221,17 @@ fn an_admission_on_a_token_admitted_before_changes_nothing() {
     assert!(!book.map.holds(&name("bob")));
 }
 
-/// T9: A SPENT CODE, AN UNKNOWN CODE, A CODE OF ANOTHER FORM and A CODE A
-/// POST IN FLIGHT HOLDS are refused at the post, no docker call made; D-5
-/// and D-6 refuse a record before any — among D-5's a record the hosted
-/// genesis can never take, a key's half that does not decode or more
-/// entries than its cap, which would fail at the dark claim — the log
-/// naming the fault's token, never the record; and D-4 a name Docker cannot
-/// take as a name alone — one byte, a hosts-file name, hex digits alone —
-/// its code still issued, never let go of by a post that fails at `docker
-/// volume create` or the health wait to be posted again.
+/// T9: a post's refusals come before any docker call.
+///
+/// A spent code, an unknown code, a code of another form and a code a post
+/// in flight holds are refused at the post, no docker call made; D-5 and D-6
+/// refuse a record before any — among D-5's a record the hosted genesis can
+/// never take, a key's half that does not decode or more entries than its
+/// cap, which would fail at the dark claim — the log naming the fault's
+/// token, never the record; and D-4 a name Docker cannot take as a name
+/// alone — one byte, a hosts-file name, hex digits alone — its code still
+/// issued, never let go of by a post that fails at `docker volume create` or
+/// the health wait to be posted again.
 #[test]
 fn the_posts_refusals_come_before_any_docker_call() {
     let rig = rig(&inspects("alice"), Some(Vec::new()));
@@ -255,15 +270,17 @@ fn the_posts_refusals_come_before_any_docker_call() {
     }
 }
 
-/// T9: THE INVITE, FIRST — an uninvited post learns nothing about names: a
-/// code the file does not hold answers the invite's refusal alike for a free
-/// name, a name a post in flight holds, a name its snippet takes, a name out
-/// of the grammar and a record that is none; no docker call, and no log line
-/// naming any of them. A STRANGER's REFUSALS, BOUNDED: the five are one line
-/// — the file the code was looked for in by its path, and the invites it
-/// holds issued — the four after it counted; a minute on, the next said with
-/// their count; and a code of no code's form is a kind of its own, said
-/// apart.
+/// T9: the invite first — an uninvited post learns nothing about names.
+///
+/// A code the file does not hold answers the invite's refusal alike for a
+/// free name, a name a post in flight holds, a name its snippet takes, a name
+/// out of the grammar and a record that is none; no docker call, and no log
+/// line naming any of them.
+///
+/// **A stranger's refusals, bounded.** The five are one line — the file the
+/// code was looked for in by its path, and the invites it holds issued — the
+/// four after it counted; a minute on, the next said with their count; and a
+/// code of no code's form is a kind of its own, said apart.
 #[test]
 fn an_uninvited_post_learns_nothing_about_names() {
     let rig = rig(&inspects("alice"), None);
@@ -291,12 +308,13 @@ fn an_uninvited_post_learns_nothing_about_names() {
     );
 }
 
-/// WHERE TWO OF A POST's FAULTS HOLD, THE FIRST IN ITS ORDER SPEAKS — the
-/// invite, the name's grammar, the record, then what is in flight — each
-/// with no docker call: a name out of the grammar beside a record that is
-/// none answers D-4, and a record that is none beside a full queue D-5, the
-/// queue full all the while — the same post with its record whole meets
-/// it, D-8.
+/// Where two of a post's faults hold, the first in its order speaks.
+///
+/// The order is the invite, the name's grammar, the record, then what is in
+/// flight — each with no docker call: a name out of the grammar beside a
+/// record that is none answers D-4, and a record that is none beside a full
+/// queue D-5, the queue full all the while — the same post with its record
+/// whole meets it, D-8.
 #[test]
 fn where_two_of_a_posts_faults_hold_the_first_in_its_order_speaks() {
     let names = ["alice", "bob", "carol", "dave"];
@@ -311,9 +329,10 @@ fn where_two_of_a_posts_faults_hold_the_first_in_its_order_speaks() {
     rig.fake.assert_done();
 }
 
-/// T9: A LIVE BOARD's CODE IS LET GO OF once its spend is written: the book
-/// holds it no more, and a post naming it again is refused as spent — the
-/// file's word — never as held by another post.
+/// T9: a live board's code is let go of once its spend is written.
+///
+/// The book holds it no more, and a post naming it again is refused as spent
+/// — the file's word — never as held by another post.
 #[test]
 fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
     let script = [
@@ -335,15 +354,16 @@ fn a_live_boards_code_is_let_go_of_and_refused_as_spent() {
     rig.fake.assert_done();
 }
 
-/// T9: A LIVE BOARD's CODE IS HELD UNTIL ITS SPEND IS WRITTEN: with the
-/// invite file's lock held elsewhere — the owner's `invite` minting that
-/// moment — a worker whose board has gone live waits at its spend with the
-/// code still held, and a post naming the code meets the invite's refusal
+/// T9: a live board's code is held until its spend is written.
+///
+/// With the invite file's lock held elsewhere — the owner's `invite` minting
+/// that moment — a worker whose board has gone live waits at its spend with
+/// the code still held, and a post naming the code meets the invite's refusal
 /// with no docker call; the lock let go of, the spend lands, and only then is
 /// the code let go of. The wait is the moment a stop would leave behind
-/// (`main`'s THE STOP): the snippet standing, the board live, the file saying
-/// issued, and the log naming the board's snippet written with no spend after
-/// it.
+/// (`main`'s paragraph on the stop): the snippet standing, the board live,
+/// the file saying issued, and the log naming the board's snippet written
+/// with no spend after it.
 #[test]
 fn a_live_boards_code_is_held_until_its_spend_is_written() {
     let rig = rig(&(flow_of("alice", false) + &reloads(1)), None);
@@ -374,13 +394,15 @@ fn a_live_boards_code_is_held_until_its_spend_is_written() {
     rig.fake.assert_done();
 }
 
-/// T9: A SPEND THAT COULD NOT BE WRITTEN KEEPS ITS CODE HELD for the
-/// process's life: the file still says issued, so a post naming the code
-/// meets the invite's refusal — never a second board on one invite — while
-/// the board stands live and the log names the operator's act and the line
-/// to mark by its issue date and its file's path, never its code or its
-/// address; and the later post's refusal names the board that holds the code
-/// and the act, so a person's report hours later joins the spend's line.
+/// T9: a spend that could not be written keeps its code held.
+///
+/// It is held for the process's life: the file still says issued, so a post
+/// naming the code meets the invite's refusal — never a second board on one
+/// invite — while the board stands live and the log names the operator's act
+/// and the line to mark by its issue date and its file's path, never its code
+/// or its address; and the later post's refusal names the board that holds
+/// the code and the act, so a person's report hours later joins the spend's
+/// line.
 #[cfg(unix)]
 #[test]
 fn a_spend_that_could_not_be_written_keeps_its_code_held() {
@@ -414,11 +436,12 @@ fn a_spend_that_could_not_be_written_keeps_its_code_held() {
     assert!(!rig.log().join("\n").contains(code.as_str()) && !rig.log().join("\n").contains("person@example.com"), "{:?}", rig.log());
 }
 
-/// T9: A SPEND THAT FINDS ITS CODE NO LONGER ISSUED — the operator's hand
-/// having marked it spent while its board was made — lets the code go all
-/// the same: the board stands live, the log names the board and no spend of
-/// its own, the file keeps the operator's word, and a post naming the code is
-/// refused by the file.
+/// T9: a spend that finds its code no longer issued lets the code go.
+///
+/// The operator's hand marked it spent while its post waited, and the
+/// code goes all the same: the board stands live, the log names the board
+/// and no spend of its own, the file keeps the operator's word, and a post
+/// naming the code is refused by the file.
 #[test]
 fn a_spend_that_finds_its_code_no_longer_issued_lets_it_go() {
     let script = [
@@ -445,8 +468,9 @@ fn a_spend_that_finds_its_code_no_longer_issued_lets_it_go() {
     rig.fake.assert_done();
 }
 
-/// T10: A SIGN-UP through the service is kept and logged with the file's
-/// fill against its cap — its address in no log line; a malformed one
+/// T10: a sign-up through the service is kept, its address in no log line.
+///
+/// It is logged with the file's fill against its cap; a malformed one is
 /// refused, nothing kept, the refusal — a stranger's to make at a request's
 /// rate — said once a stretch: a second within the minute counted, unsaid.
 #[test]
@@ -464,11 +488,12 @@ fn a_sign_up_is_kept_and_its_address_is_in_no_log_line() {
     );
 }
 
-/// THE SIGN-UP FILE UNKEPT IS SAID AT ITS EDGES: a file that cannot be read
-/// refuses every sign-up, said once as it starts — the file by its path, the
-/// cause, what it refuses — each after counted unsaid; and the first sign-up
-/// kept a hold-down after the last refused says the end, with the sign-ups
-/// it refused, once.
+/// The sign-up file unkept is said at its edges.
+///
+/// A file that cannot be read refuses every sign-up, said once as it starts —
+/// the file by its path, the cause, what it refuses — each after counted
+/// unsaid; and the first sign-up kept a hold-down after the last refused says
+/// the end, with the sign-ups it refused, once.
 #[cfg(unix)]
 #[test]
 fn the_sign_up_file_unkept_is_said_as_it_starts_and_as_it_ends() {
@@ -494,11 +519,13 @@ fn the_sign_up_file_unkept_is_said_as_it_starts_and_as_it_ends() {
     assert_eq!(rig.log().len(), 4, "the end said once: {:?}", rig.log());
 }
 
-/// THE INVITE FILE UNREAD IS SAID AT ITS EDGES: a file that cannot be read
-/// refuses every post D-8, said once as it starts — the file by its path,
-/// the cause, what it refuses — each after counted unsaid, no docker call
-/// made; and the first post judged a hold-down after the last refused says
-/// the end, with the posts it refused, once — and is admitted.
+/// The invite file unread is said at its edges.
+///
+/// A file that cannot be read refuses every post D-8, said once as it starts
+/// — the file by its path, the cause, what it refuses — each after counted
+/// unsaid, no docker call made; and the first post judged a hold-down after
+/// the last refused says the end, with the posts it refused, once — and is
+/// admitted.
 #[cfg(unix)]
 #[test]
 fn the_invite_file_unread_is_said_as_it_starts_and_as_it_ends() {
@@ -522,12 +549,13 @@ fn the_invite_file_unread_is_said_as_it_starts_and_as_it_ends() {
     rig.fake.assert_done();
 }
 
-/// T10: A SIGN-UP PAST THE FILE's CAP — the file at its 256 KiB — is
-/// refused as one that could not be kept, nothing written, and logged ONCE
-/// for the stretch the file stands at its cap, with the cap and the owner's
-/// act, never the address: a second refusal adds no line, and the first
-/// sign-up kept once the owner has trimmed the file says the stretch's end
-/// with its count, once.
+/// T10: a sign-up past the file's cap is refused and logged once.
+///
+/// With the file at its 256 KiB, the sign-up is refused as one that could not
+/// be kept, nothing written, and logged once for the stretch the file stands
+/// at its cap, with the cap and the owner's act, never the address: a second
+/// refusal adds no line, and the first sign-up kept once the owner has
+/// trimmed the file says the stretch's end with its count, once.
 #[test]
 fn a_sign_up_past_the_files_cap_is_refused_and_logged_once() {
     let rig = rig("", None);
@@ -548,11 +576,12 @@ fn a_sign_up_past_the_files_cap_is_refused_and_logged_once() {
     assert!(!rig.log().join("\n").contains("example.org"), "{:?}", rig.log());
 }
 
-/// T8: THE ADMISSION LOOKS AGAIN AT THE NAME — a post paused inside its
-/// reads of what stands while a second post for its name is admitted meets
-/// D-4 at its own admission, the name held by the post admitted meanwhile,
-/// and leaves nothing: one post waits, one code is held, its own still
-/// issued.
+/// T8: the admission looks again at the name.
+///
+/// A post paused inside its reads of what stands while a second post for its
+/// name is admitted meets D-4 at its own admission, the name held by the post
+/// admitted meanwhile, and leaves nothing: one post waits, one code is held,
+/// its own still issued.
 #[test]
 fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
     let gate = Gate::new();
@@ -585,12 +614,14 @@ fn a_post_for_a_name_admitted_while_its_reads_ran_meets_d4() {
     assert!(rig.logged("alice: a post refused: a post in flight holds the name"), "{:?}", rig.log());
 }
 
-/// T9: THE ADMISSION LOOKS AGAIN AT THE INVITE — a post paused inside its
-/// reads holds its code, so a post of this service's on the code is refused
-/// as held; and where the code is marked spent meanwhile — a spend written
-/// between the post's first lookup and its in-flight check, or the
-/// operator's by hand — the paused post meets the invite's refusal at its
-/// own admission: never a second board on one invite.
+/// T9: the admission looks again at the invite.
+///
+/// A post paused inside its reads holds its code, so a post of this
+/// service's on the code is refused as held; and where the code is marked
+/// spent meanwhile — a spend written between the post's first lookup and its
+/// in-flight check, or the operator's by hand — the paused post meets the
+/// invite's refusal at its own admission: never a second board on one
+/// invite.
 #[test]
 fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
     let gate = Gate::new();
@@ -619,8 +650,9 @@ fn a_post_whose_code_was_spent_while_its_reads_ran_is_refused() {
     assert!(rig.logged("bob: a post refused: its invite was spent under carol while the post was judged"), "{:?}", rig.log());
 }
 
-/// ONE CODE, ONE LOOK: a post paused inside its look holds its code — a
-/// second post on the same code, under another name, is refused as held
+/// One code, one look: a post paused inside its look holds its code.
+///
+/// A second post on the same code, under another name, is refused as held
 /// with no docker call, so one invite never takes more than one of the
 /// looks' permits — while a post on another code looks beside it; let go,
 /// the first post's D-4 lets the code go, and the code looks again.
@@ -652,14 +684,16 @@ fn one_code_holds_one_look_at_a_time() {
     assert!(rig.service.book().looking.is_empty(), "a look's hold outlived its post");
 }
 
-/// A LOOK THAT UNWINDS LETS ITS CODE GO: a post whose look panics — a
-/// `docker` call that panics, caught where the pages catch an answer's
-/// panic — leaves its code unheld, and the same code's next post looks and
-/// is admitted.
+/// A look that unwinds lets its code go.
+///
+/// A post whose look panics — a `docker` call that panics, caught where the
+/// pages catch an answer's panic — leaves its code unheld, and the same
+/// code's next post looks and is admitted.
 #[test]
 fn a_look_that_unwinds_lets_its_code_go() {
-    /// A runner whose first volume inspect panics, every other call
-    /// answering "not standing".
+    /// A runner whose first volume inspect panics.
+    ///
+    /// Every other call answers "not standing".
     struct PanicsOnce(AtomicBool);
     impl Docker for PanicsOnce {
         fn run(&self, call: Call<'_>) -> io::Result<Exit> {

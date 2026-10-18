@@ -1,18 +1,22 @@
-//! THE RECORD, the second of the post's two person-made fields — the first,
-//! the board's name, is `name`'s — judged in process before any docker run
+//! The record: the post's second person-made field, judged in process.
+//!
+//! The post has two person-made fields; the first, the board's name, is
+//! `name`'s. The record is the canonical enrollment record `skep keygen`
+//! printed on the person's own device. It is judged before any docker run
 //! (the provisioning record §2.1; Q6 (a)), so a refused post leaves nothing
-//! behind: the canonical enrollment record `skep keygen` printed on the
-//! person's own device. The text is trimmed exactly as the hosted walk trims
-//! it (`skep-client`'s `hosted.rs`, H2: `trim_end_matches(['\n', '\r'])`), so
-//! a textarea's trailing line break is no `bad_record`; then
+//! behind.
+//!
+//! The text is trimmed exactly as the hosted walk trims it
+//! (`skep-client`'s `hosted.rs`, H2: `trim_end_matches(['\n', '\r'])`), so a
+//! textarea's trailing line break is no `bad_record`; then
 //! `skep_identity::parse_enroll` on its bytes, the one authority for every
 //! fault it can raise over a form's bytes — `too_large`, `not_utf8`,
 //! `bad_record`, `empty`, `duplicate_key:<n>`, each D-5, its token the one
 //! word the log carries (AUTH-2.130 admits the canonical encoding and nothing
-//! else); then the walk's H2 COPIED in its own spelling — an entry whose key
+//! else); then the walk's H2 copied in its own spelling — an entry whose key
 //! is not the production kind (`e.key.alg() != ALG_MLDSA65_ED25519`) is D-6,
-//! a PREVIEW key parsing cleanly and being refused by this test alone; then
-//! THE GENESIS's OWN TWO REFUSALS, which skepd's credential precheck makes
+//! a preview key parsing cleanly and being refused by this test alone; then
+//! the genesis's own two refusals, which skepd's credential precheck makes
 //! at the hosted claim's genesis (its slots (4) and (5), in AUTH-3.44's
 //! order) — after this service has made the claim run and the walk has
 //! committed its delegate and its home, so a record refused by either can
@@ -23,15 +27,16 @@
 //! anchor-flagged — kept for the reply's sentence (AUTH-5.62). The trim and
 //! the kind test are held to the walk's own spellings, and the genesis's two
 //! refusals to the daemon's, by this module's suite, which reads them back
-//! from `skep-client` and from `skepd`.
+//! from `skep-client` and from `skep-core`.
 //!
-//! THE RECORD HOLDS NO KEY THAT SIGNS: `parse_enroll` yields `PublicKey`s,
-//! and no field type in `skep-identity` can carry a private key (I1,
-//! AUTH-2.89); the decode is `skep-signature`'s verify-only build, which
-//! holds no signer. Its bytes are the person's identifier and are NEVER
-//! logged whole — not here, and not through [`Record`]'s `Debug`, which
-//! shows the length alone; the sidecar's talk, which the flow logs whole,
-//! names each entry by its fingerprint and its label.
+//! The record holds no key that signs: `parse_enroll` yields `Enrollment`s,
+//! whose keys are `PublicKey`s, and no field type in `skep-identity` can
+//! carry a private key (I1, AUTH-2.89); the decode is `skep-signature`'s
+//! verify-only build, which holds no signer. Its bytes are the person's
+//! identifier and are never logged whole — not here, and not through
+//! [`Record`]'s `Debug`, which shows of them their length alone; the
+//! sidecar's talk, which the flow logs whole, names each entry by its
+//! fingerprint and its label.
 
 use std::fmt;
 
@@ -40,17 +45,20 @@ use skep_identity::{parse_enroll, PayloadError, ALG_MLDSA65_ED25519};
 use skep_identity::{PublicKey, ED25519_KEY_LEN, MLDSA65_KEY_LEN};
 use skep_signature::key_decodes;
 
-/// THE GENESIS's KEY CAP: sixteen entries in one record — skepd's
-/// `MAX_GENESIS_KEYS` (`auth/policy/credential.rs`, the seeding hand's own
-/// bound), private to the daemon and restated here, held to it by this
-/// module's suite, which reads it back. A hosted claim's genesis past it is
-/// refused by the daemon after the claim run is made; `skep keygen
-/// --anchors` prints three entries.
+/// The genesis's key cap: sixteen entries in one record.
+///
+/// It is the daemon's `MAX_GENESIS_KEYS` (`skep-core`'s
+/// `auth/policy/credential.rs`, the seeding hand's own bound), private to
+/// the daemon's core and restated here, held to it by this module's suite,
+/// which reads it back. A hosted claim's genesis past it is refused by the
+/// daemon after the claim run is made; `skep keygen --anchors` prints three
+/// entries.
 const MAX_GENESIS_KEYS: usize = 16;
 
-/// A record the post admitted: its bytes as the sidecar will read them on
-/// its stdin — the field trimmed — and whether it carried no anchor-flagged
-/// entry.
+/// A record the post admitted: its bytes and its anchorless fact.
+///
+/// The bytes are as the sidecar will read them on its stdin — the field
+/// trimmed — and the fact is whether it carried no anchor-flagged entry.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Record {
     bytes: Vec<u8>,
@@ -58,21 +66,26 @@ pub struct Record {
 }
 
 impl Record {
-    /// The record's bytes, trimmed: what the sidecar's `--hosted -` reads.
+    /// Returns the record's bytes, trimmed.
+    ///
+    /// They are what the sidecar's `--hosted -` reads.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// THE ANCHORLESS FACT (AUTH-5.16's second arm; AUTH-5.62): no entry
-    /// of the record carries `anchor: true` — the form's own parse, never a
-    /// DATA line of the sidecar's, whose reply carries no such sentence.
+    /// Returns the anchorless fact (AUTH-5.16's second arm; AUTH-5.62).
+    ///
+    /// It is that no entry of the record carries `anchor: true` — the form's
+    /// own parse, never a data line of the sidecar's, whose reply carries no
+    /// such sentence.
     pub fn anchorless(&self) -> bool {
         self.anchorless
     }
 }
 
-/// The length and the fact, never the bytes: a `{:?}` in a log line can
-/// carry nothing of the person's record.
+/// The length and the fact, never the bytes.
+///
+/// A `{:?}` in a log line can carry no byte of the person's record.
 impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Record").field("bytes", &self.bytes.len()).field("anchorless", &self.anchorless).finish()
@@ -84,25 +97,30 @@ impl fmt::Debug for Record {
 pub enum RecordRefused {
     /// D-5: not a record `skep keygen` printed — `parse_enroll`'s fault.
     NotARecord(PayloadError),
-    /// D-6: an entry names a key that is not the production kind; `alg` is
-    /// the token it named.
+    /// D-6: an entry names a key that is not the production kind.
+    ///
+    /// `alg` is the token it named.
     PreviewKey {
         /// The entry's alg token.
         alg: &'static str,
     },
-    /// D-5: an entry whose key has a half that does not decode
-    /// ([`key_decodes`]) — the daemon's `undecodable_key` at the hosted
-    /// claim's genesis.
+    /// D-5: an entry whose key has a half that does not decode.
+    ///
+    /// The decode is [`key_decodes`]: the daemon's `undecodable_key` at the
+    /// hosted claim's genesis.
     UndecodableKey,
-    /// D-5: more entries than [`MAX_GENESIS_KEYS`] — the daemon's
-    /// `too_many_enrolled` at the same genesis.
+    /// D-5: more entries than [`MAX_GENESIS_KEYS`].
+    ///
+    /// It is the daemon's `too_many_enrolled` at the same genesis.
     TooManyKeys,
 }
 
 impl RecordRefused {
-    /// The one word the log carries: the payload fault's token
-    /// (`PayloadError::token`, AUTH-1.28's one authority), `preview_key`, or
-    /// the daemon's own word for a genesis it refuses.
+    /// Returns the one word the log carries.
+    ///
+    /// It is the payload fault's token (`PayloadError::token`, AUTH-1.28's
+    /// one authority), `preview_key`, or the daemon's own word for a genesis
+    /// it refuses.
     fn token(&self) -> String {
         match self {
             RecordRefused::NotARecord(e) => e.token(),
@@ -113,9 +131,11 @@ impl RecordRefused {
     }
 }
 
-/// The one word the log carries, and only it: `Display` is the word's one
-/// way out of this module — [`RecordRefused::token`] as it stands, never a
-/// second vocabulary, as `PayloadError`'s is to its own.
+/// The one word the log carries, and only it.
+///
+/// `Display` is the word's one way out of this module —
+/// [`RecordRefused::token`] as it stands, never a second vocabulary, as
+/// `PayloadError`'s is to its own.
 impl fmt::Display for RecordRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.token())
@@ -124,12 +144,19 @@ impl fmt::Display for RecordRefused {
 
 impl std::error::Error for RecordRefused {}
 
-/// THE RECORD's ADMISSION: the field trimmed as the hosted walk trims it,
-/// `parse_enroll` on the bytes, then H2 — every entry the production kind —
-/// then the genesis's own two refusals — every half decoded, the entries
-/// within the cap — and the anchorless fact.
+/// Admits a record field, answering the record and its anchorless fact.
+///
+/// # Errors
+///
+/// The checks run in this order, and the first to fail refuses: the field
+/// trimmed as the hosted walk trims it, `parse_enroll` on the bytes
+/// ([`RecordRefused::NotARecord`]), then H2 — every entry the production
+/// kind ([`RecordRefused::PreviewKey`]) — then the genesis's own two
+/// refusals — every half of the first `MAX_GENESIS_KEYS + 1` entries
+/// decoded ([`RecordRefused::UndecodableKey`]), the entries within the cap
+/// ([`RecordRefused::TooManyKeys`]).
 pub fn admit(field: &[u8]) -> Result<Record, RecordRefused> {
-    // H2's trim, in the walk's own spelling (`hosted.rs:77`), on the text
+    // H2's trim, in the walk's own spelling (`hosted.rs:95`), on the text
     // where the bytes are text; bytes that are not are handed on untrimmed,
     // and `parse_enroll` answers them `not_utf8` itself — it stays the one
     // authority for every fault, in its own order (the cap first).
@@ -138,14 +165,14 @@ pub fn admit(field: &[u8]) -> Result<Record, RecordRefused> {
         Err(_) => field,
     };
     let entries = parse_enroll(trimmed).map_err(RecordRefused::NotARecord)?;
-    // H2, copied: refused here as the sidecar would refuse it one step
-    // later, ahead of any docker run (P13; the provisioning record §2.1).
+    // H2, copied: refused here, ahead of any docker run (P13; the
+    // provisioning record §2.1), as the sidecar would refuse it at step 4.
     for e in &entries {
         if e.key.alg() != ALG_MLDSA65_ED25519 {
             return Err(RecordRefused::PreviewKey { alg: e.key.alg() });
         }
     }
-    // THE GENESIS's OWN REFUSALS, the daemon's credential precheck's slots
+    // The genesis's own refusals, the daemon's credential precheck's slots
     // (4) and (5) in its order: every half of the first `MAX_GENESIS_KEYS +
     // 1` entries decoded — the daemon decodes no further — then the count.
     // The daemon makes both at the hosted claim's genesis, after this
@@ -161,10 +188,11 @@ pub fn admit(field: &[u8]) -> Result<Record, RecordRefused> {
     Ok(Record { bytes: trimmed.to_vec(), anchorless })
 }
 
-/// A PRODUCTION-KIND KEY WHOSE HALVES DECODE, for the unit suites: `pq`
-/// repeated as the post-quantum half — ML-DSA-65's decode admits any bytes
-/// of its length — beside the Ed25519 base point's encoding (RFC 8032: `58`,
-/// then thirty-one `66`), a point by construction.
+/// Returns a production-kind key whose halves decode, for the unit suites.
+///
+/// Its post-quantum half is `pq` repeated — ML-DSA-65's decode admits any
+/// bytes of its length — beside the Ed25519 base point's encoding (RFC 8032:
+/// `58`, then thirty-one `66`), a point by construction.
 #[cfg(test)]
 pub fn decodable_key(pq: u8) -> PublicKey {
     let mut ed25519 = [0x66; ED25519_KEY_LEN];
@@ -172,11 +200,16 @@ pub fn decodable_key(pq: u8) -> PublicKey {
     PublicKey::from_halves(ALG_MLDSA65_ED25519, &[pq; MLDSA65_KEY_LEN], &ed25519).expect("the production row's widths")
 }
 
-/// A PRODUCTION-KIND KEY WHOSE ED25519 HALF IS NO POINT, for the unit
-/// suites: the first constant half [`key_decodes`] refuses — found, not
-/// hard-coded, as skepd's own suite finds its one; roughly half of all
-/// 32-byte strings fail decompression, and the `expect` keeps a search that
-/// finds nothing from passing silently.
+/// Returns a production-kind key whose Ed25519 half is no point.
+///
+/// It is for the unit suites: the first constant half [`key_decodes`]
+/// refuses — found, not hard-coded, as skepd's own suite finds its one;
+/// roughly half of all 32-byte strings fail decompression.
+///
+/// # Panics
+///
+/// Panics where the search finds no such half: the `expect` keeps a search
+/// that finds nothing from passing silently.
 #[cfg(test)]
 pub fn undecodable_key() -> PublicKey {
     (0u8..=255)

@@ -1,27 +1,33 @@
-//! THE SCRIPTED FAKE — `test-hooks` alone, so no shipped build holds it: a
-//! [`Docker`] answered from a SCRIPT the test writes, one line per call it
-//! expects, each with the exit code and the stdout (and, where wanted, the
-//! stderr) the call answers. THE ORDER IS STRICT PER NAME AND FREE ACROSS
-//! NAMES: a call is answered by the first unconsumed line under its own
-//! name — the lines without a name (the reload, the listing) are one name
-//! among them — because the pool makes boards for different names at once,
-//! and which name's call lands first is the scheduler's; a name's own calls
-//! still come in the order its lines are written. It RECORDS every call in
-//! the order received — the method, the name, the input it carries — in
-//! memory and, where it was opened from a file (the binary's
-//! `--docker-fake <script>`), as one line per call in its CALLS FILE, the
-//! sibling `<script>.calls`, which a suite driving the built binary reads
-//! after it. A call the script did not expect — another method than the
-//! next line under its name, or a call under a name with no line left — is
-//! answered with exit [`UNEXPECTED`] and a stderr saying so, recorded as
-//! unexpected, and leaves the script where it was; `FakeDocker::assert_done`
-//! then fails the test, as does a script line left uncalled.
+//! The scripted fake: a [`Docker`] answered from a script the test writes.
 //!
-//! THE SCRIPT's LINE: TAB-separated fields — the method as the trait spells
-//! it, the name (`-` for the reload and the listing, which name none), the
-//! exit code, then optionally the stdout and the stderr, in which `\n` is a
-//! line break, `\t` a tab and `\\` a backslash (`line` writes one). A blank
-//! line, or one beginning `#`, is no call.
+//! It is compiled under `test-hooks` alone, so no shipped build holds it. The
+//! script has one line per call it expects, each with the exit code and the
+//! stdout (and, where wanted, the stderr) the call answers.
+//!
+//! **The order is strict per name and free across names.** A call is
+//! answered by the first unconsumed line under its own name — the lines
+//! without a name (the reload, the listing) are one name among them —
+//! because the pool makes boards for different names at once, and which
+//! name's call lands first is the scheduler's; a name's own calls still come
+//! in the order its lines are written.
+//!
+//! It records every call in the order received — the method, the name, the
+//! input it carries — in memory and, where it was opened from a file (the
+//! binary's `--docker-fake <script>`), as one line per call in its calls
+//! file, the sibling `<script>.calls`, which a suite driving the built binary
+//! reads after it, the input's length there in the input's place; a call
+//! whose line that file cannot take is left out of both, as `run`'s errors
+//! say. A call the script did not expect — another method than the next line
+//! under its name, or a call under a name with no line left — is answered
+//! with exit [`UNEXPECTED`] and a stderr saying so, recorded as unexpected,
+//! and leaves the script where it was; `FakeDocker::assert_done` then fails
+//! the test, as does a script line left uncalled.
+//!
+//! **The script's line.** Its fields are tab-separated: the method as the
+//! trait spells it, the name (`-` for the reload and the listing, which name
+//! none), the exit code, then optionally the stdout and the stderr, in which
+//! `\n` is a line break, `\t` a tab and `\\` a backslash (`line` writes one).
+//! A blank line, or one beginning `#`, is no call.
 
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
@@ -38,20 +44,24 @@ use super::{Call, Docker};
 use crate::name::Name;
 use crate::process::Exit;
 
-/// THE PAUSE a unit suite puts on the fake: called with every call's method
-/// and name once the call is answered and recorded, and free to block — the
-/// test's way to pause a worker inside one call while another name's flow
-/// runs on. Called with no lock of the fake's held, so a pause in one call
-/// pauses no other. Unwind-safe, as a suite catches the fake's own panics.
+/// The pause a unit suite puts on the fake.
+///
+/// It is called with every call's method and name once the call is answered
+/// and recorded, and is free to block — the test's way to pause a worker
+/// inside one call while another name's flow runs on. It is called with no
+/// lock of the fake's held, so a pause in one call pauses no other. It is
+/// unwind-safe, as a suite catches the fake's own panics.
 #[cfg(test)]
 type Pause = Box<dyn Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe + RefUnwindSafe>;
 
-/// The exit code a call the script did not expect answers: Docker's own
-/// code for an error of the `docker` command itself, as this crate knows
-/// Docker (UNVERIFIED HERE) — a code every step reads as a failure.
+/// The exit code a call the script did not expect answers.
+///
+/// It is Docker's own code for an error of the `docker` command itself, as
+/// this crate knows Docker (unverified here) — a code every step reads as a
+/// failure.
 pub const UNEXPECTED: i32 = 125;
 
-/// ONE SCRIPT LINE: the call it expects and what that call answers.
+/// One script line: the call it expects and what that call answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScriptLine {
     /// The method expected, as the trait spells it.
@@ -73,16 +83,19 @@ pub struct Called {
     pub method: &'static str,
     /// The name it named, `None` for the reload and the listing.
     pub name: Option<String>,
-    /// The input it carried — the sidecar's record, on the child's stdin —
-    /// where it carried any.
+    /// The input it carried, where it carried any.
+    ///
+    /// It is the sidecar's record, on the child's stdin.
     pub input: Option<Vec<u8>>,
-    /// Whether the script's next line expected it.
+    /// Whether the script's next line under its name expected it.
     pub expected: bool,
 }
 
 impl Called {
-    /// The call as `<method> <name>` — `<method>` alone for the reload and
-    /// the listing — the form a test lists the expected sequence in.
+    /// Returns the call as `<method> <name>`.
+    ///
+    /// It is `<method>` alone for the reload and the listing — the form a test
+    /// lists the expected sequence in.
     #[cfg(test)]
     fn said(&self) -> String {
         match &self.name {
@@ -92,7 +105,9 @@ impl Called {
     }
 }
 
-/// THE FAKE: the script left to answer, the calls received, the calls file
+/// The fake.
+///
+/// It holds the script left to answer, the calls received, the calls file
 /// they are written to where it was opened from a file, and a unit suite's
 /// pause.
 pub struct FakeDocker {
@@ -103,8 +118,9 @@ pub struct FakeDocker {
     pause: OnceLock<Pause>,
 }
 
-/// The script left, the calls received and the calls file; the pause is a
-/// closure.
+/// The script left, the calls received and the calls file.
+///
+/// The pause is a closure.
 impl std::fmt::Debug for FakeDocker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FakeDocker").field("script", &self.script).field("calls", &self.calls).field("calls_file", &self.calls_file).finish_non_exhaustive()
@@ -112,7 +128,12 @@ impl std::fmt::Debug for FakeDocker {
 }
 
 impl FakeDocker {
-    /// The fake over a script's text.
+    /// Parses the fake over a script's text.
+    ///
+    /// # Errors
+    ///
+    /// A line of fewer than three or more than five tab-separated fields, or
+    /// whose exit code is no number, named by its line number.
     pub fn parse(script: &str) -> Result<FakeDocker, String> {
         let mut lines = VecDeque::new();
         for (i, text) in script.lines().enumerate() {
@@ -141,16 +162,28 @@ impl FakeDocker {
         })
     }
 
-    /// THE PAUSE set: `pause` is called with every call's method and name
-    /// once the call is answered and recorded, and may block there. Set once.
+    /// Sets the pause.
+    ///
+    /// `pause` is called with every call's method and name once the call is
+    /// answered and recorded, and may block there.
+    ///
+    /// # Panics
+    ///
+    /// Panics where a pause is already set: it is set once.
     #[cfg(test)]
     pub fn pause(&self, pause: impl Fn(&'static str, Option<&str>) + Send + Sync + UnwindSafe + RefUnwindSafe + 'static) {
         assert!(self.pause.set(Box::new(pause)).is_ok(), "the pause is set once");
     }
 
-    /// The fake over the script file at `path`, writing every call it
-    /// receives to its calls file, [`calls_path`]`(path)`, emptied first —
-    /// the binary's `--docker-fake <script>`.
+    /// Opens the fake over the script file at `path`.
+    ///
+    /// It is the binary's `--docker-fake <script>`, and it writes every call
+    /// it receives to its calls file, [`calls_path`]`(path)`, emptied first.
+    ///
+    /// # Errors
+    ///
+    /// The script file cannot be read, its text is no script, or the calls
+    /// file cannot be written.
     pub fn open(path: &Path) -> io::Result<FakeDocker> {
         let text = std::fs::read_to_string(path)?;
         let mut fake = FakeDocker::parse(&text).map_err(io::Error::other)?;
@@ -160,32 +193,36 @@ impl FakeDocker {
         Ok(fake)
     }
 
-    /// Every call received, in order.
+    /// Returns every call received, in order.
     #[cfg(test)]
     pub fn calls(&self) -> Vec<Called> {
         self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Every call received, each as `Called::said` spells it.
+    /// Returns every call received, each as `Called::said` spells it.
     #[cfg(test)]
     pub fn said(&self) -> Vec<String> {
         self.calls().iter().map(Called::said).collect()
     }
 
-    /// The calls the script did not expect.
+    /// Returns the calls the script did not expect.
     #[cfg(test)]
     pub fn unexpected(&self) -> Vec<Called> {
         self.calls().into_iter().filter(|c| !c.expected).collect()
     }
 
-    /// The script's lines not yet called.
+    /// Returns the script's lines not yet called.
     #[cfg(test)]
     fn left(&self) -> Vec<ScriptLine> {
         self.script.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect()
     }
 
-    /// FAILS THE TEST on a call the script did not expect, or on a script
-    /// line left uncalled.
+    /// Asserts the script is done: every call expected, every line called.
+    ///
+    /// # Panics
+    ///
+    /// Panics, failing the test, on a call the script did not expect, or on a
+    /// script line left uncalled.
     #[cfg(test)]
     pub fn assert_done(&self) {
         let unexpected: Vec<String> = self.unexpected().iter().map(Called::said).collect();
@@ -195,7 +232,7 @@ impl FakeDocker {
     }
 }
 
-/// A call's method name, as the trait and the script spell it.
+/// Returns a call's method name, as the trait and the script spell it.
 fn method(call: &Call<'_>) -> &'static str {
     match call {
         Call::VolumeCreate(_) => "volume_create",
@@ -213,7 +250,7 @@ fn method(call: &Call<'_>) -> &'static str {
     }
 }
 
-/// The board a call is about, where it names one.
+/// Returns the board a call is about, where it names one.
 fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
     match *call {
         Call::VolumeCreate(n)
@@ -230,28 +267,30 @@ fn name<'a>(call: &Call<'a>) -> Option<&'a Name> {
     }
 }
 
-/// A script file's calls file: `<script>.calls`.
+/// Returns a script file's calls file: `<script>.calls`.
 pub fn calls_path(script: &Path) -> PathBuf {
     let mut path = script.as_os_str().to_owned();
     path.push(".calls");
     PathBuf::from(path)
 }
 
-/// ONE SCRIPT LINE: the call expected and its answer, escaped.
+/// Returns one script line: the call expected and its answer, escaped.
 #[cfg(test)]
 pub fn line(method: &str, name: Option<&str>, code: i32, stdout: &str, stderr: &str) -> String {
     format!("{method}\t{}\t{code}\t{}\t{}\n", name.unwrap_or("-"), escape(stdout), escape(stderr))
 }
 
-/// A field's text as the script carries it: a backslash, a line break and
-/// a tab escaped.
+/// Returns a field's text as the script carries it.
+///
+/// A backslash, a line break and a tab are escaped.
 #[cfg(test)]
 fn escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t")
 }
 
-/// A script field's escapes undone: `\n`, `\t`, `\\`; any other backslash
-/// kept as written.
+/// Undoes a script field's escapes: `\n`, `\t`, `\\`.
+///
+/// Any other backslash is kept as written.
 fn unescape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars();
@@ -275,9 +314,17 @@ fn unescape(text: &str) -> String {
 }
 
 impl Docker for FakeDocker {
-    /// One call answered: the script's next line UNDER THE CALL's NAME where
-    /// it expects this call, else [`UNEXPECTED`]; either way recorded, with
-    /// the input the call carries.
+    /// Answers one call from the script's next line under the call's name.
+    ///
+    /// That line answers where it expects this call, else [`UNEXPECTED`]
+    /// does; either way the call is recorded, with the input the call
+    /// carries.
+    ///
+    /// # Errors
+    ///
+    /// Where the fake was opened from a file, a calls file that cannot be
+    /// opened or appended to — an expected call's script line then consumed,
+    /// and the call left out of the calls recorded in memory.
     fn run(&self, call: Call<'_>) -> io::Result<Exit> {
         let input = call.input();
         let method = method(&call);

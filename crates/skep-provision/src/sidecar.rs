@@ -1,17 +1,18 @@
-//! THE SIDECAR's ANSWER (step 4, the dark claim): `skep claim --hosted -`'s
-//! DATA on stdout and its exit code, read for what they are and nothing
-//! this program imagines (the provisioning record §2.3). Its stderr is the
-//! operator's TALK — the H0 warnings, each entry's fingerprint, the
-//! anchorless line, "the genesis stands" — kept whole in the log and parsed
-//! never.
+//! The sidecar's answer (step 4, the dark claim): its data and its exit code.
 //!
-//! THE DATA LINES, one per line through the binary's `data`, every C0
-//! control in a value rendered as its code point (`<U+000A>` for a line
+//! They are `skep claim --hosted -`'s data on stdout and its exit code, read
+//! for what they are and nothing this program imagines (the provisioning
+//! record §2.3). Its stderr is the operator's talk — the H0 warnings, each
+//! entry's fingerprint, the anchorless line, "the genesis stands" — kept
+//! whole in the log and parsed never.
+//!
+//! **The data lines.** Each is one line through the binary's `data`, every
+//! C0 control in a value rendered as its code point (`<U+000A>` for a line
 //! break), so a byte a board chose forges no second line:
 //!
 //! 1. `claimant 1.0.1` — the account that claimed the board;
 //! 2. `account 1.0.1` and 3. `principal 1` — two of the three facts;
-//! 4. `origin http://127.0.0.1:8642` — THE DIALED ORIGIN, the claim run's
+//! 4. `origin http://127.0.0.1:8642` — the dialed origin, the claim run's
 //!    loopback the sidecar was told to dial ([`dialed_origin`]): asserted
 //!    here and shown nowhere — the reply relays the public origin
 //!    (AUTH-4.57 (b));
@@ -20,14 +21,14 @@
 //!    `<origin>`, so neither is shown to a person as printed; the reply
 //!    composes both again with the public origin (`reply`).
 //!
-//! EXACTLY those six lines, each value the one this program expects of a
+//! Exactly those six lines, each value the one this program expects of a
 //! fresh alpha board ([`ACCOUNT`], [`PRINCIPAL`], [`dialed_origin`]), are
-//! [`Answer::Claimed`]; the ONE line `claimed by <claimant>` is
+//! [`Answer::Claimed`]; the one line `claimed by <claimant>` is
 //! [`Answer::AlreadyClaimed`] — the walk's idempotent answer, which on a
 //! volume the flow just made is residue and a failed step; any other shape
 //! under exit 0 is [`Failure::Shape`]. The exit codes (`skep-client`'s
-//! `Halt::exit_code`; `skep-cli`'s `finish`): 0; 2 a usage refusal; 3 HALT
-//! AND SURFACE, the topology's one halt among them; 1 the board refused; 4
+//! `Halt::exit_code`; `skep-cli`'s `finish`): 0; 2 a usage refusal; 3 halt
+//! and surface, the topology's one halt among them; 1 the board refused; 4
 //! transport — the daemon not yet listening, which the flow retries.
 
 use std::fmt;
@@ -35,15 +36,17 @@ use std::fmt;
 use crate::docker::dialed_origin;
 use crate::process::Exit;
 
-/// The account the dark claim founds on a fresh board — the alpha's
-/// claimant under the root `1` — and the account fact the reply carries, the
-/// first of the three, which the deployment notes §4 call the address.
+/// The account the dark claim founds on a fresh board.
+///
+/// It is the alpha's claimant under the root `1`, and the account fact the
+/// reply carries — the first of the three, which the deployment notes §4
+/// call the address.
 pub const ACCOUNT: &str = "1.0.1";
 
 /// The principal the dark claim binds: `skep claim --hosted`'s default, 1.
 pub const PRINCIPAL: u64 = 1;
 
-/// The six DATA lines, read.
+/// The six data lines, read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claimed {
     /// Line 1's value: the claimant.
@@ -52,8 +55,9 @@ pub struct Claimed {
     pub account: String,
     /// Line 3's value: its principal.
     pub principal: String,
-    /// Line 4's value: THE DIALED ORIGIN, held to [`dialed_origin`] — the one
-    /// the sidecar was told to dial — and shown nowhere.
+    /// Line 4's value: the dialed origin, held to [`dialed_origin`].
+    ///
+    /// It is the one the sidecar was told to dial, and is shown nowhere.
     origin: String,
     /// Line 5, whole.
     first_act: String,
@@ -78,8 +82,10 @@ pub enum Answer {
 pub enum Failure {
     /// Exit 2: a usage refusal — the argv was wrong.
     Usage,
-    /// Exit 3: HALT AND SURFACE — the bare bind refused, residue, the
-    /// payload's or the preview face, a refused delegate or mint.
+    /// Exit 3: halt and surface.
+    ///
+    /// The bare bind refused, residue, the payload's or the preview face, and
+    /// a refused delegate or mint are among its halts.
     Halt,
     /// Exit 1: the board refused the claim.
     Refused,
@@ -87,8 +93,10 @@ pub enum Failure {
     Transport,
     /// Any other exit code, or `None` for an end by signal.
     OtherExit(Option<i32>),
-    /// Exit 0 and a stdout that is neither the six lines nor the one; the
-    /// words say which line, never what it held.
+    /// Exit 0 and a stdout that is neither the six lines nor the one.
+    ///
+    /// The words say which line, how many lines, or that the stdout is not
+    /// text — never what it held.
     Shape(String),
 }
 
@@ -109,8 +117,20 @@ impl fmt::Display for Failure {
 
 impl std::error::Error for Failure {}
 
-/// THE READ: the exit code mapped, and an exit-0 stdout held to the six
-/// lines or the one.
+/// Reads the sidecar's answer off its exit.
+///
+/// The exit code is mapped, and an exit-0 stdout held to the six lines or
+/// the one.
+///
+/// # Errors
+///
+/// An exit other than 0 is its mapped failure: 2 [`Failure::Usage`], 3
+/// [`Failure::Halt`], 1 [`Failure::Refused`], 4 [`Failure::Transport`], and
+/// any other code or an end by signal [`Failure::OtherExit`]. An exit 0
+/// whose stdout is not text, or is neither the six lines nor the one — a
+/// count of lines other than six, one line that is not `claimed by …`, a
+/// line without its key or its act's prefix, or a value other than this
+/// program expects — is [`Failure::Shape`].
 pub fn read(exit: &Exit) -> Result<Answer, Failure> {
     match exit.code {
         Some(0) => {}
@@ -121,7 +141,7 @@ pub fn read(exit: &Exit) -> Result<Answer, Failure> {
         other => return Err(Failure::OtherExit(other)),
     }
     let text = std::str::from_utf8(&exit.stdout).map_err(|_| Failure::Shape("a stdout that is not text".to_owned()))?;
-    // One DATA line per `\n`: the sidecar renders every C0 control inside a
+    // One data line per `\n`: the sidecar renders every C0 control inside a
     // value as its code point, so a `\n` here is a line's end and nothing
     // else, and `<U+000A>` inside a value is text.
     let lines: Vec<&str> = text.strip_suffix('\n').unwrap_or(text).split('\n').collect();
@@ -161,7 +181,12 @@ pub fn read(exit: &Exit) -> Result<Answer, Failure> {
     }
 }
 
-/// Line `at`'s value after its `key`, or the shape refused naming the line.
+/// Returns line `at`'s value after its `key`.
+///
+/// # Errors
+///
+/// [`Failure::Shape`] naming the line, where the line does not open with
+/// `key`.
 fn value<'a>(line: &'a str, key: &str, at: usize) -> Result<&'a str, Failure> {
     line.strip_prefix(key).ok_or_else(|| Failure::Shape(format!("line {at} is not `{}…`", key.trim_end())))
 }

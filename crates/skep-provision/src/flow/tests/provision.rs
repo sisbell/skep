@@ -1,36 +1,37 @@
-//! T13 — ONE POST PROVISIONED on the test's own thread, a worker's one turn
-//! (`Service::run_next`): (a) the whole flow, call by call, to the snippet,
-//! the live status, its page the reply, the invite spent and ONE mail sent
-//! after the status turned live, its lines carrying their figures — the
-//! invite's issue date, the time waited and the posts behind, the `/health`
-//! wait's bound, the time the steps took, the mails ahead of the hand-over —
-//! and an anchorless record's page and mail carrying the anchorless
-//! sentence, an anchored one's none; (b) THE DECISION TABLE, one case per
-//! failing step as the provisioning record §5.2 tabulates it, a failed claim
-//! run's row taking the container its `docker run` may leave — the dark
-//! claim's every refusal, a shape the read refuses among them, and the claim
-//! run's own removal refused after a claim — each reading a run's last lines
-//! before removing it, removing what was made for the name and nothing for
-//! any other, then looking at what stands and saying done, the snippet
-//! absent, the reload called where the snippet was written, the status D-8,
-//! the invite still issued and no mail; a failed run's last lines logged
-//! above its removal, which takes them with it, the last `/health` body's
-//! pair named where the wait gave up, and the wait never a minute unsaid —
-//! its bound as it begins, its progress every fifteenth try; (c) a
-//! cleanup's removal failing — a docker call's or the snippet's — logged,
-//! and the look after the removals naming what stands, the name left taken;
-//! a refused `rm -f` of a run that never stood, and a cleanup's reload
-//! failing, each logged as itself, the look finding nothing standing; a
-//! snippet whose write failed after its rename, removed by the cleanup, the
-//! write's failure naming it by its path; step 3's second look, a name
-//! taken since its post failing before anything is made; a step or a
-//! cleanup that panics, costing its post alone and never the worker; the
-//! dark claim's retry, thirty tries two seconds apart, its last exit 4 past
-//! them the step's failure; the `/health` wait given up, logged by its
-//! bound, the time into it, its last try's exit and its stderr; and every
-//! failure said with the time its steps took. Beside them, T12's flow half:
-//! no send before live, an outage with the status live throughout, and no
-//! mail where none is configured.
+//! T13: one post provisioned on the test's own thread, a worker's one turn.
+//!
+//! The turn is `Service::run_next`'s: (a) the whole flow, call by call, to
+//! the snippet, the live status, its page the reply, the invite spent and one
+//! mail sent after the status turned live, its lines carrying their figures —
+//! the invite's issue date, the time waited and the posts behind, the
+//! `/health` wait's bound, the time the steps took, the mails ahead of the
+//! hand-over — and an anchorless record's page and mail carrying the
+//! anchorless sentence, an anchored one's none; (b) the decision table, one
+//! case per failing step as the provisioning record §5.2 tabulates it, a
+//! failed claim run's row taking the container its `docker run` may leave —
+//! the dark claim's every refusal, a shape the read refuses among them, and
+//! the claim run's own removal refused after a claim — each that made a run
+//! reading its last lines before removing it, removing what was made for the
+//! name and nothing for any other, then, where anything was made, looking at
+//! what stands and saying done, the snippet absent, the reload called where
+//! the snippet was written, the status D-8, the invite still issued and no
+//! mail; a failed run's last lines logged above its removal, which takes them
+//! with it, the last `/health` body's pair named where the wait gave up, and
+//! the wait never a minute unsaid — its bound as it begins, its progress every
+//! fifteenth try; (c) a cleanup's removal failing — a docker call's or the
+//! snippet's — logged, and the look after the removals naming what stands, the
+//! name left taken; a refused `rm -f` of a run that never stood, and a
+//! cleanup's reload failing, each logged as itself, the look finding nothing
+//! standing; a snippet whose write failed after its rename, removed by the
+//! cleanup, the write's failure naming it by its path; step 3's second look, a
+//! name taken since its post failing before anything is made; a step or a
+//! cleanup that panics, costing its post alone and never the worker; the dark
+//! claim's retry, thirty tries two seconds apart, its last exit 4 past them the
+//! step's failure; the `/health` wait given up, logged by its bound, the time
+//! into it, its last try's exit and its stderr; and every failure said with the
+//! time its steps took. Beside them, T12's flow half: no send before live, an
+//! outage with the status live throughout, and no mail where none is
+//! configured.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -39,18 +40,19 @@ use crate::docker::Call;
 use crate::invites::InviteState;
 use crate::sender::fake::messages;
 
-/// T13 (a): THE WHOLE FLOW — the post's two inspects; then the worker's two
-/// inspects, `volume_create`, `run_claim`, `sidecar_claim` with the record
-/// trimmed on its stdin, `rm_force`, `run_serving`, `health` once per try,
-/// `caddy_reload`, in that order and no other call; the snippet on disk;
-/// the status live, its page the reply; the invite spent; ONE mail sent, to
-/// the invite's address, after the status turned live, its body the page's
-/// text; the log saying the post's admission with its invite's issue date,
-/// its taking with the time it waited and the posts behind it, the `/health`
-/// wait's bound and the try that paired, its end with the time its steps
-/// took, and the mail's hand-over with the mails ahead of it, between the
-/// live line and the mail's first try; and no record byte, address, code or
-/// token in the log.
+/// T13 (a): the whole flow runs every step, in order.
+///
+/// The post's two inspects; then the worker's two inspects, `volume_create`,
+/// `run_claim`, `sidecar_claim` with the record trimmed on its stdin,
+/// `rm_force`, `run_serving`, `health` once per try, `caddy_reload`, in that
+/// order and no other call; the snippet on disk; the status live, its page
+/// the reply; the invite spent; one mail sent, to the invite's address, after
+/// the status turned live, its body the page's text; the log saying the
+/// post's admission with its invite's issue date, its taking with the time it
+/// waited and the posts behind it, the `/health` wait's bound and the try
+/// that paired, its end with the time its steps took, and the mail's
+/// hand-over with the mails ahead of it, between the live line and the mail's
+/// first try; and no record byte, address, code or token in the log.
 #[test]
 fn the_whole_flow_runs_every_step_in_order() {
     let script = [
@@ -133,11 +135,13 @@ fn the_whole_flow_runs_every_step_in_order() {
     }
 }
 
-/// THE ANCHORLESS FACT REACHES THE PERSON: a post whose record carries no
-/// anchor-flagged entry — `skep keygen --payload`'s — goes live with the
-/// anchorless sentence (AUTH-5.62) on its status page and in its mail, the
-/// two one text, and an anchored post's carry none: the record's own fact,
-/// carried from the post through the book to the page and the mail.
+/// The anchorless fact reaches the person.
+///
+/// A post whose record carries no anchor-flagged entry —
+/// `skep keygen --payload`'s — goes live with the anchorless sentence
+/// (AUTH-5.62) on its status page and in its mail, the two one text, and an
+/// anchored post's carry none: the record's own fact, carried from the post
+/// through the book to the page and the mail.
 #[test]
 fn an_anchorless_records_page_and_mail_carry_the_anchorless_sentence() {
     for anchor in [false, true] {
@@ -163,10 +167,12 @@ fn an_anchorless_records_page_and_mail_carry_the_anchorless_sentence() {
     }
 }
 
-/// One case of the decision table: the script its worker runs through the
-/// failure, the cleanup and the look after it, the calls that follow the
-/// four inspects, and what the case does to the rig before the worker's
-/// turn.
+/// One case of the decision table.
+///
+/// It holds its name, the script its worker runs through the failure, the
+/// cleanup and the look after it, the calls that follow the four inspects,
+/// whether the reload is called, and what the case does to the rig before
+/// the worker's turn.
 struct Case {
     what: &'static str,
     script: String,
@@ -288,13 +294,15 @@ fn cases() -> Vec<Case> {
     cases
 }
 
-/// T13 (b): THE DECISION TABLE — for each failing step, the removals the
-/// record tabulates for what was made, a failed claim run's taking the
-/// container its `docker run` may leave by the record's own rule, in the
-/// reverse of the order made, for the name alone, and then the look at what
-/// stands, finding nothing and saying done; the snippet absent; the reload
-/// called again where the snippet was written; the status D-8; the invite
-/// still issued; no mail tried.
+/// T13 (b): the decision table — each failed step removes what was made.
+///
+/// For each failing step come the removals the record tabulates for what was
+/// made, a failed claim run's taking the container its `docker run` may
+/// leave by the record's own rule, in the reverse of the order made, for the
+/// name alone, and then, where anything was made, the look at what stands,
+/// finding nothing and saying done; the snippet absent; the reload called
+/// again where the snippet was written; the status D-8; the invite still
+/// issued; no mail tried.
 #[test]
 fn each_failed_step_removes_what_was_made_and_nothing_else() {
     for case in cases() {
@@ -323,10 +331,11 @@ fn each_failed_step_removes_what_was_made_and_nothing_else() {
     }
 }
 
-/// T13 (c): A CLEANUP CALL THAT FAILS is logged, the next removal still
-/// made, and the look after the removals NAMES WHAT STANDS — the container
-/// the refused `rm -f` left — so the name is LEFT TAKEN: a re-post meets D-4
-/// off what stands.
+/// T13 (c): a cleanup call that fails is logged, the next removal still made.
+///
+/// The look after the removals names what stands — the container the refused
+/// `rm -f` left — so the name is left taken: a re-post meets D-4 off what
+/// stands.
 #[test]
 fn a_failed_cleanup_call_leaves_the_name_taken_and_is_logged() {
     let script = [
@@ -359,12 +368,13 @@ fn a_failed_cleanup_call_leaves_the_name_taken_and_is_logged() {
     rig.fake.assert_done();
 }
 
-/// T13 (c): THE NAMED GAP AT THE SNIPPET — a snippet the cleanup cannot
-/// remove, its directory read-only by the time the reload fails, is logged,
-/// the reload still made, the run and the volume still removed, and the
-/// look after the removals — the snippet read, no docker call — says
-/// INCOMPLETE and names it: the snippet stands, and a re-post meets D-4 off
-/// it with no docker call.
+/// T13 (c): the named gap at the snippet.
+///
+/// A snippet the cleanup cannot remove, its directory read-only by the time
+/// the reload fails, is logged, the reload still made, the run and the volume
+/// still removed, and the look after the removals — the snippet read, no
+/// docker call — says `INCOMPLETE` and names it: the snippet stands, and a
+/// re-post meets D-4 off it with no docker call.
 #[cfg(unix)]
 #[test]
 fn a_snippet_the_cleanup_cannot_remove_leaves_the_name_taken_and_is_logged() {
@@ -402,11 +412,12 @@ fn a_snippet_the_cleanup_cannot_remove_leaves_the_name_taken_and_is_logged() {
     rig.fake.assert_done();
 }
 
-/// T13 (c): A CLEANUP WHOSE RELOAD FAILS LEAVES NOTHING STANDING: the
-/// reload's failure is logged as itself — the snippet removed, the run and
+/// T13 (c): a cleanup whose reload fails leaves nothing standing.
+///
+/// The reload's failure is logged as itself — the snippet removed, the run and
 /// the volume removed — and the look after the removals finds nothing the
 /// truth about names reads standing, so the cleanup is said done, never
-/// INCOMPLETE: a re-post for the name is admitted.
+/// `INCOMPLETE`: a re-post for the name is admitted.
 #[test]
 fn a_cleanup_whose_reload_fails_leaves_nothing_standing() {
     let script = [
@@ -441,12 +452,13 @@ fn a_cleanup_whose_reload_fails_leaves_nothing_standing() {
     rig.fake.assert_done();
 }
 
-/// T13 (c): A REFUSED `rm -f` OF A RUN THAT NEVER STOOD — the serving
-/// run's `docker run` refused before it made one — leaves nothing
-/// standing: the read of its last lines refused and logged as a removal's
-/// answer is, the refusal logged, the volume removed, the look after the
-/// removals finding nothing, the cleanup said done, never INCOMPLETE; a
-/// re-post for the name is admitted.
+/// T13 (c): after a refused `rm -f` of a run that never stood, nothing stands.
+///
+/// The serving run's `docker run` was refused before it made one: the read
+/// of its last lines refused and logged as a removal's answer is, the refusal
+/// logged, the volume removed, the look after the removals finding nothing,
+/// the cleanup said done, never `INCOMPLETE`; a re-post for the name is
+/// admitted.
 #[test]
 fn a_refused_rm_of_a_run_that_never_stood_leaves_nothing_standing() {
     let script = [
@@ -480,10 +492,11 @@ fn a_refused_rm_of_a_run_that_never_stood_leaves_nothing_standing() {
     rig.fake.assert_done();
 }
 
-/// T13 (c): THE SNIPPET's WRITE FAILING AFTER ITS RENAME — the directory's
-/// sync refused, the snippet standing — is a failed step whose cleanup
-/// removes the snippet and reloads: the snippet is the cleanup's from its
-/// write's first act, so the write's error is read as a snippet that may
+/// T13 (c): the snippet's write failing after its rename is a failed step.
+///
+/// The directory's sync is refused, the snippet standing, and the step's
+/// cleanup removes the snippet and reloads: the snippet is the cleanup's from
+/// its write's first act, so the write's error is read as a snippet that may
 /// stand, and the look after the removals finds nothing standing under the
 /// name.
 #[cfg(unix)]
@@ -543,11 +556,13 @@ fn a_snippet_whose_write_failed_after_its_rename_is_removed_by_the_cleanup() {
     assert!(failed.ends_with(&format!(" — {}", rig.snippet("alice").display())), "the write's failure names the snippet by its path: {failed}");
 }
 
-/// THE DARK CLAIM's RETRY: exit 4 — the claim run's daemon not yet
-/// listening — is tried again after a sleep of the bound's interval, and
-/// the bound is the one the flow states, thirty tries two seconds apart;
-/// past it — thirty exits 4, a sleep before each try but the first — the
-/// last exit 4 is the step's failure, named once.
+/// The dark claim's retry: exit 4 is tried again after the bound's interval.
+///
+/// Exit 4 — the claim run's daemon not yet listening — is tried again after
+/// a sleep of the bound's interval, and the bound is the one the flow states,
+/// thirty tries two seconds apart; past it — thirty exits 4, a sleep before
+/// each try but the first — the last exit 4 is the step's failure, named
+/// once.
 #[test]
 fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
     assert_eq!((SIDECAR_WAIT.tries.get(), SIDECAR_WAIT.interval), (30, Duration::from_secs(2)), "thirty tries two seconds apart");
@@ -579,10 +594,12 @@ fn the_dark_claim_retries_exit_4_two_seconds_apart_thirty_times() {
     past.fake.assert_done();
 }
 
-/// THE `/health` WAIT GIVEN UP: the bound's tries with no pair, the last a
-/// failed run, fail the step — logged once with the bound, the time into the
-/// wait and the last try's exit, as the runner spells an exit, and the last
-/// try's stderr whole; a failed run's stdout no body, so no pair is named.
+/// The `/health` wait given up: the bound's tries with no pair fail the step.
+///
+/// The last try is a failed run, and the step's failure is logged once with
+/// the bound, the time into the wait and the last try's exit, as the runner
+/// spells an exit, and the last try's stderr whole; a failed run's stdout is
+/// no body, so no pair is named.
 #[test]
 fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
     let tries = HEALTH_WAIT.tries.get() as usize;
@@ -606,17 +623,20 @@ fn a_health_wait_given_up_is_logged_with_its_bound_and_its_last_exit() {
     rig.fake.assert_done();
 }
 
-/// A FAILED RUN's LAST LINES ARE LOGGED BEFORE IT IS REMOVED: the serving run
-/// never pairing — every `/health` body naming no claimant — the cleanup
-/// reads the run's last lines first, its daemon's own account of the
-/// failure, and logs each above the run's removal, which takes them with
-/// it; and the wait's give-up names the last body's pair as the board
-/// answered it, a claim not on the volume read apart from local trust on.
-/// THE WAIT IS NEVER A MINUTE UNSAID: it says its bound as it begins, and
-/// at its fifteenth, thirtieth and forty-fifth tries without the pair what
-/// each saw, with the time into the wait — and no progress line at its last
-/// try, whose give-up says it — so a long wait reads apart from a `docker`
-/// call that has not returned.
+/// A failed run's last lines are logged before it is removed.
+///
+/// With the serving run never pairing — every `/health` body naming no
+/// claimant — the cleanup reads the run's last lines first, its daemon's own
+/// account of the failure, and logs each above the run's removal, which
+/// takes them with it; and the wait's give-up names the last body's pair as
+/// the board answered it, a claim not on the volume read apart from local
+/// trust on.
+///
+/// **The wait is never a minute unsaid.** It says its bound as it begins,
+/// and at its fifteenth, thirtieth and forty-fifth tries without the pair
+/// what each saw, with the time into the wait — and no progress line at its
+/// last try, whose give-up says it — so a long wait reads apart from a
+/// `docker` call that has not returned.
 #[test]
 fn a_failed_runs_last_lines_are_logged_before_it_is_removed() {
     let tries = HEALTH_WAIT.tries.get() as usize;
@@ -649,11 +669,13 @@ fn a_failed_runs_last_lines_are_logged_before_it_is_removed() {
     assert!(at("alice: health: waiting for the pair, at most 60 tries 1000 ms apart") < log.iter().position(|l| l == progress[0]).expect("the first progress line"), "the bound said first: {log:?}");
 }
 
-/// STEP 3's SECOND LOOK: a name taken since its post — its snippet written,
-/// a volume or a container made under it meanwhile — fails the post at the
-/// look, D-8, before anything is made: no `volume_create`, and no cleanup,
-/// so nothing this post never made is removed — the snippet that took the
-/// name stands as written — and the invite still issued.
+/// Step 3's second look: a name taken since its post fails the post.
+///
+/// With its snippet written, or a volume or a container made under it
+/// meanwhile, the name fails the post at the look, D-8, before anything is
+/// made: no `volume_create`, and no cleanup, so nothing this post never made
+/// is removed — the snippet that took the name stands as written — and the
+/// invite still issued.
 #[test]
 fn a_name_taken_since_its_post_fails_before_anything_is_made() {
     let volume = line("volume_inspect", Some("alice"), 0, "", "");
@@ -683,18 +705,22 @@ fn a_name_taken_since_its_post_fails_before_anything_is_made() {
     }
 }
 
-/// T13 (c): A STEP OR A CLEANUP THAT PANICS costs its post alone, never the
-/// worker: a step that panics is a failed step — `run_claim` panicking once
-/// the volume is made, the run it may have left and the volume removed by the
-/// cleanup, and the look after them finding nothing — and a cleanup that
-/// panics too — its `volume rm` panicking — is logged INCOMPLETE; either way
-/// the worker's turn ends, the post is D-8, its invite still issued and its
-/// code let go of: the post made again on it is admitted.
+/// T13 (c): a step or a cleanup that panics costs its post alone.
+///
+/// It never costs the worker: a step that panics is a failed step —
+/// `run_claim` panicking once the volume is made, the cleanup's `rm -f` made
+/// for the run it may have left and the volume removed, and the look after
+/// them finding nothing — and a cleanup that panics too — its `volume rm`
+/// panicking — is logged `INCOMPLETE`; either way the worker's turn ends, the
+/// post is D-8, its invite still issued and its code let go of: the post made
+/// again on it is admitted.
 #[test]
 fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
-    /// A runner that panics at the claim run, and at the volume's removal
-    /// where `volume_rm_panics`: the volume's creation and its removal
-    /// otherwise exit 0, and every other call exit 1 — nothing standing.
+    /// A runner that panics at the claim run, and where asked at `volume rm`.
+    ///
+    /// It panics at the removal where `volume_rm_panics`; the volume's
+    /// creation and its removal otherwise exit 0, and every other call exit 1
+    /// — nothing standing.
     struct Panics {
         volume_rm_panics: bool,
     }
@@ -739,9 +765,11 @@ fn a_step_or_a_cleanup_that_panics_costs_its_post_alone() {
     }
 }
 
-/// T12: A MAIL OUTAGE — every try refused — is retried to its bound on the
-/// sender's side and given up, THE STATUS LIVE THROUGHOUT: every try made
-/// with the page already live, and live after.
+/// T12: a mail outage leaves the status live throughout.
+///
+/// The outage — every try refused — is retried to its bound on the sender's
+/// side and given up, every try made with the page already live, and live
+/// after.
 #[test]
 fn a_mail_outage_leaves_the_status_live_throughout() {
     let script = [

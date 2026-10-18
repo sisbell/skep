@@ -1,21 +1,23 @@
-//! THE POOL's FENCE, workers on threads of their own as `serve` runs them:
-//! T15 (two workers make two names at once, and one worker does not), T16
-//! (a post answers at once while a worker is paused inside a step), T17 (a
-//! second post for a name in flight meets D-4 under two workers, and one
-//! `volume_create` per name across a burst), T18 (the snippet's write and
-//! the reload serial across names, and a failed route change's lock held
-//! across its undo).
+//! The pool's fence: workers on threads of their own, as `serve` runs them.
+//!
+//! The suite holds T15 (two workers make two names at once, and one worker
+//! does not), T16 (a post answers at once while a worker is paused inside a
+//! step), T17 (a second post for a name in flight meets D-4 under two
+//! workers, and one `volume_create` per name across a burst), T18 (the
+//! snippet's write and the reload serial across names, and a failed route
+//! change's lock held across its undo).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 
 use super::*;
 
-/// T18: A FAILED ROUTE CHANGE KEEPS THE ROUTE LOCK ACROSS ITS UNDO —
-/// `alice`'s reload refused and her worker paused between her failed step
-/// and her cleanup, the snippet she wrote standing, `bob`, his board paired
-/// and at the route lock, writes nothing; let go, `alice`'s snippet is
-/// removed and her reload made before `bob`'s snippet is written, so no
+/// T18: a failed route change keeps the route lock across its undo.
+///
+/// With `alice`'s reload refused and its worker paused between its failed
+/// step and its cleanup, the snippet it wrote standing, `bob`, its board
+/// paired and at the route lock, writes nothing; let go, `alice`'s snippet is
+/// removed and its reload made before `bob`'s snippet is written, so no
 /// reload of `bob`'s loads a snippet whose own route change failed.
 #[test]
 fn a_failed_route_change_keeps_the_route_lock_across_its_undo() {
@@ -64,12 +66,14 @@ fn a_failed_route_change_keeps_the_route_lock_across_its_undo() {
     assert!(!rig.snippet("alice").exists() && rig.snippet("bob").exists());
 }
 
-/// T15: TWO NAMES IN FLIGHT AT ONCE — under two workers, `alice`'s worker
-/// paused inside its sidecar wait (exit 4 once, the sleep hook at a gate), a
-/// post for `bob` is admitted and `bob` reaches `run_claim` in the fake's
-/// log BEFORE `alice` reaches `run_serving`; under ONE worker, the same
-/// script, `bob`'s `run_claim` comes only after `alice`'s `run_serving` —
-/// the pool, not luck, is what interleaves.
+/// T15: two names are in flight at once under two workers, and not under one.
+///
+/// Under two workers, `alice`'s worker paused inside its sidecar wait (exit 4
+/// once, the sleep hook at a gate), a post for `bob` is admitted and `bob`
+/// reaches `run_claim` in the fake's log before `alice` reaches
+/// `run_serving`; under one worker, the same script, `bob`'s `run_claim`
+/// comes only after `alice`'s `run_serving` — the pool, not luck, is what
+/// interleaves.
 #[test]
 fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
     for workers in [2usize, 1] {
@@ -101,10 +105,12 @@ fn two_workers_make_two_names_at_once_and_one_worker_does_not() {
     }
 }
 
-/// T16: THE POST NEVER WAITS ON A PROVISIONING — the one worker paused
-/// inside `alice`'s sidecar wait, a post for `bob` through the desk's own
-/// path answers within a short bound, admitted, and its status page shows
-/// D-7; the paused board goes live after, and `bob`'s turn comes.
+/// T16: the post never waits on a provisioning.
+///
+/// With the one worker paused inside `alice`'s sidecar wait, a post for `bob`
+/// through the desk's own path answers within a short bound, admitted, and
+/// its status page shows D-7; the paused board goes live after, and `bob`'s
+/// turn comes.
 #[test]
 fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     let gate = Gate::new();
@@ -132,11 +138,12 @@ fn a_post_answers_at_once_while_a_worker_is_paused_inside_a_step() {
     rig.fake.assert_done();
 }
 
-/// T17: A SECOND POST FOR THE SAME NAME IN FLIGHT IS REFUSED D-4 under two
-/// workers — `alice`'s worker paused and its name held, a post for `alice`
-/// under another code meets `Refusal::Name`, no docker call made, the code
-/// still issued — and across a burst of posts (four names, each posted
-/// twice, two workers running) the fake's log shows ONE `volume_create` per
+/// T17: a second post for the same name in flight is refused D-4.
+///
+/// Under two workers — `alice`'s worker paused and its name held — a post for
+/// `alice` under another code meets `Refusal::Name`, no docker call made, the
+/// code still issued; and across a burst of posts (four names, each posted
+/// twice, two workers running) the fake's log shows one `volume_create` per
 /// name: two workers never both take a job for one name.
 #[test]
 fn two_workers_never_both_take_a_job_for_one_name() {
@@ -168,12 +175,14 @@ fn two_workers_never_both_take_a_job_for_one_name() {
     assert_eq!(said.iter().filter(|c| *c == "caddy_reload").count(), 4, "{said:?}");
 }
 
-/// T18: ROUTE CHANGES ARE SERIAL — two names going live at once produce two
-/// snippets and two reloads, and no reload lands between another name's
-/// snippet write and its own reload: `alice`'s reload paused inside the
-/// fake while `bob` runs to the step before its own snippet, `bob` writes
-/// nothing while `alice`'s reload stands open; then the recorded order shows
-/// each name's write followed at once by its own reload.
+/// T18: route changes are serial.
+///
+/// Two names going live at once produce two snippets and two reloads, and no
+/// reload lands between another name's snippet write and its own reload:
+/// `alice`'s reload paused inside the fake while `bob` runs to the step
+/// before its own snippet, `bob` writes nothing while `alice`'s reload stands
+/// open; then the recorded order shows each name's write followed at once by
+/// its own reload.
 #[test]
 fn the_snippet_write_and_the_reload_are_serial_across_names() {
     let gate = Gate::new();

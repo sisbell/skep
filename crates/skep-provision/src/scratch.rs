@@ -1,5 +1,6 @@
-//! A scratch directory for the unit suites: made under the system temp
-//! directory, named by OS entropy, removed when dropped.
+//! A scratch directory for the unit suites, removed when dropped.
+//!
+//! It is made under the system temp directory, named by OS entropy.
 
 use std::path::{Path, PathBuf};
 
@@ -7,7 +8,12 @@ use std::path::{Path, PathBuf};
 pub struct Scratch(PathBuf);
 
 impl Scratch {
-    /// A fresh one, `0700`.
+    /// Returns a fresh one, `0700`.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the OS gives no entropy for its name, or where the
+    /// directory cannot be made.
     pub fn new() -> Scratch {
         let mut raw = [0u8; 8];
         getrandom::fill(&mut raw).expect("OS entropy");
@@ -23,7 +29,7 @@ impl Scratch {
         Scratch(path)
     }
 
-    /// Its path.
+    /// Returns its path.
     pub fn path(&self) -> &Path {
         &self.0
     }
@@ -33,7 +39,7 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            // A test that made a directory unwritable gives it back first.
+            // A directory a test made unwritable is made writable again first.
             use std::os::unix::fs::PermissionsExt;
             if let Ok(entries) = std::fs::read_dir(&self.0) {
                 for entry in entries.flatten() {

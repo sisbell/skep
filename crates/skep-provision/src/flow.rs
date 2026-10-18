@@ -1,18 +1,19 @@
-//! THE FLOW (the deployment notes §4, steps 3 to 5; the provisioning record
-//! §2 and §5.2): the [`Service`] the pages' desk is — A POOL OF WORKERS,
-//! THE NAME THE UNIT OF EXCLUSION.
+//! The flow: the [`Service`] the pages' desk is.
 //!
-//! THE POST ([`Service`]'s `Desk::admit`): the invite looked up — a code the
-//! file holds issued; the name's grammar; the record admitted (D-5, D-6) —
-//! each in process, before any docker call; then WHAT IS IN FLIGHT, under
+//! It is a pool of workers, the name the unit of exclusion (the deployment
+//! notes §4, steps 3 to 5; the provisioning record §2 and §5.2).
+//!
+//! **The post** ([`Service`]'s `Desk::admit`): the invite looked up — a code
+//! the file holds issued; the name's grammar; the record admitted (D-5, D-6)
+//! — each in process, before any docker call; then what is in flight, under
 //! the book's short lock — the queue's depth ([`QUEUE_DEPTH`]; past it D-8,
-//! "try again later"), the codes held and the names the posts in flight hold —
-//! refused with no docker call, and the post's code then held for its look
-//! ([`CodeLook`]), one look per code; then THE TRUTH ABOUT THE NAME
+//! "try again later"), the codes held and the names the posts in flight hold
+//! — refused with no docker call, and the post's code then held for its look
+//! ([`CodeLook`]), one look per code; then the truth about the name
 //! (`names::taken`, D-4), three reads under no lock of this service's, at
 //! most [`MAX_LOOKS`] posts' at once — past it D-8, "try again later", with
-//! no docker call; then THE STATUS TOKEN minted, the look still held — D-8
-//! where the OS gives no entropy; then THE ADMISSION, under the book's lock
+//! no docker call; then the status token minted, the look still held — D-8
+//! where the OS gives no entropy; then the admission, under the book's lock
 //! again: the look ended, and what is in flight checked again — a post for
 //! this name may have been admitted while the reads ran, though none for
 //! this code, which the look held — and the invite looked up again under the
@@ -20,112 +21,114 @@
 //! live on the code before the look held it, or by the operator's hand —
 //! then the post queued, and D-7 answered with its status URL. A refused
 //! post leaves nothing: no docker call past the truth's reads, no file, no
-//! queue entry, no code held. A POST NEVER WAITS ON A PROVISIONING: no lock
+//! queue entry, no code held. A post never waits on a provisioning: no lock
 //! it takes is held across one.
 //!
-//! THE NAME IS THE UNIT OF EXCLUSION. A name is HELD from its admission to
-//! its live or failed end (the status map's `holds`) — the owner's lock per
-//! name, an entry in the book that no thread waits on — and a second post
-//! for a name in flight is refused (D-4) under the book's lock, the very
-//! lock that admits — so no two posts for one name are ever in flight, and
-//! the worker that takes a post owns its name alone to the end. No mutex is
-//! held over a provisioning: two workers make two names at once.
+//! **The name is the unit of exclusion.** A name is held from its admission
+//! to its live or failed end (the status map's `holds`) — the lock per name,
+//! an entry in the book that no thread waits on — and a second post for a
+//! name in flight is refused (D-4) under the book's lock, the very lock that
+//! admits — so no two posts for one name are ever in flight, and the worker
+//! that takes a post owns its name alone to the end. No mutex is held over a
+//! provisioning: two workers make two names at once.
 //!
-//! THE WORKERS ([`Service::work`]), `--workers` threads, each taking the
+//! **The workers** ([`Service::work`]): `--workers` threads, each taking the
 //! next queued post and running it to its end:
 //!
 //! 3. the truth about the name read again — a name taken since the post is
 //!    not this post's (D-8); `volume_create`, the volume labelled as this
 //!    service's; `run_claim`, the public origin configured (AUTH-4.57 (a),
 //!    (b), (f));
-//! 4. `sidecar_claim`, the record on its stdin, RETRIED on exit 4 while the
-//!    claim run's daemon is not yet listening ([`SIDECAR_WAIT`]); its DATA
+//! 4. `sidecar_claim`, the record on its stdin, retried on exit 4 while the
+//!    claim run's daemon is not yet listening ([`SIDECAR_WAIT`]); its data
 //!    read (`sidecar`): the six lines are the claim, `claimed by …` on the
 //!    volume this flow just made is residue — a failure — and any other
 //!    exit or shape a failure, its stderr whole in the log; then `rm_force`
 //!    the claim run;
-//! 5. `run_serving`; the `/health` wait for the PAIR (`health`) — the
+//! 5. `run_serving`; the `/health` wait for the pair (`health`) — the
 //!    first-start guard beside the proxy's own check (AUTH-4.57 (d)); then
-//!    A ROUTE CHANGE under the one route lock, serial across every name:
+//!    a route change under the one route lock, serial across every name:
 //!    the snippet written (`caddy`, AUTH-4.57 (c)) and `caddy_reload` — so
 //!    no reload lands between another name's snippet and its own reload,
 //!    and, where the write or the reload fails, none between that snippet
 //!    and the reload that undoes it: the lock is held on into the cleanup;
 //!
-//! then THE STATUS LIVE, then THE INVITE SPENT under the invite file's own
-//! lock and its code let go of, in that order, then THE MAIL handed to the
-//! sender's own thread, after the page and never ahead of it, so a mail
-//! outage holds up no next post. The snippet stands before the spend is
-//! written: a stop between the two leaves the board routed — or routed at the
-//! proxy's next reload — and its invite issued, which the next start names
-//! the board for and admits a post on again until the operator marks it
-//! (`main`'s THE STOP). A step that panics is a failed step, and a cleanup
-//! that panics fails its post all the same: a panic costs its post, never
-//! the worker.
+//! then the status live, then the invite spent under the invite file's own
+//! lock and its code let go of where the spend is answered, in that order,
+//! then the mail handed to the sender's own thread, after the page and never
+//! ahead of it, so a mail outage holds up no next post. The snippet stands
+//! before the spend is written: a stop between the two leaves the board
+//! routed — or routed at the proxy's next reload — and its invite issued,
+//! which the next start names the board for and admits a post on again until
+//! the operator marks it (`main`'s paragraph on the stop). A step that panics
+//! is a failed step, and a cleanup that panics fails its post all the same: a
+//! panic costs its post, never the worker.
 //!
-//! THE CLEANUP (the provisioning record §5.2's decision table, D-8 made
+//! **The cleanup** (the provisioning record §5.2's decision table, D-8 made
 //! literally true): on a failed step, what the flow made is undone in the
 //! reverse of the order it was made — the snippet removed where its write
 //! began, and Caddy reloaded where one stood or may stand, the route change's
 //! undo under the route lock its write took and held since; `rm_force` where
 //! a run may stand, its last lines logged first — the board's own daemon's
 //! account of the failure, which the removal takes with the run; `volume_rm`
-//! where the volume stands — and then THE TRUTH ASKED what stands under the
-//! name: the three reads a post makes (`names::taken`), the ones D-8's
-//! "Nothing stands under your name" speaks of, never the removals' answers.
-//! The status FAILED (D-8) and the invite
-//! NOT spent, so the person may post again. By the table: `volume_create`
-//! failed — nothing; `run_claim` failed — whatever run its `docker run` left,
-//! and the volume (the record's row names the volume; its rule,
-//! `docker rm -f` whichever run stands, takes the container a failed start
-//! leaves); the dark claim failed (exit 4 past the bound, 3, 1, 2, or
-//! `claimed by`) — the claim run and the volume; `run_serving` failed, or the
-//! pair never answered — the serving run and the volume; the snippet's write
-//! failed — the snippet, where its rename landed, and a reload, then the
-//! serving run and the volume; the reload failed — the snippet and a reload,
-//! the serving run, the volume. A board whose claim landed and whose route
-//! did not is removed with its volume: no route ever existed — the route lock
-//! kept every other name's reload out while its snippet stood, and its own
-//! reload, where one was made, failed — so no one wrote to it, and a re-post
-//! claims a fresh volume with the same keys. THE NAMED GAP: where something
-//! still stands after the removals — a removal that itself failed — the log
-//! says INCOMPLETE and names it, and the truth then refuses re-posts (D-4)
-//! until the operator clears it; a refused `rm -f` of a run that never stood,
-//! and a reload that fails, leave nothing the truth reads, and the verdict is
-//! done.
+//! where the volume stands — and then, where anything was made, the truth
+//! asked what stands under the name: the three reads a post makes
+//! (`names::taken`), the ones D-8's "Nothing stands under your name" speaks
+//! of, never the removals' answers.
+//! The status is failed (D-8) and the invite not spent, so the person may
+//! post again. By the table: `volume_create` failed — nothing; `run_claim`
+//! failed — whatever run its `docker run` left, and the volume (the record's
+//! row names the volume; its rule, `docker rm -f` whichever run stands,
+//! takes the container a failed start leaves); the dark claim failed (exit 4
+//! past the bound, 3, 1, 2, `claimed by`, any other exit or shape, or a
+//! `docker` that could not run) — the claim run and the volume; `run_serving`
+//! failed, or the pair never answered — the serving run and the volume; the
+//! snippet's write failed — the snippet, where its rename landed, and a
+//! reload, then the serving run and the volume; the reload failed — the
+//! snippet and a reload, the serving run, the volume. A board whose claim
+//! landed and whose route did not is removed with its volume: no route ever
+//! existed — the route lock kept every other name's reload out while its
+//! snippet stood, and its own reload, where one was made, failed — so no one
+//! wrote to it, and a re-post claims a fresh volume with the same keys.
 //!
-//! THE SWEEP AT START ([`Service::sweep`]; `serve` runs it once, its address
-//! bound and before it serves): a stop mid-board before its snippet's write
-//! leaves a volume, and perhaps a run, under a name with no snippet, which
-//! the truth would read as TAKEN for good — so every volume under this
-//! service's label is listed, the listing named before it is made, and each
-//! under a name of the grammar with no snippet is handed to the cleanup
-//! itself as what a stop leaves, and so undone by the table's last two rows,
-//! the truth asked what stands after; a name whose snippet stands is left —
-//! and named where no line of the invite file is spent under it, for a stop
-//! from its snippet's write until its spend leaves its invite issued — a
-//! volume under no name of the grammar is logged and left, and a listing
-//! that fails is logged and the sweep skipped — the sign-up still serves.
-//! THE SNIPPET DIRECTORY IS THE LIST OF BOARDS IT SPARES: a start over a
-//! directory emptier than the Engine's labelled volumes — a VM restored with
-//! its volumes and not the directory, `--boards-dir` pointed elsewhere —
-//! removes every board it lacks. Its precondition is the operator's: ONE
-//! SERVICE PER DOCKER HOST, for the label and the names are the host's, and
-//! a second service would take the first's boards for half-made; `serve`
-//! refuses one over the same state directory or on the same port before its
-//! sweep. And it takes the service whole, by `&mut`, so no post of this
-//! service's is in flight while it runs — a post's volume stands with no
-//! snippet from its step 3 until its route change.
+//! **The named gap.** Where something still stands after the removals — a
+//! removal that itself failed — the log says `INCOMPLETE` and names it, and
+//! the truth then refuses re-posts (D-4) until the operator clears it; a
+//! refused `rm -f` of a run that never stood, and a reload that fails, leave
+//! nothing the truth reads, and the verdict is done.
 //!
-//! THE DESK's OTHER TWO ANSWERS: a sign-up (`Desk::sign_up`), the address
+//! **The sweep at start** ([`Service::sweep`]; `serve` runs it once, its
+//! address bound and before it serves): a stop mid-board before its
+//! snippet's write leaves a volume, and perhaps a run, under a name with no
+//! snippet, which the truth would read as taken for good — so every volume
+//! under this service's label is listed, the listing named before it is
+//! made, and each under a name of the grammar with no snippet is handed to
+//! the cleanup itself as what a stop leaves, and so undone by the table's
+//! last two rows, the truth asked what stands after; a name whose snippet
+//! stands is left — and named where no line of the invite file is spent
+//! under it, for a stop from its snippet's write until its spend leaves its
+//! invite issued — a volume under no name of the grammar is logged and left,
+//! and a listing that fails is logged and the sweep skipped — the sign-up
+//! still serves. The snippet directory is the list of boards it spares: a
+//! start over a directory emptier than the Engine's labelled volumes — a VM
+//! restored with its volumes and not the directory, `--boards-dir` pointed
+//! elsewhere — removes every board it lacks. Its precondition is the
+//! operator's: one service per Docker host, for the label and the names are
+//! the host's, and a second service would take the first's boards for
+//! half-made; `serve` refuses one over the same state directory or on the
+//! same port before its sweep. And it takes the service whole, by `&mut`, so
+//! no post of this service's is in flight while it runs — a post's volume
+//! stands with no snippet from its step 3 until its route change.
+//!
+//! **The desk's other two answers.** A sign-up (`Desk::sign_up`): the address
 //! kept through `signups` and logged as kept or refused — never the
-//! address — touching nothing of the book; and a status (`Desk::status`),
-//! a query of the book's status map, a live post's page rendered by the
-//! one renderer from the inputs [`Service`]'s `live_reply` gathers.
+//! address — touching nothing of the book; and a status (`Desk::status`): a
+//! query of the book's status map, a live post's page rendered by the one
+//! renderer from the inputs [`Service`]'s `live_reply` gathers.
 //!
-//! THE LOG, on stderr through [`Log`]: one line per step naming the name, the
-//! step and each call's exit code, and the sidecar's stderr whole, which
-//! names each record entry by its fingerprint and its label — NEVER the
+//! **The log**, on stderr through [`Log`]: one line per step naming the name,
+//! the step and each call's exit code, and the sidecar's stderr whole, which
+//! names each record entry by its fingerprint and its label — never the
 //! record whole or a key of it, a person's address, an invite code or a
 //! status token (the provisioning record §4). A post is said as a worker
 //! takes it, with how long it waited and the posts still waiting, and at its
@@ -173,25 +176,31 @@ use crate::wait::Wait;
 
 use status_map::{PostState, StatusMap};
 
-/// THE QUEUE's DEPTH: four posts WAITING for a worker, the ones the workers
-/// run apart, whatever `--workers` is — the provisioning record §5.2's
-/// figure, priced there for one worker and kept for the pool; a fifth meets
-/// D-8, "try again later". No flag sets it: a change to it is a ruling's.
+/// The queue's depth: four posts waiting for a worker, whatever `--workers` is.
+///
+/// They are the ones the workers run apart — the provisioning record §5.2's
+/// figure, priced there for one worker, for the pool as well; a fifth meets
+/// D-8, "try again later". No flag sets it: a change to it is a design
+/// decision's.
 const QUEUE_DEPTH: usize = 4;
 
-/// THE DARK CLAIM's RETRY: thirty tries two seconds apart while the
-/// sidecar answers exit 4 — the claim run's daemon not yet listening.
+/// The dark claim's retry: thirty tries two seconds apart.
+///
+/// The tries go on while the sidecar answers exit 4 — the claim run's daemon
+/// not yet listening.
 const SIDECAR_WAIT: Wait = Wait { tries: NonZeroU32::new(30).expect("thirty is not zero"), interval: Duration::from_secs(2) };
 
-/// THE `/health` WAIT's PROGRESS: a line at every fifteenth try without the
-/// pair, some half a minute apart — each try a `docker run --rm` of the
-/// sidecar and a second's pause — so no stretch of a board's steps goes a
-/// minute without a line: RUNBOOK §10 step 12 reads a minute's silence from a
-/// board taken by a worker as a `docker` call that has not returned.
+/// The `/health` wait's progress line: every fifteenth try without the pair.
+///
+/// The lines come some half a minute apart — each try a `docker run --rm` of
+/// the sidecar and a second's pause — so no stretch of a board's steps goes
+/// a minute without a line: RUNBOOK §10 step 12 reads a minute's silence from
+/// a board taken by a worker as a `docker` call that has not returned.
 const HEALTH_PROGRESS: u32 = 15;
 
-/// THE LOOKS' CAP: four posts' looks at what stands under their names at
-/// once — [`QUEUE_DEPTH`], the posts that can wait at once. A look is up to
+/// The looks' cap: four posts' looks at what stands under their names at once.
+///
+/// It is [`QUEUE_DEPTH`], the posts that can wait at once. A look is up to
 /// two `docker` processes, Go programs of tens of megabytes each, and a post
 /// refused D-4 off a container — the proxy's own, `caddy`, stands under its
 /// name — leaves its code issued and unheld, so uncapped one issued code
@@ -219,44 +228,51 @@ struct Job {
     record: Record,
     code: InviteCode,
     address: String,
-    /// The day its invite was issued, as the invite file's line holds it:
-    /// the operator's locator for that line — said as the post is admitted,
-    /// and again where its spend cannot be written — never its code or its
-    /// address, which no log line carries.
+    /// The day its invite was issued, as the invite file's line holds it.
+    ///
+    /// It is the operator's locator for that line — said as the post is
+    /// admitted, and again where its spend cannot be written — never its code
+    /// or its address, which no log line carries.
     issued: String,
-    /// When it was admitted: the line a worker takes it with says how long
-    /// it waited.
+    /// When it was admitted.
+    ///
+    /// The line a worker takes it with says how long it waited.
     admitted_at: Instant,
 }
 
-/// THE BOOK, which the pages and the workers share under its own short lock:
-/// WHAT IS IN FLIGHT — the posts waiting for a worker, and the invite codes
-/// held, each by a post admitted (`admitted`) or by a post looking at what
-/// stands under its name (`looking`), each code with what holds it, for a
-/// refusal to name — and every post this process admitted, by token, in
-/// flight or ended (the status map); and THE RULES THAT TIE THEM:
-/// a post looking at what stands holds its code until its admission or its
-/// refusal ([`CodeLook`]); a post admitted waits with its token in the map and
-/// its code held; a post taken is running; a post in flight, waiting or
-/// running, holds its name; a failed post lets its code go at once, and a live
-/// one keeps it held until its spend is answered — written, or the file found
-/// holding the code no longer issued, the operator's hand having marked it —
-/// and the worker lets it go ([`Book::release`]); a spend that could not be
-/// written keeps it held; and a new post is admitted only where none of a full
-/// queue, a held code and a held name blocks it — the first of them in that
-/// order, as [`Book::blocks`] answers, asked by the admitter under the lock it
-/// admits under ([`Book::admit`]'s precondition).
+/// The book, which the pages and the workers share under its own short lock.
+///
+/// It holds what is in flight — the posts waiting for a worker, and the
+/// invite codes held, each by a post admitted (`admitted`) or by a post
+/// looking at what stands under its name (`looking`), each code with what
+/// holds it, for a refusal to name — and every post this process admitted,
+/// by token, in flight or ended (the status map).
+///
+/// **The rules that tie them.** A post looking at what stands holds its code
+/// until its admission or its refusal ([`CodeLook`]); a post admitted waits
+/// with its token in the map and its code held; a post taken is running; a
+/// post in flight, waiting or running, holds its name; a failed post lets its
+/// code go at once, and a live one keeps it held until its spend is answered
+/// — written, or the file found holding no such code issued, the operator's
+/// hand having marked it or removed its line — and the worker lets it go
+/// ([`Book::release`]); a spend that could not be written keeps it held; and
+/// a new post is admitted only where none of a full queue, a held code and a
+/// held name blocks it — the first of them in that order, as
+/// [`Book::blocks`] answers, asked by the admitter under the lock it admits
+/// under ([`Book::admit`]'s precondition).
 struct Book {
     queue: VecDeque<Job>,
     map: StatusMap,
-    /// The codes the posts admitted hold, each with its post's token — the
-    /// key the status map holds the post by, so what holds a code is read
-    /// off the post itself: each from its post's admission until let go of —
-    /// a failed post's at once, a live post's once its spend is answered
-    /// ([`Book::release`]).
+    /// The codes the posts admitted hold, each with its post's token.
+    ///
+    /// The token is the key the status map holds the post by, so what holds a
+    /// code is read off the post itself: each from its post's admission until
+    /// let go of — a failed post's at once, a live post's once its spend is
+    /// answered ([`Book::release`]).
     admitted: HashMap<InviteCode, String>,
-    /// The codes whose posts are looking at what stands under their names,
-    /// each with its post's name: held as surely as one in `admitted`, from
+    /// The codes whose posts are looking at what stands under their names.
+    ///
+    /// Each is held with its post's name, as surely as one in `admitted`, from
     /// the post's in-flight check to its admission or its refusal, so the
     /// posts on one code hold one of the looks' permits at most.
     looking: HashMap<InviteCode, Name>,
@@ -278,28 +294,34 @@ enum Blocked {
     NameHeld,
 }
 
-/// HOW A CODE IS HELD, as its refusal says it: the operator reads a code held
-/// for good — a live board's whose spend could not be written — apart from
-/// one held for the moments a post is judged or made.
+/// How a code is held, as its refusal says it.
+///
+/// The operator reads a code held for good — a live board's whose spend
+/// could not be written — apart from one held for the moments a post is
+/// judged or made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
     /// By a post looking at what stands under its name ([`CodeLook`]).
     Looking,
     /// By a post in flight, waiting or running.
     InFlight,
-    /// By a board gone live, until its spend is answered — for the
-    /// process's life, where the spend could not be written.
+    /// By a board gone live, until its spend is answered.
+    ///
+    /// It is held for the process's life, where the spend could not be
+    /// written.
     Live,
 }
 
 impl Book {
-    /// The book at start: nothing in flight, the status map as rebuilt.
+    /// Returns the book at start: nothing in flight, the status map as rebuilt.
     fn new(map: StatusMap) -> Book {
         Book { queue: VecDeque::new(), map, admitted: HashMap::new(), looking: HashMap::new() }
     }
 
-    /// What refuses a new post for `name` under `code`: the first of a full
-    /// queue, a held code and a held name — `None` where none does.
+    /// Returns what refuses a new post for `name` under `code`, if anything.
+    ///
+    /// It is the first of a full queue, a held code and a held name — `None`
+    /// where none does.
     fn blocks(&self, name: &Name, code: &InviteCode) -> Option<Blocked> {
         if self.queue.len() >= QUEUE_DEPTH {
             return Some(Blocked::QueueFull);
@@ -315,14 +337,20 @@ impl Book {
         self.map.holds(name).then_some(Blocked::NameHeld)
     }
 
-    /// A post admitted: its token in the map, its code held, the post queued
-    /// — answered with the posts now waiting. PRECONDITION, the caller's,
-    /// under the same lock as this call: nothing in flight blocks the post
-    /// ([`Book::blocks`] answers `None` for its name and its code), and its
-    /// token is fresh. The first is the admitter's alone to check, and the
-    /// book does not check it again; the second the map's own gate asserts
-    /// ([`StatusMap::admit`]), and it comes first, so a broken admission
-    /// panics before the book changes: an admission is whole or not made.
+    /// Admits a post: its token in the map, its code held, the post queued.
+    ///
+    /// It answers with the posts now waiting.
+    ///
+    /// **Precondition.** The caller's, under the same lock as this call:
+    /// nothing in flight blocks the post ([`Book::blocks`] answers `None` for
+    /// its name and its code). It is the admitter's alone to check, and the
+    /// book does not check it again.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the post's token is not fresh: the map's own gate asserts
+    /// it ([`StatusMap::admit`]), and it comes first, so a broken admission
+    /// panics before the book changes — an admission is whole or not made.
     fn admit(&mut self, job: Job) -> usize {
         self.map.admit(job.token.clone(), job.name.clone(), job.record.anchorless());
         self.admitted.insert(job.code.clone(), job.token.clone());
@@ -330,44 +358,50 @@ impl Book {
         self.queue.len()
     }
 
-    /// The next waiting post, taken by a worker: now running.
+    /// Takes the next waiting post for a worker, marking it running.
     fn take(&mut self) -> Option<Job> {
         let job = self.queue.pop_front()?;
         self.map.set(&job.token, PostState::Running);
         Some(job)
     }
 
-    /// `token`'s post marked live: its page the live reply. Its code stays
-    /// held until its spend is answered ([`Book::release`]).
+    /// Marks `token`'s post live: its page the live reply.
+    ///
+    /// Its code stays held until its spend is answered ([`Book::release`]).
     fn mark_live(&mut self, token: &str) {
         self.map.set(token, PostState::Live);
     }
 
-    /// `code` let go of: a new post may name it — a live post's once the
-    /// file holds it no longer issued, spent by this post's spend or by the
-    /// operator's hand; a failed post's at once.
+    /// Lets `code` go: a new post may name it.
+    ///
+    /// A live post's goes once the file holds no such code issued, spent by
+    /// this post's spend or by the operator's hand, or its line removed; a
+    /// failed post's at once.
     fn release(&mut self, code: &InviteCode) {
         self.admitted.remove(code);
     }
 
-    /// `job`'s post marked failed: its page D-8, and its code let go of at
-    /// once — the file still holds it issued, so the person may post again.
+    /// Marks `job`'s post failed: its page D-8, and its code let go of at once.
+    ///
+    /// The file still holds it issued, so the person may post again.
     fn mark_failed(&mut self, job: &Job) {
         self.map.set(&job.token, PostState::Failed);
         self.release(&job.code);
     }
 }
 
-/// A PERMIT UNDER A CAP — the workspace's word for it, `skep-util`'s
-/// `Permit`, which this crate's five dependencies leave out: taken where
-/// fewer than the cap are held, and given back when dropped — on every
-/// return and every unwind alike, so no permit is ever kept by a look that
-/// ended.
+/// A permit under a cap: taken where fewer than the cap are held.
+///
+/// It is the workspace's word for it, `skep-util`'s `Permit`, which this
+/// crate's five dependencies leave out; it is given back when dropped — on
+/// every return and every unwind alike, so no permit is ever kept by a look
+/// that ended.
 struct Permit<'a>(&'a AtomicUsize);
 
 impl<'a> Permit<'a> {
-    /// A permit among `held`'s, where fewer than `cap` are held; `None`
-    /// where `cap` are.
+    /// Takes a permit among `held`'s, where fewer than `cap` are held.
+    ///
+    /// It answers `None` where `cap` are.
     fn take(held: &'a AtomicUsize, cap: usize) -> Option<Permit<'a>> {
         held.try_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < cap).then_some(n + 1)).ok().map(|_| Permit(held))
     }
@@ -379,33 +413,36 @@ impl Drop for Permit<'_> {
     }
 }
 
-/// A CODE's LOOK: the post's code in the book's `looking` while its post
-/// reads what stands under its name — so one invite takes one of the looks'
-/// permits at most, never all of them — let go of when dropped, on every
-/// return and every unwind alike, unless the admission ended it first, under
-/// the lock it admits under.
+/// A code's look: its post's code held in the book's `looking`.
+///
+/// It is held while its post reads what stands under its name — so one
+/// invite takes one of the looks' permits at most, never all of them — and
+/// let go of when dropped, on every return and every unwind alike, unless
+/// the admission ended it first, under the lock it admits under.
 struct CodeLook<'s> {
     book: &'s Mutex<Book>,
     code: Option<InviteCode>,
 }
 
 impl<'s> CodeLook<'s> {
-    /// The look begun, under the book's lock the caller holds — `book` the
-    /// content of `lock` — once the in-flight check made under it has found
-    /// nothing blocking the post for `name`: the code held in `looking`, the
-    /// name beside it for a refusal to name, and the hold handed to the guard
-    /// that lets it go.
+    /// Begins the look, under the book's lock the caller holds.
+    ///
+    /// `book` is the content of `lock`, and the look begins once the in-flight
+    /// check made under it has found nothing blocking the post for `name`: the
+    /// code held in `looking`, the name beside it for a refusal to name, and
+    /// the hold handed to the guard that lets it go.
     fn begin(lock: &'s Mutex<Book>, book: &mut Book, code: InviteCode, name: Name) -> CodeLook<'s> {
         book.looking.insert(code.clone(), name);
         CodeLook { book: lock, code: Some(code) }
     }
 
-    /// The look ended at the admission, under the book's lock the caller
-    /// holds: the code out of `looking`, so the in-flight check made again
-    /// there does not meet this post's own look; and taken from the guard,
-    /// so its drop — after the lock is let go, by when a worker may have run
-    /// this post and let its code go, and a later post's look may hold it —
-    /// takes nothing back.
+    /// Ends the look at the admission, under the book's lock the caller holds.
+    ///
+    /// The code goes out of `looking`, so the in-flight check made again there
+    /// does not meet this post's own look; and it is taken from the guard, so
+    /// its drop — after the lock is let go, by when a worker may have run this
+    /// post and let its code go, and a later post's look may hold it — takes
+    /// nothing back.
     fn end(mut self, book: &mut Book) {
         if let Some(code) = self.code.take() {
             book.looking.remove(&code);
@@ -421,32 +458,38 @@ impl Drop for CodeLook<'_> {
     }
 }
 
-/// What a provisioning has made, or begun to make where a making's error can
-/// follow its first act — the claim run's `docker run`, the snippet's write —
-/// or, handed to the sweep, what a stop mid-board may have left, for the
-/// cleanup to undo; and, once its snippet's write has begun, the route lock
-/// that write took, so a failed route change is undone under the lock it was
-/// made under. The cleanup takes it apart whole and the sweep builds it
-/// whole, so a making added here is a compile error at both until each says
-/// what it does with it.
+/// What a provisioning has made, or begun to make, for the cleanup to undo.
+///
+/// It holds what was made, and a making begun where its error can follow its
+/// first act — the claim run's `docker run`, the snippet's write — or, as
+/// the sweep builds it, what a stop mid-board may have left; and, once its
+/// snippet's write has begun, the route lock that write took, so a failed
+/// route change is undone under the lock it was made under. The cleanup
+/// takes it apart whole and the sweep builds it whole, so a making added
+/// here is a compile error at both until each says what it does with it.
 #[derive(Debug, Default)]
 struct Made<'s> {
     /// The board's volume, created.
     volume: bool,
-    /// A run that may stand under the name: the claim run, from its
-    /// `docker run`'s first act, then the serving run.
+    /// A run that may stand under the name.
+    ///
+    /// It is the claim run, from its `docker run`'s first act, then the
+    /// serving run.
     run: bool,
-    /// THE SNIPPET, from its write's first act: the route lock that write
-    /// took — the write's error may come after its rename, the snippet
-    /// standing — let go of once the reload succeeds, and otherwise held
-    /// on into the cleanup, across the snippet's removal and the reload
-    /// that undoes it.
+    /// The snippet, from its write's first act: the route lock that write took.
+    ///
+    /// The write's error may come after its rename, the snippet standing; the
+    /// lock is let go of once the reload succeeds, and otherwise held on into
+    /// the cleanup, across the snippet's removal and the reload that undoes
+    /// it.
     snippet: Option<MutexGuard<'s, ()>>,
 }
 
-/// WHERE A CLEANUP RUNS: on a failed step — the provisioning record §5.2's
-/// FAILURE CLEANUP — or at start, on a board a stop left half-made — the
-/// owner's CLEANUP ON START, the sweep; and the word its log lines carry.
+/// Where a cleanup runs, and the word its log lines carry.
+///
+/// It runs on a failed step — the provisioning record §5.2's failure cleanup
+/// — or at start, on a board a stop left half-made — the cleanup on start,
+/// the sweep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CleanupOn {
     /// A step failed: its lines say `cleanup`.
@@ -465,11 +508,12 @@ impl fmt::Display for CleanupOn {
     }
 }
 
-/// THE LINES SAID AT A RATE (`rates`), the ones a stranger can drive: the
-/// edges of a failure met at every request while it stands — said once as it
-/// starts, once as it ends, with its count — and the stretches of a refusal
-/// no invite bounds — said at most once a minute, with the count of like
-/// ones since.
+/// The lines said at a rate (`rates`): the ones a stranger can drive.
+///
+/// They are the edges of a failure met at every request while it stands —
+/// said once as it starts, once as it ends, with its count — and the
+/// stretches of a refusal no invite bounds — said at most once a minute, with
+/// the count of like ones since.
 #[derive(Debug, Default)]
 struct Rated {
     /// The invite file unread at a post's lookup.
@@ -486,15 +530,18 @@ struct Rated {
     spent: Stretch,
     /// A sign-up with no address by the rule.
     unaddressed: Stretch,
-    /// A unit suite's clock: what it has moved the instant every rate here is
-    /// judged at on by, so a hold-down or a stretch passes with no wait.
+    /// A unit suite's clock.
+    ///
+    /// It holds what the suite has moved the instant every rate here is judged
+    /// at on by, so a hold-down or a stretch passes with no wait.
     #[cfg(test)]
     advanced_ms: AtomicU64,
 }
 
 impl Rated {
-    /// The instant every rate here is judged at: the monotonic clock — and,
-    /// in a unit suite, what the suite has moved it on by.
+    /// Returns the instant every rate here is judged at: the monotonic clock.
+    ///
+    /// In a unit suite, it adds what the suite has moved it on by.
     fn now(&self) -> Instant {
         let now = Instant::now();
         #[cfg(test)]
@@ -502,49 +549,64 @@ impl Rated {
         now
     }
 
-    /// A unit suite's clock moved on by `by`: a hold-down or a stretch passed
-    /// with no wait.
+    /// Moves a unit suite's clock on by `by`.
+    ///
+    /// A hold-down or a stretch passes with no wait.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `by` is more milliseconds than a `u64` holds.
     #[cfg(test)]
     fn advance(&self, by: Duration) {
         self.advanced_ms.fetch_add(u64::try_from(by.as_millis()).expect("a suite's step fits in u64 milliseconds"), Ordering::Relaxed);
     }
 }
 
-/// THE SERVICE: the desk the pages ask, and the workers' shared state.
+/// The service: the desk the pages ask, and the workers' shared state.
 pub struct Service {
     config: Config,
     state_dir: StateDir,
     signups: SignUps,
     docker: Box<dyn Docker>,
-    /// Where the follow-up mail is handed: `None` where no mail is
-    /// configured.
+    /// Where the follow-up mail is handed.
+    ///
+    /// It is `None` where no mail is configured.
     outbox: Option<Outbox>,
     log: Log,
     sleep: Sleep,
-    /// THE ROUTE LOCK: held across a route change — a snippet's write and
-    /// the reload that follows it, and where either fails, on across the
-    /// snippet's removal and the reload that undoes it — and nowhere else,
-    /// so route changes are serial across every name: no reload of another
-    /// name's lands between a snippet and its own reload, nor loads a
-    /// snippet whose own route change failed.
+    /// The route lock: held across a route change, and nowhere else.
+    ///
+    /// A route change is a snippet's write and the reload that follows it,
+    /// and where either fails, the lock is held on across the snippet's
+    /// removal and the reload that undoes it — so route changes are serial
+    /// across every name: no reload of another name's lands between a snippet
+    /// and its own reload, nor loads a snippet whose own route change failed.
     route_lock: Mutex<()>,
-    /// THE BOOK's SHORT LOCK: what is in flight, every post's state, and the
-    /// rules that tie them.
+    /// The book, under its short lock.
+    ///
+    /// It holds what is in flight, every post's state, and the rules that tie
+    /// them.
     book: Mutex<Book>,
     /// Woken when a post is queued, for a worker waiting at the book.
     queued: Condvar,
-    /// How many posts are looking at what stands under their names, at most
-    /// [`MAX_LOOKS`].
+    /// How many posts are looking at what stands under their names.
+    ///
+    /// They are at most [`MAX_LOOKS`].
     looks: AtomicUsize,
     /// The lines a stranger can drive, each said at its rate.
     rated: Rated,
 }
 
 impl Service {
-    /// The service over its configuration, its state directory, its runner
-    /// and its outbox — `None` where no mail is configured — the status map
-    /// REBUILT from the snippet directory: the one error, a snippet directory
-    /// that cannot be read, which `serve` names and refuses to start on.
+    /// Returns the service, its status map rebuilt from the snippet directory.
+    ///
+    /// The service is over its configuration, its state directory, its runner
+    /// and its outbox — `None` where no mail is configured.
+    ///
+    /// # Errors
+    ///
+    /// The one error: a snippet directory that cannot be read, which `serve`
+    /// names and refuses to start on.
     pub fn new(config: Config, state_dir: StateDir, docker: Box<dyn Docker>, outbox: Option<Outbox>, log: Log, sleep: Sleep) -> io::Result<Service> {
         let map = StatusMap::rebuild(&config.boards_dir)?;
         let signups = SignUps::new(&state_dir);
@@ -564,32 +626,34 @@ impl Service {
         })
     }
 
-    /// HOW MANY boards stood routed at start — the names the status map was
-    /// rebuilt with (Q5 (a)): the serving line's `live`. A board made live
-    /// since is not among them; whether a board is live now is what stands
-    /// under its name ([`names::taken`]).
+    /// Counts the boards that stood routed at start: the serving line's `live`.
+    ///
+    /// They are the names the status map was rebuilt with (Q5 (a)). A board
+    /// made live since is not among them; whether a board is live now is what
+    /// stands under its name ([`names::taken`]).
     pub fn routed_at_start_count(&self) -> usize {
         self.book().map.routed_at_start().len()
     }
 
-    /// THE SWEEP AT START, run once before the service serves: every volume
-    /// under this service's label listed — the listing named on a line of its
-    /// own before it is made, so an Engine that never answers leaves that line
-    /// the start's last, naming the call that has not returned; each under a
-    /// name of the grammar with NO snippet is half-made — a stop mid-board
-    /// left it — and is undone by [`Service::cleanup`], handed what such a
-    /// stop leaves: the volume, and a run that may stand under the name. So
-    /// the table's last two rows undo it — whichever run stands (`rm_force`),
-    /// then the volume (`volume_rm`), each answer logged — and the truth is
-    /// then asked what stands ([`Service::cleared`]): done, or INCOMPLETE
-    /// naming what stands, the name then taken until the operator clears it.
-    /// A name whose snippet stands is left — live, or its run stopped:
-    /// `--restart on-failure` brings a run back from a failure of its own,
-    /// and by Docker's documentation not from the Engine's restart or a
-    /// reboot (RUNBOOK §10 step 12) — and so is a listed volume under no name
-    /// of the grammar, logged. The listing's answer is logged as every call's
-    /// is ([`Service::judged`]); one that fails skips the sweep, said on a
-    /// line of its own with what the skip leaves taken: a listing failure
+    /// Runs the sweep at start, once, before the service serves.
+    ///
+    /// Every volume under this service's label is listed — the listing named
+    /// on a line of its own before it is made, so an Engine that never answers
+    /// leaves that line the start's last, naming the call that has not
+    /// returned; each under a name of the grammar with no snippet is half-made
+    /// — what a stop mid-board leaves — and is undone by [`Service::cleanup`],
+    /// handed what such a stop leaves: the volume, and a run that may stand
+    /// under the name. So the table's last two rows undo it — whichever run
+    /// stands (`rm_force`), then the volume (`volume_rm`), each answer logged
+    /// — and the truth is then asked what stands ([`Service::cleared`]): done,
+    /// or `INCOMPLETE` naming what stands, the name then taken until the
+    /// operator clears it. A name whose snippet stands is left — live, or its
+    /// run stopped: `--restart on-failure` brings a run back from a failure of
+    /// its own, and by Docker's documentation not from the Engine's restart or
+    /// a reboot (RUNBOOK §10 step 12) — and so is a listed volume under no
+    /// name of the grammar, logged. The listing's answer is logged as every
+    /// call's is ([`Service::judged`]); one that fails skips the sweep, said
+    /// on a line of its own with what the skip leaves taken: a listing failure
     /// must not take the sign-up down. A name whose snippet stands with no
     /// volume under the label — a route to no board, or a board made by hand
     /// — is said and left; so is a routed board under the label with no line
@@ -597,33 +661,33 @@ impl Service {
     /// until its spend, a spend that could not be written, or its spent line
     /// removed by hand — whose invite may still say issued, a post naming it
     /// admitted again until the operator marks it ([`invites::spent_names`]);
-    /// and the sweep ends on a line of its own — the volumes listed, the
-    /// half-made among them, the boards cleared, the names left INCOMPLETE,
-    /// the time it took — the start's figures in one place. Answers the
-    /// boards cleared, for the serving line. The snippet directory is thus
-    /// the list of boards it spares: a labelled volume whose snippet is gone
-    /// is half-made to it, however long it has stood.
+    /// and the sweep, where neither its listing nor the snippet directory's
+    /// read skips it, ends on a line of its own — the volumes listed, the
+    /// half-made among them, the boards cleared, the names left `INCOMPLETE`,
+    /// the time it took — the start's figures in one place. It answers the
+    /// boards cleared, for the serving line. The snippet directory is thus the
+    /// list of boards it spares: a labelled volume whose snippet is gone is
+    /// half-made to it, however long it has stood.
     ///
-    /// ITS PRECONDITION, the operator's: ONE SERVICE PER DOCKER HOST. The
-    /// label marks every volume any `serve` on the host made, and a volume
-    /// is half-made by this service's snippet directory alone — so a second
-    /// service on the host would read the first's boards in flight, and
-    /// under another `--boards-dir` its live boards too, as half-made, and
-    /// remove them; the host's volume and container names are one namespace
-    /// besides. Nothing in a volume tells two services apart; `serve` refuses
-    /// a second service over the same state directory or on the same port
-    /// before its sweep, and one under another of each is the operator's to
-    /// keep.
+    /// **Precondition.** The operator's: one service per Docker host. The
+    /// label marks every volume any `serve` on the host made, and a volume is
+    /// half-made by this service's snippet directory alone — so a second
+    /// service on the host would read the first's boards in flight, and under
+    /// another `--boards-dir` its live boards too, as half-made, and remove
+    /// them; the host's volume and container names are one namespace besides.
+    /// Nothing in a volume tells two services apart; `serve` refuses a second
+    /// service over the same state directory or on the same port before its
+    /// sweep, and one under another of each is the operator's to keep.
     ///
-    /// ITS SECOND, which its type keeps: no post of this service's in flight.
-    /// A post's volume stands with no snippet from its step 3 until its route
-    /// change, which the sweep would take for half-made and remove from under
-    /// its worker; the sweep takes the service by `&mut`, so no worker and no
-    /// connection thread holds the service while it runs — `serve` sweeps
-    /// before it shares the service with either.
+    /// **Precondition, which its type keeps.** No post of this service's is in
+    /// flight. A post's volume stands with no snippet from its step 3 until
+    /// its route change, which the sweep would take for half-made and remove
+    /// from under its worker; the sweep takes the service by `&mut`, so no
+    /// worker and no connection thread holds the service while it runs —
+    /// `serve` sweeps before it shares the service with either.
     pub fn sweep(&mut self) -> usize {
         let began = Instant::now();
-        // THE LISTING NAMED BEFORE IT IS MADE: an Engine that does not answer
+        // The listing named before it is made: an Engine that does not answer
         // holds the start here, and this line, its last, names the call that
         // has not returned.
         self.log("sweep: listing the volumes under the label");
@@ -646,7 +710,7 @@ impl Service {
         for listed in &labelled.ungrammatical {
             self.log(&format!("sweep: a volume under the label is under no name of the grammar, left: {listed}"));
         }
-        // A SNIPPET WITH NO VOLUME UNDER THE LABEL: a name the rebuild found
+        // A snippet with no volume under the label: a name the rebuild found
         // routed that the listing holds no volume for — a route to no board,
         // its name taken for good, or a board made by hand, outside the label
         // — said, for the operator to tell which; the sweep leaves it.
@@ -654,7 +718,7 @@ impl Service {
         for name in &unbacked {
             self.log(&format!("{name}: its snippet stands with no volume under the label — a route to no board, or a board made by hand: `docker volume inspect {name}` tells which"));
         }
-        // A ROUTED BOARD WITH NO INVITE SPENT UNDER IT: one this service made
+        // A routed board with no invite spent under it: one this service made
         // — its volume under the label — whose spend a stop cut off after its
         // snippet's write, or which could not be written, or whose spent line
         // a hand removed, so the invite its post named may still say issued,
@@ -693,10 +757,11 @@ impl Service {
         swept
     }
 
-    /// ONE WORKER: the next post waited for and provisioned, forever — the
-    /// post's name is the worker's alone until the post ends live or failed,
-    /// for no second post for a name in flight is ever admitted. `serve` runs
-    /// `--workers` of these over one service.
+    /// Runs one worker: the next post waited for and provisioned, forever.
+    ///
+    /// The post's name is the worker's alone until the post ends live or
+    /// failed, for no second post for a name in flight is ever admitted.
+    /// `serve` runs `--workers` of these over one service.
     pub fn work(&self) -> ! {
         loop {
             let job = {
@@ -712,8 +777,10 @@ impl Service {
         }
     }
 
-    /// The next queued post provisioned now, on this thread — `false` where
-    /// none waits: one worker's one turn, as a unit suite drives it.
+    /// Provisions the next queued post now, on this thread.
+    ///
+    /// It answers `false` where none waits: one worker's one turn, as a unit
+    /// suite drives it.
     #[cfg(test)]
     fn run_next(&self) -> bool {
         let Some(job) = self.book().take() else { return false };
@@ -733,23 +800,25 @@ impl Service {
         (self.log)(line);
     }
 
-    /// ONE POST PROVISIONED on the worker that owns its name: the steps,
-    /// then live — the route lock let go of first — and the mail after it;
-    /// or cleaned up, the route lock held on into the cleanup where the steps
-    /// took it, and no mail. A step or a cleanup that panics costs this post
-    /// alone, never the worker, which the pool made at start and never makes
-    /// again: a step that panics is a failed step, what `made` recorded
-    /// undone and a making whose record the panic cut off left standing, as
-    /// a stop mid-board leaves one; a cleanup that panics leaves what it had
-    /// not undone standing, logged INCOMPLETE; and the post fails either
-    /// way, its code let go of. The post's board is the worker thread's for
-    /// its length ([`sender::on_board`]), so a panic's one line names it.
+    /// Provisions one post on the worker that owns its name.
+    ///
+    /// The steps run, then live — the route lock let go of first — and the
+    /// mail after it; or the post is cleaned up, the route lock held on into
+    /// the cleanup where the steps took it, and no mail. A step or a cleanup
+    /// that panics costs this post alone, never the worker, which the pool
+    /// made at start and never makes again: a step that panics is a failed
+    /// step, what `made` recorded undone and a making whose record the panic
+    /// cut off left standing, as a stop mid-board leaves one; a cleanup that
+    /// panics leaves what it had not undone standing, logged `INCOMPLETE`; and
+    /// the post fails either way, its code let go of. The post's board is the
+    /// worker thread's for its length ([`sender::on_board`]), so a panic's one
+    /// line names it.
     fn provision(&self, job: Job) {
         let name = job.name.clone();
         sender::on_board(&name, || self.provision_on_board(job));
     }
 
-    /// [`Service::provision`]'s work, its board the thread's.
+    /// Does [`Service::provision`]'s work, its board the thread's.
     fn provision_on_board(&self, job: Job) {
         let name = &job.name;
         // The post's start, said with how long it waited and how many wait
@@ -785,12 +854,12 @@ impl Service {
                         invites::path(&self.state_dir).display()
                     )),
                 }
-                // The code is let go of AFTER the spend is answered — written,
-                // or the file found holding the code no longer issued — so a
-                // post that finds the book not holding it finds the file
-                // holding it no longer issued. A spend that could not be
-                // written keeps its code held for the process's life: the file
-                // may still say issued.
+                // The code is let go of after the spend is answered — written,
+                // or the file found holding no such code issued — so a post
+                // that finds the book not holding it finds the file holding
+                // no such code issued. A spend that could not be written keeps
+                // its code held for the process's life: the file may still say
+                // issued.
                 if spend.is_ok() {
                     self.book().release(&job.code);
                 }
@@ -807,9 +876,17 @@ impl Service {
         }
     }
 
-    /// STEPS 3 TO 5, in order; the first that fails is named, and `made`
-    /// says what the cleanup undoes — from the snippet's write on, under
-    /// the route lock it holds.
+    /// Runs steps 3 to 5, in order.
+    ///
+    /// The first that fails is named, and `made` says what the cleanup undoes
+    /// — from the snippet's write on, under the route lock it holds.
+    ///
+    /// # Errors
+    ///
+    /// The name of the first step that fails: the second look at the name,
+    /// `volume_create`, `run_claim`, the dark claim, `rm_force`,
+    /// `run_serving`, the `/health` wait, the snippet's write or
+    /// `caddy_reload`.
     fn steps<'s>(&'s self, job: &Job, made: &mut Made<'s>) -> Result<(), &'static str> {
         let name = &job.name;
         let docker = self.docker.as_ref();
@@ -844,11 +921,11 @@ impl Service {
         // `docker run` too can fail with its container made (the table's row:
         // the serving run and the volume).
         self.done(name, "run_serving", docker.run_serving(name))?;
-        // THE `/health` WAIT, said as it begins with its bound, at every
+        // The `/health` wait, said as it begins with its bound, at every
         // [`HEALTH_PROGRESS`]th try without the pair with what that try saw,
-        // and at its end, each with the time into it: the wait is the steps'
-        // longest, and a board taken by a worker is never a minute unsaid in
-        // it.
+        // and at its end, each with the time into it but where `docker`
+        // could not run: the wait is the steps' longest, and a board taken
+        // by a worker is never a minute unsaid in it.
         let waiting_from = Instant::now();
         self.log(&format!("{name}: health: waiting for the pair, at most {} tries {} ms apart", HEALTH_WAIT.tries, HEALTH_WAIT.interval.as_millis()));
         let progress = |at: u32, exit: &Exit| {
@@ -878,7 +955,7 @@ impl Service {
                 return Err("the /health wait");
             }
         }
-        // A ROUTE CHANGE: the snippet's write and the reload under the route
+        // A route change: the snippet's write and the reload under the route
         // lock, which `made` holds from the write's first act — the write's
         // error may come after its rename, the snippet standing — so no
         // reload of another name's lands between this snippet and its own
@@ -894,9 +971,16 @@ impl Service {
         Ok(())
     }
 
-    /// STEP 4: the sidecar run over [`SIDECAR_WAIT`] until it answers other
-    /// than exit 4, or the bound passes — its last exit 4 then the step's
-    /// failure; its stderr logged whole every try.
+    /// Runs step 4, the sidecar, over [`SIDECAR_WAIT`].
+    ///
+    /// It runs until the sidecar answers other than exit 4, or the bound
+    /// passes; its stderr is logged whole every try.
+    ///
+    /// # Errors
+    ///
+    /// `the dark claim`: a `docker` that could not run, a `claimed by` on the
+    /// volume this flow made, any failure the read names but exit 4, or exit 4
+    /// past the bound — its last exit 4 then the step's failure.
     fn dark_claim(&self, job: &Job) -> Result<(), &'static str> {
         let name = &job.name;
         for at in SIDECAR_WAIT.paced(self.sleep.as_ref()) {
@@ -933,11 +1017,12 @@ impl Service {
         Err("the dark claim")
     }
 
-    /// ONE CALL's ANSWER logged and judged, each line opening `prefix` —
-    /// `<name>: <step>` in a step, `<name>: <cleanup|sweep>: <step>` in a
-    /// removal, `sweep: volumes` for the sweep's listing: exit 0 logged and
-    /// the answer kept; any other exit logged with its stderr whole, or a
-    /// `docker` that could not run logged — each `None`.
+    /// Logs and judges one call's answer, each line opening `prefix`.
+    ///
+    /// The prefix is `<name>: <step>` in a step, `<name>: <cleanup|sweep>:
+    /// <step>` in a removal, `sweep: volumes` for the sweep's listing: exit 0
+    /// is logged and the answer kept; any other exit is logged with its stderr
+    /// whole, or a `docker` that could not run logged — each `None`.
     fn judged(&self, prefix: &str, answered: io::Result<Exit>) -> Option<Exit> {
         match answered {
             Ok(exit) if exit.success() => {
@@ -958,22 +1043,27 @@ impl Service {
         }
     }
 
-    /// ONE STEP's CALL judged done: exit 0 goes on; any other exit, or a
-    /// `docker` that could not run, fails the step `step`.
+    /// Judges one step's call done: exit 0 goes on.
+    ///
+    /// # Errors
+    ///
+    /// `step`, failing the step, on any other exit or a `docker` that could
+    /// not run.
     fn done(&self, name: &Name, step: &'static str, answered: io::Result<Exit>) -> Result<Exit, &'static str> {
         self.judged(&format!("{name}: {step}"), answered).ok_or(step)
     }
 
-    /// THE CLEANUP, on a failure or at start ([`CleanupOn`]): what was made,
-    /// undone in reverse — the snippet under the route lock its write took,
-    /// let go of once its reload is made, then the run, its last lines
-    /// logged first where a step failed ([`Service::run_said`]), then the
-    /// volume, each removal logged and the next still tried — and then the
-    /// verdict, [`Service::cleared`]: the truth about names asked what
-    /// stands, never the removals' answers. `true` where the name is cleared:
-    /// the look finds nothing standing, or no look is owed, nothing having
-    /// been made. `made` is taken apart whole, so a making added to [`Made`]
-    /// is a compile error here until it is undone.
+    /// Undoes what was made, on a failure or at start ([`CleanupOn`]).
+    ///
+    /// It undoes in reverse — the snippet under the route lock its write took,
+    /// let go of once its reload, where one is owed, is made, then the run,
+    /// its last lines logged first where a step failed ([`Service::run_said`]),
+    /// then the volume, each removal logged and the next still tried — and
+    /// then comes the verdict, [`Service::cleared`]: the truth about names
+    /// asked what stands, never the removals' answers. It answers `true` where
+    /// the name is cleared: the look finds nothing standing, or no look is
+    /// owed, nothing having been made. `made` is taken apart whole, so a
+    /// making added to [`Made`] is a compile error here until it is undone.
     fn cleanup(&self, name: &Name, made: Made<'_>, on: CleanupOn) -> bool {
         let docker = self.docker.as_ref();
         let Made { volume, run, snippet } = made;
@@ -1002,7 +1092,7 @@ impl Service {
                 self.undone(name, on, "caddy_reload", caddy::reload(docker));
             }
         }
-        // A FAILED RUN READ BEFORE IT IS REMOVED: the board's daemon says on
+        // A failed run read before it is removed: the board's daemon says on
         // its own stream why it never listened or never paired, and `rm -f`
         // takes that stream with the run — so its last lines are logged
         // first. On a failure alone: the sweep's runs are a stop's leavings,
@@ -1019,19 +1109,22 @@ impl Service {
         !made_anything || self.cleared(name, on)
     }
 
-    /// ONE REMOVAL's CALL — a making undone — logged under `on`'s word as
-    /// [`Service::judged`] logs it, and nothing concluded from its answer:
-    /// what stands after the removals is [`Service::cleared`]'s to ask.
+    /// Logs one removal's call — a making undone — under `on`'s word.
+    ///
+    /// It is logged as [`Service::judged`] logs it, and nothing is concluded
+    /// from its answer: what stands after the removals is
+    /// [`Service::cleared`]'s to ask.
     fn undone(&self, name: &Name, on: CleanupOn, step: &str, answered: io::Result<Exit>) {
         self.judged(&format!("{name}: {on}: {step}"), answered);
     }
 
-    /// A FAILED RUN's LAST LINES, logged before the cleanup removes the run:
-    /// each `<name>: cleanup: the run said: <line>` — its stderr's, the
-    /// board's daemon's own stream, then its stdout's — or that it said
-    /// nothing; a read that fails logged as a removal's answer is. The
-    /// board's daemon never saw an invite code, a status token or a person's
-    /// address, so none is in what it said.
+    /// Logs a failed run's last lines, before the cleanup removes the run.
+    ///
+    /// Each is `<name>: cleanup: the run said: <line>` — its stderr's, the
+    /// board's daemon's own stream, then its stdout's — or the log says that
+    /// it said nothing; a read that fails is logged as a removal's answer is.
+    /// The board's daemon never saw an invite code, a status token or a
+    /// person's address, so none is in what it said.
     fn run_said(&self, name: &Name, answered: io::Result<Exit>) {
         match answered {
             Ok(exit) if exit.success() => {
@@ -1049,23 +1142,23 @@ impl Service {
         }
     }
 
-    /// THE VERDICT AFTER THE REMOVALS, on a failure or at start: whether the
-    /// name is CLEARED, asked of the truth about names itself
-    /// ([`names::taken`], the three reads a post makes) and never read off
-    /// the removals' answers — a refused `rm -f` may be of a run that never
-    /// stood, and a reload removes nothing the truth reads — then logged
-    /// under `on`'s word: done; or INCOMPLETE naming what stands, the
-    /// operator's to clear — a volume, which the truth reads only where no
-    /// snippet stands, so half-made to the next start's sweep, which removes
-    /// it too; or INCOMPLETE naming the look that could not be made — its
-    /// source, `docker` or the snippet directory, in its words
-    /// ([`names::taken`]) — and the act once one can be. `true` where nothing
-    /// stands. The reads are the post's own, an inspect's non-zero exit "not
-    /// standing" whatever its reason: an Engine that cannot be reached reads
-    /// here as nothing standing, as it does at a post, and the removals'
-    /// lines logged above the verdict then name the Engine; a volume so left
-    /// with no snippet, and any run under its name, is the next start's
-    /// sweep's.
+    /// Returns the verdict after the removals: whether the name is cleared.
+    ///
+    /// On a failure or at start, it is asked of the truth about names itself
+    /// ([`names::taken`], the three reads a post makes) and never read off the
+    /// removals' answers — a refused `rm -f` may be of a run that never stood,
+    /// and a reload removes nothing the truth reads — then logged under `on`'s
+    /// word: done; or `INCOMPLETE` naming what stands, the operator's to clear
+    /// — a volume, which the truth reads only where no snippet stands, so
+    /// half-made to the next start's sweep, which removes it too; or
+    /// `INCOMPLETE` naming the look that could not be made — its source,
+    /// `docker` or the snippet directory, in its words ([`names::taken`]) —
+    /// and the act once one can be. It answers `true` where nothing stands.
+    /// The reads are the post's own, an inspect's non-zero exit "not standing"
+    /// whatever its reason: an Engine that cannot be reached reads here as
+    /// nothing standing, as it does at a post, and the removals' lines logged
+    /// above the verdict then name the Engine; a volume so left with no
+    /// snippet, and any run under its name, is the next start's sweep's.
     fn cleared(&self, name: &Name, on: CleanupOn) -> bool {
         match names::taken(self.docker.as_ref(), &self.config.boards_dir, name) {
             Ok(None) => {
@@ -1086,32 +1179,39 @@ impl Service {
         }
     }
 
-    /// THE MAIL HANDED OVER: the live reply handed to the outbox — where
-    /// mail is configured — once the status is live, for the sender's own
-    /// thread to send; the job ends here, its name and address going with
-    /// the mail.
+    /// Hands the live reply to the outbox, where mail is configured.
+    ///
+    /// It is handed once the status is live, for the sender's own thread to
+    /// send; the job ends here, its name and address going with the mail.
     fn hand_over_mail(&self, job: Job) {
         let Some(outbox) = &self.outbox else { return };
         let reply = self.live_reply(&job.name, job.record.anchorless(), &job.token);
         outbox.hand_over(job.name, job.address, reply);
     }
 
-    /// THE LIVE REPLY of a post: what the one renderer, `reply::text`, is
-    /// given — the board's public origin, the record's anchorless fact and
-    /// the post's status URL — gathered in this one place for the
-    /// status page and the mail alike, so the two cannot say two things.
+    /// Returns the live reply of a post, from what the one renderer is given.
+    ///
+    /// The one renderer, `reply::text`, is given the board's public origin,
+    /// the record's anchorless fact and the post's status URL — gathered in
+    /// this one place for the status page and the mail alike, so the two
+    /// cannot say two things.
     fn live_reply(&self, name: &Name, anchorless: bool, token: &str) -> String {
         reply::text(&name.origin(&self.config.suffix), anchorless, &pages::status_url(&self.config.suffix, token))
     }
 
-    /// WHAT IS IN FLIGHT, under the book's lock the caller holds: what the
-    /// book says blocks the post — the queue full (D-8, "try again later"),
-    /// the code held (the invite's refusal), the name held by a post in
-    /// flight (D-4) — logged and refused, no docker call made. The line names
-    /// what fills the queue, its posts in order, and what holds the code: a
-    /// post looking at what stands, a post in flight, or a board gone live
-    /// until its spend is answered — held for good where that spend could
-    /// not be written, the operator's act then named.
+    /// Checks what is in flight, under the book's lock the caller holds.
+    ///
+    /// What the book says blocks the post is logged and refused, no docker
+    /// call made. The line names what fills the queue, its posts in order, and
+    /// what holds the code: a post looking at what stands, a post in flight,
+    /// or a board gone live until its spend is answered — held for good where
+    /// that spend could not be written, the operator's act then named.
+    ///
+    /// # Errors
+    ///
+    /// What the book says blocks the post: the queue full (D-8, "try again
+    /// later"), the code held (the invite's refusal), the name held by a post
+    /// in flight (D-4).
     fn in_flight(&self, book: &Book, name: &Name, code: &InviteCode) -> Result<(), Refusal> {
         let Some(blocked) = book.blocks(name, code) else { return Ok(()) };
         let (why, refusal) = match blocked {
@@ -1131,19 +1231,21 @@ impl Service {
         Err(refusal)
     }
 
-    /// A REFUSAL NO INVITE BOUNDS, said through its stretch ([`Stretch`]):
-    /// at most once a minute, with the count of like ones since — `line`
-    /// built only where it is said.
+    /// Says a refusal no invite bounds through its stretch ([`Stretch`]).
+    ///
+    /// It is said at most once a minute, with the count of like ones since —
+    /// `line` built only where it is said.
     fn say_once_a_stretch(&self, stretch: &Stretch, line: impl FnOnce() -> String) {
         if let Some(line) = stretch.said(self.rated.now(), line) {
             self.log(&line);
         }
     }
 
-    /// A REFUSAL OF A CODE THE INVITE FILE DOES NOT HOLD, its line: the file
-    /// by its path and how many invites it holds issued, so the operator who
-    /// minted into one file reads whether the service reads the same — the
-    /// count read here, only where the line is said.
+    /// Returns the line refusing a code the invite file does not hold.
+    ///
+    /// It names the file by its path and how many invites it holds issued, so
+    /// the operator who minted into one file reads whether the service reads
+    /// the same — the count read here, only where the line is said.
     fn not_in_the_file(&self) -> String {
         let path = invites::path(&self.state_dir);
         match invites::issued_count(&self.state_dir) {
@@ -1152,10 +1254,11 @@ impl Service {
         }
     }
 
-    /// THE INVITE FILE UNREAD at a post's lookup — `prefix` the post's
-    /// `<name>: ` where the post has one — said at the failure's edge
-    /// ([`Edge`]): once as it starts, with the file's path, the cause and
-    /// what it refuses; every post it refuses after counted.
+    /// Says the invite file unread at a post's lookup, at the failure's edge.
+    ///
+    /// `prefix` is the post's `<name>: ` where the post has one. The edge
+    /// ([`Edge`]) says it once as it starts, with the file's path, the cause
+    /// and what it refuses; every post it refuses after is counted.
     fn invite_file_unread(&self, prefix: &str, e: &io::Error) {
         if self.rated.invite_file.met(self.rated.now()) {
             self.log(&format!(
@@ -1165,9 +1268,10 @@ impl Service {
         }
     }
 
-    /// THE INVITE FILE READ at a post's lookup: its failure's end said, where
-    /// one stood and its last post refused is a hold-down past, with the
-    /// posts it refused.
+    /// Says the invite file read at a post's lookup: its failure's end.
+    ///
+    /// The end is said where a failure stood and its last post refused is a
+    /// hold-down past, with the posts it refused.
     fn invite_file_reads(&self) {
         if let Some(ended) = self.rated.invite_file.passed(self.rated.now()) {
             self.log(&format!("the invite file {} reads again: {} could not be judged while it did not{}", invites::path(&self.state_dir).display(), ended.count("post", "posts"), ended.across()));
@@ -1191,13 +1295,13 @@ impl Desk for Service {
                 self.log(&format!("a sign-up kept; the file holds {} of its {MAX_SIGNUPS_BYTES} bytes", kept.held));
                 Ok(())
             }
-            // A REFUSAL NO INVITE BOUNDS: a stranger's to make at a
+            // A refusal no invite bounds: a stranger's to make at a
             // request's rate, so said once a stretch with its count.
             Err(SignUpRefused::NotAnAddress) => {
                 self.say_once_a_stretch(&self.rated.unaddressed, || "a sign-up refused: no address".to_owned());
                 Err(SignUpRefusal::NotAnAddress)
             }
-            // THE CAP, said once for its stretch — at its first refusal — and
+            // The cap, said once for its stretch — at its first refusal — and
             // its end once, at the next sign-up kept: a stranger's stream of
             // sign-ups against a full file is two lines, never a line each.
             Err(refused @ SignUpRefused::Full { refused_before: 0 }) => {
@@ -1205,7 +1309,7 @@ impl Desk for Service {
                 Err(SignUpRefusal::Failed)
             }
             Err(SignUpRefused::Full { .. }) => Err(SignUpRefusal::Failed),
-            // THE FILE UNKEPT, met at every sign-up while it stands: said at
+            // The file unkept, met at every sign-up while it stands: said at
             // its edge, once as it starts and once, with its count, as it
             // ends.
             Err(SignUpRefused::Io(e)) => {
@@ -1259,7 +1363,7 @@ impl Desk for Service {
                 RecordRefused::PreviewKey { .. } => Refusal::Preview,
             }
         })?;
-        // WHAT IS IN FLIGHT, under the book's short lock: a refusal here
+        // What is in flight, under the book's short lock: a refusal here
         // costs no docker call. Passed, the post's code is held for its look
         // — one look per code — until the admission or the refusal lets it
         // go.
@@ -1268,7 +1372,7 @@ impl Desk for Service {
             self.in_flight(&book, &name, &code)?;
             CodeLook::begin(&self.book, &mut book, code.clone(), name.clone())
         };
-        // THE TRUTH ABOUT THE NAME: three reads under no lock of this
+        // The truth about the name: three reads under no lock of this
         // service's — a post waits on no provisioning — under one of the
         // looks' permits, given back as the reads end. Past the cap, the
         // refusal names the posts whose invites a look holds — the four with
@@ -1304,14 +1408,14 @@ impl Desk for Service {
                 return Err(Refusal::Failed);
             }
         }
-        // THE STATUS TOKEN: drawn from the OS before the admission, off the
+        // The status token: drawn from the OS before the admission, off the
         // book's short lock, the look still held — so a draw the OS refuses
         // answers D-8 and lets the code go as any refusal does.
         let token = names::unguessable().map_err(|e| {
             self.log(&format!("{name}: a post could not be admitted: {e}"));
             Refusal::Failed
         })?;
-        // THE ADMISSION, under the book's lock: the look ended, then what is
+        // The admission, under the book's lock: the look ended, then what is
         // in flight checked again, `Book::admit`'s precondition discharged
         // under the lock it admits under — a post for this name may have
         // been admitted while the reads ran, though none for this code, which

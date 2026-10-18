@@ -1,26 +1,31 @@
-//! THE SERVICE's START: the status map rebuilt from the snippets standing;
-//! THE SWEEP, T20 (its listing named before it is made and its answer logged
-//! as every call's is, the half-made board removed — its run's last lines
-//! unread, a stop's leavings no failure's — the routed and the ungrammatical
-//! left, a listing that fails and a snippet directory it cannot search each
-//! skipped on a line of its own naming what the skip leaves taken and the
-//! act, a volume the removals left said the next start's too, a snippet with
-//! no volume under the label said and left, a routed board with no invite
-//! line spent under it named and left, and a sweep that listed ending on its
-//! summary); a `docker` that cannot be run at all — the sweep skipped, a post
-//! refused D-8, the look's line naming `docker`; and a `docker` that lists
-//! and then cannot run — the half-made board left INCOMPLETE, never cleared,
-//! the look named as what could not be made, and the act once one can be.
+//! The service's start: the status map rebuilt from the snippets standing.
+//!
+//! The suite holds the sweep, T20 (its listing named before it is made and
+//! its answer logged as every call's is, the half-made board removed — its
+//! run's last lines unread, a stop's leavings no failure's — the routed and
+//! the ungrammatical left, a listing that fails and a snippet directory it
+//! cannot search each skipped on a line of its own naming what the skip
+//! leaves taken and the act, a volume the removals left said the next
+//! start's too, a snippet with no volume under the label said and left, a
+//! routed board with no invite line spent under it named and left, and a
+//! sweep that listed and read the snippet directory ending on its summary); a
+//! `docker` that cannot be run at all — the sweep skipped, a post refused D-8,
+//! the look's line naming `docker`; and a `docker` that lists and then cannot
+//! run — the half-made board left `INCOMPLETE`, never cleared, the look named
+//! as what could not be made, and the act once one can be.
 
 use super::*;
 use crate::docker::Call;
 
-/// The line a listing that fails is skipped on: what the skip leaves taken,
-/// and the operator's act.
+/// The line a listing that fails is skipped on.
+///
+/// It says what the skip leaves taken, and the operator's act.
 const SKIPPED: &str = "sweep: the volumes under the label could not be listed; the sweep is skipped — a board a stop left half-made stays taken until a start whose listing answers: restart once `docker volume ls` answers as the service's user";
 
-/// The rebuild at the service's start: the snippets standing are the names
-/// routed at start, which the serving line counts as `live`.
+/// The rebuild at the service's start.
+///
+/// The snippets standing are the names routed at start, which the serving
+/// line counts as `live`.
 #[test]
 fn the_service_counts_the_snippets_standing_at_start() {
     let rig = rig("", None);
@@ -30,11 +35,12 @@ fn the_service_counts_the_snippets_standing_at_start() {
     assert_eq!(again.routed_at_start_count(), 1);
 }
 
-/// A `docker` THAT CANNOT BE RUN AT ALL: the sweep's listing cannot be made,
-/// so the sweep is skipped and the service stands; and a post whose look at
-/// the name cannot be made meets D-8 — never D-4's "taken" — and leaves
-/// nothing: no post waiting, no code held — its look's hold let go — the
-/// invite still issued.
+/// A `docker` that cannot be run at all skips the sweep and refuses a post.
+///
+/// The sweep's listing cannot be made, so the sweep is skipped and the
+/// service stands; and a post whose look at the name cannot be made meets
+/// D-8 — never D-4's "taken" — and leaves nothing: no post waiting, no code
+/// held — its look's hold let go — the invite still issued.
 #[test]
 fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     /// A runner whose `docker` cannot be run: every call the error.
@@ -67,12 +73,14 @@ fn a_docker_that_cannot_run_skips_the_sweep_and_refuses_a_post_d8() {
     assert!(log.iter().any(|l| l.starts_with("alice: a post could not be judged: the look at the name: docker could not run: ")), "the look's line naming docker: {log:?}");
 }
 
-/// THE VERDICT WHERE NO LOOK CAN BE MADE: a `docker` that answers the
-/// sweep's listing and then cannot be run at all — the run's and the
-/// volume's removals each logged as one that could not run, the look after
-/// them unmade — leaves the half-made board INCOMPLETE, the look named as
-/// what could not be made, `docker` its source, and the operator's act once
-/// one can be: never said done, never counted cleared.
+/// The verdict where no look can be made.
+///
+/// A `docker` that answers the sweep's listing and then cannot be run at all
+/// — the run's and the volume's removals each logged as one that could not
+/// run, the look after them unmade — leaves the half-made board
+/// `INCOMPLETE`, the look named as what could not be made, `docker` its
+/// source, and the operator's act once one can be: never said done, never
+/// counted cleared.
 #[test]
 fn a_look_that_cannot_be_made_never_clears_a_name() {
     /// A runner that lists `bob` and can run nothing after it.
@@ -107,20 +115,22 @@ fn a_look_that_cannot_be_made_never_clears_a_name() {
     assert!(!log.iter().any(|l| l.ends_with("done — nothing stands under the name")), "{log:?}");
 }
 
-/// T20: THE SWEEP — `labelled_volumes` answering `alice`, `bob` and
-/// `Carol_X` with `alice.caddy` standing and no `bob.caddy`: the listing's
-/// answer logged as every call's is, then `rm_force bob` and `volume_rm
-/// bob`, then the look at what stands under `bob`, finding nothing; nothing
-/// for `alice`, nothing for `Carol_X` (logged as under no name of the
-/// grammar), the count 1, the log naming the name and each step; a
-/// `labelled_volumes` exit 1 — logged with its stderr as every call's is,
-/// the skip on a line of its own, the count 0, the service standing and
-/// taking a post, no summary said; a `volume_rm` failure — logged, and the
-/// look naming the volume that stands, the name left, not counted; an
-/// `rm_force` failure (no container) logged as itself, the volume still
-/// removed and the look finding nothing. A sweep that listed ends on its
-/// summary: the volumes listed, the half-made, the cleared, the names left
-/// INCOMPLETE, the time it took.
+/// T20: the sweep removes a half-made board and leaves the rest.
+///
+/// With `labelled_volumes` answering `alice`, `bob` and `Carol_X`,
+/// `alice.caddy` standing and no `bob.caddy`: the listing's answer logged as
+/// every call's is, then `rm_force bob` and `volume_rm bob`, then the look at
+/// what stands under `bob`, finding nothing; nothing for `alice`, nothing for
+/// `Carol_X` (logged as under no name of the grammar), the count 1, the log
+/// naming the name and each step; a `labelled_volumes` exit 1 — logged with
+/// its stderr as every call's is, the skip on a line of its own, the count 0,
+/// the service standing and taking a post, no summary said; a `volume_rm`
+/// failure — logged, and the look naming the volume that stands, the name
+/// left, not counted; an `rm_force` failure (no container) logged as itself,
+/// the volume still removed and the look finding nothing. A sweep that
+/// listed and read the snippet directory ends on its summary: the volumes
+/// listed, the half-made, the cleared, the names left `INCOMPLETE`, the time
+/// it took.
 #[test]
 fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     let script = line("labelled_volumes", None, 0, "alice\nbob\nCarol_X\n", "") + &line("rm_force", Some("bob"), 0, "", "") + &line("volume_rm", Some("bob"), 0, "", "") + &inspects("bob");
@@ -189,11 +199,13 @@ fn the_sweep_removes_a_half_made_board_and_leaves_the_rest() {
     assert!(partly.logged_around("sweep: 2 volumes under the label, 2 of them half-made and 1 cleared; left INCOMPLETE: bob; in ", " ms"), "the summary naming what it left: {:?}", partly.log());
 }
 
-/// A SNIPPET WITH NO VOLUME UNDER THE LABEL is said at the sweep and left —
-/// a route to no board, its name taken for good, or a board made by hand,
-/// the operator's to tell, with the inspect that tells it — beside a
-/// snippet whose volume the listing holds, which says nothing; nothing is
-/// removed for either, and the summary counts what the listing held.
+/// A snippet with no volume under the label is said at the sweep and left.
+///
+/// It is a route to no board, its name taken for good, or a board made by
+/// hand, the operator's to tell, with the inspect that tells it; beside it
+/// stands a snippet whose volume the listing holds, which says nothing;
+/// nothing is removed for either, and the summary counts what the listing
+/// held.
 #[test]
 fn a_snippet_with_no_volume_under_the_label_is_said_and_left() {
     let dir = Scratch::new();
@@ -221,12 +233,13 @@ fn a_snippet_with_no_volume_under_the_label_is_said_and_left() {
     assert!(log.iter().any(|l| l.starts_with("sweep: 1 volume under the label, 0 of them half-made and 0 cleared; in ") && l.ends_with(" ms")), "{log:?}");
 }
 
-/// A ROUTED BOARD WITH NO INVITE SPENT UNDER IT is said at the sweep: a stop
-/// between its snippet's write and its spend, or a spend that could not be
-/// written, left its invite issued, which a post spends again on a second
-/// board — so the start names the board and the act, before it serves, and
-/// leaves it, no call made for it; a routed board whose invite is spent under
-/// it says nothing.
+/// A routed board with no invite spent under it is said at the sweep.
+///
+/// A stop between its snippet's write and its spend, or a spend that could
+/// not be written, left its invite issued, which a post spends again on a
+/// second board — so the start names the board and the act, before it
+/// serves, and leaves it, no call made for it; a routed board whose invite is
+/// spent under it says nothing.
 #[test]
 fn a_routed_board_with_no_invite_spent_under_it_is_said_at_the_sweep() {
     let mut rig = rig(&line("labelled_volumes", None, 0, "alice\nbob\n", ""), None);
@@ -245,9 +258,10 @@ fn a_routed_board_with_no_invite_spent_under_it_is_said_at_the_sweep() {
     assert!(rig.logged_around("sweep: 2 volumes under the label, 0 of them half-made and 0 cleared; in ", " ms"), "{:?}", rig.log());
 }
 
-/// A SNIPPET DIRECTORY THE SWEEP CANNOT SEARCH skips it on a line of its own
-/// naming the directory by its path, what the skip leaves taken and the act
-/// — the listing made, nothing removed, the count 0.
+/// A snippet directory the sweep cannot search skips it on a line of its own.
+///
+/// The line names the directory by its path, what the skip leaves taken and
+/// the act — the listing made, nothing removed, the count 0.
 #[cfg(unix)]
 #[test]
 fn a_snippet_directory_the_sweep_cannot_search_skips_it_and_says_what_that_leaves() {

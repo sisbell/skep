@@ -1,14 +1,17 @@
-//! THE COMMAND LINE, parsed by hand in the daemon's style: a leading verb —
-//! `serve` or `invite` — then its flags, each `--flag <value>`, the last
-//! given winning; `--version` read as the FIRST argument alone, what
-//! follows it unread; `--help`, or `-h`, the usage text. Every default is a
-//! named constant below, and the usage text renders each from its constant,
-//! so the program cannot describe a default it does not use. A flag the verb
-//! does not take, a flag without its value, a value of the wrong form, a
-//! required flag missing, `--mailer` without `--from` or the reverse — each
-//! is a usage refusal ([`parse`]'s `Err`), which `main` says with the usage
-//! text and answers exit 2. Under `test-hooks` alone, `serve` takes the two
-//! fakes' flags; a shipped build calls both unknown arguments.
+//! The command line, parsed by hand in the daemon's style.
+//!
+//! A leading verb — `serve` or `invite` — comes first, then its flags, each
+//! `--flag <value>`, the last given winning; `--version` is read as the
+//! first argument alone, what follows it unread; `--help`, or `-h`, is the
+//! usage text. Every default is a named constant below, and the usage text
+//! renders each from its constant, so the program cannot describe a default
+//! it does not use.
+//!
+//! A flag the verb does not take, a flag without its value, a value of the
+//! wrong form, a required flag missing, `--mailer` without `--from` or the
+//! reverse — each is a usage refusal ([`parse`]'s `Err`), which `main` says
+//! with the usage text and answers exit 2. Under `test-hooks` alone, `serve`
+//! takes the two fakes' flags; a shipped build calls both unknown arguments.
 
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -21,53 +24,63 @@ use crate::domain::{Domain, DOMAIN_ALPHABET_IN_WORDS};
 use crate::invite_code::{InviteCode, MAX_CODE_BYTES};
 use crate::mail_address::{address_rule, MailAddress};
 
-/// THE LISTEN ADDRESS's DEFAULT: loopback, port 8842 — not the daemon's
-/// 8642 and not the dev provider's 8742. How Caddy, in its container,
-/// reaches the service on the host is the VM's configuration; `--listen`
-/// takes any address the operator gives.
+/// The listen address's default: loopback, port 8842.
+///
+/// It is not the daemon's 8642 and not the dev provider's 8742. How Caddy,
+/// in its container, reaches the service on the host is the VM's
+/// configuration; `--listen` takes any address the operator gives.
 const DEFAULT_LISTEN: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8842));
 
-/// THE SNIPPET DIRECTORY's DEFAULT: the one the Caddyfile imports, `import
-/// /etc/caddy/boards/*.caddy` (the deployment notes §4a).
+/// The snippet directory's default: the one the Caddyfile imports.
+///
+/// The Caddyfile's line is `import /etc/caddy/boards/*.caddy` (the
+/// deployment notes §4a).
 const DEFAULT_BOARDS_DIR: &str = "/etc/caddy/boards";
 
-/// THE HOSTED IMAGE's DEFAULT TAG: the `Dockerfile`'s default target, as
-/// the README builds it.
+/// The hosted image's default tag: the `Dockerfile`'s default target.
+///
+/// It is tagged as the README builds it.
 const DEFAULT_IMAGE: &str = "skep-hosted";
 
-/// THE SIDECAR's DEFAULT TAG: the `Dockerfile`'s `skep-cli` target, the
-/// `skep` command alone.
+/// The sidecar's default tag: the `Dockerfile`'s `skep-cli` target.
+///
+/// It holds the `skep` command alone.
 const DEFAULT_CLI_IMAGE: &str = "skep-cli";
 
-/// THE BRIDGE's DEFAULT: the network Caddy and the boards share (the
-/// deployment notes §4 step 5, `docker network create skep`).
+/// The bridge's default: the network Caddy and the boards share.
+///
+/// The deployment notes make it at §4 step 5, `docker network create skep`.
 const DEFAULT_NETWORK: &str = "skep";
 
-/// CADDY's CONTAINER, by default (the deployment notes §4a's run line).
+/// Caddy's container, by default (the deployment notes §4a's run line).
 const DEFAULT_CADDY: &str = "caddy";
 
-/// THE SUFFIX's DEFAULT: the alpha's domain, every board `<name>.skep.host`.
+/// The suffix's default: the alpha's domain, every board `<name>.skep.host`.
 const DEFAULT_SUFFIX: &str = "skep.host";
 
-/// THE SERVING RUN's LOG FILE SIZE, by default: the README's serving line's
-/// `max-size=10m` — the operator's to size, with the files kept, so that a
-/// board's files hold more than an hour of its stream: a standing state is
-/// said again hourly, and survives a rotation within the hour (the
-/// deployment notes §9 item 12).
+/// The serving run's log file size, by default.
+///
+/// It is the README's serving line's `max-size=10m` — the operator's to size,
+/// with the files kept, so that a board's files hold more than an hour of its
+/// stream: a standing state is said again hourly, and survives a rotation
+/// within the hour (the deployment notes §9 item 12).
 const DEFAULT_LOG_MAX_SIZE: &str = "10m";
 
-/// THE SERVING RUN's LOG FILES KEPT, by default: the README's serving
-/// line's `max-file=5` — the operator's to size, with the file size, by the
-/// hour [`DEFAULT_LOG_MAX_SIZE`]'s card names.
+/// The serving run's log files kept, by default.
+///
+/// It is the README's serving line's `max-file=5` — the operator's to size,
+/// with the file size, by the hour [`DEFAULT_LOG_MAX_SIZE`]'s card names.
 const DEFAULT_LOG_MAX_FILE: NonZeroU32 = NonZeroU32::new(5).expect("five is not zero");
 
-/// THE WORKERS, by default: three threads, each making one board at a
-/// time, so three names are made at once — the owner's number for the
-/// alpha's VM; `--workers` sets another, never zero.
+/// The workers, by default: three threads, each making one board at a time.
+///
+/// So three names are made at once — the number for the alpha's VM;
+/// `--workers` sets another, never zero.
 const DEFAULT_WORKERS: NonZeroUsize = NonZeroUsize::new(3).expect("three is not zero");
 
-/// THE CONNECTIONS, by default: sixteen threads, each serving one
-/// connection at a time, made at start — `skepd`'s own default pool. At
+/// The connections, by default: sixteen threads, `skepd`'s own default pool.
+///
+/// Each serves one connection at a time, and all are made at start. At
 /// sixteen the worst bills stay small: a connection holds at most some 10 MB
 /// at once — its half-megabyte read, its form, and a refused post's page
 /// echoing a field of quotes six bytes for each it was sent — so sixteen
@@ -84,8 +97,9 @@ pub enum Command {
     Version,
     /// `--help`: the usage text.
     Help,
-    /// `serve`: the service — boxed, its settings many times the other
-    /// arms' size.
+    /// `serve`: the service.
+    ///
+    /// It is boxed, its settings many times the other arms' size.
     Serve(Box<ServeArgs>),
     /// `invite`: one invite minted.
     Invite(InviteArgs),
@@ -96,22 +110,29 @@ pub enum Command {
 pub struct ServeArgs {
     /// `--listen`: the address and port the pages are served on.
     pub listen: SocketAddr,
-    /// `--state-dir`: the sign-up file and the invite file. Required.
+    /// `--state-dir`: the sign-up file and the invite file.
+    ///
+    /// Required.
     pub state_dir: PathBuf,
     /// `--boards-dir`: the snippets.
     pub boards_dir: PathBuf,
-    /// The run configuration: `--image`, `--cli-image`, `--network`,
-    /// `--caddy`, `--suffix`, `--log-max-size`, `--log-max-file`.
+    /// The run configuration.
+    ///
+    /// It comes from `--image`, `--cli-image`, `--network`, `--caddy`,
+    /// `--suffix`, `--log-max-size` and `--log-max-file`.
     pub settings: Settings,
-    /// `--workers`: the worker threads — the boards made at once. One or
-    /// more: a service with none would admit posts and make no board.
+    /// `--workers`: the worker threads — the boards made at once.
+    ///
+    /// One or more: a service with none would admit posts and make no board.
     pub workers: NonZeroUsize,
-    /// `--connections`: the connection threads — the requests served at
-    /// once, a further connection waiting in the listener's queue. One or
-    /// more: a service with none would accept no connection.
+    /// `--connections`: the connection threads — the requests served at once.
+    ///
+    /// A further connection waits in the listener's queue. One or more: a
+    /// service with none would accept no connection.
     pub connections: NonZeroUsize,
-    /// `--reply-to`: the owner's mailbox, which D-8 names and where an
-    /// answer to the mail goes. Required.
+    /// `--reply-to`: the owner's mailbox, which D-8 names.
+    ///
+    /// An answer to the mail goes there. Required.
     pub reply_to: MailAddress,
     /// `--mailer` with `--from`, or neither: no mail.
     pub mail: Option<MailArgs>,
@@ -129,9 +150,10 @@ pub struct MailArgs {
     pub from: MailAddress,
 }
 
-/// The mailer the flags name, which `main` makes a sender of: the host's
-/// relay client (`--mailer`), or under `test-hooks` the mail fake
-/// (`--mailer-fake`).
+/// The mailer the flags name, which `main` makes a sender of.
+///
+/// It is the host's relay client (`--mailer`), or under `test-hooks` the
+/// mail fake (`--mailer-fake`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mailer {
     /// `--mailer <program>`: the host's relay client, `<program> -t`.
@@ -148,36 +170,41 @@ pub struct InviteArgs {
     pub address: MailAddress,
     /// `--code`: the code to mint; a fresh one where none is given.
     pub code: Option<InviteCode>,
-    /// `--state-dir`: where the invite file lives. Required.
+    /// `--state-dir`: where the invite file lives.
+    ///
+    /// Required.
     pub state_dir: PathBuf,
     /// `--suffix`: the invite link's host.
     pub suffix: Domain,
 }
 
-/// THE BUILD: `<crate version> (<commit>)` — the version Cargo compiled in,
-/// and the commit the build named through `SKEP_GIT_SHA`, `unknown` where it
-/// named none — read at compile time, so the run consults no file and no
-/// variable. The one spelling both the version line and the start's first
-/// line carry.
+/// Returns the build: `<crate version> (<commit>)`.
+///
+/// It is the version Cargo compiled in, and the commit the build named
+/// through `SKEP_GIT_SHA`, `unknown` where it named none — read at compile
+/// time, so the run consults no file and no variable. It is the one spelling
+/// both the version line and the start's first line carry.
 pub fn build() -> String {
     format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
 }
 
-/// THE VERSION LINE (`--version`): `skep-provision <crate version>
-/// (<commit>)` — [`build`] after the program's name, `skepd`'s form.
+/// Returns the version line (`--version`): [`build`] after the program's name.
+///
+/// It reads `skep-provision <crate version> (<commit>)`, `skepd`'s form.
 pub fn version_line() -> String {
     format!("skep-provision {}", build())
 }
 
 impl ServeArgs {
-    /// THE SETTINGS EVERY BOARD IS MADE WITH, as the start says them on its
-    /// stream — the flags the serving line leaves out: the images, the
-    /// bridge, the proxy's container, the serving run's log rotation, the
-    /// mail and the owner's mailbox the failure page names. So an operator
-    /// reading the log after a change reads what the service runs with, and
-    /// a wrong `--network` or `--caddy` is read there, before a board fails
-    /// on it. Its two addresses are the operator's settings, never a
-    /// person's.
+    /// Returns the settings every board is made with, as the start says them.
+    ///
+    /// The start says them on its stream — the flags the serving line leaves
+    /// out: the images, the bridge, the proxy's container, the serving run's
+    /// log rotation, the mail and the owner's mailbox the failure page names.
+    /// So an operator reading the log after a change reads what the service
+    /// runs with, and a wrong `--network` or `--caddy` is read there, before
+    /// a board fails on it. Its addresses — the owner's mailbox, and with
+    /// mail the sending one — are the operator's settings, never a person's.
     pub fn settings_said(&self) -> String {
         let s = &self.settings;
         let mail = match &self.mail {
@@ -199,7 +226,7 @@ impl ServeArgs {
     }
 }
 
-/// THE USAGE TEXT, every default read from its constant.
+/// Returns the usage text, every default read from its constant.
 pub fn usage() -> String {
     let fakes = if cfg!(feature = "test-hooks") {
         "\n  --docker-fake <SCRIPT>  (test-hooks builds alone) the scripted Docker\n                          runner in the host's place; every call it\n                          receives recorded in <SCRIPT>.calls\n  --mailer-fake <LOG>     (test-hooks builds alone) each message appended\n                          to <LOG>, in --mailer's place\n"
@@ -282,12 +309,17 @@ invite link printed on stdout, the one line to mail by hand.
     )
 }
 
-/// THE PARSE: a leading `--version`, or `--help` or `-h`, read before any
-/// other argument and what follows it unread; or a verb and its flags. Where
-/// several refusals hold, the first met speaks: an argument that is not UTF-8
-/// text, where no leading `--version`, `--help` or `-h` came first; then a
-/// verb unknown or missing; then the verb's words read left to right — an
-/// unknown argument, a flag without its value, a value of the wrong form,
+/// Parses the command line: a leading `--version`, `--help` or `-h`, or a verb.
+///
+/// A leading `--version`, or `--help` or `-h`, is read before any other
+/// argument, what follows it unread; any other line is a verb and its flags.
+///
+/// # Errors
+///
+/// Where several refusals hold, the first met speaks: an argument that is not
+/// UTF-8 text, where no leading `--version`, `--help` or `-h` came first;
+/// then a verb unknown or missing; then the verb's words read left to right —
+/// an unknown argument, a flag without its value, a value of the wrong form,
 /// `--version` out of its place, and a `--help` or `-h` met first answers the
 /// usage text; then `--mailer` and `--from` unpaired; then a required flag
 /// missing, `--state-dir` before `--reply-to` for `serve` and `--address`
@@ -309,14 +341,24 @@ pub fn parse(argv: impl IntoIterator<Item = OsString>) -> Result<Command, String
     }
 }
 
-/// One flag's value, or the refusal naming the flag.
+/// Takes one flag's value from the arguments.
+///
+/// # Errors
+///
+/// The refusal naming the flag, where no value follows it.
 fn value(argv: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     argv.next().ok_or_else(|| format!("{flag} needs a value"))
 }
 
-/// A value that becomes one word of a docker argv: not empty, no
-/// whitespace, and not beginning with `-`, so it can never be read as a
-/// flag of `docker`'s own.
+/// Takes a value that becomes one word of a docker argv.
+///
+/// The value is not empty, holds no whitespace, and does not begin with `-`,
+/// so it can never be read as a flag of `docker`'s own.
+///
+/// # Errors
+///
+/// The refusal naming the flag and the value, where it is empty, begins with
+/// `-` or holds whitespace.
 fn word(flag: &str, v: String) -> Result<String, String> {
     if v.is_empty() || v.starts_with('-') || v.chars().any(char::is_whitespace) {
         return Err(format!("{flag}: '{v}' is not one word that does not begin with '-'"));
@@ -324,11 +366,17 @@ fn word(flag: &str, v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// A LOG FILE SIZE, as `--log-max-size` takes one: `<N>[k|m|g]`, `N` digits
-/// alone, one or more and within a `u32` — what Docker's `json-file` driver
-/// takes as `max-size` (as this crate knows Docker — UNVERIFIED HERE). A
-/// size it refuses would refuse every board at its serving run, after the
-/// board's claim, so it is refused here, at the parse.
+/// Takes a log file size, as `--log-max-size` takes one: `<N>[k|m|g]`.
+///
+/// `N` is digits alone, one or more and within a `u32` — what Docker's
+/// `json-file` driver takes as `max-size` (as this crate knows Docker —
+/// unverified here).
+///
+/// # Errors
+///
+/// The refusal naming the flag and the value, where it is no such size. A
+/// size the driver refuses would refuse every board at its serving run,
+/// after the board's claim, so it is refused here, at the parse.
 fn size(flag: &str, v: String) -> Result<String, String> {
     let digits = v.strip_suffix(['k', 'm', 'g']).unwrap_or(&v);
     if !digits.bytes().all(|b| b.is_ascii_digit()) || digits.parse::<NonZeroU32>().is_err() {
@@ -337,11 +385,16 @@ fn size(flag: &str, v: String) -> Result<String, String> {
     Ok(v)
 }
 
-/// A PATH a flag names — `--boards-dir`, `--mailer` — any value but the
-/// empty one, which names nothing. Refused here, a usage refusal, exit 2,
-/// which the unit never restarts; met at the start instead it would be a
-/// refused start, exit 1, which the unit restarts every five seconds. An
-/// empty `--state-dir` is none, and meets its own "is required".
+/// Takes a path a flag names: `--boards-dir`, `--mailer`.
+///
+/// Any value but the empty one is a path. An empty `--state-dir` is none,
+/// and meets its own "is required".
+///
+/// # Errors
+///
+/// The empty value, which names nothing: refused here, a usage refusal, exit
+/// 2, which the unit never restarts; met at the start instead it would be a
+/// refused start, exit 1, which the unit restarts every five seconds.
 fn path(flag: &str, v: String) -> Result<PathBuf, String> {
     if v.is_empty() {
         return Err(format!("{flag}: an empty value names nothing"));
@@ -349,41 +402,64 @@ fn path(flag: &str, v: String) -> Result<PathBuf, String> {
     Ok(PathBuf::from(v))
 }
 
-/// A DOMAIN, as `--suffix` takes one: the value [`Domain::parse`] admits,
-/// or the refusal naming the flag and the grammar's alphabet in its words
-/// ([`DOMAIN_ALPHABET_IN_WORDS`]).
+/// Takes a domain, as `--suffix` takes one: the value [`Domain::parse`] admits.
+///
+/// # Errors
+///
+/// The refusal naming the flag and the grammar's alphabet in its words
+/// ([`DOMAIN_ALPHABET_IN_WORDS`]), where the grammar refuses the value.
 fn domain(flag: &str, v: &str) -> Result<Domain, String> {
     Domain::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not a domain of {DOMAIN_ALPHABET_IN_WORDS}"))
 }
 
-/// THE SUFFIX's DEFAULT, taken in as a suffix is: [`DEFAULT_SUFFIX`] is in
-/// the grammar, as `every_default_is_its_named_constant` finds it parsed.
+/// Returns the suffix's default, taken in as a suffix is.
+///
+/// [`DEFAULT_SUFFIX`] is in the grammar, as
+/// `every_default_is_its_named_constant` finds it parsed.
 fn default_suffix() -> Domain {
     Domain::parse(DEFAULT_SUFFIX).expect("`DEFAULT_SUFFIX`, `skep.host`, is in the grammar")
 }
 
-/// A MAIL ADDRESS by the rule: the value `MailAddress::parse` admits, or a
-/// refusal naming the rule in its own words ([`address_rule`]).
+/// Takes a mail address by the rule: the value `MailAddress::parse` admits.
+///
+/// # Errors
+///
+/// A refusal naming the flag, the value and the rule in its own words
+/// ([`address_rule`]), where the rule refuses the value.
 fn mail_address(flag: &str, v: &str) -> Result<MailAddress, String> {
     MailAddress::parse(v).ok_or_else(|| format!("{flag}: '{v}' is not an address: {}", address_rule()))
 }
 
-/// A COUNT OF ONE OR MORE, the type a count flag lands in: one whose
-/// `FromStr` refuses `0` — `NonZeroU32` and `NonZeroUsize`, and no other —
-/// so [`count`] cannot admit a zero its refusal says it refuses.
+/// A count of one or more: the type a count flag lands in.
+///
+/// It is one whose `FromStr` refuses `0` — `NonZeroU32` and `NonZeroUsize`,
+/// and no other — so [`count`] cannot admit a zero its refusal says it
+/// refuses.
 trait OneOrMore: FromStr {}
 
 impl OneOrMore for NonZeroU32 {}
 
 impl OneOrMore for NonZeroUsize {}
 
-/// A COUNT — `--log-max-file`, `--workers`, `--connections` — as the
-/// setting's [`OneOrMore`] type parses it, or the refusal naming the flag.
+/// Takes a count as the setting's [`OneOrMore`] type parses it.
+///
+/// The counts are `--log-max-file`, `--workers` and `--connections`.
+///
+/// # Errors
+///
+/// The refusal naming the flag and the value, where the type refuses it — a
+/// zero among them.
 fn count<N: OneOrMore>(flag: &str, v: &str) -> Result<N, String> {
     v.parse().map_err(|_| format!("{flag}: '{v}' is not a count of one or more"))
 }
 
-/// `serve`'s flags.
+/// Parses `serve`'s flags.
+///
+/// # Errors
+///
+/// As [`parse`]'s past the verb: its words read left to right, then
+/// `--mailer` and `--from` unpaired, then `--state-dir` missing, then
+/// `--reply-to` missing.
 fn parse_serve(mut argv: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut listen = DEFAULT_LISTEN;
     let mut state_dir: Option<PathBuf> = None;
@@ -453,7 +529,12 @@ fn parse_serve(mut argv: impl Iterator<Item = String>) -> Result<Command, String
     })))
 }
 
-/// `invite`'s flags.
+/// Parses `invite`'s flags.
+///
+/// # Errors
+///
+/// As [`parse`]'s past the verb: its words read left to right, then
+/// `--address` missing, then `--state-dir` missing.
 fn parse_invite(mut argv: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut address: Option<MailAddress> = None;
     let mut code: Option<InviteCode> = None;

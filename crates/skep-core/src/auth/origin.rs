@@ -265,11 +265,14 @@ impl fmt::Display for Warning {
             // no key strands at an origin change — the frontend's keys are
             // its shell's, bound to no origin, and no per-origin key store is
             // planned — so the warning names the re-issue and nothing of
-            // keys.
+            // keys; and, origins being read at start alone, the restart that
+            // makes the re-issue.
             Warning::ConfiguredLoopbackPortChanged(o) => write!(
                 f,
                 "configured origin {o} names a loopback host at a port this \
-                 daemon is not bound to; re-issue the origin for the bound port",
+                 daemon is not bound to; re-issue the origin for the bound port: \
+                 origins are read at start, so restart with --origin (or \
+                 SKEPD_ORIGIN) naming that host at the port the serving line names",
             ),
             // The warning form (§1): the setting, the consequence, the act.
             Warning::PreviewKeysAllowed => f.write_str(
@@ -423,8 +426,9 @@ mod tests {
         );
         // A hosted board configured with its public origin alone is silent.
         assert!(startup_warnings(&cfg_with(443, false, &["https://b.example"]), false).is_empty());
-        // The two claimed arms name the act that clears them (the warning
-        // form: the setting, the consequence, the act).
+        // The two claimed arms and the moved port's name the act that clears
+        // them (the warning form: the setting, the consequence, the act) —
+        // each a restart, the three settings being read at start.
         let permissive = Warning::ClaimedWithLocalTrust.to_string();
         assert!(
             permissive.ends_with(
@@ -441,6 +445,17 @@ mod tests {
                  naming the origin this board is reached at"
             ),
             "{unconfigured}"
+        );
+        let moved_port =
+            Warning::ConfiguredLoopbackPortChanged(Origin::parse("http://127.0.0.1:8080").unwrap())
+                .to_string();
+        assert!(
+            moved_port.ends_with(
+                "re-issue the origin for the bound port: origins are read at start, so restart \
+                 with --origin (or SKEPD_ORIGIN) naming that host at the port the serving line \
+                 names"
+            ),
+            "{moved_port}"
         );
     }
 

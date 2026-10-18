@@ -4,8 +4,9 @@
 //! the standing line's, the feed walk's progress and the hold-down the edge
 //! pairs judge their second line by (`operations.md` §1.1 m11, m12, m15).
 //!
-//! Each is `pub`, the daemon reading the request-body cap and the hold-down
-//! from here. The daemon's own bounds — the small-body cap, the feed's two
+//! Each is `pub`, the daemon reading three from here: the request-body cap,
+//! the hold-down and the standing line's cadence. The daemon's own bounds —
+//! the small-body cap, the feed's two
 //! page-size bounds, the blob route's chunk, its two deadlines and the
 //! pruner's cadence — are `skepd`'s `limits.rs`; the media resource's own
 //! numbers — the per-file cap, the fetch pool and its two intervals, the
@@ -15,15 +16,16 @@
 
 use std::time::Duration;
 
-/// Request-body cap for the two frame-carrying routes, enforced on the
-/// declared `Content-Length` before any body byte is read or allocated.
-/// Pre-media value — wire frames are small.
+/// The request-body cap of the two frame-carrying routes, `/op` and `/op-at`.
 ///
-/// This bounds the REQUEST, not the allocation it commands, and the ratio
-/// between them is what anyone raising it must price. The FLOOR under every
-/// JSON-carrying route is `serde_json`'s: the whole `Value` tree is built
-/// before any codec cap runs, and a `Value` is order 32 bytes against as
-/// little as two wire bytes of dense array, so a body of arbitrary shape
+/// It is enforced on the declared `Content-Length` before any body byte is
+/// read or allocated: a value set before media, wire frames being small.
+///
+/// It bounds the request, not the allocation the request commands, and the
+/// ratio between them is what anyone raising it must price. The floor under
+/// every JSON-carrying route is `serde_json`'s: the whole `Value` tree is
+/// built before any codec cap runs, and a `Value` is order 32 bytes against
+/// as little as two wire bytes of dense array, so a body of arbitrary shape
 /// buys roughly twenty times its size in transient heap — for a frame the
 /// codec is then about to refuse. Above that floor the per-byte write
 /// discipline adds the `insert` path's own multiplier, minting one `Val`
@@ -31,28 +33,38 @@ use std::time::Duration;
 /// body in live heap; the codec's `MAX_INSERT_VALUES` is what bounds that
 /// one. Raising this number alone raises both amplified costs with it.
 ///
-/// It is also the budget of the one frame body the daemon composes out of
-/// the STORE rather than out of a request — a shot's entry-frame body
-/// (`auth::entry`'s `MAX_SHOT_BODY_BYTES`, parity with this) — so
-/// raising it raises what the write-path check reads and verifies per shot.
+/// Two of the core's bounds are relations to it, and move with it. A shot's
+/// entry-frame body (`auth::entry`'s `MAX_SHOT_BODY_BYTES`, parity with
+/// this) is the one frame body the daemon composes out of the store rather
+/// than out of a request, so raising this raises what the write-path check
+/// reads and verifies per shot. The blocked-prefix list's supply file
+/// (`auth::blocked`'s `MAX_BLOCKED_SUPPLY_BYTES`) is read whole at every
+/// start, and at every reissue with the supply's lock held at the head of
+/// routing, so raising this raises how long a reissue can hold every
+/// request behind it.
 ///
-/// The media round's raise is NOT this constant's: the blob route carries
-/// its own cap, [`MAX_BLOB_BYTES`](skep_media::limits::MAX_BLOB_BYTES), on
-/// a body that never sits whole in memory — raising this one alone would
-/// have bought a buffered body of the cap's size, the amplified costs above
-/// with it.
+/// The blob route's larger bodies are not this constant's: it carries its
+/// own cap, [`MAX_BLOB_BYTES`](skep_media::limits::MAX_BLOB_BYTES), on a
+/// body that never sits whole in memory — raising this one in its place
+/// would buy a buffered body of that size, the amplified costs above with
+/// it.
 pub const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 
-/// THE STANDING LINE's CADENCE — one hour, INTERIM (D1: a daemon constant
-/// for a cadence, as the pruner's interval is, and its precedent): the
-/// interval of the checkpoint thread's timed wait on the write path's
-/// signal (`commits::CheckpointSignal::wait`), at each tick of which the
-/// thread writes ONE `standing:` line re-saying every standing bad state
+/// The standing line's cadence: one hour, interim (`operations.md` D1).
+///
+/// It is a daemon constant for a cadence, the pruner's interval its
+/// precedent, and it has two readers, so moving it moves both. The
+/// checkpoint thread's timed wait on the write path's signal
+/// (`commits::CheckpointSignal::wait`) ticks at it, and at each tick the
+/// thread writes one `standing:` line re-saying every standing bad state
 /// that stands — the nine, in the line's order: the write path's halt, the
 /// kernel's poison, the journal damage a history read met, a stopped feed
 /// file, the pruner's thread gone, the feed walk's thread gone, the cell
 /// index failed, the floor binding, CLAIMED-PERMISSIVE — and nothing on a
-/// healthy board (`operations.md` §1 THE RATES; §1.1 m11).
+/// healthy board (`operations.md` §1 THE RATES; §1.1 m11). And `skepd`'s
+/// panic hook rates a recurring panic by it: one line per site on its
+/// thread per interval, the panics between counted on the next.
+///
 /// What the interval bounds is how long a standing state goes unsaid past
 /// its transition: each is said once at its transition, so a stream rotated
 /// past that line holds nothing of it, and an hour is the most a reader of

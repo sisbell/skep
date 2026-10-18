@@ -29,9 +29,10 @@ use skep_engine::World;
 
 /// The enrolled-set cap (RES-57, AUTH-3.57).
 ///
-/// It is daemon policy — a config-visible constant, never a fold constant —
-/// `Enroll` arm only, `Genesis` exempt. Raisable later without format
-/// consequence — but not without CPU consequence: the enrolled set is what
+/// It is daemon policy — a daemon constant, never a fold constant, which no
+/// setting moves or echoes — `Enroll` arm only, `Genesis` exempt. Raisable
+/// later without format consequence (AUTH-3.57), by a rebuild — but not
+/// without CPU consequence: the enrolled set is what
 /// [`crate::auth::session::handshake`] walks on a signed `POST /session`
 /// attempt, in full where no key verifies, so raising this raises that
 /// unauthenticated route's per-attempt work linearly. The budget is written

@@ -13,8 +13,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 - **The session layer**, `auth` — `AuthState` (`open`,
   `reinstall_blocked_at_claim`, `reissue_blocked_prefixes`,
-  `blocked_supply_path`, `auth_object`, `commit_tail`), the daemon's one
-  handle on the layer, and its parts: `AuthConfig` (`node_prefix`,
+  `blocked_supply_path`, `blocked_supply_absent_line`, `auth_object`,
+  `commit_tail`), the daemon's one handle on the layer, and its parts:
+  `AuthConfig` (`node_prefix`,
   `node_prefix_line`, `mode`, `auth_line`, `claimed_permissive`,
   `blocked_prefixes`, `bind_port`, `port`) with `Mode` (`of`), the
   challenge store and the sessions store below, `CredentialLock` (`new`,
@@ -64,8 +65,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `to_bytes`, the one marshal door; `op_name`, `check_keys`,
   `key_set_reply`, `credential_refused_reply`, `registry_refused_reply`,
   `wire_address` and `wire_tumbler`.
-- **The bounds**, `limits` — `MAX_REQUEST_BODY` and `EDGE_HOLD_DOWN`, the
-  two the daemon reads too; `STANDING_INTERVAL`,
+- **The bounds**, `limits` — `MAX_REQUEST_BODY`, `EDGE_HOLD_DOWN` and
+  `STANDING_INTERVAL`, the three the daemon reads too, the last its panic
+  hook's rate beside the standing line's cadence;
   `FEED_WALK_PROGRESS_BOUNDARIES`, `FEED_WALK_PROGRESS_INTERVAL` and
   `MAX_CHANGES_PAGE_BYTES`, the core's own.
 - **The lock**, `serial` — `SerialGuard`, the write-serialization guard

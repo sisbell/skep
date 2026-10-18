@@ -142,6 +142,8 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     classed("H.1 written at open", Class::Landing);
     classed("pruner: the OS refused its thread (", Class::Failure);
     classed("cell index rebuilt at open:", Class::Landing);
+    // The blocked list's absence, a line of the report like the rest.
+    classed("no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES):", Class::Open);
 }
 
 /// §3 START, STEP 3's LEAD — EVERY LINE OF THE OPEN CARRIES A CLASS WORD: the
@@ -545,4 +547,128 @@ fn runbook_gives_windows_no_command() {
     assert!(windows.contains("Windows"), "§9.3 names the platform: {windows}");
     assert!(!windows.contains("schtasks"), "§9.3 gives no scheduled task: {windows}");
     assert!(!windows.contains("```"), "§9.3 gives no fenced command: {windows}");
+}
+
+/// Checks that §3 step 8's two list files open a daemon as written.
+///
+/// The step gives the empty list a board that may need a takedown starts on
+/// and an issue that blocks one account, each in the forms the step states
+/// (AUTH-4.70). Both are read off the step's own fences, written to a file
+/// and handed to the library's open as `--blocked-prefixes` hands it, so a
+/// file the step shows that the daemon would refuse fails here. The step
+/// says what a change costs — the path read at start alone, the rename the
+/// next request installs, the directory a container mounts — and quotes the
+/// reissue's landing and its refusal as the binary writes them
+/// (`auth_wire/blocked_prefixes.rs` holds the binary to the words).
+#[test]
+fn runbook_step_8s_list_files_open_a_daemon_and_it_says_what_a_change_costs() {
+    let step = passage("\n## 3. Start", "8. **Block or lift a prefix.**", &["\n## 4."]);
+    let (empty, rest) = fenced(&step);
+    let (blocking, _) = fenced(rest);
+    for (file, body) in [("empty", empty), ("blocking", blocking)] {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let list = tmp.path().join("blocked.json");
+        std::fs::write(&list, body).expect("write the step's file");
+        let mut opts = skepd::AuthOptions::default();
+        opts.blocked_supply_path = Some(list);
+        if let Err(e) = skepd::Daemon::open_with(tmp.path().join("board"), opts) {
+            panic!("§3 step 8's {file} list opens a daemon: {e}\n{body}");
+        }
+    }
+    let step = collapsed(&step);
+    for fact in [
+        "the path `--blocked-prefixes` (or `SKEPD_BLOCKED_PREFIXES`) names is read at start alone",
+        "`operator` and every `record` are in the registry's global form",
+        "`binding_writer` and every `prefix` are in this board's local form",
+        "mount the directory that holds the file, never the file itself",
+        "The next request installs the new list",
+        "landing: blocked-prefix list (reissued, {path}):",
+        "failure: blocked-prefix list: reissue REFUSED — {error}; the list in force stands until a \
+         restart, and the next start REFUSES until a valid list stands at {path}: an empty \
+         \"entries\" lifts every block, an absent file lifts none",
+        "every block with the empty list, never by deleting the file",
+    ] {
+        assert!(step.contains(fact), "§3 step 8 says {fact:?}: {step}");
+    }
+}
+
+/// Checks that the cadences the runbook names are the core's constants'.
+///
+/// The standing line comes once an hour, and the panic hook's rate is the
+/// same hour (`STANDING_INTERVAL`); the open's bare classification and the
+/// feed walk say their progress every 1,000 positions or boundaries or ten
+/// seconds, whichever first (`FEED_WALK_PROGRESS_BOUNDARIES`,
+/// `FEED_WALK_PROGRESS_INTERVAL`). A count is read through its constant; a
+/// figure the runbook spells in words is asserted beside the constant it
+/// spells. So a cadence that moves fails here rather than leaving the
+/// runbook naming the old one.
+#[test]
+fn runbook_names_the_cadences_the_cores_constants_set() {
+    use std::time::Duration;
+
+    use skep_core::limits::{
+        FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL, STANDING_INTERVAL,
+    };
+
+    assert_eq!(STANDING_INTERVAL, Duration::from_secs(3600), "the runbook's \"once an hour\"");
+    assert_eq!(FEED_WALK_PROGRESS_INTERVAL, Duration::from_secs(10), "its \"ten seconds\"");
+    // A count as the runbook writes one, its thousands grouped.
+    let grouped = |n: u64| {
+        let digits = n.to_string();
+        let mut out = String::new();
+        for (i, c) in digits.chars().enumerate() {
+            if i > 0 && (digits.len() - i).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(c);
+        }
+        out
+    };
+    let every = grouped(FEED_WALK_PROGRESS_BOUNDARIES);
+    let text = collapsed(&runbook_md());
+    for figure in [
+        "And once an hour, while any bad state stands, the daemon writes one `standing:` line"
+            .to_string(),
+        "A thread's panic is said on one line, once an hour per site on its thread while it recurs"
+            .to_string(),
+        format!("a line every {every} positions or ten seconds, whichever comes first"),
+        format!("`progress:` line every {every} boundaries or ten seconds, whichever comes first"),
+    ] {
+        assert!(text.contains(&figure), "RUNBOOK.md names the cadence {figure:?}");
+    }
+}
+
+/// Checks that Back up and Restore carry the settings a copy does not.
+///
+/// §7 step 1 says the directory holds the board's state and none of its
+/// settings, and names what to keep beside each copy, the blocked-prefix
+/// file among them; §2 step 3 starts the restored board under them, says
+/// what each blocked-list outcome costs, and reads the open's items 13 to
+/// 16 against the board's last report.
+#[test]
+fn runbook_keeps_the_settings_and_the_blocked_list_beside_each_copy() {
+    let backup = collapsed(&passage(
+        "\n## 7. Back up",
+        "1. **Take one moment's copy",
+        &["2. **Prove the copy"],
+    ));
+    for fact in [
+        "It holds the board's state and none of its settings",
+        "a copy of the file `--blocked-prefixes` names",
+    ] {
+        assert!(backup.contains(fact), "§7 step 1 says {fact:?}: {backup}");
+    }
+    let restore = collapsed(&passage(
+        "\n## 2. Restore",
+        "3. **Replace the data directory whole",
+        &["4. **Start only once"],
+    ));
+    for fact in [
+        "The directory holds none of the board's settings",
+        "with the flag kept and its file absent the start is refused, exit 1",
+        "every standing takedown lapses",
+        "Read the open's items 13 to 16 (Start, step 3)",
+    ] {
+        assert!(restore.contains(fact), "§2 step 3 says {fact:?}: {restore}");
+    }
 }

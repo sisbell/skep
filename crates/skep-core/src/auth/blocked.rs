@@ -29,10 +29,10 @@ use crate::codec::{check_keys, wire_address};
 /// with the supply's `seen` held at the head of routing, so every request
 /// that arrives meanwhile waits on it, `/health` and `/session` included.
 ///
-/// The number is the frame routes' body cap,
-/// [`crate::limits::MAX_REQUEST_BODY`], cited rather than re-derived: this
-/// file carries strictly less per record than a frame does, so the same
-/// ceiling is the same headroom or more.
+/// The number is a relation to the frame routes' body cap,
+/// [`crate::limits::MAX_REQUEST_BODY`], and moves with it: this file
+/// carries strictly less per record than a frame does, so the same ceiling
+/// is the same headroom or more.
 const MAX_BLOCKED_SUPPLY_BYTES: usize = crate::limits::MAX_REQUEST_BODY;
 
 // ── the blocked-prefix list (AUTH-1.44, AUTH-4.36 step 4b, AUTH-4.70) ────
@@ -342,7 +342,8 @@ impl BlockedPrefixes {
                  there is none)"
             ),
             (None, None) => "not a comparand (no --node-prefix: the off-board test is off; a \
-                             hosted board must supply one)"
+                             hosted board must supply one, --node-prefix or SKEPD_NODE_PREFIX, \
+                             at a restart)"
                 .to_string(),
         };
         let inert_entries = self.judged().filter(|(_, inert)| inert.is_some()).count();
@@ -392,9 +393,10 @@ impl BlockedPrefixes {
 pub enum Reissue {
     /// The new issue is the list in force.
     Installed,
-    /// The file could not be read, is not a list, or is past the byte cap.
+    /// The look refused the file, and nothing was installed.
     ///
-    /// Nothing was installed and the list in force stands.
+    /// The path names no regular file, or the file could not be read, is
+    /// not a list, or is past the byte cap; the list in force stands.
     Refused(io::Error),
 }
 
@@ -402,9 +404,11 @@ pub enum Reissue {
 ///
 /// The list's channel is the build's, and this is the recommended one, "a
 /// file the flag `--blocked-prefixes <path>` names": a file the operator
-/// owns, read at every start and re-read when it moves — its identity
-/// checked at the head of every request
-/// ([`super::AuthState::reissue_blocked_prefixes`]), one `stat`.
+/// owns, its path taken at open alone — a board opened with none installs
+/// no list until a restart names one — and the file read at every start and
+/// re-read when it moves, its identity checked at the head of every request
+/// ([`super::AuthState::reissue_blocked_prefixes`]), one `stat`, so the
+/// next request after a replace installs the new issue.
 ///
 /// Not the conventional reload signal, deliberately. This daemon has no
 /// signal handling at all (`main.rs`: crash-stop is the shutdown story), a
@@ -428,12 +432,21 @@ pub enum Reissue {
 /// — absent is "the header names none", and there is no other spelling;
 /// `entries` is required, and an empty array is the explicit empty list (a
 /// lift of everything is an issue, never an absent file). Every address is
-/// dotted decimal under the codec's own tumbler caps, T4-valid. JSON
-/// because a truncated object does not parse: a reader racing a writer
-/// that did not replace the file atomically refuses the torn issue and
-/// keeps the list in force, where a line format would install the half it
-/// saw. The operator still owes the atomic replace (write beside, rename
-/// over) — it is also what gives every issue a fresh identity.
+/// dotted decimal under the codec's own tumbler caps, T4-valid, in the form
+/// its field is pinned to (AUTH-4.70): `operator` and every `record` in the
+/// registry's global form — the board's node prefix in place of the local
+/// form's leading `1` — and `binding_writer` and every `prefix` in the
+/// board's local form, as its session accounts are. The read checks no
+/// form: an address is taken as written, and the install's verdicts follow
+/// what it says. JSON because a truncated object does not parse: a reader
+/// racing a writer that did not replace the file atomically refuses the
+/// torn issue and keeps the list in force, where a line format would
+/// install the half it saw. The operator still owes the atomic replace
+/// (write beside, rename over) — it is also what gives every issue a fresh
+/// identity. Under a container the operator mounts the directory that
+/// holds the file, never the file itself: a file's bind mount keeps the
+/// inode it was made over, so a rename on the host moves no identity this
+/// daemon can see, and the list in force stands with nothing said.
 #[derive(Debug)]
 pub(super) struct BlockedSupply {
     pub(super) path: PathBuf,
@@ -483,8 +496,9 @@ impl BlockedSupply {
     ///
     /// # Errors
     ///
-    /// Fails as [`BlockedSupply::read`] does: the file cannot be read, is
-    /// not a list, or is past [`MAX_BLOCKED_SUPPLY_BYTES`].
+    /// Fails as [`BlockedSupply::read`] does: the path names no regular
+    /// file, or the file cannot be read, is not a list, or is past
+    /// [`MAX_BLOCKED_SUPPLY_BYTES`].
     pub(super) fn open(path: &Path) -> io::Result<(BlockedSupply, BlockedIssue)> {
         let supply = BlockedSupply { path: path.to_path_buf(), seen: parking_lot::Mutex::new(None) };
         let (stamp, issue) = supply.read()?;
@@ -494,20 +508,29 @@ impl BlockedSupply {
 
     /// Reads the file once, at most a byte past the cap, with its identity.
     ///
-    /// The identity comes off the open handle — so the stamp names the bytes
-    /// read, and a replace landing between this and the next look is seen as
-    /// one — then the byte cap, then the parse.
+    /// The path's kind is asked first, and a path that names no regular file
+    /// is refused unopened: a FIFO's open waits for a writer, which at start
+    /// would hang the open and at a reissue would hold `seen`, and with it
+    /// every request. The identity comes off the open handle — so the stamp
+    /// names the bytes read, and a replace landing between this and the next
+    /// look is seen as one — then the byte cap, then the parse.
     ///
     /// # Errors
     ///
-    /// Every failure is an `io::Error` naming the path: an open, a stat or a
-    /// read that fails keeps its own kind; a file that is not a list, and one
-    /// past [`MAX_BLOCKED_SUPPLY_BYTES`], are both `InvalidData`, so the
-    /// channel's two refusals travel as one kind.
+    /// Every failure is an `io::Error` naming the path: a stat, an open or a
+    /// read that fails keeps its own kind; a path that names no regular file,
+    /// a file that is not a list and one past [`MAX_BLOCKED_SUPPLY_BYTES`]
+    /// are all `InvalidData`, so the channel's refusals travel as one kind.
     fn read(&self) -> io::Result<(FileStamp, BlockedIssue)> {
         use std::io::Read;
         let with_path =
             |e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", self.path.display()));
+        if !std::fs::metadata(&self.path).map_err(with_path)?.is_file() {
+            return Err(with_path(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "not a regular file: the list is a file the operator replaces by rename",
+            )));
+        }
         let file = std::fs::File::open(&self.path).map_err(with_path)?;
         let stamp = FileStamp::of(&file.metadata().map_err(with_path)?);
         let mut bytes = Vec::new();

@@ -183,10 +183,15 @@ board is claimed; `SKEPD_NODE_PREFIX=1.N` where a registry minted one,
 omitted where none did (the start line then says the off-board test is
 off and a hosted board must supply one: expected, until there is a
 registry); `SKEPD_UPLOADS` (on by default); `SKEPD_WORKERS` (at or above
-the floor `skepd --help` prints); and `SKEPD_BLOCKED_PREFIXES`, naming a
-mounted file replaced by rename, when the serving layer issues one. The
-provisioning service's boards carry `SKEPD_ORIGIN` alone of these, the
-rest at the daemon's defaults. On the `docker run` line: `--init` (the daemon handles no signal, so as PID 1
+the floor `skepd --help` prints); and `SKEPD_BLOCKED_PREFIXES`, naming the
+blocked-prefix list. The daemon reads that path at start alone, so a board
+started without it blocks nothing until it is recreated with one: start
+every board that may need a takedown with the variable naming a file that
+holds `{"entries": []}`, in a mounted DIRECTORY and never a mounted file —
+a mounted file keeps its first identity, so a new issue renamed over it on
+the host is never seen (RUNBOOK.md, Start, step 8). The provisioning
+service's boards carry `SKEPD_ORIGIN` alone of these, the rest at the
+daemon's defaults. On the `docker run` line: `--init` (the daemon handles no signal, so as PID 1
 without an init it would not take SIGTERM), `--read-only` (the volume is
 the only writable path), `--cap-drop ALL`, `--security-opt
 no-new-privileges`, `--ulimit nofile=1024:1024` (the daemon sizes its 64
@@ -197,11 +202,15 @@ board, on a filesystem of its own where the floor must be the board's:
 
 ```
 docker volume create alice
+mkdir -p /srv/skep/alice/blocked
+printf '{"entries": []}\n' > /srv/skep/alice/blocked/blocked.json
 docker run -d --init --name alice --restart on-failure \
     --read-only --cap-drop ALL --security-opt no-new-privileges \
     --ulimit nofile=1024:1024 --log-opt max-size=10m --log-opt max-file=5 \
     -v alice:/var/lib/skepd \
+    -v /srv/skep/alice/blocked:/etc/skepd/blocked:ro \
     -e SKEPD_ORIGIN=https://alice.example \
+    -e SKEPD_BLOCKED_PREFIXES=/etc/skepd/blocked/blocked.json \
     skep-hosted
 ```
 

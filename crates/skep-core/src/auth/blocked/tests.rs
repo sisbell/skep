@@ -241,7 +241,8 @@ fn the_install_log_names_the_count_the_header_and_each_inert_entry() {
         untold.log_lines(),
         ["2 of 2 entries in force, 0 inert; operator account 1.3.0.7 (the header's); \
           binding-writing account not a comparand (no --node-prefix: the off-board test \
-          is off; a hosted board must supply one)"]
+          is off; a hosted board must supply one, --node-prefix or SKEPD_NODE_PREFIX, at a \
+          restart)"]
     );
     let unclaimed = BlockedPrefixes::installed_under(issue(None, None, &[]), None, None);
     assert!(
@@ -272,6 +273,41 @@ fn a_supply_past_the_byte_cap_is_refused_unread() {
     let e = BlockedSupply::open(&path).expect_err("one byte past the cap is refused");
     assert_eq!(e.kind(), io::ErrorKind::InvalidData, "the channel's one refusal kind");
     assert!(e.to_string().contains("supply cap"), "the refusal names the cap: {e}");
+}
+
+/// Checks that a supply path naming no regular file is refused unopened.
+///
+/// A FIFO's open waits for a writer, so a read that opened one would hang
+/// the start and, at a reissue, every request behind the supply's lock; a
+/// directory holds no list either. Each is refused `InvalidData`, naming
+/// the rule. The FIFO's open runs on a thread of its own and is answered
+/// within a bound, so a read that opens before it asks parks that thread
+/// and fails here, released by a writer rather than hanging the suite.
+#[cfg(unix)]
+#[test]
+fn a_supply_path_that_names_no_regular_file_is_refused_unopened() {
+    let refused = |e: io::Error| {
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData, "the channel's one refusal kind: {e}");
+        assert!(e.to_string().contains("not a regular file"), "the refusal names the rule: {e}");
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    refused(BlockedSupply::open(dir.path()).expect_err("a directory holds no list"));
+    let fifo = dir.path().join("blocked.fifo");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status().expect("run mkfifo");
+    assert!(made.success(), "mkfifo made the FIFO");
+    let (answered, answer) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    std::thread::spawn(move || {
+        let _ = answered.send(BlockedSupply::open(&path).map(|_| ()));
+    });
+    match answer.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(opened) => refused(opened.expect_err("a FIFO holds no list")),
+        Err(_) => {
+            // A writer releases the parked open, so the thread ends.
+            let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+            panic!("the FIFO's open waited for a writer: the path was opened before its kind");
+        }
+    }
 }
 
 /// The supply file's grammar: one strict JSON object. `entries` is

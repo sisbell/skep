@@ -780,19 +780,8 @@ fn the_cause_and_the_foreign_lines_render_the_ruled_words() {
 /// count and the positions once, under `open:`.
 #[test]
 fn the_lines_past_the_head_leave_the_file_and_are_said_once() {
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
-
     let dir = tempfile::tempdir().expect("tempdir");
-    let engine = Engine::open(KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.path().to_path_buf(),
-            retain_checkpoints: 2,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
-        salt: SaltSource::Os,
-    })
-    .expect("a fresh engine");
+    let engine = crate::commits::tests::fsync_engine(dir.path());
     let head = engine.kernel().current_seq().0;
     let path = dir.path().join(SIDECAR_FILE);
     let past = [head + 3, head + 1];

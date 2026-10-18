@@ -2,6 +2,27 @@ use super::*;
 use skep_content::Val;
 use skep_namespace::PrincipalId;
 
+/// Returns an engine over `dir` under this suite's own kernel config.
+///
+/// The config is an fsync journal retaining two checkpoints, its cadence a
+/// deferred count of 1,024 commits that no test here crosses, so a test
+/// that needs a checkpoint takes it by hand (`kernel().checkpoint()`). It
+/// is not the daemon's: `skepd` bounds its cadence by journal bytes as well,
+/// which no test here reaches.
+pub(super) fn fsync_engine(dir: &std::path::Path) -> Engine {
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    Engine::open(KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
+        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
+        salt: SaltSource::Os,
+    })
+    .expect("a fresh engine")
+}
+
 /// Reads are exactly the ops the change feed records nothing for —
 /// M10's partition and this table's answer, agreeing on both sides.
 #[test]
@@ -185,6 +206,25 @@ fn the_commit_stream_is_monotone_and_coalesces() {
     assert!(matches!(step, StreamStep::Shutdown), "shutdown outranks a commit: {step:?}");
 }
 
+/// Checks that wire.md's keepalive sentence names the stream's own interval.
+///
+/// §The commit stream tells a client how long a stream is silent before the
+/// daemon writes its `:ka` comment, the figure a client times a dead stream
+/// by. It is read here through [`KEEPALIVE_INTERVAL`], which no other suite
+/// can reach, so an interval that moves without its sentence fails here.
+#[test]
+fn wire_md_names_the_keepalive_interval_the_stream_waits() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
+    let wire = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let wire = wire.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sentence = format!(
+        "After {} seconds of silence the daemon writes the comment line `:ka`",
+        KEEPALIVE_INTERVAL.as_secs()
+    );
+    assert!(wire.contains(&sentence), "wire.md says {sentence:?}");
+}
+
 /// `signal.wait()` on a detached thread, its answer on the returned channel —
 /// never joined, so a mutation that leaves the waiter parked fails the
 /// assertion reading the channel rather than hanging the suite.
@@ -343,22 +383,11 @@ fn the_durability_and_halt_lines_render_the_ruled_words_and_the_door_records_the
 fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch() {
     use skep_arrangement::InsertError;
     use skep_febe::lower_txn;
-    use skep_kernel::{
-        BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, TxnError,
-    };
+    use skep_kernel::TxnError;
     use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let engine = Engine::open(KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.path().to_path_buf(),
-            retain_checkpoints: 2,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
-        salt: SaltSource::Os,
-    })
-    .expect("a fresh engine");
+    let engine = fsync_engine(dir.path());
     let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
     let stores = engine.stores();
     let account = system_account();
@@ -444,41 +473,34 @@ fn durability_refusals_are_said_once_per_kind_and_the_landing_closes_the_stretch
     );
 }
 
-/// ROWS 27 AND 28 ON THE DOOR, PER ATTEMPT (`operations.md` §1.1 rows 27 and
-/// 28; §4 row 27's line cell; L12's door): a compaction rewrite that fails
-/// BEFORE its rename — a directory standing on the temp file's name,
-/// `commits.log.compact` and `feed-index.log.compact`, which no create
-/// passes — is said through the classed door under `failure:`, in the
-/// ruled words, one line per file that stood; and said AGAIN at the next
-/// landing that compacts while the cause stands — per attempt, the rule's
-/// named exception, each landing a fresh act — where every other line of
-/// the feed's is once. Driven one layer below the daemon, whose pre-claim
-/// gate admits no bulk write: an engine over a temp dir under the daemon's
-/// own kernel config, the write path over it, six bulk inserts as the
-/// system principal through the session door — each recorded in the feed
-/// — rotating the journal's segment so the first checkpoint reclaims below
-/// it and the compaction has a floor; the checkpoint and the compaction
-/// run here as the checkpoint thread runs them. The next open, the obstacle
-/// gone, compacts what the landings could not and says what it dropped.
+/// Checks rows 27 and 28 on the door, said at every attempt.
+///
+/// A compaction rewrite that fails before its rename — a directory standing
+/// on the temp file's name, `commits.log.compact` and
+/// `feed-index.log.compact`, which no create passes — is said through the
+/// classed door under `failure:`, in the ruled words, one line per file
+/// that stood (`operations.md` §1.1 rows 27 and 28; §4 row 27's line cell;
+/// L12's door); and said again at the next landing that compacts while the
+/// cause stands — per attempt, the rule's named exception, each landing a
+/// fresh act — where every other line of the feed's is said once. Driven
+/// one layer below the daemon, whose pre-claim gate admits no bulk write:
+/// an engine over a temp dir under this suite's own kernel config
+/// ([`fsync_engine`]), the write path over it, six bulk inserts as the
+/// system principal through the session door — each recorded in the feed —
+/// rotating the journal's segment so the first checkpoint reclaims below it
+/// and the compaction has a floor; the checkpoint, taken by hand, and the
+/// compaction run here as the checkpoint thread runs them. The next open,
+/// the obstacle gone, compacts what the landings could not and says what
+/// it dropped.
 #[test]
 fn a_compaction_failed_before_its_rename_is_said_through_the_door_at_every_attempt() {
     use skep_address::Nat;
     use skep_arrangement::Caller;
     use skep_febe::{Deposit, VPos};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let engine = Engine::open(KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.path().to_path_buf(),
-            retain_checkpoints: 2,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
-        salt: SaltSource::Os,
-    })
-    .expect("a fresh engine");
+    let engine = fsync_engine(dir.path());
     let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
     let stores = engine.stores();
     // One write through the session door, as the daemon's sequences commit:
@@ -674,20 +696,10 @@ fn a_raise_wakes_a_parked_wait() {
 fn a_panic_after_the_commit_records_the_position_bare_and_an_unmoved_one_records_nothing() {
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let engine = Engine::open(KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.path().to_path_buf(),
-            retain_checkpoints: 2,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
-        salt: SaltSource::Os,
-    })
-    .expect("a fresh engine");
+    let engine = fsync_engine(dir.path());
     let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
     let stores = engine.stores();
     let account = system_account();
@@ -753,20 +765,10 @@ fn commits_log_entry(dir: &std::path::Path, at: u64) -> Option<serde_json::Value
 /// moves the head writer's mint to the next, and the line names both.
 #[test]
 fn the_head_writers_row_40_goes_through_the_classed_door() {
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
     use skep_namespace::{system_account, SYSTEM_PRINCIPAL};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let engine = Engine::open(KernelConfig {
-        durability: Durability::Fsync {
-            journal_path: dir.path().to_path_buf(),
-            retain_checkpoints: 2,
-            burned_seq: BurnedSeqPolicy::Rollback,
-        },
-        checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
-        salt: SaltSource::Os,
-    })
-    .expect("a fresh engine");
+    let engine = fsync_engine(dir.path());
     let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
     let stores = engine.stores();
     let account = system_account();

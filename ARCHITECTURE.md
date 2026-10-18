@@ -2784,10 +2784,10 @@ it:
    format: parse, and marshal — its key-sorting `obj` and the lowercase
    hex pair are `skep-util`'s, taken as every other file takes them),
    `serial.rs` (the write-serialization lock and its guard) and
-   `limits.rs` (the six bounds the core reads: the request-body cap and
-   the edge pairs' hold-down, which the daemon reads too, the standing
-   line's cadence, the feed walk's progress cadence and the feed's page
-   byte budget; the daemon's own seven are `skepd`'s `limits.rs`, the
+   `limits.rs` (the six bounds the core reads: the request-body cap, the
+   edge pairs' hold-down and the standing line's cadence, which the daemon
+   reads too, the feed walk's progress cadence and the feed's page byte
+   budget; the daemon's own seven are `skepd`'s `limits.rs`, the
    media resource's numbers `skep_media::limits`'s, each `pub` for its
    reader). None of these knows anything of the session layer or the
    commits; a leaf imports only leaves — and a leaf in another crate is a
@@ -3100,8 +3100,9 @@ the store's install — nothing above their own layer.
    position) and `limits.rs` (the daemon's seven bounds: the small-body
    cap, the change feed's two page-size bounds, and the blob route's
    bounds — the streaming arm's chunk, its two deadlines, the pruner's
-   cadence; the six the core reads are `skep_core::limits`'s, two of them
-   — the request-body cap and the edge pairs' hold-down — read here too,
+   cadence; the six the core reads are `skep_core::limits`'s, three of
+   them — the request-body cap, the edge pairs' hold-down and the standing
+   line's cadence, the panic hook's rate — read here too,
    and the media resource's own numbers, the two pools' counts among them,
    are `skep-media`'s `limits`, the daemon taking the ones it reads from
    there, each `pub` for it). Neither knows anything about the daemon; a

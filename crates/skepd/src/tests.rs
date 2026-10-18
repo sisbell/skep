@@ -446,15 +446,24 @@ fn the_variable_meets_the_same_floor_as_the_flag() {
     );
 }
 
-/// AUTH-1.44's `--allow-preview-keys`: a bare flag, OFF unless given, and
-/// seeded by no environment variable — a served board's image cannot
-/// turn it on in silence.
+/// Checks that `--allow-preview-keys` is off unless given (AUTH-1.44).
+///
+/// It is a bare flag, seeded by no environment variable, so a served
+/// board's image cannot turn it on in silence. Not given, the parse records
+/// nothing and the setting is the library's own default, which is off —
+/// the default the help names, held to the library's here.
 #[test]
 fn the_preview_keys_flag_is_off_unless_given() {
     let absent = parse_args(argv(&["--data-dir", "/tmp/x"]))
         .expect("valid flags")
         .expect("a run, not usage");
-    assert!(!absent.allow_preview_keys, "the default is OFF");
+    assert!(!absent.allow_preview_keys, "the flag was not given");
+    assert!(!AuthOptions::default().allow_preview_keys, "the default is the library's: OFF");
+    let folded = usage().split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        folded.contains("Off — the default — an enrollment record naming one is refused"),
+        "the help names the library's default: {folded}"
+    );
     let given = parse_args(argv(&["--data-dir", "/tmp/x", "--allow-preview-keys"]))
         .expect("valid flags")
         .expect("a run, not usage");
@@ -463,6 +472,52 @@ fn the_preview_keys_flag_is_off_unless_given() {
         parse_args(argv(&["--data-dir", "/tmp/x", "--allow-preview-keys", "true"])).is_err(),
         "the flag takes no value: a trailing word is an unknown argument"
     );
+}
+
+/// Checks that the local-trust pair's default has one home, the library's.
+///
+/// Unset by flag and variable, the parse records no value, so the open keeps
+/// the library's default and its source; a flag records its value and its
+/// arm. The help names the default arm read off the library's default, so a
+/// default moved there moves the help with it.
+#[test]
+fn the_local_trust_default_is_the_librarys_and_the_help_names_its_arm() {
+    let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+    assert_eq!(absent.local_trust, None, "unset: the library's default stands");
+    let off = parse_args(argv(&["--data-dir", "/tmp/x", "--no-local-trust"]))
+        .expect("valid")
+        .expect("a run");
+    assert_eq!((off.local_trust, off.local_trust_source), (Some(false), Source::Flag));
+    let arm = if AuthOptions::default().local_trust { "--local-trust" } else { "--no-local-trust" };
+    let folded = usage().split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        folded.contains(&format!(
+            "(env: SKEPD_LOCAL_TRUST=true|false); the default is {arm} — a hosted image must \
+             pass --no-local-trust affirmatively"
+        )),
+        "the help names the library's default arm: {folded}"
+    );
+}
+
+/// Checks that the blocked-prefix list's help says what a change costs.
+///
+/// It names each field's form (AUTH-4.70), that the path is read at start
+/// alone, the empty list a board that may need a takedown starts on, and
+/// that a replaced file is installed at the next request — under a
+/// container, a file in a mounted directory.
+#[test]
+fn the_blocked_prefixes_help_names_the_forms_and_what_a_change_costs() {
+    let folded = usage().split_whitespace().collect::<Vec<_>>().join(" ");
+    for fact in [
+        "operator and each record in the registry's global form (the node prefix in place of the \
+         local form's leading 1), binding_writer and each prefix in this board's local form",
+        "The PATH is read at start alone: a board started without one blocks nothing until a \
+         restart names a file",
+        "on a file holding {\"entries\": []}",
+        "a container mounting its directory and never the file; the next request installs it",
+    ] {
+        assert!(folded.contains(fact), "the help says {fact:?}: {folded}");
+    }
 }
 
 /// THE BIND's DEFAULT IS LOOPBACK (AUTH-4.57 (a); the deployment ruling —

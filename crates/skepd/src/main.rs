@@ -416,11 +416,12 @@ const OTHER_PROGRAMS_VARIABLES: [&str; 1] = ["SKEPD_URL"];
 ///
 /// A misspelled name would otherwise leave its setting at the default and
 /// let the start go on (`operations.md` §2, validated at start). The
-/// blocked-prefix list's is the worst: an absent list is said nowhere at
-/// the open (§1.1 row 20), so a takedown the operator wrote would not be in
-/// force and nothing would say so. A misspelled flag is refused as an
-/// unknown argument, and this is its variable's twin. The daemon's parse
-/// and a tool's both call it first, and a tool counts the daemon's own
+/// blocked-prefix list's is the worst: the board would start with no list,
+/// every takedown the operator wrote out of force, and the open's line for
+/// an absent supply would read as a board that names none by choice. A
+/// misspelled flag is refused as an unknown argument, and this is its
+/// variable's twin. The daemon's parse and a tool's both call it first,
+/// and a tool counts the daemon's own
 /// variables as known, so an image's baked settings never stop `skepd
 /// inventory`. A test build passes the `SKEPD_TEST_` seams (the worker
 /// fault, the feed walk's hold, the unit suite's child markers); a shipped
@@ -457,8 +458,11 @@ fn refuse_unknown_variables() -> Result<(), String> {
 /// Returns the help text, every default a constant supplies read from it.
 ///
 /// So the program cannot describe a default it does not use, wherever a
-/// constant supplies the default.
+/// constant supplies the default — and the local-trust pair's default arm
+/// is read off `AuthOptions::default()`, the setting's one home.
 fn usage() -> String {
+    let local_trust_default =
+        if AuthOptions::default().local_trust { "--local-trust" } else { "--no-local-trust" };
     format!(
         "\
 usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
@@ -489,10 +493,11 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
 {DEFAULT_WORKERS};
                      minimum {MIN_WORKERS})
   --local-trust      honor bare (unsigned) loopback sessions after the
-                     board is claimed (the default — a hosted image must
-                     pass --no-local-trust affirmatively)
+                     board is claimed
   --no-local-trust   refuse every bare session once the board is claimed
-                     (env: SKEPD_LOCAL_TRUST=true|false)
+                     (env: SKEPD_LOCAL_TRUST=true|false); the default is
+                     {local_trust_default} — a hosted image must pass
+                     --no-local-trust affirmatively
   --uploads          admit the blob upload family (the default), under a
                      per-account limit of one part in {DEFAULT_LIMIT_SHARE} of
                      the volume's capacity, never below \
@@ -523,13 +528,21 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
                      {{\"operator\": <account>, \"binding_writer\": <account>,
                       \"entries\": [{{\"prefix\": <address>,
                                    \"record\": <address>}}, ...]}}
-                     — the two header fields optional. A session under a
-                     listed prefix is refused 403 prefix_blocked and a
-                     live one ends. Read at EVERY start (a file that
-                     cannot be read, or is not a list, stops the start)
-                     and re-read whenever it is REPLACED — write the new
-                     list beside it and rename it over; no restart, no
-                     signal
+                     — the two header fields optional; operator and each
+                     record in the registry's global form (the node prefix
+                     in place of the local form's leading 1), binding_writer
+                     and each prefix in this board's local form. A session
+                     under a listed prefix is refused 403 prefix_blocked
+                     and a live one ends. The PATH is read at start alone:
+                     a board started without one blocks nothing until a
+                     restart names a file, so start one that may need a
+                     takedown on a file holding {{\"entries\": []}}. The
+                     FILE is read at EVERY start (a file that cannot be
+                     read, or is not a list, stops the start) and re-read
+                     whenever it is REPLACED — write the new list beside it
+                     and rename it over, a container mounting its
+                     directory and never the file; the next request
+                     installs it; no restart, no signal
   --node-prefix <PREFIX>
                      the board's full node prefix in the registry, 1.N
                      (env: SKEPD_NODE_PREFIX) — an address under the root
@@ -645,7 +658,12 @@ struct Args {
     bind: Ipv4Addr,
     port: u16,
     workers: usize,
-    local_trust: bool,
+    /// The local-trust setting, where a flag or its variable set it.
+    ///
+    /// The flags are `--local-trust` and `--no-local-trust`, the variable
+    /// `SKEPD_LOCAL_TRUST`. `None` where none did: the setting is then
+    /// `AuthOptions`' own default, read there and restated nowhere here.
+    local_trust: Option<bool>,
     /// Where `local_trust` came from: the default, the flag or the variable.
     ///
     /// The open's `auth:` line names it beside the flag's value
@@ -657,10 +675,12 @@ struct Args {
     uploads: bool,
     /// Where `uploads` came from, which line 8 names (§1.1 row 8).
     uploads_source: Source,
-    /// `--allow-preview-keys` (AUTH-1.44): a flag and no environment variable.
+    /// `--allow-preview-keys` (AUTH-1.44): whether the flag was given.
     ///
-    /// It is a dev setting a served board never sets, so nothing can turn it
-    /// on in silence from the image's environment.
+    /// A flag and no environment variable: it is a dev setting a served
+    /// board never sets, so nothing can turn it on in silence from the
+    /// image's environment. Not given, the setting is `AuthOptions`' own
+    /// default.
     allow_preview_keys: bool,
     origins: Vec<Origin>,
     /// Where `origins` came from: the default, the flag or the variable.
@@ -882,8 +902,9 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     };
     let mut blocked_prefixes = std::env::var_os(SKEPD_BLOCKED_PREFIXES).map(PathBuf::from);
     let mut node_prefix: Sourced<NodePrefix> = Sourced::from_env(SKEPD_NODE_PREFIX)?;
-    // Default off, and no variable seeds it (AUTH-1.44: "the daemon refuses
-    // enrollment of a tag-3 key unless this setting allows it").
+    // Whether the flag was given, which no variable seeds (AUTH-1.44: "the
+    // daemon refuses enrollment of a tag-3 key unless this setting allows
+    // it"); the default is `AuthOptions`'.
     let mut allow_preview_keys = false;
     let mut it = argv;
     while let Some(arg) = it.next() {
@@ -967,9 +988,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         bind: bind.unwrap_or(DEFAULT_BIND),
         port: port.unwrap_or(DEFAULT_PORT),
         workers,
-        // Phase A default on (AUTH-1.45): a hosted image must set the flag
-        // affirmatively false — abstention keeps the notebook behavior.
-        local_trust: local_trust.value.unwrap_or(true),
+        // Unset is `AuthOptions`' default (AUTH-1.45, Phase A on: a hosted
+        // image sets the flag affirmatively false), which `main` leaves as
+        // the library builds it.
+        local_trust: local_trust.value,
         local_trust_source: local_trust.source,
         // Open by default, the default per-account limit in force from
         // start; the off switch is affirmative.
@@ -1080,12 +1102,19 @@ fn main() {
     // from the defaults and then set, which is what `AuthOptions` being
     // `#[non_exhaustive]` asks: a knob this binary grows no flag for arrives
     // at its own default rather than at whatever a literal here omitted.
+    // Local trust and the preview keys keep the value the library built
+    // them with where no flag or variable set them, so each default has one
+    // home: `AuthOptions`'.
     let mut opts = AuthOptions::default();
-    opts.local_trust = args.local_trust;
-    opts.local_trust_source = args.local_trust_source;
+    if let Some(local_trust) = args.local_trust {
+        opts.local_trust = local_trust;
+        opts.local_trust_source = args.local_trust_source;
+    }
     // The dev setting (AUTH-1.44): enrollment of tag-3 keys, refused unless
     // the flag says otherwise; a served board is launched without it.
-    opts.allow_preview_keys = args.allow_preview_keys;
+    if args.allow_preview_keys {
+        opts.allow_preview_keys = true;
+    }
     opts.configured = args.origins;
     opts.configured_source = args.origins_source;
     // Supplied at every start, as `--origin` is (AUTH-4.70): the file is

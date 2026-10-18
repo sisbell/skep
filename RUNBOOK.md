@@ -480,6 +480,18 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    alone: the daemon refuses to start on one that other users can
    read, and names the `chmod 700` that fixes it (Start, step 3).
 
+   The directory holds none of the board's settings, so start it
+   under the ones kept beside the copy (Back up, step 1), the file
+   `--blocked-prefixes` names put back first. Started under the
+   defaults instead, the board comes back with local trust on, no
+   configured origin and its off-board test off, each said in the
+   open's report. The blocked list costs more: with the flag kept and
+   its file absent the start is refused, exit 1, and with the flag
+   dropped to get the board up, every standing takedown lapses, the
+   open saying only that no file was named. Read the open's items 13
+   to 16 (Start, step 3) against the board's last report before the
+   copy, and restart under the right settings where they differ.
+
 4. **Start only once all of `blobs/` has landed.** The open
    reconciles the blob store whether or not it then serves: it
    retires every upload record whose partial file has not arrived,
@@ -707,7 +719,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    A `SKEPD_` variable the daemon does not read is refused at start,
    named beside the ones it does, exit 2: a misspelled
    `SKEPD_BLOCKED_PREFIX` would otherwise start the board with no
-   list and say nothing.
+   list, its open saying only that none was named.
 
    - `--port <PORT>` (`SKEPD_PORT`): the TCP port, on the address
      `--bind <ADDR>` (`SKEPD_BIND`) names — 127.0.0.1 by default, the
@@ -743,10 +755,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      `--origin` replaces the variable's list; repeated, the flags add
      to one another.
    - `--blocked-prefixes <FILE>` (`SKEPD_BLOCKED_PREFIXES`): the
-     blocked-prefix list. It is read at every start, where a file
-     that cannot be read, or is not a list, stops the start; and
-     read again whenever it is replaced: write the new list beside
-     it and rename it over.
+     blocked-prefix list. The path is read at start alone, so a
+     board started without one blocks nothing until a restart names
+     a file. The file is read at every start, where a file that
+     cannot be read, or is not a list, stops the start; and read
+     again whenever it is replaced, at the next request: write the
+     new list beside it and rename it over (step 8).
    - `--node-prefix <PREFIX>` (`SKEPD_NODE_PREFIX`): the board's
      node prefix, `1.N`. Without it the blocked-prefix list's
      off-board test is off.
@@ -1030,7 +1044,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        ```
        warning (at start): board is claimed with --local-trust still on: any loopback party may write as any principal (CLAIMED-PERMISSIVE); where that is not meant, restart with --no-local-trust (SKEPD_LOCAL_TRUST=false)
        warning (at start): board is claimed with no configured origin: signed_origins is empty and every signed session will be refused — with --local-trust off, every bare one too, so no session can write; restart with --origin <ORIGIN> (or SKEPD_ORIGIN) naming the origin this board is reached at
-       warning (at start): configured origin {origin} names a loopback host at a port this daemon is not bound to; re-issue the origin for the bound port
+       warning (at start): configured origin {origin} names a loopback host at a port this daemon is not bound to; re-issue the origin for the bound port: origins are read at start, so restart with --origin (or SKEPD_ORIGIN) naming that host at the port the serving line names
        warning (at start): the dev setting --allow-preview-keys is on: the enrollment of a preview key (the tag-3 row, fndsa512-preview-ed25519) is admitted, a genesis included — a served board runs without it; drop the flag and restart
        ```
 
@@ -1047,12 +1061,18 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
        ```
        open: node prefix {prefix} ({source}): egress and assertion config, never journaled; the blocked-prefix list's off-board test runs against it
-       open: no --node-prefix: the off-board test is off (every operator account reads as this board's own); a hosted board must supply one
+       open: no --node-prefix: the off-board test is off (every operator account reads as this board's own); a hosted board must supply one (--node-prefix or SKEPD_NODE_PREFIX) at a restart
        ```
 
-   16. Where a list was supplied, the blocked-prefix list in force:
+   16. The blocked-prefix list in force. Where a file was named,
        `open: blocked-prefix list (at start, {path}):`, and beneath
-       it the count of entries in force and each inert entry.
+       it the count of entries in force and each inert entry (step
+       8). Where none was, the line says so, and that no prefix can
+       be blocked until a restart names a file:
+
+       ```
+       open: no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES): no prefix is blocked, and none can be until a restart names a file — a board that may need a takedown starts with one holding {"entries": []}
+       ```
 
    17. The worker threads, started last. A worker thread the OS
        refuses stops the start, exit 1, before the pruner and the
@@ -1198,6 +1218,71 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    and says the mode on stderr: `ENFORCING`, with step 2's local trust
    off. `crates/skep-cli/README.md` tables every setting the command
    reads.
+
+8. **Block or lift a prefix.** The blocked-prefix list is the one
+   setting the daemon takes while it runs, and only from the file a
+   start named: the path `--blocked-prefixes` (or
+   `SKEPD_BLOCKED_PREFIXES`) names is read at start alone. A board
+   started without one blocks nothing, and its open says so (step 3,
+   item 16); a takedown on it waits for a restart that names a file.
+   So start any board that may need one on a file that holds the
+   empty list:
+
+   ```
+   {"entries": []}
+   ```
+
+   The file is one JSON object: `entries`, required, each entry the
+   `prefix` it blocks and the `record`, the version address of the
+   takedown record it cites; and two optional header fields,
+   `operator` and `binding_writer`. Each field has its form.
+   `operator` and every `record` are in the registry's global form,
+   the board's node prefix in place of the local form's leading `1`:
+   local `1.0.7` under `--node-prefix 1.3` is `1.3.0.7`.
+   `binding_writer` and every `prefix` are in this board's local
+   form, as its accounts are. The daemon checks no form and reads
+   each address as written, so a header in the wrong form misjudges
+   which entries it exempts. To block the account `1.0.7`:
+
+   ```
+   {"operator": "1.3.0.1", "entries": [{"prefix": "1.0.7", "record": "1.3.0.1.0.7.1"}]}
+   ```
+
+   Write each new issue beside the file, in the same directory, and
+   rename it over the old one (`mv blocked.json.new blocked.json`):
+   the daemon watches the file's identity, a rename is a new file,
+   and an edit in place can be read half written, which is refused.
+   Under a container, mount the directory that holds the file, never
+   the file itself: a mounted file keeps the identity it had when the
+   container started, so a rename on the host is never seen, and the
+   old list stays in force with nothing said.
+
+   The next request installs the new list, before it resolves its
+   own session; on a quiet board send one (`curl -s
+   http://127.0.0.1:8642/health`). From then a session whose account
+   sits at or under a listed prefix is refused `403 prefix_blocked`
+   naming the entry's record, and a live one ends at its next
+   request. The install says the list in force:
+
+   ```
+   landing: blocked-prefix list (reissued, {path}):
+   ```
+
+   and beneath it the count of entries in force and each entry it
+   holds INERT, ignored: one that covers the operator's account, or,
+   where that account is off-board, the account that writes the
+   board's bindings. An entry you meant to block that reads inert
+   names a header in the wrong form. A file the daemon cannot read,
+   or that is no list, installs nothing, and the list in force
+   stands:
+
+   ```
+   failure: blocked-prefix list: reissue REFUSED — {error}; the list in force stands until a restart, and the next start REFUSES until a valid list stands at {path}: an empty "entries" lifts every block, an absent file lifts none
+   ```
+
+   Lift a block with an issue that drops its entry, and every block
+   with the empty list, never by deleting the file: a start refuses
+   a named file that is gone.
 
 ## 4. Stop
 
@@ -1412,7 +1497,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 1. **Take one moment's copy of the whole data directory.** The
    directory is one unit, backed up and moved together: the
    journal, the change feed's files with `feed-attest.log` among
-   them, and `blobs/`. Take the copy one of three ways:
+   them, and `blobs/`. It holds the board's state and none of its
+   settings: keep beside each copy the command line or the
+   environment the board runs under — its origins, `--no-local-trust`,
+   `--node-prefix`, the upload setting — and a copy of the file
+   `--blocked-prefixes` names, which lives outside the directory and
+   which a restore needs in place (Restore, step 3). Take the copy
+   one of three ways:
 
    - a snapshot of the volume;
    - a copy with the daemon stopped;

@@ -174,6 +174,13 @@ pub use server::{
     HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, DEFAULT_WORKERS, MIN_WORKERS,
     UNIVERSAL_HEADERS,
 };
+/// Which arm of the parse set a setting, `skep-util`'s, re-exported too.
+///
+/// It is the type of [`AuthOptions`]' three source members — the local-trust
+/// flag's, the configured origins' and the node prefix's — so a caller that
+/// sets one of those settings names the arm that set it on this crate's
+/// path, as it names the options themselves.
+pub use skep_util::source::Source;
 
 /// The seeded start: [`embed`] under the test seam's seeded salt source.
 ///

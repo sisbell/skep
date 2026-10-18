@@ -61,9 +61,9 @@ pub struct AuthOptions {
     ///
     /// It is the default, the flag (`--local-trust` / `--no-local-trust`) or
     /// the variable (`SKEPD_LOCAL_TRUST`), which the open's `auth:` line
-    /// names beside the flag's value (§1.1 m14); `Source::Default` from a
-    /// caller that sets the flag and names no source, which the line then
-    /// says.
+    /// names beside the flag's value (§1.1 m14). A caller that sets the flag
+    /// and names no source leaves `Source::Default`, and the line then says
+    /// `no source named` beside a value that is not the default.
     pub local_trust_source: Source,
     /// The configured origin set.
     ///
@@ -80,8 +80,9 @@ pub struct AuthOptions {
     /// It is the default (no origin configured), the flag (`--origin`) or the
     /// variable (`SKEPD_ORIGIN`), which the open's `auth:` line names beside
     /// the set (§1.1 m14): the one line that tells a stale variable's origin
-    /// from the flag's. `Source::Default` from a caller that sets the set and
-    /// names no source, which the line then says.
+    /// from the flag's. A caller that sets the set and names no source leaves
+    /// `Source::Default`, and the line then says `no source named` beside a
+    /// set that is not the default's.
     pub configured_source: Source,
     /// The blocked-prefix list's supply (AUTH-1.44, AUTH-4.70).
     ///
@@ -90,10 +91,12 @@ pub struct AuthOptions {
     /// supplied at every start, as `configured` is: a named file is read at
     /// open, and one that cannot be read or is not a list fails the open, so
     /// no restart starts the daemon on an empty list the standing records do
-    /// not support. It is re-issued while the daemon runs by replacing the
-    /// file; the format and the re-read are `BlockedSupply`'s. `None` is a
-    /// board whose operator supplies none — the notebook — and no prefix is
-    /// blocked.
+    /// not support. The path is read at open alone; the file it names is
+    /// looked at again on each request, and installed where it was replaced
+    /// (`BlockedSupply`'s format and re-read). `None` is a board whose
+    /// operator supplies none — the notebook — and no prefix is blocked until
+    /// a restart names a file, which the open says
+    /// ([`super::AuthState::blocked_supply_absent_line`]).
     ///
     /// Deliberately not `blocked_prefixes`, as `configured` is deliberately
     /// not `origins`: `blocked_prefixes` is `AuthConfig`'s read of the list
@@ -123,10 +126,11 @@ pub struct AuthOptions {
     /// Where `node_prefix` came from.
     ///
     /// It is the flag (`--node-prefix`) or the variable
-    /// (`SKEPD_NODE_PREFIX`); `Source::Default` where none was supplied, and
-    /// from a caller that sets a prefix and names no source — which the
-    /// start-up line (`AuthConfig::node_prefix_line`) names beside the prefix
-    /// (§1.1 row 19).
+    /// (`SKEPD_NODE_PREFIX`), which the start-up line
+    /// (`AuthConfig::node_prefix_line`) names beside the prefix (§1.1 row
+    /// 19); `Source::Default` where none was supplied, and from a caller that
+    /// sets a prefix and names no source, which the line then says as `no
+    /// source named`.
     pub node_prefix_source: Source,
     /// The dev setting `allow_preview_keys` (AUTH-1.44; AUTH RES-206).
     ///
@@ -246,20 +250,28 @@ impl AuthConfig {
     ///
     /// It names the node prefix in force with its source — `(--node-prefix)`
     /// or `(SKEPD_NODE_PREFIX)`, the name alone, the line already saying the
-    /// value; `(the default)` from a caller that set one and named no source
-    /// — or its absence; said once, at start, whether or not a list is
-    /// supplied, because a hosted board launched without its prefix has its
-    /// off-board test off and would otherwise learn so only at its first
-    /// install.
+    /// value; `(no source named)` from a caller that set one and named no
+    /// source — or its absence, with the two names that supply one at a
+    /// restart, since the prefix is read at start alone (REG-1.70). It is
+    /// said once, at start, whether or not a list is supplied, because a
+    /// hosted board launched without its prefix has its off-board test off
+    /// and would otherwise learn so only at its first install.
     pub fn node_prefix_line(&self) -> String {
+        let at_default = self.node_prefix == AuthOptions::default().node_prefix;
         match &self.node_prefix {
             Some(prefix) => format!(
                 "node prefix {prefix} ({}): egress and assertion config, never journaled; the \
                  blocked-prefix list's off-board test runs against it",
-                self.node_prefix_source.words("--node-prefix", "SKEPD_NODE_PREFIX")
+                source_words(
+                    self.node_prefix_source,
+                    at_default,
+                    "--node-prefix",
+                    "SKEPD_NODE_PREFIX"
+                )
             ),
             None => "no --node-prefix: the off-board test is off (every operator account reads \
-                     as this board's own); a hosted board must supply one"
+                     as this board's own); a hosted board must supply one (--node-prefix or \
+                     SKEPD_NODE_PREFIX) at a restart"
                 .to_string(),
         }
     }
@@ -291,10 +303,12 @@ impl AuthConfig {
     /// set, which row 17's warning names the consequence of — and the
     /// configured set's source beside it, `(--origin)`, `(SKEPD_ORIGIN)` or
     /// `(the default)`, so a stale variable's origin is told from the
-    /// flag's. The one line that names a mistyped `--origin` on an
-    /// `Enforcing` board, where every signed session is otherwise refused in
-    /// silence.
+    /// flag's. Either source reads `no source named` where a caller set a
+    /// value that is not the default and named no source. The one line that
+    /// names a mistyped `--origin` on an `Enforcing` board, where every
+    /// signed session is otherwise refused in silence.
     pub fn auth_line(&self, claimed: bool) -> String {
+        let defaults = AuthOptions::default();
         let (flag, variable) = if self.local_trust {
             ("--local-trust", "SKEPD_LOCAL_TRUST=true")
         } else {
@@ -307,13 +321,20 @@ impl AuthConfig {
                 set.iter().map(Origin::as_str).collect::<Vec<_>>().join(", ")
             }
         };
+        let configured_at_default =
+            self.configured == defaults.configured.into_iter().collect::<BTreeSet<_>>();
         format!(
             "auth: {} (--local-trust {}, {}); configured origins {} ({}); signed origins {}",
             Mode::of(self, claimed),
             if self.local_trust { "on" } else { "off" },
-            self.local_trust_source.words(flag, variable),
+            source_words(
+                self.local_trust_source,
+                self.local_trust == defaults.local_trust,
+                flag,
+                variable
+            ),
             list(&self.configured),
-            self.configured_source.words("--origin", "SKEPD_ORIGIN"),
+            source_words(self.configured_source, configured_at_default, "--origin", "SKEPD_ORIGIN"),
             list(&signed_origins(self, claimed)),
         )
     }
@@ -395,6 +416,19 @@ impl AuthConfig {
     /// carve the case out for itself.
     pub fn port(&self) -> Option<u16> {
         self.port.get().copied()
+    }
+}
+
+/// Returns a setting's source as the open's lines spell it.
+///
+/// It is [`Source::words`], save one cell: a value that is not the default
+/// under `Source::Default` is a caller's that named no source, and the line
+/// says `no source named` rather than call that value the default.
+/// `at_default` is whether the value in force is [`AuthOptions::default`]'s.
+fn source_words<'a>(source: Source, at_default: bool, flag: &'a str, variable: &'a str) -> &'a str {
+    match source {
+        Source::Default if !at_default => "no source named",
+        source => source.words(flag, variable),
     }
 }
 
@@ -509,7 +543,8 @@ mod tests {
     /// says `none` for both sets. The source's words are the setting's,
     /// `(--local-trust {on|off}, {source})` as m14 spells them, and the
     /// configured set's beside it — the flag, the variable by its name, the
-    /// default where none was configured.
+    /// default where none was configured, and `no source named` where a
+    /// caller set a value that is not the default and named no source.
     #[test]
     fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets() {
         let cfg = AuthConfig::new(AuthOptions::default());
@@ -562,13 +597,26 @@ mod tests {
             "auth: CLAIMED-ENFORCING (--local-trust off, SKEPD_LOCAL_TRUST=false); configured \
              origins none (the default); signed origins none"
         );
+        let unsourced = AuthConfig::new(AuthOptions {
+            local_trust: false,
+            configured: vec![configured("https://board.example")],
+            ..AuthOptions::default()
+        });
+        unsourced.bind_port(443).expect("binds once");
+        assert_eq!(
+            unsourced.auth_line(true),
+            "auth: CLAIMED-ENFORCING (--local-trust off, no source named); configured origins \
+             https://board.example (no source named); signed origins https://board.example",
+            "a value that is not the default is never called the default's"
+        );
     }
 
     /// Checks that the node prefix's line (row 19) names its source.
     ///
-    /// It names the flag, the variable by its bare name, and the default's
-    /// phrase where a caller set a prefix and named no source; a board told
-    /// none keeps its one sentence.
+    /// It names the flag, the variable by its bare name, and `no source
+    /// named` where a caller set a prefix and named no source; a board told
+    /// none keeps its one sentence, with the two names that supply a prefix
+    /// at a restart.
     #[test]
     fn the_node_prefix_line_names_the_prefix_with_its_source() {
         let at = |source: Source| {
@@ -583,11 +631,12 @@ mod tests {
                     off-board test runs against it";
         assert_eq!(at(Source::Flag), format!("node prefix 1.3 (--node-prefix){rest}"));
         assert_eq!(at(Source::Env), format!("node prefix 1.3 (SKEPD_NODE_PREFIX){rest}"));
-        assert_eq!(at(Source::Default), format!("node prefix 1.3 (the default){rest}"));
+        assert_eq!(at(Source::Default), format!("node prefix 1.3 (no source named){rest}"));
         assert_eq!(
             AuthConfig::new(AuthOptions::default()).node_prefix_line(),
             "no --node-prefix: the off-board test is off (every operator account reads as this \
-             board's own); a hosted board must supply one"
+             board's own); a hosted board must supply one (--node-prefix or SKEPD_NODE_PREFIX) at \
+             a restart"
         );
     }
 

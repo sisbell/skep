@@ -1169,23 +1169,24 @@ fn doc_states_the_write_permit_pool_and_its_token() {
     );
 }
 
-/// THE LARGEST SINGLE ANSWER, THE THREE DEADLINES AND THE HEAD CAP
-/// (`operations.md` §2.4 rows 1, 2 and 12; the ops lanes' W3 and W4):
+/// Checks §Transport's largest single answer, its deadlines and head cap.
+///
 /// §Transport states, per route, the largest single answer a reader must
 /// accept as the code bounds it today — the blob fetch at the per-file cap,
 /// a feed page at the page byte budget, a frame answer in items, spans and
 /// pairs and in bytes by no constant, the dump the world, the rest one
 /// object — and never the kernel's per-transaction budget restated; the
 /// transport's three deadlines, 30 s each, with what each bounds; and the
-/// request head's cap with its refusal. The figures the test reaches are
-/// read THROUGH the constants — the per-file cap, the delivery, span and
-/// pair budgets — so the sentence moves with them; the page budget
-/// (`limits.rs`'s `MAX_CHANGES_PAGE_BYTES`), the three deadlines
-/// (`http.rs`'s `REQUEST_READ_TIMEOUT`, `WRITE_TIMEOUT` and
+/// request head's cap with its refusal (`operations.md` §2.4 rows 1, 2 and
+/// 12; the ops lanes' W3 and W4). The figures the test reaches are read
+/// through the constants — the per-file cap, the delivery, span and pair
+/// budgets, and the page budget, `skep_core::limits`'s
+/// `MAX_CHANGES_PAGE_BYTES`, cross-checked against the `budget` §The change
+/// feed's refusal carries — so the sentence moves with them; the three
+/// deadlines (`http.rs`'s `REQUEST_READ_TIMEOUT`, `WRITE_TIMEOUT` and
 /// `TRANSFER_DEADLINE`) and the head cap (`http.rs`'s `MAX_REQUEST_HEAD`,
 /// whose refusal `read_request` spells) are the daemon's private
-/// constants, pinned as the literals their cards spell — the page budget
-/// cross-checked against the `budget` §The change feed's refusal carries.
+/// constants, pinned as the literals their cards spell.
 #[test]
 fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
     let transport = prose("\n### Transport", &["\n### Identity"]);
@@ -1197,8 +1198,10 @@ fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
             skep_media::limits::MAX_BLOB_BYTES >> 20
         ),
         "its `Content-Length` the file's size and a RESET the one end short of it".to_string(),
-        // 256 rows × 8 KiB — `MAX_CHANGES_PAGE_BYTES`, crate-private: the literal.
-        "a `GET /changes` page carries at most **2 MiB** of marshaled entries".to_string(),
+        format!(
+            "a `GET /changes` page carries at most **{} MiB** of marshaled entries",
+            skep_core::limits::MAX_CHANGES_PAGE_BYTES >> 20
+        ),
         "a page past it refused whole with `400 malformed_changes` carrying `budget` and `fits`"
             .to_string(),
         "bounded in ITEMS where it is bounded at all and in bytes by no constant of the daemon's"
@@ -1223,8 +1226,8 @@ fn doc_states_the_largest_single_answer_the_three_deadlines_and_the_head_cap() {
     );
     let feed = prose("\n## The change feed", &["\n## The other endpoints"]);
     assert!(
-        feed.contains(&format!("\"budget\": {}", 2 * 1024 * 1024)),
-        "the 2 MiB §Transport spells is the budget §The change feed's refusal carries"
+        feed.contains(&format!("\"budget\": {}", skep_core::limits::MAX_CHANGES_PAGE_BYTES)),
+        "the budget §Transport spells is the budget §The change feed's refusal carries"
     );
     // THE THREE DEADLINES (§2.4 row 1): `Duration::from_secs(30)` each in
     // `http.rs`, `pub(super)` — the literal, with what each bounds in the
@@ -1792,4 +1795,30 @@ fn doc_response_examples_match_the_codec() {
     oracle.sort();
     required.sort();
     assert_eq!(oracle, required, "the two transcriptions of wire.md's response shapes disagree");
+}
+
+/// Checks that §Sessions spells the nonce's lifetime and the store's cap.
+///
+/// A nonce lives `CHALLENGE_TTL_MS` — `ttl_ms` on the wire, a byte pin of
+/// it — and at most `MAX_LIVE_NONCES` are live at once. Both are
+/// `skep-core`'s `pub` constants, read here, so a figure that moves fails
+/// here rather than leaving the document naming the old one.
+#[test]
+fn doc_spells_the_nonces_lifetime_and_the_stores_cap_through_their_constants() {
+    use skep_core::auth::session::CHALLENGE_TTL_MS;
+    use skep_core::auth::MAX_LIVE_NONCES;
+
+    let sessions = prose("\n### Sessions", &["\n### ", "\n## "]);
+    for fact in [
+        format!("\"ttl_ms\":{CHALLENGE_TTL_MS}"),
+        format!(
+            "It lives {} seconds (`ttl_ms` is a byte pin of that constant)",
+            CHALLENGE_TTL_MS / 1000
+        ),
+        format!(
+            "At most {MAX_LIVE_NONCES} nonces are live at once; past the cap the oldest is evicted"
+        ),
+    ] {
+        assert!(sessions.contains(&fact), "§Sessions says {fact:?}: {sessions}");
+    }
 }

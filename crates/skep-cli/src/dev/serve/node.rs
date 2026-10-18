@@ -38,7 +38,7 @@ mod built {
     use serde_json::{json, Value};
     use skep_client::halt::Halt;
     use skep_client::Origin;
-    use skepd::{embed, AuthOptions, Daemon, EmbedError, MediaOptions, Permit, Skepd, Step, DEFAULT_WORKERS};
+    use skepd::{embed, AuthOptions, Daemon, EmbedError, MediaOptions, Permit, Skepd, Source, Step, DEFAULT_WORKERS};
 
     /// The daemon in-process: the server, and the origin it answers at.
     pub struct Node {
@@ -65,6 +65,12 @@ mod built {
             let own = |port: u16| {
                 let mut opts = AuthOptions::default();
                 opts.local_trust = local_trust;
+                // Off is this tool's own `--no-local-trust`, named as the
+                // flag that set it, so the daemon's `auth:` line never reads
+                // it as the daemon's default.
+                if !local_trust {
+                    opts.local_trust_source = Source::Flag;
+                }
                 opts.configured = vec![skepd::Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin")];
                 opts
             };

@@ -597,9 +597,10 @@ fn a_refused_command_line_off_a_terminal_is_one_line_naming_help() {
 /// writes one line naming it beside the variables the daemon reads, exit 2,
 /// and creates nothing under the data directory (`operations.md` §2,
 /// validated at start), where it would otherwise start the board with no
-/// blocked-prefix list and say nothing. The child runs under the
-/// [`Spawned`] guard on an ephemeral port, so a binary that starts after
-/// all fails this claim at [`PATIENCE`] and is killed, never left serving.
+/// blocked-prefix list, its open saying only that none was named. The child
+/// runs under the [`Spawned`] guard on an ephemeral port, so a binary that
+/// starts after all fails this claim at [`PATIENCE`] and is killed, never
+/// left serving.
 #[test]
 fn a_misspelled_variable_stops_the_start_before_the_directory_is_touched() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -976,20 +977,22 @@ fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean
     );
 }
 
-/// m14 — THE OPEN's-REPORT `auth:` LINE AT EVERY START, on the real binary:
-/// a fresh UNCLAIMED board under the defaults says `open: auth: unclaimed
+/// Checks the open's `auth:` line at every start, on the real binary (m14).
+///
+/// A fresh unclaimed board under the defaults says `open: auth: unclaimed
 /// (--local-trust on, the default); configured origins none (the default);
 /// signed origins {the bound port's three loopback defaults}` — the bare
-/// set, since unclaimed the signed set is the bare one; the board CLAIMED
+/// set, since unclaimed the signed set is the bare one. The board, claimed
 /// over the wire in that life and started again `--no-local-trust --origin
-/// http://127.0.0.1:{port}` says `CLAIMED-ENFORCING (--local-trust off,
+/// http://127.0.0.1:{port}`, says `CLAIMED-ENFORCING (--local-trust off,
 /// --no-local-trust); configured origins {that origin} (--origin); signed
-/// origins {that origin}` — the configured set ALONE once claimed, the mode derived
-/// from the pair as AUTH-5.86 derives it — with no warning, since the origin
-/// names the bound port, and before the node prefix's line; and the same
-/// board started with `SKEPD_LOCAL_TRUST=true` on the command says
+/// origins {that origin}` — the configured set alone once claimed, the mode
+/// derived from the pair as AUTH-5.86 derives it — with no warning, since
+/// the origin names the bound port, and before the node prefix's line,
+/// which the blocked list's absence follows, no file being named (row 20).
+/// The same board started with `SKEPD_LOCAL_TRUST=true` on the command says
 /// `CLAIMED-PERMISSIVE (--local-trust on, SKEPD_LOCAL_TRUST=true) …`, the
-/// permissive warning said before it. Each child killed by the test.
+/// permissive warning said before it. Each child is killed by the test.
 #[test]
 fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets_at_every_start() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -1033,12 +1036,21 @@ fn the_auth_line_names_the_mode_the_flag_with_its_source_and_the_two_sets_at_eve
         "FINDING (m14): the enforcing board's auth line"
     );
     await_said(&mut stderr, "open", "no --node-prefix");
+    assert_eq!(
+        await_said(&mut stderr, "open", "no --blocked-prefixes"),
+        "no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES): no prefix is blocked, and none can be \
+         until a restart names a file — a board that may need a takedown starts with one holding \
+         {\"entries\": []}",
+        "row 20: a board started with no list says so, and what a takedown then costs"
+    );
     let at = |stderr: &Stderr, class: &str, prefix: &str| {
         stderr.seen.iter().position(|l| said(l, class, prefix))
     };
     assert!(
-        at(&stderr, "open", "auth: ") < at(&stderr, "open", "no --node-prefix"),
-        "the auth line comes before the node prefix's:\n{}",
+        at(&stderr, "open", "auth: ") < at(&stderr, "open", "no --node-prefix")
+            && at(&stderr, "open", "no --node-prefix")
+                < at(&stderr, "open", "no --blocked-prefixes"),
+        "the auth line, then the node prefix's, then the list's absence:\n{}",
         stderr.seen.join("\n")
     );
     assert!(
@@ -1109,7 +1121,8 @@ fn the_upload_setting_and_the_node_prefix_name_the_arm_that_set_each() {
     assert_eq!(
         await_said(&mut by_variable.stderr, "open", "no --node-prefix"),
         "no --node-prefix: the off-board test is off (every operator account reads as this \
-         board's own); a hosted board must supply one"
+         board's own); a hosted board must supply one (--node-prefix or SKEPD_NODE_PREFIX) at a \
+         restart"
     );
     by_variable.child.kill();
 

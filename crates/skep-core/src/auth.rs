@@ -124,11 +124,12 @@ impl AuthState {
     ///
     /// # Errors
     ///
-    /// Fails only on that supply: a file the options name that cannot be
-    /// read, is not a list, or is past the channel's byte cap
-    /// (`MAX_BLOCKED_SUPPLY_BYTES`). An operator condition — a daemon that
-    /// started on an empty list instead would lapse every standing block in
-    /// silence, which is the one thing "supplied at every start" rules out.
+    /// Fails only on that supply: a path the options name that is no regular
+    /// file, or a file that cannot be read, is not a list, or is past the
+    /// channel's byte cap (`MAX_BLOCKED_SUPPLY_BYTES`). An operator
+    /// condition — a daemon that started on an empty list instead would
+    /// lapse every standing block in silence, which is the one thing
+    /// "supplied at every start" rules out.
     pub fn open(opts: AuthOptions, world: &World) -> io::Result<AuthState> {
         let (blocked_supply, issue) = match opts.blocked_supply_path.as_deref() {
             Some(path) => {
@@ -225,6 +226,21 @@ impl AuthState {
     /// Returns the supply file's path for the log; `None` where none was named.
     pub fn blocked_supply_path(&self) -> Option<&Path> {
         self.blocked_supply.as_ref().map(|s| s.path.as_path())
+    }
+
+    /// Returns the open's line for a board started with no supply file.
+    ///
+    /// `None` where the options named one: the open says that list in force
+    /// instead ([`BlockedPrefixes::log_lines`]). The path is read at
+    /// [`AuthState::open`] alone, so a board that names none blocks no
+    /// prefix until a restart names a file (AUTH-4.70) — what the line says,
+    /// beside the empty issue a board that may need a takedown starts with.
+    pub fn blocked_supply_absent_line(&self) -> Option<&'static str> {
+        self.blocked_supply.is_none().then_some(
+            "no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES): no prefix is blocked, and none \
+             can be until a restart names a file — a board that may need a takedown starts \
+             with one holding {\"entries\": []}",
+        )
     }
 
     /// Returns `/health`'s `auth` object (AUTH-6.13).
@@ -330,4 +346,35 @@ impl AuthState {
 /// channel's shapes are rendered.
 pub fn key_set_of<'a>(world: &'a World, account: &Address) -> Option<&'a KeySet> {
     world.m3().is_registered_account(account).then(|| world.identity().key_set(account))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checks that the absent supply's line answers where no file was named.
+    ///
+    /// A board opened with no supply file answers the line, which names the
+    /// flag, its variable, the restart a takedown then needs and the empty
+    /// issue to start with; one opened over a file answers `None`, its list
+    /// in force said by that list's own lines.
+    #[test]
+    fn the_absent_supply_line_is_answered_where_no_file_was_named_alone() {
+        let world = World::genesis();
+        let unnamed = AuthState::open(AuthOptions::default(), &world).expect("no supply to read");
+        assert_eq!(
+            unnamed.blocked_supply_absent_line(),
+            Some(
+                "no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES): no prefix is blocked, and \
+                 none can be until a restart names a file — a board that may need a takedown \
+                 starts with one holding {\"entries\": []}"
+            )
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("blocked.json");
+        std::fs::write(&path, br#"{"entries": []}"#).expect("write the empty list");
+        let opts = AuthOptions { blocked_supply_path: Some(path), ..AuthOptions::default() };
+        let named = AuthState::open(opts, &world).expect("the empty list opens");
+        assert_eq!(named.blocked_supply_absent_line(), None, "a named file's list says itself");
+    }
 }

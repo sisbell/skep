@@ -1586,9 +1586,17 @@ impl Daemon {
     /// the stream is this daemon's, for [`Daemon::log_config_warnings`]'s
     /// reason.
     ///
-    /// It is silent where no supply was named: that is a board whose
-    /// operator supplies none, and there is no list to name.
+    /// Where no supply was named it says so at start, one line of the open's
+    /// report (`AuthState::blocked_supply_absent_line`): no list is in force,
+    /// and since the path is read at start alone none can be until a
+    /// restart names a file. At a claim it says nothing more, there being no
+    /// list to re-compare.
     fn log_blocked_prefixes(&self, when: Moment) {
+        if when == Moment::AtStart {
+            if let Some(absent) = self.auth.blocked_supply_absent_line() {
+                self.say(Class::Open, absent);
+            }
+        }
         let Some(path) = self.auth.blocked_supply_path() else { return };
         let class = match when {
             Moment::AtStart | Moment::AtOpen => Class::Open,

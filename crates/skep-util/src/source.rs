@@ -18,11 +18,14 @@
 //! `skepd` (its session-layer options) and `skep-media` (its upload
 //! setting) carry it, and it has no subject of its own.
 
-/// Which arm of the parse set a setting's value in force. `Copy`, and
-/// `Default` is the default's own arm, so an option type built from its
-/// defaults carries `Default` on every member until the parse says
-/// otherwise — a caller that sets a value and names no source is read as
-/// the default's, which is what its line then says.
+/// Which arm of the parse set a setting's value in force.
+///
+/// `Copy`, and `Default` is the default's own arm, so an option type built
+/// from its defaults carries `Default` on every member until the parse says
+/// otherwise. A caller that sets a value and names no source leaves
+/// `Default` beside it: a line that can tell its value from the default's
+/// says no source was named where the two differ, and one that cannot says
+/// the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Source {
     /// Neither a flag nor a variable named the setting: the daemon's own

@@ -951,6 +951,27 @@ fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     said_holding(&talk, &[&format!("the in-process daemon at {board_origin} is stopped")]);
 }
 
+/// Checks that `--own --no-local-trust` names the flag on the `auth:` line.
+///
+/// The in-process daemon's open says the line on the provider's stream. Off
+/// is the tool's own `--no-local-trust`, so the line names that flag as the
+/// arm that set it and never calls off the daemon's default; without the
+/// flag the line says the default, which on is.
+#[cfg(feature = "dev-hooks")]
+#[test]
+fn own_no_local_trust_is_named_as_the_flag_on_the_daemons_auth_line() {
+    let dir = tempfile::tempdir().unwrap();
+    for (flags, arm) in [(&["--no-local-trust"][..], "(--local-trust off, --no-local-trust)"), (&[][..], "(--local-trust on, the default)")] {
+        let node_port = free_port().to_string();
+        let (own, store) = (dir.path().join(format!("own-{}", flags.len())), dir.path().join(format!("store-{}", flags.len())));
+        let mut args = vec!["--own", "--data-dir", s(&own), "--port", &node_port, "--session", "bare", "--principal", "1", "--dir", s(&store)];
+        args.extend_from_slice(flags);
+        let provider = Provider::start(&args);
+        let said = said_holding(&provider.talk, &[&format!("open: auth: unclaimed {arm};")]);
+        assert_eq!(provider.stop(), 0, "{said}");
+    }
+}
+
 // ── THE HELD-BURST STORE through the provider ────────────────────────────────
 
 /// A burst held `unreachable` when the daemon the provider dials stops, the

@@ -732,8 +732,11 @@ atom declared under its class's type is the deposit-class write it
 admits, §Arrangement) → the genesis enroll deposit, its `ty` that same
 type → the claim deposit.
 The genesis deposit seeds the account's key set (the enrolled-set cap
-does not bind it, and the anchor gate is exempt of THIS genesis — the
-seeding hand records the initial set, flags included: a top-level
+does not bind it — though ONE genesis record names at most **16** keys, a
+bound on the record and not on the set, past which it is refused
+`too_many_enrolled` too, §Credential refusals — and the anchor gate is
+exempt of THIS genesis — the seeding hand records the initial set, flags
+included: a top-level
 account's own genesis, with no keyed account above it; a genesis that
 hands a SUB-account away is anchor-grade wherever the set that opens the
 account holds an anchor, the hire, the spawn and a forked seat's
@@ -775,7 +778,8 @@ and every signed session will be refused`. Its two sibling warnings:
 claimed with `--local-trust` still on (any loopback party may write as
 any principal — CLAIMED-PERMISSIVE), and a configured loopback-host
 origin naming a port the daemon is not bound to (re-issue the origin for
-the bound port; no key strands — a key is bound to no origin).
+the bound port, at a restart, origins being read at start; no key strands
+— a key is bound to no origin).
 
 **The preview-key setting.** `--allow-preview-keys`, a DEV setting
 beside `--local-trust` and off by default: with it the daemon admits the
@@ -2158,7 +2162,10 @@ type (§The claim ceremony and credentials) — run a stricter order:
   rather than discovered at a handshake);
   `too_many_enrolled` (the enrolled-set cap, **16** — daemon policy,
   raisable without format consequence; the enroll arm only, the
-  ceremony's genesis exempt); then ONE slot holding TWO tokens, in this
+  ceremony's genesis exempt from the SET's cap — and held to its own
+  bound on ONE record: a genesis record naming more than **16** keys is
+  refused this token too, since a signed `POST /session` walks the set
+  it seeds in full); then ONE slot holding TWO tokens, in this
   order — `content_session` FIRST (ANY credential-typed deposit — an
   enrollment, a retirement or a claim — from a CONTENT-scoped session,
   §Sessions: whatever key opened the session and whether or not the act

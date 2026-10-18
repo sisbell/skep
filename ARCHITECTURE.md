@@ -2600,9 +2600,10 @@ whose figures the operator's tool reports under the gate's own pending
 rule. `index.rs` — THE CELL INDEX:
 per hash the cells naming it, per account the distinct hashes its cells
 name at their size (the base); entered by the daemon's write path at every
-commit that mints a cell and rebuilt whole at every open on a thread over
-an immutable snapshot of the content store, its entries added into the one
-copy (an entry is idempotent per cell) — that thread's death, caught,
+commit that mints a cell and rebuilt whole at every open on a thread — or
+at the open, where the OS refuses the thread — over an immutable snapshot
+of the content store, its entries added into the one copy (an entry is
+idempotent per cell); the walk's death, caught on either by one catch,
 marks the index FAILED, a third state beside ready and not-ready, said
 once and re-said by the daemon's standing line; its readiness flag is what
 the index's three readers consult, and a value naming the kind under no

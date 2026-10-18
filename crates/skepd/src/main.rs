@@ -272,8 +272,11 @@ static HOOK_MEMORY: LazyLock<Mutex<HookMemory>> = LazyLock::new(|| Mutex::new(Ho
 /// while the daemon serves on; a panic on `main`'s own thread — the open's,
 /// a tool's — unwinds to exit 101, so the hook drains the stream before the
 /// unwind goes on, as every exit of the binary's does, and its line and the
-/// open's before it reach the stream (`operations.md` §0 fact 1). A sink that
-/// never takes the bytes holds that drain, as it holds every exit's.
+/// open's before it reach the stream (`operations.md` §0 fact 1). A panic on
+/// `main` that a catch contains — the cell index's walk, run at the open
+/// where the OS refused its thread — finds the drain only a wait for the
+/// lines already queued, and the open goes on. A sink that never takes the
+/// bytes holds that drain, as it holds every exit's.
 fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
@@ -285,8 +288,9 @@ fn install_the_panic_hook() {
             notice::emit(Class::Failure, line);
         }
         // A panic on `main` ends the process at exit 101 with the stream's
-        // thread wherever it is: drained first, whether or not the rate let
-        // this line be said, so the lines queued before it reach the stream.
+        // thread wherever it is, unless a catch contains it (the cell index's
+        // walk at the open): drained first, whether or not the rate let this
+        // line be said, so the lines queued before it reach the stream.
         if thread.name() == Some("main") {
             notice::drain();
         }

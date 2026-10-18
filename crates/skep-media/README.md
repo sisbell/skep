@@ -52,9 +52,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The index**, `index` — `CellIndex`: `new`; the entries at commit,
   `enter_insert` and `enter_publish`; the reads `base`, `referenced`,
   `references` (`Reference`), `accounts` and `halts` (`HaltMark`); `walk`
-  over a snapshot and `start_walk` on a thread of its own, answering a
-  `Rebuild` — or, where that thread died, marking the index FAILED, the
-  third state beside ready and not-ready, read through the gate's
+  over a snapshot and `start_walk` on a thread of its own, or at the open
+  where the OS refuses the thread, answering a `Rebuild` — or, where the
+  walk died on either, marking the index FAILED under one catch, the third
+  state beside ready and not-ready, read through the gate's
   `index_failed`.
 - **The pruner**, `pruner` — `Pruner` (`new`), one per daemon beside its
   gate, whose `pass(&gate, exclusive)` answers a `PrunePass` — or nothing

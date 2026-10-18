@@ -427,9 +427,10 @@ pub(super) enum TransportError {
     IndexRebuilding,
     /// The failed-index refusal: the cell index's walk at open died.
     ///
-    /// The walk died on its thread (`operations.md` §4 row 26; §1.1 row 41;
-    /// PATTERNS P10) — caught, the index failed, a third state beside ready
-    /// and not-ready — and this is one of its three readers. *Not*
+    /// The walk died, on its thread or at the open where the OS refused it
+    /// one (`operations.md` §4 row 26; §1.1 row 41; PATTERNS P10) — caught,
+    /// the index failed, a third state beside ready and not-ready — and this
+    /// is one of its three readers. *Not*
     /// retry-class, though it shares the 503: `index_rebuilding` names a
     /// window that ends, this a state that stands for the life of the
     /// process, so the `detail` names the act that exists elsewhere — a

@@ -850,13 +850,14 @@ fn refuse_rebuilding() -> Reply {
 /// Returns the failed refusal, `index_failed`.
 ///
 /// It answers `operations.md` §4 row 26, §1.1 row 41 and PATTERNS P10: the
-/// cell index's walk at open died on its thread — caught, the index failed
-/// for the life of the process — and this request is one of its three
-/// readers. The `detail` states the state and the one act that exists,
-/// elsewhere and another hand's — a restart — and carries no retry hint,
-/// since no retry can succeed: a client that retries retry-class tokens
-/// stops here. The operator's faces of the same state are the catch's line,
-/// the pruner's `no pass runs` line and the standing line's clause.
+/// cell index's walk at open died, on its thread or at the open where the
+/// OS refused it one — caught, the index failed for the life of the
+/// process — and this request is one of its three readers. The `detail`
+/// states the state and the one act that exists, elsewhere and another
+/// hand's — a restart — and carries no retry hint, since no retry can
+/// succeed: a client that retries retry-class tokens stops here. The
+/// operator's faces of the same state are the catch's line, the pruner's
+/// `no pass runs` line and the standing line's clause.
 fn refuse_failed() -> Reply {
     refuse(
         TransportError::IndexFailed,

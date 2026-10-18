@@ -1203,8 +1203,7 @@ impl FeedWalk {
                 lines.say(Class::Failure, FeedWalkRefusedLine { error: &e, low, head });
                 // The head's world again: this runs inside the open, before
                 // any writer exists, so the root is the one the feed opened
-                // at. Not under the catch — a panic here is the open's, as
-                // the index walk's inline arm is.
+                // at. Not under the catch — a panic here is the open's.
                 let snapshot = stores.kernel().snapshot();
                 feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines);
                 None

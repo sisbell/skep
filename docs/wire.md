@@ -3093,8 +3093,8 @@ not start; the progress read and the termination, every text read and
 write, `/changes`, the door's own binding arm — every other request — is
 served throughout (PATTERNS P22: a derived structure's loss is a slower
 answer, never an outage). The readiness is monotone: once ready, ready
-for the life of the process. Where the walk at open DIED — its thread's
-panic caught, the index FAILED, a third state beside ready and not-ready,
+for the life of the process. Where the walk at open DIED — its panic
+caught, the index FAILED, a third state beside ready and not-ready,
 said once on the operator stream and re-said by its standing line — the
 three readers answer `503 {"error":"index_failed","detail":"…"}` for the
 life of the process, the `detail` naming the state and the one act that

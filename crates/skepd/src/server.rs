@@ -1144,7 +1144,9 @@ impl Daemon {
         // every commit from here on enters its own cells, and the walk adds
         // the world's into the same copy (the composition clause). The
         // daemon serves while the thread walks; the index's three readers
-        // refuse `index_rebuilding` until it completes.
+        // refuse `index_rebuilding` until it completes. A walk that dies, on
+        // its thread or here, is caught and marks the index failed: the open
+        // returns all the same, and those three refuse `index_failed`.
         index::start_walk(daemon.engine.kernel(), Arc::clone(daemon.media.index()));
         Ok(daemon)
     }

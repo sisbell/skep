@@ -1248,8 +1248,11 @@ fn gaps(
 ///
 /// Each overrides the gap's default and sets who resolved it (merge record
 /// §1.4 step 7). Returned are the ones not applied: naming no gap, a gap the
-/// rules settled, or a choice the gap cannot take. Of two naming one gap the
-/// later stands.
+/// rules settled, or a choice the gap cannot take. At a `moves` gap only the
+/// order the spine took applies. At any other gap, two naming it apply in
+/// turn and combine: an `After` or a `Before` moves the gap, and at a gap of
+/// one group places it by that anchor too; every other choice sets what is
+/// placed; where two set the same, the later stands.
 fn resolve(
     r: &Refinement,
     entries: &mut [Entry],

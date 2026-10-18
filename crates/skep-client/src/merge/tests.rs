@@ -2,9 +2,11 @@
 //! test over `compose_runs` with the row's literal runs, asserting M as
 //! runs, the gap kinds, the `settled` flags and the value log as the table
 //! stands after the rulings; the resolutions, one per unsettled kind; the
-//! fences the module promises; the one rule as a property over generated
-//! inputs; `base_of` over §1.2's address forms; `script` over three pairs.
-//! No board: every value read is a closure over a table the test writes.
+//! record's re-statement of them as a law over every place a gap is moved
+//! to; the fences the module promises; the one rule as a property over
+//! generated inputs; `base_of` over §1.2's address forms; `script` over
+//! three pairs. No board: every value read is a closure over a table the
+//! test writes.
 //!
 //! The notation is the record's: `(D,s,w)` is the run of `w` positions of
 //! `D` from `D·s`; the base `D.2` is `[(D,1,11)]` "the cat sat" — `D·1–4`
@@ -524,6 +526,117 @@ fn a_resolution_on_a_settled_gap_is_ignored_and_reported() {
     let c = compose_runs(&base(), &sides, None, &resolve(1, Choice::KeepBoth), &unread);
     assert_eq!(kinds(&c), vec![(GapKind::Corner, false)]);
     assert_eq!(c.ignored.len(), 1);
+}
+
+/// A move and an order at one gap combine, whichever the merger gave first.
+///
+/// At (b)'s gap of two groups, `Order([B,A])` and `After(D·11)` together
+/// place B's "fat " then A's "big " after the base's last position, with
+/// the anchors as M holds them.
+#[test]
+fn a_move_and_an_order_compose_at_one_gap() {
+    let sides = two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)]);
+    let order = Choice::Order(vec![SideIx(1), SideIx(0)]);
+    let moved = Choice::After(d_at(11));
+    for choices in [[order.clone(), moved.clone()], [moved, order]] {
+        let resolutions = choices
+            .iter()
+            .map(|choice| Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person })
+            .collect();
+        let c = compose_runs(&base(), &sides, None, &Options { resolutions, ..Options::default() }, &unread);
+        assert_eq!(runs(&c), vec![rd(1, 11), rd(16, 4), rd(12, 4)], "the cat satfat big : {choices:?}");
+        assert_eq!(c.gaps[0].placed, Placement::Order(vec![SideIx(1), SideIx(0)]), "{choices:?}");
+        assert_eq!(anchors(&c), vec![(Some(11), None)], "{choices:?}");
+        assert!(c.ignored.is_empty(), "{choices:?}");
+    }
+}
+
+// ── the record's re-statement ────────────────────────────────────────────
+
+/// The record a landing of `c` writes, read back from its JSON.
+///
+/// Its inputs are fixed; its gaps, its value log and its counts are the
+/// composition's, so its options are what a verifier composes from.
+///
+/// # Panics
+///
+/// Panics if the record does not read back from the JSON it writes.
+fn recorded(c: &Composed) -> Record {
+    let record = Record {
+        doc: d(),
+        base: addr("1.0.1.0.1.2"),
+        sides: vec![
+            SideAt::Member { at: addr("1.0.1.0.1.3"), role: Role::Head },
+            SideAt::Member { at: addr("1.0.1.0.1.2.1"), role: Role::Alternative },
+        ],
+        landed: None,
+        claims: Vec::new(),
+        runs: c.counts,
+        retries: 0,
+        gaps: c.gaps.clone(),
+        values: c.values.clone(),
+        replaces: None,
+        by: "skep-client".into(),
+        link: None,
+    };
+    Record::from_value(&record.to_value()).expect("the record reads back")
+}
+
+/// A record's options compose the same M and gaps as its merger's choices.
+///
+/// It is the record's re-statement law (merge record §4), over every
+/// unsettled shape of gap — an order gap, a cut, a corner beside one
+/// survivor or between two, a collision of no, one and two groups. Each
+/// gap is moved after or before every base position, or not moved, then
+/// ordered, kept or omitted, the move given first or last; the options its
+/// record re-states compose again to the runs and the gaps the merger's
+/// own choices composed. Every shape's gap is moved somewhere, so the law
+/// never holds by the default place alone.
+#[test]
+fn a_record_recomposes_every_place_and_choice_its_merger_made() {
+    let shapes = [
+        ("(b)", two(vec![rd(1, 4), rd(12, 4), rd(5, 7)], vec![rd(1, 4), rd(16, 4), rd(5, 7)])),
+        ("(c)", two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4)])),
+        ("(e′)", two(vec![rd(5, 7), rd(1, 4)], vec![rd(1, 4), rd(12, 4), rd(5, 7)])),
+        ("(f′)", two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 5), rd(16, 1), rd(6, 6)])),
+        ("(i′)", two(vec![rd(1, 2), rd(12, 1), rd(4, 8)], vec![rd(1, 2), rd(13, 1), rd(4, 8)])),
+        ("the corner, a left survivor", two(vec![rd(1, 6), rd(12, 1), rd(7, 5)], vec![rd(1, 4)])),
+        ("the agent case", two(vec![rd(1, 4), rd(12, 3), rd(8, 4)], vec![rd(1, 4), rd(16, 6), rd(8, 4)])),
+        ("a collision with nothing placed", two(vec![rd(1, 4), rd(8, 4)], vec![rd(1, 4)])),
+    ];
+    let places: Vec<Option<Choice>> = std::iter::once(None)
+        .chain((1..=11).flat_map(|n| [Some(Choice::After(d_at(n))), Some(Choice::Before(d_at(n)))]))
+        .collect();
+    let picks = [
+        None,
+        Some(Choice::Order(vec![SideIx(0), SideIx(1)])),
+        Some(Choice::Order(vec![SideIx(1), SideIx(0)])),
+        Some(Choice::KeepOnly(SideIx(0))),
+        Some(Choice::KeepOnly(SideIx(1))),
+        Some(Choice::KeepBoth),
+        Some(Choice::Omit),
+    ];
+    for (name, sides) in &shapes {
+        let unmoved = anchors(&compose(&base(), sides));
+        let mut moved = 0;
+        for place in &places {
+            for pick in &picks {
+                for given in [[place, pick], [pick, place]] {
+                    let resolutions: Vec<Resolution> = given
+                        .into_iter()
+                        .flatten()
+                        .map(|choice| Resolution { gap: GapId(1), choice: choice.clone(), by: ResolvedBy::Person })
+                        .collect();
+                    let options = Options { resolutions: resolutions.clone(), ..Options::default() };
+                    let first = compose_runs(&base(), sides, None, &options, &unread);
+                    let again = compose_runs(&base(), sides, None, &recorded(&first).options(), &unread);
+                    assert_eq!((runs(&again), &again.gaps), (runs(&first), &first.gaps), "{name}: {resolutions:?}");
+                    moved += usize::from(anchors(&first) != unmoved);
+                }
+            }
+        }
+        assert!(moved > 0, "{name}: no place moved its gap");
+    }
 }
 
 // ── the fences ───────────────────────────────────────────────────────────
@@ -2782,9 +2895,54 @@ mod scripted {
         assert!(dialer.frames("compare").len() > 1, "{:?}", dialer.ops());
     }
 
-    /// The `Record` round trip through its JSON, `type` fixed `merge`, the
-    /// gaps with their runs and resolutions, a draft side and a draft
-    /// landing included; an object of another type or version is no record.
+    /// A gap of two groups the merger moved lands, and its record verifies.
+    ///
+    /// The race shape with a second daughter adding "fat " at `D·4|D·5`:
+    /// the merger moves the order gap after `D·11`, so M is one run; the
+    /// record read back holds the gap where M holds it and re-states the
+    /// move, so `verify` composes the landed M again and answers `Equal`
+    /// (merge record §4).
+    #[test]
+    fn a_moved_gap_of_two_groups_lands_and_verifies_equal() {
+        let mut w = World::race();
+        w.text(D, 16, "fat ");
+        w.member(&format!("{D}.1.2"), vec![run(D, 1, 4), run(D, 16, 4), run(D, 5, 7)], Some(11));
+        let (_, board, signer) = open(w);
+        let session = sign_in(&board, &signer);
+        let end = a(&format!("{D}.0.1.11"));
+        let inputs = Inputs {
+            sides: vec![Side::Member(a(&format!("{D}.1.2")))],
+            options: Options {
+                resolutions: vec![Resolution {
+                    gap: GapId(1),
+                    choice: Choice::After(end.clone()),
+                    by: ResolvedBy::Person,
+                }],
+                ..Options::default()
+            },
+            ..race_inputs()
+        };
+        let merged = compose(&board, Some(session.token()), &inputs).expect("composed");
+        assert!(merged.composed.ignored.is_empty(), "{:?}", merged.composed.ignored);
+        assert_eq!(m_runs(&merged), vec![run(D, 1, 19)], "the cat satbig fat ");
+        land(&board, &merged, shot(&session, &signer)).expect("landed");
+        let record = current(&board, Some(&token()), &a(K), &merged.key)
+            .expect("the lookup")
+            .expect("the record");
+        let gap = &record.gaps[0];
+        assert_eq!(
+            (gap.kind, gap.after.clone(), gap.before.clone()),
+            (GapKind::Order, Some(end), None),
+            "the gap where M holds it"
+        );
+        assert_eq!(verify(&board, Some(&token()), &record), Ok(Verdict::Equal));
+    }
+
+    /// The `Record` round-trips through its JSON, its `type` fixed `merge`.
+    ///
+    /// Its gaps keep their runs and the resolutions they re-state, a draft
+    /// side and a draft landing included; an object of another type or
+    /// version is no record.
     #[test]
     fn the_record_round_trips_and_names_its_type() {
         let (_, board, _) = open(World::race());
@@ -2849,9 +3007,15 @@ mod scripted {
         assert!(v.get("link").is_none(), "the link is no member of the body");
         let back = Record::from_value(&v).expect("a record");
         assert_eq!(back, merged.record);
+        let answer = ResolvedBy::Answer(a(&format!("{DOC1}.0.1.7")));
         assert_eq!(
             back.options().resolutions,
             vec![
+                Resolution {
+                    gap: GapId(1),
+                    choice: Choice::After(a(&format!("{D}.0.1.4"))),
+                    by: ResolvedBy::Agent
+                },
                 Resolution {
                     gap: GapId(1),
                     choice: Choice::Order(vec![SideIx(1), SideIx(0)]),
@@ -2859,10 +3023,12 @@ mod scripted {
                 },
                 Resolution {
                     gap: GapId(2),
-                    choice: Choice::Omit,
-                    by: ResolvedBy::Answer(a(&format!("{DOC1}.0.1.7")))
-                }
-            ]
+                    choice: Choice::Before(a(&format!("{D}.0.1.1"))),
+                    by: answer.clone()
+                },
+                Resolution { gap: GapId(2), choice: Choice::Omit, by: answer }
+            ],
+            "each gap a merger settled re-stated as its place, then its placement"
         );
         let mut other = v.clone();
         other["type"] = json!("skep-head");

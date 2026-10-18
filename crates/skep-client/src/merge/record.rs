@@ -355,11 +355,15 @@ impl Record {
     /// Returns the composition's options the record carries.
     ///
     /// They are the value switches, the retries, and the merger's
-    /// resolutions as the gaps record them — each gap settled by a person,
-    /// an agent or an answer re-stated as the choice its `placed` spells, so
-    /// a verifier composes the same M (§4) — save a gap of two or more groups
-    /// a merger moved, which is re-stated as its order alone and composed at
-    /// its default place.
+    /// resolutions as the gaps record them, so a verifier composes the same
+    /// M and the same gaps (§4). Each gap a person, an agent or an answer
+    /// settled is re-stated as its place, then its placement (§1.4 step 7):
+    /// the place is `After` the anchor M holds before the gap, or, at the
+    /// start of M, `Before` the one after it, and the placement is the order
+    /// or the omission its `placed` spells. A gap placed `after` is re-stated
+    /// by its place alone and one placed `before` by its `before` anchor,
+    /// either of which places a gap of one group by that anchor; a `moves`
+    /// gap, which has no anchors, is re-stated by its order alone.
     pub fn options(&self) -> Options {
         let mut resolutions = Vec::new();
         for gap in &self.gaps {
@@ -367,19 +371,24 @@ impl Record {
                 Some(ResolvedBy::Rule) | None => continue,
                 Some(by) => by.clone(),
             };
-            let choice = match &gap.placed {
-                Placement::Order(sides) => Choice::Order(sides.clone()),
-                Placement::After => match &gap.after {
-                    Some(a) => Choice::After(a.clone()),
-                    None => continue,
-                },
-                Placement::Before => match &gap.before {
-                    Some(b) => Choice::Before(b.clone()),
-                    None => continue,
-                },
-                Placement::Omitted => Choice::Omit,
+            let place = gap
+                .after
+                .clone()
+                .map(Choice::After)
+                .or_else(|| gap.before.clone().map(Choice::Before));
+            // The place first: at a gap of one group a move also sets the
+            // placement, which the order or the omission after it sets again.
+            let choices: Vec<Choice> = match &gap.placed {
+                Placement::Order(sides) => {
+                    place.into_iter().chain([Choice::Order(sides.clone())]).collect()
+                }
+                Placement::Omitted => place.into_iter().chain([Choice::Omit]).collect(),
+                Placement::After => place.into_iter().collect(),
+                Placement::Before => gap.before.clone().map(Choice::Before).into_iter().collect(),
             };
-            resolutions.push(Resolution { gap: gap.id, choice, by });
+            resolutions.extend(
+                choices.into_iter().map(|choice| Resolution { gap: gap.id, choice, by: by.clone() }),
+            );
         }
         Options {
             dedup: self.values.dedup,

@@ -86,7 +86,7 @@ pub const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 /// million positions is a thousand lines over the walk's length, and a
 /// boundary costs one whole-world reconstruction, so a thousand of them is
 /// seconds at the least. The open's classification of the bare positions
-/// `feed-index.log` lost — two reconstructions a position, before the board
+/// `feed-index.log` lost — a reconstruction a position, before the board
 /// serves — says its own `open:` line at the same figures, a position in a
 /// boundary's place.
 pub const FEED_WALK_PROGRESS_BOUNDARIES: u64 = 1_000;

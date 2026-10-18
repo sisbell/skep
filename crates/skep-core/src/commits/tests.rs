@@ -854,7 +854,7 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     let all = said.join("\n");
     for line in [
         "open: feed-index.log covers to position 0: 2 bare positions are classified from the \
-         journal before the board serves, two world reconstructions each"
+         journal before the board serves, 3 world reconstructions in all"
             .to_string(),
         format!(
             "failure: feed-index.log: the journal refused to classify 2 bare positions, the \
@@ -877,9 +877,11 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     ] {
         assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{all}");
     }
-    // The open's own closing lines: what it classified, and how far back the
-    // feed answers with the region the walk has yet to land.
-    let classified = "open: feed-index.log: 0 of 2 bare positions classified from the journal in ";
+    // The open's own closing lines: what it classified — no reconstruction
+    // answered — and how far back the feed answers with the region the walk
+    // has yet to land.
+    let classified = "open: feed-index.log: 0 of 2 bare positions classified from the journal, 0 \
+                      world reconstructions, in ";
     let reach = format!(
         "open: the change feed answers from position 1 to position {head}: commits.log 2 \
          entries, 2 of them bare; positions (2, {head}] wait on the walk, in "
@@ -1175,7 +1177,7 @@ fn a_derived_file_whose_landing_rewrite_fails_takes_no_line_after_it() {
     let wp = open_the_write_path(dir.path(), &engine);
     let classifying = format!(
         "open: feed-index.log covers to position {low}: 3 bare positions are classified from the \
-         journal before the board serves, two world reconstructions each"
+         journal before the board serves, 4 world reconstructions in all"
     );
     let said = wp.lines_said().lock().clone();
     assert!(said.contains(&classifying), "the next open re-derives:\n{}", said.join("\n"));
@@ -1311,8 +1313,8 @@ fn a_walk_whose_thread_the_os_refuses_is_walked_at_the_open() {
 /// them, so a kill between the two leaves `commits.log` as the open found it
 /// and the next open walks the region again behind the listener. The other
 /// order would leave the log whole over derived files fenced below the
-/// region, and the next open would classify every bare position of it, two
-/// world reconstructions each, before the board serves. The seam ends the
+/// region, and the next open would classify every bare position of it, a
+/// world reconstruction each, before the board serves. The seam ends the
 /// landing between its rewrites, leaving the files as a kill there leaves
 /// them; opened again with the walk held, the region pends from its lower
 /// edge, no bare position is classified at the open, and the walk lands it.
@@ -1738,4 +1740,66 @@ fn the_walk_loads_one_base_per_boundary_it_proves() {
         6 + 1,
         "one base per boundary proved: the region's edge, five boundaries but the head, the floor"
     );
+}
+
+/// Checks that the open rebuilds each bare position's world once.
+///
+/// Where `feed-index.log` is lost, the open classifies every bare position
+/// from the journal before the board serves (PUB-6.45). A run of them is
+/// what a walk's landing writes, and the world at one is the world below the
+/// next, so the open carries it forward as the walk does: the run costs one
+/// reconstruction a position and one below its first, and the head's world
+/// is the open's snapshot. Over eight draft mints with `commits.log` torn
+/// back to the second, the walk lands six bare positions; with the index
+/// lost, the reopen loads the floor probe's base and six for the run — the
+/// seven the walk loads for the same six — classifies each position as the
+/// walk did, and says the six it will pay ahead of paying them and the six
+/// it paid once done.
+#[test]
+fn a_lost_feed_index_reconstructs_each_bare_position_once() {
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let board: Vec<u64> = (0..8).map(|_| mint_a_draft(&wp, &stores).1).collect();
+    drop(wp);
+    tear_to(dir.path(), board[1]);
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    drop(wp);
+    // The index's records by position, the fence line skipped.
+    let index_path = dir.path().join("feed-index.log");
+    let index = || -> std::collections::BTreeMap<u64, serde_json::Value> {
+        std::fs::read_to_string(&index_path)
+            .expect("feed-index.log")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a line is JSON"))
+            .filter_map(|record| Some((record.get("at")?.as_u64()?, record.get("docs")?.clone())))
+            .collect()
+    };
+    let walked = index();
+    assert!(
+        board[2..].iter().all(|at| walked.contains_key(at)),
+        "the premise: the walk classified the six bare positions it landed: {walked:?}"
+    );
+    std::fs::remove_file(&index_path).expect("lose the index");
+    let before = engine.kernel().bases_loaded();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(
+        engine.kernel().bases_loaded() - before,
+        1 + 6,
+        "the floor probe, then the world below the run and one a bare position but the head"
+    );
+    assert_eq!(index(), walked, "each position classified as the walk classified it");
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    let planned = "open: feed-index.log covers to position 0: 6 bare positions are classified \
+                   from the journal before the board serves, 6 world reconstructions in all";
+    let found = said.iter().filter(|l| l.as_str() == planned).count();
+    assert_eq!(found, 1, "the reconstructions counted ahead of paying them:\n{all}");
+    let paid = "open: feed-index.log: 6 of 6 bare positions classified from the journal, 6 \
+                world reconstructions, in ";
+    let found = said.iter().filter(|l| l.starts_with(paid) && l.ends_with(" ms")).count();
+    assert_eq!(found, 1, "the reconstructions paid:\n{all}");
 }

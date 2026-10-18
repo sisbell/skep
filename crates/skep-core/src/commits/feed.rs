@@ -540,12 +540,13 @@ impl Feed {
     /// COST: the `commits.log` replay and walk (`CommitsLog::open` states
     /// them), plus O(each derived file) to replay it and O(its missing
     /// tail) to close it — a whole-file loss is one O(journal) rebuild, and a
-    /// bare position outside the index's coverage one targeted pair of
-    /// world reconstructions — and the attest store's own open, whose cost
-    /// [`AttestStore::open`] states. Never a rewrite per restart: a derived
-    /// file is rewritten only when the log compacted under it, when it
-    /// carries another journal's lines, or (the offset array) when its
-    /// offsets no longer match the log's.
+    /// bare position outside the index's coverage one world reconstruction,
+    /// a run of them one more for the world below its first and none for the
+    /// head's, which is the open's snapshot ([`BareClassifier`]) — and the
+    /// attest store's own open, whose cost [`AttestStore::open`] states.
+    /// Never a rewrite per restart: a derived file is rewritten only when the
+    /// log compacted under it, when it carries another journal's lines, or
+    /// (the offset array) when its offsets no longer match the log's.
     ///
     /// THE LINES (`operations.md` §1.1 rows 9, 11, 2), through `lines`, the
     /// classed door the write path made ahead of this open: a derived file's
@@ -655,18 +656,28 @@ impl Feed {
             lines.say(Class::Failure, line);
         }
         // The bare positions the index lost are classified from the journal
-        // before the board serves, at two world reconstructions each — said
-        // ahead of the cost, at a cadence while it runs and with its figures
-        // once done, so a slow open is told from a hung one.
+        // before the board serves, a world reconstruction each and one below
+        // each run of them ([`BareClassifier`]) — the count said ahead of
+        // paying it, at a cadence while it runs and with its figures once
+        // done, so a slow open is told from a hung one.
         let tail = f_index.first_uncovered()..;
-        let unclassified = log
-            .entries()
-            .range(tail.clone())
-            .filter(|(at, meta)| matches!(meta, CommitMeta::Bare { .. }) && !docs.contains_key(at))
-            .count();
+        let mut classifier = BareClassifier::new(engine, &snap, &log);
+        let (mut unclassified, mut planned, mut follows_bare) = (0usize, 0usize, false);
+        for (at, meta) in log.entries().range(tail.clone()) {
+            let bare = matches!(meta, CommitMeta::Bare { .. }) && !docs.contains_key(at);
+            if bare {
+                unclassified += 1;
+                planned += classifier.planned(*at, follows_bare);
+            }
+            follows_bare = bare;
+        }
         if unclassified > 0 {
-            let coverage = f_index.coverage();
-            lines.say(Class::Open, BareClassificationLine { coverage, positions: unclassified });
+            let line = BareClassificationLine {
+                coverage: f_index.coverage(),
+                positions: unclassified,
+                reconstructions: planned,
+            };
+            lines.say(Class::Open, line);
         }
         let classifying = Instant::now();
         let mut cadence = ProgressCadence::new();
@@ -682,13 +693,12 @@ impl Feed {
                     CommitMeta::Recorded { docs: strings, .. } => {
                         strings.iter().filter_map(|s| parse_dotted(s)).collect()
                     }
-                    // A bare position the index lost: the journal answers —
-                    // one pair of world reconstructions per such position,
-                    // the per-position cost the walk's landing never pays
-                    // (it classifies off the worlds it already holds).
+                    // A bare position the index lost: the journal answers,
+                    // off the worlds the classifier rebuilds or carries
+                    // forward from the position before.
                     CommitMeta::Bare { .. } => {
                         attempted += 1;
-                        let addrs = match classify_bare(engine, &log, at) {
+                        let addrs = match classifier.classify(at) {
                             Ok(addrs) => addrs,
                             Err(e) => {
                                 refused = Some(match refused {
@@ -722,10 +732,15 @@ impl Feed {
                     .map_err(with_file(INDEX_FILE))?;
             }
         }
+        let reconstructions = classifier.finish();
         if attempted > 0 {
-            let classified = attempted - refused.as_ref().map_or(0, |(n, ..)| *n);
-            let elapsed_ms = classifying.elapsed().as_millis();
-            lines.say(Class::Open, BareClassifiedLine { classified, of: attempted, elapsed_ms });
+            let line = BareClassifiedLine {
+                classified: attempted - refused.as_ref().map_or(0, |(n, ..)| *n),
+                of: attempted,
+                reconstructions,
+                elapsed_ms: classifying.elapsed().as_millis(),
+            };
+            lines.say(Class::Open, line);
         }
         if let Some((positions, first, account)) = refused {
             lines.say(Class::Failure, ClassificationRefusedLine { positions, first, account });
@@ -963,8 +978,8 @@ impl Feed {
     /// coverage claim over the gap, and a position at or below a claim with
     /// no record is a `[]`-docs entry, which no mask withholds. The next open
     /// re-derives that file, classifying the region's bare positions from the
-    /// journal before it serves, two world reconstructions each.
-    /// `commits.log` stops at the same edge
+    /// journal before it serves, a world reconstruction each and one below
+    /// the first ([`BareClassifier`]). `commits.log` stops at the same edge
     /// ([`CommitsLog::write_the_landing`] says why). Past its rename a file
     /// is in place and has said its own stop. A stop asked while the walk ran
     /// writes nothing.
@@ -1606,17 +1621,21 @@ impl std::fmt::Display for DerivedCutLine {
     }
 }
 
-/// The open's line ahead of the bare positions it classifies from the
-/// journal before the board serves.
+/// The open's line ahead of the bare positions it classifies.
 ///
+/// The positions are classified from the journal before the board serves.
 /// The words: `feed-index.log covers to position {c}: {n} bare positions
-/// are classified from the journal before the board serves, two world
-/// reconstructions each` — the cost said ahead of paying it. A pure value,
-/// pinned by `to_string()` in the unit suite; emitted under `Class::Open`
-/// by [`Feed::open`].
+/// are classified from the journal before the board serves, {r} world
+/// reconstructions in all` — the cost said ahead of paying it: one a
+/// position, one more below each run of them and none at the head
+/// ([`BareClassifier::planned`]), exact where the journal answers and an
+/// upper bound where it refuses. A pure value, pinned by `to_string()` in
+/// the unit suite; emitted under `Class::Open` by [`Feed::open`].
 struct BareClassificationLine {
     coverage: u64,
     positions: usize,
+    /// The world reconstructions the classification will pay.
+    reconstructions: usize,
 }
 
 impl std::fmt::Display for BareClassificationLine {
@@ -1624,8 +1643,8 @@ impl std::fmt::Display for BareClassificationLine {
         write!(
             f,
             "{INDEX_FILE} covers to position {}: {} bare positions are classified from the \
-             journal before the board serves, two world reconstructions each",
-            self.coverage, self.positions
+             journal before the board serves, {} world reconstructions in all",
+            self.coverage, self.positions, self.reconstructions
         )
     }
 }
@@ -1637,11 +1656,11 @@ impl std::fmt::Display for BareClassificationLine {
 /// many are done of the `{n}` the announcing line named, `{d}` since the
 /// classification began. Said every [`FEED_WALK_PROGRESS_BOUNDARIES`]
 /// positions or [`FEED_WALK_PROGRESS_INTERVAL`], whichever comes first: the
-/// board serves nothing until the open is done, and two world
-/// reconstructions a position can run past a supervisor's start window. A
-/// pure value, pinned by `to_string()` in the unit suite; emitted under
-/// `Class::Open` by [`Feed::open`] — the open's own line, the `progress:`
-/// class being the walk thread's.
+/// board serves nothing until the open is done, and a world reconstruction
+/// a position can run past a supervisor's start window. A pure value, pinned
+/// by `to_string()` in the unit suite; emitted under `Class::Open` by
+/// [`Feed::open`] — the open's own line, the `progress:` class being the
+/// walk thread's.
 struct BareClassifyingLine {
     position: u64,
     done: usize,
@@ -1662,12 +1681,16 @@ impl std::fmt::Display for BareClassifyingLine {
 /// The open's bare classification, done.
 ///
 /// The words: `feed-index.log: {c} of {n} bare positions classified from the
-/// journal in {d} ms` — the ones the journal refused said beside it
+/// journal, {k} world reconstructions, in {d} ms` — `{k}` the reconstructions
+/// the journal answered, so `{d}` over `{k}` bounds what one costs on this
+/// board; the positions the journal refused said beside it
 /// ([`ClassificationRefusedLine`]). A pure value, pinned by `to_string()` in
 /// the unit suite; emitted under `Class::Open` by [`Feed::open`].
 struct BareClassifiedLine {
     classified: usize,
     of: usize,
+    /// The world reconstructions the journal answered.
+    reconstructions: usize,
     elapsed_ms: u128,
 }
 
@@ -1675,8 +1698,9 @@ impl std::fmt::Display for BareClassifiedLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{INDEX_FILE}: {} of {} bare positions classified from the journal in {} ms",
-            self.classified, self.of, self.elapsed_ms
+            "{INDEX_FILE}: {} of {} bare positions classified from the journal, {} world \
+             reconstructions, in {} ms",
+            self.classified, self.of, self.reconstructions, self.elapsed_ms
         )
     }
 }
@@ -2315,21 +2339,97 @@ fn elements_of(v: Option<&Value>) -> &[Value] {
     v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
 
-/// Returns the journal's classification of a bare position the index lost.
+/// The open's classification of the bare positions the index lost.
 ///
-/// It is read from the world at the boundary below it (the previous entry,
-/// or genesis) and its own.
-///
-/// # Errors
-///
-/// The journal's refusal of either world (reclaimed, corrupt, I/O): the
-/// position is then the module's unclassifiable residue, served to every
-/// class, and the caller says the refusal.
-fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Result<Vec<Address>, HistoryError> {
-    let prev = log.entries().range(..at).next_back().map(|(k, _)| *k).unwrap_or(0);
-    let below = engine.world_at(Seq(prev))?;
-    let above = engine.world_at(Seq(at))?;
-    Ok(derived_docs(&below, &above))
+/// A lost sidecar never unmasks a draft write (PUB-6.45), so each such
+/// position is classified from the journal: its documents are the diff of
+/// the world at the entry below it — the previous entry, or genesis — and
+/// its own ([`derived_docs`]), each world rebuilt by a history read
+/// (`Engine::world_at`), one base loaded and the journal above it folded,
+/// nothing memoized. A run of consecutive bare positions, which is what a
+/// walk's landing writes, shares its worlds: the world at one is the world
+/// below the next, so it is carried forward, and the run costs one
+/// reconstruction a position and one below its first, the walk's own count
+/// ([`reconstruct`]); the head's own world is the open's snapshot, never
+/// rebuilt. A carried world is spent only where the position's previous
+/// entry is the one it was rebuilt at, and dropped ahead of any other
+/// rebuild, so at most two rebuilt worlds are held at once.
+struct BareClassifier<'a> {
+    engine: &'a Engine,
+    /// The open's snapshot of the head, whose world is the head's own.
+    head: &'a Snapshot<World>,
+    log: &'a CommitsLog,
+    /// The world at the bare position last classified, with its position.
+    carried: Option<(u64, World)>,
+    /// The world reconstructions the journal answered.
+    reconstructions: usize,
+}
+
+impl<'a> BareClassifier<'a> {
+    fn new(
+        engine: &'a Engine,
+        head: &'a Snapshot<World>,
+        log: &'a CommitsLog,
+    ) -> BareClassifier<'a> {
+        BareClassifier { engine, head, log, carried: None, reconstructions: 0 }
+    }
+
+    /// Returns the world reconstructions classifying `at` pays.
+    ///
+    /// It is the count where the journal answers: one for the bare
+    /// position's own world, none at the head, and one for the world below
+    /// it unless `follows_bare` — the entry before it a bare position
+    /// classified in the same pass, whose world [`BareClassifier::classify`]
+    /// carries forward.
+    fn planned(&self, at: u64, follows_bare: bool) -> usize {
+        usize::from(!follows_bare) + usize::from(at != self.head.seq().0)
+    }
+
+    /// Returns the documents the commit at the bare position `at` touched.
+    ///
+    /// # Errors
+    ///
+    /// The journal's refusal of either world (reclaimed, corrupt, I/O): the
+    /// position is then the module's unclassifiable residue, served to every
+    /// class, and the caller says the refusal. The world at `at` is not
+    /// asked for where the world below it was refused, and no world is
+    /// carried past a refusal.
+    fn classify(&mut self, at: u64) -> Result<Vec<Address>, HistoryError> {
+        let prev = self.log.entries().range(..at).next_back().map_or(0, |(k, _)| *k);
+        let below = match self.carried.take() {
+            Some((carried, world)) if carried == prev => world,
+            stale => {
+                drop(stale);
+                self.rebuild(prev)?
+            }
+        };
+        if at == self.head.seq().0 {
+            return Ok(derived_docs(&below, self.head.world()));
+        }
+        let above = self.rebuild(at)?;
+        let docs = derived_docs(&below, &above);
+        self.carried = Some((at, above));
+        Ok(docs)
+    }
+
+    /// Returns the world at `at`, rebuilt from the journal, and counts it.
+    ///
+    /// # Errors
+    ///
+    /// The journal's refusal of the world (reclaimed, corrupt, I/O), which
+    /// is not counted.
+    fn rebuild(&mut self, at: u64) -> Result<World, HistoryError> {
+        let world = self.engine.world_at(Seq(at))?;
+        self.reconstructions += 1;
+        Ok(world)
+    }
+
+    /// Returns the world reconstructions the journal answered.
+    ///
+    /// It releases the world carried.
+    fn finish(self) -> usize {
+        self.reconstructions
+    }
 }
 
 /// The K-way merge of ascending position sources, deduplicated by
@@ -2461,18 +2561,25 @@ mod tests {
     #[test]
     fn the_opens_classification_and_compaction_lines_render_the_ruled_words() {
         assert_eq!(
-            BareClassificationLine { coverage: 12, positions: 3 }.to_string(),
+            BareClassificationLine { coverage: 12, positions: 3, reconstructions: 4 }.to_string(),
             "feed-index.log covers to position 12: 3 bare positions are classified from the \
-             journal before the board serves, two world reconstructions each"
+             journal before the board serves, 4 world reconstructions in all"
         );
         assert_eq!(
             BareClassifyingLine { position: 2_040, done: 1_000, of: 3_000, elapsed_ms: 9_800 }
                 .to_string(),
             "feed-index.log: the bare classification at position 2040, 1000 of 3000, 9800 ms in"
         );
+        let classified = BareClassifiedLine {
+            classified: 2_999,
+            of: 3_000,
+            reconstructions: 3_000,
+            elapsed_ms: 29_400,
+        };
         assert_eq!(
-            BareClassifiedLine { classified: 2_999, of: 3_000, elapsed_ms: 29_400 }.to_string(),
-            "feed-index.log: 2999 of 3000 bare positions classified from the journal in 29400 ms"
+            classified.to_string(),
+            "feed-index.log: 2999 of 3000 bare positions classified from the journal, 3000 world \
+             reconstructions, in 29400 ms"
         );
         let reach = |pending| FeedOpenLine {
             floor: Some(2_049),

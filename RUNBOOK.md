@@ -1038,21 +1038,24 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        and `feed-attest.log`'s said (Restore, step 5). Where the
        open's compaction dropped entries below the journal's reclaim
        floor, and before the open classifies, from the journal, the
-       positions `feed-index.log` lost — two world reconstructions
-       each, before the board serves:
+       positions `feed-index.log` lost — a world reconstruction each
+       and one below each run of them, before the board serves, the
+       count said ahead of paying it:
 
        ```
        open: the change feed's files compacted below the reclaim floor at position {floor}: {n} entries dropped
-       open: feed-index.log covers to position {covered}: {n} bare positions are classified from the journal before the board serves, two world reconstructions each
+       open: feed-index.log covers to position {covered}: {n} bare positions are classified from the journal before the board serves, {r} world reconstructions in all
        ```
 
        While that classification runs, a line every 1,000 positions
        or ten seconds, whichever comes first — a slow open told from a
-       hung one — and one when it is done:
+       hung one — and one when it is done, with the reconstructions
+       the journal answered: its `{ms}` over its `{k}` bounds what one
+       costs on this board, the figure to size the next such open by:
 
        ```
        open: feed-index.log: the bare classification at position {position}, {i} of {n}, {ms} ms in
-       open: feed-index.log: {c} of {n} bare positions classified from the journal in {ms} ms
+       open: feed-index.log: {c} of {n} bare positions classified from the journal, {k} world reconstructions, in {ms} ms
        ```
 
        Where the journal refuses that classification, each position
@@ -1502,8 +1505,8 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    file, and the file takes no further line. `commits.log` stands as
    the open found it, so the next open walks the positions again; an
    index file stands fenced below them, so the next open classifies
-   them from the journal before the board serves, two world
-   reconstructions a position:
+   them from the journal before the board serves, a world
+   reconstruction a position and one below the first:
 
    ```
    failure: commits.log: the walk's landing rewrite failed before its rename: {error}; the file stands as it was and takes no further line, so the next open walks again from position {covered}; every write since this open is held in memory alone, its key and its time lost at that open — restart soon

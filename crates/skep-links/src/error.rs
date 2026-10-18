@@ -129,7 +129,8 @@ pub enum EmitError {
     /// Span counts violate the registered shape (P3 Sh-conf).
     ///
     /// One `FROM` span always, and no `TO` span under Unary, exactly one
-    /// under Binary, any finite number under Multi.
+    /// under Binary, any finite number under Multi — each slot's spans counted
+    /// as a set, a repeated span once.
     ShapeViolation,
     /// `ty ~ [K_sup]` — a class only `assert_sup` and `editlink` write.
     ///

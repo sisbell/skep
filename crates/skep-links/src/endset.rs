@@ -80,14 +80,16 @@ impl Endset {
 
     /// Returns the number of spans in the stored sequence.
     ///
-    /// It is what the managed surface's [`Shape`](crate::Shape) gate counts.
-    /// ASN-0126's `|F|` and `|G|` are set cardinalities, and the two agree
-    /// exactly on a duplicate-free decomposition: every [`enc`]-built endset
-    /// is one unless the caller names an address twice, and an
-    /// `iextent`-built one (M5's construction) is one unless its resolution
-    /// meets one I-extent twice — two specs naming one span, or content
-    /// transcluded twice into what they name. A repeated span counts twice
-    /// here and once there.
+    /// It counts the decomposition, so a repeated span counts twice — the
+    /// count the per-slot budget [`MAX_SLOT_SPANS`](crate::MAX_SLOT_SPANS)
+    /// holds, the spans a slot keeps. ASN-0126's `|e|`, which the managed
+    /// surface's [`Shape`](crate::Shape) gate counts, is the cardinality of
+    /// the set of spans and counts a repeat once. The two agree exactly on a
+    /// duplicate-free decomposition: every [`enc`]-built endset is one unless
+    /// the caller names an address twice, and an `iextent`-built one (M5's
+    /// construction) is one unless its resolution meets one I-extent twice —
+    /// two specs naming one span, or content transcluded twice into what they
+    /// name.
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -414,8 +416,9 @@ impl Link {
 ///
 /// The encoding is `⟨subtree_of(x) : x ∈ X⟩`, in `X`'s order and one span per
 /// element, a sequence map rather than a set, so a repeated address is a
-/// repeated span (which is what the managed shape gate counts) — exactly what
-/// the managed surface (Emit_K/Nullify/assert_sup/claims) emits, with
+/// repeated span — stored as given, and counted once by the managed shape
+/// gate, which counts a slot's spans as a set. It is exactly what the managed
+/// surface (Emit_K/Nullify/assert_sup/claims) emits, with
 /// `enc(X).addrs() = X`. "Canonical" in AD's sense — the standard encoding
 /// of a name — and not in M1's: the spans are never normalized, so
 /// `enc([doc, elem])` keeps a span inside another. Takes anything that

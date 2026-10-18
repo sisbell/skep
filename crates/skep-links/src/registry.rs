@@ -18,10 +18,12 @@ use crate::endset::{enc, Endset, Link};
 
 /// A registered type's tuple shape (ASN-0126 P3).
 ///
-/// Conformance counts the stored decomposition's spans — one `FROM` span
-/// always, and per shape no `TO` span (Unary), exactly one (Binary), or any
-/// finite number (Multi). That count is P3's set-valued `|F|`/`|G|` on the
-/// duplicate-free endsets the managed surface builds ([`Endset::len`]).
+/// Conformance counts each slot's spans as a set — ASN-0126's `|e|`, the
+/// cardinality of `e` as a finite set of spans (`Endset = 𝒫_fin(Span)`,
+/// ASN-0043) — one `FROM` span always, and per shape no `TO` span (Unary),
+/// exactly one (Binary), or any finite number (Multi). A span the stored
+/// decomposition repeats counts once, so a slot naming one address twice
+/// conforms wherever naming it once does.
 ///
 /// Sh-conf is a gate on the managed surface, not an invariant of the store:
 /// `emit`, `nullify`, `assert_sup` and `editlink`'s claim pass it; MAKELINK
@@ -48,17 +50,32 @@ pub enum Shape {
 /// tuple (a `(1,0)` tuple conforms under Unary and Multi). Reads both counts
 /// off the link itself, so they cannot arrive in the wrong order.
 ///
-/// The counts are of the stored decomposition ([`Endset::len`]), which is
-/// ASN-0126's set-valued `|F|`/`|G|` on a duplicate-free endset — every endset
-/// this gate sees is [`enc`]-built, and so duplicate-free unless its caller
-/// names an address twice — and over-counts a repeated span.
+/// Each count is ASN-0126's `|e|`, the slot's cardinality as a set of spans,
+/// never the stored sequence's [`Endset::len`]: a span the decomposition
+/// repeats counts once ([`enc`] keeps a repeated address as a repeated span),
+/// while two distinct spans count two however they sit, nested or abutting.
+/// The value is read, never merged — the gate adds preconditions and does not
+/// alter what it admits (effect-identity, ASN-0126) — so a repeat is stored as
+/// given.
 pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
-    value.from_slot().len() == 1
+    holds_one_span(value.from_slot())
         && match shape {
             Shape::Unary => value.to_slot().is_empty(),
-            Shape::Binary => value.to_slot().len() == 1,
+            Shape::Binary => holds_one_span(value.to_slot()),
             Shape::Multi => true,
         }
+}
+
+/// Returns whether `e` holds exactly one span, counted as a set.
+///
+/// That is ASN-0126's `|e| = 1`: a span the decomposition repeats counts
+/// once, two distinct spans count two however they sit — one inside the
+/// other, or abutting — and one span over an extent counts one (span count,
+/// not coverage, not denotation). Answered without collecting the set: a
+/// first span, and every other equal to it.
+fn holds_one_span(e: &Endset) -> bool {
+    let mut spans = e.spans();
+    spans.next().is_some_and(|first| spans.all(|s| s == first))
 }
 
 /// The four behavior atoms of ASN-0128.
@@ -558,7 +575,7 @@ pub fn registry() -> &'static Arc<TypeRegistry> {
 mod tests {
     use std::collections::HashSet;
 
-    use skep_address::{validate, Nat, Tumbler};
+    use skep_address::{validate, Nat, Span, Tumbler};
     use skep_namespace::GHOST_POSITIONS;
 
     use super::*;
@@ -699,32 +716,40 @@ mod tests {
     }
 
     #[test]
-    fn sh_conf_reads_both_span_counts_against_the_declared_shape() {
-        // The rule [`Shape`] states, decided where the shape is declared: one
-        // `FROM` span always, and per shape no `TO` span, exactly one, or any
-        // finite number. The `|F| = 1` clause is the half no write path can
-        // present — `emit` forces `enc({from})` and an `editlink` successor
-        // takes the open gate — so it holds here or nowhere.
-        let none = Endset::empty;
-        let one = || enc([&ra(1)]);
-        let two = || enc([&ra(1), &ra(2)]);
-        for (shape, admits) in [
-            (Shape::Unary, [true, false, false]),
-            (Shape::Binary, [false, true, false]),
-            (Shape::Multi, [true, true, true]),
-        ] {
-            for (g, to) in [none(), one(), two()].into_iter().enumerate() {
-                assert_eq!(
-                    sh_conf(shape, &Link::triple(one(), to.clone(), one())),
-                    admits[g],
-                    "{shape:?} admits |G| = {g} at |F| = 1"
-                );
-                // A shape is never inferred from the tuple: whatever |G| does,
-                // an |F| off 1 conforms to none of the three.
-                for from in [none(), two()] {
-                    assert!(
-                        !sh_conf(shape, &Link::triple(from, to.clone(), one())),
-                        "{shape:?} refuses |F| ≠ 1 at |G| = {g}"
+    fn sh_conf_counts_each_slot_as_a_set_of_spans() {
+        // ASN-0126's `|e|` is the cardinality of `e` as a finite set of spans,
+        // and each row pairs a slot with that count. Every pair of rows is
+        // checked as (F, G); the |F| = 1 clause is the half no write path
+        // presents (`emit` forces `enc({from})`), so it holds here or nowhere.
+        let extent = |lo: u32, hi: u32| {
+            Span::from_endpoints(ra(lo).tumbler().clone(), ra(hi).tumbler()).expect("an extent")
+        };
+        let rows = [
+            (Endset::empty(), 0),
+            (enc([&ra(1)]), 1),
+            (enc([&ra(1), &ra(3)]), 2),
+            // A repeated span counts once.
+            (enc([&ra(1), &ra(1)]), 1),
+            // Two spans, one inside the other, count two.
+            (enc([&skep_namespace::ghost_home_document(), &ra(1)]), 2),
+            // One span over an extent counts one; the same extent split into
+            // two abutting spans counts two — span count, not coverage.
+            (Endset::from_spans([extent(1, 3)]), 1),
+            (Endset::from_spans([extent(1, 2), extent(2, 3)]), 2),
+        ];
+        for shape in [Shape::Unary, Shape::Binary, Shape::Multi] {
+            let admits = |g: usize| match shape {
+                Shape::Unary => g == 0,
+                Shape::Binary => g == 1,
+                Shape::Multi => true,
+            };
+            for (from, f) in &rows {
+                for (to, g) in &rows {
+                    let value = Link::triple(from.clone(), to.clone(), enc([&ra(1)]));
+                    assert_eq!(
+                        sh_conf(shape, &value),
+                        *f == 1 && admits(*g),
+                        "{shape:?} at |F| = {f}, |G| = {g}: {from:?}, {to:?}"
                     );
                 }
             }

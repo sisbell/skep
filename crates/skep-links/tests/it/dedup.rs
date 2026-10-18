@@ -317,14 +317,16 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     // hit as returning the class's incumbent rather than a tuple it admitted.
     let k = kernel();
     let w = writer(&k);
-    // enc([ca1, ca1]) denotes {ca1}, so this F shares an I0 class with
-    // emit's own enc({ca1}) — while storing two spans, where Unary's shape
-    // gate forces one; the open surface has no shape gate. Typed pred_def —
-    // registered Unary, idem⊤.
-    let l = open_deposit(&w, &[ca(1), ca(1)], &[], &[ra(1)]);
+    // enc([doc1, ca1]) classifies as {doc1} — I0a drops the address beneath
+    // another — so this F shares an I0 class with emit's own enc({doc1}),
+    // while holding two distinct spans where Unary's shape gate demands one
+    // (a repeated address would not do: the gate counts a slot's spans as a
+    // set). The open surface has no shape gate. Typed pred_def — registered
+    // Unary, idem⊤.
+    let l = open_deposit(&w, &[doc1(), ca(1)], &[], &[ra(1)]);
     let before = k.current_seq();
     let (hit, seq) = w
-        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
+        .emit(P1, &doc1(), &pred_def_ty(), &doc1(), &[])
         .expect("the emit's own value is Unary-conformant");
     assert_eq!(hit, l, "the MAKELINK deposit IS the incumbent this emit hits");
     assert_eq!(seq, before, "zero-step: nothing committed");
@@ -332,9 +334,9 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     let snap = k.snapshot();
     let incumbent = snap.world().links().readlink(&hit).expect("resident");
     assert_eq!(
-        incumbent.from_slot().len(),
-        2,
-        "and it carries an F the shape gate this call passed would refuse"
+        incumbent.from_slot(),
+        &enc(&[doc1(), ca(1)]),
+        "and it carries an F of two distinct spans, which the shape gate this call passed refuses"
     );
     // The control: the same emit against a shape-conformant store deposits,
     // so the equality above is the dedup hit and not an absent write path.

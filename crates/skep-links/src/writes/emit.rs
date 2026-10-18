@@ -29,7 +29,8 @@ use crate::LinkWorld;
 /// `ty` is held to the budget as squarely as `to`: its class collapses
 /// repeated addresses, so a registered class is no bound on the slot naming
 /// it. What the budget prevents differs between the two. An over-budget `to`
-/// could never be stored — no class in this format admits `|G| > 1` — so for
+/// could never be stored — every class `emit` reaches in this format is
+/// Unary, the two Binary ones being fenced ahead of the shape gate — so for
 /// `to` it saves the building of a value the shape gate would refuse. An
 /// over-budget `ty` has no such backstop under any shape: no gate on `emit`'s
 /// path but this budget reads e₃'s span count, so for `ty` the budget is all
@@ -62,10 +63,11 @@ where
     /// (PUB-6.25); a hit returns the incumbent with the base `Seq` and
     /// commits nothing.
     ///
-    /// The shape gate counts spans, not distinct addresses: `enc(to)` yields
-    /// one span per element, so `to = [x, x]` carries `|G| = 2` here and is
-    /// refused under Binary, where ASN-0126's set-valued `|G|` admits it
-    /// ([`Shape`](crate::Shape)).
+    /// The shape gate counts `to`'s spans as a set — ASN-0126's `|G|`
+    /// ([`Shape`](crate::Shape)). `enc(to)` yields one span per element and a
+    /// repeat is stored as given, so `to = [x, x]` keeps two spans and
+    /// conforms wherever `to = [x]` does; the two are one I0 identity, so
+    /// each dedups to the other's incumbent.
     ///
     /// **What a hit returns.** The T1-least active tuple of the I0 class the
     /// caller can read — the earliest incumbent homed in a document its

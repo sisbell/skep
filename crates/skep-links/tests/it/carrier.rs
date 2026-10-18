@@ -95,10 +95,10 @@ fn endset_reads_back_verbatim_and_enc_round_trips() {
     let x = [ca(2), ca(7)];
     let got: Vec<_> = enc(&x).addrs().cloned().collect();
     assert_eq!(got, vec![ca(2).tumbler().clone(), ca(7).tumbler().clone()]);
-    // enc is a SEQUENCE map, not a set: a repeated address is a repeated span
-    // (the count the managed shape gate sees), and a nested pair stays
-    // nested — "canonical" in AD's sense is the standard encoding of a name,
-    // never M1's normalized form.
+    // enc is a sequence map, not a set: a repeated address is a repeated span
+    // (the count `len` sees; the managed shape gate, counting the set, sees
+    // one), and a nested pair stays nested — "canonical" in AD's sense is the
+    // standard encoding of a name, never M1's normalized form.
     let twice = enc(&[ca(2), ca(2)]);
     assert_eq!(twice.len(), 2);
     assert_eq!(twice.addrs().count(), 2);

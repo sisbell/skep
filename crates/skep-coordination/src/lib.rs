@@ -1,4 +1,4 @@
-//! # skep-coordination — M9: Predicate & Coordination Layer
+//! skep-coordination — M9: Predicate & Coordination Layer.
 //!
 //! The substrate's **programmable, self-monitoring automation layer**. It
 //! owns three things and nothing else:
@@ -7,8 +7,10 @@
 //!    (ASN-0129) composing M7's per-type atoms (Observe + BH1–BH4) into
 //!    decidable Boolean/value verdicts over committed structural state;
 //! 2. **predicate definitions as content** (ASN-0130) — PL terms persisted as
-//!    immutable content-addressed artifacts, validated/registered/versioned/
-//!    certified as `pdef`/`pd_stable` tuples;
+//!    immutable content-addressed artifacts, validated/registered/certified
+//!    as `pdef`/`pd_stable` tuples, and versioned over the shipped
+//!    `supersedes` class, whose lineage claim the link store refuses as
+//!    built;
 //! 3. a **reactive rule engine with a quiescence theory** (ASN-0133) — a
 //!    registry of trigger→action rules, an atomic fire executor, quiescence
 //!    detection (Q0/Q7), a fair `step` scheduler, and the SF+Marker+grow-only
@@ -29,14 +31,14 @@
 //! recomputed from M7's journal-recovered slices at every ask. No journal, no
 //! `apply`, no `WorldState` slice, no record variant.
 //!
-//! Several QUERIES may fill that memo on a miss — `signature`, a
+//! Several *queries* may fill that memo on a miss — `signature`, a
 //! `type_check`/`type_check_trigger` over a `Ref`, `evaluate_def`, and
 //! `certify_rule` over a `Def` trigger or over a domain naming a `Ref` (each
 //! `Ref` resolved before the domain is refused) — and so do the commands that
 //! resolve through it on their way: `register_pred`, which admits the def it
 //! has registered, `define_predicate` and `supersede` through it,
 //! `certify_stable`, and `register_rule`. The first fill of a start wins and
-//! nothing is ever evicted, so once a start is memoized ONE handle answers
+//! nothing is ever evicted, so once a start is memoized *one* handle answers
 //! every later probe of it as it answered the first (a never-registered start
 //! is never memoized, its answer following the registration; nor is an
 //! ever-registered start with nothing resident yet, its answer following the
@@ -46,12 +48,12 @@
 //! each of those queries stays one. Under a breach the design gives that up
 //! on purpose (freeze-on-breach, §Internal 4): a start registered past the
 //! gate before its referent was defined, and probed in that window, stays
-//! POISONED on the probing handle while a handle that first probes it later
+//! poisoned on the probing handle while a handle that first probes it later
 //! derives it defined; and a reference to breached content may be refused
 //! one way warm and another cold. Every such disagreement is between
 //! refusals, or a refusal and a defined answer — never a wrong `Some`.
 //!
-//! ## Boundary — deliberately NOT owned here
+//! ## Boundary — deliberately not owned here
 //!
 //! * the content-region/arrangement query algebra — M8 (hard lateral
 //!   boundary: **no M9→M8 edge**);
@@ -60,7 +62,7 @@
 //! * ordering/durability/recovery — M2;
 //! * byte content, arrangement, link values, address minting, registry
 //!   mutation — M4/M5/M7/M3 (M9 builds **no second `TypeRegistry`**: it
-//!   projects the ONE engine-built instance into its frozen catalog at
+//!   projects the one engine-built instance into its frozen catalog at
 //!   construction and consults nothing else for type knowledge after);
 //! * ownership consultation — residence reduces to
 //!   `is_registered_document`;
@@ -73,21 +75,21 @@
 //! * the injected `mk_vstream`/`mk_link_writer` factories presuppose the
 //!   engine can construct a `Vstream` from `&Kernel<W>` and a `LinkWriter`
 //!   from `&Kernel<W>` plus a visibility class — the injected `guest`
-//!   predicate, lent at every construction (lane 3.3b) — and each must build
-//!   over EXACTLY the kernel (and, for the writer, the visibility class) it
-//!   is handed, with `guest` a pure function of the world it is passed: the
+//!   predicate, lent at every construction — and each must build over
+//!   *exactly* the kernel (and, for the writer, the visibility class) it is
+//!   handed, with `guest` a pure function of the world it is passed: the
 //!   one-pinned-snapshot verdict and the byte-identical commit rest on both.
 //!   The factory types are `fn` pointers, so a factory holding a kernel or a
 //!   visibility class of its own does not compile; one naming a `static`
 //!   instead, and an impure `guest`, nothing here can refuse. And `guest`
-//!   must be TOTAL over every `&Address` M9 hands it, a fire consulting it on
-//!   the action's HOME before M7's H-HOME gate has run and on the bound
+//!   must be *total* over every `&Address` M9 hands it, a fire consulting it
+//!   on the action's home before M7's H-HOME gate has run and on the bound
 //!   argument's document, falling back to the argument itself; `false` is the
 //!   safe answer for an address it does not recognize, and a panic is not an
 //!   answer ([`Coordinator::new`] states the whole of it);
 //! * **PR-DISC**: no write but M9's own `register_pred`/`certify_stable` may
 //!   grow the `pdef`/`pd_stable` slices (§Internal 4). M7 classes a deposit
-//!   by its TYPE slot, whatever surface it arrives through, so the obligation
+//!   by its type slot, whatever surface it arrives through, so the obligation
 //!   covers a typed `emit`, the open surface's `makelink` and `editlink`'s
 //!   successor alike — M7 itself fences only the `[R]`, `[K_sup]` and
 //!   `replaces` classes. M9's `register_rule` closes the in-module route
@@ -95,13 +97,13 @@
 //!   (`UndisciplinedDef`, freeze-on-breach), but `is_ever_pred`,
 //!   `is_active_pred` and `is_certified_stable` read the classes: nothing in
 //!   M9 can tell a breaching `pd_stable` tuple from a certificate. What
-//!   bounds a breach is that those probes match a start by its COVERAGE
-//!   CLASS — the F half of the I0 identity M7's dedup keys the two writes'
+//!   bounds a breach is that those probes match a start by its *coverage
+//!   class* — the F half of the I0 identity M7's dedup keys the two writes'
 //!   deposits by, so one tuple names one start at most — so a forgery costs
 //!   its writer one tuple per start, and one whose F covers starts from a
 //!   document, an account or the node has that ancestor's class and forges
-//!   none of them. PL's `is_K` over the two classes matches by coverage (D2),
-//!   and a rule reading either class has no such bound.
+//!   none of them. PL's `is_K` over the two classes matches by coverage
+//!   (ASN-0128 D2), and a rule reading either class has no such bound.
 
 #![forbid(unsafe_code)]
 
@@ -124,13 +126,14 @@ mod value;
 mod fixture;
 // The tree's child structure, stated once: `Rewrite` and `Visit`.
 mod walk;
-// The caps every walk over a term is charged against, and the one counter.
+// The caps every walk over a term is set against, and the one counter.
 mod budget;
-// The rejection vocabularies, one per operation.
+// The rejection vocabularies: one per operation, or per pair of operations
+// that runs one check.
 mod error;
 // The frozen projection of the engine's `TypeRegistry`.
 mod catalog;
-// M7's read surface at guest class: every read a verdict makes.
+// M7's read surface at guest class: every link-store read a verdict makes.
 mod guest;
 // WT: the type checker, the checked terms only it builds, and the two seams a
 // referent is resolved through (`Resolver`, `DefSource`).
@@ -192,20 +195,24 @@ pub use skep_links::{
     Visibility,
 };
 
-/// `im`'s persistent collections are [`Value`]'s payload types, so this is a
-/// PUBLIC dependency: the exact version the crate was built against is
-/// nameable here — `skep_coordination::im::OrdSet` — rather than matched by
-/// luck at a caller's own manifest, where a version skew would spell itself
-/// `expected OrdSet<Address>, found OrdSet<Address>`. The `const _` below
-/// pins what the choice of `im` (over the `Rc`-backed `im-rc`) promises.
+/// The `im` crate, whose persistent collections are [`Value`]'s payload types.
+///
+/// So this is a *public* dependency: the exact version the crate was built
+/// against is nameable here — `skep_coordination::im::OrdSet` — rather than
+/// matched by luck at a caller's own manifest, where a version skew would
+/// spell itself `expected OrdSet<Address>, found OrdSet<Address>`. The
+/// `const _` below pins what the choice of `im` (over the `Rc`-backed
+/// `im-rc`) promises.
 pub use im;
 
-/// The world M9 is assembled over: every store it reads (M3, M4, M5, M7)
-/// and every record it lifts through their ops (M9 drives no `transact`
-/// itself — a def write rides M5's placement composite, every `pdef`/
-/// `pd_stable`/fire deposit M7's gated `emit`/`nullify`). One name for the
-/// bound set every `Coordinator` impl block states; a blanket impl, so any
-/// world with the four stores and the four lifts is one.
+/// The world M9 is assembled over.
+///
+/// It has every store it reads (M3, M4, M5, M7) and every record it lifts
+/// through their ops (M9 drives no `transact` itself — a def write rides
+/// M5's placement composite, every `pdef`/`pd_stable`/fire deposit M7's
+/// gated `emit`/`nullify`). One name for the bound set every `Coordinator`
+/// impl block but `Debug`'s states; a blanket impl, so any world with the
+/// four stores and the five lifts is one.
 pub trait CoordinationWorld:
     WorldState<
         Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>,
@@ -230,14 +237,15 @@ impl<W> CoordinationWorld for W where
 {
 }
 
-/// What this crate promises without saying, pinned so a private change
-/// cannot revoke it silently: every value a driver carries out of a verdict
-/// or a step — and every rejection, in its `Box<dyn Error + Send + Sync>`
-/// crossing form — is `Send + Sync + 'static`. `Value` keeps the promise
-/// through `im`'s `Arc`-backed collections, which this crate's manifest
-/// names; a swap to the `Rc`-backed `im-rc` would revoke it with nothing else
-/// failing to build. `Coordinator<W>` itself is pinned over a concrete world
-/// in the suite, being generic here.
+/// What this crate promises without saying, pinned at compile time.
+///
+/// It is pinned so a private change cannot revoke it silently: every value a
+/// driver carries out of a verdict or a step — and every rejection, in its
+/// `Box<dyn Error + Send + Sync>` crossing form — is `Send + Sync + 'static`.
+/// `Value` keeps the promise through `im`'s `Arc`-backed collections, which
+/// this crate's manifest names; a swap to the `Rc`-backed `im-rc` would
+/// revoke it with nothing else failing to build. `Coordinator<W>` itself is
+/// pinned over a concrete world in the suite, being generic here.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     fn owed_error<T: std::error::Error + Send + Sync + 'static>() {}

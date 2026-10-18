@@ -1,11 +1,13 @@
-//! §Internal 1 — the type checker: a single bottom-up synthesis pass over the
-//! raw `Term`, checked under the caller-supplied ordered parameter context
-//! Γ_D (ASN-0129 WT is a Γ-parameterized CHECKING judgment), with `Reg`
-//! expansion (V-IDX), the catalog + behavior guards (V-STAT), and WT-ref via
-//! the signature resolver. Decided once at construction, valid at every
-//! reachable state (WT). The pass has two top-level judgments — a signed term
-//! under its Γ_D, and the WT domain judgment over a rule's CLOSED domain —
-//! and nothing outside this module starts its walk any other way.
+//! The type checker (§Internal 1): a single bottom-up synthesis pass.
+//!
+//! The pass runs over the raw `Term`, checked under the caller-supplied
+//! ordered parameter context Γ_D (ASN-0129 WT is a Γ-parameterized
+//! *checking* judgment), with `Reg` expansion (V-IDX), the catalog + behavior
+//! guards (V-STAT), and WT-ref via the signature resolver. Decided once at
+//! construction, valid at every reachable state (WT). The pass has two
+//! top-level judgments — a signed term under its Γ_D, and the WT domain
+//! judgment over a rule's closed domain — and nothing outside this module
+//! starts its walk any other way.
 //!
 //! The pass is also the crate's two resource doors for a term, stored or
 //! supplied: it refuses a tree that nests past [`MAX_DEPTH`] — counting the
@@ -14,7 +16,7 @@
 //! referent's own reach, and each argument at the `Let` position its index
 //! gives it ([`referent_depth`], [`reference_reach`], [`argument_depth`]) —
 //! and one that spends the node [`Budget`], counting every node it visits or
-//! builds AND the payload each carries, so nested `Reg` quantifiers, an
+//! builds and the payload each carries, so nested `Reg` quantifiers, an
 //! `Arc`-shared body and a large literal are charged for what they produce
 //! and the check stops at the budget rather than after it.
 
@@ -32,17 +34,18 @@ use crate::error::TypeError;
 use crate::value::{Signature, SignedTerm, Sort};
 use crate::walk::{rewrite_term, Rewrite};
 
-/// The post-type-check form — the ONE checked-term shape in the crate: what
-/// `type_check` hands back, what a stored def's memo entry holds, what a
-/// rule's trigger wraps ([`TriggerTerm`]). Carries the signed term — Γ_D and
-/// the compact pre-`Reg`-expansion body, read back via
+/// The post-type-check form: the one checked-term shape in the crate.
+///
+/// It is what `type_check` hands back, what a stored def's memo entry holds,
+/// what a rule's trigger wraps ([`TriggerTerm`]). It carries the signed term
+/// — Γ_D and the compact pre-`Reg`-expansion body, read back via
 /// [`TypedTerm::params`] / [`TypedTerm::source_body`], the form the codec
 /// stores (`codec::stored_run`, §Internal 4) — the synthesized codomain
 /// ([`TypedTerm::result_sort`]), the ref-free flag, the Reg-expanded
 /// evaluable projection (every `TypeRef` `Concrete`, no surviving `Reg`
 /// quantifier — `Ref` nodes may remain: see [`TypedTerm::is_ref_free`]), and
 /// the term's reach — the deepest level any walk over it recurses to,
-/// counted through its references. Deliberately carries NO view (PR-VIEW):
+/// counted through its references. Deliberately carries no view (PR-VIEW):
 /// the view is an evaluation/classification parameter, never a term
 /// annotation.
 ///
@@ -63,13 +66,14 @@ pub struct TypedTerm {
     result: Sort,
     evaluable: ArcTerm,
     ref_free: bool,
-    /// The reach, relative to the root: the deepest level any walk — the
-    /// evaluator's, the expander's, the analyzer's, a cold derivation's —
-    /// recurses to over this term, its `Reg`-expansion joins and its
+    /// The reach, relative to the root: the deepest level any walk recurses to.
+    ///
+    /// The walks are the evaluator's, the expander's, the analyzer's and a
+    /// cold derivation's, over this term, its `Reg`-expansion joins and its
     /// references' own reaches included. `≤ MAX_DEPTH` by construction; what
     /// a `Ref` to this term adds is [`crate::budget::reference_reach`]'s.
     ///
-    /// It bounds the FLAT REFERENCE EXPANSION's depth as well as this tree's,
+    /// It bounds the flat reference expansion's depth as well as this tree's,
     /// because every node was checked at a level no shallower than the
     /// position its expansion occupies — the `Reg` joins at the deepest
     /// instance's level, a reference's arguments each at their own `Let`
@@ -81,8 +85,9 @@ pub struct TypedTerm {
 }
 
 impl TypedTerm {
-    /// A `TypedTerm` assembled from its parts, bypassing the checker — test
-    /// builds only, for the expander's stub referents, which need not
+    /// Returns a `TypedTerm` assembled from its parts, bypassing the checker.
+    ///
+    /// Test builds only, for the expander's stub referents, which need not
     /// type-check (the expander is structural). Every other `TypedTerm` is
     /// the checker's.
     #[cfg(test)]
@@ -96,71 +101,82 @@ impl TypedTerm {
         TypedTerm { signed, result, evaluable, ref_free, reach }
     }
 
-    /// Γ_D — the ordered free-parameter context this term was checked under.
+    /// Returns Γ_D, the ordered free-parameter context.
+    ///
+    /// This term was checked under it.
     pub fn params(&self) -> &[(VarId, Sort)] {
         &self.signed.params
     }
 
-    /// C_D — the synthesized codomain sort.
+    /// Returns C_D, the synthesized codomain sort.
     pub fn result_sort(&self) -> Sort {
         self.result
     }
 
-    /// False iff any `Ref` node survives. `eval` (and so `decide`),
-    /// `classify` and `quiescent_scoped`'s scope require it true, each
-    /// asserting it at its door. A ref-bearing term is used by ADDRESS:
-    /// `define_predicate` stores it, `evaluate_def` evaluates it, and its
-    /// static analyses run over the stored def's flat reference expansion —
-    /// `certify_stable`'s, and `certify_rule`'s for a `Def` trigger.
+    /// Returns `false` iff any `Ref` node survives.
+    ///
+    /// `eval` (and so `decide`), `classify` and `quiescent_scoped`'s scope
+    /// require it true, each asserting it at its door. A ref-bearing term is
+    /// used by *address*: `define_predicate` stores it, `evaluate_def`
+    /// evaluates it, and its static analyses run over the stored def's flat
+    /// reference expansion — `certify_stable`'s, and `register_rule`'s and
+    /// `certify_rule`'s for a `Def` trigger.
     pub fn is_ref_free(&self) -> bool {
         self.ref_free
     }
 
-    /// The original pre-`Reg`-expansion syntactic body (`Reg`-quantifiers and
-    /// `ClassVar` refs intact) — distinct from the Reg-expanded evaluable
-    /// tree.
+    /// Returns the original pre-`Reg`-expansion syntactic body.
+    ///
+    /// `Reg`-quantifiers and `ClassVar` refs are intact — distinct from the
+    /// Reg-expanded evaluable tree.
     pub fn source_body(&self) -> &Term {
         &self.signed.body
     }
 
-    /// The `Reg`-expanded evaluable projection — every `TypeRef` `Concrete`,
-    /// no surviving `Reg` quantifier, a `Ref` node only where
-    /// [`TypedTerm::is_ref_free`] says so, and no deeper than `reach`: the
-    /// tree the evaluator, the expander and the analyses walk.
+    /// Returns the `Reg`-expanded evaluable projection.
+    ///
+    /// Every `TypeRef` is `Concrete`, no `Reg` quantifier survives, a `Ref`
+    /// node remains only where [`TypedTerm::is_ref_free`] says so, and no
+    /// node is deeper than `reach`: the tree the evaluator, the expander and
+    /// the analyses walk.
     pub(crate) fn evaluable(&self) -> &Term {
         &self.evaluable
     }
 
-    /// The signed term `(Γ_D, body)` this term was checked from — the
-    /// compact pre-`Reg`-expansion form the codec stores
+    /// Returns the signed term `(Γ_D, body)` this term was checked from.
+    ///
+    /// It is the compact pre-`Reg`-expansion form the codec stores
     /// (`codec::stored_run`).
     pub(crate) fn signed(&self) -> &SignedTerm {
         &self.signed
     }
 
-    /// `(Γ_D, C_D)` — the term's signature (PR-SIG).
+    /// Returns `(Γ_D, C_D)`, the term's signature (PR-SIG).
     pub(crate) fn signature(&self) -> Signature {
         Signature { params: self.signed.params.clone(), result: self.result }
     }
 }
 
-/// A rule trigger: a ONE-parameter Bool term whose parameter may be
-/// `Tup`-sorted — the only PL term with a tuple PARAMETER (ASN-0133 ρ_R); any
-/// term may still bind tuples through a quantifier over `A_K`/`L_K`. A
-/// caller's comes from `Coordinator::type_check_trigger`; inside the crate
-/// the rule engine also captures a `Def` trigger's def into this shape at
-/// registration, so the working set holds one trigger type. A type of its
-/// own so the def path cannot receive it: `define_predicate` takes a
-/// `TypedTerm`, and no accessor of this type returns the checked term
-/// beneath, so it yields none, in this crate or out of it — its accessors
-/// are the trigger's parameter, its ref-freeness, its source body and, for
-/// the rule engine, its evaluable projection. Holds the checked term shared,
-/// so a registration captures it without a copy.
+/// A rule trigger: a checked one-parameter Bool term (ASN-0133 ρ_R).
+///
+/// Its parameter may be `Tup`-sorted — the only PL term with a tuple
+/// *parameter*; any term may still bind tuples through a quantifier over
+/// `A_K`/`L_K`. A caller's comes from `Coordinator::type_check_trigger`;
+/// inside the crate the rule engine also captures a `Def` trigger's def into
+/// this shape at registration, so the working set holds one trigger type. A
+/// type of its own so the def path cannot receive it: `define_predicate`
+/// takes a `TypedTerm`, and no accessor of this type returns the checked
+/// term beneath, so it yields none, in this crate or out of it — its
+/// accessors are the trigger's parameter, its ref-freeness, its source body
+/// and, for the rule engine, its evaluable projection. Holds the checked
+/// term shared, so a registration captures it without a copy.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TriggerTerm(Arc<TypedTerm>);
 
 impl TriggerTerm {
-    /// The two constructions, each after establishing the shape — one
+    /// Returns the trigger over `checked`, whose shape its caller established.
+    ///
+    /// There are two constructions, each after establishing the shape — one
     /// parameter, Bool codomain: `Coordinator::type_check_trigger`'s (its
     /// signature supplies the one parameter; it refuses a non-Bool codomain),
     /// and `validate_rule`'s capture of a `Def` trigger's def, after
@@ -170,39 +186,45 @@ impl TriggerTerm {
         TriggerTerm(checked)
     }
 
-    /// The one parameter — `register_rule` reconciles its sort with the
-    /// domain's element sort, the rule engine binds each candidate argument
-    /// to it, and the termination lint's Marker leg names it.
+    /// Returns the one parameter.
+    ///
+    /// `register_rule` reconciles its sort with the domain's element sort,
+    /// the rule engine binds each candidate argument to it, and the
+    /// termination lint's Marker leg names it.
     pub fn param(&self) -> &(VarId, Sort) {
         &self.0.params()[0]
     }
 
-    /// False iff any `Ref` node survives — `register_rule` requires it true
-    /// of an `Inline` trigger.
+    /// Returns `false` iff any `Ref` node survives.
+    ///
+    /// `register_rule` requires it true of an `Inline` trigger.
     pub fn is_ref_free(&self) -> bool {
         self.0.ref_free
     }
 
-    /// The original pre-`Reg`-expansion syntactic body.
+    /// Returns the original pre-`Reg`-expansion syntactic body.
     pub fn source_body(&self) -> &Term {
         self.0.source_body()
     }
 
-    /// The `Reg`-expanded evaluable projection — what the rule engine
-    /// evaluates the trigger by, and, for a ref-free trigger, its flat
-    /// expansion as it stands.
+    /// Returns the `Reg`-expanded evaluable projection.
+    ///
+    /// It is what the rule engine evaluates the trigger by, and, for a
+    /// ref-free trigger, its flat expansion as it stands.
     pub(crate) fn evaluable(&self) -> &Term {
         self.0.evaluable()
     }
 }
 
-/// The V-IDX expansion step (§Internal 1): `TypeRef::ClassVar(cvar) →
-/// TypeRef::Concrete(key)` throughout a body, stopping at an inner `Reg`
-/// binder that rebinds `cvar` (shadowing). Charges the checker's node budget
-/// per node it visits AND per unit of payload that node carries — an
-/// `Arc`-shared body is a tree to a rewrite, and a literal's tumbler is
-/// copied whole into every instance — and past the budget builds nothing
-/// more, leaving the spent budget for the caller to refuse on.
+/// The V-IDX expansion step (§Internal 1): a class variable's substitution.
+///
+/// It rewrites `TypeRef::ClassVar(cvar) → TypeRef::Concrete(key)` throughout
+/// a body, stopping at an inner `Reg` binder that rebinds `cvar`
+/// (shadowing). Charges the checker's node budget per term node it visits
+/// and per unit of payload that node carries — an `Arc`-shared body is a
+/// tree to a rewrite, and a literal's tumbler is copied whole into every
+/// instance — and past the budget builds nothing more, leaving the spent
+/// budget for the caller to refuse on.
 struct SubstClassVar<'a> {
     cvar: VarId,
     key: &'a TypeKey,
@@ -235,9 +257,10 @@ impl Rewrite for SubstClassVar<'_> {
 
 type Ctx = im::HashMap<VarId, Sort>;
 
-/// A checked term: its evaluable projection, sort and ref-freeness. How deep
-/// the pass went is the pass's own record ([`Checker::deepest`]), not a
-/// per-node field.
+/// A checked term: its evaluable projection, sort and ref-freeness.
+///
+/// How deep the pass went is the pass's own record ([`Checker::deepest`]),
+/// not a per-node field.
 #[derive(Debug, Clone)]
 struct Checked {
     term: ArcTerm,
@@ -245,13 +268,15 @@ struct Checked {
     ref_free: bool,
 }
 
-/// The WT domain judgment's product — for a domain inside a term, and for a
-/// rule's closed domain through [`Checker::check_closed_dom`]: the
-/// `Reg`-expanded domain (every `TypeRef` `Concrete`, no `Reg` survivor, no
-/// node checked past `MAX_DEPTH`), the element sort it yields, and whether a
-/// `Ref` survives in it. The checker's alone, as [`TypedTerm`] is: the fields
-/// are private, so the guarantees a rule's `TypedDom` rests on come from the
-/// judgment and never from a struct literal elsewhere.
+/// The WT domain judgment's product.
+///
+/// It is the product for a domain inside a term, and for a rule's closed
+/// domain through [`Checker::check_closed_dom`]: the `Reg`-expanded domain
+/// (every `TypeRef` `Concrete`, no `Reg` survivor, no node checked past
+/// `MAX_DEPTH`), the element sort it yields, and whether a `Ref` survives in
+/// it. The checker's alone, as [`TypedTerm`] is: the fields are private, so
+/// the guarantees a rule's `TypedDom` rests on come from the judgment and
+/// never from a struct literal elsewhere.
 #[derive(Debug, Clone)]
 pub(crate) struct CheckedDom {
     dom: ArcDom,
@@ -260,18 +285,21 @@ pub(crate) struct CheckedDom {
 }
 
 impl CheckedDom {
-    /// The checked domain — a rule's `TypedDom` once its caller has refused
-    /// a ref-bearing one.
+    /// Returns the checked domain.
+    ///
+    /// It is a rule's `TypedDom` once its caller has refused a ref-bearing
+    /// one.
     pub(crate) fn into_dom(self) -> ArcDom {
         self.dom
     }
 
-    /// The element sort the domain yields: `Addr` or `Tup` (QD).
+    /// Returns the element sort the domain yields: `Addr` or `Tup` (QD).
     pub(crate) fn elem_sort(&self) -> Sort {
         self.elem_sort
     }
 
-    /// False iff a `Ref` survives — in a `Filter` predicate or a set term.
+    /// Returns `false` iff a `Ref` survives, in a `Filter` predicate or a set
+    /// term.
     pub(crate) fn is_ref_free(&self) -> bool {
         self.ref_free
     }
@@ -285,32 +313,35 @@ fn want(expected: Sort, found: Sort) -> Result<(), TypeError> {
     }
 }
 
-/// The resolver's two refusals, each the `Ref` arm's own rejection:
-/// `Undefined` — the address's signature is undefined (never registered, or
-/// ever-registered-but-undisciplined), WT-ref's domain failure; `TooDeep` —
+/// The resolver's two refusals, each the `Ref` arm's own rejection.
+///
+/// `Undefined`: the address's signature is undefined (never registered, or
+/// ever-registered-but-undisciplined), WT-ref's domain failure. `TooDeep`:
 /// the referent's derivation could not complete at the level it was asked
-/// at — the ASKING term's refusal, never the referent's: the resolver leaves
-/// the referent unjudged (and unmemoized).
+/// at — the *asking* term's refusal, never the referent's: the resolver
+/// leaves the referent unjudged (and unmemoized).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unresolved {
     Undefined,
     TooDeep,
 }
 
-/// The referent resolver WT-ref consults (the signature resolver, PR-SIG):
-/// the defined referent at an address, its derivation — if the memo misses
-/// — rooted at the level asked for, or one of the two [`Unresolved`]
-/// refusals.
+/// The referent resolver WT-ref consults (the signature resolver, PR-SIG).
+///
+/// It answers the defined referent at an address, its derivation — if the
+/// memo misses — rooted at the level asked for, or one of the two
+/// [`Unresolved`] refusals.
 type Resolver<'a> = dyn Fn(&Address, u32) -> Result<Arc<TypedTerm>, Unresolved> + 'a;
 
-/// Referent supplier for the DAG-recursive drivers over ref-bearing bodies —
-/// the denotation of a stored def (`eval_term`'s walk plus the one `Ref`
-/// arm, §Internal 4/Conflicts §5) and the flat expansion the static analyses
-/// run over — where [`Resolver`] is the checker's own consultation of the
-/// same memo. It answers at level 0: every referent a driver asks for belongs
-/// to a checked body, so the one refusal is "no defined signature". An
-/// evaluation context holds none wherever a gate has already made its term
-/// ref-free — `eval`/`decide`'s precondition, a rule's checked domain,
+/// The referent supplier for the DAG-recursive drivers over ref-bearing bodies.
+///
+/// The drivers are the denotation of a stored def (`eval_term`'s walk plus
+/// the one `Ref` arm, §Internal 4/Conflicts §5) and the flat expansion the
+/// static analyses run over; [`Resolver`] is the checker's own consultation
+/// of the same memo. It answers at level 0: every referent a driver asks for
+/// belongs to a checked body, so the one refusal is "no defined signature".
+/// An evaluation context holds none wherever a gate has already made its
+/// term ref-free — `eval`/`decide`'s precondition, a rule's checked domain,
 /// `quiescent_scoped`'s scope — so the `Ref` arm there is a panic, not a
 /// resolution. A `Some` is the memo's own `Arc` — the checked term of a
 /// defined referent, never a copy.
@@ -320,18 +351,22 @@ pub(crate) trait DefSource {
 
 /// What a type position must satisfy beyond being cataloged (V-STAT).
 enum Guard {
-    /// Cataloged only, no behavior requirement — the core atoms, `·[K]`, the
-    /// slice domains.
+    /// Cataloged only, no behavior requirement.
+    ///
+    /// The core atoms, `·[K]`, `M_K` and the slice domains take it.
     Cataloged,
     /// The class's registration must declare this behavior.
     Needs(Behavior),
-    /// BH2's v1 narrowing (Conflicts §8): the `Walk` behavior AND the shipped
-    /// `Supersedes` key — M7 v1 serves the walk only there, so admitting any
-    /// other Walk class would silently denote ∅/\[\].
+    /// BH2's v1 narrowing (Conflicts §8).
+    ///
+    /// The `Walk` behavior and the shipped `Supersedes` key — M7 v1 serves the
+    /// walk only there, so admitting any other Walk class would silently
+    /// denote ∅/\[\].
     Walk,
 }
 
 /// A prim's typing rule: every operand at `operand`, the node at `result`.
+///
 /// Named per V-PRIM family below, so a call site cannot transpose the two —
 /// as an unnamed `(Sort, Sort)` it could, and a transposition retypes the
 /// operator with nothing to object.
@@ -352,8 +387,10 @@ const NAT_OP: PrimRule = PrimRule { operand: Sort::Nat, result: Sort::Nat };
 /// `elems` — Seq_fin(T) → ℘_fin(T).
 const SEQ_ELEMS: PrimRule = PrimRule { operand: Sort::AddrSeq, result: Sort::AddrSet };
 
-/// The checking pass. `resolve` is the referent resolver WT-ref consults —
-/// the only external consultation (it reads the immutable def memo, so even
+/// The checking pass.
+///
+/// `resolve` is the referent resolver WT-ref consults — the only external
+/// consultation (it reads the def memo, whose entries are permanent, so even
 /// ref-bearing type-checking is "decided once") — asked at the level the
 /// referent's own check starts at ([`referent_depth`]), so a cold derivation
 /// stays within the levels the `Ref` node is charged ([`reference_reach`]),
@@ -377,8 +414,15 @@ impl<'a> Checker<'a> {
         Checker { catalog, resolve, nodes: Budget::default(), deepest: Cell::new(0) }
     }
 
-    /// The whole judgment over a signed term — its body under its Γ_D — into
-    /// the checked-term shape, the body's root at nesting level `depth`.
+    /// Runs the whole judgment over a signed term, its body under its Γ_D.
+    ///
+    /// The judgment yields the checked-term shape, the body's root at nesting
+    /// level `depth`. [`TypedTerm::reach`] is the pass's high-water mark
+    /// *relative* to this root — the referent's term in [`reference_reach`]
+    /// when [`Checker::check_term`]'s `Ref` arm charges a reference to this
+    /// term — so the two halves of the depth accounting are stated together.
+    ///
+    /// # Errors
     ///
     /// Γ_D is charged against the node budget first, so a context longer than
     /// the budget is `TooLarge` before anything is sized by its length (the
@@ -387,10 +431,8 @@ impl<'a> Checker<'a> {
     /// would shadow its earlier one, leaving the argument passed at the
     /// earlier position unreadable; then WT + WT-ref over the body, referents
     /// resolved at the levels the `Ref` arm asks for them at
-    /// ([`referent_depth`]). [`TypedTerm::reach`] is the pass's high-water
-    /// mark RELATIVE to this root — the referent's term in [`reference_reach`]
-    /// when [`Checker::check_term`]'s `Ref` arm charges a reference to this
-    /// term — so the two halves of the depth accounting are stated together.
+    /// ([`referent_depth`]), the first refusal [`Checker::check_term`] meets
+    /// speaking.
     pub(crate) fn check_signed(self, signed: SignedTerm, depth: u32) -> Result<TypedTerm, TypeError> {
         if !self.nodes.charge(signed.params.len()) {
             return Err(TypeError::TooLarge);
@@ -410,25 +452,36 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// The WT domain judgment over a CLOSED domain — one that binds only its
-    /// own variables, as a rule's does — from nesting level 0: the checker's
-    /// second top-level judgment beside [`Checker::check_signed`], consuming
-    /// it likewise. Once a caller has refused one that is not
+    /// Runs the WT domain judgment over a *closed* domain.
+    ///
+    /// A closed domain binds only its own variables, as a rule's does; the
+    /// judgment runs from nesting level 0. This is the checker's second
+    /// top-level judgment beside [`Checker::check_signed`], consuming it
+    /// likewise. Once a caller has refused one that is not
     /// [`CheckedDom::is_ref_free`], its product carries every guarantee the
-    /// domain's walks lean on: every
-    /// `TypeRef` `Concrete`, no `Reg` survivor, and no node deeper than
-    /// `MAX_DEPTH` — the bound `enum_dom` and `Analyzer::dom` take, having
-    /// none of their own.
+    /// domain's walks lean on: every `TypeRef` `Concrete`, no `Reg` survivor,
+    /// and no node deeper than `MAX_DEPTH` — the bound `enum_dom` and
+    /// `Analyzer::dom` take, having none of their own.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal [`Checker::check_dom`] meets over the domain.
     pub(crate) fn check_closed_dom(self, d: &Dom) -> Result<CheckedDom, TypeError> {
         self.check_dom(&Ctx::new(), d, 0)
     }
 
-    /// A walk over this term reaches `level`: refused past `MAX_DEPTH`
-    /// (`TooDeep`), otherwise recorded against the pass's high-water mark —
-    /// the ONE place either happens. [`Checker::enter`] asks it for every
-    /// level a node is checked at; the `Ref` arm asks it for the deepest level
-    /// a walk through the reference reaches ([`reference_reach`]), which is
-    /// the referent's and so entered by no node of this pass.
+    /// Records that a walk over this term reaches `level`.
+    ///
+    /// The level is recorded against the pass's high-water mark, or refused —
+    /// this is the one place either happens. [`Checker::enter`] asks it for
+    /// every level a node is checked at; the `Ref` arm asks it for the
+    /// deepest level a walk through the reference reaches
+    /// ([`reference_reach`]), which is the referent's and so entered by no
+    /// node of this pass.
+    ///
+    /// # Errors
+    ///
+    /// `TooDeep` for a `level` past `MAX_DEPTH`, which is not recorded.
     fn reach_to(&self, level: u32) -> Result<(), TypeError> {
         if level > MAX_DEPTH {
             return Err(TypeError::TooDeep);
@@ -437,11 +490,18 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// The two doors at every node — the nesting cap ([`Checker::reach_to`],
-    /// which also records the level) and the node budget, charged `weight`
-    /// units for the node and the payload it carries. The cap speaks first, so
-    /// a node past both is `TooDeep`; a level recorded ahead of a `TooLarge`
-    /// is never read, the judgment failing with it.
+    /// Takes a node at `depth` through the two doors at every node.
+    ///
+    /// They are the nesting cap ([`Checker::reach_to`], which also records the
+    /// level) and the node budget, charged `weight` units for the node and the
+    /// payload it carries.
+    ///
+    /// # Errors
+    ///
+    /// `TooDeep` past the nesting cap, else `TooLarge` past the node budget.
+    /// The cap speaks first, so a node past both is `TooDeep`; a level
+    /// recorded ahead of a `TooLarge` is never read, the judgment failing with
+    /// it.
     fn enter(&self, weight: usize, depth: u32) -> Result<(), TypeError> {
         self.reach_to(depth)?;
         if !self.nodes.charge(weight) {
@@ -450,19 +510,25 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// The cataloged key of a type position, its `guard` met (V-STAT). A
-    /// surviving `ClassVar` is `UnboundClassVar` (no enclosing `Reg` binder
+    /// Returns the cataloged key of a type position, its `guard` met (V-STAT).
+    ///
+    /// # Errors
+    ///
+    /// A surviving `ClassVar` is `UnboundClassVar` (no enclosing `Reg` binder
     /// substituted it); a `Concrete` key that is not one of the catalog's keys
     /// is `UncatalogedTypeKey` — the probe being `Endset`-equality, that
     /// subsumes non-address-denoting keys and coverage-equal-but-byte-different
-    /// misses.
+    /// misses. Past the catalog, a class whose registration does not declare
+    /// the behavior the guard needs is `BehaviorMissing`, and under
+    /// `Guard::Walk` a Walk class other than the shipped `Supersedes` key is
+    /// `UnservedWalkClass`, the behavior speaking first.
     fn guarded(&self, tr: &TypeRef, guard: Guard) -> Result<TypeKey, TypeError> {
         let k = match tr {
             TypeRef::ClassVar(v) => return Err(TypeError::UnboundClassVar(*v)),
             TypeRef::Concrete(k) => k,
         };
         let entry = self.catalog.get(k).ok_or_else(|| TypeError::UncatalogedTypeKey(k.clone()))?;
-        // The GATE, against `CatalogEntry::declares`'s question: this refuses,
+        // The gate, against `CatalogEntry::declares`'s question: this refuses,
         // so every use of it ends in `?`.
         let require = |needs: Behavior| -> Result<(), TypeError> {
             if entry.declares(needs) {
@@ -487,15 +553,26 @@ impl<'a> Checker<'a> {
         Ok(k.clone())
     }
 
-    /// A child at `depth`, required at `expected`.
+    /// Checks a child at `depth`, required at `expected`.
+    ///
+    /// # Errors
+    ///
+    /// The child's own refusal, or `SortMismatch` when its sort is not
+    /// `expected`.
     fn sub(&self, ctx: &Ctx, t: &Term, expected: Sort, depth: u32) -> Result<Checked, TypeError> {
         let c = self.check_term(ctx, t, depth)?;
         want(expected, c.sort)?;
         Ok(c)
     }
 
-    /// A Bool connective: both children at Bool, the node rebuilt through
-    /// its constructor.
+    /// Checks a Bool connective: both children at Bool.
+    ///
+    /// The node is rebuilt through its constructor.
+    ///
+    /// # Errors
+    ///
+    /// The first child's refusal, then the second's — a child not at Bool is
+    /// `SortMismatch`.
     fn bool2(
         &self,
         ctx: &Ctx,
@@ -513,8 +590,15 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// A quantifier's checked parts: the domain, and the Bool body under the
-    /// binder at the domain's element sort. The `Reg` case is `expand_reg`'s.
+    /// Returns a quantifier's checked parts: the domain and the Bool body.
+    ///
+    /// The body is checked under the binder at the domain's element sort. The
+    /// `Reg` case is `expand_reg`'s.
+    ///
+    /// # Errors
+    ///
+    /// The domain's refusal, then the body's — a body not at Bool is
+    /// `SortMismatch`.
     fn quantified(
         &self,
         ctx: &Ctx,
@@ -529,7 +613,12 @@ impl<'a> Checker<'a> {
         Ok((cd, c))
     }
 
-    /// A T1 order-extremum over an address-valued domain (PC2a).
+    /// Checks a T1 order-extremum over an address-valued domain (PC2a).
+    ///
+    /// # Errors
+    ///
+    /// The domain's refusal, or `SortMismatch` for a domain that is not
+    /// address-valued.
     fn extremum(
         &self,
         ctx: &Ctx,
@@ -542,20 +631,30 @@ impl<'a> Checker<'a> {
         Ok(Checked { term: Arc::new(mk(cd.dom)), sort: Sort::OptAddr, ref_free: cd.ref_free })
     }
 
-    /// A leaf: no children.
+    /// Returns a checked leaf: a node with no children.
     fn leaf(term: Term, sort: Sort) -> Checked {
         Checked { term: Arc::new(term), sort, ref_free: true }
     }
 
-    /// WT over `t` at nesting level `depth` (0 at a term's root; a def
-    /// derived through a `Ref` starts at [`referent_depth`] of the `Ref`'s
-    /// level).
+    /// Checks WT over `t` at nesting level `depth`.
+    ///
+    /// The level is 0 at a term's root; a def derived through a `Ref` starts
+    /// at [`referent_depth`] of the `Ref`'s level.
+    ///
+    /// # Errors
+    ///
+    /// The first refusal the walk meets: the node's own doors
+    /// ([`Checker::enter`]) before its arm's — a type position's guard before
+    /// its children, the children left to right, a `Ref`'s referent before
+    /// its arguments — in the order `Coordinator::type_check` states.
     fn check_term(&self, ctx: &Ctx, t: &Term, depth: u32) -> Result<Checked, TypeError> {
         self.enter(weight(t), depth)?;
         // `depth` is this node's level, `child_depth` the level its children
-        // occupy. Three arms pass `depth` deliberately: `Atom` and `Prim`,
-        // whose helpers derive their own child level, and `expand_reg`, whose
-        // join chain replaces this node rather than nesting beneath it.
+        // occupy. Five arms pass `depth` deliberately: `Atom` and `Prim`,
+        // whose helpers derive their own child level; the two `Reg`
+        // quantifiers, whose `expand_reg` join chain replaces this node
+        // rather than nesting beneath it; and `Ref`, whose levels the
+        // budget's three functions place.
         let child_depth = depth + 1;
         match t {
             Term::Var(v) => match ctx.get(v) {
@@ -690,10 +789,10 @@ impl<'a> Checker<'a> {
                 //
                 // The referent is asked for at `referent_depth`, where its own
                 // check starts from here. A derivation that cannot complete
-                // there is THIS node's TooDeep and says nothing about the
+                // there is this node's TooDeep and says nothing about the
                 // referent; on a memo hit the same reference is refused by the
                 // reach charge below (`referent_depth` states why). That
-                // charge is the referent's, so it is made BEFORE the arguments
+                // charge is the referent's, so it is made before the arguments
                 // are checked: the referent speaks first, warm or cold, so on
                 // the disciplined domain a term's answer does not turn on
                 // whether the memo was warm (the crate root states the breach
@@ -715,13 +814,18 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// WT-ref's argument matching for the reference to `addr`: each argument
-    /// checked at the level its own `Let` gives it in the flat expansion
-    /// ([`argument_depth`], over the reference's own level `depth`), then
-    /// matched against its formal. An arity mismatch is `ArgArityMismatch`, at
-    /// the first unmatched position: too many at the first extra argument,
-    /// once it has checked on its own account; too few once every argument
-    /// has.
+    /// Checks WT-ref's argument matching for the reference to `addr`.
+    ///
+    /// Each argument is checked at the level its own `Let` gives it in the
+    /// flat expansion ([`argument_depth`], over the reference's own level
+    /// `depth`), then matched against its formal.
+    ///
+    /// # Errors
+    ///
+    /// An argument's own refusal, or `SortMismatch` against its formal, in
+    /// argument order. An arity mismatch is `ArgArityMismatch`, at the first
+    /// unmatched position: too many at the first extra argument, once it has
+    /// checked on its own account; too few once every argument has.
     fn reference_args(
         &self,
         ctx: &Ctx,
@@ -751,15 +855,23 @@ impl<'a> Checker<'a> {
         Ok(checked_args)
     }
 
-    /// V-IDX `Reg` expansion: instantiate `body` once per registered class,
-    /// substituting `ClassVar(cvar) → Concrete(key)`, that class's catalog
-    /// key, check EACH instance (an ill-typed one rejects the whole term —
-    /// `RegInstanceIllTyped`), and join the instances through `join` (`And`
-    /// for ∀, `Or` for ∃) as the evaluable projection. The join is a
-    /// left-nested chain of `n − 1` connectives over `n` classes, so an
-    /// instance sits up to `n − 1` levels below the quantifier's node in the
-    /// evaluable: every instance is checked at that level, the deepest one's,
-    /// so the projection's real depth is what the walks are charged for.
+    /// Expands a `Reg` quantifier (V-IDX) into one instance per class.
+    ///
+    /// It instantiates `body` once per registered class, substituting
+    /// `ClassVar(cvar) → Concrete(key)`, that class's catalog key, checks
+    /// each instance, and joins the instances through `join` (`And` for ∀,
+    /// `Or` for ∃) as the evaluable projection. The join is a left-nested
+    /// chain of `n − 1` connectives over `n` classes, so an instance sits up
+    /// to `n − 1` levels below the quantifier's node in the evaluable: every
+    /// instance is checked at that level, the deepest one's, so the
+    /// projection's real depth is what the walks are charged for.
+    ///
+    /// # Errors
+    ///
+    /// An ill-typed instance rejects the whole term — `RegInstanceIllTyped`,
+    /// carrying that instance's refusal — but `TooDeep` and `TooLarge` speak
+    /// bare, the budgets being the whole term's; a substitution that spends
+    /// the node budget is `TooLarge` too.
     fn expand_reg(
         &self,
         ctx: &Ctx,
@@ -804,7 +916,7 @@ impl<'a> Checker<'a> {
                 None => Err(TypeError::UnboundVariable(v)),
             }
         };
-        // A one-argument atom at a type position: the argument at `sort`.
+        // An atom's term argument, checked at `sort` one level below the atom.
         let arg = |e: &Term, sort: Sort| self.sub(ctx, e, sort, child_depth);
         let (atom, sort, ref_free) = match a {
             Atom::IsK(tr, e) => {
@@ -899,8 +1011,14 @@ impl<'a> Checker<'a> {
         Ok(Checked { term: Arc::new(Term::Atom(atom)), sort, ref_free })
     }
 
-    /// A binary prim over two children of one sort, the node rebuilt through
-    /// its constructor.
+    /// Checks a binary prim over two children of one sort.
+    ///
+    /// The node is rebuilt through its constructor.
+    ///
+    /// # Errors
+    ///
+    /// Each child's refusal in turn — a child not at the rule's operand sort
+    /// is `SortMismatch`.
     fn prim2(
         &self,
         ctx: &Ctx,
@@ -919,7 +1037,12 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// A unary prim over one child.
+    /// Checks a unary prim over one child.
+    ///
+    /// # Errors
+    ///
+    /// The child's refusal — a child not at the rule's operand sort is
+    /// `SortMismatch`.
     fn prim1(
         &self,
         ctx: &Ctx,
@@ -983,15 +1106,24 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// The WT domain judgment `⊢ D dom(s)`, `s ∈ {Addr, Tup}`, at nesting
-    /// level `depth`. A `Reg` reaching here sits under a former V-IDX does
+    /// Runs the WT domain judgment `⊢ D dom(s)`, `s ∈ {Addr, Tup}`.
+    ///
+    /// The domain's root sits at nesting level `depth`.
+    ///
+    /// # Errors
+    ///
+    /// The domain node's own doors ([`Checker::enter`]) first, then its arm's:
+    /// a type position's guard, a child's refusal — a `Filter` predicate not
+    /// at Bool or a set term not at ℘_fin(T) being `SortMismatch` — or
+    /// `MisplacedReg`. A `Reg` reaching here sits under a former V-IDX does
     /// not admit it under — `∀`/`∃` and `count` each take it before asking
     /// for a domain — and is `MisplacedReg`, refused where its element sort
     /// would be read (the design's "likewise rejected at the element-sort
     /// check").
     fn check_dom(&self, ctx: &Ctx, d: &Dom, depth: u32) -> Result<CheckedDom, TypeError> {
         // A domain former carries no unbounded payload of its own: its type
-        // position is a cataloged endset (`guarded`), its children are terms.
+        // position is a cataloged endset (`guarded`), its children are terms
+        // and domains.
         self.enter(1, depth)?;
         let child_depth = depth + 1;
         let leaf = |dom: Dom, elem_sort: Sort| CheckedDom {

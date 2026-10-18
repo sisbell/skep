@@ -1,7 +1,8 @@
-//! §Internal 3 — the dynamics / stability analyzer: a second bottom-up pass
-//! (after type-check, over a ref-free tree with `Reg` expanded and every
-//! `TypeRef` concrete), parameterized by the term view (PC3), fusing the FP
-//! footprint and the PD0 stability induction, plus the PR-VIEW
+//! The dynamics / stability analyzer (§Internal 3): a second bottom-up pass.
+//!
+//! The pass runs after type-check, over a ref-free tree with `Reg` expanded
+//! and every `TypeRef` concrete, parameterized by the term view (PC3),
+//! fusing the FP footprint and the PD0 stability induction, plus the PR-VIEW
 //! view-independence scan. Sound but incomplete: classification is by
 //! spelling and errs toward "not certified" — never over-certifies.
 
@@ -13,9 +14,11 @@ use crate::catalog::TypeCatalog;
 use crate::value::Slice;
 use crate::walk::{visit_dom, visit_term, Visit};
 
-/// `classify`'s output — all static, sound-but-incomplete. `footprint`/
-/// `stability`/`active_exceptions` are RELATIVE TO `classify`'s view argument
-/// (PC3); `view_independent` alone is view-agnostic (the PR-VIEW scan).
+/// `classify`'s output: all static, sound-but-incomplete.
+///
+/// `footprint`/`stability`/`active_exceptions` are *relative to*
+/// `classify`'s view argument (PC3); `view_independent` alone is
+/// view-agnostic (the PR-VIEW scan).
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — the analyses
 /// are a vocabulary that grows (as `CertifyError`'s static refusals do), and
@@ -23,42 +26,54 @@ use crate::walk::{visit_dom, visit_term, Visit};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Dynamics {
+    /// What the term may read, relative to the view.
     pub footprint: Footprint,
+    /// The term's point in the stability lattice, relative to the view.
     pub stability: Stability,
+    /// The three active-view exceptions, relative to the view.
     pub active_exceptions: ActiveExceptions,
+    /// Whether the term reads alike at every view, by the syntactic scan.
     pub view_independent: bool,
 }
 
-/// The 4-point lattice: ST∩SF / ST / SF / neither (PD0). A point is what a
-/// SPELLING is certified at — PD0 classifies by spelling and errs toward
-/// not-certified — so `Neither` reads "certified in neither direction", never
-/// "stable in neither": a tautology can land there. For a term whose codomain
-/// is not `Bool` the two directions coincide: the term is `StSf` exactly when
-/// it reads no state, its value fixed across steps, and `Neither` otherwise —
-/// a grow-only set included — so `StOnly`/`SfOnly` arise only for a Boolean
-/// term. Deliberately NOT `Ord`: `StOnly` and `SfOnly` are incomparable, so a
-/// derived total order would compile, read meaningful, and contradict PD0.
+/// The 4-point lattice: ST∩SF / ST / SF / neither (PD0).
+///
+/// A point is what a *spelling* is certified at — PD0 classifies by spelling
+/// and errs toward not-certified — so `Neither` reads "certified in neither
+/// direction", never "stable in neither": a tautology can land there. For a
+/// term whose codomain is not `Bool` the two directions coincide: the term is
+/// `StSf` exactly when it reads no state, its value fixed across steps, and
+/// `Neither` otherwise — a grow-only set included — so `StOnly`/`SfOnly`
+/// arise only for a Boolean term. Deliberately not `Ord`: `StOnly` and
+/// `SfOnly` are incomparable, so a derived total order would compile, read
+/// meaningful, and contradict PD0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stability {
+    /// ST∩SF: certified stable in both directions.
     StSf,
+    /// ST alone: certified ⊤-stable only.
     StOnly,
+    /// SF alone: certified ⊥-stable only.
     SfOnly,
+    /// Certified in neither direction.
     Neither,
 }
 
-/// Read slices: per-type {active, audit} (an active read implies `L_R` —
+/// The slices a term reads, through the accessors below.
+///
+/// They are per-type {active, audit} (an active read implies `L_R` —
 /// retractions shrink it), the whole-audit flag (`L_dom`), the residence
 /// domain (`is_doc`), the BH4 home-frontier flag, and the cross-type
-/// `targets_keyed` join. Read through the accessors below.
+/// `targets_keyed` join.
 ///
-/// A SOUND OVER-APPROXIMATION: every slice the term may read is recorded,
-/// and a recorded slice need not be read. One imprecision is deliberate —
-/// `is_K` at the `default` view charges Φ's active slices, though UV never
-/// rewrites a verdict atom — because every reader takes the footprint as a
-/// superset. So a caller may use it to decide what MIGHT change a verdict,
-/// never to assert that a dependency exists.
+/// **A sound over-approximation.** Every slice the term may read is
+/// recorded, and a recorded slice need not be read. One imprecision is
+/// deliberate — `is_K` at the `default` view charges Φ's active slices,
+/// though UV never rewrites a verdict atom — because every reader takes the
+/// footprint as a superset. So a caller may use it to decide what *might*
+/// change a verdict, never to assert that a dependency exists.
 ///
-/// Deliberately NOT `Hash`, and neither is [`Dynamics`], which holds one: the
+/// Deliberately not `Hash`, and neither is [`Dynamics`], which holds one: the
 /// class sets are `im::HashSet`s, whose `Hash` folds their members in
 /// iteration order — an order each set's own hasher fixes — while their
 /// `PartialEq` compares contents, so two equal footprints could hash apart.
@@ -73,53 +88,60 @@ pub struct Footprint {
 }
 
 impl Footprint {
-    /// The classes whose AUDIT slice (`L_K`) the term reads.
+    /// Returns the classes whose *audit* slice (`L_K`) the term reads.
     pub fn audit_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
         self.audit.iter()
     }
 
-    /// The classes whose ACTIVE slice the term reads (each ⊆ `L_K ∪ L_R`, so
-    /// any retraction can shrink it — `ActiveExceptions::retraction_shrinks`).
+    /// Returns the classes whose *active* slice the term reads.
+    ///
+    /// Each is ⊆ `L_K ∪ L_R`, so any retraction can shrink it —
+    /// `ActiveExceptions::retraction_shrinks`.
     pub fn active_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
         self.active.iter()
     }
 
-    /// The term reads the whole typed-relation audit sublayer (`L_dom`).
+    /// Returns whether the term reads the whole audit sublayer (`L_dom`).
+    ///
+    /// That is the typed-relation audit sublayer.
     pub fn reads_all_audit(&self) -> bool {
         self.all_audit
     }
 
-    /// The term reads the residence domain (`is_doc`).
+    /// Returns whether the term reads the residence domain (`is_doc`).
     pub fn reads_residence(&self) -> bool {
         self.residence
     }
 
-    /// The term reads BH4's home-wide frontier (`age`/`stale`).
+    /// Returns whether the term reads BH4's home-wide frontier (`age`/`stale`).
     pub fn reads_home_frontier(&self) -> bool {
         self.home_frontier
     }
 
-    /// The term reads the cross-type `targets_keyed` join.
+    /// Returns whether the term reads the cross-type `targets_keyed` join.
     pub fn reads_targets_keyed(&self) -> bool {
         self.targets_keyed
     }
 
-    /// Any active slice is read, so any R-deposit can shrink what the term
-    /// reads (the first active-view exception, and the armer graph's
-    /// retraction edge).
+    /// Returns whether any R-deposit can shrink what the term reads.
+    ///
+    /// It can when any active slice is read (the first active-view exception,
+    /// and the armer graph's retraction edge).
     pub fn retraction_shrinks(&self) -> bool {
         !self.active.is_empty()
     }
 
-    /// THE ARMER GRAPH'S EDGE RULE (§8), whole: `emission` can change what a
-    /// term with this footprint reads — because it lands in a class whose
-    /// audit or active slice the term reads, because the term reads the whole
-    /// audit sublayer, because the term reads BH4's home-wide frontier (which
-    /// ANY same-home deposit moves), or because it is a RETRACTION and the
-    /// term reads some active slice (every active slice shrinks under one).
-    /// Asked of the footprint, which alone knows what a term reads, over an
-    /// [`Emission`], which the rule engine builds because it alone knows what
-    /// an action deposits.
+    /// Returns whether `emission` arms a term with this footprint.
+    ///
+    /// This is the armer graph's edge rule (§8), whole: `emission` can change
+    /// what a term with this footprint reads — because it lands in a class
+    /// whose audit or active slice the term reads, because the term reads the
+    /// whole audit sublayer, because the term reads BH4's home-wide frontier
+    /// (which *any* same-home deposit moves), or because it is a *retraction*
+    /// and the term reads some active slice (every active slice shrinks under
+    /// one). Asked of the footprint, which alone knows what a term reads, over
+    /// an [`Emission`], which the rule engine builds because it alone knows
+    /// what an action deposits.
     pub(crate) fn armed_by(&self, emission: &Emission) -> bool {
         let class = emission.class();
         self.all_audit
@@ -129,8 +151,9 @@ impl Footprint {
             || (matches!(emission, Emission::Retraction(_)) && self.retraction_shrinks())
     }
 
-    /// The term reads nothing, so its value cannot change across a state step
-    /// — PD0's STEP-CONSTANT proviso ("a literal or an already-bound
+    /// Returns whether the term reads nothing, so no state step can change it.
+    ///
+    /// That is PD0's *step-constant* proviso ("a literal or an already-bound
     /// address"), transcribed structurally.
     fn is_step_constant(&self) -> bool {
         self.audit.is_empty()
@@ -141,9 +164,11 @@ impl Footprint {
             && !self.targets_keyed
     }
 
-    /// This footprint with `other`'s reads added — both by value, as
-    /// `im::HashSet::union` is: every call site already owns its right-hand
-    /// side, and half of them build it inline.
+    /// Returns this footprint with `other`'s reads added.
+    ///
+    /// Both are taken by value, as `im::HashSet::union` takes them: every call
+    /// site already owns its right-hand side, and a third of them build it
+    /// inline.
     fn union(mut self, other: Footprint) -> Footprint {
         self.audit.extend(other.audit);
         self.active.extend(other.active);
@@ -155,12 +180,13 @@ impl Footprint {
     }
 }
 
-/// What a fire deposits, as the armer graph reads it (§8): the coverage class
-/// of the tuple the action emits, and whether that emission is a RETRACTION —
-/// which arms any active-reading trigger besides its own class, retractions
-/// shrinking every active slice. Built by the rule engine, which alone knows
-/// what an action emits; read by [`Footprint::armed_by`], which alone knows
-/// what a term reads.
+/// What a fire deposits, as the armer graph reads it (§8).
+///
+/// It is the coverage class of the tuple the action emits, and whether that
+/// emission is a *retraction* — which arms any active-reading trigger besides
+/// its own class, retractions shrinking every active slice. Built by the rule
+/// engine, which alone knows what an action emits; read by
+/// [`Footprint::armed_by`], which alone knows what a term reads.
 #[derive(Debug, Clone)]
 pub(crate) enum Emission {
     Marker(CoverageClass),
@@ -168,7 +194,7 @@ pub(crate) enum Emission {
 }
 
 impl Emission {
-    /// The class the deposited tuple lands in, whichever kind it is.
+    /// Returns the class the deposited tuple lands in, whichever kind it is.
     fn class(&self) -> &CoverageClass {
         match self {
             Emission::Marker(c) | Emission::Retraction(c) => c,
@@ -176,9 +202,11 @@ impl Emission {
     }
 }
 
-/// The three active-view exceptions, emitted explicitly ("name them or be
-/// surprised"). `#[non_exhaustive]` for [`Dynamics`]'s reason: emitted, never
-/// constructed by a caller, and a fourth exception named is an addition.
+/// The three active-view exceptions.
+///
+/// They are emitted explicitly ("name them or be surprised").
+/// `#[non_exhaustive]` for [`Dynamics`]'s reason: emitted, never constructed
+/// by a caller, and a fourth exception named is an addition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct ActiveExceptions {
@@ -190,12 +218,14 @@ pub struct ActiveExceptions {
     pub targets_keyed_cross_type: bool,
 }
 
-/// Per-node analysis: footprint, ⊤-stability (st), ⊥-stability (sf), and —
-/// for set-valued nodes — membership in PD0's grow-only closure. PD0's other
+/// Per-node analysis: a footprint, two stabilities and grow-only membership.
+///
+/// That is the footprint, ⊤-stability (st), ⊥-stability (sf), and — for
+/// set-valued nodes — membership in PD0's grow-only closure. PD0's other
 /// closure property, step-constancy, is the footprint's own
 /// ([`Footprint::is_step_constant`]) rather than a field here. The rule
-/// engine reads two of a term's: `fp`, the trigger footprint it records,
-/// and `sf`, the certification lint's leg (a).
+/// engine reads two of a term's: `fp`, the trigger footprint it records, and
+/// `sf`, the certification lint's leg (a).
 #[derive(Debug, Clone)]
 pub(crate) struct Analysis {
     pub(crate) fp: Footprint,
@@ -204,42 +234,49 @@ pub(crate) struct Analysis {
     grow_only: bool,
 }
 
-/// A domain's analysis: its footprint and its membership in PD0's grow-only
-/// closure — the two facts the quantifier, fold and `Filter` rules read of a
-/// domain; the rule engine reads `grow_only`, the certification lint's leg
-/// (c).
+/// A domain's analysis: its footprint and its grow-only membership.
+///
+/// The membership is in PD0's grow-only closure — the two facts the
+/// quantifier, fold and `Filter` rules read of a domain; the rule engine
+/// reads `grow_only`, the certification lint's leg (c).
 #[derive(Debug, Clone)]
 pub(crate) struct DomAnalysis {
     fp: Footprint,
     pub(crate) grow_only: bool,
 }
 
-/// A node whose value is fixed by its footprint: step-constant ⇒ ST∩SF and
-/// grow-only vacuously; reading state ⇒ Neither and outside the closure.
+/// Returns the analysis of a node whose value is fixed by its footprint.
+///
+/// Step-constant ⇒ ST∩SF and grow-only vacuously; reading state ⇒ Neither
+/// and outside the closure.
 fn step_constant(fp: Footprint) -> Analysis {
     let c = fp.is_step_constant();
     Analysis { fp, st: c, sf: c, grow_only: c }
 }
 
-/// A state read whose value is free to change across steps: Neither, and
-/// outside the grow-only closure.
+/// Returns a state read's analysis: its value is free to change across steps.
+///
+/// It is Neither, and outside the grow-only closure.
 fn state_read(fp: Footprint) -> Analysis {
     Analysis { fp, st: false, sf: false, grow_only: false }
 }
 
-/// One classification's fixed context: the catalog, the term view (PC3 —
-/// binds the view-parameterized constituents), and the ST⁺ threshold
-/// widening. The fused FP + PD0 pass runs over it.
+/// One classification's fixed context.
 ///
-/// PRECONDITIONS on every input: ref-free, every `TypeRef` concrete, and
-/// WITHIN [`crate::budget::MAX_DEPTH`] — this pass recurses once per node on
-/// the caller's thread with no bound of its own, and takes that bound from
-/// the checker: for a checked term or a flat expansion, `TypedTerm::reach`,
-/// which the checker charges for the flat expansion as well as for the
-/// checked tree; for a domain, the closed-domain judgment, which refuses any
-/// node past the cap. The three shapes that satisfy all three are a checked
-/// term's evaluable projection, an `Expander` output, and a rule's checked
-/// domain (`TypedDom`, which `certify_rule` passes to [`Analyzer::dom`]).
+/// It holds the catalog, the term view (PC3 — binds the view-parameterized
+/// constituents), and the ST⁺ threshold widening. The fused FP + PD0 pass
+/// runs over it.
+///
+/// **Preconditions** on every input: ref-free, `Reg` expanded, every
+/// `TypeRef` concrete, and *within* [`crate::budget::MAX_DEPTH`] — this pass
+/// recurses once per node on the caller's thread with no bound of its own,
+/// and takes that bound from the checker: for a checked term or a flat
+/// expansion, `TypedTerm::reach`, which the checker charges for the flat
+/// expansion as well as for the checked tree; for a domain, the closed-domain
+/// judgment, which refuses any node past the cap. The three shapes that
+/// satisfy all four are a ref-free checked term's evaluable projection, an
+/// `Expander` output, and a rule's checked domain (`TypedDom`, which
+/// `certify_rule` passes to [`Analyzer::dom`]).
 ///
 /// The fields are private and [`Analyzer::new`] leaves `widen` false, so
 /// [`st_plus`] — the one judgment PD0's widening belongs to — is the only
@@ -252,22 +289,27 @@ pub(crate) struct Analyzer<'a> {
 }
 
 impl<'a> Analyzer<'a> {
-    /// The classification analyzer at `view`: PD0 without the ST⁺ threshold
-    /// widening, which only [`st_plus`] applies.
+    /// Returns the classification analyzer at `view`.
+    ///
+    /// It runs PD0 without the ST⁺ threshold widening, which only
+    /// [`st_plus`] applies.
     pub(crate) fn new(catalog: &'a TypeCatalog, view: View) -> Analyzer<'a> {
         Analyzer { catalog, view, widen: false }
     }
 
-    /// Is this term admissible as a stability threshold? An ℕ literal, widened
-    /// under ST⁺ to a bound ℕ parameter — the one PD0 widening (§Internal 3).
+    /// Returns whether `t` is admissible as a stability threshold.
+    ///
+    /// An ℕ literal is, widened under ST⁺ to a bound ℕ parameter — the one
+    /// PD0 widening (§Internal 3).
     fn admissible_threshold(&self, t: &Term) -> bool {
         matches!(t, Term::Lit(Lit::Nat(_))) || (self.widen && matches!(t, Term::Var(_)))
     }
 
-    /// The stored slice a read of class `k` touches: the audit slice is
-    /// `L_K`; the active slice is ⊆ `L_K ∪ L_R`, so any retraction can shrink
-    /// it. Which slice a term's VIEW reads is [`Slice::of`]'s statement, made
-    /// once per arm below.
+    /// Returns the footprint of a read of class `k` at the stored `slice`.
+    ///
+    /// The audit slice is `L_K`; the active slice is ⊆ `L_K ∪ L_R`, so any
+    /// retraction can shrink it. Which slice a term's *view* reads is
+    /// [`Slice::of`]'s statement, made once per arm below.
     fn slice_fp(&self, k: &TypeKey, slice: Slice) -> Footprint {
         let mut fp = Footprint::default();
         let read = match slice {
@@ -278,18 +320,20 @@ impl<'a> Analyzer<'a> {
         fp
     }
 
-    /// The BH1 filter slices a `default`-view term's UV rewrite consults per
-    /// element (`EvalCtx::filtered_other`, fixed active); empty at `active`
-    /// and `audit`, where no rewrite runs. Charged in one place per family —
-    /// after the arm, in [`Analyzer::atom`] and [`Analyzer::dom`] — to every
-    /// read whose denotation moves with the view ([`atom_moves_with_view`],
-    /// [`dom_moves_with_view`]). That covers every read the evaluator
-    /// UV-rewrites: UV runs only at `default`, so every read it rewrites moves
-    /// with the view. The one read charged beyond them is `is_K`, which moves
-    /// with the view and which UV never rewrites (`EvalCtx::is_k_at` reads the
-    /// active slice at `default`) — deliberately CONSERVATIVE: the footprint
-    /// is read only as a superset (`armed_by`, step-constancy), and the armer
-    /// graph's Default self-loop case is pinned on it.
+    /// Returns the BH1 filter slices a `default`-view term's UV rewrite reads.
+    ///
+    /// The rewrite consults them per element (`EvalCtx::filtered_other`,
+    /// fixed active); empty at `active` and `audit`, where no rewrite runs.
+    /// Charged in one place per family — after the arm, in [`Analyzer::atom`]
+    /// and [`Analyzer::dom`] — to every read whose denotation moves with the
+    /// view ([`atom_moves_with_view`], [`dom_moves_with_view`]). That covers
+    /// every read the evaluator UV-rewrites: UV runs only at `default`, so
+    /// every read it rewrites moves with the view. The one read charged
+    /// beyond them is `is_K`, which moves with the view and which UV never
+    /// rewrites (`EvalCtx::is_k_at` reads the active slice at `default`) —
+    /// deliberately *conservative*: the footprint is read only as a superset
+    /// (`armed_by`, step-constancy), and the armer graph's Default self-loop
+    /// case is pinned on it.
     fn read_filter_fp(&self) -> Footprint {
         let mut fp = Footprint::default();
         if self.view == View::Default {
@@ -298,7 +342,12 @@ impl<'a> Analyzer<'a> {
         fp
     }
 
-    /// The fused FP + PD0 pass over a term.
+    /// Runs the fused FP + PD0 pass over a term.
+    ///
+    /// # Panics
+    ///
+    /// Panics on an input the preconditions exclude: a `Ref` node, a `Reg`
+    /// domain or a `ClassVar` type position.
     pub(crate) fn term(&self, t: &Term) -> Analysis {
         match t {
             // Γ-/binder-bound vars and literals: empty footprint ⇒ ST∩SF.
@@ -406,14 +455,20 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// The fused FP + PD0 pass over an atom: what its own arm reads, then —
-    /// for an atom whose denotation moves with the view
-    /// ([`atom_moves_with_view`]) — the BH1 filter slices
-    /// ([`Analyzer::read_filter_fp`]), charged once after the match rather than
-    /// in each arm, so the exhaustive classification decides the footprint as
-    /// well as the scan. No arm's `st`/`sf`/`grow_only` reads that charge: each
-    /// turns on the argument's footprint or on the view, so the charge moves no
-    /// stability.
+    /// Runs the fused FP + PD0 pass over an atom.
+    ///
+    /// It charges what the atom's own arm reads, then — for an atom whose
+    /// denotation moves with the view ([`atom_moves_with_view`]) — the BH1
+    /// filter slices ([`Analyzer::read_filter_fp`]), charged once after the
+    /// match rather than in each arm, so the exhaustive classification decides
+    /// the footprint as well as the scan. No arm's `st`/`sf`/`grow_only` reads
+    /// that charge: each turns on the argument's footprint or on the view, so
+    /// the charge moves no stability.
+    ///
+    /// # Panics
+    ///
+    /// Panics on an input the preconditions exclude: a `ClassVar` type
+    /// position, or a `Ref` node or `Reg` domain inside an argument.
     fn atom(&self, a: &Atom) -> Analysis {
         let view = self.view;
         let mut analysis = match a {
@@ -437,7 +492,7 @@ impl<'a> Analyzer<'a> {
                 Analysis { grow_only, st: false, sf: false, fp }
             }
             // BH1–BH3 at one class and one argument: each reads that class's
-            // FIXED active slice, so each is Neither whatever the argument — a
+            // fixed active slice, so each is Neither whatever the argument — a
             // deposit or a retraction there can move it. Which of them the
             // evaluator UV-rewrites at `default` is `atom_moves_with_view`'s to
             // say, its BH1 charge following the match.
@@ -518,13 +573,13 @@ impl<'a> Analyzer<'a> {
                     fp: aset.fp,
                 }
             }
-            // count(D) ≤ c ∈ SF and count(D) ≥ c ∈ ST over a grow-only D, with a
-            // literal threshold (ST⁺ widens to a bound ℕ parameter);
+            // count(D) ≤ c ∈ SF and count(D) ≥ c ∈ ST over a grow-only D,
+            // with a literal threshold (ST⁺ widens to a bound ℕ parameter);
             // count(D) = c is unclassified — Neither (PD0). Each side's
             // `Count` domain is analyzed exactly once here — its own analysis
-            // is `step_constant(dom.fp)`, and the grow-only fact rides along — so
-            // a threshold nested inside its own domain's filter costs linear
-            // work, not a doubling per level.
+            // is `step_constant(dom.fp)`, and the grow-only fact rides along
+            // — so a threshold nested inside its own domain's filter costs
+            // linear work, not a doubling per level.
             Prim::NatLe(x, y) => {
                 let side = |t: &Term, other: &Term| -> (Analysis, bool) {
                     match t {
@@ -557,13 +612,19 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// Domain analysis: the footprint and grow-only membership. The grow-only
-    /// closure (PD0): `L_K`; `L_dom`; `M_K` in an audit-view term;
-    /// `Filter{D, P}` with D grow-only and P ∈ ST per binding; a
+    /// Returns a domain's analysis: the footprint and grow-only membership.
+    ///
+    /// The grow-only closure (PD0): `L_K`; `L_dom`; `M_K` in an audit-view
+    /// term; `Filter{D, P}` with D grow-only and P ∈ ST per binding; a
     /// step-constant domain; `SetTerm` of a grow-only set-valued term. And,
     /// for a domain whose enumeration moves with the view
     /// ([`dom_moves_with_view`]), the BH1 filter slices, charged after the arm
     /// as [`Analyzer::atom`] charges an atom's.
+    ///
+    /// # Panics
+    ///
+    /// Panics on an input the preconditions exclude: a `Reg` domain, a
+    /// `ClassVar` type position, or a `Ref` node.
     pub(crate) fn dom(&self, d: &Dom) -> DomAnalysis {
         let mut analysis = match d {
             Dom::MembersDom(tr) => DomAnalysis {
@@ -599,17 +660,19 @@ impl<'a> Analyzer<'a> {
 
 // ─────────────────────── PR-VIEW view-independence ───────────────────────
 
-/// The atoms whose denotation moves with the TERM VIEW, classified
-/// EXHAUSTIVELY: the three view-parameterized constituents (`is_K`/`members`/
-/// `targets_of` — D1–D3 and V-AUD read different slices, and `targets_of`
-/// matches its source differently at `audit`) and the four collections the
-/// evaluator UV-rewrites at `default` (`succs`/`chain`/`sources_to`/`stale`).
-/// Every other atom reads a fixed slice, or no state at all, and answers the
-/// same at every view — though its ARGUMENTS need not, so the caller walks on.
+/// Returns whether atom `a`'s denotation moves with the *term view*.
+///
+/// The classification is *exhaustive*: the three view-parameterized
+/// constituents (`is_K`/`members`/`targets_of` — ASN-0128's D1–D3 and V-AUD
+/// read different slices, and `targets_of` matches its source differently at
+/// `audit`) and the four collections the evaluator UV-rewrites at `default`
+/// (`succs`/`chain`/`sources_to`/`stale`). Every other atom reads a fixed
+/// slice, or no state at all, and answers the same at every view — though
+/// its *arguments* need not, so the caller walks on.
 ///
 /// No `_` arm, deliberately. `certify_stable` stands behind this scan and a
 /// `pd_stable` tuple is a permanent content-addressed claim, so an atom added
-/// to `ast.rs` must be CLASSIFIED here rather than inherit the certifying
+/// to `ast.rs` must be *classified* here rather than inherit the certifying
 /// answer by default — and a conservative default would be no better, since it
 /// would silently refuse a legitimate view-independent atom. The same list is
 /// the analyzer's BH1 charge at `default` ([`Analyzer::read_filter_fp`]),
@@ -639,13 +702,15 @@ fn atom_moves_with_view(a: &Atom) -> bool {
     }
 }
 
-/// The domains whose enumeration moves with the TERM VIEW, classified
-/// EXHAUSTIVELY for [`atom_moves_with_view`]'s reason: `M_K` alone —
-/// D1/V-AUD's view-selected slice, UV-rewritten at `default`. The rest name a
-/// fixed slice (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at
-/// type-check), or are closures whose children a walker reaches on its own.
-/// PR-VIEW's scan refuses these domains, and the analyzer charges them the
-/// BH1 filter slices at `default` ([`Analyzer::dom`]).
+/// Returns whether domain `d`'s enumeration moves with the *term view*.
+///
+/// The classification is *exhaustive*, for [`atom_moves_with_view`]'s
+/// reason: `M_K` alone — the view-selected slice of ASN-0128 D1 and V-AUD,
+/// UV-rewritten at `default`. The rest name a fixed slice
+/// (`A_K`/`L_K`/`L_dom`), carry no state (`Reg`, folded away at type-check),
+/// or are closures whose children a walker reaches on its own. PR-VIEW's
+/// scan refuses these domains, and the analyzer charges them the BH1 filter
+/// slices at `default` ([`Analyzer::dom`]).
 fn dom_moves_with_view(d: &Dom) -> bool {
     match d {
         Dom::MembersDom(_) => true,
@@ -658,12 +723,18 @@ fn dom_moves_with_view(d: &Dom) -> bool {
     }
 }
 
-/// The syntactic scan: no atom and no domain whose denotation moves with the
-/// view ([`atom_moves_with_view`], [`dom_moves_with_view`]). The same answer
-/// at every view. Preconditions as the [`Analyzer`]'s — the depth bound
+/// Returns whether `t` is view-independent, by the syntactic scan.
+///
+/// The scan finds no atom and no domain whose denotation moves with the view
+/// ([`atom_moves_with_view`], [`dom_moves_with_view`]). The same answer at
+/// every view. Preconditions as the [`Analyzer`]'s — the depth bound
 /// included: this walk has none of its own. Ref-free, in particular, because
 /// a referent's body is the one part a `Ref` node's own spelling cannot vouch
 /// for, so the scan runs over the flat expansion, never around a `Ref`.
+///
+/// # Panics
+///
+/// Panics on a `Ref` node the scan reaches.
 pub(crate) fn view_independent(t: &Term) -> bool {
     struct ViewScan {
         independent: bool,
@@ -682,9 +753,10 @@ pub(crate) fn view_independent(t: &Term) -> bool {
             }
         }
 
-        /// A domain that moves with the view refuses
-        /// ([`dom_moves_with_view`]); any other is walked into, its children
-        /// being where a moving read can still sit.
+        /// Refuses a domain that moves with the view ([`dom_moves_with_view`]).
+        ///
+        /// Any other is walked into, its children being where a moving read
+        /// can still sit.
         fn dom(&mut self, d: &Dom) {
             if !self.independent {
                 return;
@@ -703,28 +775,40 @@ pub(crate) fn view_independent(t: &Term) -> bool {
 
 // ───────────────────────────── ST⁺ ─────────────────────────────
 
-/// ST⁺ — the certification-strength ⊤-stability judgment (§Internal 3): PD0
-/// over a FLAT reference expansion (ST⁺ is not compositional over
+/// Returns ST⁺, the certification-strength ⊤-stability judgment (§Internal 3).
+///
+/// It is PD0 over a *flat* reference expansion (ST⁺ is not compositional over
 /// references), with the aggregate threshold widened to a bound ℕ parameter
 /// — the one PD0 widening, and the reason it is not `classify`'s. Judged at
 /// a fixed view: `certify_stable` admits only view-independent expansions,
 /// so the classification is view-invariant. Γ_D parameters read as bound
 /// constants (a free `Var` has an empty footprint). Preconditions as the
 /// [`Analyzer`]'s — the depth bound included: this walk has none of its own.
+///
+/// # Panics
+///
+/// Panics on an input the preconditions exclude, as [`Analyzer::term`] does.
 pub(crate) fn st_plus(catalog: &TypeCatalog, t: &Term) -> bool {
     Analyzer { catalog, view: View::Audit, widen: true }.term(t).st
 }
 
 // ───────────────────── the certified-Marker spelling ─────────────────────
 
-/// The negated membership a certifiable Marker rule's trigger is spelled as:
-/// `¬ is_K(x)` at `param`, yielding K — the type of the witness the trigger's
-/// negated existential quantifies over (a K-tuple covering `x`, ASN-0133 Q3).
-/// The rule engine matches K against the class its action emits (§8 leg b).
+/// Returns K when `t` is spelled `¬ is_K(x)` at `param`, else `None`.
+///
+/// That is the negated membership a certifiable Marker rule's trigger is
+/// spelled as, K being the type of the witness the trigger's negated
+/// existential quantifies over (a K-tuple covering `x`, ASN-0133 Q3). The
+/// rule engine matches K against the class its action emits (§8 leg b).
 /// `None` for every other spelling: sound but incomplete, as the rest of this
 /// module is, and by spelling, so an equivalent trigger written otherwise is
 /// simply not certified. Preconditions as the [`Analyzer`]'s — the depth
 /// bound included: this walk has none of its own.
+///
+/// # Panics
+///
+/// Panics on an input the preconditions exclude: a `Ref` node under the `¬`,
+/// or a `ClassVar` at the matched `is_K`'s type position.
 pub(crate) fn negated_membership(t: &Term, param: VarId) -> Option<&TypeKey> {
     let Term::Not(inner) = t else { return None };
     match inner.as_ref() {
@@ -739,7 +823,12 @@ pub(crate) fn negated_membership(t: &Term, param: VarId) -> Option<&TypeKey> {
     }
 }
 
-/// Assemble a `Dynamics` from one analysis pass at `view`.
+/// Assembles a `Dynamics` from one analysis pass at `view`.
+///
+/// # Panics
+///
+/// Panics on an input the [`Analyzer`]'s preconditions exclude: a `Ref`
+/// node, a `Reg` domain or a `ClassVar` type position.
 pub(crate) fn classify_term(catalog: &TypeCatalog, view: View, t: &Term) -> Dynamics {
     let analysis = Analyzer::new(catalog, view).term(t);
     let stability = match (analysis.st, analysis.sf) {

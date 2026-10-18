@@ -1,9 +1,10 @@
-//! §Internal 4 — the def byte format (PR-ENC): a deterministic, decidable,
-//! INJECTIVE serialization of the signed term `(Γ_D, body)` — `body` the
-//! compact pre-`Reg`-expansion syntactic body — as a length-prefixed envelope
-//! (varint length · param context · body), so "the run is exactly what the
-//! parse consumed" is a one-line check. n = 1: one `Val` at one content
-//! address (Conflicts §2).
+//! The def byte format (§Internal 4, PR-ENC): the serialized signed term.
+//!
+//! It is a deterministic, decidable, *injective* serialization of the signed
+//! term `(Γ_D, body)` — `body` the compact pre-`Reg`-expansion syntactic
+//! body — as a length-prefixed envelope (varint length · param context ·
+//! body), so "the run is exactly what the parse consumed" is a one-line
+//! check. n = 1: one `Val` at one content address (Conflicts §2).
 //!
 //! A parameter context is Codom-only at encode time as at registration —
 //! `Tup` has no tag at all, and no writer can hand the encoder one
@@ -17,13 +18,14 @@
 //! it refuses one nested past [`MAX_DEPTH`] and one that would build more
 //! units than the node [`Budget`] admits — a run at the daemon's request-body
 //! cap would otherwise decode to a hundred times its bytes before the checker
-//! could refuse it — so what reaches the checker is already within the
-//! budgets the checker enforces for supplied terms. The budget counts
-//! FORMERS AND PAYLOAD alike ([`Rd::charge`]): every count the input chooses
-//! — parameters, tumbler components, endset spans, `Nat` limbs, `Ref`
-//! arguments — is charged against it BEFORE it is used to size an
-//! allocation, so an untrusted count can size nothing past the budget's
-//! remainder, and a decoded tree's payload is bounded like its node count.
+//! could refuse it — so what reaches the checker is already within both
+//! numbers as the decoder meters them, which is not how the checker meters
+//! (`budget.rs`). The budget counts formers and payload alike
+//! ([`Rd::charge`]): every count the input chooses — parameters, tumbler
+//! components, endset spans, `Nat` limbs, `Ref` arguments — is charged
+//! against it *before* it is used to size an allocation, so an untrusted
+//! count can size nothing past the budget's remainder, and a decoded tree's
+//! payload is bounded like its node count.
 //!
 //! The crate writes a def through one entry, [`stored_run`], which hands back
 //! a checked term's encoding only if the decoder reads it back. The decoder's
@@ -42,23 +44,28 @@ use crate::budget::{Budget, MAX_DEPTH};
 use crate::check::TypedTerm;
 use crate::value::{SignedTerm, Sort};
 
-/// Decode failure — surfaced as `RegisterError::ParseFailed` (and, for an
+/// A decode failure.
+///
+/// It is surfaced as `RegisterError::ParseFailed` (and, for an
 /// ever-registered start, the permanent poisoned memo entry), and asked by
 /// [`stored_run`] of its own encoding, which it then refuses as
 /// [`Unstorable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Malformed;
 
-/// Store failure: the checked term has no stored run — its encoding is past
-/// what [`decode`] reads back (`MAX_DEPTH`, or the node budget as the decoder
-/// meters it, which is not how the checker meters — `budget.rs`), so a run of
-/// it is one `register_pred` would refuse `ParseFailed` whatever the store
-/// holds. Surfaced as `DefineError::Unstorable`.
+/// A store failure: the checked term has no stored run.
+///
+/// Its encoding is past what [`decode`] reads back (`MAX_DEPTH`, or the node
+/// budget as the decoder meters it, which is not how the checker meters —
+/// `budget.rs`), so a run of it is one `register_pred` would refuse
+/// `ParseFailed` whatever the store holds. Surfaced as
+/// `DefineError::Unstorable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Unstorable;
 
-/// The tag table — the ONE statement of the format's discriminants, read by
-/// the encoder and the decoder alike. Each family numbers its own
+/// The tag table: the one statement of the format's discriminants.
+///
+/// The encoder and the decoder alike read it. Each family numbers its own
 /// constructors from 1 in declaration order; a term tag and an atom tag may
 /// coincide, since a tag is only ever read where its family is expected.
 ///
@@ -168,14 +175,19 @@ mod tag {
 
 // ─────────────────────────────── encoding ───────────────────────────────
 
-/// The run a checked def is stored as — its PR-ENC encoding — handed back
-/// only if [`decode`] reads it back. Every run this returns is therefore one
-/// `register_pred` parses, and parses to `term`'s own signed term: decode ∘
-/// encode is the identity on what the decoder accepts, which the round-trip
-/// tests pin over every former. The round trip is the codec's promise to its
-/// writer, kept here because the decoder's doors are the codec's own
-/// knowledge. A checked term is not thereby storable — the checker and the
-/// decoder meter different trees (`budget.rs`) — and one past the doors is
+/// Returns the run a checked def is stored as: its PR-ENC encoding.
+///
+/// The run is handed back only if [`decode`] reads it back. Every run this
+/// returns is therefore one `register_pred` parses, and parses to `term`'s
+/// own signed term: decode ∘ encode is the identity on what the decoder
+/// accepts, which the round-trip tests pin over every former. The round trip
+/// is the codec's promise to its writer, kept here because the decoder's
+/// doors are the codec's own knowledge.
+///
+/// # Errors
+///
+/// A checked term is not thereby storable — the checker and the decoder
+/// meter different trees (`budget.rs`) — and one past the doors is
 /// [`Unstorable`].
 pub(crate) fn stored_run(term: &TypedTerm) -> Result<Vec<u8>, Unstorable> {
     let bytes = encode(term.signed());
@@ -185,10 +197,17 @@ pub(crate) fn stored_run(term: &TypedTerm) -> Result<Vec<u8>, Unstorable> {
     }
 }
 
-/// The raw PR-ENC writer beneath [`stored_run`], with no read-back check — so
-/// the codec's own tests can spell encodings past the decoder's doors. Its
-/// Γ_D is Codom-only, as every `TypedTerm`'s is (`sort_tag` states why); the
-/// crate writes a def through [`stored_run`].
+/// Returns `signed`'s raw PR-ENC encoding, with no read-back check.
+///
+/// It is the writer beneath [`stored_run`], unchecked so the codec's own
+/// tests can spell encodings past the decoder's doors; the crate writes a
+/// def through [`stored_run`].
+///
+/// # Panics
+///
+/// Panics on a `Tup` parameter, which has no tag: its Γ_D is Codom-only, as
+/// that of every `TypedTerm` a writer can hand [`stored_run`] is (`sort_tag`
+/// states why).
 fn encode(signed: &SignedTerm) -> Vec<u8> {
     let mut payload = Vec::new();
     w_varint(&mut payload, signed.params.len() as u64);
@@ -557,17 +576,23 @@ fn w_prim2(b: &mut Vec<u8>, tag: u8, x: &Term, y: &Term) {
 
 // ─────────────────────────────── decoding ───────────────────────────────
 
-/// Decode a stored def `Val`'s bytes to the signed term: envelope length must
-/// match exactly and the payload must be fully consumed ("the run is exactly
-/// what the parse consumed"). Total over every byte string: a length prefix
-/// the input cannot satisfy — however large — is `Malformed`, never a panic,
-/// so an undisciplined run reaches `register_pred`'s `ParseFailed` and the
-/// memo's freeze-on-breach. Bounded, too: every count the input chooses is
-/// charged against the `MAX_TERM_NODES` budget before it sizes anything
+/// Decodes a stored def `Val`'s bytes to the signed term.
+///
+/// Total over every byte string, and bounded: every count the input chooses
+/// is charged against the `MAX_TERM_NODES` budget before it sizes anything
 /// ([`Rd::charge`]), so the decode of B hostile bytes commits O(budget)
 /// memory, not O(B) times a per-item width, and Γ_D's length is bounded by
-/// the budget — which is what bounds the checker's context and duplicate-name
-/// set in turn.
+/// the budget — which is what bounds the checker's context and
+/// duplicate-name set in turn.
+///
+/// # Errors
+///
+/// `Malformed` unless the envelope length matches exactly and the payload
+/// is fully consumed ("the run is exactly what the parse consumed"), and for
+/// every byte string that is not one encoding within the decoder's doors. A
+/// length prefix the input cannot satisfy — however large — is `Malformed`,
+/// never a panic, so an undisciplined run reaches `register_pred`'s
+/// `ParseFailed` and the memo's freeze-on-breach.
 pub(crate) fn decode(bytes: &[u8]) -> Result<SignedTerm, Malformed> {
     Rd { b: bytes, pos: 0, nodes: Budget::default() }.signed()
 }
@@ -582,9 +607,16 @@ struct Rd<'a> {
 }
 
 impl Rd<'_> {
-    /// The whole of `b` as one signed term: the envelope, Γ_D, the body, and
-    /// nothing after it. [`decode`] is this over a fresh reader; the codec's
-    /// tests run it over one whose spend they then read.
+    /// Reads the whole of `b` as one signed term.
+    ///
+    /// That is the envelope, Γ_D, the body, and nothing after it. [`decode`]
+    /// is this over a fresh reader; the codec's tests run it over one whose
+    /// spend they then read.
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` for any `b` that is not exactly one signed term within the
+    /// decoder's doors.
     fn signed(&mut self) -> Result<SignedTerm, Malformed> {
         let len = self.len_prefix()?;
         if self.b.get(self.pos..).map(<[u8]>::len) != Some(len) {
@@ -614,16 +646,22 @@ impl Rd<'_> {
         Ok(x)
     }
 
-    /// Charge `weight` payload units — Γ_D parameters, tumbler components,
-    /// endset spans, `Nat` limbs, `Ref` arguments — against the same
-    /// [`Budget`] [`Rd::enter`] charges formers against (`budget::weight`
-    /// states why a payload is charged like a node). The decoder does not
-    /// price by `weight`: it charges every count it reads, never less than
-    /// `weight` charges the node it builds, so a former added to the format
-    /// charges its payload counts in its own arm here. Called BEFORE a count
-    /// is used to size an allocation, so an untrusted count can size nothing
-    /// past the budget: a `Vec::with_capacity` below is bounded by the
-    /// budget's remainder, not by the input's length.
+    /// Charges `weight` units against the decode's [`Budget`].
+    ///
+    /// The units are Γ_D parameters, tumbler components, endset spans, `Nat`
+    /// limbs and `Ref` arguments, and the one unit per former that
+    /// [`Rd::enter`] charges through here (`budget::weight` states why a
+    /// payload is charged like a node). The decoder does not price by
+    /// `weight`: it charges every count it reads, never less than `weight`
+    /// charges the node it builds, so a former added to the format charges
+    /// its payload counts in its own arm here. Called *before* a count is used
+    /// to size an allocation, so an untrusted count can size nothing past the
+    /// budget: a `Vec::with_capacity` below is bounded by the budget's
+    /// remainder, not by the input's length.
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` once the budget is spent.
     fn charge(&mut self, weight: usize) -> Result<(), Malformed> {
         if self.nodes.charge(weight) {
             Ok(())
@@ -632,9 +670,14 @@ impl Rd<'_> {
         }
     }
 
-    /// The two doors at every former: nesting past `MAX_DEPTH`, and the
-    /// budget — refused before the former is read, so nothing past the
-    /// budget is built.
+    /// Takes a former at `depth` through the two doors at every former.
+    ///
+    /// They are nesting past `MAX_DEPTH`, and the budget — refused before the
+    /// former is read, so nothing past the budget is built.
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` past `MAX_DEPTH`, or once the budget is spent.
     fn enter(&mut self, depth: u32) -> Result<(), Malformed> {
         if depth > MAX_DEPTH {
             return Err(Malformed);
@@ -642,17 +685,26 @@ impl Rd<'_> {
         self.charge(1)
     }
 
-    /// A length or count prefix READ FROM THE STREAM, as a `usize`: a varint
-    /// the target cannot index by is `Malformed` (never a lossy `as`), so one
-    /// byte string has at most one parse on every target width. Distinct from
-    /// `self.b.len()`, the bytes in hand, which the bound checks below compare
-    /// against.
+    /// Reads a length or count prefix *from the stream*, as a `usize`.
+    ///
+    /// Distinct from `self.b.len()`, the bytes in hand, which the bound checks
+    /// below compare against.
+    ///
+    /// # Errors
+    ///
+    /// A varint the target cannot index by is `Malformed` (never a lossy
+    /// `as`), so one byte string has at most one parse on every target width;
+    /// so is any varint [`Rd::varint`] refuses.
     fn len_prefix(&mut self) -> Result<usize, Malformed> {
         usize::try_from(self.varint()?).map_err(|_| Malformed)
     }
 
-    /// Minimal-form LEB128 (a non-minimal encoding is rejected, so decode is
-    /// injective on its accepted domain).
+    /// Reads a minimal-form LEB128 varint.
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` for a non-minimal encoding (so decode is injective on its
+    /// accepted domain), for one past `u64`, and at the end of the input.
     fn varint(&mut self) -> Result<u64, Malformed> {
         let mut x: u64 = 0;
         let mut shift = 0u32;
@@ -675,9 +727,13 @@ impl Rd<'_> {
         }
     }
 
-    /// A `VarId` from stored content, through the public constructor: the
-    /// reserved expansion range is not encodable input (PR-ENC's
-    /// body-binder disjointness).
+    /// Reads a `VarId` from stored content, through the public constructor.
+    ///
+    /// # Errors
+    ///
+    /// `Malformed` for a name in the reserved expansion range, which is not
+    /// encodable input (PR-ENC's body-binder disjointness), for one past
+    /// `u32`, and for any varint [`Rd::varint`] refuses.
     fn varid(&mut self) -> Result<VarId, Malformed> {
         let x = self.varint()?;
         u32::try_from(x).ok().and_then(VarId::new).ok_or(Malformed)

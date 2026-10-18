@@ -1,27 +1,30 @@
-//! §Internal 2 — the pure evaluator: a syntax-directed tree-walk over one
-//! verdict's fixed context `(catalog, links, m3, view)` and its environment,
-//! reading ONLY M7 (`links()`) and M3 (`m3()`) — never content or arrangement
-//! (PC4, structural-reads-only as a wiring discipline). Every constituent
-//! read of one verdict comes off the single pinned `Snapshot` the caller
-//! supplied (ASN-0134 clause 6, by construction).
+//! The pure evaluator (§Internal 2).
+//!
+//! It is a syntax-directed tree-walk over one verdict's fixed context
+//! `(catalog, links, m3, view, defs)` and its environment, reading only M7
+//! (`links()`) and M3 (`m3()`) — never content or arrangement (PC4,
+//! structural-reads-only as a wiring discipline). Every constituent read of
+//! one verdict comes off the single pinned `Snapshot` the caller supplied
+//! (ASN-0134 clause 6, by construction).
 //!
 //! The one audit seam: every audit read — `is_K@audit`, the audit core-atom
 //! rebuilds (`members`/`targets_of`/`M_K`@audit, per V-AUD's own equations
 //! over `observe(K, ⟨⟩, Audit)`), `L_K` and `L_dom` — names `Slice::Audit`
 //! and relies on `observe` returning that stored slice for it; no second
-//! audit-honoring method is assumed anywhere. Which slice a term's VIEW
-//! reads is `Slice::of`'s one statement (`value.rs`): the two concepts are
-//! distinct, and `default` names no slice at all.
+//! audit-honoring method is assumed anywhere. Which slice a term's view reads
+//! is `Slice::of`'s one statement (`value.rs`), save at
+//! [`EvalCtx::targets_of_at`], which chooses its read by the view itself:
+//! the two concepts are distinct, and `default` names no slice at all.
 //!
 //! The UV default-view rewrite is M9's (Conflicts §3): `members`/`targets_of`
-//! at `default` drop elements filtered by the BH1 types OTHER than
-//! `K_queried` — per-type via `is_k(J, ·)` (≡ BH1's `is_filtered_J`, D2) —
-//! never M7's aggregate `is_filtered`; `succs`/`chain`/`sources_to`/`stale`
-//! post-filter their returned collections; `tip`/`is_in_chain` read the
-//! unrewritten walk.
+//! at `default` drop elements filtered by the BH1 types *other* than
+//! `K_queried` — per-type via `is_k(J, ·)` (≡ BH1's `is_filtered_J`,
+//! ASN-0128 D2) — never M7's aggregate `is_filtered`;
+//! `succs`/`chain`/`sources_to`/`stale` post-filter their returned
+//! collections; `tip`/`is_in_chain` read the unrewritten walk.
 //!
 //! Every M7 read the evaluator makes goes through [`GuestLinks`] — M7's read
-//! surface filtered at link HOME by the coordinator's injected guest
+//! surface filtered at link home by the coordinator's injected guest
 //! predicate (`guest.rs` states the doctrine) — so a tuple homed in a private
 //! draft can neither satisfy a rule's trigger nor seed its domain, and a
 //! public fire never testifies to a draft's contents (PUB-6.28).
@@ -39,10 +42,11 @@ use crate::check::DefSource;
 use crate::guest::GuestLinks;
 use crate::value::{lift, Arg, Env, Slice, Value};
 
-/// One verdict's read context — M7, through the look at guest class, and M3,
-/// both off one pinned snapshot, at ONE term view (PC3: the term view is
-/// fixed for the life of a verdict, so it is context, not an argument). Built
-/// only by `Coordinator::eval_ctx`.
+/// One verdict's read context, at one term view.
+///
+/// It reads M7, through the look at guest class, and M3, both off one pinned
+/// snapshot (PC3: the term view is fixed for the life of a verdict, so it is
+/// context, not an argument). Built only by `Coordinator::eval_ctx`.
 pub(crate) struct EvalCtx<'a, W> {
     pub(crate) catalog: &'a TypeCatalog,
     pub(crate) links: GuestLinks<'a, W>,
@@ -79,10 +83,15 @@ fn as_nat(v: Value) -> Nat {
     }
 }
 
-/// The address element of an ADDRESS-VALUED domain — the three formers that
-/// fold one (`MaxT1`, `MinT1`, `Reflect`) require `dom(Addr)` at the checker
-/// (`want(Sort::Addr, cd.elem_sort)`), so a tuple here is a checked-input
-/// violation, as an ill-sorted `Value` is above.
+/// Returns the address element of an address-valued domain.
+///
+/// The three formers that fold one (`MaxT1`, `MinT1`, `Reflect`) require
+/// `dom(Addr)` at the checker (`want(Sort::Addr, cd.elem_sort)`).
+///
+/// # Panics
+///
+/// Panics on a tuple: that is a checked-input violation, as an ill-sorted
+/// `Value` is above.
 fn addr_elem(e: Arg) -> Address {
     match e {
         Arg::Addr(a) => a,
@@ -92,8 +101,12 @@ fn addr_elem(e: Arg) -> Address {
     }
 }
 
-/// A V-TUP variable's tuple, borrowed from the environment — the checker
-/// bound it at `Tup`, so the binding is a tuple.
+/// Returns a V-TUP variable's tuple, borrowed from the environment.
+///
+/// # Panics
+///
+/// Panics where the variable is unbound or bound to no tuple; on checked
+/// input the checker bound it at `Tup`, so the binding is a tuple.
 fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
     match env.get(v) {
         Some(Value::Tuple(t)) => t,
@@ -102,23 +115,25 @@ fn tuple_var<'e>(env: &'e Env, v: &VarId) -> &'e Tuple {
 }
 
 impl<W> EvalCtx<'_, W> {
-    /// BH1's per-type filter, `is_filtered_J(x)` (D2): `J`'s own ACTIVE
-    /// membership — `is_k(J, x)` at the active slice, at every term view.
-    /// What the `is_filtered` atom denotes, and what the UV rewrite asks of
-    /// every BH1 class other than the queried one ([`EvalCtx::filtered_other`]),
-    /// so the two cannot come apart on what "filtered" means. Never M7's
-    /// aggregate `is_filtered`: it is type-less, so it would count the queried
-    /// class against itself and self-erase `members(Retired)` at `default`
-    /// (ASN-0129 UV, settled OQ1).
+    /// Returns BH1's per-type filter, `is_filtered_J(x)` (ASN-0128 D2).
+    ///
+    /// That is `J`'s own *active* membership — `is_k(J, x)` at the active
+    /// slice, at every term view. What the `is_filtered` atom denotes, and
+    /// what the UV rewrite asks of every BH1 class other than the queried one
+    /// ([`EvalCtx::filtered_other`]), so the two cannot come apart on what
+    /// "filtered" means. Never M7's aggregate `is_filtered`: it is type-less,
+    /// so it would count the queried class against itself and self-erase
+    /// `members(Retired)` at `default` (ASN-0129 UV, settled OQ1).
     fn filtered_by(&self, j: &Endset, x: &Address) -> bool {
         self.links.is_k(j, x.tumbler(), Slice::Active)
     }
 
-    /// UV `K_queried` self-exclusion: `∃ J ∈ Φ, J ≠ K :: is_filtered_J(x)` —
-    /// BH1's per-type filter ([`EvalCtx::filtered_by`]) asked of every
-    /// cataloged BH1 class but the queried one. Takes the queried KEY, so the
-    /// class lookup the rewrite needs is made here rather than at every read
-    /// it rewrites.
+    /// Returns the UV `K_queried` self-exclusion at `x`.
+    ///
+    /// That is `∃ J ∈ Φ, J ≠ K :: is_filtered_J(x)` — BH1's per-type filter
+    /// ([`EvalCtx::filtered_by`]) asked of every cataloged BH1 class but the
+    /// queried one. Takes the queried *key*, so the class lookup the rewrite
+    /// needs is made here rather than at every read it rewrites.
     fn filtered_other(&self, k: &TypeKey, x: &Address) -> bool {
         let k_class = self.catalog.class_of(k);
         self.catalog
@@ -127,37 +142,42 @@ impl<W> EvalCtx<'_, W> {
             .any(|(j_class, j_endset)| j_class != k_class && self.filtered_by(j_endset, x))
     }
 
-    /// The UV default-view rewrite as ONE predicate: at `default` an element
-    /// of a read of class `k` is kept unless some OTHER BH1 class filters it;
-    /// at `active` and `audit` nothing is dropped and every element is kept.
-    /// Every view-parameterized read and every UV-rewritten collection asks
-    /// this and nothing else — the verdict atoms (`is_K`, `tip`,
-    /// `is_in_chain`, `target_of`, `age`) never ask it (UV).
+    /// Returns whether the UV default-view rewrite keeps `e` in a read of `k`.
+    ///
+    /// It is the rewrite as one predicate: at `default` an element of a read
+    /// of class `k` is kept unless some *other* BH1 class filters it; at
+    /// `active` and `audit` nothing is dropped and every element is kept.
+    /// Every view-parameterized collection read and every UV-rewritten
+    /// collection asks this and nothing else — the verdict atoms (`is_K`,
+    /// `tip`, `is_in_chain`, `target_of`, `age`) never ask it (UV).
     fn uv_keeps(&self, k: &TypeKey, e: &Address) -> bool {
         self.view != View::Default || !self.filtered_other(k, e)
     }
 
-    /// `members(K)` at the CONTEXT's view (D1 / V-AUD / UV): the view's own
-    /// slice — `Slice::of` folds `default` onto the active tuples — through
-    /// [`EvalCtx::uv_rewrite`], which drops an element at `default` and
-    /// nowhere else. `⋃ F.addrs()` over that slice is D1's equation, and
-    /// V-AUD's is the same one over the audit slice. Every read is the look's
-    /// (lane 4.1), so a draft-homed tuple contributes no member at any term
-    /// view.
+    /// Returns `members(K)` at the context's view (ASN-0128 D1 / V-AUD / UV).
     ///
-    /// `_at` marks the three VIEW-PARAMETERIZED reads — this one, `is_k_at`
-    /// and `targets_of_at`, the core atoms and `M_K`, which take the TERM
-    /// view — against the fixed-view atoms (BH1–BH4, `A_K`, `L_K`), which
+    /// It reads the view's own slice — `Slice::of` folds `default` onto the
+    /// active tuples — through [`EvalCtx::uv_rewrite`], which drops an element
+    /// at `default` and nowhere else. `⋃ F.addrs()` over that slice is D1's
+    /// equation, and V-AUD's is the same one over the audit slice. Every read
+    /// is the look's, so a draft-homed tuple contributes no member at any
+    /// term view.
+    ///
+    /// `_at` marks the three view-parameterized reads — this one, `is_k_at`
+    /// and `targets_of_at`, the core atoms and `M_K`, which take the *term*
+    /// view — against the fixed-view reads (BH1–BH4, `A_K`, `L_K`), which
     /// read their named slice whatever the term view says.
     fn members_at(&self, k: &TypeKey) -> OrdSet<Address> {
         self.uv_rewrite(k, self.links.members(&k.0, Slice::of(self.view)))
     }
 
-    /// `targets_of(K, x)` at the CONTEXT's view (D3 / V-AUD / UV), then the
-    /// UV rewrite. The views differ in WHICH TUPLES MATCH, not merely which
-    /// slice is read: `active`/`default` take the tuples whose F COVERS `x`
-    /// (M7's own regime for this read), `audit` those whose F DENOTES it
-    /// (V-AUD's exact membership, `GuestLinks::targets_of_denoting`).
+    /// Returns `targets_of(K, x)` at the context's view, then the UV rewrite.
+    ///
+    /// The rules are ASN-0128 D3, V-AUD and UV. The views differ in *which
+    /// tuples match*, not merely which slice is read: `active`/`default` take
+    /// the tuples whose F *covers* `x` (M7's own regime for this read),
+    /// `audit` those whose F *denotes* it (V-AUD's exact membership,
+    /// `GuestLinks::targets_of_denoting`).
     fn targets_of_at(&self, k: &TypeKey, x: &Address) -> OrdSet<Address> {
         let answer = match self.view {
             View::Audit => self.links.targets_of_denoting(&k.0, x),
@@ -166,19 +186,24 @@ impl<W> EvalCtx<'_, W> {
         self.uv_rewrite(k, answer)
     }
 
-    /// `is_K(x)` at the CONTEXT's view — a verdict atom, so a `default` term
-    /// reads it at the ACTIVE slice, never UV-filtered (UV). Both slices are
-    /// the look's, so a draft-homed tuple witnesses nothing.
+    /// Returns `is_K(x)` at the context's view.
+    ///
+    /// It is a verdict atom, so a `default` term reads it at the active
+    /// slice, never UV-filtered (UV). Both slices are the look's, so a
+    /// draft-homed tuple witnesses nothing.
     fn is_k_at(&self, k: &TypeKey, x: &Address) -> bool {
         self.links.is_k(&k.0, x.tumbler(), Slice::of(self.view))
     }
 
-    /// The UV rewrite over a whole ℘_fin(T) answer — ONE call per
-    /// UV-rewritten read, so a read that should have been rewritten and was
-    /// not is visible as the one that did not make it. The elements
-    /// [`EvalCtx::uv_keeps`] refuses are removed in place: at `default` those
-    /// another BH1 class filters; at `active` and `audit` none, the predicate
-    /// short-circuiting on the view, so the answer passes through whole.
+    /// Returns the UV rewrite of a whole ℘_fin(T) answer.
+    ///
+    /// It is one call per UV-rewritten set read — `chain`, a sequence, asks
+    /// [`EvalCtx::uv_keeps`] itself — so a read that should have been
+    /// rewritten and was not is visible as the one that did not make it. The
+    /// elements [`EvalCtx::uv_keeps`] refuses are removed in place: at
+    /// `default` those another BH1 class filters; at `active` and `audit`
+    /// none, the predicate short-circuiting on the view, so the answer passes
+    /// through whole.
     fn uv_rewrite(&self, k: &TypeKey, mut answer: OrdSet<Address>) -> OrdSet<Address> {
         let refused: Vec<Address> =
             answer.iter().filter(|e| !self.uv_keeps(k, e)).cloned().collect();
@@ -188,11 +213,12 @@ impl<W> EvalCtx<'_, W> {
         answer
     }
 
-    /// BH3 join: `target_of` across the catalog's `ReverseLookup` classes —
-    /// the same list the footprint analysis charges the atom with (none in
-    /// this format; the type checker keeps the atom out of the vocabulary
-    /// while that holds) — keyed by coverage class, each answered over the
-    /// visible slice.
+    /// Returns the BH3 join, keyed by coverage class.
+    ///
+    /// It is `target_of` across the catalog's `ReverseLookup` classes — the
+    /// same list the footprint analysis charges the atom with (none in this
+    /// format; the type checker keeps the atom out of the vocabulary while
+    /// that holds) — each answered over the visible slice.
     fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
         let mut out = im::HashMap::new();
         for (class, endset) in self.catalog.reverse_lookup_classes() {
@@ -204,10 +230,19 @@ impl<W> EvalCtx<'_, W> {
     }
 }
 
-/// The denotation at the context's view. Pure, total, terminating; panics
-/// only on precondition violations (a `Ref` with no `DefSource`, a
-/// `ClassVar`, an ill-sorted runtime value — all unreachable on checked
-/// input).
+/// Returns the denotation of `t` at the context's view.
+///
+/// Pure, total, terminating.
+///
+/// # Panics
+///
+/// Panics on a precondition violation, each unreachable on checked input: a
+/// `Ref` with no `DefSource` or with a referent it does not resolve, a
+/// `ClassVar`, a type key the catalog does not hold, an unbound variable, a
+/// surviving `Reg` domain, a `Stale` at a class without BH4, an ill-sorted
+/// runtime value. It panics too on a stored slot whose unit-depth span starts
+/// at a T4-invalid address, which checked input does not exclude ([`lift`]
+/// states where a store can hold one).
 pub(crate) fn eval_term<W>(cx: &EvalCtx<'_, W>, env: &Env, t: &Term) -> Value {
     match t {
         Term::Var(v) => env
@@ -313,7 +348,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             let x = as_addr(eval_term(cx, env, e));
             Value::AddrSet(cx.targets_of_at(tr.key(), &x))
         }
-        // BH1 (D2): J's own active membership at every term view —
+        // BH1 (ASN-0128 D2): J's own active membership at every term view —
         // `EvalCtx::filtered_by`, the filter the UV rewrite asks too.
         Atom::IsFiltered(tr, e) => {
             let x = as_addr(eval_term(cx, env, e));
@@ -362,7 +397,7 @@ fn eval_atom<W>(cx: &EvalCtx<'_, W>, env: &Env, a: &Atom) -> Value {
             Value::Map(cx.targets_keyed(&x))
         }
         // BH4 totalization (ASN-0129): age(a) = ⊥ exactly when `a` is not
-        // the address of an ACTIVE K-tuple — `GuestLinks::is_active_tuple`,
+        // the address of an active K-tuple — `GuestLinks::is_active_tuple`,
         // a tuple-identity test, not is_k's coverage-of-F membership.
         Atom::Age(tr, e) => {
             let k = tr.key();
@@ -424,7 +459,7 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
         Prim::NatEq(a, b) => Value::Bool(as_nat(ev(a)) == as_nat(ev(b))),
         Prim::NatLe(a, b) => Value::Bool(as_nat(ev(a)) <= as_nat(ev(b))),
         Prim::NatAdd(a, b) => Value::Nat(as_nat(ev(a)) + as_nat(ev(b))),
-        // ·[K] keys through the catalog's PRECOMPUTED class (never a runtime
+        // ·[K] keys through the catalog's precomputed class (never a runtime
         // coverage_class on user input); an absent key — non-BH3 K included —
         // denotes ⊥.
         Prim::MapGet(m, tr) => {
@@ -443,14 +478,21 @@ fn eval_prim<W>(cx: &EvalCtx<'_, W>, env: &Env, p: &Prim) -> Value {
     }
 }
 
-/// `[D]_snap` at the context's view — finite by QD-fin. Address domains
-/// deduplicate (set semantics); tuple slices are distinct by address.
-/// `Filter` composes over the materialized base (§Internal 2). Each element
-/// is an [`Arg`] — the shape a rule binds, and the one a quantifier binds
-/// through `Value::from`.
+/// Returns `[D]_snap` at the context's view, finite by QD-fin.
+///
+/// Address domains deduplicate (set semantics); tuple slices are distinct by
+/// address. `Filter` composes over the materialized base (§Internal 2). Each
+/// element is an [`Arg`] — the shape a rule binds, and the one a quantifier
+/// binds through `Value::from`.
+///
+/// # Panics
+///
+/// Panics on a `Reg` domain or a `ClassVar` type position, neither of which
+/// a checked domain holds, on a filter's predicate or a set term of the wrong
+/// sort, and wherever [`eval_term`] panics on either.
 pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
     match d {
-        // M_K at the TERM view (view-parameterized domain).
+        // M_K at the term view (view-parameterized domain).
         Dom::MembersDom(tr) => cx.members_at(tr.key()).iter().cloned().map(Arg::Addr).collect(),
         Dom::ActiveSlice(tr) => cx
             .links
@@ -465,9 +507,11 @@ pub(crate) fn enum_dom<W>(cx: &EvalCtx<'_, W>, env: &Env, d: &Dom) -> Vec<Arg> {
             .map(Arg::Tuple)
             .collect(),
         // L_dom = ⋃_{K∈catalog} observe(K, ⟨⟩, Audit) ↦ t.addr — the
-        // typed-relation sublayer only (open MAKELINK links excluded); never
-        // M8's type_slice. Deduplicated in T1 order — an `Address` orders by
-        // its tumbler — each element the `Address` M7 handed over.
+        // typed-relation sublayer only (an open MAKELINK link is excluded
+        // unless its type slot is of a cataloged class); never `type_slice`,
+        // the link store's discovery primitive for M8. Deduplicated in T1
+        // order — an `Address` orders by its tumbler — each element the
+        // `Address` M7 handed over.
         Dom::LinkDom => {
             let link_addrs: BTreeSet<Address> = cx
                 .catalog

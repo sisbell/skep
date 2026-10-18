@@ -1,16 +1,17 @@
-//! §Core data model — the two generic structural walks over the PL tree: the
-//! ONE statement of which children each node has. A structure-preserving
-//! transform implements [`Rewrite`], a structural query implements [`Visit`];
-//! each overrides only the positions its semantics touch and falls through to
-//! the defaults for the rest. Adding a former to `ast.rs` is one arm in each
-//! of [`rewrite_term`]/[`visit_term`] (or their `Dom` twins) and one in each
-//! match that classifies formers — the SEMANTIC passes (`check`, the codec,
-//! `eval`, the `Analyzer` and its two view classifications,
-//! `atom_moves_with_view` and `dom_moves_with_view`), the budget's `weight`
-//! for a term former or literal, and the flat expansion's
+//! The two generic structural walks over the PL tree (§Core data model).
+//!
+//! They are the one statement of which children each node has. A
+//! structure-preserving transform implements [`Rewrite`], a structural query
+//! implements [`Visit`]; each overrides only the positions its semantics
+//! touch and falls through to the defaults for the rest. Adding a former to
+//! `ast.rs` is one arm in each of [`rewrite_term`]/[`visit_term`] (or their
+//! `Dom` twins) and one in each match that classifies formers — the semantic
+//! passes (`check`, the codec, `eval`, the `Analyzer` and its two view
+//! classifications, `atom_moves_with_view` and `dom_moves_with_view`), the
+//! budget's `weight` for a term former or literal, and the flat expansion's
 //! α-renaming, which must know a binder — never a further hand-written
 //! recursion. Each of those matches is exhaustive, so the crate does not
-//! compile until the new former is classified, save the codec's DECODER: it
+//! compile until the new former is classified, save the codec's decoder: it
 //! dispatches on tag bytes and its readers end in `_ => Malformed`, so the
 //! compiler cannot see a missing arm. `tests/it/tidy.rs` sees it instead —
 //! the decoder must match every tag the table declares, and the encoder,
@@ -22,18 +23,21 @@
 //!
 //! Children are walked left to right in declaration order, and a binder's
 //! out-of-scope children (a quantifier's domain, a `Let`'s bound term, an
-//! `IfSome`'s guard) before its in-scope ones — the order a counter-carrying
-//! rewrite (the flat expansion's fresh-name supply) is deterministic in.
+//! `IfSome`'s guard) before its in-scope ones — save an `IfSome`'s
+//! else-branch, out of scope too and walked last. That is the order a
+//! counter-carrying rewrite (the flat expansion's fresh-name supply) is
+//! deterministic in.
 
 use std::sync::Arc;
 
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Prim, Term, TypeRef, VarId};
 
-/// A structure-preserving rewrite. The defaults rebuild a node with every
-/// child rewritten; binders are copied VERBATIM, so a scope-aware rewrite
-/// overrides [`Rewrite::term`] for the five binding formers (`Forall`/
-/// `Exists`/`Let`/`IfSome`/`BigUnion`) and [`Rewrite::dom`] for
-/// `Dom::Filter`, and falls through for the rest.
+/// A structure-preserving rewrite.
+///
+/// The defaults rebuild a node with every child rewritten; binders are copied
+/// verbatim, so a scope-aware rewrite overrides [`Rewrite::term`] for the
+/// five binding formers (`Forall`/`Exists`/`Let`/`IfSome`/`BigUnion`) and
+/// [`Rewrite::dom`] for `Dom::Filter`, and falls through for the rest.
 pub(crate) trait Rewrite {
     fn term(&mut self, t: &Term) -> Term {
         rewrite_term(self, t)
@@ -43,13 +47,14 @@ pub(crate) trait Rewrite {
         rewrite_dom(self, d)
     }
 
-    /// A type position — an atom's, a prim's or a domain's `TypeRef`.
+    /// Rewrites a type position — an atom's, a prim's or a domain's `TypeRef`.
     fn typeref(&mut self, tr: &TypeRef) -> TypeRef {
         tr.clone()
     }
 
-    /// A variable USE — a `Var` node or a V-TUP atom's tuple variable —
-    /// never a binder.
+    /// Rewrites a variable *use*, never a binder.
+    ///
+    /// A use is a `Var` node or a V-TUP atom's tuple variable.
     fn var_use(&mut self, v: VarId) -> VarId {
         v
     }
@@ -63,7 +68,9 @@ fn arc_dom<R: Rewrite + ?Sized>(r: &mut R, d: &Dom) -> ArcDom {
     Arc::new(r.dom(d))
 }
 
-/// The default term rewrite: every child through `r`, the node rebuilt.
+/// Returns the default term rewrite.
+///
+/// Every child goes through `r`, and the node is rebuilt.
 pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
     match t {
         Term::Var(v) => Term::Var(r.var_use(*v)),
@@ -136,7 +143,9 @@ pub(crate) fn rewrite_term<R: Rewrite + ?Sized>(r: &mut R, t: &Term) -> Term {
     }
 }
 
-/// The default domain rewrite: every child through `r`, the node rebuilt.
+/// Returns the default domain rewrite.
+///
+/// Every child goes through `r`, and the node is rebuilt.
 pub(crate) fn rewrite_dom<R: Rewrite + ?Sized>(r: &mut R, d: &Dom) -> Dom {
     match d {
         Dom::MembersDom(tr) => Dom::MembersDom(r.typeref(tr)),
@@ -151,8 +160,10 @@ pub(crate) fn rewrite_dom<R: Rewrite + ?Sized>(r: &mut R, d: &Dom) -> Dom {
     }
 }
 
-/// A structural fold. The defaults visit every child; override to act at a
-/// node and (usually) fall through.
+/// A structural fold.
+///
+/// The defaults visit every child; override to act at a node and (usually)
+/// fall through.
 pub(crate) trait Visit {
     fn term(&mut self, t: &Term) {
         visit_term(self, t)
@@ -163,7 +174,7 @@ pub(crate) trait Visit {
     }
 }
 
-/// The default term visit: every child through `v`.
+/// Runs the default term visit: every child through `v`.
 pub(crate) fn visit_term<V: Visit + ?Sized>(v: &mut V, t: &Term) {
     match t {
         Term::Var(_) | Term::Lit(_) => {}
@@ -233,7 +244,7 @@ pub(crate) fn visit_term<V: Visit + ?Sized>(v: &mut V, t: &Term) {
     }
 }
 
-/// The default domain visit: every child through `v`.
+/// Runs the default domain visit: every child through `v`.
 pub(crate) fn visit_dom<V: Visit + ?Sized>(v: &mut V, d: &Dom) {
     match d {
         Dom::MembersDom(_) | Dom::ActiveSlice(_) | Dom::AuditSlice(_) | Dom::LinkDom | Dom::Reg => {}
@@ -250,10 +261,12 @@ mod tests {
     use super::*;
     use crate::fixture::every_former;
 
-    /// The two walks state one tree: the identity rewrite reproduces every
-    /// former (a child passed twice or to the wrong slot would show), and a
-    /// node count taken through `Visit` equals one taken through `Rewrite`
-    /// (a child skipped by either walk would show).
+    /// The two walks state one tree.
+    ///
+    /// The identity rewrite reproduces every former (a child passed twice or
+    /// to the wrong slot would show), and a term-node count taken through
+    /// `Visit` equals one taken through `Rewrite` (a child skipped by either
+    /// walk would show, where it is or holds a term node).
     #[test]
     fn the_two_walks_agree_on_every_former() {
         struct Identity(usize);

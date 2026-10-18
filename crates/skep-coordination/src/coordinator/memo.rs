@@ -1,8 +1,10 @@
-//! §Core data model / §Internal 4 — the DefMemo: M9's one interior-mutable
-//! hint, a per-start cache of PERMANENT statuses for stored predicate
-//! definitions. It holds no authority: on the disciplined domain every entry
-//! is recomputable from the def's immutable content plus M7's audit slice,
-//! and a rebuilt memo answers every question the old one did. A POISONED
+//! The DefMemo (§Core data model / §Internal 4): the def-status cache.
+//!
+//! It is M9's one interior-mutable hint, a per-start cache of *permanent*
+//! statuses for stored predicate definitions. It holds no authority: on the
+//! disciplined domain every entry is recomputable from the def's immutable
+//! content plus M7's audit slice, and a rebuilt memo answers every question
+//! the old one did. A *poisoned*
 //! entry is the deliberate exception (freeze-on-breach, §Internal 4): it
 //! records a PR-DISC breach as this handle first met it, and a referent not
 //! yet defined at that moment is no fact about the content — a rebuilt memo
@@ -16,17 +18,18 @@ use skep_address::Address;
 
 use crate::check::TypedTerm;
 
-/// A def-status answer, distinguishing CVALID (0)'s two `None` causes:
-/// `Undisciplined` (ever-registered, content undisciplined or absent — a
-/// PR-DISC breach, `UndisciplinedDef` to a caller) and `NeverRegistered`
-/// (never registered at the answering snapshot). The two answers a later
-/// write can change are never memoized: `NeverRegistered`, which a
-/// registration changes, and the `Undisciplined` of an ever-registered start
-/// with nothing resident, which an insert changes (`Coordinator::derive_def`);
-/// every other `Undisciplined` answers a `Poisoned` entry, a fact about
-/// resident content that the memo keeps. A `Defined` answer is the memo's own
-/// `Arc` of the def's checked term — its signature (`params`/`result_sort`)
-/// and its `Reg`-expanded evaluable body.
+/// A def-status answer, distinguishing CVALID (0)'s two `None` causes.
+///
+/// The causes are `Undisciplined` (ever-registered, content undisciplined or
+/// absent — a PR-DISC breach, `UndisciplinedDef` to a caller) and
+/// `NeverRegistered` (never registered at the answering snapshot). The two
+/// answers a later write can change are never memoized: `NeverRegistered`,
+/// which a registration changes, and the `Undisciplined` of an
+/// ever-registered start with nothing resident, which an insert changes
+/// (`Coordinator::derive_def`); every other `Undisciplined` answers a
+/// `Poisoned` entry, a fact about resident content that the memo keeps. A
+/// `Defined` answer is the memo's own `Arc` of the def's checked term — its
+/// signature (`params`/`result_sort`) and its `Reg`-expanded evaluable body.
 #[derive(Debug, Clone)]
 pub(super) enum DefStatus {
     Defined(Arc<TypedTerm>),
@@ -34,9 +37,11 @@ pub(super) enum DefStatus {
     NeverRegistered,
 }
 
-/// A cached status. Both variants are PERMANENT: content is immutable and
-/// ever-registration is monotone, so a `Defined` entry can never be
-/// contradicted, and a `Poisoned` one is freeze-on-breach (§Internal 4).
+/// A cached status.
+///
+/// Both variants are *permanent*: content is immutable and ever-registration
+/// is monotone, so a `Defined` entry can never be contradicted, and a
+/// `Poisoned` one is freeze-on-breach (§Internal 4).
 #[derive(Debug)]
 enum MemoEntry {
     Defined(Arc<TypedTerm>),
@@ -53,15 +58,18 @@ impl From<&MemoEntry> for DefStatus {
     }
 }
 
-/// The content's own breach: an ever-registered start whose RESIDENT content
-/// fails the PR-ENC parse or WT — what a `Poisoned` entry records. A start
-/// with nothing resident has none: no content there has failed anything, and
-/// a run may yet be minted there (`Coordinator::derive_def` answers it
-/// `Undisciplined`, unmemoized).
+/// The content's own breach: what a `Poisoned` entry records.
+///
+/// It is an ever-registered start whose *resident* content fails the PR-ENC
+/// parse or WT. A start with nothing resident has none: no content there has
+/// failed anything, and a run may yet be minted there
+/// (`Coordinator::derive_def` answers it `Undisciplined`, unmemoized).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ContentBreach;
 
-/// The memo. THE POLICY, in two halves. THIS TYPE OWNS PERMANENCE: the first
+/// The memo.
+///
+/// **The policy, in two halves.** This type owns *permanence*: the first
 /// fill of a start wins and every later fill of it is a no-op (on the
 /// disciplined domain racing fills derive the same status from the same
 /// immutable content, so first-wins loses nothing; under a breach a fill made
@@ -69,17 +77,17 @@ pub(super) struct ContentBreach;
 /// first stands), nothing is ever evicted or overwritten, and both statuses
 /// are therefore permanent — content is immutable and ever-registration
 /// monotone, so a `Defined` entry can never be contradicted and a `Poisoned`
-/// one is freeze-on-breach. ADMISSION is the def layer's, and cannot be this
-/// type's: `Coordinator::derive_def` admits on a miss, and
+/// one is freeze-on-breach. *Admission* is the def layer's, and cannot be
+/// this type's: `Coordinator::derive_def` admits on a miss, and
 /// `Coordinator::register_pred` admits the def it has just checked and
 /// registered. At both, only a start that is ever-registered and holds
 /// resident content is offered — at `derive_def`'s pinned snapshot, and at
 /// `register_pred` by the emit that just committed or deduped onto an
 /// incumbent, over the run it has just parsed (a never-registered start must
 /// surface a later registration, and one with nothing resident a later
-/// insert) — and only a status about the CONTENT is filled: a derivation that
-/// could not complete at the level it was asked at fills nothing, that being
-/// the asking term's refusal, not the content's.
+/// insert) — and only a status about the *content* is filled: a derivation
+/// that could not complete at the level it was asked at fills nothing, that
+/// being the asking term's refusal, not the content's.
 ///
 /// A `RwLock`, never a `RefCell`: the `&self` signature/define paths of a
 /// shared `Coordinator` need `Sync`. A poisoned lock is read through: the one
@@ -93,15 +101,17 @@ impl DefMemo {
         DefMemo(RwLock::new(HashMap::new()))
     }
 
-    /// The cached status, if any — `None` means "derive it", never "not a
-    /// def".
+    /// Returns the cached status, if any.
+    ///
+    /// `None` means "derive it", never "not a def".
     pub(super) fn get(&self, start: &Address) -> Option<DefStatus> {
         let memo = self.0.read().unwrap_or_else(PoisonError::into_inner);
         memo.get(start).map(DefStatus::from)
     }
 
-    /// Record the derived status for an ever-registered start — first fill
-    /// wins — and answer with whatever the memo now holds for it.
+    /// Records a derived status for an ever-registered start; first fill wins.
+    ///
+    /// It answers with whatever the memo holds for the start after the fill.
     pub(super) fn fill(
         &self,
         start: &Address,

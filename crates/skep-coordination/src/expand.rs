@@ -1,10 +1,11 @@
-//! §Internal 4 (PR3/PR3a) — the expander: `expand(start)`, the one
-//! syntax-directed transform that removes `Ref` nodes from a checked def
-//! body, yielding its flat reference expansion for the analyses that are not
-//! compositional over references (ST⁺ certification, the rule lint's trigger
-//! leg, the armer graph). Evaluation never uses it — a def's denotation is
-//! DAG-recursive (Conflicts §5); the static analyses alone need the
-//! materialized flat term.
+//! The expander, `expand(start)` (§Internal 4, PR3/PR3a).
+//!
+//! It is the one syntax-directed transform that removes `Ref` nodes from a
+//! checked def body, yielding its flat reference expansion for the analyses
+//! that are not compositional over references (ST⁺ certification, the rule
+//! lint's SF and Marker legs, the armer graph). Evaluation never uses it — a
+//! def's denotation is DAG-recursive (Conflicts §5); the static analyses
+//! alone need the materialized flat term.
 //!
 //! The flat tree is no deeper than [`crate::budget::MAX_DEPTH`]: the checker
 //! charged every node at a level no shallower than the position its expansion
@@ -18,21 +19,21 @@
 //!
 //! Reference nodes are processed bottom-up (arguments before the node).
 //! Fresh names are drawn from the reserved `VarId ≥ EXPANSION_NAME_BASE`
-//! supply by ONE content-deterministic counter per top-level expansion — at
+//! supply by one content-deterministic counter per top-level expansion — at
 //! each reference node the referent's parameters first (signature order),
 //! then its binders depth-first left-to-right — so the expansion is
 //! deterministic and its names are disjoint from every host binder by
 //! construction. A reference node is realized as `Let`-bindings of its
 //! (expanded) arguments over the α-renamed referent body.
 //!
-//! The flat tree is a TREE: PR3's fresh-name discipline forbids sharing, so
-//! a referent used twice is expanded twice, and a reference DAG unfolds
+//! The flat tree is a *tree*: PR3's fresh-name discipline forbids sharing,
+//! so a referent used twice is expanded twice, and a reference DAG unfolds
 //! exponentially in its depth. The expansion is therefore budgeted, against
-//! the shared node [`Budget`] — every node either walk visits or builds is
-//! charged, with the payload it carries ([`weight`]), since a literal's
-//! tumbler is copied whole into every unfolding — and past the budget neither
-//! walk descends further: the result is [`ExpansionTooLarge`], never a tree
-//! the analyses would then traverse.
+//! the shared node [`Budget`] — every node either walk visits is charged,
+//! with the payload it carries ([`weight`]), since a literal's tumbler is
+//! copied whole into every unfolding — and past the budget neither walk
+//! descends further: the result is [`ExpansionTooLarge`], never a tree the
+//! analyses would then traverse.
 
 use std::sync::Arc;
 
@@ -41,14 +42,17 @@ use crate::budget::{weight, Budget};
 use crate::check::DefSource;
 use crate::walk::{rewrite_dom, rewrite_term, Rewrite};
 
-/// The expansion spent its node [`Budget`]: the reference DAG's unfolding is
-/// past the tree the analyses are budgeted to read.
+/// The refusal of an expansion that spent its node [`Budget`].
+///
+/// The reference DAG's unfolding is past the tree the analyses are budgeted
+/// to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExpansionTooLarge;
 
-/// One expansion's state, shared by the expander's walk and the renamer's:
-/// the fresh-name counter — the ONE mint site for reserved names, so an
-/// expansion's name sequence is a function of its content — and the node
+/// One expansion's state, shared by the expander's walk and the renamer's.
+///
+/// It is the fresh-name counter — the one mint site for reserved names, so
+/// an expansion's name sequence is a function of its content — and the node
 /// budget, one sum across both walks.
 #[derive(Debug)]
 struct State {
@@ -65,6 +69,7 @@ impl State {
 }
 
 /// The expander (ASN-0130): one expansion's referent supplier and state.
+///
 /// One per top-level expansion, which [`Expander::expand`] consumes: PR3's
 /// determinism is per expansion (`certify_stable`'s and the rule engine's
 /// each start at zero), and a second expansion through one supply would
@@ -80,8 +85,16 @@ impl<'a> Expander<'a> {
         Expander { defs, state: State { next_name: 0, nodes: Budget::default() } }
     }
 
-    /// `expand` — the flat reference expansion of a checked (every `Ref`
-    /// resolvable) body, or `ExpansionTooLarge` once the budget is spent.
+    /// Returns the flat reference expansion of a checked body.
+    ///
+    /// # Errors
+    ///
+    /// `ExpansionTooLarge` once the budget is spent.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a `Ref` the referent supplier does not resolve: the body
+    /// must be checked, every `Ref` resolvable.
     pub(crate) fn expand(mut self, t: &Term) -> Result<Term, ExpansionTooLarge> {
         let out = self.term(t);
         if self.state.nodes.spent() {
@@ -93,8 +106,15 @@ impl<'a> Expander<'a> {
 }
 
 impl Rewrite for Expander<'_> {
-    /// The one node the expansion acts on; every other former falls through.
-    /// Past the budget: a stub, and no descent.
+    /// Expands a `Ref`, the one node the expansion acts on.
+    ///
+    /// Every other former falls through. Past the budget: a stub, and no
+    /// descent.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a `Ref` the referent supplier does not resolve; every `Ref`
+    /// of a checked body resolves (WT-ref).
     fn term(&mut self, t: &Term) -> Term {
         if !self.state.nodes.charge(weight(t)) {
             return Term::Lit(Lit::True);
@@ -131,18 +151,22 @@ impl Rewrite for Expander<'_> {
     }
 }
 
-/// The α-renaming of an already-flat (ref-free) referent body: `map` on free
-/// occurrences, and a fresh reserved name for every internal binder,
-/// depth-first left-to-right (PR3's binding-site renaming). Charges the
-/// expansion's budget per node and per unit of payload, as the expander does.
+/// The α-renaming of an already-flat (ref-free) referent body.
+///
+/// It applies `map` on free occurrences, and a fresh reserved name for every
+/// internal binder, depth-first left-to-right (PR3's binding-site renaming).
+/// Charges the expansion's budget per node and per unit of payload, as the
+/// expander does.
 struct Rename<'a> {
     state: &'a mut State,
     map: im::HashMap<VarId, VarId>,
 }
 
 impl Rename<'_> {
-    /// Rewrite `body` in the scope of the binder `var`: mint its fresh name,
-    /// extend the map for the in-scope child, restore for whatever follows.
+    /// Rewrites `body` in the scope of the binder `var`.
+    ///
+    /// It mints the binder's fresh name, extends the map for the in-scope
+    /// child, and restores it for whatever follows.
     fn under(&mut self, var: VarId, body: &Term) -> (VarId, ArcTerm) {
         let fresh = self.state.fresh();
         let inner = self.map.update(var, fresh);
@@ -158,9 +182,16 @@ impl Rewrite for Rename<'_> {
         self.map.get(&v).copied().unwrap_or(v)
     }
 
-    /// The binding formers: out-of-scope children first, under the current
-    /// map; then the binder, freshly named, over its in-scope child. Past
-    /// the budget: a stub, and no descent.
+    /// Renames a term, giving each binding former's binder a fresh name.
+    ///
+    /// A binding former's out-of-scope children come first, under the
+    /// current map, then the binder, freshly named, over its in-scope child —
+    /// save an `IfSome`'s else-branch, out of scope too and renamed last,
+    /// under the current map. Past the budget: a stub, and no descent.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a `Ref` node: the body must be flat.
     fn term(&mut self, t: &Term) -> Term {
         if !self.state.nodes.charge(weight(t)) {
             return Term::Lit(Lit::True);

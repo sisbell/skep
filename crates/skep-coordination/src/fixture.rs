@@ -1,7 +1,9 @@
-//! A signed term spelling every former, atom, prim, domain, literal and type
+//! A signed term spelling every former, and the unit tests' two builders.
+//!
+//! The term spells every former, atom, prim, domain, literal and type
 //! position, with every encodable sort in Γ_D — the input the codec's round
 //! trip and the walks' agreement are checked on. It need not type-check: the
-//! codec and the walks are structural. Beside it, the unit tests' two
+//! codec and the walks are structural. Beside it are the unit tests' two
 //! builders, [`v`] and [`a`]. Test builds only.
 
 use std::sync::Arc;
@@ -12,12 +14,21 @@ use skep_links::enc;
 use crate::ast::{ArcDom, ArcTerm, Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
 use crate::value::{SignedTerm, Sort};
 
-/// A variable below the reserved expansion range.
+/// Returns a variable below the reserved expansion range.
+///
+/// # Panics
+///
+/// Panics on an `x` in the reserved range, at or past `EXPANSION_NAME_BASE`.
 pub(crate) fn v(x: u32) -> VarId {
     VarId::new(x).expect("test var below the watershed")
 }
 
-/// An address from its components, which must spell a T4-valid tumbler.
+/// Returns the address its components spell.
+///
+/// # Panics
+///
+/// Panics unless the components spell a T4-valid tumbler; an empty list
+/// spells none.
 pub(crate) fn a(comps: &[u32]) -> Address {
     validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
         .expect("T4-valid")
@@ -41,7 +52,7 @@ pub(crate) fn every_former() -> SignedTerm {
         Lit::False,
         Lit::Nat(Nat::from(7u32)),
         // A natural past one byte: the codec's length-prefixed
-        // big-endian limbs, not a single-byte special case.
+        // big-endian bytes, not a single-byte special case.
         Lit::Nat(Nat::from(1u64 << 40)),
         Lit::Addr(a(&[1, 0, 1, 0, 1, 0, 1, 3])),
         Lit::BotAddr,
@@ -96,7 +107,7 @@ pub(crate) fn every_former() -> SignedTerm {
         Term::Forall { var: v(5), dom: ad(Dom::MembersDom(concrete.clone())), body: at(x()) },
         Term::Exists { var: v(5), dom: ad(Dom::ActiveSlice(concrete.clone())), body: at(x()) },
         Term::Let { var: v(6), bound: at(x()), body: at(y()) },
-        // Every sibling position holds a DISTINCT subterm, so a walk or a
+        // Every sibling position holds a distinct subterm, so a walk or a
         // codec half that transposes two of them cannot round-trip.
         Term::IfSome { opt: at(x()), var: v(7), then_: at(y()), else_: at(Term::Lit(Lit::False)) },
         Term::Count(ad(Dom::AuditSlice(class_var))),

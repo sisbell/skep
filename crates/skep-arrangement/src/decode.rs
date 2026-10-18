@@ -1,9 +1,11 @@
-//! The slice's collections decoded entry by entry ([`entry_by_entry`],
-//! [`element_by_element`]): an `im::OrdMap` or `im::Vector` read one entry at
-//! a time, reserving nothing from the count its bytes declare.
+//! The slice's collections decoded entry by entry.
+//!
+//! The two doors are [`entry_by_entry`] and [`element_by_element`]: an
+//! `im::OrdMap` or `im::Vector` read one entry at a time, reserving nothing
+//! from the count its bytes declare.
 //!
 //! M2 decodes [`M5State`](crate::M5State) from a checkpoint body, bytes it
-//! does not trust (its HOSTILE-INPUT OBLIGATION on `WorldState`): the header's
+//! does not trust (its hostile-input obligation on `WorldState`): the header's
 //! checksum and hash prove the bytes are the ones that were written, and
 //! nothing about whether decoding them is safe, and its load refuses a body
 //! that will not decode and falls back to an older base. `im`'s own visitors
@@ -26,15 +28,16 @@
 //! a span T12); a map's later entry under a repeated key replaces the
 //! earlier, as `im`'s insert-in-order does (M4's door refuses a body naming
 //! one key twice instead, leaving no tie to break); and nothing `im`'s
-//! visitor admits is refused. What bounds the loop is the ELEMENT: each must
-//! consume at least one byte, so a count larger than the entries that follow
-//! costs at most one pass over the body. Every element the slice holds does
-//! — an address, a run, a span, a natural and the shot terms each open with a
-//! count of their own — and an element that decoded from zero bytes would
-//! turn a lying count into an unbounded loop (M2's obligation states that
-//! hazard on `Record`).
+//! visitor admits is refused. What bounds the loop is the *element*: each
+//! must consume at least one byte, so a count larger than the entries that
+//! follow costs at most one pass over the body. Every element the slice holds
+//! does — an address, a run, a span, a natural, the shot terms, a document's
+//! two run-lists and a document's recorded spans each open with a count of
+//! their own — and an element that decoded from zero bytes would turn a lying
+//! count into an unbounded loop (M2's obligation states that hazard on
+//! `Record`).
 //!
-//! Every collection the slice decodes comes through here: `M5State`'s three
+//! Every collection the slice decodes comes through here: `M5State`'s four
 //! maps, each run-list behind `RunListShadow`, and R's map and each
 //! document's spans behind `ProvenanceShadow`.
 //! `the_slice_decodes_or_refuses_whatever_count_its_bytes_declare`
@@ -47,10 +50,17 @@ use std::marker::PhantomData;
 
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 
-/// An `im::OrdMap`, decoded one entry at a time — the door every map the
-/// slice holds decodes through, named in its field's
-/// `#[serde(deserialize_with = …)]`. Reserves nothing; each key and value is
-/// decoded by its own `Deserialize`, and a repeated key keeps the later value.
+/// Decodes an `im::OrdMap` one entry at a time.
+///
+/// It is the door every map the slice holds decodes through, named in its
+/// field's `#[serde(deserialize_with = …)]`. Reserves nothing; each key and
+/// value is decoded by its own `Deserialize`, and a repeated key keeps the
+/// later value.
+///
+/// # Errors
+///
+/// Returns `D::Error` where a key or a value does not decode, including
+/// where the input runs out before the count its bytes declare.
 pub(crate) fn entry_by_entry<'de, D, K, V>(deserializer: D) -> Result<im::OrdMap<K, V>, D::Error>
 where
     D: Deserializer<'de>,
@@ -82,9 +92,16 @@ where
     deserializer.deserialize_map(MapVisitor(PhantomData))
 }
 
-/// An `im::Vector`, decoded one element at a time, in order — the door every
-/// vector the slice holds decodes through, as [`entry_by_entry`] is every
-/// map's. Reserves nothing; each element is decoded by its own `Deserialize`.
+/// Decodes an `im::Vector` one element at a time, in order.
+///
+/// It is the door every vector the slice holds decodes through, as
+/// [`entry_by_entry`] is every map's. Reserves nothing; each element is
+/// decoded by its own `Deserialize`.
+///
+/// # Errors
+///
+/// Returns `D::Error` where an element does not decode, including where the
+/// input runs out before the count its bytes declare.
 pub(crate) fn element_by_element<'de, D, T>(deserializer: D) -> Result<im::Vector<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -117,8 +134,9 @@ mod tests {
 
     use super::*;
 
-    /// A map and a vector behind the two doors, as the slice's types hold
-    /// them, each written by `im`'s own `Serialize`.
+    /// A map and a vector behind the two doors, as the slice's types hold them.
+    ///
+    /// Each is written by `im`'s own `Serialize`.
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct Held {
         #[serde(deserialize_with = "entry_by_entry")]
@@ -127,9 +145,10 @@ mod tests {
         vector: im::Vector<u64>,
     }
 
-    /// `bytes` decoded as a `Held`, the panic caught: `None` where the decode
-    /// panicked — as a reservation sized by a count the bytes do not carry
-    /// does once it passes `isize::MAX` bytes.
+    /// Returns `bytes` decoded as a `Held`, the panic caught.
+    ///
+    /// `None` where the decode panicked — as a reservation sized by a count
+    /// the bytes do not carry does once it passes `isize::MAX` bytes.
     fn decoded(bytes: &[u8]) -> Option<bincode::Result<Held>> {
         std::panic::catch_unwind(|| bincode::deserialize::<Held>(bytes)).ok()
     }

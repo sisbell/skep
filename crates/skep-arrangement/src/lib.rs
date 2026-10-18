@@ -1,49 +1,49 @@
-//! # skep-arrangement — M5: Arrangements & Editing (Vstream)
+//! skep-arrangement — M5: Arrangements & Editing (Vstream).
 //!
 //! M5 owns every document's **mutable V→I arrangement** (the POOM — a content
 //! subspace and a link subspace per document), the **append-only
 //! content-provenance relation R**, each trunk's **birth extent** — the
 //! content count its birth version `D.1` was minted with (PUB-3.19) — each
 //! shot-minted member's **shot terms** — the count the client placed and
-//! the base extent its copy took (the signed-ops design record's D25, arm
-//! (c′)) — and each `version`-minted document's **fork source** — the member
-//! or bare document it was born sharing (the fork-source design record, arm
-//! A) — and it is the *only* place in the system where destructive change
-//! lives (ASN-0047 P3). It provides the editing/versioning operations (INSERT
-//! [ASN-0116], DELETE [ASN-0117], COPY [ASN-0118], REINSTATE [the write by
-//! identity, the replacement act's record], REARRANGE [ASN-0119/0084],
-//! CREATENEWVERSION [ASN-0123], and the publish SHOT [PUB-2.33]), a
-//! semantics-blind link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I
-//! resolution and reverse I→V projection for readers, the R reads for
-//! provenance queries, the birth-extent, shot-terms and fork-source reads the
-//! doc-metadata read serves ([`M5State::birth_extent`],
-//! [`M5State::shot_terms`], [`M5State::fork_source`]), and the
-//! ADDRESS FORM a shot's entry signature is made over, on both of its sides
-//! ([`Shot::address_form`] for the request, [`M5State::address_form_of`] for
-//! the member it minted). Every mutation funnels through one M2
-//! composite, where the J-couplings (J0: content-allocation ⇒ placement;
-//! J1★: placement ⇒ provenance; J-LV: link placements uncoupled from R) are
-//! enforced and each content placement's R-append is co-located with its
-//! M-edit, so a reader sees one consistent `(M, R)` root (ASN-0075 atomic
-//! root-swap by co-location).
+//! the base extent its copy took (signed-ops D25) — and each
+//! `version`-minted document's **fork source** — the member or bare document
+//! it was born sharing (the fork-source design record) — and it is the
+//! *only* place in the system where destructive change lives (ASN-0047 P3).
+//! It provides the editing/versioning operations (INSERT [ASN-0116], DELETE
+//! [ASN-0117], COPY [ASN-0118], REINSTATE [the write by identity, the
+//! replacement act's record], REARRANGE [ASN-0119/0084], CREATENEWVERSION
+//! [ASN-0123], and the publish shot [PUB-2.33]), a semantics-blind
+//! link-seating step for M7 (CL-OWN/CL-UNIQ), forward V→I resolution and
+//! reverse I→V projection for readers, the R reads for provenance queries,
+//! the birth-extent, shot-terms and fork-source reads the doc-metadata read
+//! serves ([`M5State::birth_extent`], [`M5State::shot_terms`],
+//! [`M5State::fork_source`]), and the address form a shot's entry signature
+//! is made over, on both of its sides ([`Shot::address_form`] for the
+//! request, [`M5State::address_form_of`] for the member it minted). Every
+//! mutation funnels through one M2 composite, where the J-couplings (J0:
+//! content-allocation ⇒ placement; J1★: placement ⇒ provenance; J-LV: link
+//! placements uncoupled from R) are enforced and each content placement's
+//! R-append is co-located with its M-edit, so a reader sees one consistent
+//! `(M, R)` root (ASN-0075 atomic root-swap by co-location).
 //!
 //! The POOM is **authoritative mutable state, not a hint** (ASN-0047 P3): it
 //! is the only component that loses information (`ContentRemove`,
 //! `ContentReorder`), and it is recovered by replaying the one edit-delta
-//! journal ([`M5Rec`]) onto [`M5State::genesis`]. R is authoritative and
-//! non-recomputable from the current arrangement (a deleted address keeps its
-//! R pair — P2) but, like the POOM, is recovered by replay. v1 has no
-//! skip-serialized hints, so [`M5State::rebuild_derived`] is the identity.
-//! The birth extents are derived by the fold from the records that MINT a
-//! member — the shot's for every member it mints, an empty placement
-//! included, and an owned version's snapshot — the shot terms are
-//! journaled in the shot's own record, and the fork sources are noted off
-//! the snapshot's `source`; all three are carried by the checkpoint, never
-//! rebuilt, and [`M5State`] states why.
+//! journal ([`M5Rec`]) onto [`M5State::genesis`], or onto a checkpoint of
+//! that replay. R is authoritative and non-recomputable from the current
+//! arrangement (a deleted address keeps its R pair — P2) but, like the POOM,
+//! is recovered by replay. v1 has no skip-serialized hints, so
+//! [`M5State::rebuild_derived`] is the identity. The birth extents are
+//! derived by the fold from the records that mint a member — the shot's for
+//! every member it mints, an empty placement included, and an owned
+//! version's snapshot — the shot terms are journaled in the shot's own
+//! record, and the fork sources are noted off the snapshot's `source`; all
+//! three are carried by the checkpoint, never rebuilt, and [`M5State`]
+//! states why.
 //!
 //! ## Failure channels
 //!
-//! Every refusal an operation's contract anticipates arrives as a VALUE:
+//! Every refusal an operation's contract anticipates arrives as a value:
 //! `TxnError::Rejected(E)` carrying the op's own verdict, in the order that op
 //! states, or one of M2's own `TxnError` variants (`OverBudget`,
 //! `Unencodable`, `Durability`, `Poisoned`), whose effects M2 states. No
@@ -65,7 +65,7 @@
 //! `readable` that panics on its own account is the caller's panic, which M2
 //! propagates with nothing of the shot surviving.
 //!
-//! ## Boundary — deliberately NOT owned here
+//! ## Boundary — deliberately not owned here
 //!
 //! * content bytes (M4) and address minting (M3) — M5 *orchestrates* both at
 //!   its composite boundary, owns neither;
@@ -81,64 +81,64 @@
 //! * read permission — M5 knows no principal's read rights: `copy`,
 //!   `reinstate` and `version` read any registered source and owe their
 //!   source gate (PUB-6.23) to the caller, M10's pre-dispatch consult on the
-//!   wire route;
-//!   `publish` alone takes the gate's predicate as an argument — the caller's
-//!   `readable`, which the composite asks per origin document inside its
-//!   transaction (PUB-8.1) — and so does [`shot_admission`], `publish`'s
-//!   checks through that gate, which asks it of the world it is given;
+//!   wire route; `publish` alone takes the gate's predicate as an argument —
+//!   the caller's `readable`, which the composite asks per origin document
+//!   inside its transaction (PUB-8.1) — and so does [`shot_admission`],
+//!   `publish`'s checks through that gate, which asks it of the world it is
+//!   given;
 //! * ordering, durability, recovery (M2) — M5 stages [`M5Rec`]s through
 //!   `transact` and is recovered by checkpoint-load + replay.
 //!
-//! ## The version-chain model's write-path refusals (PUB round 2, lane 3.1)
+//! ## The version-chain model's write-path refusals
 //!
-//! Owner ruling D2b (2026-09-05): the three write-path refusals of the
-//! version-chain model run HERE, at the transact, as typed errors beside the
-//! ownership gate — the in-place advance refusal `PublishedTarget` on
-//! `insert`/`copy`/`reinstate`/`delete`/`rearrange` (PUB-2.11), the private-member
-//! refusal `PrivateVersionOfPublished` and the versionless sibling
-//! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — each
-//! evaluated inside its op's own transaction, off the working state (PUB-6.36
-//! slot 5 — where it falls in each op's check order is stated on that op),
-//! reading M3's publication bit on REGISTERED addresses alone (PUB-6.37)
-//! through [`published_target`], after [`trunk_of`] has projected a version
-//! member to its document (PUB-2.15). The refusals are enforced here,
-//! whatever runs ahead of the store. The one exemption is the DECLARED deposit
-//! (PUB-9.13's DECLARED horn): an `insert` carrying [`Deposit::Declared`] —
-//! the record class's TYPE, one [`deposit_class_types`] holds (PUB-2.11,
-//! PUB-2.64; RES-249, RES-261) — at the one position a published chain admits
-//! — `n_C + 1` of the arrangement [`deposit_surface`] names, the head, or the
-//! document's own while it has no member (PUB-2.59, PUB-2.61, PUB-2.66). The
-//! declaration exempts nothing by itself — the deposit class must hold its
-//! type and the shape must bear it out — and is never a bypass;
-//! [`Vstream::insert`] states how every other insert into a published
-//! document is refused. Link writes are outside the rule (PUB-2.12):
-//! `stage_seat_link` is untouched.
+//! The three write-path refusals of the version-chain model run here
+//! (PUB-kickoff D2b), at the transact, as typed errors beside the ownership
+//! gate — the in-place advance refusal `PublishedTarget` on
+//! `insert`/`copy`/`reinstate`/`delete`/`rearrange` (PUB-2.11), the
+//! private-member refusal `PrivateVersionOfPublished` and the versionless
+//! sibling `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9), the
+//! second on `publish` too — each evaluated inside its op's own transaction,
+//! off the working state (PUB-6.36 slot 5 — where it falls in each op's check
+//! order is stated on that op), reading M3's publication bit on registered
+//! addresses alone (PUB-6.37) through [`published_target`], after
+//! [`trunk_of`] has projected a version member to its document (PUB-2.15).
+//! The refusals are enforced here, whatever runs ahead of the store. The one
+//! exemption is the declared deposit (PUB-9.13's declared horn): an `insert`
+//! carrying [`Deposit::Declared`] — the record class's type, one
+//! [`deposit_class_types`] holds (PUB-2.11, PUB-2.64; RES-249, RES-261) — at
+//! the one position a published chain admits — `n_C + 1` of the arrangement
+//! [`deposit_surface`] names, the head, or the document's own while it has no
+//! member (PUB-2.59, PUB-2.61, PUB-2.66). The declaration exempts nothing by
+//! itself — the deposit class must hold its type and the shape must bear it
+//! out — and is never a bypass; [`Vstream::insert`] states how every other
+//! insert into a published document is refused. Link writes are outside the
+//! rule (PUB-2.12): `stage_seat_link` is untouched.
 //!
-//! ## The publish shot and head-float (PUB round 2, lane 3.2)
+//! ## The publish shot and head-float
 //!
-//! A published document advances by the SHOT (PUB-2.33): [`Vstream::publish`]
+//! A published document advances by the shot (PUB-2.33): [`Vstream::publish`]
 //! appends the next member of the chain anchored at the base the draft was
 //! staged from — the trunk's next member when the base is still the head,
 //! the base's daughter when it is not (PUB-2.37, PUB-2.39, decided at
-//! commit) — born published, in ONE commit, from CLIENT-SUPPLIED I-address
+//! commit) — born published, in one commit, from client-supplied I-address
 //! runs ([`Shot`], PUB-8.1) and never from any draft's arrangement. The
 //! document's own runs stay by reference, the staging draft's are re-inserted
 //! as fresh identity under the document's own I-space (the draft lying
 //! outside the chain, as [`Shot`] requires), and any other document's stay
-//! windows behind the source gate (PUB-2.40, PUB-6.23);
-//! the base's post-render deposits are carried after them (PUB-2.42,
-//! PUB-2.45). The BIRTH VERSION is minted by the same composite in either of
-//! two shapes: the BIRTH SHAPE, the base absent (PUB-2.34), with no tail to
-//! carry; or the memberless document named as its own base, carrying the
-//! deposits it took after the render (PUB-2.42, PUB-2.66).
+//! windows behind the source gate (PUB-2.40, PUB-6.23); the base's
+//! post-render deposits are carried after them (PUB-2.42, PUB-2.45). The
+//! birth version is minted by the same composite in either of two shapes:
+//! the birth shape, the base absent (PUB-2.34), with no tail to carry; or the
+//! memberless document named as its own base, carrying the deposits it took
+//! after the render (PUB-2.42, PUB-2.66).
 //!
-//! The readers that FLOAT — M6's and M8's arrangement readers, and
+//! The readers that float — M6's and M8's arrangement readers, and
 //! `version`'s snapshot, each composing [`reading_surface`] first — answer a
-//! BARE published address from its TRUNK HEAD (PUB-2.49/2.53), a version
+//! bare published address from its trunk head (PUB-2.49/2.53), a version
 //! address from its own member forever (PUB-2.50), and a memberless or
 //! private document from its own arrangement. M5's own reads ([`M5State`])
 //! answer the address named, and so do COPY's source spans (wire.md pins
-//! that seam). A DECLARED deposit into a published chain appends to the HEAD
+//! that seam). A declared deposit into a published chain appends to the head
 //! member's arrangement alone (PUB-2.66), whichever address of the chain the
 //! deposit names.
 //!
@@ -158,16 +158,17 @@
 //! `link_lock_key(doc)` — so a document's arrangement edits and their
 //! R-appends are co-serialized under that one key.
 //!
-//! A published chain's FRONTIER and the arrangement its declared deposits
-//! land in — the HEAD member's, or the document's own while it has no member
+//! A published chain's frontier and the arrangement its declared deposits
+//! land in — the head member's, or the document's own while it has no member
 //! ([`deposit_surface`]) — serialize under the trunk's `version_lock_key`.
 //! Every transaction that advances the one or lands content in the other
 //! holds it — a declared deposit, which lands in that arrangement and reads
-//! the frontier to find it (PUB-2.66), and the shot, which advances the
-//! frontier and carries its base's tail into the member it mints — and so
-//! does `version`, whose snapshot takes its source's reading surface off that
+//! the frontier to find it (PUB-2.66), and the shot, which reads the frontier
+//! to judge its base, advances it unless the member it mints is the base's
+//! daughter, and carries its base's tail into that member — and so does
+//! `version`, whose snapshot takes its source's reading surface off that
 //! frontier. Each holds the key by arithmetic on its own request, never by a
-//! read of the world. The SHOT also takes its document's `content_lock_key`
+//! read of the world. The shot also takes its document's `content_lock_key`
 //! for the fresh-identity mints and, for a base that is a member, that
 //! member's `version_lock_key`, the daughter chain's frontier; it writes only
 //! the arrangement of the member it mints, which no other transaction can
@@ -180,13 +181,13 @@
 //! `W: WorldState` (the read accessor), lifts M5's delta via
 //! `impl From<M5Rec> for W::Record` (the write-side mirror), and dispatches
 //! the variant that carries it (the engine's `Record::Arrangement`) into the
-//! fold [`M5State::apply_m5`] — moving the whole record, never destructuring
-//! it (the `#[non_exhaustive]` variants forbid foreign
-//! destructuring-construction anyway). Write-driving ops are
-//! generic over `W` with **per-op trait bounds** (each impl block names
-//! exactly the slices its ops read and the records they stage), so a minimal
-//! test world can drive `delete`/`rearrange` with `HasM5 + HasM3` and
-//! `From<M5Rec>` alone.
+//! fold [`M5State::apply_m5`] — handing over the whole record, never
+//! destructuring it (the `#[non_exhaustive]` variants forbid foreign
+//! destructuring-construction anyway). Write-driving ops are generic over `W`
+//! with **per-op trait bounds** (each impl block names the slices its ops read
+//! and the records they stage — `version`'s names `HasM5` as well, which its
+//! op does not read), so a minimal test world can drive `delete`/`rearrange`
+//! with `HasM5 + HasM3` and `From<M5Rec>` alone.
 
 #![forbid(unsafe_code)]
 
@@ -212,7 +213,7 @@ mod vspace;
 // surfaces.
 mod chain;
 // The slice: `M5State`, one document's arrangement and the absent-⇒-empty
-// convention, the journal delta `M5Rec`, the fold, and the two reads
+// convention, the journal delta `M5Rec`, the fold, and two reads
 // (`birth_extent`, `shot_terms`) of the fields only the fold writes.
 mod state;
 // The reads on the slice: resolve, point, project, deletions, the counts,
@@ -259,13 +260,14 @@ pub use shot::{Base, SegmentRun, Shot, ShotRun};
 pub use state::{M5Rec, M5State, ShotTerms};
 pub use vspace::{as_ordinal_vspan, is_ordinal_vspan, ordinal_vspan, OrdinalVSpan, VPos, VSpec};
 
-/// The engine's **read accessor** for M5's slice (Engine Composition
-/// Contract): the engine implements this for its concrete world
-/// (`W: WorldState + HasM5`), and M5 — built before `W` exists — codes
-/// against it, reaching its slice as `stg.working().m5()` inside a composite
-/// and `snapshot.world().m5()` for a read. READ side only; its write-side
-/// mirror is the engine's `impl From<M5Rec> for W::Record` lift.
+/// The engine's **read accessor** for M5's slice.
+///
+/// Under the Engine Composition Contract the engine implements this for its
+/// concrete world (`W: WorldState + HasM5`), and M5 — built before `W` exists
+/// — codes against it, reaching its slice as `stg.working().m5()` inside a
+/// composite and `snapshot.world().m5()` for a read. Read side only; its
+/// write-side mirror is the engine's `impl From<M5Rec> for W::Record` lift.
 pub trait HasM5 {
-    /// M5's slice of the world state.
+    /// Returns M5's slice of the world state.
     fn m5(&self) -> &M5State;
 }

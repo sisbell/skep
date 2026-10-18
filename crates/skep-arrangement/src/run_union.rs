@@ -1,24 +1,27 @@
-//! The UNION of a run set's I-extents ([`RunUnion`]): every address some run
-//! of the set holds, merged within each content chain in TUMBLER order, so
-//! that whether the set holds every address of a run is one search. The
-//! run-list (`run_list.rs`) orders runs by V-position; the two share no
-//! private item, and this module's privacy is what makes [`RunUnion::of`] the
-//! union's one constructor.
+//! The union of a run set's I-extents ([`RunUnion`]).
+//!
+//! It holds every address some run of the set holds, merged within each
+//! content chain in tumbler order, so that whether the set holds every
+//! address of a run is one search. The run-list (`run_list.rs`) orders runs
+//! by V-position; the two share no private item, and this module's privacy
+//! is what makes [`RunUnion::of`] the union's one constructor.
 
 use skep_address::{ordinal, Tumbler};
 
 use crate::run::Run;
 
-/// Do `a` and `b` lie in ONE content chain — their starts equal in every
-/// component but the ordinal, the `doc·0·subspace` both share (each a full
-/// element position, [`Run::admits_start`](crate::Run::admits_start))? Two
-/// runs share an address only within one content chain. And among run starts
-/// one content chain's positions lie together in the tumbler order: a start
-/// strictly between two positions of a content chain either is of that
-/// content chain or extends its `doc·0·subspace` by two components or more —
-/// an element field of three or more, which no run admits — while a start
-/// differing earlier compares alike with every position of it. What
-/// [`RunUnion`] merges within and searches by.
+/// Returns whether `a` and `b` lie in one content chain.
+///
+/// That is, their starts are equal in every component but the ordinal, the
+/// `doc·0·subspace` both share (each a full element position,
+/// [`Run::admits_start`](crate::Run::admits_start)). Two runs share an
+/// address only within one content chain. And among run starts one content
+/// chain's positions lie together in the tumbler order: a start strictly
+/// between two positions of a content chain either is of that content chain
+/// or extends its `doc·0·subspace` by two components or more — an element
+/// field of three or more, which no run admits — while a start differing
+/// earlier compares alike with every position of it. What [`RunUnion`]
+/// merges within and searches by.
 fn same_content_chain(a: &Run, b: &Run) -> bool {
     let (s, t) = (a.i_start.tumbler(), b.i_start.tumbler());
     s.len() == t.len()
@@ -28,46 +31,55 @@ fn same_content_chain(a: &Run, b: &Run) -> bool {
             .all(|(x, y)| x == y)
 }
 
-/// The UNION of a run set's I-extents — every address some run of the set
-/// holds — MERGED: within each content chain, runs that overlap or abut are
-/// joined into one piece, so the pieces are disjoint, hold each address once,
-/// lie in tumbler order, and no two of one content chain abut. BUILT ONLY by
+/// The union of a run set's I-extents, merged: every address some run holds.
+///
+/// Within each content chain, runs that overlap or abut are joined into one
+/// piece, so the pieces are disjoint, hold each address once, lie in tumbler
+/// order, and no two of one content chain abut. Built only by
 /// [`RunUnion::of`], which is what lets [`covers`](RunUnion::covers) answer
 /// by a binary search: the order it searches is the type's invariant, not a
 /// promise its caller keeps.
 ///
-/// BORROWED: a piece names the run that opens it and the run that reaches
-/// furthest, two pointers apiece, so the union of a document's runs costs a
-/// pointer per run beside the run-list it is asked of rather than a clone of
-/// it — whose size stored state, and not the asking request, sets.
+/// **Borrowed**: a piece names the run that opens it and the run that
+/// reaches furthest, two pointers apiece, so the union of a document's runs
+/// costs pointers beside the run-list it is asked of rather than a clone of
+/// it, whose size stored state, and not the asking request, sets: one pointer
+/// per run while [`of`](RunUnion::of) sorts them, and room for one piece, two
+/// pointers, per run once built.
 ///
 /// The publish shot asks it twice. Its existence walk (S3★) probes the union
 /// of the supplied runs, each address once, so a request naming one stored
 /// I-extent many times pays for it once. Its carried-run test (PUB-6.24)
-/// merges the base's runs once per admission and asks each supplied run of
-/// the union by one search, so a request of many carried runs pays the base's
-/// run count once and not once a run.
+/// merges the base's runs at most once per admission, at the first run its
+/// source gate must judge, and asks each run the gate judges of the union by
+/// one search, so a request of many carried runs pays the base's run count
+/// once and not once a run.
 pub(crate) struct RunUnion<'r>(Vec<UnionPiece<'r>>);
 
-/// One piece of a [`RunUnion`]: the addresses `[first.i_start,
-/// furthest.reach())` of one content chain — `first` the run that opens the
-/// piece, `furthest` the one of its runs reaching furthest, both of that
-/// content chain, so the piece is one contiguous ordinal range. Named fields,
-/// both being runs: a positional pair would put them within swapping distance.
+/// One piece of a [`RunUnion`]: a range of one content chain's addresses.
+///
+/// Its addresses are `[first.i_start, furthest.reach())` — `first` the run
+/// that opens the piece, `furthest` the one of its runs reaching furthest,
+/// both of that content chain, so the piece is one contiguous ordinal range.
+/// Named fields, both being runs: a positional pair would put them within
+/// swapping distance.
 struct UnionPiece<'r> {
     first: &'r Run,
     furthest: &'r Run,
 }
 
 impl<'r> RunUnion<'r> {
-    /// The union of `runs`' I-extents: sorted by start, then each run joined
-    /// to the piece before it when it is of that piece's content chain and
-    /// opens at or before the piece's reach — overlapping or abutting it — and
-    /// opening a piece of its own otherwise. Sorting is what lets one pass
-    /// join: one content chain's runs lie together among the starts
+    /// Returns the union of `runs`' I-extents.
+    ///
+    /// The runs are sorted by start, then each run is joined to the piece
+    /// before it when it is of that piece's content chain and opens at or
+    /// before the piece's reach — overlapping or abutting it — and opens a
+    /// piece of its own otherwise. Sorting is what lets one pass join: one
+    /// content chain's runs lie together among the starts
     /// ([`same_content_chain`]) and come in ordinal order within it, so a run
     /// joining no piece before it opens past every address that piece holds.
-    /// `O(n log n)` comparisons for `n` runs, and a pointer per run.
+    /// `O(n log n)` comparisons for `n` runs, and pointers alone: one per run
+    /// to sort them, and room for one piece, two pointers, per run.
     pub(crate) fn of(runs: impl IntoIterator<Item = &'r Run>) -> RunUnion<'r> {
         let mut sorted: Vec<&'r Run> = runs.into_iter().collect();
         sorted.sort_unstable_by(|a, b| a.i_start.tumbler().cmp(b.i_start.tumbler()));
@@ -95,25 +107,26 @@ impl<'r> RunUnion<'r> {
         RunUnion(pieces)
     }
 
-    /// Does the union hold EVERY address of `run`? One binary search, the
-    /// pieces being sorted by start and disjoint: the only piece that can hold
-    /// `run`'s start is the last one opening at or before it, which is of
-    /// `run`'s content chain whenever any piece of it opens there
-    /// ([`same_content_chain`]); and no two pieces of a content chain abut, so
-    /// `run` is held whole exactly when that piece is of its content chain and
-    /// reaches as far.
+    /// Returns whether the union holds every address of `run`.
     ///
-    /// A piece of ANOTHER content chain holds no address of `run`. Within one
+    /// One binary search, the pieces being sorted by start and disjoint: the
+    /// only piece that can hold `run`'s start is the last one opening at or
+    /// before it, which is of `run`'s content chain whenever any piece of it
+    /// opens there ([`same_content_chain`]); and no two pieces of a content
+    /// chain abut, so `run` is held whole exactly when that piece is of its
+    /// content chain and reaches as far.
+    ///
+    /// A piece of another content chain holds no address of `run`. Within one
     /// length, content chains are disjoint by their prefixes. Across lengths,
     /// a shorter address lies outside a longer piece's I-extent — it is
     /// compared within the longer's leading components, where both ends of
     /// that extent agree, so it falls below both or above both — and a longer
     /// address inside a shorter piece's would follow that piece's subspace
-    /// with two components or more, an element field no run admits. So neither
-    /// the run's width nor any piece's is searched: `O(log #pieces)`
-    /// comparisons and one reach, however wide the run. Transclusion
-    /// multiplicity costs nothing — the union holds a doubly arranged address
-    /// once.
+    /// with two components or more, an element field no run admits. So
+    /// neither the run's width nor any piece's is searched: `O(log #pieces)`
+    /// comparisons and two reaches, the run's and that piece's, however wide
+    /// the run. Transclusion multiplicity costs nothing — the union holds a
+    /// doubly arranged address once.
     pub(crate) fn covers(&self, run: &Run) -> bool {
         let at = self
             .0
@@ -123,22 +136,26 @@ impl<'r> RunUnion<'r> {
         })
     }
 
-    /// The union's pieces as owned runs, in tumbler order — every address the
-    /// set holds, in exactly one of them. What the shot's existence walk
-    /// probes.
+    /// Returns the union's pieces as owned runs, in tumbler order.
+    ///
+    /// Every address the set holds lies in exactly one of them. What the
+    /// shot's existence walk probes.
     pub(crate) fn runs(&self) -> impl Iterator<Item = Run> + '_ {
         self.0.iter().map(UnionPiece::to_run)
     }
 }
 
 impl UnionPiece<'_> {
-    /// One I-step past the piece's last address: its furthest run's reach.
+    /// Returns the piece's reach: its furthest run's reach.
+    ///
+    /// It is one I-step past the piece's last address.
     fn reach(&self) -> Tumbler {
         self.furthest.reach()
     }
 
-    /// The piece as an owned run — `first`'s start, widened to the piece's
-    /// reach. A PROPAGATING mint, as
+    /// Returns the piece as an owned run, `first`'s start widened to its reach.
+    ///
+    /// It is a propagating mint, as
     /// [`Run::admits_start`](crate::Run::admits_start) lists them: the start
     /// is a run's own, so a full element position; and the width is the
     /// ordinal distance to a reach of the same content chain at or past
@@ -163,15 +180,15 @@ mod tests {
 
     #[test]
     fn a_run_union_denotes_exactly_the_runs_addresses_each_once_in_tumbler_order() {
-        // S3★/PUB-6.24: the union a run set's I-extents name, merged within each
-        // content chain — EXACTLY the runs' addresses, none dropped, which the
-        // shot's existence walk and its re-insert's `.expect` stand on, and each
-        // in one merged run, which is what lets the walk pay a stored position
-        // once however often a request names it. Repeats, nesting, overlap,
-        // abutment and a gap in one content chain; a second content chain of
-        // the SAME length, kept apart by its prefix alone; a third of another
-        // length — listed out of order, so the sort is what brings each content
-        // chain's runs together.
+        // S3★/PUB-6.24: the union a run set's I-extents name, merged within
+        // each content chain — exactly the runs' addresses, none dropped,
+        // which the shot's existence walk and its re-insert's `assert!` stand
+        // on, and each in one merged run, which is what lets the walk pay a
+        // stored position once however often a request names it. Repeats,
+        // nesting, overlap, abutment and a gap in one content chain; a second
+        // content chain of the same length, kept apart by its prefix alone; a
+        // third of another length — listed out of order, so the sort is what
+        // brings each content chain's runs together.
         let family = vec![
             run(&ca(3), 2),
             run(&ca(1), 2),
@@ -200,10 +217,11 @@ mod tests {
         let denoted: Vec<Address> = merged.iter().flat_map(Run::addrs).collect();
         assert_eq!(denoted.len(), named.len(), "no address in two merged runs");
         assert_eq!(denoted.into_iter().collect::<BTreeSet<_>>(), named);
-        // And whole-run membership is its search, against the address-by-address
-        // oracle, from every start and width across the three content chains
-        // and their gaps — the same-length content chains being where the
-        // prefix, and not the length, has to keep the search apart.
+        // And whole-run membership is its search, against the
+        // address-by-address oracle, from every start and width across the
+        // three content chains and their gaps — the same-length content chains
+        // being where the prefix, and not the length, has to keep the search
+        // apart.
         let mut checked = 0usize;
         for start in (1..=10u32).flat_map(|k| [ca(k), pca(k), vca(k)]) {
             for width in 1..=7u32 {

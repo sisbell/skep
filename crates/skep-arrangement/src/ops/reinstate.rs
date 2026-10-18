@@ -1,6 +1,7 @@
-//! REINSTATE (the replacement act's record, E2 (a)): the write by identity —
-//! runs of PERMANENT content I-addresses placed into a draft at a position,
-//! allocating none; `retrieve_i`'s twin as COPY is `retrieve_v`'s.
+//! REINSTATE (the replacement act's record): the write by identity.
+//!
+//! Runs of permanent content I-addresses are placed into a draft at a
+//! position, allocating none; `retrieve_i`'s twin as COPY is `retrieve_v`'s.
 
 use skep_address::Address;
 use skep_content::HasContent;
@@ -23,73 +24,81 @@ where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration) + M4 (the existence probe) + M5
     W::Record: From<M5Rec>,                     // stages only M5Rec (no mint, no byte write)
 {
-    /// REINSTATE (the replacement act's record §2 P3, E2 (a)): place `runs`
-    /// — content I-runs the CLIENT names, each beside the document it states
-    /// minted it, the form the publish shot's runs take ([`ShotRun`]) — into
-    /// `doc`'s content subspace at `at`, by IDENTITY: the addresses are
-    /// placed as given, whether or not any arrangement holds them now, so a
-    /// run a DELETE un-arranged comes back at its own addresses and every
-    /// link whose recorded endset covers them returns with it (the links
-    /// store records I-spans, M7's `slot_endset`; its region reads stab by
-    /// I-overlap). Allocates NO content (CP1/CP2, as COPY); records
-    /// provenance for the placed runs (J1★). The one thing COPY cannot do:
-    /// COPY reaches arranged V-spans alone, and a removed span has no
-    /// V-position to name, so an editor's undo re-inserted the words as new
-    /// bytes and every link on the old ones stayed behind.
+    /// Places client-named content I-runs into `doc` at `at`, by identity.
     ///
-    /// THE REACH IS WIDE (the record's Q2, the owner's ruling): a run's
-    /// origin may be ANY registered document, as a shot's by-reference run
-    /// may window one. REQUIRES — the caller has established that the
-    /// principal it writes for may READ every DISTINCT `runs[].origin`
-    /// (PUB-6.23's source gate), the destination's own I-space excepted, as
-    /// the shot's gate excepts it. M5 knows no principal's read rights and
-    /// takes no consult for REINSTATE, exactly as it takes none for COPY: a
-    /// caller that skips it re-places, into a document its principal owns,
-    /// bytes that principal may not read. On the wire route M10's
-    /// pre-dispatch consult discharges it (its `Op::source_arguments` names
-    /// the distinct origins in run order); a caller driving REINSTATE
-    /// directly owes its own.
+    /// REINSTATE (the replacement act's record §2 P3) places `runs` — content
+    /// I-runs the client names, each beside the document it states minted it,
+    /// the form the publish shot's runs take ([`ShotRun`]) — into `doc`'s
+    /// content subspace at `at`: the addresses are placed as given, whether or
+    /// not any arrangement holds them now, so a run a DELETE un-arranged comes
+    /// back at its own addresses and every link whose recorded endset covers
+    /// them returns with it (the links store records I-spans, M7's
+    /// `slot_endset`; its region reads stab by I-overlap). Allocates no
+    /// content (CP1/CP2, as COPY); records provenance for the placed runs
+    /// (J1★). The one thing COPY cannot do: COPY reaches arranged V-spans
+    /// alone, and a removed span has no V-position to name, so an editor's
+    /// undo through COPY re-inserts the words as new bytes and every link on
+    /// the old ones stays behind.
     ///
-    /// DUPLICATES ARE ADMITTED (the record's edge 1 under the wide reach): a
-    /// run already arranged elsewhere in `doc` is placed again, as a
+    /// **The reach is wide** (the record's Q2): a run's origin may be any
+    /// registered document, as a shot's by-reference run may window one.
+    ///
+    /// **Precondition.** The caller has established that the principal it
+    /// writes for may read every distinct `runs[].origin` (PUB-6.23's source
+    /// gate), the destination's own I-space excepted, as the shot's gate
+    /// excepts it. M5 knows no principal's read rights and takes no consult
+    /// for REINSTATE, exactly as it takes none for COPY: a caller that skips
+    /// it re-places, into a document its principal owns, bytes that principal
+    /// may not read. On the wire route M10's pre-dispatch consult discharges
+    /// it (its `Op::source_arguments` names the distinct origins in run
+    /// order); a caller driving REINSTATE directly owes its own.
+    ///
+    /// **Duplicates are admitted** (the record's edge 1 under the wide reach):
+    /// a run already arranged elsewhere in `doc` is placed again, as a
     /// self-COPY places a duplicate — the arrangement keeps the multiplicity
     /// (S5), and no `arranges_any` test gates it.
     ///
     /// `runs` is borrowed: each run is cloned into the placement, and the
     /// client's list is kept whole for a caller that reports it.
     ///
-    /// Check order (which error wins). Destination first, as COPY:
-    /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only)
-    /// → `PublishedTarget` (PUB-2.11 on the DESTINATION's document, PUB-2.15
-    /// projected; a re-placement is an in-place edit and carries no deposit
-    /// exemption) → `NotContentSubspace` → `OutOfBounds`. Then, per run, IN
-    /// THE ORDER GIVEN, the FIRST defective run deciding (COPY's "which spec
-    /// speaks" rule): `BadRun` (the start is no content element, or the
-    /// stated `origin` does not project to the document the start settles —
-    /// `run_origin_document`, the shot's own arithmetic) →
-    /// `SourceNotRegistered` (that origin document is unregistered) →
-    /// `DanglingSource` (an address the run names holds no value — EVERY
-    /// address of the run is probed through `value_at`, not its start alone,
-    /// since a client-named run was resolved from no arrangement and S3★'s
-    /// induction does not cover its interior; the shot's rule for a
-    /// by-reference run) → `TooManyRuns` ([`MAX_PLACED_RUNS`], measured as
-    /// each run is accumulated, so an over-budget list stops at the cap);
-    /// finally `EmptyResult` when `runs` is empty — a `Run` has width ≥ 1 by
-    /// standing invariant, so an empty placement is exactly an empty list.
-    /// Cross-origin runs never coalesce (the accumulator's I-adjacency
-    /// guard), preserving the origin multiset (CP11).
-    ///
-    /// COST, AND WHO OWNS IT. The probe walks every address of every run,
-    /// run by run — `Σ width` of the request, a run named twice walked
-    /// twice — under M2's applier lock. The wire caps the run COUNT
-    /// (`MAX_WIRE_LIST`) and not a run's WIDTH, as it caps a shot's; a route
+    /// **Cost, and who owns it.** The probe covers every address of every
+    /// run, run by run — one predecessor lookup per run, then a step per
+    /// stored piece, at most `Σ width` of the request, a run named twice
+    /// walked twice — under M2's applier lock. The wire caps the run count
+    /// (`MAX_WIRE_LIST`) and not a run's width, as it caps a shot's; a route
     /// that carries this op owes that number, as the shot's does.
     ///
-    /// LOCKS: `content_lock_key(doc)` alone, as COPY. No origin is locked —
-    /// the placed addresses stay valid forever by content immutability (S0)
-    /// — and the chain's head key is not taken: REINSTATE reads no
-    /// arrangement at all, its own or any origin's, so it never asks where
-    /// a head is.
+    /// **Locks.** `content_lock_key(doc)` alone, as COPY. No origin is locked
+    /// — the placed addresses stay valid forever by content immutability (S0)
+    /// — and the chain's head key is not taken: REINSTATE reads no origin's
+    /// arrangement, and of its own only the content count its bounds check
+    /// asks, so it never asks where a head is.
+    ///
+    /// # Errors
+    ///
+    /// Each refusal comes as `TxnError::Rejected`, in this order (which error
+    /// wins). Destination first, as COPY: `DocNotRegistered` → `NotOwner` (the
+    /// ω gate on the destination only) → `PublishedTarget` (PUB-2.11 on the
+    /// destination's document, PUB-2.15 projected; a re-placement is an
+    /// in-place edit and carries no deposit exemption) → `NotContentSubspace`
+    /// → `OutOfBounds`. Then, per run, in the order given, the first defective
+    /// run deciding (COPY's "which spec speaks" rule): `BadRun` (the start is
+    /// no content element, or the stated `origin` does not project to the
+    /// document the start settles — `run_origin_document`, the shot's own
+    /// arithmetic) → `SourceNotRegistered` (that origin document is
+    /// unregistered) → `DanglingSource` (an address the run names holds no
+    /// value — every address of the run is probed through the content store's
+    /// run read, `pieces` and then `covered`, not its start alone, since a
+    /// client-named run was resolved from no arrangement and S3★'s induction
+    /// does not cover its interior; the shot's rule for a by-reference run) →
+    /// `TooManyRuns` ([`MAX_PLACED_RUNS`], measured as each run is
+    /// accumulated, so an over-budget list stops at the cap); finally
+    /// `EmptyResult` when `runs` is empty — a `Run` has width ≥ 1 by standing
+    /// invariant, so an empty placement is exactly an empty list. Cross-origin
+    /// runs never coalesce (the accumulator's I-adjacency guard), preserving
+    /// the origin multiset (CP11). The kernel's own failures — `OverBudget`,
+    /// `Unencodable`, `Durability`, `Poisoned` — come back as `transact`
+    /// returns them.
     pub fn reinstate(
         &self,
         caller: Caller,
@@ -133,7 +142,7 @@ where
                     if !m3.is_registered_document(&origin_doc) {
                         return Err(ReinstateError::SourceNotRegistered);
                     }
-                    // Existence (S3★) at EVERY address: the run is the
+                    // Existence (S3★) at every address: the run is the
                     // client's I-extent and no arrangement's, so nothing
                     // vouches for its interior but the probe itself — M4's run
                     // read, which walks the extent piece by piece and says

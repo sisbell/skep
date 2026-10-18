@@ -1,6 +1,8 @@
-//! §C/§8 — link seating: the pure step composed into M7's MAKELINK, and,
-//! under the `test-hooks` feature, its contract-required standalone
-//! transact-wrapped twin.
+//! Link seating (§C/§8).
+//!
+//! It holds the pure step composed into M7's MAKELINK, and, under the
+//! `test-hooks` feature, its contract-required standalone transact-wrapped
+//! twin.
 
 use skep_address::{document_of, link_subspace, Address};
 #[cfg(feature = "test-hooks")]
@@ -14,35 +16,19 @@ use crate::state::{M5Rec, M5State};
 #[cfg(feature = "test-hooks")]
 use crate::HasM5;
 
-/// Append an already-allocated home link `link` at doc's next link
-/// V-position (§8; ASN-0047 CL-OWN/CL-UNIQ/J-LV). SEMANTICS-BLIND about link
-/// VALUES: whether `link ∈ dom(L)` is M7's, and M5 never reads M7 (no
-/// back-edge). Its SHAPE is M5's, because the [`LinkSeat`](M5Rec::LinkSeat)
-/// fold seats this very address as a [`Run`](crate::Run) start — so this is
-/// where the run invariant is established for the link path, and the door
-/// checks, in order:
+/// Returns the record that appends the already-allocated home link `link`.
 ///
-/// * `NotLinkAddress` — `link` is a FULL ELEMENT POSITION
-///   `doc·0·s_L·ordinal`: the element-field shape the placed run requires,
-///   and the link subspace for where it belongs. Element level
-///   alone would not do — a subspace BASE `doc·0·s_L` is element-level, and
-///   its `subspace()` answers `s_L`, so it would pass a bare subspace test
-///   and then be placed as a "width-1" run whose I-extent covers every link
-///   address of the document.
-/// * `NotHomeLink` — CL-OWN, `origin(link) = doc` via M1's `document_of`.
-///   Shape first is what makes this question meaningful: `document_of` is
-///   reflexive on a Document address, so a document seated in ITSELF would
-///   otherwise pass CL-OWN and be placed as a width-1 run whose I-extent
-///   covers the document's entire subtree — after which CL-UNIQ reports
-///   every later link of that document as already seated, permanently.
-/// * `AlreadySeated` — CL-UNIQ, which the arrangement answers for itself (a
-///   link interior to a coalesced link run counts as seated).
+/// The record's fold seats `link` at `doc`'s next link V-position (§8;
+/// ASN-0047 CL-OWN/CL-UNIQ/J-LV). Semantics-blind about link values: whether
+/// `link ∈ dom(L)` is M7's, and M5 never reads M7 (no back-edge). Its shape
+/// is M5's, because the [`LinkSeat`](M5Rec::LinkSeat) fold seats this very
+/// address as a [`Run`] start — so this is where the run
+/// invariant is established for the link path, by the first of the door's
+/// checks, which the errors section below lists in order.
 ///
-/// The shape check refuses nothing M3's `mint_link` produces.
+/// **Precondition.** Three clauses, none of which this step can check.
 ///
-/// REQUIRES, three clauses, none of which this step can check.
-///
-/// * `m5` must be the WORKING state of the transaction that stages the
+/// * `m5` must be the working state of the transaction that stages the
 ///   returned record — `stg.working().m5()` — and
 /// * that transaction must hold `M3State::link_lock_key(doc)`. `CL-UNIQ` is
 ///   decided against the state this reads, so a caller that decides it
@@ -50,7 +36,7 @@ use crate::HasM5;
 ///   stage afterwards, and a link already seated between the two is seated a
 ///   second time at `n_L(d) + 1`, which no read reports and no operation
 ///   undoes.
-/// * THE CALLER OWES THE OWNERSHIP GATE. This step applies none: it does not
+/// * The caller owes the ownership gate. This step applies none: it does not
 ///   ask whether `doc` is a registered document, nor whether the writing
 ///   caller is its effective owner, and a record it returns writes a link
 ///   V-position into `doc` regardless. Before composing it, establish both,
@@ -62,14 +48,40 @@ use crate::HasM5;
 ///   `origin(link)`, but a link address in any document's link subspace is a
 ///   tumbler anyone can spell.
 ///
-/// `seat_link`, the `test-hooks` twin below, discharges the first two and NOT
+/// `seat_link`, the `test-hooks` twin below, discharges the first two and not
 /// the third. M7's MAKELINK discharges all three: it runs its own ownership
 /// gate — registration, then ω — on `home` before composing this step, in
 /// the same transaction and under the same key it holds for its K.λ mint.
 ///
-/// Returns the delta; M7 lifts via `.into()` and stages it inside MAKELINK's
-/// K.λ + K.μ⁺_L transaction. The fold appends at `n_L(d) + 1` and records NO
+/// M7 lifts the returned delta via `.into()` and stages it inside MAKELINK's
+/// K.λ + K.μ⁺_L transaction. The fold appends at `n_L(d) + 1` and records no
 /// provenance (J-LV).
+///
+/// # Errors
+///
+/// The door checks, in order:
+///
+/// * `NotLinkAddress` — `link` is a full element position
+///   `doc·0·s_L·ordinal`: the element-field shape the placed run requires,
+///   and the link subspace for where it belongs. Element level alone would
+///   not do — a subspace base `doc·0·s_L` is element-level, and its
+///   `subspace()` answers `s_L`, so it would pass a bare subspace test, and
+///   the step would return a record meant to seat it as a "width-1" run
+///   whose I-extent covers every link address of the document. The
+///   `LinkSeat` fold's own door refuses that start, so the seat would be
+///   reported and never made.
+/// * `NotHomeLink` — CL-OWN, `origin(link) = doc` via M1's `document_of`.
+///   Shape first is what makes this question meaningful: `document_of` is
+///   reflexive on a Document address, so a document seated in itself would
+///   otherwise pass CL-OWN, and the step would return a record meant to seat
+///   it as a width-1 run whose I-extent covers the document's entire subtree
+///   — a run after which CL-UNIQ would report every later link of that
+///   document as already seated. The `LinkSeat` fold's own door refuses that
+///   start, so the seat would be reported and never made.
+/// * `AlreadySeated` — CL-UNIQ, which the arrangement answers for itself (a
+///   link interior to a coalesced link run counts as seated).
+///
+/// The shape check refuses nothing M3's `mint_link` produces.
 pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5Rec, SeatError> {
     if !Run::admits_start(link) || link.subspace() != Some(&link_subspace()) {
         return Err(SeatError::NotLinkAddress);
@@ -86,13 +98,16 @@ pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5
     })
 }
 
-/// STANDALONE OP — the Engine-Composition-Contract-required transact-wrapped
-/// twin of the pure [`stage_seat_link`] (the contract demands BOTH forms for
-/// any primitive that appears as a step in another store's composite, and
-/// `stage_seat_link` is exactly that step for M7's MAKELINK).
+/// Seats `link` in `doc` in a transaction of its own: the standalone op.
 ///
-/// ISOLATION/TEST USE ONLY, for two reasons. It applies NO OWNERSHIP GATE —
-/// it takes no [`Caller`](crate::Caller), asks nothing of `doc`'s
+/// It is the Engine-Composition-Contract-required transact-wrapped twin of
+/// the pure [`stage_seat_link`] (the contract demands both forms for any
+/// primitive that appears as a step in another store's composite, and
+/// `stage_seat_link` is exactly that step for M7's MAKELINK). Returns the
+/// seated link address and the commit `Seq`.
+///
+/// **Isolation and test use only**, for two reasons. It applies no ownership
+/// gate — it takes no [`Caller`](crate::Caller), asks nothing of `doc`'s
 /// registration, and so commits a link V-position into whatever document the
 /// link's origin names; and committing a seat *alone* records that position
 /// with no link allocation in the same composite. Production seats a home
@@ -103,8 +118,14 @@ pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5
 /// So it is compiled only under the `test-hooks` feature (default off), which
 /// this crate's suites and skep-retrieval's turn on through their
 /// dev-dependencies: a build that compiles no test holds none of it, and a
-/// production path that reached for it would not compile. Returns the seated
-/// link address and the commit `Seq`.
+/// production path that reached for it would not compile.
+///
+/// # Errors
+///
+/// `TxnError::Rejected` carrying [`stage_seat_link`]'s refusal, in its
+/// order: `NotLinkAddress`, `NotHomeLink`, `AlreadySeated`. The kernel's own
+/// failures — `OverBudget`, `Unencodable`, `Durability`, `Poisoned` — come
+/// back as `transact` returns them.
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub fn seat_link<W>(
@@ -131,8 +152,8 @@ mod tests {
     #[test]
     fn stage_rejects_a_non_link_address_before_it_asks_whose_home_it_is() {
         // §8: the seated address becomes a Run start, so its shape is
-        // checked first — and the two inputs that make the ORDER matter are
-        // the ones whose origin IS the document.
+        // checked first — and the inputs that make the order matter are the
+        // ones whose origin is the document, three of those below.
         let s = M5State::genesis();
         // A document address: `document_of` is reflexive on it, so it passes
         // CL-OWN. Seated, it would be a width-1 run whose I-extent runs from
@@ -143,7 +164,7 @@ mod tests {
             stage_seat_link(&s, &doc1(), &doc1()),
             Err(SeatError::NotLinkAddress)
         ));
-        // A CONTENT element of the same document: also origin doc1, and
+        // A content element of the same document: also origin doc1, and
         // seating it would put a content address at a link V-position.
         assert!(matches!(
             stage_seat_link(&s, &doc1(), &ca(5)),
@@ -154,8 +175,8 @@ mod tests {
             stage_seat_link(&s, &doc1(), &a(&[1, 0, 1])),
             Err(SeatError::NotLinkAddress)
         ));
-        // doc1's LINK SUBSPACE BASE — the case a bare subspace test admits.
-        // It is element-level and its `subspace()` IS s_L, so CL-OWN and a
+        // doc1's link subspace base — the case a bare subspace test admits.
+        // It is element-level and its `subspace()` is s_L, so CL-OWN and a
         // subspace comparison both pass it; what it is not is a position.
         // Seated, its last component would be the subspace id, so the run's
         // ordinal arithmetic would advance s_L → s_L + 1 (M1's TA7a) and its
@@ -169,7 +190,7 @@ mod tests {
             Err(SeatError::NotLinkAddress)
         ));
         // The shape check refuses nothing M3's `mint_link` produces: a link
-        // element of ANOTHER document passes it and is refused for the
+        // element of another document passes it and is refused for the
         // reason it should be.
         assert!(matches!(
             stage_seat_link(&s, &doc1(), &a(&[1, 0, 1, 0, 2, 0, 2, 1])),
@@ -180,7 +201,7 @@ mod tests {
     #[test]
     fn stage_rejects_a_foreign_home_and_a_reseat_and_admits_a_fresh_home_link() {
         // CL-OWN: origin(link) must be doc; CL-UNIQ: not already seated —
-        // including a link INTERIOR to a coalesced link run.
+        // including a link interior to a coalesced link run.
         let s = M5State::genesis();
         assert!(matches!(
             stage_seat_link(&s, &doc2(), &la(1)),
@@ -208,7 +229,8 @@ mod tests {
             stage_seat_link(&s, &doc1(), &la(2)),
             Err(SeatError::AlreadySeated)
         ));
-        // The pure step commits nothing: the receiver state never changed.
+        // The pure step commits nothing: a fresh genesis, the value the first
+        // receiver held, seats no link of doc1.
         assert_eq!(M5State::genesis().link_count(&doc1()), n(0));
     }
 }

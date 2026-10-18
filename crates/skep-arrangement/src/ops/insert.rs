@@ -1,6 +1,8 @@
-//! INSERT (ASN-0116; §3): fresh content placed in one composite — its mints,
-//! its writes, its placement and its provenance — and the one insert a
-//! published document admits, a declared deposit at a fresh position.
+//! INSERT (ASN-0116; §3): fresh content placed in one composite.
+//!
+//! Its mints, its writes, its placement and its provenance ride that one
+//! composite — and here too is the one insert a published document admits,
+//! a declared deposit at a fresh position.
 
 use std::sync::Arc;
 
@@ -24,102 +26,83 @@ where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (writes) + M5
     W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite> + From<ContentStretch>, // stages M3Rec + ContentWrite/ContentStretch + M5Rec
 {
-    /// INSERT (ASN-0116; §3): mint n fresh content addresses (M3), write
-    /// their bytes (M4) — a maximal run of single-byte values as ONE range
-    /// mint and ONE stretch, an atom as its own mint and write — splice the
-    /// run at `at` (content subspace), record provenance — one M2 composite
-    /// under `M3State::content_lock_key(doc)` and, for a declared deposit,
-    /// the chain's head key (`head_lock_key`: the trunk's
-    /// `version_lock_key`). Returns the inserted run's START address (the
-    /// predicate-def identity for M9) and the commit `Seq`.
+    /// Inserts fresh content into `doc` in one composite (ASN-0116; §3).
     ///
-    /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
-    /// in-txn ω gate) → `PublishedTarget` (below) → `EmptyContent` →
-    /// `NotContentSubspace` (`at.subspace ≠ s_C`) → `OutOfBounds` (the
-    /// arrangement does not admit `at.ordinal` as a placement boundary —
-    /// Valid(First)InsertionPosition, so ordinal = 1 when n_C = 0). Then,
-    /// PER MAXIMAL RUN OF SINGLE-BYTE VALUES OR ATOM in the order given,
-    /// `Mint` (the content mint, a range for a run) → `Content` (the byte
-    /// write, a stretch for a run), with the FIRST to fail deciding.
+    /// It mints n fresh content addresses (M3), writes their bytes (M4) — a
+    /// maximal run of single-byte values as one range mint and one stretch, an
+    /// atom as its own mint and write — splices the run at `at` (content
+    /// subspace) and records provenance, in one M2 composite under
+    /// `M3State::content_lock_key(doc)` and, for a declared deposit, the
+    /// chain's head key (`head_lock_key`: the trunk's `version_lock_key`).
+    /// Returns the inserted run's start address (the predicate-def identity
+    /// for M9) and the commit `Seq`.
     ///
-    /// Neither per-value verdict is one an honest request can earn on a
-    /// correct store: `Mint(MintError::HomeNotRegistered)` cannot arrive past
-    /// the gate above and is M3's own boundary discharge;
-    /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier,
-    /// which M3 states never fires on a live path; and
-    /// `Content(AlreadyStored)` cannot occur in production at all — M3 mints
-    /// fresh and M5 writes once, which is the argument `stage_write` itself
-    /// makes for keeping the guard. All three are defensive, as the shot's and
-    /// VERSION's mints are.
+    /// **The published target, and the deposit that clears it** (PUB-2.11,
+    /// PUB-2.59, PUB-2.61; PUB-9.13's declared horn). When the document `doc`
+    /// projects to (PUB-2.15) is published, an insert is an in-place edit
+    /// (PUB-2.11's in-place advance) and refuses `PublishedTarget` — unless
+    /// `deposit` is [`Deposit::Declared`], the type it carries is a member of
+    /// [`deposit_class_types`], and the insert is deposit-shaped: `at` names a
+    /// fresh content position past the arranged extent, so the placement
+    /// appends and disturbs no arrangement. The declaration exempts nothing by
+    /// itself — the deposit class must hold its type and the shape must bear
+    /// it out — and is never a bypass: a declaration naming a type the
+    /// deposit class does not hold (the grant's, the edition claim's, any
+    /// other address) refuses with the same code wherever it lands (PUB-2.11;
+    /// RES-249, RES-261), a declared insert at an arranged position refuses
+    /// with it too, and an undeclared append refuses as well (closing the cost
+    /// RES-209 item 5 names). The test is a membership compare against a
+    /// build-time set: it reads nothing, and what the bytes *are* it cannot
+    /// tell — prose declared under a held type is admitted, a malformed record
+    /// atom of the class it names, which is PUB-2.60's accepted residue. Into
+    /// a private document the declaration is inert, whatever it names — every
+    /// insert is admitted there. A declared deposit whose fresh position lies
+    /// past the append boundary clears this refusal and meets `OutOfBounds`
+    /// below, so it is told its position is bad rather than that its target is
+    /// published. `Caller::System` is not exempt (PUB-6.28): a rule fire never
+    /// advances a published arrangement in place.
     ///
-    /// THE PUBLISHED TARGET, and the deposit that clears it (PUB-2.11,
-    /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
-    /// document `doc` projects to (PUB-2.15) is PUBLISHED, an insert is an
-    /// in-place edit (PUB-2.11's in-place advance) and refuses
-    /// `PublishedTarget` — UNLESS `deposit` is [`Deposit::Declared`], the
-    /// TYPE it carries is a member of [`deposit_class_types`], AND the
-    /// insert is deposit-SHAPED: `at` names a fresh content position past the
-    /// arranged extent, so the placement appends and disturbs no arrangement.
-    /// The declaration exempts nothing by itself — the deposit class must
-    /// hold its type and the shape must bear it out — and is never a bypass:
-    /// a declaration naming a type the deposit class does not hold (the
-    /// grant's, the edition claim's, any other address) refuses with the same
-    /// code wherever it lands (PUB-2.11; RES-249, RES-261), a declared insert
-    /// at an arranged position refuses with it too, and an UNDECLARED append
-    /// refuses as well (the cost RES-209 item 5 named, closed). THE TEST IS A
-    /// MEMBERSHIP COMPARE against a build-time set: it reads nothing, and
-    /// what the bytes ARE it cannot tell — prose declared under a held type
-    /// is admitted, a malformed record atom of the class it names, which is
-    /// PUB-2.60's accepted residue. Into a PRIVATE document the declaration
-    /// is inert, whatever it names — every insert is admitted there as
-    /// before. A declared deposit whose fresh position lies past the append
-    /// boundary clears this refusal and meets `OutOfBounds` below, so it is
-    /// told its position is bad rather than that its target is published.
-    /// `Caller::System` is NOT exempt (PUB-6.28): a rule fire never advances
-    /// a published arrangement in place.
-    ///
-    /// So a published document admits exactly ONE insert: a deposit declared
+    /// So a published document admits exactly one insert: a deposit declared
     /// under a held type, at `[s_C, n_C + 1]` of the arrangement it lands
     /// in — the one position both fresh and inside the append boundary. A
     /// caller builds that position by asking [`deposit_surface`] for the
     /// arrangement and [`content_count`](crate::M5State::content_count) of it
-    /// for `n_C`. A position read before another deposit landed there is no
-    /// longer fresh, and the deposit carrying it is refused `PublishedTarget`
-    /// like any in-place edit — the remedy being a fresh position, not the
-    /// draft the refusal's face proposes.
+    /// for `n_C`. A position read before another deposit lands there is not
+    /// fresh once that deposit has landed, and the deposit carrying it is
+    /// refused `PublishedTarget` like any in-place edit — the remedy being a
+    /// fresh position, not the draft the refusal's face proposes.
     ///
-    /// AN ACCOUNT'S HOME IS SUCH A TARGET. The flagless first mint into an
-    /// empty account is born published — M3's own create path resolves that
-    /// bit (PUB-8.21), not a flag the caller sent — so content enters doc 1
-    /// only by a DECLARED deposit at a fresh position: the record atoms that
-    /// accrete there outside the version discipline (PUB-2.4, PUB-2.60), its
-    /// prose advancing by shots like any edition's (PUB-2.58). A client or
+    /// **An account's home is such a target.** The flagless first mint into
+    /// an empty account is born published — M3's own create path resolves
+    /// that bit (PUB-8.21), not a flag the caller sent — so content enters
+    /// doc 1 only by a declared deposit at a fresh position: the record atoms
+    /// that accrete there outside the version discipline (PUB-2.4, PUB-2.60),
+    /// its prose advancing by shots like any edition's (PUB-2.58). A client or
     /// fixture that mints a home and then inserts into it undeclared meets
-    /// this refusal, and that is the rule working; the account's LATER
+    /// this refusal, and that is the rule working; the account's later
     /// flagless mints are private by default (PUB-1.1) and take an ordinary
     /// insert.
     ///
-    /// WHICH ARRANGEMENT THE DEPOSIT LANDS IN (PUB-2.65, PUB-2.66; lane 3.2's
-    /// ruling): the HEAD member's, ALONE — the version-chain reads' own answer
+    /// **Which arrangement the deposit lands in** (PUB-2.65, PUB-2.66): the
+    /// head member's, alone — the version-chain reads' own answer
     /// ([`deposit_surface`]), which is the trunk head once the chain has one
     /// ([`trunk_head`](crate::trunk_head)), whichever address of the chain
     /// the caller named: the bare document, the head itself, or a pinned
-    /// member, which never grows. It differs from the
+    /// member, whose content arrangement never grows. It differs from the
     /// [`reading_surface`](crate::reading_surface) at exactly that pinned
     /// member, whose readers answer the member itself. `at` is therefore
-    /// judged fresh against the HEAD's extent, and the placement record names
-    /// the head.
-    /// While the document has no member the deposit lands in its own
-    /// arrangement, which is what its readers answer from until a head exists
-    /// (PUB-2.66's memberless reading). The atom's IDENTITY is minted under
-    /// the CONTENT CHAIN of the address the caller NAMED (`mint_content(doc)`)
-    /// — the document's own for a bare address, a member's own for a member
-    /// (PUB-2.52) — so the start returned lies under the named address's
-    /// content chain whichever arrangement the deposit lands in; only the
-    /// placement floats.
+    /// judged fresh against the head's extent, and the placement record names
+    /// the head. While the document has no member the deposit lands in its
+    /// own arrangement, which is what its readers answer from until a head
+    /// exists (PUB-2.66's memberless reading). The atom's identity is minted
+    /// under the content chain of the address the caller named
+    /// (`mint_content(doc)`) — the document's own for a bare address, a
+    /// member's own for a member (PUB-2.52) — so the start returned lies under
+    /// the named address's content chain whichever arrangement the deposit
+    /// lands in; only the placement floats.
     ///
-    /// COST, AND WHO OWNS IT. This op admits any `values` length: there is no
-    /// analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
+    /// **Cost, and who owns it.** This op admits any `values` length: there is
+    /// no analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
     /// and none is owed, because the size of an INSERT is the size of the
     /// request that carries it rather than a source document's fragmentation
     /// multiplied by a spec count. What the values cost is `2 × (maximal
@@ -127,25 +110,50 @@ where
     /// record per run or atom, plus one placement; a run of a million typed
     /// bytes is two records — and `n` content addresses that are allocated
     /// permanently, M5 having no reclamation path. M2's `MAX_TXN_BYTES`
-    /// refuses the transaction past its own ceiling, but it refuses AFTER the
+    /// refuses the transaction past its own ceiling, but it refuses after the
     /// mints and writes are staged, so a caller that wants the refusal to
-    /// arrive before that work owes its own cap: M10's codec sets one on the
-    /// wire route (`MAX_INSERT_VALUES`), and a route that carries this op
-    /// without one owes the number.
+    /// arrive before that work owes its own cap: skep-core's codec, M10's
+    /// production `Codec`, sets one on the wire route (`MAX_INSERT_VALUES`),
+    /// and a route that carries this op without one owes the number.
     ///
     /// J0/J1★ by construction: mint + write + place + provenance ride one
     /// transaction, each run through `allocate_stretch_for_placement` and
     /// each atom through `allocate_for_placement` — J0's two steps, shared
     /// with the shot's re-insert, whose own docs state why the placement they
-    /// accumulate is never widened over addresses nobody allocated. THE
-    /// COALESCING: `values` is walked in order, every one-byte value joining a
-    /// pending byte-run, and the run is flushed as one stretch at the next
+    /// accumulate is never widened over addresses nobody allocated. **The
+    /// coalescing**: `values` is walked in order, every one-byte value joining
+    /// a pending byte-run, and the run is flushed as one stretch at the next
     /// atom and at the end — every one-byte value the codec hands in is a
     /// per-byte value (the wire canonicalizes a one-byte atom to its per-byte
     /// form), so one code path stores every per-byte value one way, a run of
     /// one included. INSERT's runs and atoms are minted one after another
     /// under the held content key, so they are I-adjacent and INSERT places
-    /// exactly ONE run, whose start is the first address minted.
+    /// exactly one run, whose start is the first address minted.
+    ///
+    /// # Errors
+    ///
+    /// Each refusal comes as `TxnError::Rejected`, in this order (which error
+    /// wins): `DocNotRegistered` → `NotOwner` (the in-txn ω gate) →
+    /// `PublishedTarget` (above) → `EmptyContent` → `NotContentSubspace`
+    /// (`at.subspace ≠ s_C`) → `OutOfBounds` (the arrangement does not admit
+    /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
+    /// so ordinal = 1 when n_C = 0). Then, per maximal run of single-byte
+    /// values or atom in the order given, `Mint` (the content mint, a range
+    /// for a run) → `Content` (the byte write, a stretch for a run), with the
+    /// first to fail deciding. The kernel's own failures — `OverBudget`,
+    /// `Unencodable`, `Durability`, `Poisoned` — come back as
+    /// `transact_attested` returns them.
+    ///
+    /// Neither per-value verdict is one an honest request can earn on a
+    /// correct store: `Mint(MintError::HomeNotRegistered)` cannot arrive past
+    /// the gate above and is M3's own boundary discharge;
+    /// `Mint(MintError::Gate)` is the inc gate M3 routes defensively, which M3
+    /// states no input and no state reaches, corrupted or not;
+    /// `Content(AlreadyStored)`, and a stretch's `Content(Overlap)`, cannot
+    /// occur in production at all — M3 mints fresh and M5 writes once, which
+    /// is the argument `stage_write` and `stage_stretch` make for keeping the
+    /// guard; and `Content(EmptyStretch)` never arrives, since no empty run is
+    /// flushed. All are defensive, as the shot's and VERSION's mints are.
     pub fn insert(
         &self,
         caller: Caller,
@@ -178,10 +186,10 @@ where
                 InsertError::NotOwner,
             )?;
             // PUB-6.36 slot 5: on a registered, owned target, the
-            // published-target refusal — cleared only by a deposit DECLARED
+            // published-target refusal — cleared only by a deposit declared
             // under a type the deposit class holds (PUB-2.11, RES-249/261) at
-            // a FRESH position (PUB-2.59, PUB-9.13) of the arrangement the
-            // deposit lands in: the HEAD member's, or the document's own
+            // a fresh position (PUB-2.59, PUB-9.13) of the arrangement the
+            // deposit lands in: the head member's, or the document's own
             // while it has none (PUB-2.66). Which arrangement the insert
             // lands in is decided with the refusal, one case at a time.
             let surface = {
@@ -192,7 +200,7 @@ where
                     // and the insert edits the arrangement named.
                     doc.clone()
                 } else if let Some(ty) = declared_type {
-                    // The CLASS TEST: a membership compare against M5's own
+                    // The class test: a membership compare against M5's own
                     // build-time set, reading nothing. A declaration naming
                     // any other type answers as an undeclared append does.
                     if !deposit_class_types().contains(ty) {
@@ -242,7 +250,7 @@ where
                     &mut runs,
                 )?;
             }
-            // The placement's start is the FIRST address minted: the
+            // The placement's start is the first address minted: the
             // accumulator only ever widens a run rightwards or opens a new
             // one after it, so the first run's start is the first mint.
             let start = runs

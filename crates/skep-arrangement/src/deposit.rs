@@ -1,24 +1,27 @@
-//! The deposit declaration an INSERT carries ([`Deposit`]), and the deposit
-//! class's types the insert door compares it against ([`deposit_class_types`]).
+//! The deposit declaration an INSERT carries, and the deposit class's types.
+//!
+//! The declaration is [`Deposit`]; the insert door compares it against the
+//! types [`deposit_class_types`] holds.
 
 use std::sync::LazyLock;
 
 use skep_address::{elem_addr, Address, ElemPos, Nat};
 use skep_namespace::ghost_home_document;
 
-/// The deposit DECLARATION an INSERT carries or omits (PUB-9.13's DECLARED
-/// horn; PUB-2.59, PUB-2.61): the one declaration M5's writes take,
-/// and the one thing that clears the in-place refusal on a published
-/// document — and only for an insert at a fresh content position
+/// The deposit declaration an INSERT carries or omits.
+///
+/// It is PUB-9.13's declared horn (PUB-2.59, PUB-2.61): the one declaration
+/// M5's writes take, and the one thing that clears the in-place refusal on a
+/// published document — and only for an insert at a fresh content position
 /// ([`Vstream::insert`](crate::Vstream::insert) states the shape). Into a
 /// private document it is inert. Content only — a link deposit is outside the
 /// rule (PUB-2.12).
 ///
-/// THE DECLARATION NAMES THE RECORD CLASS (PUB-2.11, PUB-2.64; RES-249): what
-/// it carries is the class's TYPE address — the type the `make_link` naming
-/// the atom then carries (PUB-2.63) — and the write path tests it, admitting
-/// a declared insert on a published document only where that type is one
-/// [`deposit_class_types`] holds. A bare "this is a deposit" would not
+/// **The declaration names the record class** (PUB-2.11, PUB-2.64; RES-249):
+/// what it carries is the class's type address — the type the `make_link`
+/// naming the atom then carries (PUB-2.63) — and the write path tests it,
+/// admitting a declared insert on a published document only where that type
+/// is one [`deposit_class_types`] holds. A bare "this is a deposit" would not
 /// separate the exempt record atom from ordinary prose at a fresh position;
 /// the class type does, and the `make_link` naming the atom, carrying that
 /// same type, is where the declaration is borne out.
@@ -37,75 +40,81 @@ use skep_namespace::ghost_home_document;
 ///
 /// Two variants because the corpus has two — an insert is declared or it is
 /// not — so a match on it is exhaustive, and a third variant would change the
-/// exemption itself. `Default` is `Undeclared`: on the wire an ABSENT field
+/// exemption itself. `Default` is `Undeclared`: on the wire an absent field
 /// is the one spelling of no declaration (PUB-2.64).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Deposit {
-    /// No declaration: an ordinary edit — and, on a published document, an
-    /// in-place edit, refused.
+    /// No declaration: an ordinary edit.
+    ///
+    /// On a published document it is an in-place edit, refused.
     #[default]
     Undeclared,
-    /// The deposit declaration, carrying the record class's TYPE: admitted on
-    /// a published document where the type is a member of
-    /// [`deposit_class_types`] AND the insert names a fresh content position
+    /// The deposit declaration, carrying the record class's type.
+    ///
+    /// It is admitted on a published document where the type is a member of
+    /// [`deposit_class_types`] and the insert names a fresh content position
     /// of the arrangement the deposit lands in. A type the set does not hold
     /// is refused `PublishedTarget`, as an undeclared append is.
     Declared(Address),
 }
 
-/// The commons' TYPE subspace of the ghost home document — subspace 3, the
-/// core vocabulary's home, where nothing is ever minted (no M3 door mints
-/// into any document's subspace 3), so no content address can equal a type
-/// spelled there.
+/// The commons' type subspace of the ghost home document: subspace 3.
+///
+/// It is the core vocabulary's home, where nothing is ever minted (no M3
+/// door mints into any document's subspace 3), so no content address can
+/// equal a type spelled there.
 const COMMONS_TYPE_SUBSPACE: u32 = 3;
 
-/// The commons ordinals of [`deposit_class_types`]' members, in the set's
-/// order — the two atom-bearing CREDENTIAL classes (AUTH-5.4: a credential
-/// record is ONE ATOM, a DECLARED deposit into the home document), then the
-/// two atom-bearing REGISTRY kinds whose bodies the daemon parses (REG-1.14;
-/// REG-2.26's first two members, each an atom plus a link into a doc 1):
+/// The commons ordinals of [`deposit_class_types`]' members, in order.
 ///
-/// * `1` — ENROLL, `1.1.0.1.0.1.0.3.1`;
-/// * `2` — RETIRE, `1.1.0.1.0.1.0.3.2`;
-/// * `55` — the BINDING, `1.1.0.1.0.1.0.3.55`;
-/// * `56` — the ENDPOINT, `1.1.0.1.0.1.0.3.56`.
+/// In the set's order, they are the two atom-bearing credential classes
+/// (AUTH-5.4: a credential record is one atom, a declared deposit into the
+/// home document), then the two atom-bearing registry kinds whose bodies the
+/// daemon parses (REG-1.14; REG-2.26's first two members, each an atom plus a
+/// link into a doc 1):
 ///
-/// The daemon's own constants for the credential pair (`T_ENROLL`,
-/// `T_RETIRE`) and the registry's own table for the other two
-/// (`skep-registry`, read by the engine's ledger) sit above this crate,
-/// where the door cannot read them, so this is a SECOND SPELLING — and the
-/// daemon's suite pins the four EQUAL, member for member, and this set
-/// prefix-free against every pin of the engine's commons ledger
-/// (`skep-engine/src/types.rs`) but the two rows it spells again, so neither
-/// spelling moves alone.
+/// * `1` — enroll, `1.1.0.1.0.1.0.3.1`;
+/// * `2` — retire, `1.1.0.1.0.1.0.3.2`;
+/// * `55` — the binding, `1.1.0.1.0.1.0.3.55`;
+/// * `56` — the endpoint, `1.1.0.1.0.1.0.3.56`.
+///
+/// The engine ledger's pins for the credential pair (`t_enroll`, `t_retire`)
+/// sit above this crate, where the door cannot read them, and the registry's
+/// own table for the other two (`skep-registry`, read by the engine's ledger)
+/// lies in a crate this one does not depend on, so this is a second spelling —
+/// and the tests of the engine's commons ledger (`skep-engine/src/types.rs`)
+/// pin the four equal, member for member, and this set prefix-free against
+/// every other pin of that ledger, and the daemon's suite pins the four equal
+/// too, so neither spelling moves alone.
 const DEPOSIT_CLASS_ORDINALS: [u32; 4] = [1, 2, 55, 56];
 
-/// THE DEPOSIT CLASS's TYPE-RECOGNITION INPUT at the insert door (PUB-2.11;
-/// RES-249, RES-261; the owner's ruling, 2026-09-18): the members' list of
-/// PUB-2.61's class sentence RESTRICTED TO THE CLASSES THAT DEPOSIT AN ATOM —
-/// a BUILD-TIME set, M5's own, each member the ghost home document's
-/// ([`ghost_home_document`]) subspace-3 element at its commons ordinal
-/// (`DEPOSIT_CLASS_ORDINALS`). Today: ENROLL, RETIRE, the registry's
-/// BINDING and its ENDPOINT, in that order.
+/// Returns the deposit class's type-recognition input at the insert door.
 ///
-/// Membership is EQUALITY — the membership compare RES-249 pins, and the
+/// It is the members' list of PUB-2.61's class sentence restricted to the
+/// classes that deposit an atom (PUB-2.11; RES-249, RES-261) — a build-time
+/// set, M5's own, each member the ghost home document's
+/// ([`ghost_home_document`]) subspace-3 element at its commons ordinal
+/// (`DEPOSIT_CLASS_ORDINALS`). Today: enroll, retire, the registry's binding
+/// and its endpoint, in that order.
+///
+/// Membership is equality — the membership compare RES-249 pins, and the
 /// compare the credential classifier makes of the type slot of the
 /// `make_link` naming the atom (exactly one span `Equal` to the class's,
 /// containment answering nothing): a subtype beneath a member is no member.
 /// A class joins at the rule that mints it or that states it rides this
 /// class (RES-261), by one ordinal above and nothing else — and with the
 /// daemon arm that parses its record and verifies its `sig`, as the two
-/// registry kinds joined with the record grade's registry arm (REG-1.37 as
+/// registry kinds are held with the record grade's registry arm (REG-1.37 as
 /// the record grade re-reads it); each type held here that no conforming
 /// `insert` bears out is one more prose path under PUB-2.60's residue, so
-/// the set holds what deposits an atom TODAY and no more.
+/// the set holds what deposits an atom today and no more.
 ///
-/// JOINING LATER, each at its own type's allocation:
+/// **Joining later**, each at its own type's allocation:
 ///
-/// * the DISPLAY-NAME record — IN by PUB-2.62 (RES-261): its doc-1 content
+/// * the display-name record — in by PUB-2.62 (RES-261): its doc-1 content
 ///   write is a deposit into a published home; it joins at P8's allocation
 ///   (the write itself is deferred, AUTH RES-62);
-/// * the INVITE LETTER — RES-221 gave it a body, so it deposits an atom; it
+/// * the invite letter — RES-221 gives it a body, so it deposits an atom; it
 ///   joins at its type's allocation (no type is pinned for it yet);
 /// * the registry's five other body-bearing rows — the takedown record's
 ///   base reading `3.57.1`, the disavowal `3.58.2`, an expulsion's and a
@@ -114,25 +123,26 @@ const DEPOSIT_CLASS_ORDINALS: [u32; 4] = [1, 2, 55, 56];
 ///   schema is pinned and the daemon parses it; a declared `insert` under
 ///   one is refused `PublishedTarget` at this door until then.
 ///
-/// NEVER — a class that deposits its typed link and endsets alone, and no
-/// atom: PUB-2.61's class sentence names it, but its type is never one the
-/// deposit class holds (RES-261), no conforming `insert` ever declaring it:
+/// **Never** — a class that deposits its typed link and endsets alone, and
+/// no atom: PUB-2.61's class sentence names it, but its type is never one
+/// the deposit class holds (RES-261), no conforming `insert` ever declaring
+/// it:
 ///
-/// * the GRANT — its link and endsets alone, NO BODY (PUB-5.15, RES-221);
+/// * the grant — its link and endsets alone, no body (PUB-5.15, RES-221);
 /// * `published-in-error` — the same (PUB-5.116, RES-220);
-/// * the EDITION CLAIM — NO BODY (RES-221);
-/// * `successor-of` — NO BODY (RES-221; REG-2.26's link-alone row);
-/// * the registry's two other link-alone rows — LIFTED `3.57.2` and the
-///   policy link's own reading `3.58.1` (REG-2.26) — NO BODY;
+/// * the edition claim — no body (RES-221);
+/// * `successor-of` — no body (RES-221; REG-2.26's link-alone row);
+/// * the registry's two other link-alone rows — lifted `3.57.2` and the
+///   policy link's own reading `3.58.1` (REG-2.26) — no body;
 /// * the two bare ordinals of the registry kinds that read more than one
 ///   way — the takedown record `3.57`, the policy link `3.58` — which carry
-///   NO deposit at all (REG-1.18);
-/// * the CLAIM link — names the account in its FROM and deposits no atom
+///   no deposit at all (REG-1.18);
+/// * the claim link — names the account in its `FROM` and deposits no atom
 ///   (AUTH's third credential type, `3.3`).
 ///
-/// HELD, not manufactured per call: one process-wide value, constructed at
-/// its first read — the addresses are compiled format constants, and the door
-/// consults them on every declared insert into a published document.
+/// **Held, not manufactured per call**: one process-wide value, constructed
+/// at its first read — the addresses are compiled format constants, and the
+/// door consults them on every declared insert into a published document.
 pub fn deposit_class_types() -> &'static [Address] {
     static TYPES: LazyLock<[Address; 4]> = LazyLock::new(|| {
         DEPOSIT_CLASS_ORDINALS.map(|ordinal| {
@@ -162,14 +172,17 @@ mod tests {
         assert_eq!(Deposit::default(), Deposit::Undeclared);
     }
 
-    /// The set as spelled: ENROLL, RETIRE, the BINDING, the ENDPOINT, each
-    /// the ghost home document's subspace-3 element at its commons ordinal —
-    /// where no M3 door mints, so no content address equals a member —
-    /// pairwise prefix-free, since membership is equality and a member
-    /// beneath another would be a subtype the door never reads as one. The
-    /// pin EQUAL to the daemon's constants and the registry's table, and
-    /// prefix-free against the engine's ledger, is the daemon suite's, which
-    /// can see every spelling; this crate sits below the others.
+    /// The set is spelled enroll, retire, the binding, the endpoint.
+    ///
+    /// Each is the ghost home document's subspace-3 element at its commons
+    /// ordinal — where no M3 door mints, so no content address equals a
+    /// member — pairwise prefix-free, since membership is equality and a
+    /// member beneath another would be a subtype the door never reads as
+    /// one. The pin equal to the engine ledger's credential pins and the
+    /// registry's table, and prefix-free against the rest of the engine's
+    /// ledger, is that ledger's own tests', which can see every spelling, and
+    /// the daemon's suite pins the equality too; this crate sits below the
+    /// engine and the daemon, and does not depend on `skep-registry`.
     #[test]
     fn the_deposit_class_types_are_the_four_atom_bearing_kinds_in_the_ghost_homes_type_subspace() {
         let types = deposit_class_types();
@@ -194,9 +207,11 @@ mod tests {
         }
     }
 
-    /// The set is ONE value, held: two reads hand back the same slice, not
-    /// two equal ones — the door consults it on every declared insert into a
-    /// published document, and a member is nine big-integer components.
+    /// The set is one value, held: two reads hand back the same slice.
+    ///
+    /// They are not two equal ones — the door consults it on every declared
+    /// insert into a published document, and a member is nine big-integer
+    /// components.
     #[test]
     fn the_deposit_class_types_are_one_held_value_rather_than_a_construction_per_read() {
         assert!(std::ptr::eq(deposit_class_types(), deposit_class_types()));

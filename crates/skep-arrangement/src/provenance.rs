@@ -1,5 +1,7 @@
-//! §A/§9 — the append-only content-provenance relation R: what each document
-//! has ever contained, and the historical read that answers off it.
+//! The append-only content-provenance relation R (§A/§9).
+//!
+//! It records what each document has ever contained, and holds the
+//! historical read that answers off it.
 
 use serde::{Deserialize, Serialize};
 use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
@@ -7,24 +9,27 @@ use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 use crate::decode::{element_by_element, entry_by_entry};
 use crate::run::Run;
 
-/// R, keyed by placing document — every content span a document has ever
-/// contained, in placement order (ASN-0047 P2: a pair `(a, d)` records that
-/// `d` contained the I-address `a`, and no transition removes one).
+/// R, keyed by placing document: every content span a document ever contained.
 ///
-/// APPEND-ONLY IS THE CARD, and it is structural: this type offers
-/// [`append`](Provenance::append) and reads, and NO way to drop or rewrite a
+/// The spans are kept in placement order (ASN-0047 P2: a pair `(a, d)`
+/// records that `d` contained the I-address `a`, and no transition removes
+/// one).
+///
+/// **Append-only is the card**, and it is structural: this type offers
+/// [`append`](Provenance::append) and reads, and no way to drop or rewrite a
 /// pair. That absence is why a deleted address keeps its provenance without
 /// any op having to promise it, and why R is non-recomputable from the
 /// current arrangement — a deletion contracts the arrangement and leaves R
 /// standing, so SHOWDELETIONS has something to subtract from. Recovered by
 /// replay like the arrangement itself, never rebuilt.
 ///
-/// SPAN SHAPE, and there are TWO doors that keep it: every recorded span is a
-/// [`Run::iextent`] — level-uniform and element-level.
-/// [`append`](Provenance::append) takes RUNS and lifts them itself, so no
+/// **Span shape**, and there are two doors that keep it: every span the fold
+/// records is a [`Run::iextent`] — level-uniform and element-level.
+/// [`append`](Provenance::append) takes runs and lifts them itself, so no
 /// caller can record a span of another shape, and the serde shadow below
-/// re-enters the level-uniformity clause on the decode path, so no checkpoint
-/// can present one either. The reads rest on that: it is what makes
+/// re-enters the level-uniformity clause on the decode path, so no
+/// checkpoint can present a span that breaks that clause either. The reads
+/// rest on that: it is what makes
 /// [`M5State::deletions`](crate::M5State::deletions)' per-class
 /// `difference_sets` infallible, M1's set ops gating on level-uniformity as
 /// well as on length — and a `.expect` on a public read is not a thing to
@@ -38,24 +43,26 @@ use crate::run::Run;
 #[serde(try_from = "ProvenanceShadow")]
 pub(crate) struct Provenance(im::OrdMap<Address, im::Vector<Span>>);
 
-/// The deserialization mint path (the serde `try_from` shadow, as [`Run`] and
-/// M1's `Address`/`Span`/`Tumbler` each carry one): the map is decoded entry
-/// by entry ([`entry_by_entry`]) and each document's spans element by element
-/// ([`EverContainedShadow`]) — each key re-entering `validate` and each span
-/// re-entering T12 through their own shadows, and no count the checkpoint body
-/// declares, the map's or a document's, sizing a reservation — and then the
-/// SPAN SHAPE clause the reads depend on is re-established here, so a
-/// checkpoint whose R holds a span no [`Run::iextent`] could have produced is
-/// a decode failure M2 reports as corruption rather than a value that panics
+/// The deserialization mint path: the serde `try_from` shadow.
+///
+/// [`Run`] and M1's `Address`/`Span`/`Tumbler` each carry one too. The map is
+/// decoded entry by entry ([`entry_by_entry`]) and each document's spans
+/// element by element ([`EverContainedShadow`]) — each key re-entering
+/// `validate` and each span re-entering T12 through their own shadows, and no
+/// count the checkpoint body declares, the map's or a document's, sizing a
+/// reservation — and then the span-shape clause the reads depend on is
+/// re-established here, so a checkpoint whose R holds a span that is not
+/// level-uniform, which no [`Run::iextent`] is, is a decode failure M2
+/// reports as corruption rather than a value that panics
 /// [`M5State::deletions`](crate::M5State::deletions) on the next
 /// SHOWDELETIONS, on a worker thread, per request.
 ///
-/// LEVEL-UNIFORMITY IS THE CLAUSE, and it is the minimal one: it is what M1's
-/// `level_class` gates on, hence exactly what the per-class `difference_sets`
-/// needs. Element-level-ness is not re-checked — no read faults on its
-/// absence, and asking it here would be a second definition of a run start
-/// rather than the one [`Run::admits_start`] owns. One length comparison per
-/// recorded span, once, at checkpoint load.
+/// **Level-uniformity is the clause**, and it is the minimal one: it is what
+/// M1's `level_class` gates on, hence exactly what the per-class
+/// `difference_sets` needs. Element-level-ness is not re-checked — no read
+/// faults on its absence, and asking it here would be a second definition of
+/// a run start rather than the one [`Run::admits_start`] owns. One length
+/// comparison per recorded span, once, at checkpoint load.
 ///
 /// It reads exactly what a `Provenance` writes — the same newtype over the
 /// same map, each value a newtype over the same vector, and bincode encodes a
@@ -66,11 +73,12 @@ struct ProvenanceShadow(
     #[serde(deserialize_with = "entry_by_entry")] im::OrdMap<Address, EverContainedShadow>,
 );
 
-/// One document's R↾doc as [`ProvenanceShadow`] decodes it: its recorded
-/// spans, read element by element ([`element_by_element`]), so a span count
-/// the checkpoint body does not carry is refused where the input runs out
-/// rather than reserved for. A carrier and nothing else — the conversion below
-/// unwraps it into the relation.
+/// One document's R↾doc as [`ProvenanceShadow`] decodes it.
+///
+/// Its recorded spans are read element by element ([`element_by_element`]),
+/// so a span count the checkpoint body does not carry is refused where the
+/// input runs out rather than reserved for. A carrier and nothing else — the
+/// conversion below unwraps it into the relation.
 #[derive(Clone, Deserialize)]
 struct EverContainedShadow(#[serde(deserialize_with = "element_by_element")] im::Vector<Span>);
 
@@ -90,11 +98,12 @@ impl TryFrom<ProvenanceShadow> for Provenance {
 }
 
 impl Provenance {
-    /// Append the I-extents of `runs` to R↾doc (persistent — the receiver is
-    /// untouched). Called from the placing folds, co-located with the
-    /// arrangement update they pair with, so one new state carries both halves
-    /// of J1★. The ONLY mutator, and it only ever lengthens a document's
-    /// sequence.
+    /// Returns R with the I-extents of `runs` appended to R↾doc.
+    ///
+    /// It is persistent — the receiver is untouched. Called from the placing
+    /// folds, co-located with the arrangement update they pair with, so one
+    /// new state carries both halves of J1★. The only mutator, and it only
+    /// ever lengthens a document's sequence.
     ///
     /// Takes the runs rather than their spans: the lift is the one this type
     /// admits, so performing it here makes the span-shape invariant above
@@ -110,10 +119,11 @@ impl Provenance {
         Provenance(self.0.update(doc.clone(), spans))
     }
 
-    /// R↾doc: the iextent cover of content spans `doc` has ever contained —
-    /// every span it placed, whether or not the arrangement still holds it,
-    /// and the `deletions` operand (Conflicts #8). Raw and possibly
-    /// mixed-length; it never crosses a module seam.
+    /// Returns R↾doc, the iextent cover of the spans `doc` has ever contained.
+    ///
+    /// That is every content span it placed, whether or not the arrangement
+    /// still holds it, and the `deletions` operand (Conflicts #8). Raw and
+    /// possibly mixed-length; it never crosses a module seam.
     pub(crate) fn ever_contained(&self, doc: &Address) -> SpanSet {
         self.0
             .get(doc)
@@ -121,33 +131,38 @@ impl Provenance {
             .unwrap_or_else(SpanSet::empty)
     }
 
-    /// `|R↾doc|` — how many spans R↾doc holds: one per run `doc` has ever
-    /// placed, whether or not the arrangement still holds it. One map lookup,
-    /// reading no span; absent ⇒ 0.
+    /// Returns `|R↾doc|`, how many spans R↾doc holds.
+    ///
+    /// That is one per run `doc` has ever placed, whether or not the
+    /// arrangement still holds it. One map lookup, reading no span; absent ⇒ 0.
     pub(crate) fn recorded_span_count(&self, doc: &Address) -> usize {
         self.0.get(doc).map_or(0, |spans| spans.len())
     }
 
-    /// Has `doc` any entry in R at all? Distinguishes ABSENT from empty, which
-    /// the reads deliberately do not (both answer ⟨⟩) — the empty-source
-    /// fork's "no redundant entry" claim is about the map, so the test that
-    /// pins it needs a way to ask.
+    /// Returns whether `doc` has any entry in R at all.
+    ///
+    /// It distinguishes absent from empty, which the reads deliberately do not
+    /// (both answer ⟨⟩) — the empty-source fork's "no redundant entry" claim
+    /// is about the map, so the test that pins it needs a way to ask.
     #[cfg(test)]
     pub(crate) fn is_recorded(&self, doc: &Address) -> bool {
         self.0.contains_key(doc)
     }
 
-    /// Every document with some placed span not `Separated` from some span of
-    /// `coverage`, under M1's total, length-gate-free `classify_spans` — so a
-    /// mixed-length coverage is answered without the level-class discipline.
-    /// v1 scans the map (Open decision #3: an index over R would live here,
-    /// R's owner, not in the query that composes on it); the `OrdMap` walk is
-    /// what makes the result's tumbler order deterministic, and a key is
-    /// already the placing document's `Address`, so the answer is assembled
-    /// rather than reconstructed.
+    /// Returns the documents with a span not `Separated` from `coverage`.
     ///
-    /// COST, since nothing here bounds it: one `classify_spans` per (recorded
-    /// span × coverage span) over the WHOLE relation, each deriving both
+    /// A span counts where it is not `Separated` from some span of `coverage`,
+    /// under M1's total, length-gate-free `classify_spans` — so a mixed-length
+    /// coverage is answered without the level-class discipline. v1 scans the
+    /// map (Open decision #3: an index over R would live here, R's owner, not
+    /// in the query that composes on it); the `OrdMap` walk is what makes the
+    /// result's tumbler order deterministic, and a key is already the placing
+    /// document's `Address`, so the answer is assembled rather than
+    /// reconstructed.
+    ///
+    /// **Cost**, since nothing here bounds it: at most one `classify_spans`
+    /// per (recorded span × coverage span) over the whole relation — a
+    /// document's walk stops at its first match — each deriving both
     /// operands' endpoints, and R only ever grows (P2).
     /// [`M5State::docs_ever_containing`](crate::M5State::docs_ever_containing)
     /// states what this answer means to a caller, and who owns that bound.
@@ -199,12 +214,12 @@ mod tests {
 
     #[test]
     fn decoding_the_relation_re_establishes_the_span_shape_the_reads_rest_on() {
-        // §9: the SPAN SHAPE clause is what makes `M5State::deletions`'
+        // §9: the span-shape clause is what makes `M5State::deletions`'
         // per-class `difference_sets` infallible — M1's set ops gate on
         // level-uniformity as well as on length — so the decode path holds it
-        // as the mutator does. A span no `Run::iextent` could have produced is
-        // a decode failure M2 reports as corruption, not a value that panics a
-        // public read on the next SHOWDELETIONS.
+        // as the mutator does. A span that is not level-uniform, which no
+        // `Run::iextent` is, is a decode failure M2 reports as corruption, not
+        // a value that panics a public read on the next SHOWDELETIONS.
         //
         // The bytes are made by encoding the shadow's own shape, which is the
         // exact form a corrupt checkpoint would present.
@@ -217,7 +232,7 @@ mod tests {
             )))
             .expect("the shadow encodes")
         };
-        // T12-valid (action point 1 ≤ #start 8) and NOT level-uniform — the
+        // T12-valid (action point 1 ≤ #start 8) and not level-uniform — the
         // shape `iextent` cannot make and `difference_sets` faults on.
         let skew = Span::new(ca(1).tumbler().clone(), t(&[1])).expect("T12");
         assert!(!skew.is_level_uniform());

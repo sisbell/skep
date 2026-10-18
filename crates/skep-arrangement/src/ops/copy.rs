@@ -1,5 +1,6 @@
-//! COPY (ASN-0118; §5): transclusion by reference — existing content resolved
-//! from its sources and placed, allocating none.
+//! COPY (ASN-0118; §5): transclusion by reference.
+//!
+//! Existing content is resolved from its sources and placed, allocating none.
 
 use skep_address::Address;
 use skep_content::HasContent;
@@ -21,30 +22,30 @@ where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration) + M4 (`contains` gate) + M5
     W::Record: From<M5Rec>,                     // stages only M5Rec (no mint, no byte write)
 {
-    /// COPY (ASN-0118; §5): transclude existing content by reference —
-    /// resolve `specs` against source arrangements off the transaction's
-    /// working state, splice into doc's content subspace at `at`, record
-    /// provenance for the placed runs. Allocates NO content (CP1/CP2); the
-    /// resolved addresses stay valid forever by content immutability (S0),
-    /// so no source lock is needed.
+    /// Transcludes existing content by reference (ASN-0118; §5).
     ///
-    /// SOURCES ARE READ AS NAMED — no head-float (wire.md pins this seam): a
-    /// spec naming a bare published document with members resolves against
-    /// that document's own pre-chain arrangement, which the chain has
+    /// It resolves `specs` against source arrangements off the transaction's
+    /// working state, splices into doc's content subspace at `at`, and records
+    /// provenance for the placed runs. Allocates no content (CP1/CP2); the
+    /// resolved addresses stay valid forever by content immutability (S0), so
+    /// no source lock is needed.
+    ///
+    /// **Sources are read as named** — no head-float (wire.md pins this
+    /// seam): a spec naming a bare published document with members resolves
+    /// against that document's own pre-chain arrangement, which the chain has
     /// superseded, never against the trunk head its readers answer from;
     /// `EmptySource` and the clipping are judged against that same
     /// arrangement. A caller wanting what a reader of the bare address sees
     /// names the head — [`trunk_head`](crate::trunk_head), or
     /// [`reading_surface`](crate::reading_surface) of the address — as a
-    /// stager's copy names the member it stages from (PUB-2.27).
-    /// Contrast [`version`](Vstream::version), which snapshots the reading
-    /// surface.
+    /// stager's copy names the member it stages from (PUB-2.27). Contrast
+    /// [`version`](Vstream::version), which snapshots the reading surface.
     ///
-    /// REQUIRES — the caller has established that the principal it writes
-    /// for may read every `specs[].source` (PUB-6.23's source gate). M5 knows
-    /// no principal's read rights and takes no consult for COPY, so nothing
-    /// here checks it: a caller that skips it transcludes a document its
-    /// principal may not read into one that principal owns, and the
+    /// **Precondition.** The caller has established that the principal it
+    /// writes for may read every `specs[].source` (PUB-6.23's source gate). M5
+    /// knows no principal's read rights and takes no consult for COPY, so
+    /// nothing here checks it: a caller that skips it transcludes a document
+    /// its principal may not read into one that principal owns, and the
     /// destination's ω — the only question COPY asks of its caller — admits
     /// the write. On the wire route M10's pre-dispatch consult discharges it;
     /// a caller driving COPY directly owes its own.
@@ -53,38 +54,38 @@ where
     /// neither, so a caller that holds its spec list behind a reference is not
     /// made to clone it.
     ///
-    /// Check order (which error wins). Destination first, as INSERT:
-    /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only;
-    /// source spans are unrestricted BY OWNERSHIP, transclusion of another's
-    /// content being the point of the medium, and are not judged for
-    /// READABILITY here — the REQUIRES above) → `PublishedTarget` (PUB-2.11
-    /// on the DESTINATION's document, PUB-2.15 projected; copy-into is an
-    /// in-place edit and carries no deposit exemption — the sources,
-    /// published or private, are never what this refuses on) →
-    /// `NotContentSubspace` → `OutOfBounds`. Then, per spec:
-    /// `SourceNotRegistered`
-    /// → `NotOrdinalVSpan` (the span fails
+    /// # Errors
+    ///
+    /// Each refusal comes as `TxnError::Rejected`, in this order (which error
+    /// wins). Destination first, as INSERT: `DocNotRegistered` → `NotOwner`
+    /// (the ω gate on the destination only; source spans are unrestricted by
+    /// ownership, transclusion of another's content being the point of the
+    /// medium, and are not judged for readability here — the precondition
+    /// above) → `PublishedTarget` (PUB-2.11 on the destination's document,
+    /// PUB-2.15 projected; copy-into is an in-place edit and carries no
+    /// deposit exemption — the sources, published or private, are never what
+    /// this refuses on) → `NotContentSubspace` → `OutOfBounds`. Then, per
+    /// spec: `SourceNotRegistered` → `NotOrdinalVSpan` (the span fails
     /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the one shape `resolve`
     /// folds on, so a span COPY rejects is exactly a span `resolve` would
-    /// refuse to serve, Conflicts #7)
-    /// → `SourceNotContentSubspace` (that span's subspace ≠ s_C)
-    /// → `EmptySource` (ASN-0118
-    /// enabled(COPY)) → `TooManyRuns` (the WALK's charge: this spec's source's
-    /// whole run count, summed with the specs before it, past
-    /// [`MAX_COPY_RESOLVE_STEPS`] — taken before
-    /// the spec is resolved, so a spec the budget refuses is never walked) →
-    /// per-run `DanglingSource` (`M4::contains` on the run
+    /// refuse to serve, Conflicts #7) → `SourceNotContentSubspace` (that
+    /// span's subspace ≠ s_C) → `EmptySource` (ASN-0118 enabled(COPY)) →
+    /// `TooManyRuns` (the walk's charge: this spec's source's whole run count,
+    /// summed with the specs before it, past [`MAX_COPY_RESOLVE_STEPS`] —
+    /// taken before the spec is resolved, so a spec the budget refuses is
+    /// never walked) → per-run `DanglingSource` (`M4::contains` on the run
     /// start — S3★, Open decision #5 default) → `TooManyRuns`
-    /// ([`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured after each run
-    /// is accumulated; the resolution is pulled LAZILY, so an over-budget spec
-    /// stops the source walk at the cap rather than being resolved in full and
-    /// measured afterwards); finally `EmptyResult` when nothing survives
-    /// clipping. Cross-origin runs never coalesce
-    /// (the placement accumulator's I-adjacency guard), preserving the origin
-    /// multiset (CP11).
+    /// ([`MAX_PLACED_RUNS`], measured after each run is accumulated; the
+    /// resolution is pulled lazily, so an over-budget spec stops the source
+    /// walk at the cap rather than being resolved in full and measured
+    /// afterwards); finally `EmptyResult` when nothing survives clipping.
+    /// Cross-origin runs never coalesce (the placement accumulator's
+    /// I-adjacency guard), preserving the origin multiset (CP11). The kernel's
+    /// own failures — `OverBudget`, `Unencodable`, `Durability`, `Poisoned` —
+    /// come back as `transact` returns them.
     ///
-    /// WHICH SPEC SPEAKS, when more than one is defective: the specs are
-    /// examined in the order given and the FIRST spec to fail any of its
+    /// **Which spec speaks**, when more than one is defective: the specs are
+    /// examined in the order given and the first spec to fail any of its
     /// guards decides, with the per-spec order above applying within that
     /// spec. So a mis-shaped span in an earlier spec outranks an unregistered
     /// source in a later one — the list is walked, not the guards.
@@ -93,28 +94,28 @@ where
     /// invariant, stated so that widening what they gate obliges widening
     /// them:
     ///
-    /// * `SourceNotContentSubspace` keeps LINK addresses out of content
+    /// * `SourceNotContentSubspace` keeps link addresses out of content
     ///   V-positions. It is not a formality: `resolve` serves whichever
     ///   run-list the span's subspace numeral selects, so a link-subspace span
-    ///   resolves against the source's LINK runs, and placing those here would
+    ///   resolves against the source's link runs, and placing those here would
     ///   bind link addresses at content positions — links seated under an
     ///   origin that is not this document, which CL-OWN forbids and no read
     ///   downstream would report.
     /// * `DanglingSource` is S3★ on the content side, and it is checked on run
-    ///   STARTS alone. Sound for the interior by induction over the ways an
+    ///   starts alone. Sound for the interior by induction over the ways an
     ///   address enters a content arrangement, each of which either admits a
     ///   present address or inherits one: a run this gate admits was arranged
     ///   in its source, whose interior is present by the same induction;
     ///   INSERT and the shot's re-insert write every address they place, in
-    ///   the composite that places it (`allocate_for_placement`, J0); the
-    ///   shot's by-reference runs are probed at EVERY address before placement
-    ///   (they were not resolved from any arrangement), and so are REINSTATE's
-    ///   runs, client-named like them (`ops/reinstate.rs`); the shot's carried
-    ///   tail is read off the base's own arrangement, already inside the
+    ///   the composite that places it (`allocate_for_placement` and
+    ///   `allocate_stretch_for_placement`, J0's two steps); the shot's
+    ///   by-reference runs are probed at every address before placement (they
+    ///   were not resolved from any arrangement), and so are REINSTATE's runs,
+    ///   client-named like them (`ops/reinstate.rs`); the shot's carried tail
+    ///   is read off the base's own arrangement, already inside the
     ///   induction; VERSION shares an arrangement already inside it. Outside
-    ///   the induction
-    ///   is a record staged past the ops or decoded from a corrupt store —
-    ///   [`M5Rec`]'s seals and
+    ///   the induction is a record staged past the ops or decoded from a
+    ///   corrupt store — [`M5Rec`]'s seals and
     ///   [`M5State::apply_m5`](crate::M5State::apply_m5)'s input class say
     ///   how, and that is M2's integrity, not this gate's. A new way in joins
     ///   this list, or this gate is re-examined.
@@ -165,7 +166,7 @@ where
                     if world.m5().content_is_empty(&spec.source) {
                         return Err(CopyError::EmptySource);
                     }
-                    // The WALK's charge, ahead of the walk: the source's whole
+                    // The walk's charge, ahead of the walk: the source's whole
                     // run count, the most this spec's resolution can step past
                     // — the request's spec list multiplies it, under the
                     // applier lock, whatever the specs keep.
@@ -173,8 +174,8 @@ where
                     if steps > MAX_COPY_RESOLVE_STEPS {
                         return Err(CopyError::TooManyRuns);
                     }
-                    // Resolved BEFORE staging ⇒ a self-copy sees the pre-edit
-                    // arrangement. Resolved LAZILY, so what one spec makes
+                    // Resolved before staging ⇒ a self-copy sees the pre-edit
+                    // arrangement. Resolved lazily, so what one spec makes
                     // this closure hold live is the accumulator (capped
                     // below) and not the source's whole run-list, whose size
                     // the request does not choose.

@@ -1,15 +1,15 @@
-//! THE OWNERSHIP GATE (as amended 2026-08-16, the ownership ruling): a gated
-//! write's registration, then its ω gate — ONE caller identity type and ONE
-//! ownership predicate, shared by M5's writes and (by re-export) M7's
-//! link-deposit ops, so the ω half of "who may write into this document's
-//! space" has one definition everywhere — and the whole gate, registration
-//! then ω, has one too: answered as one boolean
-//! ([`Caller::passes_ownership_gate`]) for a door ahead of the store, and as
-//! the ordered verdict by [`gate_write`].
+//! The ownership gate: a gated write's registration, then its ω gate.
+//!
+//! It is one caller identity type and one ownership predicate, shared by
+//! M5's writes and (by re-export) M7's link-deposit ops, so the ω half of
+//! "who may write into this document's space" has one definition everywhere
+//! — and the whole gate, registration then ω, has one too: answered as one
+//! boolean ([`Caller::passes_ownership_gate`]) for a door ahead of the store,
+//! and as the ordered verdict by [`gate_write`].
 //!
 //! The predicate is M3's [`M3State::is_effective_owner`] — ω, the longest
 //! registered account/node-tier prefix, compared by principal id: the
-//! caller's account must be EXACTLY the document's account. Exactness is
+//! caller's account must be exactly the document's account. Exactness is
 //! load-bearing in both directions (ASN-0042 exclusive delegation, O2/O3/O8
 //! — the deliberate fix of green's `tumbleraccounteq`): a parent account
 //! does not own a sub-delegated account's documents, and a sub-account does
@@ -20,8 +20,9 @@
 use skep_address::Address;
 use skep_namespace::{M3State, PrincipalId};
 
-/// The write-op caller identity, evaluated inside the store's transaction
-/// (the same discipline as the existing ω sites).
+/// The write-op caller identity, evaluated inside the store's transaction.
+///
+/// It keeps the same discipline as the other ω sites.
 ///
 /// `Principal` is a FEBE-attributed write: M10 resolves the session's
 /// principal and the store checks it owns the written document. `System` is
@@ -30,44 +31,48 @@ use skep_namespace::{M3State, PrincipalId};
 /// architecture); the ω gate does not apply. The transport never
 /// constructs `System`.
 ///
-/// `System` is exempt from ω and from NOTHING ELSE: the version-chain
+/// `System` is exempt from ω and from nothing else: the version-chain
 /// model's in-place refusal (PUB-2.11) reads the same for it — a rule fire
 /// never advances a published arrangement in place (PUB-6.28), so an
 /// automation write into a published target is refused exactly as a
 /// principal's is. PUB-6.28's other clause — a rule fire never crosses the
-/// draft boundary — is NOT kept here:
+/// draft boundary — is not kept here:
 /// [`Vstream::publish`](crate::Vstream::publish) asks its caller nothing
 /// beyond `gate_write`, which `System` passes, so the clause holds for the
 /// shot only because M9 composes `insert` alone.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Caller {
-    /// A session-attributed principal — ω-checked against each written
-    /// document.
+    /// A session-attributed principal.
+    ///
+    /// It is ω-checked against each written document.
     Principal(PrincipalId),
-    /// The engine-internal automation path (M9); exempt from ω by
-    /// architecture, not by omission — and exempt from the publication
-    /// refusals by neither.
+    /// The engine-internal automation path (M9).
+    ///
+    /// It is exempt from ω by architecture, not by omission — and exempt from
+    /// the publication refusals by neither.
     System,
 }
 
 impl Caller {
-    /// Is this caller the effective owner of `doc`? The ONE ownership
-    /// predicate of M5's writes, and it does not compute ω itself: it
-    /// asks M3, whose `is_effective_owner` IS the rule (exact account match
-    /// by principal id — delegation's id-injectivity makes id equality
-    /// equivalent to prefix equality, and no registered owning prefix is
-    /// not-owner, never a pass). One spelling of the rule, in the module
-    /// that owns the registry it reads.
+    /// Returns whether this caller is the effective owner of `doc`.
+    ///
+    /// It is the one ownership predicate of M5's gated writes, and it does not
+    /// compute ω itself: it asks M3, whose `is_effective_owner` is the rule
+    /// (exact account match by principal id — delegation's id-injectivity
+    /// makes id equality equivalent to prefix equality, and no registered
+    /// owning prefix is not-owner, never a pass). One spelling of the rule, in
+    /// the module that owns the registry it reads.
     ///
     /// `System` answers `true` — it is exempt from ω, as the type states — so
     /// what this decides is whether the caller passes the ω gate, which is
     /// the question every caller asks it.
     ///
-    /// ω answers ANY address, registered or not, by its longest registered
+    /// ω answers any address, registered or not, by its longest registered
     /// prefix, so this says "owner" of an address under the caller's own
     /// account that names no document. Whether a write would pass the
-    /// ownership gate is [`passes_ownership_gate`](Caller::passes_ownership_gate)'s
-    /// question, which asks registration first.
+    /// ownership gate is
+    /// [`passes_ownership_gate`](Caller::passes_ownership_gate)'s question,
+    /// which asks registration first.
     pub fn is_owner(&self, m3: &M3State, doc: &Address) -> bool {
         match self {
             Caller::System => true,
@@ -75,41 +80,48 @@ impl Caller {
         }
     }
 
-    /// Does this caller pass the OWNERSHIP GATE for `doc` — is `doc` a
-    /// REGISTERED document and this caller its effective owner
-    /// ([`is_owner`](Caller::is_owner))? The two questions `gate_write` asks,
-    /// in its order, answered as one, for a door AHEAD of the store that
-    /// defers to the store wherever the store's own first slot would refuse
-    /// (PUB-6.36 slot 1, PUB-6.37) and so needs the answer and not the
-    /// verdict: M10's write door, skep-media's media door and the daemon's
-    /// producers ask it. `System` passes wherever `doc` is registered.
+    /// Returns whether this caller passes the ownership gate for `doc`.
+    ///
+    /// That is, whether `doc` is a registered document and this caller its
+    /// effective owner ([`is_owner`](Caller::is_owner)): the two questions
+    /// `gate_write` asks, in its order, answered as one, for a door ahead of
+    /// the store that defers to the store wherever the store's own first slot
+    /// would refuse (PUB-6.36 slot 1, PUB-6.37) and so needs the answer and
+    /// not the verdict. M10's write door, skep-media's media door and the
+    /// daemon's producers ask it. `System` passes wherever `doc` is
+    /// registered.
     pub fn passes_ownership_gate(&self, m3: &M3State, doc: &Address) -> bool {
         m3.is_registered_document(doc) && self.is_owner(m3, doc)
     }
 }
 
-/// THE OWNERSHIP GATE every edit op and the publish shot open: `doc` must be
-/// a registered document, and `caller` must be its effective owner.
+/// Runs the ownership gate that every edit op and the publish shot open with.
 ///
-/// THE ORDER IS DECIDED HERE — registration first, so a write aimed at an
-/// unregistered document never reports `NotOwner` and never discloses an
-/// ownership verdict about an address that names nothing. The verdicts stay
-/// with the caller: each op passes its own two constructors, so its error
-/// contract remains readable at its own call site. Its boolean, for a door
-/// that defers rather than refuses, is [`Caller::passes_ownership_gate`] —
-/// the same two questions, and
+/// `doc` must be a registered document, and `caller` must be its effective
+/// owner. The verdicts stay with the caller: each op passes its own two
+/// constructors, so its error contract remains readable at its own call
+/// site. Its boolean, for a door that defers rather than refuses, is
+/// [`Caller::passes_ownership_gate`] — the same two questions, and
 /// `the_ownership_gates_boolean_is_its_ordered_verdict_answered_as_one`
 /// holds the two to one answer over every kind of caller and address.
 ///
 /// The registration this gate establishes is also what the version-chain
 /// reads ask first of the ops that open here (PUB-6.37):
 /// [`published_target`](crate::published_target) and the two surfaces built
-/// on it REQUIRE it, M3 answering the publication bit for registered
+/// on it require it, M3 answering the publication bit for registered
 /// addresses alone, and the frontier reads beside them, total, leave that
 /// polarity to their caller. Each op asks those reads only after this gate,
 /// so the publication bit is read on registered addresses alone and an
 /// unregistered target answers the registration refusal, never a publication
 /// code.
+///
+/// # Errors
+///
+/// The order is decided here — registration first: `not_registered` where
+/// `doc` is not a registered document, then `not_owner(doc)` where `caller`
+/// is not its effective owner. So a write aimed at an unregistered document
+/// never reports `NotOwner` and never discloses an ownership verdict about
+/// an address that names nothing.
 pub(crate) fn gate_write<E>(
     m3: &M3State,
     caller: Caller,
@@ -133,11 +145,11 @@ mod tests {
 
     #[test]
     fn the_ownership_gates_boolean_is_its_ordered_verdict_answered_as_one() {
-        // `passes_ownership_gate` is `gate_write`'s two questions as one answer,
-        // for a door that defers rather than refuses — so over every kind of
-        // caller and every tier of address it passes exactly where the gate
-        // does. The family holds each owner's documents, an address under
-        // P1's account that names no document — which ω ALONE says P1 owns,
+        // `passes_ownership_gate` is `gate_write`'s two questions as one
+        // answer, for a door that defers rather than refuses — so over every
+        // kind of caller and every tier of address it passes exactly where the
+        // gate does. The family holds each owner's documents, an address under
+        // P1's account that names no document — which ω alone says P1 owns,
         // so the registration half is asked and not assumed — an account and
         // an element.
         let m3 = seeded_m3();

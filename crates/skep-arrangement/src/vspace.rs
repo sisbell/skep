@@ -1,33 +1,38 @@
-//! §Request-side V-space values — the depth-2 V-position ([`VPos`]), COPY's
-//! source specification ([`VSpec`]), and the ordinal-level depth-2 V-range
-//! stated once from both sides: [`as_ordinal_vspan`] reads one into an
-//! [`OrdinalVSpan`] (and [`is_ordinal_vspan`] is its verdict),
-//! [`ordinal_vspan`] builds one. All three are public, so the shape has one
-//! definition across every crate that reads or builds a V-span.
+//! §Request-side V-space values: a V-position, COPY's spec and the V-range.
+//!
+//! They are the depth-2 V-position ([`VPos`]), COPY's source specification
+//! ([`VSpec`]), and the ordinal-level depth-2 V-range stated once from both
+//! sides: [`as_ordinal_vspan`] reads one into an [`OrdinalVSpan`] (and
+//! [`is_ordinal_vspan`] is its verdict), [`ordinal_vspan`] builds one. All
+//! three are public, so the shape has one definition across every crate that
+//! reads or builds a V-span.
 
 use num_traits::Zero;
 use skep_address::{content_subspace, Address, Nat, Span, Tumbler};
 
-/// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth,
-/// ASN-0084 scope; structurally depth-2, so "depth" needs no separate check).
+/// A depth-2 V-position `[subspace, ordinal]`.
+///
+/// Here m = 2 — ASN-0036 S8-depth, ASN-0084 scope; the position is
+/// structurally depth-2, so "depth" needs no separate check.
 ///
 /// Ordered as the depth-2 tumbler `[subspace, ordinal]` it denotes (T1):
 /// subspace first, then ordinal. The derive compares fields in declaration
-/// order, so the declaration order IS the ordering — pinned against
+/// order, so the declaration order is the ordering — pinned against
 /// `Tumbler`'s own order (`a_v_position_orders_as_its_tumbler`), which is
 /// what a reordering of the fields would break.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VPos {
-    /// s_C = 1 (content) or s_L = 2 (link), per ASN-0047.
+    /// The subspace numeral: s_C = 1 (content) or s_L = 2 (link), per ASN-0047.
     pub subspace: Nat,
-    /// 1-based ordinal within the subspace.
+    /// The 1-based ordinal within the subspace.
     pub ordinal: Nat,
 }
 
 impl VPos {
-    /// The CONTENT position at `ordinal` — `[s_C, ordinal]`, in the subspace
-    /// every edit op writes to. The constructing half of
-    /// [`is_content`](VPos::is_content), as `Some` is of `is_some`: the
+    /// Returns the content position at `ordinal`: `[s_C, ordinal]`.
+    ///
+    /// It lies in the subspace every edit op writes to. The constructing half
+    /// of [`is_content`](VPos::is_content), as `Some` is of `is_some`: the
     /// numeral is M1's (T7), and a caller building a content position names
     /// the subspace by this rather than spelling `content_subspace()` beside
     /// the ordinal. Takes the ordinal by value, since the position keeps it.
@@ -38,12 +43,14 @@ impl VPos {
         }
     }
 
-    /// Does this position name the CONTENT subspace s_C? The numeral is M1's
-    /// (T7), and naming the classification here is what keeps the four edit
-    /// ops that gate on it from each restating the comparison — the same
-    /// service the arrangement's own subspace selector performs on the
-    /// run-list side, where "exactly these two subspaces exist" is answered by
-    /// the arrangement rather than by every read that routes on a numeral.
+    /// Returns whether this position names the content subspace s_C.
+    ///
+    /// The numeral is M1's (T7), and naming the classification here is what
+    /// keeps the five edit ops that gate on it from each restating the
+    /// comparison — the same service the arrangement's own subspace selector
+    /// performs on the run-list side, where "exactly these two subspaces
+    /// exist" is answered by the arrangement rather than by every read that
+    /// routes on a numeral.
     ///
     /// The verdict a refusal earns stays with the op that publishes it: this
     /// answers which subspace the position names, not what to do about it.
@@ -52,27 +59,32 @@ impl VPos {
     }
 }
 
-/// One source-span for COPY (ASN-0118): transclude `span` of `source`'s OWN
-/// arrangement — the address named, never its reading surface
-/// ([`Vstream::copy`](crate::Vstream::copy)). The span must satisfy
-/// [`is_ordinal_vspan`] and lie in the content subspace
+/// One source-span for COPY (ASN-0118).
+///
+/// COPY transcludes `span` of `source`'s own arrangement — the address
+/// named, never its reading surface ([`Vstream::copy`](crate::Vstream::copy)).
+/// The span must satisfy [`is_ordinal_vspan`] and lie in the content subspace
 /// (`NotOrdinalVSpan`/`SourceNotContentSubspace` otherwise — Conflicts #7).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VSpec {
+    /// The document whose own arrangement the span is read from.
     pub source: Address,
+    /// The V-span of `source` to transclude.
     pub span: Span,
 }
 
-/// The three quantities an ordinal-level depth-2 V-span names, borrowed from
-/// the span [`as_ordinal_vspan`] read them out of. Holding them is what lets
-/// a caller that has already asked whether a span has this shape go on to use
-/// its parts, with no second extraction to justify — and no second
-/// definition of where each part sits in the span, which is what a caller
-/// reading `start.get(1)` or `width.get(2)` for itself would be keeping.
+/// The three quantities an ordinal-level depth-2 V-span names.
+///
+/// They are borrowed from the span [`as_ordinal_vspan`] read them out of.
+/// Holding them is what lets a caller that has already asked whether a span
+/// has this shape go on to use its parts, with no second extraction to
+/// justify — and no second definition of where each part sits in the span,
+/// which is what a caller reading `start.get(1)` or `width.get(2)` for itself
+/// would be keeping.
 ///
 /// Named fields, not a tuple: all three are `&Nat`, so a positional
 /// destructuring would put them back within swapping distance of each other.
-/// A VIEW into the span, not a value of its own: three borrows and nothing
+/// A view into the span, not a value of its own: three borrows and nothing
 /// owned, so reading a span costs no allocation and the view cannot outlive
 /// what it reads.
 ///
@@ -90,30 +102,34 @@ pub struct OrdinalVSpan<'a> {
 }
 
 impl OrdinalVSpan<'_> {
-    /// Does this span lie in the CONTENT subspace s_C? The
-    /// [`VPos::is_content`] question asked of a span's borrowed numeral, so
-    /// COPY's two subspace gates — the destination's and the source span's —
-    /// read alike rather than one through a predicate and one raw — and so
-    /// the content clause every neighbour adds to the shape (M7's MAKELINK
-    /// specs, M8's regions, M10's successor specs) has one spelling here
-    /// rather than an index read apiece.
+    /// Returns whether this span lies in the content subspace s_C.
+    ///
+    /// It is the [`VPos::is_content`] question asked of a span's borrowed
+    /// numeral, so COPY's two subspace gates — the destination's and the
+    /// source span's — read alike rather than one through a predicate and one
+    /// raw — and so the content clause every neighbour judging a content
+    /// V-span adds to the shape (M7's MAKELINK specs, M8's regions, M10's
+    /// successor specs) has one spelling here rather than an index read
+    /// apiece.
     pub fn is_content(&self) -> bool {
         *self.subspace == content_subspace()
     }
 }
 
-/// Read `span` as an ordinal-level depth-2 V-range — a count of positions
-/// within one subspace (ASN-0118 action point 2) — or `None` when it is not
-/// one. THE ONE DEFINITION of that shape in M5, which is why its two verdicts
-/// cannot drift apart: [`M5State::resolve`](crate::M5State::resolve) folds a
-/// span this refuses to ⟨⟩, and COPY rejects the same span as
+/// Reads `span` as an ordinal-level depth-2 V-range; `None` when it is not one.
+///
+/// Such a range is a count of positions within one subspace (ASN-0118 action
+/// point 2). This is the one definition of that shape in M5, which is why its
+/// two verdicts cannot drift apart:
+/// [`M5State::resolve`](crate::M5State::resolve) folds a span this refuses to
+/// ⟨⟩, and COPY rejects the same span as
 /// [`CopyError::NotOrdinalVSpan`](crate::CopyError::NotOrdinalVSpan).
 ///
 /// The condition is stated in full on [`is_ordinal_vspan`], its verdict.
 /// Handing back the parts is what lets a caller read the subspace, ordinal
 /// and count off a span whose shape is already settled, instead of
 /// re-extracting components by index — which is what every neighbour that
-/// judges a CONTENT V-span otherwise does, the content clause being the one
+/// judges a content V-span otherwise does, the content clause being the one
 /// they add: M7's MAKELINK specs, M8's regions and M10's successor specs each
 /// ask [`OrdinalVSpan::is_content`] of this reading, and M8 prices its walk
 /// off `ordinal + count` rather than off the reach.
@@ -133,8 +149,10 @@ pub fn as_ordinal_vspan(span: &Span) -> Option<OrdinalVSpan<'_>> {
     })
 }
 
-/// Does `span` name an ordinal-level depth-2 V-range — a count of positions
-/// within one subspace (ASN-0118 action point 2)? The COMPLETE condition is
+/// Returns whether `span` names an ordinal-level depth-2 V-range.
+///
+/// Such a range is a count of positions within one subspace (ASN-0118 action
+/// point 2). The complete condition is
 /// `#start == 2 ∧ #width == 2 ∧ width.get(1) == 0`: a span with `#start ≠ 2`
 /// (below or above), a `#width ≠ 2`, or a level-uniform `[m, n]` width with
 /// `m > 0` (action-point-1, which makes `width.get(2)` the wrong extraction)
@@ -143,17 +161,20 @@ pub fn as_ordinal_vspan(span: &Span) -> Option<OrdinalVSpan<'_>> {
 /// Published so a caller building V-spans from a request can pre-validate and
 /// tell "bad request" from "genuinely empty" before it asks. The verdict form
 /// of [`as_ordinal_vspan`]'s reading, for a caller that gates a span and hands
-/// it on unread — M6's SHOWORIGIN_V precondition, and the depth clause of
-/// M6's wider well-formedness gate. A caller that goes on to use the parts
-/// asks the reading, so no neighbour extracts a component by index. What
+/// it on unread; M6's SHOWORIGIN_V precondition asks the reading itself, and
+/// M6's wider well-formedness gate deliberately leaves depth compatibility to
+/// `resolve`'s defensive fold. A caller that goes on to use the parts asks the
+/// reading, so no neighbour extracts a component by index. What
 /// [`ordinal_vspan`] builds, this accepts.
 pub fn is_ordinal_vspan(span: &Span) -> bool {
     as_ordinal_vspan(span).is_some()
 }
 
-/// `count` positions starting AT the V-position `at`, as the span
-/// [`is_ordinal_vspan`] recognizes — the constructing half of that one shape,
-/// so a producer of V-spans and its recognizer cannot come apart.
+/// Returns the span of `count` positions starting at the V-position `at`.
+///
+/// It is the span [`is_ordinal_vspan`] recognizes — the constructing half of
+/// that one shape, so a producer of V-spans and its recognizer cannot come
+/// apart.
 ///
 /// The start is a [`VPos`] rather than a loose subspace/ordinal pair because
 /// those two are one thing — the position the range opens at — and as two

@@ -1,4 +1,4 @@
-//! # skep-kernel — M2: Transaction, Journal & Concurrency Kernel
+//! skep-kernel — M2: Transaction, Journal & Concurrency Kernel.
 //!
 //! The engine's **generic transactional substrate**: every state change becomes
 //! one atomic, totally-ordered, durable, recoverable step (or a composite
@@ -50,20 +50,21 @@
 //! The kernel has no logging seam: it answers facts, and the caller above
 //! says them. A journaled open reports what it did as [`Recovery`] — the
 //! start point, the bases it passed over, the commits it replayed, the tail
-//! it cut with where the cut began and the position an intact marker in it
-//! claimed, and the corrupt runs below the start point it read and passed
-//! over; a landing answers the journal bytes it reclaimed and the
-//! checkpoints it removed through [`Kernel::last_reclaimed_bytes`] and
-//! [`Kernel::last_removed_checkpoints`]; the checkpoints `transact` ran
-//! inline on a committing thread are counted, and the last one recorded —
-//! the commit that ran it, how long it held that commit's caller, how it
-//! ended ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint`]);
-//! and a checkpoint that failed AFTER its base landed names which step
-//! failed — the directory's fsync, retention or the journal's reclamation —
-//! as [`CheckpointError::Landed`] carrying a [`LandedStep`]. RETENTION KEEPS
-//! THE BASES THAT LOAD: the names an open passed over are passed over by
-//! the count of bases to keep and removed as excess, so the first landing
-//! after a skip keeps the base the open loaded from beside the new one.
+//! it cut with where the cut began, the position an intact marker in it
+//! claimed and the files its bytes were kept in, and the corrupt runs below
+//! the start point it read and passed over; a landing answers the journal
+//! bytes it reclaimed and the checkpoints it removed through
+//! [`Kernel::last_reclaimed_bytes`] and [`Kernel::last_removed_checkpoints`];
+//! the checkpoints `transact` ran inline on a committing thread are counted,
+//! and the last one recorded — the commit that ran it, how long it held that
+//! commit's caller, how it ended ([`Kernel::inline_checkpoints`],
+//! [`Kernel::last_inline_checkpoint`]); and a checkpoint that failed after
+//! its base landed names which step failed — the directory's fsync,
+//! retention or the journal's reclamation — as [`CheckpointError::Landed`]
+//! carrying a [`LandedStep`]. **Retention keeps the bases that load**: the
+//! names an open passed over are passed over by the count of bases to keep
+//! and removed as excess, so the first landing after a skip keeps the base
+//! the open loaded from beside the new one.
 //!
 //! The `test-hooks` feature compiles in the test seam (`hooks.rs`): the
 //! WRITE-FAULT SEAM, under which a test makes the next checkpoint write —
@@ -72,9 +73,10 @@
 //! (`StorageFull` for the full volume), or the next checkpoint write
 //! panic, each arm firing once and disarming, through `Kernel`'s
 //! `#[doc(hidden)]` doors `fail_the_next`, `panic_at_the_next` and
-//! `armed_steps`. The seam is one kernel's, never the process's, and a
-//! build without the feature carries none of it: the write sites' hook
-//! before a [`Step`] is a no-op there.
+//! `armed_steps`; the open's tail keep hooks it at its copy's fsync, which
+//! only the cut's own unit suite arms. The seam is one kernel's, never the
+//! process's, and a build without the feature carries none of it: the write
+//! sites' hook before a [`Step`] is a no-op there.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -473,19 +475,21 @@ impl Space {
     }
 }
 
-/// The steps of the kernel's two write paths the test seam hooks before
-/// (`test-hooks`, `hooks.rs`): an arm — a failure of a named
-/// `io::ErrorKind`, or a panic — is placed BEFORE the step it names, after
+/// The steps of the kernel's write paths the test seam hooks before.
+///
+/// Under `test-hooks` (`hooks.rs`) an arm — a failure of a named
+/// `io::ErrorKind`, or a panic — is placed before the step it names, after
 /// every step before it has completed, so what each leaves is the step's
 /// own card. Three are the checkpoint write's: its temp file's creation,
 /// the temp file's fsync, and the directory's fsync after the rename that
 /// publishes it. Three are the journal appender's: the append of a
 /// transaction's frames, the barrier that commits them, and the truncation
-/// that repairs a failed or unwound commit. The temp file's creation and
-/// the rename THEMSELVES — the two a directory squatting on their names
-/// already refuses — are no steps. Named in every build, so each write
-/// site's hook before a step is one call whether the seam is compiled in or
-/// not; without the feature nothing reads it.
+/// that repairs a failed or unwound commit. One is the open's tail cut's:
+/// the fsync of the copy it keeps of a tail that holds an intact frame. The
+/// temp file's creation and the rename themselves — the two a directory
+/// squatting on their names already refuses — are no steps. Named in every
+/// build, so each write site's hook before a step is one call whether the
+/// seam is compiled in or not; without the feature nothing reads it.
 ///
 /// Deliberately not `#[non_exhaustive]`: the seam says of every step whether
 /// it takes a panic arm (`hooks.rs`), and a suite outside this crate that
@@ -524,17 +528,31 @@ pub enum Step {
     /// here is the repair's own, and POISONS the kernel
     /// ([`TxnError::Poisoned`]).
     JournalRepair,
+    /// The fsync of the copy the open's tail cut keeps of an intact tail.
+    ///
+    /// The tail holds an intact frame no torn write leaves
+    /// ([`Recovery::tail_cut_kept`]); the copy's bytes are written and
+    /// nothing is cut. A failure here removes the copy, cuts nothing and
+    /// fails the open with [`OpenError::Io`]. The step is hooked on the seam
+    /// the open makes, which no door can arm before the open runs, so it
+    /// fires only where the cut's own unit suite hands it a seam of its own;
+    /// an arm a door places here stands unfired.
+    TailKeep,
 }
 
-/// The write-fault seam as the two write paths hold it — the hook each
-/// calls before a [`Step`]. Under `test-hooks` it is the kernel's seam
-/// state behind an `Arc` (`hooks::Hooks`), so what the kernel's doors arm
-/// its journal appender fires; the checkpoint write takes it by reference.
+/// The write-fault seam as the write paths hold it.
+///
+/// Each write path calls its hook before a [`Step`]. Under `test-hooks` it is
+/// the kernel's seam state behind an `Arc` (`hooks::Hooks`), so what the
+/// kernel's doors arm its journal appender fires; the checkpoint write and
+/// the open's tail cut take it by reference.
 #[cfg(feature = "test-hooks")]
 pub(crate) type Seam = std::sync::Arc<hooks::Hooks>;
-/// The write-fault seam as the two write paths hold it — the hook each
-/// calls before a [`Step`]. Without `test-hooks` it is [`NoHooks`], whose
-/// hook is a no-op, so the write paths read the same in either build.
+/// The write-fault seam as the write paths hold it.
+///
+/// Each write path calls its hook before a [`Step`]. Without `test-hooks` it
+/// is [`NoHooks`], whose hook is a no-op, so the write paths read the same in
+/// either build.
 #[cfg(not(feature = "test-hooks"))]
 pub(crate) type Seam = NoHooks;
 

@@ -1703,6 +1703,7 @@ fn a_base_whose_seed_refuses_is_passed_over_for_the_next_older_and_reported() {
             tail_cut: 0,
             tail_cut_intact: 0,
             tail_cut_from: None,
+            tail_cut_kept: vec![],
             tail_cut_claimed: None,
             began: true,
             runs_passed_over: 0,

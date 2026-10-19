@@ -872,6 +872,7 @@ fn content_survives_durable_recovery_by_checkpoint_and_replay() {
             tail_cut: 0,
             tail_cut_intact: 0,
             tail_cut_from: None,
+            tail_cut_kept: vec![],
             tail_cut_claimed: None,
             began: false,
             runs_passed_over: 0,

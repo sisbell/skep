@@ -637,10 +637,12 @@ fn a_repair_that_fails_poisons_the_kernel() {
     }
 }
 
-/// An in-memory kernel runs no step: its commit path appends nothing and
-/// its `checkpoint` is the no-op. So the doors arm as on any kernel and
-/// nothing fires — every arm stands, which `armed_steps` shows — while the
-/// kernel commits and checkpoints as if none were armed.
+/// An in-memory kernel runs no step, so its arms never fire.
+///
+/// Its commit path appends nothing, its `checkpoint` is the no-op, and its
+/// open cut no tail. So the doors arm as on any kernel and nothing fires —
+/// every arm stands, which `armed_steps` shows — while the kernel commits and
+/// checkpoints as if none were armed.
 #[test]
 fn an_in_memory_kernel_reaches_no_step_so_its_arms_never_fire() {
     let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
@@ -662,6 +664,7 @@ fn an_in_memory_kernel_reaches_no_step_so_its_arms_never_fire() {
             Step::CheckpointDirSync,
             Step::JournalBarrier,
             Step::JournalRepair,
+            Step::TailKeep,
             Step::JournalAppend,
         ],
         "every arm stands, unfired"

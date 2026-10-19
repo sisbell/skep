@@ -150,30 +150,36 @@ pub enum Durability {
     /// install. A committed marker *is* the commit ack (§1); `burned_seq`
     /// governs the durability-failure rollback.
     Fsync {
-        /// Directory for journal segments + checkpoints + the `open()`-held
-        /// exclusion lock file (Lifecycle). An empty path names no directory
-        /// and is refused at `open()` ([`crate::OpenError::InvalidConfig`]);
-        /// a relative one is resolved against the working directory ONCE, at
-        /// `open()`, so every file the kernel touches afterwards lies in the
-        /// directory the path named then, wherever the process's working
-        /// directory moves.
+        /// The directory the journal's segments, checkpoints and lock live in.
         ///
-        /// CALLER CONTRACT — the kernel owns four names in this directory:
-        /// `seg-<n>.wal`, `checkpoint.<n>`, `checkpoint.tmp` and
-        /// `kernel.lock`. `open()` creates the directory if absent, and the
-        /// kernel creates, reads and DELETES files under those names:
+        /// It holds the journal segments, the checkpoints and the
+        /// `open()`-held exclusion lock file (Lifecycle). An empty path names
+        /// no directory and is refused at `open()`
+        /// ([`crate::OpenError::InvalidConfig`]); a relative one is resolved
+        /// against the working directory once, at `open()`, so every file the
+        /// kernel touches afterwards lies in the directory the path named
+        /// then, wherever the process's working directory moves.
+        ///
+        /// **Precondition.** The kernel owns five names in this directory:
+        /// `seg-<n>.wal`, `checkpoint.<n>`, `checkpoint.tmp`, `kernel.lock`
+        /// and `seg-<n>.wal.cut-<b>` (`seg-<n>.wal.cut-<b>.<k>` where that
+        /// one already stands). `open()` creates the directory if absent, and
+        /// the kernel creates, reads and deletes files under the first four:
         /// checkpoint retention and journal reclamation are deletions, and a
         /// foreign file bearing one of those names is a base or a segment as
-        /// far as recovery is concerned. Every other name it leaves alone,
-        /// its listings taking only the spellings it writes, so an embedder
-        /// may keep files of its own beside the journal — the daemon keeps
-        /// its change feed and its blob store there. On unix the directory
-        /// and every file the kernel creates in it are OWNER-ONLY — the
-        /// directory `0700` (every component `open()` makes), each file
-        /// `0600` — the mode set at creation, the process umask irrelevant;
-        /// a directory or file that already stands keeps the mode it has.
-        /// The `open()`-held flock excludes a second kernel and nothing else.
-        /// M2 cannot check this.
+        /// far as recovery is concerned. The fifth is the tail cut's keep —
+        /// the bytes an open cut from a tail holding an intact frame no torn
+        /// write leaves ([`crate::Recovery`]'s `tail_cut_kept`) — which the
+        /// kernel creates and never removes or writes over: a kept file is
+        /// the operator's. Every other name it leaves alone, its listings
+        /// taking only the spellings it writes, so an embedder may keep files
+        /// of its own beside the journal — the daemon keeps its change feed
+        /// and its blob store there. On unix the directory and every file the
+        /// kernel creates in it are owner-only — the directory `0700` (every
+        /// component `open()` makes), each file `0600` — the mode set at
+        /// creation, the process umask irrelevant; a directory or file that
+        /// already stands keeps the mode it has. The `open()`-held flock
+        /// excludes a second kernel and nothing else. M2 cannot check this.
         journal_path: PathBuf,
         /// `N ≥ 1` most-recent checkpoints kept; the journal is reclaimed only
         /// BELOW the OLDEST retained one, so `BadCheckpoint` can fall back to

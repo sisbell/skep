@@ -308,14 +308,18 @@ foundation and on the stores above it.
 
 ## The kernel, `skep-kernel`
 
-The kernel owns four names in one directory: the journal's segments
+The kernel owns its names in one directory: the journal's segments
 (`seg-<n>.wal`), the checkpoints (`checkpoint.<n>`, each written through
 `checkpoint.tmp` — a temp file the kernel alone deletes: a failed write
 removes its own before answering, and `Kernel::open` removes one a crash
-left, reporting its size) and the exclusion lock (`kernel.lock`). Every
-other name in that directory it leaves alone, so an embedder keeps files
-of its own beside the journal — the daemon keeps its change feed and its
-blob store there. The directory is born `0700` and every file the kernel
+left, reporting its size), the exclusion lock (`kernel.lock`), and the
+files the open's tail cut keeps (`seg-<n>.wal.cut-<byte>`, then `….<k>`):
+where the tail holds an intact frame no torn write leaves, every byte the
+cut takes is kept there first, durably, and the kernel never reads, moves,
+removes or writes over one — they are the operator's. Every other name in
+that directory it leaves alone, so an embedder keeps files of its own
+beside the journal — the daemon keeps its change feed and its blob store
+there. The directory is born `0700` and every file the kernel
 makes in it `0600` on unix, through `journal::dir_builder` and
 `journal::file_options`, the modes' one home: the mode is set at creation
 so the process umask cannot loosen it, and `tests/it/tidy.rs` holds every
@@ -335,16 +339,20 @@ repair failing with a named `io::ErrorKind`, or a panic in the checkpoint
 write, each arm firing once, armed through `#[doc(hidden)]` doors on
 `Kernel` and scoped to that kernel — and the count of the bases that
 kernel's history reads have loaded, read through a door of the same
-standing; the `Step` the write sites hook before is named in every build,
-and the hook is a no-op without the feature.
+standing; the open's tail keep hooks the same seam at its copy's fsync,
+which only the cut's own unit suite arms, the open's seam being made
+unarmed with it; the `Step` the write sites hook before is named in every
+build, and the hook is a no-op without the feature.
 
 The kernel has no logging seam: it answers facts, and the daemon says them.
 A journaled open reports what it found and did as `Recovery` — the start
 point, the bases it passed over, the commits it replayed (`replayed`), the
 un-acked tail it cut, in bytes (`tail_cut`), with the file and byte the cut
 began at (`tail_cut_from`), the intact frames among them no torn write
-leaves (`tail_cut_intact`) and the position an intact marker in the cut
-claimed (`tail_cut_claimed`), whether it `began` a journal where none stood,
+leaves (`tail_cut_intact`), the files those bytes were kept in before a
+byte was cut, where the tail held such a frame (`tail_cut_kept`), and the
+position an intact marker in the cut claimed (`tail_cut_claimed`), whether
+it `began` a journal where none stood,
 and the corrupt runs below the start point it read and passed over
 (`runs_passed_over`, with the account of the first); a landing answers the
 journal bytes it reclaimed (`Kernel::last_reclaimed_bytes`, `Some(0)` where
@@ -373,7 +381,10 @@ Rules that hold across its files:
   call; the in-memory journal, which has no barrier, installs at the same
   point.
 - **A halt cuts nothing.** Every refusal in `Kernel::open` precedes
-  `journal::truncate_tail`, recovery's one destructive step.
+  `journal::truncate_tail`, recovery's one destructive step — and that
+  step keeps before it cuts: where the tail holds an intact frame no torn
+  write leaves, every byte it will take is first copied or moved beside
+  the journal and synced, and a keep that fails cuts nothing.
 - **One door to the write state.** `ApplierLock::acquire`, which refuses
   a nested acquisition, is the only way to the sequencer, the journal and
   the cadence; the lock's fields are private to `kernel/applier.rs`.

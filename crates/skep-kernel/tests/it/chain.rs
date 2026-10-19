@@ -1595,17 +1595,21 @@ fn c16_a_markers_salt_edited_breaks_at_that_transaction() {
     every_boundary_answers(&engine, &golden, "case 16, re-chained: the world is the golden's");
 }
 
-/// CASE 17 — A FRAME OF THE LAST TRANSACTION REWRITTEN SO IT NO LONGER
-/// DECODES, its CRC re-fixed: here the last marker's signature slot, its tag
-/// set with no bytes after it — the one spelling of empty broken, as case 4
-/// breaks it mid-history. The frame is intact by CRC, so these ARE the bytes
+/// Case 17: a frame of the last transaction rewritten so it will not decode.
+///
+/// Its CRC is re-fixed: here the last marker's signature slot, its tag set
+/// with no bytes after it — the one spelling of empty broken, as case 4
+/// breaks it mid-history. The frame is intact by CRC, so these are the bytes
 /// that were written, and under one stamp no writer of this format writes
 /// them: a rewrite. The ruling requires the open to halt, as it does
 /// mid-history (case 4). It does not: the corrupt run the frame opens lies
-/// above the committed head, §7's torn tail, and the transaction is cut as
-/// the tail. A STOP by name — closing it amends §7's tail rule, the owner's
-/// call — so the case stands ignored with the ruling's outcome asserted
-/// intact, named in `Kernel::open`'s damage model.
+/// above the committed head, §7's torn tail, and the transaction is cut from
+/// the journal as the tail — its bytes kept beside the journal first, the
+/// intact frame being one no torn write leaves (`Recovery::tail_cut_kept`),
+/// but cut all the same, and the open serving. A STOP by name — closing it
+/// amends §7's tail rule, the owner's call — so the case stands ignored with
+/// the ruling's outcome asserted intact, named in `Kernel::open`'s damage
+/// model.
 #[test]
 #[ignore = "STOP (owner): a frame of the LAST transaction rewritten so it no longer decodes, its \
             CRC re-fixed, opens a corrupt run above the committed head, which §7's tail rule \

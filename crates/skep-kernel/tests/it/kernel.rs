@@ -266,15 +266,18 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("<non-string panic payload>")
 }
 
-/// Every step of the write-fault seam, in the order the write paths reach
-/// them — what a claim that arms them all walks.
-const EVERY_STEP: [Step; 6] = [
+/// Every step of the write-fault seam, as a claim that arms them all walks.
+///
+/// The checkpoint write's and the journal's come in the order their write
+/// paths reach them, then the open's tail keep.
+const EVERY_STEP: [Step; 7] = [
     Step::CheckpointCreate,
     Step::CheckpointSync,
     Step::CheckpointDirSync,
     Step::JournalAppend,
     Step::JournalBarrier,
     Step::JournalRepair,
+    Step::TailKeep,
 ];
 
 /// ~300 KiB per record against the 1 MiB rotation threshold: four commits fill

@@ -207,6 +207,11 @@ apart.
      deletes them itself: old checkpoints, and the journal below
      them, as new checkpoints land; a stray `checkpoint.tmp` at
      the next open;
+   - a `seg-<n>.wal.cut-<byte>` file is a journal tail an open cut
+     that held an intact frame, kept beside the journal — the one
+     copy of a write the board may have acknowledged (Start, step 3,
+     item 8): the kernel never removes it; copy it off the volume
+     before you remove it;
    - below the journal's reclaim floor, `feed-attest.log` holds the
      only copy of each attested commit's signature;
    - the deposited files under `blobs/` are the depositors' own,
@@ -246,12 +251,18 @@ apart.
    as bytes; it compacts the change feed's files where the
    journal's reclaim floor has passed their oldest entries, and
    writes back, and syncs, any lines `feed-attest.log` is missing.
-   If any of these is refused, the open stops with exit 1, and a
-   board that was still serving reads is down:
+   Where the journal's tail holds an intact frame no torn write
+   leaves, the kernel's own open first keeps every byte it will cut
+   beside the journal (Start, step 3, item 8): a copy of the cut
+   segment's tail, at most one segment, and a rename of each later
+   segment, which takes no room; a keep refused cuts nothing. If any
+   of these is refused, the open stops with exit 1, and a board that
+   was still serving reads is down:
 
    ```
    skepd: change-feed sidecar: {file}: {error}
    skepd: blob store: {file}: {act}: {error}
+   skepd: engine open: journal open/recovery I/O failure: seg-{n}.wal.cut-{byte}: {act}: {error}
    ```
 
    The blob store frees what it can before it asks for room — the
@@ -955,7 +966,7 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       taken a write the daemon acknowledged, and names it:
 
       ```
-      failure: journal tail cut ({bytes} bytes, beginning at byte {byte} of {segment}, past position {position}), {n} of its frames intact on disk — a commit marker whose records failed their check, or a frame no writer of this format writes, the signature of rot in or a rewrite of the journal's last transaction rather than of a crash: a write this daemon acknowledged may be among the cut, at position {claimed}, the position an intact commit marker in the cut claims; a copy taken before this open holds the bytes; check the volume and its device
+      failure: journal tail cut ({bytes} bytes, beginning at byte {byte} of {segment}, past position {position}), {n} of its frames intact on disk — a commit marker whose records failed their check, or a frame no writer of this format writes, the signature of rot in or a rewrite of the journal's last transaction rather than of a crash: a write this daemon acknowledged may be among the cut, at position {claimed}, the position an intact commit marker in the cut claims; the open kept the cut bytes in {kept}, beside the journal in the data directory, where no open reads, moves or removes it — copy it off the volume before you remove it; check the volume and its device
       ```
 
       `{claimed}` is the position that write's acknowledgement named,
@@ -965,10 +976,26 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       above the head, the line reads `at a position above {position}`
       instead.
 
-      The cut bytes are gone from the data directory; the copy taken
-      before this open is the one place they stand, from byte
-      `{byte}` of `{segment}` on. Keep it, and check the volume and
-      its device before the board takes more writes.
+      The cut bytes are gone from the journal, and every one of them
+      was kept first, before a byte was cut: `{kept}` names the files,
+      in the data directory beside the journal —
+      `{segment}.cut-{byte}` for the cut segment's bytes from byte
+      `{byte}` on, and `seg-{n}.wal.cut-0` for each later segment the
+      cut took whole, a name already standing passed over for
+      `….1`, `….2`. Where the cut kept several, the line names them
+      all. They are the one copy of the write the cut may have taken,
+      and the evidence of what befell it: a flipped bit in a record
+      that fails its check points at the disk, an intact frame that
+      no writer writes at a rewrite. No open reads, moves, removes or
+      writes over them, and the journal goes on as if the tail were
+      gone. Copy them off the volume, keep them until the write is
+      accounted for, then remove them. Never move one back under its
+      segment's name: the positions it holds are the next commits'
+      to take again, and the segment that name may since have been
+      given is theirs.
+
+      The board already serves by the time this line is read: check
+      the volume and its device now.
 
       The inventory reports the bytes cut as `journal.tail_cut`
       (Stop, step 2).
@@ -1714,10 +1741,14 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    The inventory writes nothing under `blobs/`, but its open does
    to the journal what every open does. It takes the kernel's lock,
    creating `kernel.lock`; it cuts a torn tail, reported as
-   `journal.tail_cut` (`0` where nothing was cut); and it removes a
-   stray `checkpoint.tmp`, reported as
-   `journal.stray_checkpoint_removed` (`null` where none stood). So
-   it needs a copy it can write. One it cannot is refused, exit 1:
+   `journal.tail_cut` (`0` where nothing was cut), and where that
+   tail held an intact frame no torn write leaves it first keeps
+   every byte it cuts beside the journal, in the
+   `seg-<n>.wal.cut-<byte>` files the copy then holds (Start,
+   step 3, item 8); and it removes a stray `checkpoint.tmp`,
+   reported as `journal.stray_checkpoint_removed` (`null` where
+   none stood). So it needs a copy it can write. One it cannot is
+   refused, exit 1:
 
    ```
    skepd inventory: the copy at {dir} is read-only: the inventory's open writes the kernel's lock and may cut a torn tail; run it over a writable copy

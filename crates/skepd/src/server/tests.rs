@@ -408,6 +408,7 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
         tail_cut: 0,
         tail_cut_intact: 0,
         tail_cut_from: None,
+        tail_cut_kept: vec![],
         tail_cut_claimed: None,
         began: false,
         runs_passed_over: 0,
@@ -428,15 +429,19 @@ fn the_opens_two_lines_carry_the_directory_the_base_the_replay_and_the_duration_
     assert_eq!(Base(Seq(77)).to_string(), "checkpoint.77");
 }
 
-/// THE OPEN's BEGINNING AND ITS TAIL CUT, pinned whole: the beginning's line
-/// says no journal stood and what that means on a board that had one; the
-/// tail cut's two arms say opposite things of the acknowledged writes — a
-/// crash's tail under the report's own class, `open`, and a tail holding
-/// intact frames no torn write leaves under `failure` — each naming the file
-/// and the byte the cut began at and the position it lies past, and the
-/// failure arm WHICH write it may have taken: the position an intact marker
-/// in the cut claimed, where that lies above the head, and a position above
-/// the head where it does not or no marker was read. An open that cut
+/// The open's beginning and its tail cut are pinned whole, in their words.
+///
+/// The beginning's line says no journal stood and what that means on a board
+/// that had one; the tail cut's two arms say opposite things of the
+/// acknowledged writes — a crash's tail under the report's own class, `open`,
+/// and a tail holding intact frames no torn write leaves under `failure` —
+/// each naming the file and the byte the cut began at and the position it
+/// lies past, and the failure arm *which* write it may have taken: the
+/// position an intact marker in the cut claimed, where that lies above the
+/// head, and a position above the head where it does not or no marker was
+/// read; and where its bytes are: the files the kernel's open kept them in
+/// beside the journal, one or several, named, with the act — and, where the
+/// kernel kept none, the copy taken before the open. An open that cut
 /// nothing, or gave no account, says neither.
 #[test]
 fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words() {
@@ -450,13 +455,17 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
          board"
     );
 
-    let account = |tail_cut: u64, tail_cut_intact: u64, tail_cut_claimed: Option<Seq>| Recovery {
+    let account = |tail_cut: u64,
+                   tail_cut_intact: u64,
+                   tail_cut_claimed: Option<Seq>,
+                   kept: &[&str]| Recovery {
         start_point: Seq(0),
         skipped: vec![],
         replayed: 2,
         tail_cut,
         tail_cut_intact,
         tail_cut_from: (tail_cut > 0).then(|| ("seg-1.wal".to_string(), 218)),
+        tail_cut_kept: kept.iter().map(|name| name.to_string()).collect(),
         tail_cut_claimed,
         began: false,
         runs_passed_over: 0,
@@ -466,11 +475,11 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
     let head = Seq(2);
     assert!(TailCutLine::of(None, head).is_none(), "no account, nothing cut");
     assert!(
-        TailCutLine::of(Some(&account(0, 0, None)), head).is_none(),
+        TailCutLine::of(Some(&account(0, 0, None, &[])), head).is_none(),
         "a clean close cut nothing"
     );
 
-    let crash = TailCutLine::of(Some(&account(55, 0, None)), head).expect("a crash's tail");
+    let crash = TailCutLine::of(Some(&account(55, 0, None, &[])), head).expect("a crash's tail");
     assert!(matches!(crash.class(), Class::Open), "a crash's tail is the report's own line");
     assert_eq!(
         crash.to_string(),
@@ -480,22 +489,26 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
          acknowledged write stands"
     );
 
-    let rot_at = |claimed: Option<Seq>| {
-        TailCutLine::of(Some(&account(109, 1, claimed)), head)
+    let kept = ["seg-1.wal.cut-218"];
+    let rot_at = |claimed: Option<Seq>, kept: &[&str]| {
+        TailCutLine::of(Some(&account(109, 1, claimed, kept)), head)
             .expect("a tail with an intact frame")
             .to_string()
     };
-    let rot = TailCutLine::of(Some(&account(109, 1, Some(Seq(3)))), head).expect("an intact tail");
+    let rot = TailCutLine::of(Some(&account(109, 1, Some(Seq(3)), &kept)), head)
+        .expect("an intact tail");
     assert!(matches!(rot.class(), Class::Failure), "an acknowledged write may be among the cut");
     let opening = "journal tail cut (109 bytes, beginning at byte 218 of seg-1.wal, past position \
                    2), 1 of its frames intact on disk — a commit marker whose records failed their \
                    check, or a frame no writer of this format writes, the signature of rot in or a \
                    rewrite of the journal's last transaction rather than of a crash: a write this \
                    daemon acknowledged may be among the cut, ";
-    let trailer =
-        "; a copy taken before this open holds the bytes; check the volume and its device";
+    let trailer = "; the open kept the cut bytes in seg-1.wal.cut-218, beside the journal in the \
+                   data directory, where no open reads, moves or removes it — copy it off the \
+                   volume before you remove it; check the volume and its device";
     // The claimed position above the head names the write — the position its
-    // acknowledgement and the change feed named it by.
+    // acknowledgement and the change feed named it by — and the kept file
+    // names where its bytes are.
     assert_eq!(
         rot.to_string(),
         format!(
@@ -508,11 +521,31 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
     // the head and never named by a position the journal still holds.
     for claimed in [None, Some(Seq(2)), Some(Seq(1))] {
         assert_eq!(
-            rot_at(claimed),
+            rot_at(claimed, &kept),
             format!("{opening}at a position above 2{trailer}"),
             "claimed {claimed:?}"
         );
     }
+    // Several kept files — the cut segment's copy and the later segments
+    // moved aside whole — are named as one list, in journal order.
+    assert_eq!(
+        rot_at(None, &["seg-1.wal.cut-218", "seg-5.wal.cut-0", "seg-9.wal.cut-0"]),
+        format!(
+            "{opening}at a position above 2; the open kept the cut bytes in seg-1.wal.cut-218, \
+             seg-5.wal.cut-0 and seg-9.wal.cut-0, beside the journal in the data directory, where \
+             no open reads, moves or removes them — copy them off the volume before you remove \
+             them; check the volume and its device"
+        )
+    );
+    // A kept list the kernel left empty — which no tail of this arm leaves —
+    // points at the copy taken before the open instead.
+    assert_eq!(
+        rot_at(None, &[]),
+        format!(
+            "{opening}at a position above 2; a copy taken before this open holds the bytes; \
+             check the volume and its device"
+        )
+    );
 }
 
 /// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
@@ -1042,6 +1075,7 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         tail_cut: 0,
         tail_cut_intact: 0,
         tail_cut_from: None,
+        tail_cut_kept: vec![],
         tail_cut_claimed: None,
         began: false,
         runs_passed_over: 0,
@@ -1060,6 +1094,7 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         tail_cut: 0,
         tail_cut_intact: 0,
         tail_cut_from: None,
+        tail_cut_kept: vec![],
         tail_cut_claimed: None,
         began: false,
         runs_passed_over: 0,
@@ -1088,6 +1123,7 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         tail_cut: 0,
         tail_cut_intact: 0,
         tail_cut_from: None,
+        tail_cut_kept: vec![],
         tail_cut_claimed: None,
         began: false,
         runs_passed_over: 0,
@@ -1114,6 +1150,7 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         tail_cut: 0,
         tail_cut_intact: 0,
         tail_cut_from: None,
+        tail_cut_kept: vec![],
         tail_cut_claimed: None,
         began: false,
         runs_passed_over: 0,
@@ -1144,6 +1181,7 @@ fn the_recovery_warnings_name_the_skipped_checkpoint_the_start_point_and_the_emp
         tail_cut: 0,
         tail_cut_intact: 0,
         tail_cut_from: None,
+        tail_cut_kept: vec![],
         tail_cut_claimed: None,
         began: false,
         runs_passed_over: runs,

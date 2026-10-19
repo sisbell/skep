@@ -1,14 +1,16 @@
-//! (a) THE KERNEL's FILES ARE OWNER-ONLY — the caller contract on
-//! `Durability::Fsync`'s `journal_path` (`config.rs`): "On unix the
-//! directory and every file the kernel creates in it are OWNER-ONLY — the
-//! directory `0700` (every component `open()` makes), each file `0600` —
-//! the mode set at creation, the process umask irrelevant". A kernel opened
-//! on a path that does not exist creates every missing component `0700`,
-//! and after one commit and one checkpoint `kernel.lock`, `seg-1.wal` and
-//! `checkpoint.<n>` — the checkpoint written through `checkpoint.tmp`, whose
-//! mode the rename carries — are `0600` exactly, no other bit set.
+//! (a) The kernel's files are owner-only, whatever the umask.
 //!
-//! The claim asserts the EXACT bits and reports the umask it ran under: at
+//! The caller contract on `Durability::Fsync`'s `journal_path`
+//! (`config.rs`): "On unix the directory and every file the kernel creates
+//! in it are owner-only — the directory `0700` (every component `open()`
+//! makes), each file `0600` — the mode set at creation, the process umask
+//! irrelevant". A kernel opened on a path that does not exist creates every
+//! missing component `0700`, and after one commit and one checkpoint
+//! `kernel.lock`, `seg-1.wal` and `checkpoint.<n>` — the checkpoint written
+//! through `checkpoint.tmp`, whose mode the rename carries — are `0600`
+//! exactly, no other bit set.
+//!
+//! The claim asserts the *exact* bits and reports the umask it ran under: at
 //! `022`, the machine's default, the modes removed would leave a `0755`
 //! directory and `0644` files, which is what the claim fails on; at a umask
 //! that already masks group and other the claim cannot tell the modes from

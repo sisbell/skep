@@ -47,9 +47,12 @@
 //! inventory reports as `journal.tail_cut` — the bytes cut, `0` where the
 //! last committed marker ended the journal: a count and never `null`, since
 //! every open runs the cut and a cut that took nothing leaves the journal a
-//! clean close left it; and a stray `checkpoint.tmp` — a checkpoint a crash
-//! or a full volume left half-written — removed, which the inventory
-//! reports as `journal.stray_checkpoint_removed`; no checkpoint, no commit,
+//! clean close left it; a tail holding an intact frame no torn write leaves
+//! cut too, every byte of it first kept beside the journal in
+//! `seg-{n}.wal.cut-{byte}` files no open removes; and a stray
+//! `checkpoint.tmp` — a checkpoint a crash or a full volume left
+//! half-written — removed, which the inventory reports as
+//! `journal.stray_checkpoint_removed`; no checkpoint, no commit,
 //! no head, no feed sidecar — the daemon's own open is never run. So the
 //! copy is run over writable: one the open cannot write — a read-only
 //! mount, a directory or a file without its write bit — is refused by name

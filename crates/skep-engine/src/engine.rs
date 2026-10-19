@@ -62,6 +62,14 @@ pub struct Recovery {
     /// the byte of it — as M2 answered it (`skep_kernel::Recovery`'s
     /// `tail_cut_from`); `None` where nothing was cut.
     pub tail_cut_from: Option<(String, u64)>,
+    /// The files the cut's bytes were kept in, by name, as M2 answered them.
+    ///
+    /// Where the cut took an intact frame no torn write leaves, every byte it
+    /// took was first kept beside the journal, in the data directory, in
+    /// `seg-{n}.wal.cut-{byte}` files (`skep_kernel::Recovery`'s
+    /// `tail_cut_kept`): the operator's, which no open reads, removes or
+    /// writes over. Empty for a crash's tail and where nothing was cut.
+    pub tail_cut_kept: Vec<String>,
     /// The greatest position an intact commit marker in the cut claimed —
     /// where the cut may have taken an acknowledged write, the position its
     /// acknowledgement named (`skep_kernel::Recovery`'s `tail_cut_claimed`);
@@ -178,11 +186,12 @@ impl fmt::Debug for Engine {
 }
 
 impl Engine {
-    /// Recover-or-init (M2's `Kernel::open`) over the genesis world — which
-    /// is a compiled constant, so M2's byte-identical-genesis caller
-    /// contract is discharged by construction: there is no configuration for
-    /// a caller to pass differently on a reopen, and no drift check left to
-    /// run.
+    /// Opens the engine: M2's recover-or-init over the genesis world.
+    ///
+    /// The genesis world is a compiled constant, so M2's byte-identical-genesis
+    /// caller contract on `Kernel::open` is discharged by construction: there
+    /// is no configuration for a caller to pass differently on a reopen, and no
+    /// drift check left to run.
     ///
     /// A journal and its checkpoints carry M2's own format stamps, and M2
     /// refuses a board written under any other M2 format by name, with the
@@ -198,12 +207,12 @@ impl Engine {
     /// There is nothing to assemble beyond that recovery. The type registry
     /// M9 is handed at [`Engine::coordinator`] is `skep_links::registry` —
     /// M7's own compiled format constant, built once per process — so the
-    /// instance a consumer reads IS the one the store's fold and write gates
+    /// instance a consumer reads *is* the one the store's fold and write gates
     /// run against, by construction rather than by an agreement anything here
     /// would have to keep.
     ///
     /// The kernel this hands [`EngineStores`] satisfies that constructor's
-    /// PRECONDITION — its root satisfies [`World`]'s invariant — under either
+    /// precondition — its root satisfies [`World`]'s invariant — under either
     /// durability mode, by a different route each time. Journalled: M2 seeds
     /// whatever base it loads, a checkpoint or genesis, through
     /// `WorldState::rebuild_derived`, which establishes the invariant, and
@@ -213,33 +222,43 @@ impl Engine {
     /// why it must. So the mode that skips the rebuild is the mode whose root
     /// needs none.
     ///
-    /// PRECONDITIONS passed through, not discharged: M2's caller contract on a
-    /// journalled `cfg` — the journal directory belongs to the kernel alone,
-    /// which creates, reads and deletes the segment, checkpoint and lock files
-    /// in it — binds this method's caller unchanged. So does M2's SALT
-    /// discipline on `cfg.salt`, which no configuration can check and nothing
-    /// here enforces: `SaltSource::Os` for every deployment,
-    /// `SaltSource::Seeded` for fixtures and tests alone — a daemon opened
-    /// under a seeded source serves chain values a reader can invert (M2's
-    /// `SaltSource`). The crate root re-exports every type a `KernelConfig` is
-    /// built from, so a binary can open an engine without naming M2; this
-    /// card is where it reads both contracts. M2's GENESIS contracts,
-    /// byte-identical on every reopen and consistent in its derived state as
-    /// passed, are the caller contracts this method discharges.
+    /// **Preconditions passed through, not discharged.** M2's caller contract
+    /// on a journalled `cfg` — the kernel owns its names in the journal
+    /// directory, creating, reading and deleting the segment, checkpoint and
+    /// lock files, and creating, never removing, the files its tail cut keeps
+    /// (§7), and leaves every other name alone — binds this method's caller
+    /// unchanged. So does M2's salt discipline on `cfg.salt`, which no
+    /// configuration can check and nothing here enforces: `SaltSource::Os` for
+    /// every deployment, `SaltSource::Seeded` for fixtures and tests alone — a
+    /// daemon opened under a seeded source serves chain values a reader can
+    /// invert (M2's `SaltSource`). The crate root re-exports every type a
+    /// `KernelConfig` is built from, so a binary can open an engine without
+    /// naming M2; this card is where it reads both contracts. M2's genesis
+    /// contracts, byte-identical on every reopen and consistent in its derived
+    /// state as passed, are the caller contracts this method discharges.
     ///
-    /// THE IDENTITY SLICE's load (AUTH-2.83–2.86): a retained checkpoint
-    /// written WITHOUT the slice — by a build before it — is a start point
+    /// **The identity slice's load** (AUTH-2.83–2.86): a retained checkpoint
+    /// written *without* the slice — by a build before it — is a start point
     /// only where its link slice holds no credential deposit, resolving to
-    /// the empty table; one holding any is NOT a start point, and M2's
+    /// the empty table; one holding any is *not* a start point, and M2's
     /// fallback chain steps back to the next-older retained checkpoint that
     /// is, or to genesis while the journal reaches it, and replays forward —
-    /// the TRUE table, slower, once; with no start point left the open
-    /// REFUSES, `OpenError::BadCheckpoint` carrying the slice's own sentence
+    /// the true table, slower, once; with no start point left the open
+    /// refuses, `OpenError::BadCheckpoint` carrying the slice's own sentence
     /// and remedy (AUTH-2.88). What the chain did is [`Engine::recovery`]'s to
     /// tell, and the daemon's to log.
     ///
-    /// PANICS, rather than returning `Err`, under `Durability::Fsync` when
-    /// recovery meets state that DECODES but violates a structural fact a fold
+    /// # Errors
+    ///
+    /// Returns [`EngineError::Open`] carrying M2's `OpenError` whole where
+    /// `Kernel::open` refuses: an invalid configuration, a journal under
+    /// another format, an I/O failure, an exhausted fallback chain, or durable
+    /// committed data that cannot be read.
+    ///
+    /// # Panics
+    ///
+    /// Panics, rather than returning `Err`, under `Durability::Fsync` when
+    /// recovery meets state that decodes but violates a structural fact a fold
     /// or a rebuild asserts — the stores' own, M7's that every link key is a
     /// T4-valid element address among them, and the exception set's that a
     /// registered draft's owner resolves to an account, reached from a
@@ -261,6 +280,7 @@ impl Engine {
             tail_cut: found.tail_cut,
             tail_cut_intact: found.tail_cut_intact,
             tail_cut_from: found.tail_cut_from.clone(),
+            tail_cut_kept: found.tail_cut_kept.clone(),
             tail_cut_claimed: found.tail_cut_claimed,
             began: found.began,
             runs_passed_over: found.runs_passed_over,

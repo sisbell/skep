@@ -1032,8 +1032,10 @@ impl Daemon {
         // tail, said under `Class::Open` through the door; and a tail holding
         // intact frames no torn write leaves (`Recovery::tail_cut_intact`),
         // where the cut may have taken an acknowledged write — at the
-        // position its marker claimed — said as the failure it is. The
-        // inventory reports the same bytes as `journal.tail_cut`.
+        // position its marker claimed, its bytes kept beside the journal in
+        // the files the line names (`Recovery::tail_cut_kept`) — said as the
+        // failure it is. The inventory reports the same bytes as
+        // `journal.tail_cut`.
         if let Some(cut) = TailCutLine::of(engine.recovery(), engine.kernel().current_seq()) {
             match cut.class() {
                 Class::Open => say_open_line(cut),
@@ -2971,7 +2973,9 @@ impl fmt::Display for BeganLine {
 ///   cut claimed (`Recovery::tail_cut_claimed`), the one that write's own
 ///   acknowledgement and the change feed named it by, where the claim lies
 ///   above the head; else a position above the head, unnamed — and where the
-///   bytes still are, and the act.
+///   bytes still are: the files the kernel's open kept them in beside the
+///   journal before it cut a byte (`Recovery::tail_cut_kept`), which no open
+///   reads, moves or removes — and the act.
 ///
 /// A pure value the unit suite pins by `to_string()` and
 /// [`TailCutLine::class`].
@@ -2984,6 +2988,8 @@ struct TailCutLine {
     claimed: Option<Seq>,
     /// The committed head the open left: the cut lies past it.
     head: Seq,
+    /// The files in the data directory the cut bytes were kept in, by name.
+    kept: Vec<String>,
 }
 
 impl TailCutLine {
@@ -3001,6 +3007,7 @@ impl TailCutLine {
             from: recovery.tail_cut_from.clone(),
             claimed: recovery.tail_cut_claimed,
             head,
+            kept: recovery.tail_cut_kept.clone(),
         })
     }
 
@@ -3019,7 +3026,7 @@ impl TailCutLine {
 
 impl fmt::Display for TailCutLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let TailCutLine { bytes, intact, from, claimed, head } = self;
+        let TailCutLine { bytes, intact, from, claimed, head, kept } = self;
         write!(f, "journal tail cut ({bytes} bytes, ")?;
         if let Some((segment, byte)) = from {
             write!(f, "beginning at byte {byte} of {segment}, ")?;
@@ -3049,9 +3056,27 @@ impl fmt::Display for TailCutLine {
             )?,
             _ => write!(f, "at a position above {head}")?,
         }
-        f.write_str(
-            "; a copy taken before this open holds the bytes; check the volume and its device",
-        )
+        // Where the bytes are: the files the kernel's open kept them in
+        // before it cut one, where its tail held such a frame — which every
+        // tail this arm says does. A kept list the kernel left empty says
+        // what a copy taken before the open holds instead.
+        match kept.as_slice() {
+            [] => f.write_str("; a copy taken before this open holds the bytes")?,
+            [one] => write!(
+                f,
+                "; the open kept the cut bytes in {one}, beside the journal in the data \
+                 directory, where no open reads, moves or removes it — copy it off the volume \
+                 before you remove it"
+            )?,
+            [first @ .., last] => write!(
+                f,
+                "; the open kept the cut bytes in {} and {last}, beside the journal in the data \
+                 directory, where no open reads, moves or removes them — copy them off the \
+                 volume before you remove them",
+                first.join(", ")
+            )?,
+        }
+        f.write_str("; check the volume and its device")
     }
 }
 

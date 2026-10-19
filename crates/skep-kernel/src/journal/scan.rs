@@ -1,20 +1,21 @@
 //! The scan, which is recovery's read side.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use bincode::Options;
 
 use super::attest::{self, Attestation};
 use super::chain::{slot_digest, ChainLink};
-use super::segment::{fsync_dir, scanned_above, SegmentMeta};
+use super::segment::{file_options, fsync_dir, scanned_above, SegmentMeta};
 use super::{
     codec, find_magic, frame_len, parse_frame, CommittedRecord, FramePayload, LogRecord, Marker,
     Parsed, Txn, FRAME_HEADER_LEN, MAGIC, MARKER_FRAME_LEN, MAX_SEGMENT_LEN, MAX_TXN_BYTES,
     RESYNC_BUDGET_PASSES, STAMP_PREFIX,
 };
 use crate::error::{at_file, stamp_text, Cause};
+use crate::{Seam, Step};
 
 /// How a corrupt run (a span the scan skipped via magic-resync) ended (§7).
 #[derive(Debug, PartialEq, Eq)]
@@ -255,18 +256,20 @@ pub(crate) struct ScanOutcome {
     /// by. The verdict on a run belongs to those, not to a caller re-deriving
     /// the classifier.
     runs: Vec<Run>,
-    /// The INTACT frames after the last committed marker of a kind no torn
-    /// write leaves: a commit marker that commits nothing, or a frame whose
-    /// CRC passes and that does not decode. Counted by the walk and reset by
-    /// every committed marker ([`ScanOutcome::collect_commit`]), so once the
-    /// scan returns it counts them in the tail the cut removes
-    /// ([`truncate_tail`]) — what a recovery reports as
-    /// [`crate::Recovery`]'s `tail_cut_intact`. A crash leaves one only where
-    /// the disk wrote an append's pages out of order; rot in the last
-    /// committed transaction, or a rewrite of it, leaves one too (the open
-    /// item in [`crate::Kernel::open`]'s damage model), which is why it is
-    /// counted rather than cut in silence. Never bounded, for the reason the
-    /// head is not.
+    /// The intact frames in the tail of a kind no torn write leaves.
+    ///
+    /// They are a commit marker that commits nothing, or a frame whose CRC
+    /// passes and that does not decode, after the last committed marker.
+    /// Counted by the walk and reset by every committed marker
+    /// ([`ScanOutcome::collect_commit`]), so once the scan returns it counts
+    /// them in the tail the cut removes ([`truncate_tail`]) — what a recovery
+    /// reports as [`crate::Recovery`]'s `tail_cut_intact`. A crash leaves one
+    /// only where the disk wrote an append's pages out of order; rot in the
+    /// last committed transaction, or a rewrite of it, leaves one too (the
+    /// open item in [`crate::Kernel::open`]'s damage model), which is why it
+    /// is counted, and why a tail that holds one is kept beside the journal
+    /// before a byte of it is cut rather than cut in silence. Never bounded,
+    /// for the reason the head is not.
     pub tail_intact: u64,
     /// The greatest `last_seq` an intact commit marker after the last
     /// committed one CLAIMS — a marker [`ScanOutcome::tail_intact`] counts,
@@ -1196,10 +1199,11 @@ fn walk(
                         // on the next intact frame and halts the caller; in the
                         // LAST transaction the run lies above the committed
                         // head, where §7 calls it the torn tail, and the
-                        // transaction is cut though its CRC proves these are the
-                        // bytes that were written — the open item in
-                        // `Kernel::open`'s damage model, which the count is what
-                        // reports.
+                        // transaction is cut from the journal though its CRC
+                        // proves these are the bytes that were written — the
+                        // open item in `Kernel::open`'s damage model, which the
+                        // count reports and whose bytes the count has kept
+                        // beside the journal (`truncate_tail`).
                         Err(_) => {
                             run_began.get_or_insert((seg_index, pos));
                             outcome.tail_intact += 1;
@@ -1554,68 +1558,358 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
     })
 }
 
-/// The tail-truncation step (§7), run AFTER every refusal and BEFORE any
-/// write is served: durably remove everything after the last committed marker
-/// — cut its segment at the marker's frame end, delete every wholly-later
-/// segment, fsync file and directory. Every halt precedes it — every route to
-/// [`crate::OpenError::Corruption`], which enumerates them, and the exhausted
-/// checkpoint chain of [`crate::OpenError::BadCheckpoint`] — which is what
-/// leaves the journal directory an operator images after a halt exactly as it
-/// was found (§7); [`crate::Kernel::open`] is where that order is kept and
-/// stated. This is what makes cross-session `Txn` uniqueness and
-/// file-order == `Seq`-order true at the next recovery (§1/§7). Idempotent; a
-/// failure fails `open()` with `Io`.
+/// Removes everything after the last committed marker from the journal (§7).
+///
+/// The tail-truncation step, run after every refusal and before any write is
+/// served: it cuts the marker's segment at the marker's frame end, takes
+/// every wholly-later segment out, and fsyncs file and directory. Every halt
+/// precedes it — every route to [`crate::OpenError::Corruption`], which
+/// enumerates them, and the exhausted checkpoint chain of
+/// [`crate::OpenError::BadCheckpoint`] — which is what leaves the journal
+/// directory an operator images after a halt exactly as it was found (§7);
+/// [`crate::Kernel::open`] is where that order is kept and stated. This is
+/// what makes cross-session `Txn` uniqueness and file-order == `Seq`-order
+/// true at the next recovery (§1/§7). Idempotent at the open: a failed cut
+/// is retried by the next `open()`.
+///
+/// **The keep.** Where the tail holds an intact frame no torn write leaves
+/// ([`ScanOutcome::tail_intact`]) — the sign that the cut may take a
+/// transaction this kernel acknowledged, rot in or a rewrite of the journal's
+/// last transaction (the open item in [`crate::Kernel::open`]'s damage
+/// model), whose bytes are then the one record of that write and of what
+/// befell it — every byte the cut takes is first kept beside the journal,
+/// durably ([`keep_aside`]). The cut segment's bytes from the cut on are
+/// copied to `{segment}.cut-{byte}`, and each wholly-later segment that holds
+/// a byte is moved whole to `{segment}.cut-0`, so no byte leaves the journal
+/// that a durable file beside it does not hold. A crash's tail holds no such
+/// frame — a torn write leaves a frame that fails its CRC, and the intact
+/// records before it were never acknowledged — and is cut and gone, as §7
+/// rules. No listing of the kernel's reads a kept file's name, so the next
+/// session's appends and every recovery's scan go on as if the tail were
+/// gone; the kept files are the operator's, and no open removes or writes
+/// over one ([`keep_a_copy`]).
 ///
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.
 ///
 /// Answers what it removed ([`Truncated`]), which a journaled open reports
-/// as the tail it cut ([`crate::Recovery`]'s `tail_cut` and
-/// `tail_cut_from`): the bytes — the cut segment's length above the cut,
+/// as the tail it cut ([`crate::Recovery`]'s `tail_cut`, `tail_cut_from` and
+/// `tail_cut_kept`): the bytes — the cut segment's length above the cut,
 /// read before the cut, plus each wholly-later segment's length, read before
-/// its removal — and where the cut began, the first file a byte left. `0`
-/// and nowhere where the last committed marker ends the journal, and where
-/// nothing was scanned: a cut that took nothing and no cut leave the same
-/// journal, so the two are one answer. The lengths read are the lengths the
-/// scan read — recovery holds the journal's lock, so nothing appends between
-/// the scan and this cut.
-pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<Truncated> {
+/// it is removed or moved — where the cut began, the first file a byte left,
+/// and the files the keep left beside the journal. `0` and nowhere where the
+/// last committed marker ends the journal, and where nothing was scanned: a
+/// cut that took nothing and no cut leave the same journal, so the two are
+/// one answer. The lengths read are the lengths the scan read — recovery
+/// holds the journal's lock, so nothing appends between the scan and this
+/// cut.
+///
+/// **The seam** (`test-hooks`): the keep's copy is synced through `seam`'s
+/// [`Step::TailKeep`]. [`crate::Kernel::open`] hands it the seam it makes,
+/// which nothing can arm before the open runs, so only a test that hands the
+/// cut a seam of its own fails that step; in a build without the feature the
+/// hook is a no-op.
+///
+/// # Errors
+///
+/// Fails, and fails `open()` with `Io`, where a file of the cut cannot be
+/// opened, sized, cut, synced or removed, named `{file}: {act}`, or where
+/// the keep fails ([`keep_aside`]). A keep that fails cuts nothing and puts
+/// back what it made, so the next open keeps and cuts.
+pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome, seam: &Seam) -> io::Result<Truncated> {
     let Some(tail) = &scan.tail else {
-        return Ok(Truncated { bytes: 0, from: None });
+        return Ok(Truncated { bytes: 0, from: None, kept: Vec::new() });
     };
-    let truncating = at_file(file_name(&tail.segment), "truncate");
-    let mut cut = 0;
-    OpenOptions::new()
-        .write(true)
-        .open(&tail.segment)
-        .and_then(|f| {
-            cut = f.metadata()?.len().saturating_sub(tail.offset);
-            f.set_len(tail.offset)?;
-            f.sync_data()
-        })
-        .map_err(truncating)?;
-    let mut from = (cut > 0).then(|| (file_name(&tail.segment), tail.offset));
+    let name = file_name(&tail.segment);
+    let segment =
+        OpenOptions::new().write(true).open(&tail.segment).map_err(at_file(&name, "truncate"))?;
+    let above = segment
+        .metadata()
+        .map_err(at_file(&name, "truncate"))?
+        .len()
+        .saturating_sub(tail.offset);
+    let kept = if scan.tail_intact > 0 {
+        keep_aside(dir, tail, above, seam)?
+    } else {
+        Kept::default()
+    };
+    segment
+        .set_len(tail.offset)
+        .and_then(|()| segment.sync_data())
+        .map_err(at_file(&name, "truncate"))?;
+    let mut cut = above;
+    let mut from = (above > 0).then_some((name, tail.offset));
     for path in &tail.discard {
-        let len = fs::metadata(path)
-            .and_then(|meta| fs::remove_file(path).map(|()| meta.len()))
-            .map_err(at_file(file_name(path), "remove"))?;
+        // A segment the keep moved aside stands under its kept name, its
+        // length read before the move. Every other is removed here.
+        let len = match kept.moved.iter().find(|(moved, _)| moved == path) {
+            Some(&(_, len)) => len,
+            None => fs::metadata(path)
+                .and_then(|meta| fs::remove_file(path).map(|()| meta.len()))
+                .map_err(at_file(file_name(path), "remove"))?,
+        };
         if from.is_none() && len > 0 {
             from = Some((file_name(path), 0));
         }
         cut = cut.saturating_add(len);
     }
     fsync_dir(dir)?;
-    Ok(Truncated { bytes: cut, from })
+    Ok(Truncated { bytes: cut, from, kept: kept.names })
 }
 
-/// What [`truncate_tail`] removed: the bytes, and where the cut began — the
-/// name in the journal directory of the first file a byte left, and the byte
-/// of it the cut began at: the cut segment at the cut's offset, or else the
-/// first wholly-later segment that held a byte, at byte `0`. `None` where
-/// nothing was cut.
+/// What [`truncate_tail`] removed from the journal, and where it kept it.
+///
+/// `bytes` is the bytes cut. `from` is where the cut began — the name in the
+/// journal directory of the first file a byte left, and the byte of it the
+/// cut began at: the cut segment at the cut's offset, or else the first
+/// wholly-later segment that held a byte, at byte `0` — and `None` where
+/// nothing was cut. `kept` is the files the keep left the cut bytes in, by
+/// name, in journal order: empty where the tail held no intact frame no torn
+/// write leaves, and where nothing was cut.
+#[derive(Debug)]
 pub(crate) struct Truncated {
     pub(crate) bytes: u64,
     pub(crate) from: Option<(String, u64)>,
+    pub(crate) kept: Vec<String>,
+}
+
+/// What the keep left beside the journal ([`keep_aside`]).
+///
+/// `names` is the files the cut bytes were kept in, by name, in journal
+/// order; `moved` is the wholly-later segments the keep moved there, each by
+/// the path it stood at and its length, which the cut counts and leaves where
+/// the keep put them.
+#[derive(Default)]
+struct Kept {
+    names: Vec<String>,
+    moved: Vec<(PathBuf, u64)>,
+}
+
+/// Keeps every byte of `tail` beside the journal before a byte of it is cut.
+///
+/// The keep of §7's tail truncation, run ahead of the cut: the cut segment's
+/// `above` bytes from the cut on are copied ([`keep_a_copy`]) and synced, and
+/// the directory synced; then each wholly-later segment that holds a byte is
+/// moved whole ([`move_aside`]), and the directory synced again. A segment
+/// that holds none has nothing to keep, and the cut removes it. The order
+/// keeps every journal byte the cut takes in a durable file beside it: the
+/// copy is durable before any segment moves, and every move before the cut,
+/// so a crash anywhere in between leaves the cut segment uncut and every
+/// byte already moved kept — the next open scans what of the tail remains,
+/// completes a copy it finds standing, and cuts.
+///
+/// # Errors
+///
+/// Fails where the copy cannot be made or synced, a later segment cannot be
+/// sized or moved, or the directory cannot be synced, each named
+/// `{file}: {act}`. A failure answers with what this call made put back
+/// ([`undone`]) — the segments it moved renamed to their own names, the copy
+/// it made removed — so the cut that does not follow leaves the journal as
+/// the keep found it, and the room a copy took is free again for the next
+/// open's.
+fn keep_aside(dir: &Path, tail: &TailCut, above: u64, seam: &Seam) -> io::Result<Kept> {
+    let mut kept = Kept::default();
+    let mut copy: Option<PathBuf> = None;
+    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let done = (|| -> io::Result<()> {
+        if above > 0 {
+            kept.names.push(keep_a_copy(dir, &tail.segment, tail.offset, seam, &mut copy)?);
+            fsync_dir(dir)?;
+        }
+        for path in &tail.discard {
+            let len = fs::metadata(path).map_err(at_file(file_name(path), "stat"))?.len();
+            if len == 0 {
+                continue;
+            }
+            let (name, to) = move_aside(dir, path)?;
+            moves.push((path.clone(), to));
+            kept.moved.push((path.clone(), len));
+            kept.names.push(name);
+        }
+        if !moves.is_empty() {
+            fsync_dir(dir)?;
+        }
+        Ok(())
+    })();
+    match done {
+        Ok(()) => Ok(kept),
+        Err(failed) => Err(undone(failed, copy.as_deref(), &moves)),
+    }
+}
+
+/// Returns the name of a synced copy of `segment` from its byte `offset` on.
+///
+/// The copy [`keep_aside`] makes of the cut segment's tail, in a file of its
+/// own beside the journal, `{segment}.cut-{offset}`, born owner-only as every
+/// file the kernel makes ([`file_options`]).
+///
+/// A name already standing is never written over: the copy takes the first
+/// of [`kept_name`]'s names that is absent, or that holds a regular file
+/// whose bytes are a prefix of the bytes kept — a copy of these very bytes
+/// an earlier attempt began and a crash cut short, completed in place, so a
+/// crash loop over one open's keep leaves one copy and not one per attempt.
+/// Any other file under a name — an earlier cut's bytes, kept by an earlier
+/// open under the name the same segment and byte gave — is passed over
+/// whole. `made` names the copy once it is created or opened, so a failure
+/// past that point removes it ([`undone`]). The seam's [`Step::TailKeep`] is
+/// hooked before the copy's fsync, its bytes written.
+///
+/// # Errors
+///
+/// Fails where the segment cannot be read, a name cannot be looked at, or the
+/// copy cannot be created, opened, written or synced, each named
+/// `{file}: {act}`.
+fn keep_a_copy(
+    dir: &Path,
+    segment: &Path,
+    offset: u64,
+    seam: &Seam,
+    made: &mut Option<PathBuf>,
+) -> io::Result<String> {
+    let segment_name = file_name(segment);
+    let mut bytes = Vec::new();
+    let mut source = File::open(segment).map_err(at_file(&segment_name, "read"))?;
+    source
+        .seek(SeekFrom::Start(offset))
+        .and_then(|_| source.take(MAX_SEGMENT_LEN).read_to_end(&mut bytes))
+        .map_err(at_file(&segment_name, "read"))?;
+    let mut k = 0;
+    loop {
+        let name = kept_name(&segment_name, offset, k);
+        let path = dir.join(&name);
+        let standing = match fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(at_file(&name, "stat")(e)),
+            Ok(meta) => match unfinished_copy(&path, &meta, &bytes, &name)? {
+                Some(len) => Some(len),
+                None => {
+                    k += 1;
+                    continue;
+                }
+            },
+        };
+        let opened = match standing {
+            None => file_options()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(at_file(&name, "create")),
+            Some(_) => file_options().write(true).open(&path).map_err(at_file(&name, "open")),
+        };
+        let mut copy = opened?;
+        *made = Some(path);
+        let from = standing.unwrap_or(0);
+        copy.seek(SeekFrom::Start(from))
+            .and_then(|_| copy.write_all(&bytes[from as usize..]))
+            .map_err(at_file(&name, "write"))?;
+        seam.before(Step::TailKeep)
+            .and_then(|()| copy.sync_all())
+            .map_err(at_file(&name, "fsync"))?;
+        return Ok(name);
+    }
+}
+
+/// Returns the length of `path`'s file where it holds a short copy of `bytes`.
+///
+/// A copy of `bytes` a crash cut short is a regular file whose whole content
+/// is a prefix of them, the whole of them included; `None` answers anything
+/// else standing there.
+///
+/// # Errors
+///
+/// Fails where the file cannot be read, named `{name}: read`.
+fn unfinished_copy(
+    path: &Path,
+    meta: &fs::Metadata,
+    bytes: &[u8],
+    name: &str,
+) -> io::Result<Option<u64>> {
+    if !meta.is_file() || meta.len() > bytes.len() as u64 {
+        return Ok(None);
+    }
+    let held = fs::read(path).map_err(at_file(name, "read"))?;
+    Ok(bytes.starts_with(&held).then_some(meta.len()))
+}
+
+/// Moves the wholly-later segment `discard` aside whole.
+///
+/// The segment goes to the first of [`kept_name`]'s names for its byte `0`
+/// that is absent — a rename, which takes no room and keeps the segment's
+/// own bytes and mode — and the name and the path it stands at are answered.
+/// A name already standing, of whatever kind, is passed over: a rename
+/// replaces its target, so the target is one no file holds.
+///
+/// # Errors
+///
+/// Fails where a name cannot be looked at, named `{name}: stat`, or the
+/// rename is refused, named `{segment}: rename to {name}`.
+fn move_aside(dir: &Path, discard: &Path) -> io::Result<(String, PathBuf)> {
+    let segment_name = file_name(discard);
+    let mut k = 0;
+    loop {
+        let name = kept_name(&segment_name, 0, k);
+        let to = dir.join(&name);
+        match fs::symlink_metadata(&to) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                fs::rename(discard, &to)
+                    .map_err(at_file(&segment_name, format!("rename to {name}")))?;
+                return Ok((name, to));
+            }
+            Err(e) => return Err(at_file(&name, "stat")(e)),
+            Ok(_) => k += 1,
+        }
+    }
+}
+
+/// Returns the `k`th name the keep may give `segment`'s bytes from `byte` on.
+///
+/// `segment` is a file of the journal directory by its name; the names are
+/// `{segment}.cut-{byte}`, then `{segment}.cut-{byte}.{k}` where the earlier
+/// ones stand. No listing of the kernel's reads one back — a segment's name
+/// ends `.wal`, a checkpoint's opens `checkpoint.` — so a kept file is never
+/// a segment or a base.
+fn kept_name(segment: &str, byte: u64, k: u64) -> String {
+    match k {
+        0 => format!("{segment}.cut-{byte}"),
+        k => format!("{segment}.cut-{byte}.{k}"),
+    }
+}
+
+/// Returns a failed keep's account, once what the keep made is put back.
+///
+/// The segments it moved are renamed to their own names, newest first, and
+/// then — every one of them back — the copy it made is removed, so the cut
+/// that does not follow leaves the journal and its directory as the keep
+/// found them. Best-effort: what could not be put back is folded into the
+/// account beside the failure, never masking it, its kind kept; and the copy
+/// stands where a moved segment could not go back, so a byte missing from
+/// the next open's tail stays kept.
+fn undone(failed: io::Error, copy: Option<&Path>, moves: &[(PathBuf, PathBuf)]) -> io::Error {
+    let mut left = Vec::new();
+    for (from, to) in moves.iter().rev() {
+        if let Err(e) = fs::rename(to, from) {
+            left.push(format!(
+                "{} could not be moved back to {}: {e}",
+                file_name(to),
+                file_name(from)
+            ));
+        }
+    }
+    if let Some(copy) = copy.filter(|_| left.is_empty()) {
+        match fs::remove_file(copy) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => left.push(format!("{} could not be removed: {e}", file_name(copy))),
+        }
+    }
+    if left.is_empty() {
+        failed
+    } else {
+        io::Error::new(
+            failed.kind(),
+            format!("{failed}; and the keep could not be undone after it: {}", left.join("; ")),
+        )
+    }
 }
 
 /// A journal file's name, by its path, as a refusal names it.

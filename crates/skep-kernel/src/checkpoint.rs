@@ -1,4 +1,6 @@
-//! Checkpoint files (§6): a serialized `W` @ `Seq` — a recoverable prefix-fold
+//! Checkpoint files (§6): serialized worlds a recovery starts from.
+//!
+//! A checkpoint is a serialized `W` @ `Seq` — a recoverable prefix-fold
 //! cache, written temp → fsync → atomic-rename, with a header checksum over
 //! the serialized `W` bytes. That checksum is what load validates before
 //! trusting a base (serde deserialization alone does not reliably detect
@@ -7,14 +9,14 @@
 //!
 //! Layout (`SKC4`): `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
 //! [chain_head 32][body_hash 32][body]`, at `checkpoint.<S>`; the fixed temp
-//! name `checkpoint.tmp` is no base — recovery REMOVES it (a crash
+//! name `checkpoint.tmp` is no base — recovery removes it (a crash
 //! mid-checkpoint leaves at most a `.tmp` the next open deletes, and a failed
-//! write deletes its own before answering — §6; the name is one of the four
-//! the kernel owns in its directory, so the file is the kernel's to delete).
+//! write deletes its own before answering — §6; the name is one of those the
+//! kernel owns in its directory, so the file is the kernel's to delete).
 //! `chain_head` is the commit chain's value at `seq` — the marker that held it
 //! may be reclaimed, and this is where a replay above the base continues the
 //! chain from; `body_hash` is SHA-256 over the body, meaningful because the
-//! body is CANONICAL under `SKC4` — [`crate::WorldState`]'s
+//! body is canonical under `SKC4` — [`crate::WorldState`]'s
 //! canonical-encoding obligation, which the engine discharges with every
 //! serialized slice iterating in key order (the encoding report's option
 //! (i)) — so two writes of one world, on two processes or two machines, yield
@@ -445,15 +447,21 @@ fn tmp_path(dir: &Path) -> PathBuf {
     dir.join(TMP_NAME)
 }
 
-/// Remove a stray `checkpoint.tmp` from `dir` — a checkpoint a crash or a
-/// failed write left half-written under the fixed temp name — answering its
-/// length in bytes, or `None` where none stood. The open's act, under the
-/// flock ([`crate::Kernel::open`]): the file is no base ([`list`] skips the
-/// name) and keeps its room on the volume, which after a write the volume's
-/// room failed is the room the next checkpoint needs; the name is one of the
-/// four the kernel owns in its directory, so the deletion is the kernel's. A
-/// file that is there and cannot be removed fails the open as the I/O
-/// condition it is.
+/// Removes a stray `checkpoint.tmp` from `dir`, answering its length in bytes.
+///
+/// The file is a checkpoint a crash or a failed write left half-written under
+/// the fixed temp name; `None` answers where none stood. The open's act,
+/// under the flock ([`crate::Kernel::open`]): the file is no base ([`list`]
+/// skips the name) and keeps its room on the volume, which after a write the
+/// volume's room failed is the room the next checkpoint needs; the name is
+/// one of those the kernel owns in its directory, so the deletion is the
+/// kernel's.
+///
+/// # Errors
+///
+/// A file that is there and cannot be looked at or removed, or a directory
+/// that cannot be synced after it, fails the open as the I/O condition it
+/// is.
 pub(crate) fn remove_stray_tmp(dir: &Path) -> io::Result<Option<u64>> {
     let tmp = tmp_path(dir);
     let len = match fs::metadata(&tmp) {

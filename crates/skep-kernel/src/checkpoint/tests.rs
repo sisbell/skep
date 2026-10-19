@@ -713,7 +713,7 @@ fn each_checkpoint_step_fires_its_arm_once_and_leaves_what_its_card_says() {
                 );
             }
             Step::CheckpointDirSync => assert!(!tmp.exists() && base.exists(), "the base"),
-            Step::JournalAppend | Step::JournalBarrier | Step::JournalRepair => {
+            Step::JournalAppend | Step::JournalBarrier | Step::JournalRepair | Step::TailKeep => {
                 unreachable!("not a checkpoint step")
             }
         }

@@ -126,10 +126,13 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
     assert_eq!(recovery.replayed, 2);
     // A crash's torn tail holds an intact RECORD and a torn marker — nothing
     // no torn write leaves — so the cut is reported as the crash's alone,
-    // claiming no position, from the byte T3's record began at.
+    // claiming no position, from the byte T3's record began at, and its bytes
+    // are cut and gone: kept nowhere, as §7 rules.
     assert_eq!(recovery.tail_cut_intact, 0, "a crash's torn tail is nothing but a crash's");
     assert_eq!(recovery.tail_cut_claimed, None, "a torn marker claims nothing");
     assert_eq!(recovery.tail_cut_from, Some(("seg-1.wal".to_string(), spans[4].0)));
+    assert!(recovery.tail_cut_kept.is_empty(), "a crash's tail is kept nowhere");
+    assert_eq!(kept_files(dir.path()), Vec::<String>::new());
     assert!(!recovery.began, "a journal stood: this open recovered it");
     // Under Rollback the next session reuses the discarded coordinates —
     // safe exactly because the stale tail is gone (§1/§7 Txn uniqueness).
@@ -293,15 +296,31 @@ fn an_unreadable_segment_fails_the_open_as_io_not_as_corruption() {
     assert!(err.to_string().contains("seg-1.wal: read: "), "the file and the act: {err}");
 }
 
+/// Returns the names of the files the open's tail cut kept in `dir`, sorted.
+///
+/// They are `seg-{n}.wal.cut-{byte}` and its `….{k}` successors, beside the
+/// journal.
+fn kept_files(dir: &std::path::Path) -> Vec<String> {
+    let mut kept: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".wal.cut-"))
+        .collect();
+    kept.sort();
+    kept
+}
+
 #[test]
 fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_marker() {
     // The documented §7 blind spot, asserted as specified: rot in the LAST
     // committed txn's record leaves its marker intact but checksum-failing,
-    // W demotes to the prior marker, and the acked txn is discarded as tail —
-    // no Corruption signal (out of scope for v1). Not in silence, though: the
-    // marker the cut took is intact, which no torn write leaves, and the
-    // open's report counts it, so the cut of a write that may have been
-    // acknowledged is said rather than passed off as a crash's.
+    // W demotes to the prior marker, and the acked txn is cut from the journal
+    // as tail — no Corruption signal (out of scope for v1). Not in silence,
+    // though, and not destroyed: the marker the cut takes is intact, which no
+    // torn write leaves, so the open keeps every byte it cuts beside the
+    // journal before it cuts one, and its report counts the marker and names
+    // the file the bytes were kept in — the one copy of a write that may have
+    // been acknowledged, where a copy taken before this open rarely exists.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     commit(&k, 10);
@@ -311,10 +330,11 @@ fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_mar
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
     flip_byte(&seg, spans[4].0 + FRAME_HEADER_LEN + 1); // T3's record
+    let found = fs::read(&seg).unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
-    assert_eq!(fs::metadata(&seg).unwrap().len(), spans[4].0); // physically discarded
+    assert_eq!(fs::metadata(&seg).unwrap().len(), spans[4].0); // cut from the journal
     let recovery = k.recovery().expect("journaled");
     let (marker_start, marker_len) = spans[5];
     assert_eq!(
@@ -324,10 +344,133 @@ fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_mar
     );
     assert_eq!(recovery.tail_cut_intact, 1, "T3's intact marker, counted as the rot's tell");
     // …and WHICH write: the position T3's intact marker claims — the one its
-    // acknowledgement named — and the file and byte the cut began at, where
-    // a copy taken before this open still holds it.
+    // acknowledgement named — and the file and byte the cut began at.
     assert_eq!(recovery.tail_cut_claimed, Some(Seq(3)), "the position the acked write held");
     assert_eq!(recovery.tail_cut_from, Some(("seg-1.wal".to_string(), spans[4].0)));
+    // …and where its bytes are: kept, before the cut, byte for byte as found
+    // from the byte the cut began at — the rotted record and its intact
+    // marker, the evidence of the write and of what befell it.
+    let kept = format!("seg-1.wal.cut-{}", spans[4].0);
+    assert_eq!(recovery.tail_cut_kept, vec![kept.clone()], "the one kept file, named");
+    assert_eq!(kept_files(dir.path()), vec![kept.clone()]);
+    let kept_path = dir.path().join(&kept);
+    let kept_bytes = fs::read(&kept_path).unwrap();
+    assert_eq!(kept_bytes, &found[spans[4].0 as usize..], "the cut bytes, whole");
+    #[cfg(unix)]
+    {
+        // Born owner-only, as every file the kernel makes (the `journal_path`
+        // caller contract): it holds a write's bytes whole.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&kept_path).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600, "the kept file is 0600 exactly");
+    }
+    // The next session takes the cut position again, and no open reads,
+    // moves or writes over what was kept: the journal goes on as if the tail
+    // were gone, and the kept file stands as it was.
+    assert_eq!(commit(&k, 31), Seq(3));
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20, 31]);
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.tail_cut, recovery.tail_cut_kept.len()), (0, 0), "a clean reopen");
+    assert_eq!(fs::read(&kept_path).unwrap(), kept_bytes, "the kept file, untouched");
+}
+
+/// A wholly-later segment is kept whole, and a kept name is never written over.
+///
+/// Rot in the record of the transaction that opened a segment leaves the
+/// segment's own intact marker closing nothing, the last committed marker
+/// ending the segment before it — so the open moves the tail segment aside
+/// whole, `seg-5.wal.cut-0`, before the cut, and the cut takes no byte of the
+/// segment before. The next session's commit takes the cut position, and so
+/// the segment's name, again; the same rot there is kept under the next free
+/// name, `seg-5.wal.cut-0.1`, the first kept file standing as it was.
+#[test]
+fn a_tail_segment_holding_an_intact_frame_is_moved_aside_whole_and_never_written_over() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    for _ in 0..4 {
+        commit_blob(&k); // Seqs 1..=4, filling seg-1 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(5)); // rotates into seg-5
+    drop(k);
+    let seg5 = seg_file(dir.path(), 5);
+    let rot = |seg: &std::path::Path| {
+        let spans = frame_spans(seg);
+        assert_eq!(spans.len(), 2, "T5's record and its marker");
+        flip_byte(seg, spans[0].0 + FRAME_HEADER_LEN + 1); // T5's record
+    };
+    rot(&seg5);
+    let found = fs::read(&seg5).unwrap();
+    let seg1_len = fs::metadata(seg_file(dir.path(), 1)).unwrap().len();
+
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.current_seq(), Seq(4));
+    assert_eq!(items(&k).len(), 4);
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!((recovery.tail_cut_intact, recovery.tail_cut_claimed), (1, Some(Seq(5))));
+    assert_eq!(recovery.tail_cut, found.len() as u64, "seg-5 cut whole");
+    assert_eq!(recovery.tail_cut_from, Some(("seg-5.wal".to_string(), 0)), "seg-1 gave no byte");
+    assert_eq!(recovery.tail_cut_kept, vec!["seg-5.wal.cut-0".to_string()]);
+    assert!(!seg5.exists(), "the tail segment is gone from under its own name");
+    assert_eq!(fs::read(dir.path().join("seg-5.wal.cut-0")).unwrap(), found, "moved whole");
+    assert_eq!(fs::metadata(seg_file(dir.path(), 1)).unwrap().len(), seg1_len, "seg-1 uncut");
+
+    // The next commit takes position 5 again — and the name `seg-5.wal` with
+    // it, a fresh segment — and the same rot there is kept beside the first.
+    assert_eq!(commit_blob(&k), Seq(5));
+    drop(k);
+    assert!(seg5.exists(), "the next session's segment takes the name again");
+    rot(&seg5);
+    let again = fs::read(&seg5).unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.current_seq(), Seq(4));
+    assert_eq!(k.recovery().unwrap().tail_cut_kept, vec!["seg-5.wal.cut-0.1".to_string()]);
+    assert_eq!(fs::read(dir.path().join("seg-5.wal.cut-0")).unwrap(), found, "never written over");
+    assert_eq!(fs::read(dir.path().join("seg-5.wal.cut-0.1")).unwrap(), again);
+    assert_eq!(
+        kept_files(dir.path()),
+        vec!["seg-5.wal.cut-0".to_string(), "seg-5.wal.cut-0.1".to_string()]
+    );
+}
+
+/// A name standing where the keep would go is passed over whole.
+///
+/// Whatever stands under the keep's first name and is no copy of these very
+/// bytes — here a directory holding a file of its own — is never written
+/// over, and the copy takes the next free name. (A keep that fails cuts
+/// nothing and fails the open; the open's seam is its own, so the cut's unit
+/// suite drives that failure, through a seam of its own.)
+#[test]
+fn a_name_standing_where_the_keep_would_go_is_passed_over_whole() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
+    drop(k);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    flip_byte(&seg, spans[4].0 + FRAME_HEADER_LEN + 1); // T3's record
+    let found = fs::read(&seg).unwrap();
+    let kept = format!("seg-1.wal.cut-{}", spans[4].0);
+    // A directory under the keep's first name: no copy of these bytes, so the
+    // keep passes it over whole and takes the next name.
+    fs::create_dir(dir.path().join(&kept)).unwrap();
+    fs::write(dir.path().join(&kept).join("theirs"), b"an operator's file").unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.recovery().unwrap().tail_cut_kept, vec![format!("{kept}.1")]);
+    assert_eq!(
+        fs::read(dir.path().join(format!("{kept}.1"))).unwrap(),
+        &found[spans[4].0 as usize..],
+        "the copy, under the next free name"
+    );
+    assert_eq!(
+        fs::read(dir.path().join(&kept).join("theirs")).unwrap(),
+        b"an operator's file",
+        "what stood under the name, untouched"
+    );
+    assert_eq!(items(&k), vec![10, 20]);
 }
 
 #[test]
@@ -552,9 +695,10 @@ fn an_absent_segment_halts_as_a_chain_break_where_a_damaged_one_halts_as_a_run()
 #[test]
 fn recovery_deletes_the_wholly_later_segments_the_tail_spans() {
     // §7's tail truncation is two acts: cut the segment holding the last
-    // committed marker, and DELETE every wholly-later segment. Only the first
-    // is exercised elsewhere — every other fixture's tail sits in the segment
-    // it cuts.
+    // committed marker, and take every wholly-later segment out of the
+    // journal. A crash's tail, as here, is deleted and kept nowhere; a tail
+    // holding an intact frame no torn write leaves is moved aside whole
+    // instead (`a_tail_segment_holding_an_intact_frame_is_moved_aside_…`).
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     for _ in 0..5 {
@@ -585,6 +729,8 @@ fn recovery_deletes_the_wholly_later_segments_the_tail_spans() {
         Some(("seg-5.wal".to_string(), 0)),
         "the cut began at the first byte it took: seg-5's first, seg-1 giving none"
     );
+    assert!(recovery.tail_cut_kept.is_empty(), "a crash's tail is kept nowhere");
+    assert_eq!(kept_files(dir.path()), Vec::<String>::new(), "…not even moved aside");
     assert_eq!(recovery.replayed, 4);
 
     // …which is what makes reusing the discarded coordinate safe: the next
@@ -650,14 +796,16 @@ fn open_creates_the_journal_directory_it_was_pointed_at() {
     assert!(k.recovery().expect("journaled").began, "an empty directory held no journal");
 }
 
+/// The open removes a stray `checkpoint.tmp` and answers its size.
+///
 /// A `checkpoint.tmp` a crash left — no base, and room kept on the volume —
-/// is REMOVED by the open, under the flock, and the fact reported with its
-/// size for the daemon's startup line: the name is one of the four the
-/// kernel owns, so the file is the kernel's to delete, and the operator's
-/// acts at the floor stay two. Fixed at the open: a reopen with none
-/// standing answers `None`, as the in-memory mode, which opens no directory,
-/// always does. The bases beside it stand, and the world recovers whole
-/// (M-I5 (f); the checkpoint's safety: the `.tmp` is never a base).
+/// is removed by the open, under the flock, and the fact reported with its
+/// size for the daemon's startup line: the name is one of those the kernel
+/// owns, so the file is the kernel's to delete, and the operator's acts at
+/// the floor stay two. Fixed at the open: a reopen with none standing
+/// answers `None`, as the in-memory mode, which opens no directory, always
+/// does. The bases beside it stand, and the world recovers whole (M-I5 (f);
+/// the checkpoint's safety: the `.tmp` is never a base).
 #[test]
 fn an_open_removes_a_stray_checkpoint_tmp_and_answers_its_size() {
     let dir = tempdir().unwrap();
@@ -689,15 +837,17 @@ fn an_open_removes_a_stray_checkpoint_tmp_and_answers_its_size() {
     assert_eq!(in_memory.stray_checkpoint_removed(), None, "no directory, no temp file");
 }
 
-/// THE KERNEL OWNS FOUR NAMES in its directory — `seg-<n>.wal`,
-/// `checkpoint.<n>`, `checkpoint.tmp`, `kernel.lock` — and leaves every
-/// other alone (`Durability::Fsync`'s `journal_path` contract), so an
-/// embedder keeps files of its own beside the journal: a file at the root, a
-/// directory with a file in it, and names that only resemble the kernel's,
-/// in spellings its writer never emits, come through an open, a rotation, a
-/// landing's retention and reclamation, and a reopen, byte for byte.
+/// Every name in the kernel's directory but its own is left alone.
+///
+/// The kernel owns `seg-<n>.wal`, `checkpoint.<n>`, `checkpoint.tmp`,
+/// `kernel.lock` and the tail cut's kept `seg-<n>.wal.cut-<b>`
+/// (`Durability::Fsync`'s `journal_path` contract), so an embedder keeps
+/// files of its own beside the journal: a file at the root, a directory with
+/// a file in it, and names that only resemble the kernel's, in spellings its
+/// writer never emits, come through an open, a rotation, a landing's
+/// retention and reclamation, and a reopen, byte for byte.
 #[test]
-fn every_name_but_the_kernels_four_is_left_alone() {
+fn every_name_but_the_kernels_own_is_left_alone() {
     let dir = tempdir().unwrap();
     let own: [(&str, &[u8]); 5] = [
         ("commits.log", b"the embedder's own log"),

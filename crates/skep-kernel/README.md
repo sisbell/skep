@@ -35,9 +35,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   carries the start point, the bases passed over, the commits
   `replayed`, the bytes of un-acked tail cut (`tail_cut`), the file
   and byte the cut began at (`tail_cut_from`), the intact frames among
-  them no torn write leaves (`tail_cut_intact`) and the position an
-  intact marker in the cut claimed (`tail_cut_claimed`), whether the
-  open `began` a journal where none stood, and the corrupt runs below
+  them no torn write leaves (`tail_cut_intact`), the files beside the
+  journal those bytes were kept in before a byte was cut, where the
+  tail held such a frame (`tail_cut_kept`, `seg-{n}.wal.cut-{byte}`,
+  the operator's to keep), and the position an intact marker in the
+  cut claimed (`tail_cut_claimed`), whether the open `began` a
+  journal where none stood, and the corrupt runs below
   the start point it read and answered around (`runs_passed_over`,
   with the account of the first); `poison_cause` why the write paths
   halted, where they have, a panic's words only where the code wrote
@@ -77,7 +80,8 @@ build — the kernel carries a write-fault seam: a test makes the next
 checkpoint write, before or past its rename, or the next journal
 append, barrier or repair fail with a named `io::ErrorKind`, or the
 next checkpoint write panic, each arm once, through `#[doc(hidden)]`
-doors on `Kernel`.
+doors on `Kernel`. The open's tail keep hooks the same seam at its
+copy's fsync, which only the cut's own unit suite arms.
 
 ## License
 

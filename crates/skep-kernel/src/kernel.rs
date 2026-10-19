@@ -33,19 +33,21 @@ use crate::Step;
 use crate::{LockKey, Seam, Seq, WorldState};
 use applier::ApplierLock;
 
-/// What a journaled [`Kernel::open`] FOUND AND DID (§7): the start point its
-/// derivation resolved from, and every retained checkpoint it passed over on
-/// the way there, each with the refusal that passed it over — the account
-/// `open` owes its caller under the AUTH spec's M2 seam delta ("`open` …
-/// reports the start point it resolved from", AUTH-2.85), so the daemon above
-/// can log at startup which checkpoint it did NOT start from and where it did
-/// (AUTH-2.86) — and the two acts of the open itself: how many commits it
-/// replayed above that start point, and how many bytes of un-acked tail it
-/// cut, so the open's own landing can be said in figures rather than left to
-/// the silence between two lines — with the facts that tell an operator what
-/// those figures do not: where the cut began and what position an intact
-/// marker in it claimed, whether the cut tail held intact frames no torn
-/// write leaves, whether any journal stood in the directory at all, and the
+/// What a journaled [`Kernel::open`] found in its directory and did (§7).
+///
+/// It is the start point the open's derivation resolved from, and every
+/// retained checkpoint it passed over on the way there, each with the refusal
+/// that passed it over — the account `open` owes its caller under the AUTH
+/// spec's M2 seam delta ("`open` … reports the start point it resolved
+/// from", AUTH-2.85), so the daemon above can log at startup which checkpoint
+/// it did not start from and where it did (AUTH-2.86) — and the two acts of
+/// the open itself: how many commits it replayed above that start point, and
+/// how many bytes of un-acked tail it cut, so the open's own landing can be
+/// said in figures rather than left to the silence between two lines — with
+/// the facts that tell an operator what those figures do not: where the cut
+/// began and what position an intact marker in it claimed, whether the cut
+/// tail held intact frames no torn write leaves and the files its bytes were
+/// then kept in, whether any journal stood in the directory at all, and the
 /// corrupt runs below the start point the open read and passed over, which
 /// the next fallback past that start point meets.
 /// A report and never a verdict: a skipped base is no failure of the open —
@@ -70,35 +72,57 @@ pub struct Recovery {
     /// a base taken at the head with nothing committed since — and the whole
     /// journal's count where genesis stood in.
     pub replayed: u64,
-    /// The BYTES the open's tail truncation removed: the active segment's
-    /// length above the last committed marker, plus every wholly-later
-    /// segment it discarded — §7's un-acked / torn tail, physically cut
-    /// before any write is served: a write caught before its commit was
-    /// durable, and so never acknowledged — save where
-    /// [`Recovery::tail_cut_intact`] counts a frame. `0` where the last
-    /// committed marker ended the journal, as it does after every clean
-    /// shutdown. A count and not an option: a cut that took nothing and no cut
-    /// leave the same journal, so the two are one fact, and every journaled
-    /// open runs the cut.
+    /// The bytes the open's tail truncation removed from the journal.
+    ///
+    /// They are the active segment's length above the last committed marker,
+    /// plus every wholly-later segment it discarded — §7's un-acked / torn
+    /// tail, physically cut before any write is served: a write caught before
+    /// its commit was durable, and so never acknowledged — save where
+    /// [`Recovery::tail_cut_intact`] counts a frame, when every one of these
+    /// bytes was first kept beside the journal ([`Recovery::tail_cut_kept`]).
+    /// `0` where the last committed marker ended the journal, as it does
+    /// after every clean shutdown. A count and not an option: a cut that took
+    /// nothing and no cut leave the same journal, so the two are one fact,
+    /// and every journaled open runs the cut.
     pub tail_cut: u64,
-    /// Of the frames the cut removed, the INTACT ones of a kind no torn write
-    /// leaves: a commit marker that commits nothing, or a frame whose CRC
+    /// Of the frames the cut removed, the intact ones no torn write leaves.
+    ///
+    /// They are a commit marker that commits nothing, or a frame whose CRC
     /// passes and that does not decode. `0` after every clean shutdown and
     /// after nearly every crash — a crash leaves one only where the disk
     /// wrote an append's pages out of order. Rot in the journal's last
     /// committed transaction leaves one, and so does a rewrite of it (the
     /// open item in [`Kernel::open`]'s damage model): the cut then may have
-    /// taken a transaction this kernel ACKNOWLEDGED, which a copy taken
-    /// before this open still holds. Counted, so that cut is said rather than
-    /// taken in silence.
+    /// taken a transaction this kernel acknowledged. Counted, so that cut is
+    /// said rather than taken in silence — and, where it is not `0`, the cut
+    /// bytes are kept beside the journal before one is cut
+    /// ([`Recovery::tail_cut_kept`]).
     pub tail_cut_intact: u64,
-    /// WHERE THE CUT BEGAN: the name in the journal directory of the first
-    /// file a byte left, `seg-{n}.wal`, and the byte of it the cut began at —
-    /// the cut segment at the last committed marker's frame end, or else the
-    /// first wholly-later segment that held a byte, at byte `0`. `None` where
-    /// [`Recovery::tail_cut`] is `0`. What an operator holding a copy taken
-    /// before this open reads the cut bytes back from.
+    /// Where the cut began: a file's name in the journal directory, and a byte.
+    ///
+    /// The file is the first a byte left, `seg-{n}.wal`, and the byte of it
+    /// the cut began at — the cut segment at the last committed marker's frame
+    /// end, or else the first wholly-later segment that held a byte, at byte
+    /// `0`. `None` where [`Recovery::tail_cut`] is `0`. Where the bytes were
+    /// kept, the first kept file holds them from its own byte `0` on.
     pub tail_cut_from: Option<(String, u64)>,
+    /// The files the cut's bytes were kept in, by name, in journal order.
+    ///
+    /// Where the cut took an intact frame no torn write leaves
+    /// ([`Recovery::tail_cut_intact`]), every byte it took was first kept
+    /// beside the journal, durably, before a byte was cut (§7's tail
+    /// truncation): the cut segment's bytes from the cut on copied to
+    /// `seg-{n}.wal.cut-{byte}`, and each wholly-later segment that held a
+    /// byte moved whole to `seg-{n}.wal.cut-0`, a name already standing
+    /// passed over for `….{k}`. No listing of the kernel's reads one, so a
+    /// kept file is no segment and no base, and no open removes or writes
+    /// over one. They are the operator's: the evidence of what the cut took
+    /// and of what befell it, and the one copy of an acknowledged write it
+    /// may have taken. None is to be moved back under its segment's name: the
+    /// positions it holds are the next commits' to take again, and the
+    /// segment that name may since have been given is theirs. Empty for a
+    /// crash's tail, which is cut and gone, and where nothing was cut.
+    pub tail_cut_kept: Vec<String>,
     /// THE POSITION THE CUT TAIL CLAIMED: the greatest `last_seq` an intact
     /// commit marker in it carried — a marker that committed nothing, which
     /// [`Recovery::tail_cut_intact`] counts. Rot in the journal's last
@@ -623,7 +647,10 @@ impl<W: WorldState> Kernel<W> {
     /// `TolerateGap` burns fold harmlessly), then durably TRUNCATE the
     /// un-acked/torn tail beyond `W` before any write is served (skipped on
     /// every halt path; a truncation failure fails `open()` with `Io` —
-    /// idempotent, retried next `open()`). A committed-but-unacked tail marker
+    /// idempotent, retried next `open()`) — first keeping its every byte
+    /// beside the journal where it holds an intact frame no torn write leaves
+    /// ([`Recovery::tail_cut_kept`]; a keep that fails cuts nothing and fails
+    /// `open()` with `Io` the same way). A committed-but-unacked tail marker
     /// is REPLAYED — the lost-ack case is the client's (ASN-0134
     /// SAFE(b)(iii)), not a phantom.
     ///
@@ -752,9 +779,11 @@ impl<W: WorldState> Kernel<W> {
     /// length prefix, the signature slot's one spelling of empty — its CRC
     /// re-fixed. Mid-history the corrupt run it opens halts at the next
     /// intact frame (case 4); in the last transaction the run lies above the
-    /// committed head, §7's torn tail, and the transaction is cut without a
-    /// word, though its CRC proves these are the bytes that were written.
-    /// Closing it amends §7's tail rule.
+    /// committed head, §7's torn tail, and the transaction is cut from the
+    /// journal though its CRC proves these are the bytes that were written —
+    /// said as an intact frame in the cut ([`Recovery::tail_cut_intact`]), and
+    /// its bytes kept beside the journal ([`Recovery::tail_cut_kept`]), but the
+    /// open serves the shorter journal. Closing it amends §7's tail rule.
     pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
         cfg.validate().map_err(OpenError::InvalidConfig)?;
         // The seam is made here, before the appender it is handed to and
@@ -808,16 +837,25 @@ impl<W: WorldState> Kernel<W> {
         Ok(Self::assemble(cfg, root, journal, journaled, seam))
     }
 
-    /// Recover the journal at `dir` into the root it commits from, its live
-    /// appender — handed `salt_source`, the configured [`SaltSource`] every
-    /// transaction it commits draws from (`SKJ4`); recovery itself draws
-    /// nothing, reading each salt off its marker — and `seam`, the kernel's
-    /// write-fault seam, which the appender's append, barrier and repair
-    /// hook before they run — the exclusion lock the kernel holds for its
-    /// lifetime, the account of the base it stood on and the bases it passed
-    /// over (§7), and the stray `checkpoint.tmp` it removed, if one stood
-    /// ([`Recovered`]). Recovery's own writes — the stray's removal, the
-    /// tail cut, the first segment's creation — run no step of the seam.
+    /// Recovers the journal at `dir`, answering what the open commits from.
+    ///
+    /// It answers the root the open commits from, its live appender — handed
+    /// `salt_source`, the configured [`SaltSource`] every transaction it
+    /// commits draws from (`SKJ4`); recovery itself draws nothing, reading
+    /// each salt off its marker — and `seam`, the kernel's write-fault seam,
+    /// which the appender's append, barrier and repair hook before they run;
+    /// the exclusion lock the kernel holds for its lifetime, the account of
+    /// the base it stood on and the bases it passed over (§7), and the stray
+    /// `checkpoint.tmp` it removed, if one stood ([`Recovered`]). Recovery's
+    /// own writes — the stray's removal, the tail cut and its keep, the first
+    /// segment's creation — run no step of the seam but the tail keep's fsync
+    /// ([`crate::Step::TailKeep`]), hooked on `seam`, which nothing has
+    /// armed: it was made for this open.
+    ///
+    /// # Errors
+    ///
+    /// Every refusal of [`Kernel::open`] past its configuration's, in the
+    /// order that method's doc states.
     fn recover(
         dir: &Path,
         genesis: &W,
@@ -838,7 +876,7 @@ impl<W: WorldState> Kernel<W> {
         // under the fixed temp name is no base (`checkpoint::list` would skip
         // it by name) and keeps its room on the volume — which, after a
         // write the volume's room failed, is the room the next checkpoint
-        // needs. The name is one of the four the kernel owns in this
+        // needs. The name is one of those the kernel owns in this
         // directory, so the file is the kernel's to delete; the caller is
         // told it was, and how large it was, through
         // [`Kernel::stray_checkpoint_removed`].
@@ -949,13 +987,16 @@ impl<W: WorldState> Kernel<W> {
         // while an `open()` that refuses leaves the journal exactly as it
         // found it — which is what an operator images after a halt. It is
         // also before the appender is opened over that segment, whose length
-        // this cut settles and which the appender reads once. What it cut, in
-        // bytes and from where, is the open's to report, as the commits the
-        // fold replayed are: the scan counted those as it closed their
-        // markers, the intact frames of no writer's in the tail as it met
-        // them, with the position their markers claimed, and the corrupt runs
-        // below the start point it read and passed over.
-        let cut = journal::truncate_tail(dir, &scan)?;
+        // this cut settles and which the appender reads once. Where the tail
+        // holds an intact frame no torn write leaves, the cut keeps its every
+        // byte beside the journal before it cuts one. What it cut, in bytes
+        // and from where, and the files it kept them in, is the open's to
+        // report, as the commits the fold replayed are: the scan counted
+        // those as it closed their markers, the intact frames of no writer's
+        // in the tail as it met them, with the position their markers
+        // claimed, and the corrupt runs below the start point it read and
+        // passed over.
+        let cut = journal::truncate_tail(dir, &scan, &seam)?;
         let (runs_passed_over, first_run_passed_over) = scan.runs_passed_over();
         let recovery = Recovery {
             start_point,
@@ -964,6 +1005,7 @@ impl<W: WorldState> Kernel<W> {
             tail_cut: cut.bytes,
             tail_cut_intact: scan.tail_intact,
             tail_cut_from: cut.from,
+            tail_cut_kept: cut.kept,
             tail_cut_claimed: scan.tail_claimed.map(Seq),
             began,
             runs_passed_over,
@@ -1610,18 +1652,18 @@ impl<W: WorldState> Kernel<W> {
         applier.cadence.policy.set_commits(commits)
     }
 
-    /// The `checkpoint.tmp` this kernel's [`Kernel::open`] FOUND AND REMOVED,
-    /// by its length in bytes — a checkpoint a crash or a failed write left
-    /// half-written under the fixed temp name, which is no base and keeps its
-    /// room on the volume until something deletes it; the name is one of the
-    /// four the kernel owns in its directory ([`Durability::Fsync`]'s
-    /// `journal_path` contract), so that something is the open, under the
-    /// flock.
+    /// Returns the size of the stray `checkpoint.tmp` the open removed.
+    ///
+    /// The file is a checkpoint a crash or a failed write left half-written
+    /// under the fixed temp name, which is no base and keeps its room on the
+    /// volume until something deletes it; the name is one of those the
+    /// kernel owns in its directory ([`Durability::Fsync`]'s `journal_path`
+    /// contract), so that something is [`Kernel::open`], under the flock.
     /// `None` where none stood, and under [`Durability::InMemory`], which
     /// opens no directory. Fixed at `open`, like [`Kernel::recovery`], and
     /// kept apart from it: the report is of the directory as found, not of
     /// the derivation, and the daemon above renders it as its own startup
-    /// line. A `.tmp` a FAILED [`Kernel::checkpoint`] leaves is removed by
+    /// line. A `.tmp` a failed [`Kernel::checkpoint`] leaves is removed by
     /// that call itself, best-effort, and never reaches here.
     pub fn stray_checkpoint_removed(&self) -> Option<u64> {
         self.journaled.as_ref().and_then(|journaled| journaled.stray_checkpoint_removed)

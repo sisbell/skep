@@ -11,8 +11,9 @@ readme = "README.md"
 [features]
 # The test seam, `src/hooks.rs` (its module doc says what it holds): the
 # write-fault seam — the next checkpoint write, before or past its rename,
-# or the next journal append, barrier or repair failing with a named
-# `io::ErrorKind`, or a panic in the checkpoint write, each arm once.
+# or the next journal append, barrier or repair, or the open's tail keep,
+# failing with a named `io::ErrorKind`, or a panic in the checkpoint write,
+# each arm once.
 # DEFAULT-OFF and never enabled by a shipped build: this crate's own tests
 # turn it on through the self dev-dependency below, skepd's tests through
 # its own `test-hooks` forward, and a build that compiles no test compiles

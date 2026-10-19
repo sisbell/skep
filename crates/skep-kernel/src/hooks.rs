@@ -1,39 +1,41 @@
-//! THE TEST SEAM — compiled only with `test-hooks`, which this crate's own
-//! suites and the daemon's turn on and no shipped build does. THE
-//! WRITE-FAULT SEAM: the hook before each [`Step`] of the checkpoint write
-//! and of the journal's append, barrier and repair, where an armed FAILURE
-//! answers an `io::Error` of the kind the test named in the step's place —
-//! `StorageFull` for the full volume — and an armed PANIC unwinds there.
-//! Each arm fires ONCE and disarms: the next call of the same step runs the
-//! real step. It is what lets the full volume's failures at a write, at a
-//! checkpoint — before or after the base landed — and at the repair after
-//! an unwind, and a panic inside the checkpoint write, be driven on cue in
-//! the gate on every platform, where the one failure a test could reach
-//! before was a directory squatting on a name.
+//! The test seam, compiled only with `test-hooks`.
 //!
-//! And THE BASE-LOAD COUNT (§3.3 step 2 of the operations design): the
-//! bases this kernel's history reads have selected, loaded and seeded — a
-//! retained checkpoint's whole body read, hashed, deserialized and seeded,
-//! or genesis cloned and seeded — moved once at the reads' one base
-//! selection ([`Kernel::base_at_or_below`]), so a suite fences what a
-//! caller COSTS in bases where it cannot in seconds: a consumer that asks
-//! once over a window and one that asks once per boundary read the same
-//! slots and differ here alone. Recovery's base at the open is not among
-//! them, nor a candidate the fallback chain passed over.
+//! This crate's own suites and the daemon's turn it on, and no shipped build
+//! does. **The write-fault seam**: the hook before each [`Step`] of the
+//! checkpoint write, of the journal's append, barrier and repair, and of the
+//! open's tail keep, where an armed failure answers an `io::Error` of the
+//! kind the test named in the step's place — `StorageFull` for the full
+//! volume — and an armed panic unwinds there. Each arm fires once and
+//! disarms: the next call of the same step runs the real step. It is what
+//! lets the full volume's failures at a write, at a checkpoint — before or
+//! after the base landed — at the repair after an unwind and at the keep of
+//! a tail the open cuts, and a panic inside the checkpoint write, be driven
+//! on cue in the gate on every platform.
 //!
-//! The state is ONE KERNEL's, never the process's — one test opens several
+//! **The base-load count** (§3.3 step 2 of the operations design): the bases
+//! this kernel's history reads have selected, loaded and seeded — a retained
+//! checkpoint's whole body read, hashed, deserialized and seeded, or genesis
+//! cloned and seeded — moved once at the reads' one base selection
+//! ([`Kernel::base_at_or_below`]), so a suite fences what a caller costs in
+//! bases where it cannot in seconds: a consumer that asks once over a window
+//! and one that asks once per boundary read the same slots and differ here
+//! alone. Recovery's base at the open is not among them, nor a candidate the
+//! fallback chain passed over.
+//!
+//! The state is one kernel's, never the process's — one test opens several
 //! kernels, and the suite runs many tests in one process: [`Kernel`] holds
 //! it and hands its journal appender a second handle at the open
-//! (`JournalWriter::with_seam`), and the checkpoint write takes it by
-//! reference (`checkpoint::write`); the `Seam` alias in `lib.rs` is the
-//! handle. The doors a test arms it through are [`Kernel`]'s
-//! `#[doc(hidden)]` [`fail_the_next`], [`panic_at_the_next`] and
-//! [`armed_steps`], which delegate here, and the count is read through
-//! [`bases_loaded`]. A build without the feature carries none of it, and
-//! the write sites' hook before a step is the no-op `NoHooks` of `lib.rs`.
-//! Like [`SaltSource::Seeded`], a test-time knob the shipped binary never
-//! turns: the kernel still has no logging seam — it answers facts, and this
-//! seam only makes a step fail and counts what the reads loaded.
+//! (`JournalWriter::with_seam`), and the checkpoint write and the open's tail
+//! cut take it by reference (`checkpoint::write`, `journal::truncate_tail`);
+//! the `Seam` alias in `lib.rs` is the handle. The doors a test arms it
+//! through are [`Kernel`]'s `#[doc(hidden)]` [`fail_the_next`],
+//! [`panic_at_the_next`] and [`armed_steps`], which delegate here, and the
+//! count is read through [`bases_loaded`]. A build without the feature
+//! carries none of it, and the write sites' hook before a step is the no-op
+//! `NoHooks` of `lib.rs`. Like [`SaltSource::Seeded`], a test-time knob the
+//! shipped binary never turns: the kernel still has no logging seam — it
+//! answers facts, and this seam only makes a step fail and counts what the
+//! reads loaded.
 //!
 //! [`Kernel`]: crate::Kernel
 //! [`Kernel::base_at_or_below`]: crate::Kernel::base_at_or_below
@@ -141,26 +143,30 @@ impl Hooks {
     }
 }
 
-/// Which steps take a panic arm: the checkpoint write's three — the panic
-/// the design's row of a panic past the commit region names, which the
-/// backstop's inline checkpoint propagates out of `transact` after the
-/// commit landed — and the journal's append, the unwind out of the commit
-/// region the §3 guard repairs, whose repair the seam can then fail. Not
-/// the barrier: its unwind leaves the appender in the append's own state
-/// (`InFlight::Appending`), and the same repair answers it. Not the
-/// repair: its failure is `truncate_to`'s `Err`, which the failure arm is,
-/// and an unwind out of the repair after an unwind would leave the
-/// appender's length above a partial append with the kernel unpoisoned — a
-/// state no `set_len` produces and no card describes. Spelled out variant
-/// by variant, so a step added to [`Step`] says whether it takes one before
-/// the build passes.
+/// Returns whether `step` takes a panic arm.
+///
+/// The checkpoint write's three take one — the panic the design's row of a
+/// panic past the commit region names, which the backstop's inline
+/// checkpoint propagates out of `transact` after the commit landed — and so
+/// does the journal's append, the unwind out of the commit region the §3
+/// guard repairs, whose repair the seam can then fail. Not the barrier: its
+/// unwind leaves the appender in the append's own state
+/// (`InFlight::Appending`), and the same repair answers it. Not the repair:
+/// its failure is `truncate_to`'s `Err`, which the failure arm is, and an
+/// unwind out of the repair after an unwind would leave the appender's
+/// length above a partial append with the kernel unpoisoned — a state no
+/// `set_len` produces and no card describes. Not the tail keep's fsync: an
+/// unwind out of an open is the open's caller's, with nothing cut, and the
+/// failure arm is what the keep's card describes. Spelled out variant by
+/// variant, so a step added to [`Step`] says whether it takes one before the
+/// build passes.
 fn takes_a_panic_arm(step: Step) -> bool {
     match step {
         Step::CheckpointCreate
         | Step::CheckpointSync
         | Step::CheckpointDirSync
         | Step::JournalAppend => true,
-        Step::JournalBarrier | Step::JournalRepair => false,
+        Step::JournalBarrier | Step::JournalRepair | Step::TailKeep => false,
     }
 }
 
@@ -170,13 +176,14 @@ mod tests {
 
     use super::*;
 
-    const EVERY: [Step; 6] = [
+    const EVERY: [Step; 7] = [
         Step::CheckpointCreate,
         Step::CheckpointSync,
         Step::CheckpointDirSync,
         Step::JournalAppend,
         Step::JournalBarrier,
         Step::JournalRepair,
+        Step::TailKeep,
     ];
 
     #[test]

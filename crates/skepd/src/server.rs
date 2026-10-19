@@ -219,7 +219,7 @@ use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointHeader, CheckpointPolicy, Durability,
     InlineCheckpoint, KernelConfig, LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
 };
-use skep_media::gate::MediaGate;
+use skep_media::gate::{MediaGate, UnreadDeposit};
 use skep_media::index;
 use skep_media::limits::MAX_BLOB_BYTES;
 use skep_media::pools::{FetchPool, UploadPool};
@@ -1680,26 +1680,30 @@ impl Daemon {
     /// Says the standing line (`operations.md` §1, the rates; §1.1 m11).
     ///
     /// It is what the checkpoint thread runs at each tick of its timed wait
-    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the nine reads —
+    /// ([`Woken::Tick`](skep_core::commits::Woken::Tick)): the ten reads —
     /// each atomic loads or one lock, save the floor's fresh read of the
-    /// volume, and none under the serialization guard — in the order the
-    /// line says them: (1) the write path's halt with its position, (2) the
-    /// kernel's poison with the head it halted at — no commit lands past a
-    /// poisoned kernel, so the head at the tick is the position the halt line
-    /// (m10) named — (3) the journal damage a history read met this uptime,
-    /// by the site its line named (`Daemon::history_damage`; RUNBOOK §2), (4)
-    /// the feed's stopped files with theirs, (5) the pruner's liveness flag,
-    /// (6) the feed walk's liveness flag with the region its death left
-    /// uncovered, (7) the cell index's failed state, the media gate's
-    /// (`operations.md` §4 row 26), (8) the media gate's floor binding — its
-    /// free space below its floor in force, or a read of it the host
-    /// refused, the creation's own test (`MediaGate::floor_binding`, read
-    /// fresh, so the floor's clause stops by itself once the read answers
-    /// room) — and (9) the `CLAIMED-PERMISSIVE` bit as `log_config_warnings`
-    /// reads the claim; and one line, [`StandingLine`], under
-    /// `Class::Standing`, where at least one clause stands; nothing
-    /// otherwise. No clause for the checkpoint thread's own death — it is the
-    /// carrier.
+    /// volume and the unread deposit's fresh read of its file, and none under
+    /// the serialization guard — in the order the line says them: (1) the
+    /// write path's halt with its position, (2) the kernel's poison with the
+    /// head it halted at — no commit lands past a poisoned kernel, so the
+    /// head at the tick is the position the halt line (m10) named — (3) the
+    /// journal damage a history read met this uptime, by the site its line
+    /// named (`Daemon::history_damage`; RUNBOOK §2), (4) the feed's stopped
+    /// files with theirs, (5) the pruner's liveness flag, (6) the feed walk's
+    /// liveness flag with the region its death left uncovered, (7) the cell
+    /// index's failed state, the media gate's (`operations.md` §4 row 26),
+    /// (8) the media gate's floor binding — its free space below its floor in
+    /// force, or a read of it the host refused, the creation's own test
+    /// (`MediaGate::floor_binding`, read fresh, so the floor's clause stops by
+    /// itself once the read answers room) — (9) the media gate's unread
+    /// deposit, a deposit's file the store could not read
+    /// (`MediaGate::unread_deposit`, its file read fresh, so the clause stops
+    /// by itself, and the episode's end is said, once the store reads it; one
+    /// atomic load where none stands) — and (10) the `CLAIMED-PERMISSIVE` bit
+    /// as `log_config_warnings` reads the claim; and one line,
+    /// [`StandingLine`], under `Class::Standing`, where at least one clause
+    /// stands; nothing otherwise. No clause for the checkpoint thread's own
+    /// death — it is the carrier.
     pub(crate) fn say_the_standing_line(&self) {
         let kernel = self.engine.kernel();
         let line = StandingLine {
@@ -1714,6 +1718,7 @@ impl Daemon {
                 .media
                 .floor_binding()
                 .map(|(free_space, floor)| FloorBinding { free_space, floor }),
+            unread_deposit: self.media.unread_deposit(),
             claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
         };
         if line.stands() {
@@ -3337,14 +3342,17 @@ impl fmt::Display for JournalDamageSite<'_> {
 /// `operations.md` §3.3 step 2; row 41); `the cell index failed to
 /// build`; `deposits refused at the floor (free space {f} below the floor
 /// in force {F})`, or `… (free space unread: {cause})` where the host
-/// refused the read, the cause in the store's words; `CLAIMED-PERMISSIVE`.
-/// A pure value over the reads ([`Daemon::say_the_standing_line`] makes
-/// them), pinned by `to_string()` in the unit suite; emitted under
-/// `Class::Standing` at a tick where [`StandingLine::stands`], and never
-/// otherwise. States, positions, files and the floor's two figures or its
-/// read's cause alone — no principal, token, path, query or reader rides
-/// it. The index's clause reads the media gate's failed state
-/// (`operations.md` §4 row 26).
+/// refused the read, the cause in the store's words; `a deposit's file is
+/// unread ({cause}), {n} reads failed over {ms} ms`, the cause of the tick's
+/// own read in the store's words, the file by its hash;
+/// `CLAIMED-PERMISSIVE`. A pure value over the reads
+/// ([`Daemon::say_the_standing_line`] makes them), pinned by `to_string()`
+/// in the unit suite; emitted under `Class::Standing` at a tick where
+/// [`StandingLine::stands`], and never otherwise. States, positions, files
+/// and the figures of the floor and the unread deposit or their reads'
+/// causes alone — no principal, token, path, query or reader rides it. The
+/// index's clause reads the media gate's failed state (`operations.md` §4
+/// row 26).
 pub(super) struct StandingLine {
     /// The write path's halt and the position it was set at.
     pub(super) halted_at: Option<Seq>,
@@ -3373,6 +3381,10 @@ pub(super) struct StandingLine {
     /// The floor binding: the free space read below the floor in force, or
     /// a read of it the host refused.
     pub(super) floor: Option<FloorBinding>,
+    /// A deposit's file the store could not read, as the tick read it again.
+    ///
+    /// It is `MediaGate::unread_deposit`'s answer.
+    pub(super) unread_deposit: Option<UnreadDeposit>,
     /// Whether the board is `CLAIMED-PERMISSIVE`.
     pub(super) claimed_permissive: bool,
 }
@@ -3400,6 +3412,7 @@ impl StandingLine {
             || self.feed_walk_gone.is_some()
             || self.index_failed
             || self.floor.is_some()
+            || self.unread_deposit.is_some()
             || self.claimed_permissive
     }
 }
@@ -3439,6 +3452,14 @@ impl fmt::Display for StandingLine {
                 ),
                 Err(cause) => format!("deposits refused at the floor (free space unread: {cause})"),
             });
+        }
+        if let Some(unread) = &self.unread_deposit {
+            clauses.push(format!(
+                "a deposit's file is unread ({}), {} reads failed over {} ms",
+                unread.cause,
+                unread.failed,
+                unread.age.as_millis()
+            ));
         }
         if self.claimed_permissive {
             clauses.push("CLAIMED-PERMISSIVE".to_string());

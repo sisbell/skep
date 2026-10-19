@@ -2823,7 +2823,7 @@ every value naming the kind, in this order:
 | `not_owner`, `site.addr` the draft | `publish` | permanent | a draft-native run of the shot holds a value naming the kind and the caller does not OWN the draft (ω, exact — the same test `not_owner` makes of `doc`): a grantee's, an ancestor's or a descendant's shot naming the owner's draft re-mints no cell |
 | `credential_refused`, `detail` `unbound_cell` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal did not deposit under its own lease — THE BINDING's refusal (lane B), read off this principal's own lease record first and never off the file's presence: never deposited, lapsed past the horizon, another account's deposit of the same bytes, or a deposit whole on disk whose length the cell's `size` contradicts (the size check, at the same door); permanent for the request as sent — the act that exists is a PUT of the bytes, then the cell the PUT's answer spells |
 | `credential_refused`, `detail` `unknown_cell_schema` | `insert` into a draft; the owner's own `publish` | permanent | the value names the kind and parses under no schema this board reads — D13's halt at a permanent act, so no second schema ever finds an unbound cell planted under this one; the same bytes are never admitted, and the act that exists is a cell in the form above |
-| `credential_refused`, `detail` `lease_lapsed` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal DID deposit, and the deposit is gone: the lease lapsed within the horizon, or is live over a file that is not there or not whole — the binding's LAPSED arm, told apart from `unbound_cell` so a resume can be written against it; the act is a re-PUT of the bytes, which re-takes the lease |
+| `credential_refused`, `detail` `lease_lapsed` | `insert` into a draft; the owner's own `publish` | permanent | the value is a cell naming a hash this principal DID deposit, and the deposit is gone: the lease lapsed within the horizon, or is live over a file that is not there or not whole — the binding's LAPSED arm, told apart from `unbound_cell` so a resume can be written against it; the act is a re-PUT of the bytes, which re-takes the lease. This build answers it too over a file whose size the store could not read, which is no absence — never admitted, and said on the operator stream — until the design gives a storage fault an answer of its own |
 | `credential_refused`, `detail` `index_rebuilding` | `insert` into a draft; the owner's own `publish` | retry | THE REBUILD WINDOW: the cell index's rebuild at open has not completed, and the lease arm alone would have answered `unbound_cell` or `lease_lapsed` — a verdict the index arm, unread, may overturn; the readiness token re-used in the binding's position, during the walk alone, retry-class as the readiness refusal is: the same request may be admitted once the walk completes. A cell the lease arm admits in the rebuild window is admitted |
 
 A cell naming a hash this principal holds a LIVE lease on, over a whole
@@ -2833,21 +2833,23 @@ hash the requester's OWN cells already name is a REFERENCE, kept by no
 lease — admitted where the file is on disk whole at the cell's `size`,
 `unbound_cell` where the file is whole at the size those cells name and
 this cell contradicts it (the size check), `lease_lapsed` where the file
-is absent or not whole (the deposit is gone; the act is the PUT) — and
-only then the principal's own lease. The index arm is read at the
-requester's OWN account's hashes and never at the per-hash list of cells,
-so its answer and its time are the same whether or not another account's
-cell names the hash. So the owner's own `publish` of a draft holding an
-admitted cell is admitted after the lease lapsed, the cell's file
-standing, and a re-PUT of a file the account's cells name is charged
-nothing at its own scope. Until the index's rebuild at open completes
-(THE READINESS REFUSAL, below) the index arm is skipped and the lease arm
-alone ADMITS: the door is not one of the index's readers and never waits;
-where that arm alone would refuse, the door answers THE REBUILD WINDOW's state —
-`credential_refused` with `detail` `index_rebuilding`, `disposition`
-`retry` — never a permanent token, so the owner's shot of a draft whose
-lease lapsed, its file whole, made during the walk, is answered
-retry-class and admitted after the walk with no re-PUT.
+is absent or not whole (the deposit is gone; the act is the PUT), and
+where its size the store could not read (this build's answer to a storage
+fault, said on the operator stream) — and only then the principal's own
+lease. The index arm is read at the requester's OWN account's hashes and
+never at the per-hash list of cells, so its answer and its time are the
+same whether or not another account's cell names the hash. So the owner's
+own `publish` of a draft holding an admitted cell is admitted after the
+lease lapsed, the cell's file standing, and a re-PUT of a file the
+account's cells name is charged nothing at its own scope. Until the
+index's rebuild at open completes (THE READINESS REFUSAL, below) the
+index arm is skipped and the lease arm alone ADMITS: the door is not one
+of the index's readers and never waits; where that arm alone would
+refuse, the door answers THE REBUILD WINDOW's state — `credential_refused`
+with `detail` `index_rebuilding`, `disposition` `retry` — never a
+permanent token, so the owner's shot of a draft whose lease lapsed, its
+file whole, made during the walk, is answered retry-class and admitted
+after the walk with no re-PUT.
 
 THE KIND COLUMN: the arms above are read PER KIND. The picture's cell meets
 every arm. THE BLIND DOCUMENT's cell meets `published_target` and
@@ -2916,7 +2918,7 @@ nothing to the journal and takes no `Serial`:
 | `PATCH /blob/upload/<id>?offset=<K>` | THE RESUME: admitted under the upload permit pool — past it, `503 upload_busy`, retry-class, before any body byte, the upload KEPT where it stood; then the bytes from `K`, which must be the record's offset; `K` plus the body's length at most `N`; the own scope on what the upload leaves past `K` BEFORE the body (refused there, the upload is kept) | the record where the body stops short; the finish's answer — `200 {"designation":"blake3","hash":"<64 hex>","size":N}` — where the offset reaches the length, after the file is durable, the lease synced and the record retired |
 | `GET /blob/upload/<id>` | THE PROGRESS: the upload's record — the offset a resume continues from | `200 {"expires":…,"length":N,"offset":K,"upload":"<id>"}` |
 | `DELETE /blob/upload/<id>` | THE TERMINATION: the upload ended, nothing kept | `204` |
-| `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, the cell index's number for its account (the distinct hashes its cells name, at their size), and its PENDING bytes (its live leases on hashes none of its cells names, and its uploads' bytes received) — the limits record's address as installed, and `per_account`, THE PER-ACCOUNT LIMIT IN FORCE in bytes whatever its source: the daemon's default where no record is installed, echoed as a written limit is, so a client reads the figure its own scope is held to before any refusal (R68); `null` only where a written record sets none; refused `503 index_rebuilding` until the index's rebuild at open completes | `200 {"base":<bytes>,"deposits":[…],"limits":null,"pending":<bytes>,"per_account":<bytes>,"uploads":[…]}` |
+| `GET /blob/upload` | THE DEPOSIT READ — no surface of its own (m-Q10): the requester's own standing deposits (hash, size, expiry, and `lapsed` where a live lease stands over a file that is not there or not whole, or whose size the store could not read — this build's answer to a storage fault, as at the door, said on the operator stream), its standing uploads (identifier, offset, length, expiry), its usage as two figures — the BASE, the cell index's number for its account (the distinct hashes its cells name, at their size), and its PENDING bytes (its live leases on hashes none of its cells names, and its uploads' bytes received) — the limits record's address as installed, and `per_account`, THE PER-ACCOUNT LIMIT IN FORCE in bytes whatever its source: the daemon's default where no record is installed, echoed as a written limit is, so a client reads the figure its own scope is held to before any refusal (R68); `null` only where a written record sets none; refused `503 index_rebuilding` until the index's rebuild at open completes | `200 {"base":<bytes>,"deposits":[…],"limits":null,"pending":<bytes>,"per_account":<bytes>,"uploads":[…]}` |
 
 The seven clauses, as the wire keeps them: (1) THE IDENTIFIER — 128 bits
 from the OS per upload, 32 lowercase hex, answered before any body byte

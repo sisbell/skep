@@ -33,7 +33,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the deposit read take — `store`, `key`, `now_ms`, `limits` (`Limits`),
   `index`, `index_ready`, `index_failed`, `own_pending`, `deposit_whole`
   (the binding's own reading of a deposit's file, which the deposit read
-  reports `lapsed` by), `uploads_open`, `health_object`, `startup_line`;
+  reports `lapsed` by — a file whose size the store cannot read answered
+  not whole, never admitted), `unread_deposit` (`UnreadDeposit`), the
+  episode of a deposit's file the store cannot read, which the gate says
+  at its edges and the standing line re-says off a fresh read of the file,
+  `uploads_open`, `health_object`, `startup_line`;
   the floor — `note_checkpoint`, the daemon's note of the newest
   checkpoint's size, from which the gate keeps the floor in force, `floor`,
   `floor_binding`, the creation's own test the standing line re-says — a

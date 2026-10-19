@@ -12,8 +12,9 @@
 //! through those constants, §3 step 2's variables, read off the binary's
 //! own help, §2's line for the journal damage a history read meets and step
 //! 5's reading of an attest cut, §1's line for a write refused for a cause
-//! but room, its floor's line for a free space unread and step 3's line for
-//! a pass that failed, and §1 step 8's standing clauses. Every loopback
+//! but room, its floor's line for a free space unread, its lines for a
+//! deposit's file unread and step 3's line for a pass that failed, and §1
+//! step 8's standing clauses. Every loopback
 //! origin §3 and §9 dial is held to the daemon's default port, read through
 //! its constant.
 
@@ -652,6 +653,45 @@ fn runbook_says_the_floor_binds_on_a_free_space_unread_and_names_its_cause() {
              until the read answers; every other write serves`"
         ),
         "§3 step 3 quotes the open's unread form: {open}"
+    );
+}
+
+/// Checks that §1 says a deposit's file the store cannot read, and its end.
+///
+/// Step 1 quotes the episode's two lines — `skep-media`'s `gate/tests.rs`
+/// holds the quotes to the gate's own values, and `blob_routes.rs` the lines
+/// a served daemon says — and names the store's account the cause is, the
+/// read that reads what the daemon reads, what is not lost, and the pull that
+/// puts a lost file back; step 5 acts on the line; and step 8 says what ends
+/// the standing clause, whose fence `server/tests.rs` holds.
+#[test]
+fn runbook_says_a_deposits_file_unread_and_what_ends_it() {
+    let step = collapsed(&passage(
+        "\n## 1. The full volume",
+        "1. **Tell the two states apart.**",
+        &["2. **Make room first.**"],
+    ));
+    for fact in [
+        "A deposit's file the store cannot read is said by its own line too",
+        "`blobs/blake3/{hex}: stat: {error}`",
+        "nothing is removed for it",
+        "`stat` run on that file, as the board's user, reads what the daemon reads",
+        "the pull with `--hash` (Restore, step 6)",
+    ] {
+        assert!(step.contains(fact), "§1 step 1 says {fact:?}: {step}");
+    }
+    let acts = collapsed(&passage(
+        "\n## 1. The full volume",
+        "5. **Then act on the line you saw.**",
+        &["6. **Know what the floor keeps meanwhile.**"],
+    ));
+    assert!(acts.contains("A deposit's file unread: clear the cause it names"), "{acts}");
+    let watch = passage("\n## 1. The full volume", "8. **Watch between the lines.**", &["\n## 2."]);
+    let (_, after) = fenced(&watch);
+    assert!(
+        collapsed(after)
+            .contains("a deposit's file unread: the cause it names, cleared, or the file put back"),
+        "§1 step 8 says what ends the unread deposit's clause: {after}"
     );
 }
 

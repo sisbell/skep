@@ -19,7 +19,8 @@
 //! their daemon default and install hook, the hold a stream has on its
 //! upload, the three scopes a PUT is refused on, the deposit's terms its
 //! creation and finish apply, the floor it keeps from the checkpoints the
-//! daemon notes, and the binding's read;
+//! daemon notes, and the binding's read, a deposit's file the store cannot
+//! read said at the condition's edges and re-said by the standing line;
 //! [`index`], THE CELL INDEX — per hash the cells naming it, per account the
 //! distinct hashes its cells name at their size (the base) — entered at
 //! every commit that mints a cell and rebuilt whole at every open on a

@@ -57,19 +57,20 @@ pub const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 /// checkpoint thread's timed wait on the write path's signal
 /// (`commits::CheckpointSignal::wait`) ticks at it, and at each tick the
 /// thread writes one `standing:` line re-saying every standing bad state
-/// that stands — the nine, in the line's order: the write path's halt, the
+/// that stands — the ten, in the line's order: the write path's halt, the
 /// kernel's poison, the journal damage a history read met, a stopped feed
 /// file, the pruner's thread gone, the feed walk's thread gone, the cell
-/// index failed, the floor binding, CLAIMED-PERMISSIVE — and nothing on a
-/// healthy board (`operations.md` §1 THE RATES; §1.1 m11). And `skepd`'s
-/// panic hook rates a recurring panic by it: one line per site on its
-/// thread per interval, the panics between counted on the next.
+/// index failed, the floor binding, a deposit's file the store cannot read,
+/// CLAIMED-PERMISSIVE — and nothing on a healthy board (`operations.md` §1
+/// THE RATES; §1.1 m11). And `skepd`'s panic hook rates a recurring panic
+/// by it: one line per site on its thread per interval, the panics between
+/// counted on the next.
 ///
 /// What the interval bounds is how long a standing state goes unsaid past
 /// its transition: each is said once at its transition, so a stream rotated
 /// past that line holds nothing of it, and an hour is the most a reader of
 /// the current stream waits to learn of a state that still stands. A tick
-/// on a healthy board costs the nine reads — an atomic load or one lock
+/// on a healthy board costs the ten reads — an atomic load or one lock
 /// each — and writes nothing.
 pub const STANDING_INTERVAL: Duration = Duration::from_secs(3600);
 

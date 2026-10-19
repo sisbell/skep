@@ -186,6 +186,36 @@ apart.
    `quota -v`, run as the board's user, shows it spent; for the
    device, read the OS's own log (`dmesg`).
 
+   A deposit's file the store cannot read is said by its own line
+   too. Where a read of a deposited file fails, the board answers a
+   cell over that deposit as if the deposit were gone, refused
+   `lease_lapsed`, and its owner's listing of deposits marks it
+   `lapsed`, though the file may stand whole; nothing is removed for
+   it, and every other write serves. The daemon says so once, at the
+   first such read, and once more for each cause of another kind:
+
+   ```
+   failure: a deposit's file is unread ({cause}): a cell over it, or over any deposit whose file the store cannot read, is refused as if the deposit were gone, and its owner's listing of deposits marks it lapsed, until the read answers; nothing is removed for it, and every other write serves; the act: check the volume's mount, its device and the data directory's permissions, as the cause names
+   ```
+
+   `{cause}` is the blob store's account, `blobs/blake3/{hex}:
+   stat: {error}`, the file by its hash and the OS's own words last,
+   read as the floor's unread line's are above; `Not a directory`
+   is a file standing where `blobs/` or `blobs/blake3/` should be.
+   `stat` run on that file, as the board's user, reads what the
+   daemon reads. Once the cause is cleared, the next read of that
+   file, a request's or the standing line's own (step 8), says so
+   once, `{n}` the reads requests made that failed meanwhile, each
+   one a person told the deposit was gone:
+
+   ```
+   landing: a deposit's file is read again (blobs/blake3/{hex}), {n} reads failed over {ms} ms
+   ```
+
+   A file the device lost is put back beside the serving daemon by
+   the pull with `--hash` (Restore, step 6), or by its owner's upload
+   of the same bytes, which replaces it where the store can write.
+
 2. **Make room first.** Grow the volume, or free space that
    something other than the board holds. Grown room ends the
    floor's refusals at the next upload, which reads the free space
@@ -306,6 +336,12 @@ apart.
    - The floor's line with the free space unread: clear the cause it
      names, as step 1 reads it. Room and the pass clear nothing, and
      where the volume was unmounted, mount it before any restart.
+   - A deposit's file unread: clear the cause it names, as step 1
+     reads it, and soon: meanwhile each person who places that
+     picture's cell, or lists their deposits, is told the deposit is
+     gone. `Input/output error` is the device, as for `500 blob_io`
+     below. Where the device lost the file, put it back (Restore,
+     step 6). Room and the pass clear nothing.
    - `feed-attest.log`'s line: make room, or clear the cause its line
      names, then restart. The open writes the missing line back from
      the journal and syncs it; where the cause still stands, the open
@@ -351,7 +387,8 @@ apart.
        rewrite fails there too. Stop the daemon, repair or replace
        the volume, restoring from a copy where the device lost data
        (Restore), and start again. The open reads each log afresh
-       and cuts the line a failed append tore.
+       and cuts the line a failed append tore. A deposit's file
+       unread with the same cause (step 1) is the same device.
      - `Disk quota exceeded`: the board's user is over its quota; as
        step 2 says.
      - `no partial stands for this upload`, on a resume: that
@@ -439,6 +476,7 @@ apart.
    the feed walk's thread is gone; positions ({low}, {head}] stay uncovered
    the cell index failed to build
    deposits refused at the floor (free space {free} below the floor in force {floor})
+   a deposit's file is unread ({cause}), {n} reads failed over {ms} ms
    CLAIMED-PERMISSIVE
    ```
 
@@ -470,6 +508,9 @@ apart.
    - the floor: room (steps 2 and 3), the refusals ending at the
      next upload; where its clause reads the free space unread, the
      cause it names, cleared (step 1);
+   - a deposit's file unread: the cause it names, cleared, or the
+     file put back (step 1); the standing line's own read of the file
+     ends it at the next tick, saying so, if no request's read has;
    - `CLAIMED-PERMISSIVE`: a restart with `--no-local-trust`, where
      local trust on a claimed board was not meant (Start, step 3,
      item 13).

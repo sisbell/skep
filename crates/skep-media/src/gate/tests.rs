@@ -668,4 +668,252 @@ fn the_binding_reads_the_principals_own_lease_first_and_the_file_only_under_it()
     assert!(!gate.deposit_whole(DESIGNATION, &hex, 9), "the removal: not whole");
     assert_eq!(gate.binding(p, &cell), Binding::Lapsed, "named, the file gone: the deposit is gone");
     assert_eq!(gate.own_scope(p, gate.now_ms()), 9, "the base stands whatever the directory holds");
+    assert!(gate.lines_said().is_empty(), "a file gone or short is read, and says nothing");
+}
+
+/// A deposit made through the gate's own creation and finish.
+struct Deposited {
+    bytes: Vec<u8>,
+    hex: String,
+    cell: Cell,
+}
+
+/// Deposits `bytes` as `principal`'s, whole, under the gate's terms.
+fn deposit(gate: &MediaGate, principal: PrincipalId, bytes: &[u8]) -> Deposited {
+    let now = gate.now_ms();
+    let record = gate.create_upload(principal, bytes.len() as u64, now).expect("a creation");
+    let key = MediaGate::key(principal);
+    let mut stream = gate.store().resume(&key, &record.id, 0, now).expect("a resume");
+    stream.append(bytes, now).expect("the bytes");
+    let hex = gate.finish_upload(stream, now).expect("a finish").hex;
+    let cell = Cell { hash: *blake3::hash(bytes).as_bytes(), size: bytes.len() as u64 };
+    Deposited { bytes: bytes.to_vec(), hex, cell }
+}
+
+/// Makes a directory unsearchable for the guard's life.
+///
+/// The directory is read and written but never searched (`0o600`), so no
+/// name in it can be stat'ed and every read of one answers `Permission
+/// denied`. Its own mode is restored as the guard drops, a failed assertion
+/// included, so the temporary directory stays removable.
+#[cfg(unix)]
+struct Unsearchable {
+    dir: std::path::PathBuf,
+    mode: std::fs::Permissions,
+}
+
+#[cfg(unix)]
+impl Unsearchable {
+    fn new(dir: &Path) -> Unsearchable {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir).expect("the directory").permissions();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o600)).expect("the mode");
+        Unsearchable { dir: dir.to_path_buf(), mode }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Unsearchable {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.dir, self.mode.clone());
+    }
+}
+
+/// Checks that a deposit's file the store cannot read is said at its edges.
+///
+/// The store's read of a deposit's size fails while its file is a link to
+/// itself, which no stat resolves (`operations.md` §1, THE RATES; M-I5 (c)).
+/// The binding answers the cell as the deposit gone, never admitted (M-I1
+/// (a)), and the first failed read says one `failure:` line, the store's own
+/// account of the read in it. Another deposit's file still answers, and its
+/// read ends nothing. The failed reads after the first — the deposit read's
+/// wholeness and the binding's index arm — are counted and say nothing. The
+/// standing read answers the cause, the count and the episode's age, and
+/// counts nothing itself. With the file put back, the standing read ends the
+/// episode, said once with the count and its length, and the cell is
+/// admitted again. A later fault starts a new episode, said again; and a
+/// cause of another kind — the designation's directory unsearchable, so a
+/// second file's read answers `Permission denied` — is said once as a new
+/// start and counted after. The lines' words are pinned at fixed figures. A
+/// privileged process searches any directory, so the last part has no fault
+/// to inject there and checks nothing.
+#[cfg(unix)]
+#[test]
+fn a_deposit_file_the_store_cannot_read_is_said_at_its_edges_and_never_admitted() {
+    let cause = io::Error::other(format!(
+        "blobs/blake3/{}: stat: Input/output error (os error 5)",
+        "ab".repeat(32)
+    ));
+    assert_eq!(
+        UnreadLine { cause: &cause }.to_string(),
+        format!(
+            "a deposit's file is unread (blobs/blake3/{}: stat: Input/output error (os error 5)): \
+             a cell over it, or over any deposit whose file the store cannot read, is refused as \
+             if the deposit were gone, and its owner's listing of deposits marks it lapsed, until \
+             the read answers; nothing is removed for it, and every other write serves; the act: \
+             check the volume's mount, its device and the data directory's permissions, as the \
+             cause names",
+            "ab".repeat(32)
+        )
+    );
+    let ended = Unread {
+        designation: "blake3".to_string(),
+        hex: "ab".repeat(32),
+        since_ms: 0,
+        failed: 3,
+        said: Vec::new(),
+    };
+    assert_eq!(
+        UnreadEndedLine { episode: &ended, age: Duration::from_micros(2_500_700) }.to_string(),
+        format!(
+            "a deposit's file is read again (blobs/blake3/{}), 3 reads failed over 2500 ms",
+            "ab".repeat(32)
+        ),
+        "the episode's length in whole milliseconds"
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    ready(&gate);
+    let p = PrincipalId(14);
+    let a = deposit(&gate, p, b"a picture its store cannot read");
+    let b = deposit(&gate, p, b"a picture beside it, read whole");
+    assert_eq!(gate.binding(p, &a.cell), Binding::Admitted, "the deposit as written");
+    assert!(gate.lines_said().is_empty(), "a read that answers says nothing");
+    let start =
+        |hex: &str| format!("failure: a deposit's file is unread (blobs/blake3/{hex}: stat: ");
+    let a_path = gate.store().blob_path(DESIGNATION, &a.hex).expect("a path");
+    let loop_a = || {
+        std::fs::remove_file(&a_path).expect("the file");
+        std::os::unix::fs::symlink(&a_path, &a_path).expect("a link to itself");
+    };
+
+    // THE START: the first failed read, said once.
+    loop_a();
+    assert_eq!(gate.binding(p, &a.cell), Binding::Lapsed, "an unread size: never admitted");
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].starts_with(&start(&a.hex)),
+        "the store's own account of the read: {}",
+        said[0]
+    );
+    assert!(
+        said[0].ends_with(
+            "; the act: check the volume's mount, its device and the data directory's \
+             permissions, as the cause names"
+        ),
+        "{}",
+        said[0]
+    );
+    // Another file's read answers, and ends nothing.
+    assert_eq!(gate.binding(p, &b.cell), Binding::Admitted, "the file beside it reads whole");
+    assert!(gate.deposit_whole(DESIGNATION, &b.hex, b.cell.size));
+    // The failed reads after the first: counted, unsaid.
+    assert!(!gate.deposit_whole(DESIGNATION, &a.hex, a.cell.size), "an unread size is not whole");
+    gate.index().enter(&addr("1.0.1.0.2.0.1.1"), Some(p), &a.cell);
+    assert_eq!(gate.binding(p, &a.cell), Binding::Lapsed, "the index arm answers it as gone too");
+    assert_eq!(
+        gate.lines_said().len(),
+        1,
+        "a cause already said is counted: {:?}",
+        gate.lines_said()
+    );
+
+    // THE STANDING READ: the cause, the count, the age.
+    gate.advance_clock_ms(2_000);
+    let standing = gate.unread_deposit().expect("the episode stands");
+    assert!(standing.cause.starts_with(&format!("blobs/blake3/{}: stat: ", a.hex)), "{standing:?}");
+    assert_eq!(standing.failed, 3, "the three reads requests made, never the answered one");
+    assert!(standing.age >= Duration::from_millis(2_000), "{standing:?}");
+    assert_eq!(
+        gate.unread_deposit().map(|u| u.failed),
+        Some(3),
+        "the standing read counts nothing"
+    );
+    assert_eq!(gate.lines_said().len(), 1, "nor says a cause already said");
+
+    // THE END: the file put back, the standing read reads it.
+    std::fs::remove_file(&a_path).expect("the link");
+    std::fs::write(&a_path, &a.bytes).expect("the file put back");
+    assert_eq!(gate.unread_deposit(), None, "the read answers: the episode ends");
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 2, "{said:?}");
+    let figure = said[1]
+        .strip_prefix(&format!(
+            "landing: a deposit's file is read again (blobs/blake3/{}), 3 reads failed over ",
+            a.hex
+        ))
+        .and_then(|rest| rest.strip_suffix(" ms"))
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("the end, once, with the count and the length: {}", said[1]));
+    assert!(figure >= 2_000, "the episode's length on the gate's clock: {}", said[1]);
+    assert_eq!(gate.binding(p, &a.cell), Binding::Admitted, "read again, whole: admitted");
+    assert_eq!(
+        gate.lines_said().len(),
+        2,
+        "a read that answers, no episode standing, says nothing"
+    );
+
+    // A LATER FAULT: a new episode, said again.
+    loop_a();
+    assert_eq!(gate.binding(p, &a.cell), Binding::Lapsed);
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 3, "{said:?}");
+    assert!(said[2].starts_with(&start(&a.hex)), "{}", said[2]);
+    // A CHANGED CAUSE: said once as a new start, then counted.
+    let _unsearchable = Unsearchable::new(&dir.path().join("blobs").join(DESIGNATION));
+    if gate.store().blob_size(DESIGNATION, &b.hex).is_ok() {
+        return; // a privileged process searches any directory: nothing to inject
+    }
+    assert_eq!(gate.binding(p, &b.cell), Binding::Lapsed, "the file beside it, unread now");
+    assert_eq!(gate.binding(p, &b.cell), Binding::Lapsed);
+    let said = gate.lines_said();
+    assert_eq!(said.len(), 4, "a changed cause is said once: {said:?}");
+    assert!(said[3].starts_with(&start(&b.hex)), "{}", said[3]);
+    assert!(said[3].contains("Permission denied"), "{}", said[3]);
+    assert_eq!(
+        gate.unread_deposit().map(|u| u.failed),
+        Some(3),
+        "the episode's three failed reads"
+    );
+}
+
+/// Checks that RUNBOOK §1 quotes the unread deposit's two lines as said.
+///
+/// The runbook is read at test runtime from the workspace root, as the
+/// daemon's suite reads it. Each line is rendered here by the gate's own
+/// value under the class word the classed door writes, every figure put back
+/// as the placeholder the runbook names it by, so a word the gate's line
+/// gains or loses fails here rather than leaving the runbook behind it.
+#[test]
+fn runbook_quotes_the_unread_deposits_lines_as_the_gate_says_them() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md");
+    let runbook = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let step = runbook
+        .split("1. **Tell the two states apart.**")
+        .nth(1)
+        .and_then(|rest| rest.split("2. **Make room first.**").next())
+        .unwrap_or_else(|| panic!("RUNBOOK.md no longer carries §1 step 1"));
+    let quoted: Vec<&str> = step.lines().map(str::trim).collect();
+    let cause = io::Error::other("{cause}");
+    let start = format!("{}: {}", Class::Failure, UnreadLine { cause: &cause });
+    let episode = Unread {
+        designation: DESIGNATION.to_string(),
+        hex: "{hex}".to_string(),
+        since_ms: 0,
+        failed: 9001,
+        said: Vec::new(),
+    };
+    let end = format!(
+        "{}: {}",
+        Class::Landing,
+        UnreadEndedLine { episode: &episode, age: Duration::from_millis(9002) }
+    )
+    .replace("9001", "{n}")
+    .replace("9002", "{ms}");
+    for line in [start, end] {
+        assert!(quoted.contains(&line.as_str()), "§1 step 1 quotes {line:?}:\n{step}");
+    }
 }

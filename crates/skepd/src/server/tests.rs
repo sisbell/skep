@@ -1655,14 +1655,17 @@ fn the_checkpoint_threads_lines_go_through_the_classed_door() {
 /// kernel's poison with the position its halt line named, and the journal
 /// damage a history read met by its site, after the poison (RUNBOOK §2);
 /// each of the two flag clauses alone, and the damage alone at each of its
-/// sites; no clause, which is no line at all (`stands` false); and the
-/// floor's clause alone where the host refused the free space's read, its
-/// cause in the store's words and no figure.
+/// sites; no clause, which is no line at all (`stands` false); the floor's
+/// clause alone where the host refused the free space's read, its cause in
+/// the store's words and no figure; and the unread deposit's clause alone,
+/// the tick's own read's cause in the store's words, the count and the age.
 #[test]
 fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
     use skep_core::commits::StoppedFile;
 
     let corrupt = HistoryError::Corruption { at: Seq(9), cause: None };
+    let unread_file =
+        format!("blobs/blake3/{}: stat: Input/output error (os error 5)", "ab".repeat(32));
     let every = StandingLine {
         halted_at: Some(Seq(17)),
         poisoned: Some(Seq(17)),
@@ -1675,17 +1678,25 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         feed_walk_gone: Some((20, 48)),
         index_failed: true,
         floor: Some(FloorBinding { free_space: Ok(1000), floor: 268_435_456 }),
+        unread_deposit: Some(UnreadDeposit {
+            cause: unread_file.clone(),
+            age: Duration::from_micros(7_200_900),
+            failed: 12,
+        }),
         claimed_permissive: true,
     };
     assert!(every.stands());
     assert_eq!(
         every.to_string(),
-        "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned \
-         since position 17; a history read found the journal unreadable at position 9; \
-         commits.log stopped since position 9; feed-index.log stopped since position 12; the \
-         pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
-         uncovered; the cell index failed to build; deposits refused at the floor (free space \
-         1000 below the floor in force 268435456); CLAIMED-PERMISSIVE"
+        format!(
+            "the write path is halted since position 17 (feed-attest.log); the kernel is poisoned \
+             since position 17; a history read found the journal unreadable at position 9; \
+             commits.log stopped since position 9; feed-index.log stopped since position 12; the \
+             pruner's thread is gone; the feed walk's thread is gone; positions (20, 48] stay \
+             uncovered; the cell index failed to build; deposits refused at the floor (free space \
+             1000 below the floor in force 268435456); a deposit's file is unread ({unread_file}), \
+             12 reads failed over 7200 ms; CLAIMED-PERMISSIVE"
+        )
     );
     let one = StandingLine {
         halted_at: None,
@@ -1696,6 +1707,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         feed_walk_gone: None,
         index_failed: false,
         floor: None,
+        unread_deposit: None,
         claimed_permissive: false,
     };
     assert!(one.stands());
@@ -1733,6 +1745,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         feed_walk_gone: None,
         index_failed: false,
         floor: None,
+        unread_deposit: None,
         claimed_permissive: false,
     };
     assert!(!none.stands(), "nothing on a healthy board");
@@ -1750,6 +1763,28 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         "deposits refused at the floor (free space unread: blobs/: statvfs: Input/output error (os \
          error 5))",
         "the read's cause in the store's words, never a figure"
+    );
+    let unread_deposit = StandingLine {
+        floor: None,
+        unread_deposit: Some(UnreadDeposit {
+            cause: format!(
+                "blobs/blake3/{}: stat: Permission denied (os error 13)",
+                "cd".repeat(32)
+            ),
+            age: Duration::from_millis(40),
+            failed: 1,
+        }),
+        ..unread
+    };
+    assert!(unread_deposit.stands(), "a deposit's file the store cannot read stands alone");
+    assert_eq!(
+        unread_deposit.to_string(),
+        format!(
+            "a deposit's file is unread (blobs/blake3/{}: stat: Permission denied (os error 13)), 1 \
+             reads failed over 40 ms",
+            "cd".repeat(32)
+        ),
+        "the tick's read's cause in the store's words, the count with its fixed label, the age"
     );
 }
 
@@ -1787,6 +1822,11 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         feed_walk_gone: Some((9002, 9003)),
         index_failed: true,
         floor: Some(FloorBinding { free_space: Ok(9004), floor: 9005 }),
+        unread_deposit: Some(UnreadDeposit {
+            cause: "{cause}".to_string(),
+            age: Duration::from_millis(9007),
+            failed: 9006,
+        }),
         claimed_permissive: true,
     };
     let written = [
@@ -1795,6 +1835,8 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         ("9003", "{head}"),
         ("9004", "{free}"),
         ("9005", "{floor}"),
+        ("9006", "{n}"),
+        ("9007", "{ms}"),
     ]
     .into_iter()
     .fold(every.to_string(), |line, (figure, named)| line.replace(figure, named));

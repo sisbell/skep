@@ -960,8 +960,10 @@ fn deposit_read(media_gate: &MediaGate, principal: PrincipalId) -> Value {
         .map(|l| {
             // Exact of what is on disk, by the binding's own reading
             // (`MediaGate::deposit_whole`): a lease over a file that is
-            // absent, not whole, or whose size cannot be read reads as
-            // lapsed here as at the insert.
+            // absent or not whole reads as lapsed here as at the insert, and
+            // so does one whose size the store could not read, until the
+            // design gives a storage fault an answer of its own; the gate
+            // says that read on the operator stream.
             let whole = media_gate.deposit_whole(&l.designation, &l.hex, l.size);
             obj(vec![
                 ("designation", Value::String(l.designation)),

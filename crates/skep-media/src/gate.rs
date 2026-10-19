@@ -57,16 +57,32 @@
 //! chunk may re-refuse. Neither line names a principal, an upload or a token
 //! (D9): the condition is the host's, said in the host's figures or words.
 //!
+//! **The unread deposit's lines** (`operations.md` §1, THE RATES; M-I5 (c)).
+//! A read of a deposit's file the store cannot answer — a permission, a
+//! failing device, a stale network handle — is no absence, and the binding
+//! and the deposit read answer it as the deposit gone, never admitted
+//! (M-I1 (a)), until the design gives a storage fault an answer of its own.
+//! The gate says it at the condition's edges, through the classed door. The
+//! first such read starts an episode, said once: the store's account of the
+//! read, what the board answers meanwhile, what is not lost and the act. A
+//! later failed read is counted, and said as a new start only where its
+//! cause is of a kind not yet said. The next read of the episode's own file
+//! that answers — a request's, or the standing line's own — ends it, said
+//! once with the reads that failed and how long it stood; and the daemon's
+//! standing line re-says it meanwhile ([`MediaGate::unread_deposit`]).
+//! Neither line names a principal, an upload or a token (D9): the file goes
+//! by its hash.
+//!
 //! THE BINDING reads THE INDEX FIRST (`MediaGate::binding`): a hash the
 //! requester's own cells already name is a REFERENCE, kept by no lease —
 //! admitted where the file is on disk whole at the cell's size, the deposit
-//! gone where it is not — and only then the lease arm. Until the walk
-//! completes the index arm is skipped and the lease arm alone ADMITS: the
-//! door is not one of the three readers and never waits (ms5-R, "for
-//! nothing else"); and where that arm alone would REFUSE, the answer is
-//! `Binding::Rebuilding` — the index arm it has not read may admit the
-//! cell — which the door answers RETRY-CLASS, as the readiness refusal
-//! does, and never a permanent token. Where the walk DIED instead
+//! gone where it is not or its size is unread — and only then the lease
+//! arm. Until the walk completes the index arm is skipped and the lease arm
+//! alone ADMITS: the door is not one of the three readers and never waits
+//! (ms5-R, "for nothing else"); and where that arm alone would REFUSE, the
+//! answer is `Binding::Rebuilding` — the index arm it has not read may
+//! admit the cell — which the door answers RETRY-CLASS, as the readiness
+//! refusal does, and never a permanent token. Where the walk DIED instead
 //! (`CellIndex::is_failed`; `operations.md` §4 row 26) no index arm is
 //! coming, and the lease arm's verdict stands as FINAL — `Lapsed`,
 //! `Unbound` — honest where no wait can succeed; the re-PUT that would
@@ -385,7 +401,10 @@ pub(crate) enum Binding {
     /// The principal's cells name the hash and the file is not there or not
     /// whole at the cell's size; or its lease on the hash has lapsed within
     /// the horizon, or is live over a file that is not there or not whole:
-    /// the deposit is gone, the act a re-PUT.
+    /// the deposit is gone, the act a re-PUT. A file whose size the store
+    /// could not read is answered here too, never admitted, until the design
+    /// gives a storage fault an answer of its own; the gate says that read
+    /// (`MediaGate::note_unread`).
     Lapsed,
     /// The principal's cells name the hash not, and it holds no lease on it
     /// — never deposited, lapsed past the horizon, or another's — or holds
@@ -441,6 +460,28 @@ pub enum Counted {
     Unattributed,
 }
 
+/// A deposit's file the store cannot read, as the standing line re-says it.
+///
+/// It is [`MediaGate::unread_deposit`]'s answer while an unread episode
+/// stands (`operations.md` §1, THE RATES): a read of a deposit's file the
+/// store could not answer, every such read answered as the deposit gone and
+/// never admitted (M-I1 (a)), from the first that failed to the next read of
+/// that file that answers. Its figures name a file by its hash and never a
+/// party (D9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnreadDeposit {
+    /// The cause of the standing line's own read, in the store's words.
+    ///
+    /// It reads `blobs/{designation}/{hex}: stat: {error}`: the file by its
+    /// name under the data directory, the act, and the OS's words last.
+    pub cause: String,
+    /// How long the episode has stood, on the gate's clock.
+    pub age: Duration,
+    /// The reads requests made of a deposit's file that failed since the
+    /// episode began, each answered as the deposit gone.
+    pub failed: u64,
+}
+
 /// The daemon's media resource.
 pub struct MediaGate {
     store: Store,
@@ -474,6 +515,20 @@ pub struct MediaGate {
     /// THE CELL INDEX — shared with the write path, which enters it at
     /// every commit that mints a cell, and with the walk at open.
     index: Arc<CellIndex>,
+    /// Whether an unread episode stands.
+    ///
+    /// It is set as an episode starts and cleared as it ends, each under
+    /// `unread`'s lock, so a read of a deposit's file that answers — every
+    /// read on a healthy volume — costs one atomic load and takes no lock
+    /// (`MediaGate::note_answered`).
+    unread_stands: AtomicBool,
+    /// The unread episode, where one stands.
+    ///
+    /// It runs from a read of a deposit's file the store could not answer to
+    /// the next read of that file that answers (`Unread`). Taken briefly by
+    /// every read that fails and by the read that ends it, and held across no
+    /// read of the store.
+    unread: Mutex<Option<Unread>>,
     /// The test seam's clock offset, added to the wall clock.
     #[cfg(any(test, feature = "test-hooks"))]
     clock_offset_ms: AtomicU64,
@@ -550,6 +605,8 @@ impl MediaGate {
             floor_said: AtomicBool::new(false),
             held: Mutex::new(HashSet::new()),
             index: Arc::new(CellIndex::new()),
+            unread_stands: AtomicBool::new(false),
+            unread: Mutex::new(None),
             #[cfg(any(test, feature = "test-hooks"))]
             clock_offset_ms: AtomicU64::new(0),
             #[cfg(any(test, feature = "test-hooks"))]
@@ -1066,22 +1123,148 @@ impl MediaGate {
         self.store.free_space()
     }
 
-    /// THE FILE's LENGTH AS THE BINDING READS IT: the bytes on disk under
-    /// `<designation>/<hex>`, or `None` where no file stands. A size that
-    /// cannot be read is read as no file: the binding has no I/O answer of
-    /// its own, and a deposit whose bytes it cannot see is not one it admits.
-    fn file_len(&self, designation: &str, hex: &str) -> Option<u64> {
-        self.store.blob_size(designation, hex).ok().flatten()
+    /// Returns the length of the deposit's file at `<designation>/<hex>`, as
+    /// the binding reads it.
+    ///
+    /// It is the store's one read of the file (`Store::blob_size`):
+    /// `Ok(Some(len))` where a file stands, `Ok(None)` where none does. Every
+    /// read is noted for the unread episode — a read that answered may end
+    /// it (`MediaGate::note_answered`), and one that failed starts or counts
+    /// it (`MediaGate::note_unread`) — so the operator hears of a file the
+    /// store cannot read from the read that met it (`operations.md` §1, THE
+    /// RATES).
+    ///
+    /// # Errors
+    ///
+    /// The store's account of a read that failed — `blobs/{designation}/{hex}:
+    /// stat: {error}`, the OS's words last — which is no absence. Each of the
+    /// two readers, the binding's index arm and [`MediaGate::deposit_whole`],
+    /// answers it at one marked arm.
+    fn file_len(&self, designation: &str, hex: &str) -> io::Result<Option<u64>> {
+        let read = self.store.blob_size(designation, hex);
+        match &read {
+            Ok(_) => self.note_answered(designation, hex),
+            Err(cause) => self.note_unread(designation, hex, cause),
+        }
+        read
     }
 
-    /// Whether the deposit `<designation>/<hex>` of `size` bytes is WHOLE on
-    /// disk — a file there at exactly that length, as THE BINDING reads it
-    /// (Op inventory 2, "A LIVE LEASE OVER A FILE THAT IS NOT THERE READS AS
-    /// LAPSED"): the binding's lease arm asks it of a live lease, and the
-    /// deposit read reports each deposit's `lapsed` by it, so the two are
-    /// one reading of the file and never two (M-I5 (c)).
+    /// Returns whether the deposit `<designation>/<hex>` of `size` bytes is
+    /// whole on disk: a file there at exactly that length.
+    ///
+    /// It is the binding's own reading of the file (Op inventory 2, "A LIVE
+    /// LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED"): the binding's
+    /// lease arm asks it of a live lease, and the deposit read reports each
+    /// deposit's `lapsed` by it, so the two are one reading of the file and
+    /// never two (M-I5 (c)). A file whose size the store could not read is
+    /// not whole: the deposit is answered as gone at both, never admitted
+    /// (M-I1 (a)), until the design gives a storage fault an answer of its
+    /// own, and the gate says the read on the operator stream
+    /// ([`MediaGate::unread_deposit`]).
     pub fn deposit_whole(&self, designation: &str, hex: &str, size: u64) -> bool {
-        self.file_len(designation, hex) == Some(size)
+        match self.file_len(designation, hex) {
+            Ok(len) => len == Some(size),
+            // An unread size: the deposit answered as gone.
+            Err(_) => false,
+        }
+    }
+
+    /// Notes a read of the deposit's file at `<designation>/<hex>` that
+    /// answered, a size or an absence, for the unread episode.
+    ///
+    /// Where the episode stands at this very file, the episode ends and its
+    /// end is said once ([`UnreadEndedLine`], `Class::Landing`). A read of any
+    /// other file ends nothing, so one file's fault among healthy files is
+    /// one episode, never one per request. Where no episode stands, it costs
+    /// one atomic load.
+    fn note_answered(&self, designation: &str, hex: &str) {
+        if !self.unread_stands.load(Ordering::Acquire) {
+            return;
+        }
+        let mut unread = self.unread.lock();
+        let Some(ended) = unread.take_if(|episode| episode.is_of(designation, hex)) else {
+            return;
+        };
+        self.unread_stands.store(false, Ordering::Release);
+        let age = Duration::from_millis(self.now_ms().saturating_sub(ended.since_ms));
+        self.say(Class::Landing, UnreadEndedLine { episode: &ended, age });
+    }
+
+    /// Notes a read of the deposit's file at `<designation>/<hex>` that
+    /// failed for a request, `cause` the store's account of it, for the
+    /// unread episode.
+    ///
+    /// The episode is a recurring condition said at its edges, a changed
+    /// cause a new start (`operations.md` §1, THE RATES). With no episode
+    /// standing, one begins at this file and its start is said
+    /// ([`UnreadLine`], `Class::Failure`). With one standing, the read is
+    /// counted, and said only where its cause is of a kind the episode has
+    /// not said, so a whole directory's fault met by every request is said
+    /// once and counted.
+    fn note_unread(&self, designation: &str, hex: &str, cause: &io::Error) {
+        let mut unread = self.unread.lock();
+        match unread.as_mut() {
+            Some(episode) => {
+                episode.failed = episode.failed.saturating_add(1);
+                if !episode.first_of(cause.kind()) {
+                    return;
+                }
+            }
+            None => {
+                *unread = Some(Unread {
+                    designation: designation.to_string(),
+                    hex: hex.to_string(),
+                    since_ms: self.now_ms(),
+                    failed: 1,
+                    said: vec![cause.kind()],
+                });
+                self.unread_stands.store(true, Ordering::Release);
+            }
+        }
+        self.say(Class::Failure, UnreadLine { cause });
+    }
+
+    /// Returns the unread episode as a fresh read finds it, or `None` where
+    /// none stands.
+    ///
+    /// It is the daemon's standing line's read (`operations.md` §1, THE
+    /// RATES: a standing state is read fresh at the tick). The episode's own
+    /// file is read again by the binding's read, outside the episode's lock:
+    /// the door takes that lock under the serialization guard, so a read that
+    /// hangs here holds no write. A read that answers ends the episode, its
+    /// end said once, and answers `None`, so the standing line's clause
+    /// stops by itself once the store reads the file. A read that fails
+    /// answers the episode's figures with this read's cause, said as a start
+    /// where its kind is one the episode has not said; it is not counted, the
+    /// count being the reads requests made. One atomic load where no episode
+    /// stands.
+    pub fn unread_deposit(&self) -> Option<UnreadDeposit> {
+        if !self.unread_stands.load(Ordering::Acquire) {
+            return None;
+        }
+        let (designation, hex) = {
+            let unread = self.unread.lock();
+            let episode = unread.as_ref()?;
+            (episode.designation.clone(), episode.hex.clone())
+        };
+        let cause = match self.store.blob_size(&designation, &hex) {
+            Ok(_) => {
+                self.note_answered(&designation, &hex);
+                return None;
+            }
+            Err(cause) => cause,
+        };
+        let mut unread = self.unread.lock();
+        // Ended meanwhile, by a request's read that answered.
+        let episode = unread.as_mut()?;
+        if episode.first_of(cause.kind()) {
+            self.say(Class::Failure, UnreadLine { cause: &cause });
+        }
+        Some(UnreadDeposit {
+            cause: cause.to_string(),
+            age: Duration::from_millis(self.now_ms().saturating_sub(episode.since_ms)),
+            failed: episode.failed,
+        })
     }
 
     /// THE BINDING (Op inventory 2): THE INDEX FIRST, where its walk has
@@ -1091,13 +1274,17 @@ impl MediaGate {
     /// size those cells name and this cell contradicts it (the size check,
     /// the lease arm's own answer to a cell that is not the deposit as
     /// written); the deposit gone — LAPSED — where the file is absent or
-    /// not whole — then the principal's own lease record, the file only
-    /// where that record names the hash under a live lease. Until the walk
-    /// completes the index arm is skipped — the door never waits on the
-    /// index — and where the lease arm alone would refuse, the answer is
-    /// `Binding::Rebuilding`: the arm not yet read may admit the cell. Where
-    /// the walk DIED (`operations.md` §4 row 26) the arm not read is never
-    /// coming, and the lease arm's verdict stands as final.
+    /// not whole, or its size unread — then the principal's own lease
+    /// record, the file only where that record names the hash under a live
+    /// lease. A size the store could not read is never admitted (M-I1 (a)):
+    /// both arms answer it as the deposit gone, until the design gives a
+    /// storage fault an answer of its own, and the gate says the read
+    /// (`MediaGate::note_unread`). Until the walk completes the index arm is
+    /// skipped — the door never waits on the index — and where the lease arm
+    /// alone would refuse, the answer is `Binding::Rebuilding`: the arm not
+    /// yet read may admit the cell. Where the walk DIED (`operations.md` §4
+    /// row 26) the arm not read is never coming, and the lease arm's verdict
+    /// stands as final.
     pub(crate) fn binding(&self, principal: PrincipalId, cell: &Cell) -> Binding {
         let key = Self::key(principal);
         let hex = hex_string(&cell.hash);
@@ -1105,17 +1292,19 @@ impl MediaGate {
         if ready {
             if let Some(named) = self.index.size_named(principal, DESIGNATION, &hex) {
                 return match self.file_len(DESIGNATION, &hex) {
-                    Some(len) if len == cell.size => Binding::Admitted,
-                    Some(len) if len == named => Binding::Unbound,
-                    _ => Binding::Lapsed,
+                    Ok(Some(len)) if len == cell.size => Binding::Admitted,
+                    Ok(Some(len)) if len == named => Binding::Unbound,
+                    Ok(_) => Binding::Lapsed,
+                    // An unread size: the deposit answered as gone.
+                    Err(_) => Binding::Lapsed,
                 };
             }
         }
         let lease_arm = match self.store.lease_state(&key, DESIGNATION, &hex, self.now_ms()) {
             LeaseState::None => Binding::Unbound,
             LeaseState::Lapsed { .. } => Binding::Lapsed,
-            // The file absent, unreadable, or not the length the lease
-            // recorded: the deposit is gone.
+            // The file absent, not the length the lease recorded, or its
+            // size unread (`MediaGate::deposit_whole`): the deposit is gone.
             LeaseState::Live { size, .. } if !self.deposit_whole(DESIGNATION, &hex, size) => {
                 Binding::Lapsed
             }
@@ -1217,6 +1406,93 @@ impl fmt::Display for FloorLiftedLine {
             "deposits admitted again: an upload of {} bytes finished with the volume's free \
              space {} bytes above the floor in force {}",
             self.bytes, self.free_space, self.floor
+        )
+    }
+}
+
+/// An unread episode: a deposit's file whose size the store could not read.
+///
+/// It runs from the first read that failed, at `designation`'s `hex`, to the
+/// next read of that same file that answers (`MediaGate::note_answered`).
+/// The reads that fail meanwhile, of any deposit's file, are counted in it
+/// and said only where their cause is of a kind not yet said.
+struct Unread {
+    /// The designation of the file the episode began at, which its end reads.
+    designation: String,
+    /// The hex of the file the episode began at.
+    hex: String,
+    /// The gate's clock at the first failed read.
+    since_ms: u64,
+    /// The reads requests made that failed, the first among them.
+    failed: u64,
+    /// The causes said, by their kind.
+    said: Vec<io::ErrorKind>,
+}
+
+impl Unread {
+    /// Returns whether the episode stands at `<designation>/<hex>`.
+    fn is_of(&self, designation: &str, hex: &str) -> bool {
+        self.designation == designation && self.hex == hex
+    }
+
+    /// Returns whether `kind` is a cause the episode has not said, noting it
+    /// said.
+    fn first_of(&mut self, kind: io::ErrorKind) -> bool {
+        let first = !self.said.contains(&kind);
+        if first {
+            self.said.push(kind);
+        }
+        first
+    }
+}
+
+/// The unread episode's start line: a deposit's file the store cannot read.
+///
+/// It names the cause in the store's own words — `blobs/{designation}/{hex}:
+/// stat: {error}`, the file by its name under the data directory and the
+/// OS's words last — then what the board answers meanwhile, what is not
+/// lost, and the act the cause names. A pure value the unit suite pins by
+/// `to_string()`; said under `Class::Failure` once as an episode starts and
+/// once for each changed cause (`MediaGate::note_unread`). It names a hash
+/// and never a party (D9).
+struct UnreadLine<'a> {
+    cause: &'a io::Error,
+}
+
+impl fmt::Display for UnreadLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a deposit's file is unread ({}): a cell over it, or over any deposit whose file the \
+             store cannot read, is refused as if the deposit were gone, and its owner's listing \
+             of deposits marks it lapsed, until the read answers; nothing is removed for it, and \
+             every other write serves; the act: check the volume's mount, its device and the data \
+             directory's permissions, as the cause names",
+            self.cause
+        )
+    }
+}
+
+/// The unread episode's end line: the episode's own file read again.
+///
+/// It names the file, the reads that failed over the episode and how long it
+/// stood in milliseconds, the stream's one spelling of a duration
+/// (`operations.md` §1). A pure value the unit suite pins by `to_string()`;
+/// said under `Class::Landing` once per episode (`MediaGate::note_answered`).
+struct UnreadEndedLine<'a> {
+    episode: &'a Unread,
+    age: Duration,
+}
+
+impl fmt::Display for UnreadEndedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a deposit's file is read again (blobs/{}/{}), {} reads failed over {} ms",
+            self.episode.designation,
+            self.episode.hex,
+            self.episode.failed,
+            self.age.as_millis()
         )
     }
 }

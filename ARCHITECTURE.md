@@ -2654,7 +2654,10 @@ finish — THE DEPOSIT's TERMS, the creation and the finish of an upload
 under the principal's key, the deposit's function (the store's for the
 schema's designation, the pairing checked at compile time) and the lease
 interval in force; the binding's read with its window, and the deposit's
-wholeness the deposit read reports by; and THE INVENTORY's two reads,
+wholeness the deposit read reports by — a file whose size the store cannot
+read answered as the deposit gone, never admitted, and said at the
+condition's edges by the gate, the unread episode answered to the daemon's
+standing line off a fresh read of its file; and THE INVENTORY's two reads,
 whose figures the operator's tool reports under the gate's own pending
 rule. `index.rs` — THE CELL INDEX:
 per hash the cells naming it, per account the distinct hashes its cells
@@ -3068,12 +3071,13 @@ the store's install — nothing above their own layer.
    bound and the media floor re-read from that checkpoint's size and the
    change feed's five files compacted to the journal's reclaim floor; its
    wait on the signal TIMED, so that once an hour, while any standing bad
-   state stands — the nine, in the order the line says them: the write
+   state stands — the ten, in the order the line says them: the write
    path's halt, the kernel's poison, the journal damage a history read
    met, a stopped feed file, the pruner's thread gone, the feed walk's
-   thread gone, the cell index failed, the floor binding,
-   CLAIMED-PERMISSIVE — it says ONE `standing:` line naming each with its
-   position or file, and nothing on a healthy board; its loop under the
+   thread gone, the cell index failed, the floor binding, a deposit's
+   file the store cannot read, CLAIMED-PERMISSIVE — it says ONE
+   `standing:` line naming each with its position or file, and nothing
+   on a healthy board; its loop under the
    same catch, which says what is lost with it (every checkpoint the
    backstop's, unsaid; the bound and the floor frozen; the feed's files
    uncompacted and no standing line, until a restart); and the kernel's

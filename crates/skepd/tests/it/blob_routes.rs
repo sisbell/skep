@@ -1084,6 +1084,127 @@ fn a_free_space_the_host_does_not_answer_is_said_unread_with_its_cause() {
     sd.shutdown();
 }
 
+/// A directory made unsearchable for the guard's life.
+///
+/// It is read and written but never searched (`0o600`), so no name in it can
+/// be stat'ed. Its own mode comes back as the guard drops, a failed
+/// assertion included, so the temporary directory stays removable.
+#[cfg(unix)]
+struct Unsearchable {
+    dir: std::path::PathBuf,
+    mode: std::fs::Permissions,
+}
+
+#[cfg(unix)]
+impl Unsearchable {
+    fn new(dir: &Path) -> Unsearchable {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir).expect("the directory").permissions();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o600)).expect("the mode");
+        Unsearchable { dir: dir.to_path_buf(), mode }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Unsearchable {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.dir, self.mode.clone());
+    }
+}
+
+/// Checks that a deposit's file the store cannot read is said, then its end.
+///
+/// The deposits' directory is made unsearchable under the live daemon, so
+/// the store's read of a deposited file's size answers `Permission denied` —
+/// the shape of a permission lost under `blobs/`, a failing device or a stale
+/// network handle (`operations.md` §1, THE RATES; M-I5 (c)). The cell over
+/// the deposit is refused and nothing commits: never admitted, whatever
+/// answer the design gives a storage fault (M-I1 (a)). The deposit read still
+/// serves its listing. The gate's stream carries one `failure:` line, the
+/// store's account of the read in it and nothing of the D9 list but the
+/// file's hash; the standing line names the same cause and the two reads
+/// that failed at each tick; and once the directory is searchable again, the
+/// standing line's own read of the file ends the episode with no request
+/// made, said once with the count, and the cell is admitted.
+#[cfg(unix)]
+#[test]
+fn a_deposit_file_the_store_cannot_read_is_said_and_its_end_with_no_request() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let token = open_session(port, CLAIMANT_PRINCIPAL);
+    after_the_first_pass(&sd);
+    let bytes = b"a picture whose file its store cannot read";
+    let hex = put_whole(port, &token, bytes)["hash"].as_str().expect("the hash").to_string();
+    let draft = owner_draft(port, &token);
+    assert!(media_lines(&sd).is_empty(), "a healthy board: no line of the gate's");
+    let designation_dir = dir.path().join("blobs").join("blake3");
+    let unsearchable = Unsearchable::new(&designation_dir);
+    if std::fs::metadata(designation_dir.join(&hex)).is_ok() {
+        // A privileged process searches any directory: nothing to inject.
+        drop(unsearchable);
+        sd.shutdown();
+        return;
+    }
+    let before = head_position(port);
+    let verdict = insert_cell(port, &token, &draft, bytes, bytes.len() as u64);
+    assert!(verdict.starts_with("credential_refused"), "FINDING: the cell is refused: {verdict}");
+    assert_eq!(head_position(port), before, "never admitted: nothing commits");
+    let listed = deposits_of(port, &token);
+    assert!(
+        listed.iter().any(|(h, _, _)| *h == hex),
+        "the deposit read serves its listing: {listed:?}"
+    );
+
+    let said = media_lines(&sd);
+    assert_eq!(said.len(), 1, "FINDING: the unread read is said once: {said:?}");
+    let line = &said[0];
+    assert!(
+        line.starts_with(&format!(
+            "failure: a deposit's file is unread (blobs/blake3/{hex}: stat: "
+        )),
+        "FINDING: the store's own account of the read: {line}"
+    );
+    let unnamed = line.replace(&hex, "");
+    assert!(!unnamed.contains(&token), "FINDING (D9): the token rides the line: {line}");
+    assert!(!names_a_hex_id(&unnamed), "FINDING (D9): an identifier rides the line: {line}");
+    let principal = CLAIMANT_PRINCIPAL.to_string();
+    assert!(
+        !unnamed.split(|c: char| !c.is_ascii_digit()).any(|word| word == principal),
+        "FINDING (D9): the principal's number rides the line: {line}"
+    );
+    sd.daemon().set_standing_interval_millis(40);
+    let clause = format!("a deposit's file is unread (blobs/blake3/{hex}: stat: ");
+    wait_until("the standing line's unread deposit clause", || {
+        sd.daemon().lines_said().iter().any(|l| {
+            l.starts_with("standing: ")
+                && l.contains(&clause)
+                && l.contains("), 2 reads failed over ")
+        })
+    });
+
+    // The cause cleared: the standing line's own read ends the episode.
+    drop(unsearchable);
+    let ended = format!(
+        "landing: a deposit's file is read again (blobs/blake3/{hex}), 2 reads failed over "
+    );
+    wait_until("the episode's end, said by the tick's own read", || {
+        media_lines(&sd).iter().any(|l| l.starts_with(&ended))
+    });
+    assert_eq!(
+        media_lines(&sd).len(),
+        2,
+        "the start and the end, once each: {:?}",
+        media_lines(&sd)
+    );
+    assert_eq!(
+        insert_cell(port, &token, &draft, bytes, bytes.len() as u64),
+        "ok",
+        "read again: admitted"
+    );
+    sd.shutdown();
+}
+
 /// (1) THE IDENTIFIER REACHES THE UPLOADER BEFORE THE UPLOAD's FIRST BODY
 /// BYTE on the ONE request (M-I5 (c)): a creation-with-upload sent with
 /// `Expect: 100-continue` is answered the interim `100 Continue` carrying

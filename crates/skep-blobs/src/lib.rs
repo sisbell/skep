@@ -173,7 +173,10 @@ mod jsonl;
 // asking principal and makes every change a record takes, and the one
 // expiry rule; beneath it, the identifier (`uploads/id.rs`).
 mod uploads;
-// The lease log, `leases.log`: the leases, their three states, the horizon.
+// The lease log, `leases.log`: the leases, their three states, the horizon;
+// beneath it, the map that holds them by hash first and by principal
+// (`lease/map.rs`), so the pruner's read of a hash and a principal's reads of
+// its own each cost their own leases.
 mod lease;
 // The partials, `.upload-<identifier>`: their name, and the walk at open
 // that reconciles them with the records; beneath them, the handle a request

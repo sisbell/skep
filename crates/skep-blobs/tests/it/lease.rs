@@ -1,18 +1,22 @@
-//! THE LEASE LOG on the honest-null arm (M-I5 (c); `media.md` Op inventory
-//! 1, "EACH KEY's CURRENT RECORD IS ITS LATEST, AND OPEN COMPACTS BOTH
-//! STORES"): the three states and the horizon, read off the record alone,
-//! a principal's live leases in hex order, the latest-wins re-PUT, the
-//! compaction at open and at the pass, a lease past the horizon dropped at
-//! both, the pending bytes — an upload expired and not yet removed counted
-//! by nothing — the pruner's read of whether any principal holds a file
-//! live, reading that hash's leases and no other's, at their cost and never
-//! every lease's, the torn tail, and a line naming a malformed designation
-//! or hex, or lacking any member, read as no lease. "A LIVE
-//! LEASE OVER A FILE THAT IS NOT THERE READS AS LAPSED" is the daemon's
-//! rule, built on this store's `lease_state` and `blob_size`; the store's
-//! lease state answers the record and nothing of the file.
+//! The lease log's suite, on the honest-null arm (M-I5 (c)).
+//!
+//! Its claims (`media.md` Op inventory 1, "EACH KEY's CURRENT RECORD IS ITS
+//! LATEST, AND OPEN COMPACTS BOTH STORES"): the three states and the horizon,
+//! read off the record alone, a principal's live leases in hex order, the
+//! latest-wins re-PUT, the compaction at open and at the pass, a lease past
+//! the horizon dropped at both, the pending bytes — an upload expired and not
+//! yet removed counted by nothing — a principal's pending bytes and live
+//! leases read at its own leases' cost and never every lease's, the pruner's
+//! read of whether any principal holds a file live, reading that hash's
+//! leases and no other's, at their cost and never every lease's, the torn
+//! tail, and a line naming a malformed designation or hex, or lacking any
+//! member, read as no lease. "A LIVE LEASE OVER A FILE THAT IS NOT THERE
+//! READS AS LAPSED" is the daemon's rule, built on this store's
+//! `lease_state` and `blob_size`; the store's lease state answers the record
+//! and nothing of the file.
 
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use skep_blobs::{HashFunction, LeaseState};
@@ -271,6 +275,28 @@ fn the_any_principal_read_is_one_hashs_leases_and_no_others() {
     }
 }
 
+/// Writes a lease log of `n` leases under `root`, one apiece.
+///
+/// Each lease is its own principal's (`p{i}`) on its own hash, three bytes,
+/// live until 9,999. Answers each lease's principal and hex, in the log's
+/// order: the board both cost tests read, every lease a stranger to every
+/// read but its own.
+fn one_lease_apiece(root: &Path, n: u32) -> Vec<(String, String)> {
+    fs::create_dir_all(root).unwrap();
+    let leases: Vec<(String, String)> = (0..n).map(|i| (format!("p{i}"), hex_of(&i.to_be_bytes()))).collect();
+    let log: String = leases
+        .iter()
+        .map(|(principal, hex)| {
+            let v = serde_json::json!({
+                "designation": "blake3", "expires": 9_999, "hex": hex, "key": principal, "size": 3,
+            });
+            format!("{v}\n")
+        })
+        .collect();
+    fs::write(root.join("leases.log"), log).unwrap();
+    leases
+}
+
 /// THE PRUNER's READ COSTS ONE HASH's LEASES, NOT EVERY LEASE
 /// (`Store::any_live_lease`): the pass makes it once per file under the
 /// daemon's exclusive arm, and every principal's deposits count among the
@@ -283,25 +309,46 @@ fn the_any_principal_read_is_one_hashs_leases_and_no_others() {
 fn the_any_principal_read_costs_one_hashs_leases_not_every_lease() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("blobs");
-    fs::create_dir_all(&root).unwrap();
-    let hexes: Vec<String> = (0u32..30_000).map(|i| hex_of(&i.to_be_bytes())).collect();
-    let log: String = hexes
-        .iter()
-        .enumerate()
-        .map(|(i, hex)| {
-            let v = serde_json::json!({
-                "designation": "blake3", "expires": 9_999, "hex": hex, "key": format!("p{i}"), "size": 3,
-            });
-            format!("{v}\n")
-        })
-        .collect();
-    fs::write(root.join("leases.log"), log).unwrap();
+    let leases = one_lease_apiece(&root, 30_000);
     let store = open(&root, 1);
     let started = std::time::Instant::now();
-    let held = hexes.iter().filter(|hex| store.any_live_lease("blake3", hex, 1)).count();
+    let held = leases.iter().filter(|(_, hex)| store.any_live_lease("blake3", hex, 1)).count();
     let took = started.elapsed();
-    assert_eq!(held, hexes.len(), "every hash held live");
-    assert!(took < Duration::from_secs(2), "{took:?} for {} reads over as many leases", hexes.len());
+    assert_eq!(held, leases.len(), "every hash held live");
+    assert!(took < Duration::from_secs(2), "{took:?} for {} reads over as many leases", leases.len());
+}
+
+/// Checks that a principal's reads cost its own leases, not every lease.
+///
+/// The reads are `Store::pending_bytes` and `Store::live_leases_of` (M-I6
+/// (e)): the daemon reads a principal's pending bytes once per 64 KiB chunk
+/// of its upload, the own scope re-checked as the body is written, and lists
+/// its leases at every deposit read — while every principal's deposits of one
+/// lease interval and the horizon stand among the leases, so a read that
+/// walked them would make an upload chunks × the board's leases. Thirty
+/// thousand leases, each its own principal's on its own hash: every
+/// principal's pending bytes read once, then every principal's live leases
+/// listed once, each loop inside two seconds; a walk is 9×10⁸ lease visits a
+/// loop, which a debug build does not finish inside it. The bound errs only
+/// toward passing.
+#[test]
+fn a_principals_reads_cost_its_own_leases_not_every_lease() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let leases = one_lease_apiece(&root, 30_000);
+    let store = open(&root, 1);
+    let started = std::time::Instant::now();
+    let pending: u64 = leases.iter().map(|(p, _)| store.pending_bytes(p, 1, every_deposit_unplaced)).sum();
+    let took = started.elapsed();
+    assert_eq!(pending, 3 * leases.len() as u64, "each principal's one deposit, pending");
+    assert!(took < Duration::from_secs(2), "{took:?} for {} pending reads over as many leases", leases.len());
+    let started = std::time::Instant::now();
+    let listed: Vec<Vec<String>> =
+        leases.iter().map(|(p, _)| store.live_leases_of(p, 1).into_iter().map(|l| l.hex).collect()).collect();
+    let took = started.elapsed();
+    let own: Vec<Vec<String>> = leases.iter().map(|(_, hex)| vec![hex.clone()]).collect();
+    assert_eq!(listed, own, "each principal's one deposit listed, and no other's");
+    assert!(took < Duration::from_secs(2), "{took:?} for {} listings over as many leases", leases.len());
 }
 
 /// A torn tail of the lease log is truncated at open — a half-written

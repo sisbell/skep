@@ -20,6 +20,10 @@
 //! the finish (`Stream::finish`) — the limits record's in force, or the
 //! daemon's default where none is — and the lease log reads no interval.
 
+// The lease map: the leases by hash first and by principal, and the one file
+// that changes either, so the two change together.
+mod map;
+
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
@@ -30,6 +34,8 @@ use serde_json::{json, Value};
 use crate::blobs::{designation_ok, hex_ok};
 use crate::jsonl::{Log, LogRead, LogSize, LogStop};
 use crate::uploads::{millis, past_trigger};
+
+use map::{Key, LeaseMap};
 
 /// The log's file name under the root.
 const LEASES_LOG: &str = "leases.log";
@@ -139,15 +145,20 @@ pub enum LeaseState {
 
 /// The leases as held in memory beside their log.
 ///
-/// They are keyed by `(designation, hex, principal)` — the hash first, and
-/// ordered, so the leases on one hash are one range of the map: the
-/// pruner's read of a hash ([`LeaseLog::any_live`]), which its pass makes
-/// once per file under the daemon's exclusive arm, costs that hash's
-/// holders and never every lease on the board, however many deposits a
-/// principal makes. The map's order is also the compacted log's line order.
+/// They are held in a [`LeaseMap`], whose two orders give each repeated read
+/// its own cost. By hash first: the pruner's read of a hash
+/// ([`LeaseLog::any_live`]), which its pass makes once per file under the
+/// daemon's exclusive arm, costs that hash's holders and never every lease on
+/// the board, however many deposits a principal makes. By principal: a
+/// principal's reads ([`LeaseLog::unplaced_of`], [`LeaseLog::live_of`]),
+/// which the daemon makes once per 64 KiB chunk of each upload as it re-checks
+/// the own scope (M-I6 (e)) and at each deposit read, cost that principal's
+/// own leases and never every principal's, so an upload is never its chunks ×
+/// the board's leases. The hash-first order is also the compacted log's line
+/// order.
 pub(crate) struct LeaseLog {
     log: Log,
-    leases: BTreeMap<(String, String, String), Lease>,
+    leases: LeaseMap,
     horizon: Duration,
 }
 
@@ -168,7 +179,7 @@ impl LeaseLog {
         let (log, values, mut found) = Log::open(root.join(LEASES_LOG))?;
         let (leases, unread) = fold(&values);
         found.unread = unread;
-        let mut opened = LeaseLog { log, leases, horizon };
+        let mut opened = LeaseLog { log, leases: LeaseMap::new(leases), horizon };
         let past_horizon = opened.drop_past_horizon(now_ms);
         opened.compact()?;
         Ok((opened, found, past_horizon))
@@ -182,9 +193,8 @@ impl LeaseLog {
     /// them, carry a deposit lapsed past the horizon only until the next
     /// runtime compaction drops it.
     fn drop_past_horizon(&mut self, now_ms: u64) -> usize {
-        let (horizon, held) = (self.horizon, self.leases.len());
-        self.leases.retain(|_, l| !l.past_horizon(horizon, now_ms));
-        held - self.leases.len()
+        let horizon = self.horizon;
+        self.leases.retain(|l| !l.past_horizon(horizon, now_ms))
     }
 
     /// Reads the log as found, folded, with no horizon applied.
@@ -209,7 +219,7 @@ impl LeaseLog {
     /// It is the open's account's figure, read once the horizon has dropped
     /// what it drops.
     pub fn count(&self) -> usize {
-        self.leases.len()
+        self.leases.by_hash().len()
     }
 
     /// Appends and syncs `lease`, the principal's current lease on the hash.
@@ -222,13 +232,14 @@ impl LeaseLog {
     /// log, or a write or sync that failed.
     pub fn append_synced(&mut self, lease: Lease) -> io::Result<()> {
         self.log.append_synced(&lease.to_value())?;
-        self.leases.insert((lease.designation.clone(), lease.hex.clone(), lease.principal.clone()), lease);
+        self.leases.insert(lease);
         Ok(())
     }
 
     /// Returns the principal's state on a hash at `now_ms`.
     pub fn state(&self, principal: &str, designation: &str, hex: &str, now_ms: u64) -> LeaseState {
-        let Some(l) = self.leases.get(&(designation.to_string(), hex.to_string(), principal.to_string())) else {
+        let key = (designation.to_string(), hex.to_string(), principal.to_string());
+        let Some(l) = self.leases.by_hash().get(&key) else {
             return LeaseState::None;
         };
         if l.live(now_ms) {
@@ -242,29 +253,32 @@ impl LeaseLog {
 
     /// Returns the principal's live leases at `now_ms`.
     ///
-    /// They come in designation order, and in hex order within one.
+    /// They come in designation order, and in hex order within one: the
+    /// principal's own leases, read by the map's index ([`LeaseMap::of`]),
+    /// and never every lease held.
     pub fn live_of(&self, principal: &str, now_ms: u64) -> Vec<Lease> {
-        let mut out: Vec<Lease> =
-            self.leases.values().filter(|l| l.principal == principal && l.live(now_ms)).cloned().collect();
-        out.sort_by(|a, b| (&a.designation, &a.hex).cmp(&(&b.designation, &b.hex)));
-        out
+        self.leases.of(principal).filter(|l| l.live(now_ms)).cloned().collect()
     }
 
     /// Returns the sizes of the principal's unplaced deposits, summed.
     ///
-    /// They are its live leases at `now_ms` that `unplaced` admits.
+    /// They are its live leases at `now_ms` that `unplaced` admits, read by
+    /// the map's index ([`LeaseMap::of`]): `unplaced` runs once per live lease
+    /// of the principal's own, and never for another principal's.
     pub fn unplaced_of(&self, principal: &str, now_ms: u64, mut unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         self.leases
-            .values()
-            .filter(|l| l.principal == principal && l.live(now_ms) && unplaced(l))
+            .of(principal)
+            .filter(|l| l.live(now_ms) && unplaced(l))
             .fold(0u64, |acc, l| acc.saturating_add(l.size))
     }
 
     /// Returns the sizes of every unplaced deposit at `now_ms`, summed.
     ///
-    /// They are every principal's live leases that `unplaced` admits.
+    /// They are every principal's live leases that `unplaced` admits: a sum
+    /// over the board, so it walks every lease held.
     pub fn unplaced_total(&self, now_ms: u64, mut unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         self.leases
+            .by_hash()
             .values()
             .filter(|l| l.live(now_ms) && unplaced(l))
             .fold(0u64, |acc, l| acc.saturating_add(l.size))
@@ -282,6 +296,7 @@ impl LeaseLog {
     /// as it.
     pub fn any_live(&self, designation: &str, hex: &str, now_ms: u64) -> bool {
         self.leases
+            .by_hash()
             .range((designation.to_string(), hex.to_string(), String::new())..)
             .take_while(|((d, h, _), _)| d == designation && h == hex)
             .any(|(_, l)| l.live(now_ms))
@@ -298,7 +313,7 @@ impl LeaseLog {
     ///
     /// The rewrite's failure (`Log::compact`).
     fn compact(&mut self) -> io::Result<Option<LogSize>> {
-        self.log.compact(self.leases.values().map(Lease::to_value))
+        self.log.compact(self.leases.by_hash().values().map(Lease::to_value))
     }
 
     /// Runs the runtime compaction, the pruner's pass, as open applies it.
@@ -319,7 +334,7 @@ impl LeaseLog {
     /// The rewrite's failure (`Log::compact`).
     pub fn compact_if_past(&mut self, trigger: usize, min_lines: usize, now_ms: u64) -> io::Result<Option<LogSize>> {
         self.drop_past_horizon(now_ms);
-        if !past_trigger(&self.log, self.leases.len(), trigger, min_lines) {
+        if !past_trigger(&self.log, self.leases.by_hash().len(), trigger, min_lines) {
             return Ok(None);
         }
         self.compact()
@@ -352,7 +367,7 @@ impl LeaseLog {
 /// build reads folded to nothing — and counted, the second figure: the
 /// lines read as no lease, which the open's account carries
 /// ([`LogRead::unread`]).
-fn fold(values: &[Value]) -> (BTreeMap<(String, String, String), Lease>, usize) {
+fn fold(values: &[Value]) -> (BTreeMap<Key, Lease>, usize) {
     let mut leases = BTreeMap::new();
     let mut unread = 0;
     for v in values {

@@ -460,7 +460,7 @@ Rules that hold across its files:
   (`Stream::finish`). The store checks none.
 - **The pruner's acts are one method each**, so the daemon's pass holds
   its lock around exactly one, and the lease read inside it is one hash's
-  range of the lease map (`LeaseLog`, keyed by the hash first): a pass is
+  range of the lease map (`LeaseMap`, keyed by the hash first): a pass is
   linear in its files, whatever the count of leases. A file is taken in
   two acts — `Store::rename_aside` under the caller's arm, the aside
   removed after it under none (`Store::remove_aside`) — so the arm is
@@ -504,7 +504,13 @@ Rules that hold across its files:
   `uploads.rs`: `Store` and `partials::reconcile` choose when, never what.
 - **Pending bytes are the unplaced deposits and the bytes received**
   (`Store::pending_bytes`); which deposits are unplaced is the caller's
-  answer, since the store reads no cell.
+  answer, since the store reads no cell. A principal's unplaced deposits
+  and its live leases (`Store::live_leases_of`) are read off the lease map's
+  index by principal (`LeaseMap`), at that principal's own leases' cost:
+  the daemon reads the pending bytes once per 64 KiB chunk of each upload,
+  and an upload is never its chunks × the board's leases. The map and its
+  index change together, by `LeaseMap`'s two acts alone, so the index holds
+  the map's keys and no others.
 - **A torn line is only ever a log's tail** (`jsonl::Log`): a failed
   append is cut back, and a log that cannot cut back, or whose compaction
   failed past its rename, takes no append until a compaction completes.
@@ -597,12 +603,14 @@ compaction, and a stopped log's cause), `reopen` (what open makes of the
 records and partials a crash or a restore left and the account it answers
 of them, its named refusals, the inspection that touches none of it, and
 the copy order a live copy follows), `lease` (the leases' states, their
-compaction at open and by the trigger, and the pending bytes), `modes`
+compaction at open and by the trigger, the pending bytes, and what a
+principal's reads and the pruner's cost), `modes`
 (every directory and file the store makes owner-only) and `tidy` (every
 item documented as a test hook or the test seam compiles only under
-`test-hooks`); each module's doc lists its claims. Five unit suites sit
-beside their code: `store.rs`'s, `uploads.rs`'s, `partials/handle.rs`'s,
-`blobs.rs`'s and `jsonl.rs`'s, the last in `jsonl/tests.rs`.
+`test-hooks`); each module's doc lists its claims. Six unit suites sit
+beside their code: `store.rs`'s, `uploads.rs`'s, `lease/map.rs`'s,
+`partials/handle.rs`'s, `blobs.rs`'s and `jsonl.rs`'s, the last in
+`jsonl/tests.rs`.
 
 ## The support crate, `skep-util`
 

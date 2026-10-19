@@ -1120,8 +1120,9 @@ impl Store {
     /// Returns the principal's live leases: the deposit read's list.
     ///
     /// They are those live at `now_ms`, in designation order and in hex order
-    /// within one. A lease lapsed within the horizon, which
-    /// [`Store::lease_state`] answers as lapsed, is not among them.
+    /// within one, read off the principal's own leases and never every lease
+    /// held. A lease lapsed within the horizon, which [`Store::lease_state`]
+    /// answers as lapsed, is not among them.
     pub fn live_leases_of(&self, principal: &str, now_ms: u64) -> Vec<Lease> {
         self.leases.lock().live_of(principal, now_ms)
     }
@@ -1147,6 +1148,14 @@ impl Store {
     /// cells, and this store reads none: `unplaced` answers it for each live
     /// lease — the daemon off its cell index; a caller with no cells, `true`.
     ///
+    /// **What it reads.** The principal's own leases, by the lease map's index
+    /// by principal — `unplaced` runs once per live lease of its own and never
+    /// for another principal's — so the daemon's read, made once per 64 KiB
+    /// chunk of each upload as the own scope is re-checked (M-I6 (e)), costs
+    /// that principal's deposits and never the board's; then every upload
+    /// record held, each retired by its upload's finish, its end or the
+    /// pruner's expiry.
+    ///
     /// **Precondition.** `unplaced` runs with the lease log locked, so it
     /// must not call back into this store, where a read of the leases would
     /// wait on that lock for good — a rule no type here checks.
@@ -1170,7 +1179,8 @@ impl Store {
     /// It is the record-derived part of the venue total, to which the daemon
     /// adds every base (M-I6 (f)); `unplaced` answers, and runs, as it does
     /// for [`Store::pending_bytes`], and the figure is two reads as that one
-    /// is, any principal's concurrent finish counted twice or not at all.
+    /// is, any principal's concurrent finish counted twice or not at all. A
+    /// sum over the board, it walks every lease and every upload record held.
     pub fn pending_total(&self, now_ms: u64, unplaced: impl FnMut(&Lease) -> bool) -> u64 {
         let unplaced_bytes = self.leases.lock().unplaced_total(now_ms, unplaced);
         let received = self.uploads.lock().received_total(now_ms);

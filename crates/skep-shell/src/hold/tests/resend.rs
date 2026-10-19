@@ -9,8 +9,10 @@
 //! beside it; THE ORDER, the lines sent in `k` order across the documents;
 //! the own hand on a read; a refusal the table holds nowhere, and the death
 //! signal, leaving a resent line standing; a second window's burst resent
-//! from memory; every principal's lines resent by one probe, and a probe
-//! with no line standing dialing nothing; one drain per board at a time,
+//! from memory; every principal's lines resent by one probe, a bare
+//! session's line resent by none until a session of its principal's that
+//! may write stands, and a probe with no line standing dialing nothing; one
+//! drain per board at a time,
 //! and a drain that unwinds leaving the board free to drain again; a move
 //! facing its own document alone; and the own node stopped,
 //! `writes.halted` and a third `durability` holding a burst over time, a
@@ -40,7 +42,7 @@ fn outcome_i_no_row_sends_from_the_head() {
 fn outcome_ii_a_landed_burst_is_kept_not_resent() {
     let g = ground();
     *g.fake.text.lock().unwrap() = "hello".into();
-    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": "bare", "docs": [DOC]})];
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 77, "op": "insert", "key": g.own_key(), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", true);
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 0, "the landed head is NOT re-sent: {:?}", g.fake.sends.lock().unwrap());
@@ -90,14 +92,14 @@ fn a_death_signal_at_a_resend_leaves_its_line_standing() {
 }
 
 /// THE PROBE RESENDS EVERY PRINCIPAL's LINES (§3c.4): two principals hold a
-/// line each at one board — two tabs of the bare mode, opened as two
-/// principals — and one probe sends both, each under its own session (the
-/// mutant that drains its first principal alone leaves the second's text
-/// unsent, and every later burst of that principal behind it).
+/// line each at one board — two writers' sessions, each under its own key —
+/// and one probe sends both, each under its own session (the mutant that
+/// drains its first principal alone leaves the second's text unsent, and
+/// every later burst of that principal behind it).
 #[test]
 fn a_probe_resends_every_principals_lines() {
     let g = ground();
-    let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
+    let facts = writer_facts_as(&g.store, 2, "1.0.2");
     let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 };
     let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
     let second = g.holds.sessions.register(&board, open, &mut NoSupplements);
@@ -127,12 +129,40 @@ fn outcome_iii_a_foreign_row_moves_the_document() {
     assert!(states.contains(&"moved".to_string()) && !states.contains(&"sending".to_string()), "a moved document is never said `sending`: {states:?}");
 }
 
+/// A BARE SESSION RESENDS NOTHING (foundations §3.3 state 3: the keyless
+/// session reads alone, no `bare` write of this shell's ever committed): a
+/// line held under the principal's one session, a bare one, stands through
+/// the probe — the board's `/health` read, nothing sent, nothing said past
+/// its `holding` — and once a session of the principal's that may write
+/// stands, the next probe sends it, attested by that session's key, and
+/// keeps it (the mutant whose drain resends under any session of the
+/// principal commits the person's text under the bare hand).
+#[test]
+fn a_bare_session_resends_no_held_line() {
+    let g = bare_ground();
+    g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
+    g.holds.probe("b-1");
+    assert_eq!((g.fake.health_reads.load(Ordering::SeqCst), g.fake.sends()), (1, 0), "the board is read, and nothing is sent under the bare session");
+    assert_eq!(g.lines().len(), 1, "the line stands");
+    assert_eq!(g.states(), ["holding"], "and nothing past its hold is said");
+    let open = Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts: writer_facts(&g.store), opened_at: 0 };
+    let board = BoardEntry { reference: g.session.board_reference.clone(), board: Arc::clone(&g.session.board) };
+    let writer = g.holds.sessions.register(&board, open, &mut NoSupplements);
+    g.holds.open_session(&writer);
+    g.holds.probe("b-1");
+    let sent = g.fake.sends.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1, "the writer sends the line: {sent:?}");
+    assert!(sent[0].get("attest").is_some(), "attested by the writer's key: {sent:?}");
+    assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "and keeps it");
+}
+
 /// THE OWN HAND on a read (§3c.5; wire.md §`/changes`): a SIGNED entry's row
 /// carries `attest` and NO `key`, and is the session's own under a session
-/// that holds a key — the head `done kept`, nothing re-sent — and NOT own
-/// under a bare session (the mutant that keys the test on `key` alone faces
-/// the signed row `moved`); a row with `key: "bare"` is own under a bare
-/// session alone, never under a keyed one.
+/// that holds a key — the head `done kept`, nothing re-sent (the mutant that
+/// keys the test on `key` alone faces the signed row `moved`); a row with
+/// `key: "bare"` is another hand's, never a keyed session's own. No read is
+/// made under a bare session, which writes nothing of its own to find
+/// (`a_bare_session_resends_no_held_line`).
 #[test]
 fn a_signed_row_is_own_under_a_keyed_session_alone() {
     let signed_row = json!({"at": 77, "op": "insert", "docs": [DOC], "attest": {"alg": "x", "sig": "y"}});
@@ -148,8 +178,6 @@ fn a_signed_row_is_own_under_a_keyed_session_alone() {
     let (states, sends) = walk(keyed_facts(), signed_row.clone());
     assert!(states.contains(&"kept".to_string()) && !states.contains(&"moved".to_string()), "the signed row is the keyed session's own: {states:?}");
     assert_eq!(sends, 0, "the landed head is not re-sent");
-    let (states, _) = walk(Facts { kind: SessionKind::Bare, ..keyed_facts() }, signed_row);
-    assert!(states.contains(&"moved".to_string()), "a signed row is foreign to a bare session: {states:?}");
     let (states, _) = walk(keyed_facts(), bare_row);
     assert!(states.contains(&"moved".to_string()), "a bare hand's row is foreign to a keyed session: {states:?}");
 }
@@ -272,7 +300,8 @@ fn a_second_windows_burst_is_held_in_memory_and_resent() {
     dir.ensure().unwrap();
     let _first_window = dir.try_lock().unwrap().expect("the first window holds the lock");
     let held_dir = store.path().join("held").join("ab".repeat(32));
-    let g = ground_in(store, bare_facts(), 0);
+    let facts = writer_facts(&store);
+    let g = ground_in(store, facts, 0);
     let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     assert_eq!((answer["resp"].as_str(), answer["cause"].as_str()), (Some("held"), Some("other_window")), "{answer}");
     assert!(!held_dir.join("principal-1.held").exists(), "a second window writes nothing");
@@ -445,7 +474,8 @@ fn every_read_answer_meets_every_site_answer_as_the_table_says() {
     ];
     for (n, (read, head, site, sent, settles)) in table.into_iter().enumerate() {
         let g = ground();
-        let own = |at: u64, op: &str| json!({"at": at, "op": op, "key": "bare", "docs": [DOC]});
+        let key = g.own_key();
+        let own = |at: u64, op: &str| json!({"at": at, "op": op, "key": key, "docs": [DOC]});
         let refused = |status: u16, body: Value| *g.fake.changes_refused.lock().unwrap() = Some((status, body));
         match read {
             NoRow => {}

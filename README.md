@@ -128,10 +128,11 @@ cargo run -p skep-cli --bin skep-dev -- serve --board http://127.0.0.1:8642 \
 `--page-origin` is your dev server's origin, the one origin the provider
 admits; `crates/skep-cli/README.md` has the rest. Do NOT pass the dev server's
 origin to the daemon as `--origin`: a configured origin is permanent on that
-board and stays signable after the claim. Bare sessions write drafts and never
-publish; to exercise publishing, start the provider with
-`--session signed --dir ~/.skep`, which signs with the key that claimed the
-board, and the page still holds no token.
+board and stays signable after the claim. A bare session reads alone: the
+provider refuses every write in it, a draft's as much as a publication's. For
+a page that writes, start the provider with `--session signed --dir ~/.skep`,
+which signs with the key that claimed the board, and the page still holds no
+token.
 
 To see the daemon's own read-only viewer, build with the `client` feature and
 open http://127.0.0.1:8642/; it opens no session. `--allow-preview-keys` is for

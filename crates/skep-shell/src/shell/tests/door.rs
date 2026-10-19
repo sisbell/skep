@@ -7,7 +7,10 @@
 //! address among them, and every optional argument a call row declares
 //! read in its declared form; the guest form refusing every write kind of
 //! the wire undialed and reading the board its reference or its origin
-//! names, the reference first and the target before the frame; a search's
+//! names, the reference first and the target before the frame; a bare
+//! session refusing every write kind undialed, its `/op-at` form and its
+//! `resolve(send)` too, while its read is dialed and a signed session's
+//! write goes out; a search's
 //! `opts` read as one value, and its query held to the shell's bound at
 //! every target; a listing where no index stands its whole shape with no
 //! document; a `select` of two keys or none refused by its name, a
@@ -22,6 +25,7 @@
 use std::io::{Read, Write};
 
 use super::*;
+use crate::sessions::{Facts, Open};
 use crate::shapes::{Field, CALL_ROWS};
 
 /// The `/op-at` refusals `skep-client` answers as values are the board's
@@ -430,6 +434,86 @@ fn counting_listener() -> (String, Arc<AtomicUsize>) {
         }
     });
     (origin, dials)
+}
+
+/// A listener that accepts every connection, reads its one request — its
+/// head through the blank line, its body as long as its `Content-Length`
+/// says — keeps the body's JSON, and drops the connection: a board that
+/// answers nothing and says what frames reached it.
+fn recording_listener() -> (String, Arc<Mutex<Vec<Value>>>) {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let origin = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let frames = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&frames);
+    thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let kept = Arc::clone(&kept);
+            thread::spawn(move || {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => head.push(byte[0]),
+                        _ => return,
+                    }
+                }
+                let head = String::from_utf8_lossy(&head).into_owned();
+                let declared = head.lines().filter_map(|line| line.split_once(':')).find(|(name, _)| name.eq_ignore_ascii_case("content-length")).and_then(|(_, n)| n.trim().parse().ok()).unwrap_or(0);
+                let mut body = vec![0u8; declared];
+                if stream.read_exact(&mut body).is_ok() {
+                    if let Ok(frame) = serde_json::from_slice::<Value>(&body) {
+                        kept.lock().unwrap().push(frame);
+                    }
+                }
+            });
+        }
+    });
+    (origin, frames)
+}
+
+/// A BARE SESSION's WRITE IS REFUSED BEFORE ANY DIAL (foundations §3.3 state
+/// 3, E16 (a′): the keyless session reads alone, "no `bare` write ever
+/// committed by this client"): under a bare session every write kind of the
+/// wire is refused `write_in_bare_session` naming its op, in the `op` form
+/// and the `/op-at` form alike, and its `resolve(send)` naming its act, while
+/// a listener at its board records no write frame; its read is dialed, and
+/// `resolve`'s `drop`, which commits nothing to the board, is answered as
+/// the line's absence; a signed session's write at the same board is dialed
+/// (the mutant that refuses in the guest form alone sends the bare session's
+/// write unattested, for the board to commit as `bare`; the one that fences
+/// the `op` form alone sends its `/op-at` form).
+#[test]
+fn a_bare_sessions_write_is_refused_before_any_dial() {
+    let dir = TempDir::new().unwrap();
+    let (origin, frames) = recording_listener();
+    let (shell, _) = open_shell(&origin, &dir.path().join("store"), SessionMode::Bare { principal: 1 });
+    let board = shell.board_references().remove(0);
+    let register = |token: &str, facts: Facts| -> String {
+        let open = Open { token: Token::parse(&token.repeat(16)).unwrap(), facts, opened_at: 0 };
+        shell.sessions.register(&shell.boards[0], open, &mut shell.feed(&board)).reference.clone()
+    };
+    let bare = register("9f", Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare });
+    let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
+    let signed = register("8e", Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.2".into() } });
+    for op in WRITE_KINDS {
+        for frame in [json!({"op": op}), json!({"at": 5, "frame": {"op": op}})] {
+            let refused = shell.call("op", &json!({"session": bare, "frame": frame})).unwrap_err();
+            let v = refused.to_value();
+            assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("write_in_bare_session", Some("shell"), Some(op)), "{frame}: {v}");
+        }
+    }
+    let refused = shell.call("resolve", &json!({"session": bare, "held": 1, "act": "send"})).unwrap_err().to_value();
+    assert_eq!((refused["name"].as_str(), refused["act"].as_str()), (Some("write_in_bare_session"), Some("send")), "{refused}");
+    assert_eq!(shell.call("resolve", &json!({"session": bare, "held": 1, "act": "drop"})).unwrap_err().name(), "no_such_held", "a drop commits nothing to the board, and stands");
+    let read = json!({"op": "doc_metadata", "doc": "1.0.1.0.1"});
+    assert_eq!(shell.call("op", &json!({"session": bare, "frame": read})).unwrap_err().name(), "unreachable", "a read is dialed");
+    let delete = json!({"op": "delete", "doc": "1.0.2.0.1", "p": {"subspace": "1", "ordinal": "1"}, "width": "1"});
+    let held = shell.call("op", &json!({"session": signed, "frame": delete})).unwrap();
+    assert_eq!(held["resp"], "held", "the signed session's write is dialed, its answer lost: {held}");
+    let recorded = frames.lock().unwrap().clone();
+    let writes: Vec<&Value> = recorded.iter().filter(|f| f["op"].as_str().is_some_and(|op| WRITE_KINDS.contains(&op))).collect();
+    assert_eq!(writes, [&delete], "the signed session's write alone reached the board: {recorded:?}");
+    assert!(recorded.contains(&read), "the bare session's read reached it: {recorded:?}");
 }
 
 /// THE GUEST FORM REFUSES EVERY WRITE KIND OF THE WIRE WITHOUT A DIAL (ps3-5):

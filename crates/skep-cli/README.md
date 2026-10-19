@@ -98,10 +98,13 @@ run. Either way it is printed once on stdout, its one carrier, no stderr
 line naming it; and a command line is visible to every user of this
 machine (`ps`), so where others use it, let the provider generate the
 secret. The session is `--session bare` as the principal (`--principal`)
-on the permissive board, or `--session signed` with the dev key in
-`--dir`; `~/.skep` is never consulted, a key file (`--key`, `SKEP_KEY`) is
-refused, and a bare run without `--dir` takes a throwaway directory under
-the system temp dir. `--script <file>` answers the SECRET and CONSENT
+on the permissive board — the keyless session, which reads alone: every
+write in it is refused `write_in_bare_session` before any dial, and its
+held lines wait for a session that writes — or `--session signed` with the
+dev key in `--dir`, which writes; `~/.skep` is never consulted, a key file
+(`--key`, `SKEP_KEY`) is refused, and a bare run without `--dir` takes a
+throwaway directory under the system temp dir. `--script <file>` answers
+the SECRET and CONSENT
 moments from a script (`skep-shell`'s grammar), read once, at start —
 an edit to it takes a restart, as the arm's start line says; absent, the
 auto arm answers and says so on stderr. The board is `--board`, a daemon

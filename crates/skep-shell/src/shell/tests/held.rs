@@ -1,18 +1,21 @@
-//! THE HELD-BURST STORE against the real daemon in-process: a burst held
-//! while the daemon is stopped and resent `kept` after a restart, the
-//! kernel poison holding a burst `poisoned` then `halted`, the poisoned
-//! burst that lands at the restart and is kept, the signed session's own
-//! attested row kept by the resend, a refused run with its `behind` lines
-//! and `resolve`'s two acts, the close order and the relaunch listing its
-//! held line, a second principal's file untouched and unlisted, a burst on
-//! a draft just minted kept across a restart, a relaunch with its board
-//! down listing and resending its held line, and the probe keeping its
-//! cadence while the board keeps committing.
+//! THE HELD-BURST STORE against the real daemon in-process, its bursts a
+//! signed session's — a bare session reads alone: a burst held while the
+//! daemon is stopped and resent `kept` after a restart, the kernel poison
+//! holding a burst `poisoned` then `halted`, the poisoned burst that lands
+//! at the restart and is kept, the signed session's own attested row kept
+//! by the resend, a refused run with its `behind` lines and `resolve`'s two
+//! acts, the close order and the relaunch listing its held line, a second
+//! principal's file untouched and unlisted, a burst on a draft just minted
+//! kept across a restart, a relaunch with its board down listing its held
+//! line — the bare mode's resending none of it, the signed mode's keeping
+//! it — and the probe keeping its cadence while the board keeps committing.
 
 use super::*;
+use crate::held::Opened;
+use crate::sessions::open_bare;
 
 /// The ground every hold cell stands on: the shell over a claimed board,
-/// the events seen, the board's reference, a bare session's, and a draft
+/// the events seen, the board's reference, a signed session's, and a draft
 /// with one insert acked — each by its name, so no cell takes one
 /// reference for another.
 struct HeldGround {
@@ -23,13 +26,13 @@ struct HeldGround {
     draft: String,
 }
 
-/// A claimed board, a bare shell opened over it, a session and a draft with one
-/// insert acked.
+/// A claimed board, a signed shell opened over it — the store's key the
+/// claim's — a session and a draft with one insert acked.
 fn held_ground(dir: &TempDir, sd: &Skepd) -> HeldGround {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -60,7 +63,8 @@ fn a_held_burst_is_resent_after_a_restart_and_kept() {
     let rows = shell.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "held(session) lists the burst: {rows}");
     assert_eq!((rows[0]["doc"].as_str(), rows[0]["cause"].as_str()), (Some(draft.as_str()), Some("unreachable")));
-    // Restart at the same port; the bare session dies, a fresh one re-acquired.
+    // Restart at the same port; the session dies — the restart arm re-opening
+    // it — and a fresh one is opened beside it.
     let sd = spawn_at(&dir.path().join("board"), true, port);
     wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
     let session2 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
@@ -305,8 +309,9 @@ fn a_refused_run_holds_behind_it_and_resolve_acts_on_it() {
 
 /// T11: the close order — a held burst's line is on disk and listed by
 /// `held(session)` before `shutdown`, which writes nothing of the store; the
-/// next `Shell::open` over the same store lists the line at its first
-/// session's open.
+/// next `Shell::open` over the same store, in the bare mode — a session that
+/// reads alone, its held lines among what it reads — lists the line at its
+/// first session's open.
 #[test]
 fn the_close_persists_the_held_line_and_the_relaunch_lists_it() {
     let dir = TempDir::new().unwrap();
@@ -373,7 +378,9 @@ fn dir_signature(root: &Path) -> Vec<(String, u64)> {
 /// `resolve` among them, leave its bytes as they were — and no answer and no
 /// event names a path, a directory or the other principal (the mutant that
 /// opens the first principal's acts on the second's file writes the
-/// person's text into another principal's store).
+/// person's text into another principal's store). The second principal's
+/// file holds the line an earlier session of its own held, read under a bare
+/// session of its now, which resends none of it.
 #[test]
 fn a_second_principals_file_is_untouched_and_unlisted() {
     let dir = TempDir::new().unwrap();
@@ -381,21 +388,29 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    // ONE shell (so one lock on `held/<chain>/`) opening a session for each of
-    // two principals; principal 1 owns the draft, principal 2 holds its own
-    // burst against it while the board is down.
-    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    // Principal 2's file, held before this shell opened: one line.
+    let term = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new()).board_term().unwrap().expect("H.1 stands on a claimed board");
+    let held_dir = HeldDir::new(&store, skep_search::Chain::from_bytes(term.chain));
+    held_dir.ensure().unwrap();
+    let Opened::Live { mut queue, .. } = held_dir.open_file(2, "1.0.2").unwrap() else { panic!("a fresh file") };
+    let two = json!({"op": "insert", "doc": "1.0.2.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["two"]});
+    assert!(queue.hold("1.0.2.0.1", None, 0, two, Reason::of("unreachable", false)).unwrap().unwritten.is_none());
+    drop(queue);
+    // ONE shell (so one lock on `held/<chain>/`) holding a session for each of
+    // two principals: principal 1's signed, owning the draft; principal 2's
+    // bare, opened beside it.
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
-    let s1 = shell.call("session", &json!({"board": board, "principal": 1})).unwrap()["session"].as_str().unwrap().to_string();
-    let s2 = shell.call("session", &json!({"board": board, "principal": 2})).unwrap()["session"].as_str().unwrap().to_string();
+    let s1 = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    let second = shell.sessions.register(&shell.boards[0], open_bare(&shell.boards[0].board, 2).unwrap(), &mut shell.feed(&board));
+    shell.holds.open_session(&second);
+    let s2 = second.reference.clone();
     let d1 = shell.call("op", &json!({"session": s1, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();
-    // The board goes down: each principal's next burst is held `unreachable`,
-    // each in its own file — `principal-1.held` and `principal-2.held`.
+    // The board goes down: principal 1's next burst is held `unreachable` in
+    // its own file, `principal-1.held`, beside `principal-2.held`.
     sd.shutdown();
     let h1 = shell.call("op", &json!({"session": s1, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "2"}, "values": ["one"]}})).unwrap();
     assert_eq!(h1["resp"], "held");
-    let h2 = shell.call("op", &json!({"session": s2, "frame": {"op": "insert", "doc": d1, "at": {"subspace": "1", "ordinal": "3"}, "values": ["two"]}})).unwrap();
-    assert_eq!(h2["resp"], "held");
     assert!(store.join("held").exists(), "the directory stands");
     let p2 = std::fs::read_dir(store.join("held")).unwrap().flatten().map(|e| e.path().join("principal-2.held")).find(|p| p.is_file()).expect("principal 2's file stands");
     let p2_bytes = std::fs::read(&p2).unwrap();
@@ -421,8 +436,8 @@ fn a_second_principals_file_is_untouched_and_unlisted() {
 /// A BURST ON A DRAFT JUST MINTED (§3c.2's `base`): the mint's ack is noted
 /// as every write's is, so a burst held on the draft before any burst of it
 /// was acked reads from the mint's position — the daemon stopped under it,
-/// restarted at the same port, a fresh session re-acquired: the burst is
-/// resent and kept, never faced `moved` (the mutant that notes a burst's
+/// restarted at the same port, a fresh signed session re-acquired: the burst
+/// is resent and kept, never faced `moved` (the mutant that notes a burst's
 /// acks alone reads the mint's own row and faces the person's text).
 #[test]
 fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
@@ -432,7 +447,7 @@ fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
     let origin = format!("http://127.0.0.1:{port}");
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
@@ -456,11 +471,15 @@ fn a_burst_held_on_a_draft_just_minted_is_kept_after_a_restart() {
 /// A RELAUNCH WITH ITS BOARD DOWN (§3c.7): the held file is read at a
 /// session's open, never only at the shell's — a shell opened while its
 /// board's port is closed, the daemon started there before the first
-/// `session`: `held(session)` lists the line the store already holds, and the
-/// probe resends it `kept` (the mutant that reads the store at the shell's
-/// open alone lists nothing and resends nothing). And a file written after
-/// a relaunch whose board was up names the session's account in its header,
-/// never an empty one.
+/// `session`: `held(session)` lists the line the store already holds (the
+/// mutant that reads the store at the shell's open alone lists nothing and
+/// resends nothing). A bare relaunch, the keyless session that reads alone,
+/// lists it and resends none of it — three probe cadences on, the line
+/// stands and the board holds no row of it (the mutant whose drain resends
+/// under any session commits the person's text under the bare hand); a
+/// signed relaunch resends it `kept`. And a file written after a relaunch
+/// whose board was up names the session's account in its header, never an
+/// empty one.
 #[test]
 fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let dir = TempDir::new().unwrap();
@@ -477,7 +496,8 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
         assert_eq!(held["cause"], "unreachable", "{held}");
         shell.shutdown();
     }
-    // The relaunch: the shell opened over the store while its board is down.
+    // The relaunch: the shell opened over the store while its board is down,
+    // in the bare mode.
     let (relaunched, lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(relaunched.subscribe(), Arc::clone(&relaunched.pending), Arc::clone(&seen));
@@ -487,16 +507,24 @@ fn a_relaunch_with_its_board_down_lists_and_resends_the_held_line() {
     let rows = relaunched.call("held", &json!({"session": session})).unwrap();
     assert_eq!(rows.as_array().unwrap().len(), 1, "the session's open lists the held line: {rows}\n{}", lines.lock().unwrap().join("\n"));
     assert_eq!(rows[0]["doc"], draft);
-    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
-    let read = relaunched.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
-    assert_eq!(text_of(&read), "ab", "the resent burst is on the board: {read}");
+    thread::sleep(PROBE_CADENCE * 3);
+    assert_eq!(relaunched.call("held", &json!({"session": session})).unwrap().as_array().unwrap().len(), 1, "the bare session resends none of it");
+    assert!(!seen.lock().unwrap().iter().any(|e| e.name == EventName::Held && e.data["state"] == "kept"), "nothing is kept under the bare session");
+    let token = relaunched.sessions.get(&session).unwrap().token.clone();
+    let rows = changes_under(&relaunched.boards[0].board, &token, &draft, 0);
+    assert_eq!(rows.len(), 2, "the mint and the first insert, and no row of the held burst: {rows:?}");
     relaunched.shutdown();
     drop(relaunched);
-    // A relaunch with the board up, then a burst held: its file's header
-    // names the session's account.
-    let (again, _lines) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    // A signed relaunch with the board up resends it; then, the board down, a
+    // burst held: its file's header names the session's account.
+    let (again, lines) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let _answerer = answer_moments(again.subscribe(), Arc::clone(&again.pending), Arc::clone(&seen));
     let board = again.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = again.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
+    wait_for(&seen, |e| e.name == EventName::Held && e.data["doc"] == draft && e.data["state"] == "kept");
+    let read = again.call("op", &json!({"session": session, "frame": skep_client::board::frames::retrieve_v(&draft, 1, 2)})).unwrap();
+    assert_eq!(text_of(&read), "ab", "the resent burst is on the board: {read}\n{}", lines.lock().unwrap().join("\n"));
     sd.shutdown();
     let held = again.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "3"}, "values": ["c"]}})).unwrap();
     assert_eq!(held["resp"], "held", "{held}");

@@ -4,10 +4,14 @@
 //! [`PROBE_CADENCE`](super::PROBE_CADENCE) while a line stands, and there
 //! too at the hand-overs of `resolve(send)` and `set_node_state(Running)`,
 //! because `Cmd::Tick` is driven by COMMITTED writes and a poisoned,
-//! halted, stopped or unreachable board commits nothing. THE RESEND it lets run is AUTOMATIC at the hold's end
-//! and at reopen (J2): one READ per document (`GET /changes`) before its
-//! first resend, with §3c.5's three outcomes — (i) nothing landed, send from
-//! the head; (ii) the in-flight burst landed, the head `done kept`; (iii)
+//! halted, stopped or unreachable board commits nothing. THE RESEND it lets
+//! run is AUTOMATIC at the hold's end and at reopen (J2), under a standing
+//! session of the principal's that may write — never a bare one, the
+//! keyless session that reads alone (foundations §3.3 state 3), whose
+//! principal's lines stay held until a session that may write stands: one
+//! READ per document (`GET /changes`) before its first resend, with §3c.5's
+//! three outcomes — (i) nothing landed, send from the head; (ii) the
+//! in-flight burst landed, the head `done kept`; (iii)
 //! the site MOVED, no line sent and the lines faced `moved`, NEVER rebased
 //! (J3) — and a read the board did not answer decides nothing: the next
 //! probe reads again. Every document is read first, and the lines of those
@@ -88,7 +92,8 @@ impl Holds {
     /// and at the hand-overs of `resolve(send)` and `set_node_state(Running)`.
     /// While a line stands at a board whose own node is not stopped,
     /// `/health` is read; where the board answers and takes writes, each
-    /// standing session of a principal with lines resends them.
+    /// principal with lines resends them under a standing session of its own
+    /// that may write (`SessionEntry::may_write`) — under no bare session.
     pub fn probe(&self, board_reference: &str) {
         // Gathered under the lock and dialed outside it, so `op` never waits
         // on a dead board's connect timeout.
@@ -117,12 +122,14 @@ impl Holds {
             return;
         }
         // The board answers and takes writes: the hold ends. A directory no
-        // session's open could establish is tried again, and each standing
-        // session of a principal with lines resends them.
+        // session's open could establish is tried again, and each principal
+        // with lines resends them under a session of its own that may write;
+        // a bare one, which reads alone, sends none (foundations §3.3 state
+        // 3), so a principal with no other session keeps its lines held.
         self.establish(slot);
         let principals: Vec<u64> = slot.lock().principals.iter().filter(|(_, ph)| !ph.queue.lines().is_empty()).map(|(p, _)| *p).collect();
         for principal in principals {
-            let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal) else { continue };
+            let Some(session) = self.sessions.on_board(board_reference).into_iter().find(|s| s.facts.principal == principal && s.may_write()) else { continue };
             self.resume(&session);
         }
     }
@@ -382,32 +389,24 @@ fn delivers(delivery: &Value, want: &[Cow<'_, [u8]>]) -> bool {
     want.iter().all(|w| matches!(got.next(), Some(Ok(g)) if g == *w)) && got.next().is_none()
 }
 
-/// The session's own hand on the feed (§3c.5), as an UNSIGNED entry's `key`
-/// names it: its key's fingerprint, or `bare`.
-fn own_hand(session: &SessionEntry) -> String {
-    match &session.facts.kind {
-        SessionKind::Signed { fingerprint, .. } => fingerprint.to_hex(),
-        SessionKind::Bare => "bare".to_string(),
-    }
-}
-
-/// Whether a `/changes` row is of the session's OWN hand (§3c.5). An
-/// unsigned entry carries `key` — [`own_hand`]'s value. A SIGNED entry
+/// Whether a `/changes` row is of the session's OWN hand (§3c.5): its key's.
+///
+/// An unsigned entry carries `key`, the key's fingerprint. A SIGNED entry
 /// carries NO `key` (wire.md §`/changes`: `key` is present iff the entry is
-/// unsigned) and `attest` in its place, and is the session's own where the
-/// session holds a key — §3c.5's "its `key` the session's fingerprint" reads
-/// the unsigned form alone. The shell attests every `insert` ("Attach when in
-/// doubt"), but the daemon keeps an attest on a publish-class write alone and
-/// DROPS it on a draft's (wire.md §The two attestation codes), so a burst's
-/// row is the unsigned form today, its `key` the signing key's fingerprint;
-/// the signed form stands for a row the wire's rule admits. The read's other
-/// two guards (`op` equal, the content confirmed) stand beside this one, so
-/// another key's signed row still reads as (iii).
+/// unsigned) and `attest` in its place, and is the session's own — §3c.5's
+/// "its `key` the session's fingerprint" reads the unsigned form alone. The
+/// shell attests every `insert` ("Attach when in doubt"), but the daemon
+/// keeps an attest on a publish-class write alone and DROPS it on a draft's
+/// (wire.md §The two attestation codes), so a burst's row is the unsigned
+/// form today, its `key` the signing key's fingerprint; the signed form
+/// stands for a row the wire's rule admits. The read's other two guards
+/// (`op` equal, the content confirmed) stand beside this one, so another
+/// key's signed row still reads as (iii). A bare session has no hand of its
+/// own: it writes nothing (`SessionEntry::may_write`) and the resend reads
+/// under no bare session, so every row is another's to one.
 fn own_row(session: &SessionEntry, row: &Value) -> bool {
-    if row["key"].as_str() == Some(own_hand(session).as_str()) {
-        return true;
-    }
-    matches!(session.facts.kind, SessionKind::Signed { .. }) && row.get("key").is_none() && row.get("attest").is_some()
+    let SessionKind::Signed { fingerprint, .. } = &session.facts.kind else { return false };
+    row["key"].as_str() == Some(fingerprint.to_hex().as_str()) || (row.get("key").is_none() && row.get("attest").is_some())
 }
 
 /// Whether a `/changes` row's testimony is LOST — `docs`, `key` and `op` the

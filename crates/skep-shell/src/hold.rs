@@ -13,7 +13,10 @@
 //! refusal (§4b.1's `op` row); and anything else faced at the act, save a
 //! BURST's hold-class answer or REFUSED run, which is held. A write the hold
 //! never holds is faced where a burst's would be held (§3c.4: "a non-burst
-//! write that fails … is faced at its act").
+//! write that fails … is faced at its act"). A write takes that path under a
+//! session that may write alone: the `op` row refuses a bare session's
+//! before any dial (`SessionEntry::may_write`), and the resend sends under
+//! no bare session.
 //!
 //! A BURST is an `op` under a session (never the guest form) whose
 //! `frame["op"]` is one of [`BURST_KINDS`] — the burst machine's five — on a
@@ -669,8 +672,9 @@ impl Holds {
     /// directory established where it is not yet, and the session's
     /// principal's file read whole under its account — P38's faces kept, a
     /// misplaced file set aside and said in the shell's own window — so
-    /// `held(session)` lists its lines at once and the next probe resends
-    /// them. No other principal's file is opened (P39).
+    /// `held(session)` lists its lines at once, a bare session's among them,
+    /// and the next probe resends them where a session of the principal's
+    /// may write. No other principal's file is opened (P39).
     pub fn open_session(&self, session: &SessionEntry) {
         let slot = self.slot(&session.board_reference);
         self.establish(slot);
@@ -736,7 +740,9 @@ impl Holds {
     /// owed, dialed and reissued within the call, its ack noted for the base,
     /// and every other answer faced as the refusal it is: a REFUSED run, a
     /// lost answer and a third `durability` among them (§3c.4: "a non-burst
-    /// write that fails … is faced at its act").
+    /// write that fails … is faced at its act"). A write comes here under a
+    /// session that may write alone (`SessionEntry::may_write`): the `op` row
+    /// refuses a bare session's before it.
     pub fn send(&self, session: &SessionEntry, frame: Value) -> OpAnswer {
         if is_burst(&frame) {
             return self.send_burst(session, frame);

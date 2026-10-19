@@ -3,20 +3,21 @@
 //! named to the page by an opaque reference; the sessions it holds, each
 //! named by a reference in the token's place (t5: "the page never holds a
 //! token"); the SESSION MODE the shell was started in — BARE as the
-//! claimant on the permissive board, or SIGNED content-scoped with a dev
-//! key in the store (both ruled selectable per run); and ONE METHOD PER
-//! ROW of `client.md` §4b.1 — and of `places`, the document index's
-//! listing beside `search` (A-255) — each taking the row's input as a
-//! value and answering the row's output or a [`Refusal`] under the row's
-//! armed name, the board's own refusals carried verbatim. The row methods
-//! are this module's alone behind ONE DOOR, [`Shell::call`], which
-//! dispatches on the bridge's spelling — one arm per call, the compiler
-//! holding the match exhaustive — and logs every call, so no call reaches a
-//! row past the log; [`Shell::fetch`] alone is public beside it, because it
-//! streams; it logs its own call as `call` does. The ten ceremonial rows —
-//! the key store's two and the eight walks over `skep_client::ceremony` —
-//! are the child module `ceremony`'s, `pub(super)` to the door; a transport
-//! runs each call on the connection's thread. The page's two answers,
+//! claimant on the permissive board, the keyless session that reads alone,
+//! or SIGNED content-scoped with a dev key in the store, which writes too
+//! (both ruled selectable per run); and ONE METHOD PER ROW of `client.md`
+//! §4b.1 — and of `places`, the document index's listing beside `search`
+//! (A-255) — each taking the row's input as a value and answering the row's
+//! output or a [`Refusal`] under the row's armed name, the board's own
+//! refusals carried verbatim. The row methods are this module's alone
+//! behind ONE DOOR, [`Shell::call`], which dispatches on the bridge's
+//! spelling — one arm per call, the compiler holding the match exhaustive —
+//! and logs every call, so no call reaches a row past the log;
+//! [`Shell::fetch`] alone is public beside it, because it streams; it logs
+//! its own call as `call` does. The ten ceremonial rows — the key store's
+//! two and the eight walks over `skep_client::ceremony` — are the child
+//! module `ceremony`'s, `pub(super)` to the door; a transport runs each call
+//! on the connection's thread. The page's two answers,
 //! [`Shell::answer`] and [`Shell::cancel`], route to the walk that asked. A
 //! death signal a call meets ends the session by the one sequence the
 //! board's feed thread runs too (`Sessions::end`), and the call answers
@@ -24,23 +25,26 @@
 //!
 //! WHAT THE SHELL REFUSES WITHOUT ASKING (ps3-5): a WRITE frame in the
 //! guest form ([`WRITE_KINDS`]; the board would answer `unauthenticated`, so
-//! no dial is made), and a call's ARGUMENTS not of its row's form (`shapes`'
-//! declarations): a required member absent or of another form, and an
-//! optional member present in another form, refused `malformed_args`
-//! naming it before any dial — never read as absent; absent or `null`, an
-//! optional member is the row's default. Nothing else of a frame: `op` is a
-//! frame pipe, the frame's semantics the wire's, and a credential act from
-//! the page is refused by the daemon's own `content_session` beneath the
-//! shell (ps3-7). Every `/op` under a session, `/op-at`'s aside, goes by the
-//! hold's one path (`Holds::send`): what a burst is refused at the act for
-//! (`Burst::admit`), what is held and what is reissued within the call are
-//! the hold's to say, and what a signed session's attest signs is
-//! `SessionEntry::attest`'s. Where the library does not reach a row at this
-//! pin — `upload` and `restore`, whose media walk is the shell's lane's and
-//! not in `skep-client` — the call answers `not_reached` naming where it
-//! stops, never a silent stub; `fetch` reaches the dialer's streamed form
-//! and no further (the §Recovery order of the media design is not run
-//! here).
+//! no dial is made); a write frame under a bare session, and its
+//! `resolve(send)` — the keyless session reads alone (foundations §3.3
+//! state 3), so no `bare` write of this shell's is ever committed
+//! (`write_in_bare_session`, `SessionEntry::may_write`); and a call's
+//! ARGUMENTS not of its row's form (`shapes`' declarations): a required
+//! member absent or of another form, and an optional member present in
+//! another form, refused `malformed_args` naming it before any dial — never
+//! read as absent; absent or `null`, an optional member is the row's
+//! default. Nothing else of a frame: `op` is a frame pipe, the frame's
+//! semantics the wire's, and a credential act from the page is refused by
+//! the daemon's own `content_session` beneath the shell (ps3-7). Every other
+//! `/op` under a session, `/op-at`'s aside, goes by the hold's one path
+//! (`Holds::send`): what a burst is refused at the act for (`Burst::admit`),
+//! what is held and what is reissued within the call are the hold's to say,
+//! and what a signed session's attest signs is `SessionEntry::attest`'s.
+//! Where the library does not reach a row at this pin — `upload` and
+//! `restore`, whose media walk is the shell's lane's and not in
+//! `skep-client` — the call answers `not_reached` naming where it stops,
+//! never a silent stub; `fetch` reaches the dialer's streamed form and no
+//! further (the §Recovery order of the media design is not run here).
 
 use std::fmt;
 use std::io::{self, Read};
@@ -75,13 +79,28 @@ use crate::Talk;
 
 mod ceremony;
 
-/// THE SESSION MODE a run names (P-5: both arms selectable per run): bare
-/// as the principal on the permissive board, or signed content-scoped with
-/// the store's key for the principal.
+/// The session mode a run names (P-5: both arms selectable per run).
+///
+/// Bare opens each session as the principal on the permissive board, a
+/// session for reading alone; signed opens it content-scoped with the
+/// store's key for the principal, a session that writes too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SessionMode {
-    Bare { principal: u64 },
-    Signed { principal: u64 },
+    /// The bare bind as `principal`: the keyless session, which reads alone
+    /// (foundations §3.3 state 3) — every write under it is refused
+    /// `write_in_bare_session` before any dial.
+    Bare {
+        /// The principal the run's sessions and ceremonial rows act as
+        /// where a call names none.
+        principal: u64,
+    },
+    /// The signed content-scoped handshake as `principal`, under the key the
+    /// store holds for it: the session that writes.
+    Signed {
+        /// The principal the run's sessions and ceremonial rows act as
+        /// where a call names none.
+        principal: u64,
+    },
 }
 
 impl SessionMode {
@@ -164,7 +183,8 @@ pub enum NodeState {
 }
 
 /// The write kinds of the wire (`docs/wire.md` §Operations): a frame of
-/// one of these in the guest form is refused by the shell without a dial.
+/// one of these in the guest form, or under a bare session, is refused by
+/// the shell without a dial.
 pub const WRITE_KINDS: [&str; 16] = [
     "delegate",
     "register_node",
@@ -595,7 +615,7 @@ impl Shell {
         // The own node's STOPPED state is the hold's (§3c.4): every burst at
         // its board holds `stopped` without a dial, `probe` answers it, and
         // `Running` ends the hold, the resend run on the board's feed thread
-        // where a session stands.
+        // where a session that may write stands.
         self.holds.set_node_stopped(board_reference, !running);
         if running {
             self.feed(board_reference).probe();
@@ -718,7 +738,8 @@ impl Shell {
         // so `held(session)` lists its lines at once. The resend is NOT run
         // here: the page reads `held(session)` right after opening, and a
         // synchronous resend would clear the lines before it; the feed's probe
-        // and its daemon-running tick drive it once a session stands (§3c.5).
+        // and its daemon-running tick drive it once a session that may write
+        // stands (§3c.5).
         self.holds.open_session(&session);
         Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account}))
     }
@@ -831,14 +852,17 @@ impl Shell {
     /// noted for the hold's `base` — an `/op-at` frame aside, its answer the
     /// board's own; or token-free at guest class, the board or origin named
     /// read first (`unknown_board`, `not_canonical`, `malformed_args`), then
-    /// a write refused without a dial (`write_in_guest_form`). An `/op-at`
+    /// a write refused without a dial (`write_in_guest_form`). Under a bare
+    /// session — the keyless session, which reads alone (foundations §3.3
+    /// state 3) — a write is refused without a dial, the `/op-at` form's too
+    /// (`write_in_bare_session`, [`SessionEntry::may_write`]). An `/op-at`
     /// refusal is the board's verdict, as every other is; a death signal met
     /// at the dial or at a read the attest needed ends the session.
     fn op(&self, args: &Value) -> Result<Value, Refusal> {
         let (frame, at) = Self::frame_of(args)?;
+        let op = frame["op"].as_str().unwrap_or("");
         if guest_form(args)? {
             let board = self.guest_board(args)?;
-            let op = frame["op"].as_str().unwrap_or("");
             if WRITE_KINDS.contains(&op) {
                 return Err(Refusal::shell(Name::WRITE_IN_GUEST_FORM, json!({"op": op})));
             }
@@ -851,6 +875,9 @@ impl Shell {
             };
         }
         let session = self.session(&args["session"])?;
+        if WRITE_KINDS.contains(&op) && !session.may_write() {
+            return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"op": op})));
+        }
         let Some(at) = at else {
             return match self.holds.send(&session, frame) {
                 OpAnswer::Answered(answer) => answer,
@@ -1017,21 +1044,36 @@ impl Shell {
         self.holds.lines(&session)
     }
 
-    /// `resolve(session, {held, act})` → `{}` (§4b.1): `"drop"` on a `refused`
-    /// or `moved` line marks it (and a refused run's `behind` lines) dropped;
-    /// `"send"` re-enters the automatic machine for that document, the call
-    /// answering "once the line is handed to the machine, never after its
-    /// ack" — the probe that resends it handed to the board's feed thread
-    /// (`Feed::probe`). Its refusals in this order, the first that holds
-    /// answering: `session_ended`; `malformed_args` naming `held`, then
-    /// `act` — an act the row does not spell (`ResolveAct::named`) the
-    /// argument it is, refused before any line is asked; then
-    /// `store_halted`, `no_such_held` and `not_resolvable` as
-    /// `Holds::resolve` orders them.
+    /// Answers `resolve(session, {held, act})` with `{}` (§4b.1).
+    ///
+    /// `"drop"` on a `refused` or `moved` line marks it, and a refused run's
+    /// `behind` lines with it, dropped. `"send"` re-enters the automatic
+    /// machine for that document, the call answering "once the line is
+    /// handed to the machine, never after its ack": the probe that resends
+    /// it is handed to the board's feed thread (`Feed::probe`). Under a bare
+    /// session, which reads alone ([`SessionEntry::may_write`]), `"drop"`
+    /// stands, since it commits nothing to the board, and `"send"` does not,
+    /// since no resend sends under it.
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering:
+    ///
+    /// 1. `malformed_args` naming `session`, then `session_ended` where this
+    ///    shell holds no session under the reference;
+    /// 2. `malformed_args` naming `held`, then `act` — an act the row does
+    ///    not spell (`ResolveAct::named`) is the argument it is, refused
+    ///    before any line is asked;
+    /// 3. `write_in_bare_session` for `"send"` under a bare session;
+    /// 4. `store_halted`, `no_such_held` and `not_resolvable`, as
+    ///    `Holds::resolve` orders them.
     fn resolve(&self, args: &Value) -> Result<Value, Refusal> {
         let session = self.session(&args["session"])?;
         let k = args["held"].as_u64().ok_or_else(|| Refusal::malformed("held"))?;
         let act = args["act"].as_str().and_then(ResolveAct::named).ok_or_else(|| Refusal::malformed("act"))?;
+        if act == ResolveAct::Send && !session.may_write() {
+            return Err(Refusal::shell(Name::WRITE_IN_BARE_SESSION, json!({"act": "send"})));
+        }
         match self.holds.resolve(&session, k, act)? {
             Resolved::Dropped => {}
             Resolved::HandedBack => self.feed(&session.board_reference).probe(),

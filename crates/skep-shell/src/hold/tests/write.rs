@@ -94,15 +94,15 @@ fn a_burst_is_held_under_the_first_hold_that_stands() {
 /// document at the open).
 #[test]
 fn a_hold_takes_the_last_acked_write_or_the_sessions_open_as_its_base() {
-    let g = ground_in(TempDir::new().unwrap(), bare_facts(), 60);
-    *g.fake.rows.lock().unwrap() = vec![json!({"at": 50, "op": "create_new_document", "key": "bare", "docs": [DOC]})];
+    let g = writer_at(60);
+    *g.fake.rows.lock().unwrap() = vec![json!({"at": 50, "op": "create_new_document", "key": g.own_key(), "docs": [DOC]})];
     g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     assert_eq!(g.lines()[0]["base"], 60, "no ack names the document: the session's open");
     g.holds.probe("b-1");
     assert_eq!(g.fake.sends(), 1);
     assert!(g.lines().is_empty() && g.states().contains(&"kept".to_string()), "the row before the open moves nothing");
 
-    let g = ground_in(TempDir::new().unwrap(), bare_facts(), 60);
+    let g = writer_at(60);
     let noted = |frame: Value, ack: Value| g.holds.note_ack(&g.session, &frame, &ack);
     let minted = |addr: &str, at: u64| json!({"resp": "ack_addr", "addr": addr, "at": at});
     noted(json!({"op": "create_new_document", "account": "1.0.1"}), minted("1.0.1.0.2", 70));
@@ -411,7 +411,9 @@ fn a_halted_file_refuses_every_act_and_dials_nothing() {
 fn a_line_the_store_cannot_copy_says_why_and_stands() {
     let fake = Fake::new();
     fake.no_head.store(true, Ordering::SeqCst);
-    let g = ground_over(fake, TempDir::new().unwrap(), bare_facts(), 0);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
     let answer = g.hold(&insert(DOC, json!(["hello"])), "unreachable", false);
     assert_eq!(answer["cause"], "unreachable", "{answer}");
     assert!(answer["unwritable"].as_str().is_some_and(|why| why.contains("H.1")), "the answer says why: {answer}");
@@ -448,7 +450,9 @@ fn a_line_the_store_cannot_copy_says_why_and_stands() {
 fn an_unwritable_queue_takes_its_file_once_it_empties_and_never_before() {
     let fake = Fake::new();
     fake.no_head.store(true, Ordering::SeqCst);
-    let g = ground_over(fake, TempDir::new().unwrap(), bare_facts(), 0);
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    let g = ground_over(fake, store, facts, 0);
     let first = g.hold(&insert(DOC, json!(["a"])), "unreachable", false);
     assert!(first["unwritable"].is_string(), "{first}");
     g.fake.no_head.store(false, Ordering::SeqCst);
@@ -528,10 +532,12 @@ fn sized_frame(bytes: usize) -> Value {
 /// behind a standing line unheld (the mutants that drop the size or the
 /// document check dial a frame no send of which the board takes, and hold a
 /// line none could ever clear, every later burst of the principal behind
-/// it).
+/// it). The door's own arithmetic, under a session whose key attests no
+/// insert — a bare one, so the door keeps no attest's room; the shell's `op`
+/// row refuses such a session's write before it reaches the hold.
 #[test]
 fn a_burst_the_board_takes_at_no_send_is_refused_at_the_bursts_door() {
-    let g = ground();
+    let g = bare_ground();
     for stopped in [false, true] {
         g.holds.set_node_stopped("b-1", stopped);
         let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, sized_frame(MAX_FRAME_BYTES + 1)) else { panic!("refused at the burst's door") };
@@ -642,10 +648,12 @@ fn an_unanswered_read_the_attest_needs_holds_the_burst_unsent() {
 /// THE QUEUE's BUDGET at the hold: with the principal's standing frames at
 /// the budget, the next burst is refused `held_full` — no line, no `held`
 /// event — and its answer names the bytes held and its own (the mutant that
-/// drops the queue's count holds a page's bursts without bound).
+/// drops the queue's count holds a page's bursts without bound). The queue's
+/// own budget, under a session whose key attests no insert — a bare one, its
+/// door keeping no attest's room, so one frame fills the queue.
 #[test]
 fn a_burst_the_queue_has_no_room_for_is_refused_held_full() {
-    let g = ground();
+    let g = bare_ground();
     g.hold(&sized_frame(MAX_HELD_FRAME_BYTES - 10), "unreachable", false);
     let _ = g.states();
     let OpAnswer::Answered(Err(refused)) = g.holds.send_burst(&g.session, insert(DOC, json!(["b"]))) else { panic!("refused, not held") };
@@ -683,9 +691,10 @@ fn a_burst_past_the_queues_line_budget_is_refused_held_full() {
 }
 
 /// The ground over two boards, `b-1` and `b-2`, of their own chains: the
-/// holds over both, a bare session of principal 1 at each — `sessions[0]` at
-/// `b-1`, `sessions[1]` at `b-2` — opened as the shell opens them, each
-/// board's fake, and the store directory kept for the ground's life.
+/// holds over both, a writer's session of principal 1 at each, under one key
+/// — `sessions[0]` at `b-1`, `sessions[1]` at `b-2` — opened as the shell
+/// opens them, each board's fake, and the store directory kept for the
+/// ground's life.
 struct TwoBoards {
     holds: Arc<Holds>,
     sessions: Vec<Arc<SessionEntry>>,
@@ -704,10 +713,11 @@ fn two_boards() -> TwoBoards {
     let table = Arc::new(Sessions::new(None));
     let keys = Arc::new(FileStore::open(store.path().join("store")));
     let holds = Holds::new(Arc::clone(&table), Arc::new(EventBus::new()), keys, store.path().to_path_buf(), Arc::new(|_: &str| {}), boards.iter().cloned());
+    let facts = writer_facts(&store);
     let sessions = boards
         .iter()
         .map(|entry| {
-            let session = table.register(entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: bare_facts(), opened_at: 0 }, &mut NoSupplements);
+            let session = table.register(entry, Open { token: Token::parse(&"9f".repeat(16)).unwrap(), facts: facts.clone(), opened_at: 0 }, &mut NoSupplements);
             holds.open_session(&session);
             session
         })

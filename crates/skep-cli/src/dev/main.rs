@@ -9,11 +9,11 @@
 //! `serve` is THE DEV PROVIDER: the shell's core (`skep-shell`) served to a
 //! page in a browser over loopback HTTP and server-sent events, one page
 //! origin admitted under a per-run secret, the session bare as the
-//! claimant or signed with a dev key, and — behind the `dev-hooks` feature
-//! no shipped build enables — the daemon run in-process with its test
-//! hooks so its fault states are forced live. The fifteen commands of
-//! `skep` stand: this is no sixteenth, and the sidecar image, built `--bin
-//! skep`, holds none of it.
+//! claimant, which reads alone, or signed with a dev key, which writes too,
+//! and — behind the `dev-hooks` feature no shipped build enables — the
+//! daemon run in-process with its test hooks so its fault states are forced
+//! live. The fifteen commands of `skep` stand: this is no sixteenth, and the
+//! sidecar image, built `--bin skep`, holds none of it.
 //!
 //! The root declares `args`, `terminal` and `shared` from the `skep` root's
 //! own files, so the settings (`--board`, `--dir`, `--key`, `--principal`

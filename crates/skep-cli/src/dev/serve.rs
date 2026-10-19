@@ -5,11 +5,13 @@
 //! the listen port (`--listen`); the per-run admission secret (`--secret`,
 //! of the URL-safe alphabet the page's query and header carry unchanged,
 //! else generated and printed ONCE on stdout, the one DATA line and the
-//! secret's one carrier — no TALK line names it); the
-//! session mode (`--session bare|signed`, required — both arms were ruled
-//! selectable, so a run names one); the dev key store (`--dir`, required
-//! under `signed`, a throwaway directory under the system temp dir where
-//! none is named under `bare`, removed on every way out of the verb —
+//! secret's one carrier — no TALK line names it); the session mode
+//! (`--session bare|signed`, required — both arms were ruled selectable, so
+//! a run names one: `bare` the keyless session that reads alone, every
+//! write in it refused before any dial, `signed` the session that writes);
+//! the dev key store (`--dir`, required under `signed`, a throwaway
+//! directory under the system temp dir where none is named under `bare`,
+//! removed on every way out of the verb —
 //! `~/.skep` is never consulted here, and a key file is refused: the signed
 //! arm signs with the key its store holds for the principal); the
 //! principal (`--principal`, the claimant's `DEFAULT_PRINCIPAL` where
@@ -278,7 +280,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
             talk(format!("signed: the store {} holds the key {} for principal {principal}", store_dir.display(), k.fingerprint));
         }
     } else {
-        talk(format!("bare: sessions bind as principal {principal} from this loopback peer; the store is {}", store_dir.display()));
+        talk(format!("bare: sessions bind as principal {principal} from this loopback peer and read alone, every write in them refused; the store is {}", store_dir.display()));
     }
     talk(arm_said);
     let listener = TcpListener::bind(("127.0.0.1", listen)).map_err(|e| Halt::face(format!("the provider's port {listen} could not be bound"), e.to_string(), "stop what holds it, or pass --listen"))?;

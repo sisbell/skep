@@ -5,8 +5,9 @@
 //! next — and a signed session's death read off its set and its account,
 //! the retirement ahead of the genesis; a principal's supplement following
 //! its standing sessions, a key's diagnosis named by the list it stands in,
-//! a session's key attesting the ten kinds with an entry frame alone, and a
-//! frame no attest is owed for borrowed as it stands, never copied.
+//! a session's key attesting the ten kinds with an entry frame alone and a
+//! write going out under a signed session alone, and a frame no attest is
+//! owed for borrowed as it stands, never copied.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -306,6 +307,10 @@ fn a_keys_diagnosis_is_named_by_the_list_it_stands_in() {
 /// what `attest` signs with and the burst's door keeps an attest's room for
 /// (the mutants that attest a bare session's write, or every kind, leave
 /// the burst's door keeping room no send takes, or none where a send does).
+/// And a WRITE goes out under the signed session alone: the bare one, the
+/// keyless session for reading, may write nothing (foundations §3.3 state
+/// 3; the mutant that lets a bare session write commits a `bare` write no
+/// key signed).
 #[test]
 fn a_sessions_key_attests_the_checked_kinds_alone() {
     let sessions = Sessions::new(None);
@@ -315,6 +320,7 @@ fn a_sessions_key_attests_the_checked_kinds_alone() {
     let facts = Facts { principal: 2, account: Some("1.0.2".into()), kind: SessionKind::Bare };
     let bare = sessions.register(&at("b-1", nowhere()), Open { token: Token::parse(&"8e".repeat(16)).unwrap(), facts, opened_at: 0 }, &mut Recorded::default());
     assert_eq!((bare.attesting_key("insert"), bare.attesting_key("delete")), (None, None));
+    assert_eq!((signed.may_write(), bare.may_write()), (true, false), "a write goes out under the signed session alone");
 }
 
 /// A FRAME NO ATTEST IS OWED FOR is borrowed as it stands, never copied: a

@@ -10,10 +10,12 @@
 //! too, so the shell's `session` call and the restart arm's silent re-open
 //! (AUTH-5.31) share one: the BARE bind as the claimant on the permissive
 //! board, and the SIGNED content-scoped handshake behind AUTH-5.65's
-//! pre-check, each refusal under the armed name the row spells. A write
-//! under a session that holds a key carries the attest that key signs
-//! ([`SessionEntry::attest`]), whichever caller sends it — a call's `op`,
-//! or the held-burst resend's.
+//! pre-check, each refusal under the armed name the row spells. A bare
+//! session is the keyless session for reading alone: no write goes out under
+//! it ([`SessionEntry::may_write`]; foundations §3.3 state 3). A write under
+//! a session that holds a key carries the attest that key signs
+//! ([`SessionEntry::attest`]), whichever caller sends it — a call's `op`, or
+//! the held-burst resend's.
 //!
 //! THE END ([`Sessions::end`]): a death signal is met by two callers — the
 //! shell, when a call's token answers `Skepd-Session: closed`, and the
@@ -70,9 +72,10 @@ use crate::events::{EventBus, EventName};
 use crate::refs::{session_reference, BoardEntry};
 use crate::refusal::{Name, Refusal};
 
-/// A session's kind: the bare bind, or the signed content-scoped handshake —
-/// the key that opened it, and the account whose set it authenticated
-/// against (the account itself, or the nearest above it that holds one).
+/// A session's kind: the bare bind, which reads alone, or the signed
+/// content-scoped handshake, which writes too — the key that opened it, and
+/// the account whose set it authenticated against (the account itself, or
+/// the nearest above it that holds one).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionKind {
     Bare,
@@ -119,6 +122,18 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
+    /// Returns whether a write may go out under this session: a signed one's.
+    ///
+    /// A bare session is the keyless session for reading alone (foundations
+    /// §3.3 state 3, E16 (a′): "the shell refuses every write in it, no
+    /// `bare` write ever committed by this client"), the dev provider's
+    /// `--session bare` among them: the `op` row refuses every write kind
+    /// under it, and `resolve(send)`, before any dial, and the held-burst
+    /// resend sends under a signed session alone.
+    pub fn may_write(&self) -> bool {
+        matches!(self.facts.kind, SessionKind::Signed { .. })
+    }
+
     /// The key a write of `op` under this session is attested with — the key
     /// that opened it — where the session holds one and `op` is one of the
     /// ten kinds that have an entry frame (`attest::in_checked_set`); none
@@ -329,8 +344,9 @@ pub struct Open {
 /// the unclaimed and the CLAIMED-PERMISSIVE board from this loopback peer,
 /// which sends no `Origin`; refused on ENFORCING with the board's one 401,
 /// carried verbatim. The board's position is read first, so a row landing
-/// between that read and the open is one a resend's read sees, never one it
-/// skips.
+/// between that read and the open is one the session's drafts feed reads
+/// from its open ([`SessionEntry::opened_at`]), never one it skips. The
+/// session reads alone ([`SessionEntry::may_write`]).
 pub fn open_bare(board: &Board, principal: u64) -> Result<Open, Refusal> {
     let opened_at = board.health()?.log_position();
     let token = match board.session_open(SessionBody::Bare { principal })? {

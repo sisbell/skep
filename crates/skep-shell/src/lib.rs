@@ -65,12 +65,13 @@
 //!   statements, go to the dev arm.
 //! * `sessions` — THE SESSION TABLE: every token this shell holds, beside
 //!   the board it is valid at, under the reference the page holds, the two
-//!   openings (bare, signed), the attest a session's key signs, and a
-//!   session's END — one sequence, whichever caller met the death signal —
-//!   with the reason a `session-died` carries, derived from public reads as
-//!   §4b.2 says under the key store the table holds; a leaving session's
-//!   drafts supplement, one per principal, released to another standing
-//!   session of its principal.
+//!   openings (bare, which reads alone, and signed, which writes too), the
+//!   attest a session's key signs, and a session's END — one sequence,
+//!   whichever caller met the death signal — with the reason a
+//!   `session-died` carries, derived from public reads as §4b.2 says under
+//!   the key store the table holds; a leaving session's drafts supplement,
+//!   one per principal, released to another standing session of its
+//!   principal.
 //! * `hold` — THE HOLD (`client.md` §3c.4, §3c.5): the one path of every
 //!   `/op` under a session — attested, dialed, each answer read through the
 //!   classification table, the one owner of every reissue's bound, and each
@@ -91,8 +92,9 @@
 //!   `writes.halted`, and runs THE PROBE on a deadline of its own and at a
 //!   hand-over.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
-//!   (bare as the claimant, or signed with a dev key), and one private
-//!   method per §4b.1 row, and per `places`, behind [`Shell::call`], whose
+//!   (bare as the claimant, which reads alone — every write in it refused
+//!   before any dial — or signed with a dev key), and one private method
+//!   per §4b.1 row, and per `places`, behind [`Shell::call`], whose
 //!   dispatch the compiler holds to one arm per call — the ten ceremonial
 //!   rows in its child `ceremony` — each row taking and answering values
 //!   shaped exactly as the row's columns — an argument of another form

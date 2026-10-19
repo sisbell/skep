@@ -840,7 +840,8 @@ usage: skep-dev <command> [flags]
                /bridge/shapes, the script seam at /bridge/script; ONE page
                origin admitted, with a per-run secret the page carries as
                ?provider=<secret> and echoes in the Skep-Provider header;
-               the session bare as the claimant, or signed with a dev key;
+               the session bare as the claimant, which reads alone — every
+               write in it refused — or signed with a dev key, which writes;
                the secret alone on stdout; stops cleanly when stdin closes
                (Ctrl-D at a terminal) — an interrupt skips the clean stop
 
@@ -869,8 +870,9 @@ flags (a flag beats its env variable; a variable set empty is unset):
             [--drafts <n>]      drafts past the tier, the first windowed
                                 (default 10; at least one)
   serve:    --page-origin <origin>  the ONE origin admitted (required)
-            --session bare|signed   the session mode (required; signed
-                                needs --dir with the principal's key)
+            --session bare|signed   the session mode (required; bare reads
+                                alone, signed writes and needs --dir with
+                                the principal's key)
             [--listen <port>]   the provider's loopback port (default 8742)
             [--secret <text>]   the admission secret, one or more of
                                 A-Z a-z 0-9 - . _ ~, the characters the

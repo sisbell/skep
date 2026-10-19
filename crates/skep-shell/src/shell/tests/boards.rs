@@ -63,7 +63,7 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     claim_board(&own_origin, &store);
     let (talk, lines) = talk();
     let boards = vec![Origin::parse(&own_origin).unwrap(), Origin::parse(&other_origin).unwrap()];
-    let shell = Shell::open(ShellOptions { boards, store_dir: store, session_mode: SessionMode::Bare { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&own_origin).unwrap()) });
+    let shell = Shell::open(ShellOptions { boards, store_dir: store, session_mode: SessionMode::Signed { principal: 1 }, arm: ArmConfig::Auto, talk, own_node: Some(Origin::parse(&own_origin).unwrap()) });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let refs = shell.board_references();
@@ -83,8 +83,8 @@ fn a_deliberate_stop_of_the_own_node_is_said_once() {
     assert_eq!(daemon_states(&own), ["stopped"], "a deliberate stop is said once, no unreachable beside it:\n{}", lines.lock().unwrap().join("\n"));
     assert!(lines.lock().unwrap().iter().any(|l| l.contains("the commit stream is not answering")), "TALK still says the stream is down:\n{}", lines.lock().unwrap().join("\n"));
     // The node back at the same port, `running` said once by its owner; the
-    // old session dies, a fresh one's write makes the stream tick, and the
-    // tick adds no `running` of its own.
+    // old session dies, a fresh signed one's write makes the stream tick, and
+    // the tick adds no `running` of its own.
     let own_sd = spawn_at(&dir.path().join("own"), true, port);
     shell.set_node_state(NodeState::Running);
     wait_for(&seen, |e| e.name == EventName::SessionDied && e.data["session"] == session);
@@ -293,9 +293,9 @@ fn a_dropped_shell_frees_its_boards_held_lock() {
 /// its `daemon` event says — the board started there after, never replays
 /// the history before the shell could read it — every `feed` row it emits
 /// lies past the position the board had reached before the open — while the
-/// draft a session mints after is fed, from the session's own open (the
-/// mutant that starts a board it could not read at 0 replays the board's
-/// whole feed to every subscriber).
+/// draft a signed session mints after is fed, from the session's own open
+/// (the mutant that starts a board it could not read at 0 replays the
+/// board's whole feed to every subscriber).
 #[test]
 fn a_board_down_at_the_open_is_fed_from_its_first_answer() {
     let dir = TempDir::new().unwrap();
@@ -312,7 +312,7 @@ fn a_board_down_at_the_open_is_fed_from_its_first_answer() {
         assert!(Instant::now() < deadline, "the stopped board still answers");
         thread::sleep(Duration::from_millis(20));
     }
-    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     // The feed thread reads `/health` once before it takes its first

@@ -1,14 +1,16 @@
 //! THE DEV PROVIDER's FENCE: `skep-dev serve` driven through argv against
 //! boards the suite spawns in-process, the suite standing in for the page
 //! over loopback HTTP with the admission headers. F1 every call of
-//! `client.md` §4b.1 and the document index's listing in the bare mode —
-//! the reads and the draft write acked, the publish-class write refused
-//! `signed_session_required` verbatim, the three guest forms, `keygen` and
-//! `fingerprint`, `search` and `places`, the ceremonial calls to their
-//! first refusal, the stale session and the
+//! `client.md` §4b.1 and the document index's listing in the bare mode, the
+//! keyless session that reads alone — the reads answered, and a draft's
+//! mint, an insert and a publish-class write each refused
+//! `write_in_bare_session` with the board's position unmoved, the three
+//! guest forms, `keygen` and `fingerprint`, `search` and `places`, the
+//! ceremonial calls to their first refusal, the stale session and the
 //! foreign board, the token in no answer and no event, the log listing
 //! every call; F2 the events — `feed` with the board reference and the
-//! entry, `index`, `mode` at a claim's landing, `session-died` on `close`
+//! entry the library wrote and the bare session reads, `index`, `mode` at
+//! a claim's landing, `session-died` on `close`
 //! and on the daemon's restart with the arm named, `daemon` on the
 //! stream's loss; F3 the person over the bridge — a claim on an unclaimed
 //! board with every PUBLIC moment arriving as a `moment` event and answered
@@ -19,9 +21,10 @@
 //! and counted to the stop, the secret on no line, the preflight for the
 //! one origin and never `*`, the listener on 127.0.0.1 alone; F5 the signed
 //! mode — a content-scoped session, a publish-class write acked under the
-//! attest the provider composed, the same write refused under bare; F6
-//! the fault doors under `dev-hooks` with `--own`, and `not_built_in`
-//! without; F7 the isolation, `cargo tree` naming no `skepd` without the
+//! attest the provider composed, the same write refused under bare before
+//! any dial; F6 the fault doors under `dev-hooks` with `--own` in the
+//! signed mode, and `not_built_in` without; F7 the isolation, `cargo tree`
+//! naming no `skepd` without the
 //! feature and one with it; F8 the declarations served equal to the
 //! crate's; F9 the conformance — one sequence on the crate and through the
 //! provider, deep-equal results and the same events in order.
@@ -60,12 +63,37 @@ const SECRET_QUERY: &str = "provider";
 /// A claimed board through the LIBRARY, as `dev.rs` claims one: the store
 /// holds the device key and the account's line.
 fn claim_board(board_origin: &str, store: &Path, anchors: &Path) {
-    let board = Board::new(Origin::parse(board_origin).unwrap(), PlainHttp::new());
     let store = FileStore::open(store);
     store.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    claim_with(board_origin, &store, anchors);
+}
+
+/// The board at `board_origin` claimed through the LIBRARY under the one key
+/// `store` holds already, the account's line appended to it.
+fn claim_with(board_origin: &str, store: &FileStore, anchors: &Path) {
+    let board = Board::new(Origin::parse(board_origin).unwrap(), PlainHttp::new());
     let mut person = Scripted::new(vec![Script::LabelDefault, Script::LabelDefault]);
     let opts = NotebookOptions { principal: None, display_name: Some("a name".into()), anchor_out: vec![anchors.join("a"), anchors.join("b")], paper: false, host_name: "testhost".into(), date: "2026-10-10".into() };
-    let ClaimOutcome::Ours(_) = claim::notebook(&board, &store, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n"))) else { panic!("a stranger's board") };
+    let ClaimOutcome::Ours(_) = claim::notebook(&board, store, &mut person, &opts).unwrap_or_else(|h| panic!("{h}\n{}", person.transcript.join("\n"))) else { panic!("a stranger's board") };
+}
+
+/// A draft of account `1.0.1` holding `hello`, written by the LIBRARY under
+/// a bare session of its own as principal 1 — the provider commits no write
+/// of a bare session's, which reads alone — for a bare provider's session of
+/// that principal to read.
+fn library_draft(board_origin: &str) -> String {
+    use skep_client::board::{frames, Answer, Opened, SessionBody};
+    let board = Board::new(Origin::parse(board_origin).unwrap(), PlainHttp::new());
+    let Opened::Token(token) = board.session_open(SessionBody::Bare { principal: 1 }).unwrap() else { panic!("a bare session on the permissive board") };
+    let written = |frame: &Value| -> Value {
+        let Answer::Document(v) = board.op(Some(&token), frame).unwrap() else { panic!("the library's session stands") };
+        assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "the library's write: {v}");
+        v
+    };
+    let draft = written(&frames::create_document("1.0.1", false, None))["addr"].as_str().unwrap().to_string();
+    written(&json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    let _ = board.session_close(&token);
+    draft
 }
 
 /// A daemon at `port` exactly — the restart's twin of `common::spawn`: the
@@ -418,22 +446,26 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     assert_eq!(health["mode"], "CLAIMED-PERMISSIVE");
     let probe = keep(provider.result("probe", json!({})));
     assert_eq!(probe["daemon"], "running");
-    // session, a read, a draft write, the publish-class refusal.
+    // session, a read, and every write refused before any dial: the bare
+    // session is the keyless session, which reads alone.
     let opened = keep(provider.result("session", json!({"board": board, "principal": 1})));
     let session = opened["session"].as_str().unwrap().to_string();
     assert!(session.starts_with("s-"));
     assert_eq!(opened["account"], "1.0.1");
     let set = keep(provider.result("op", json!({"session": session, "frame": {"op": "key_set", "account": "1.0.1"}})));
     assert_eq!(set["resp"], "key_set");
-    let minted = keep(provider.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})));
-    let draft = minted["addr"].as_str().unwrap().to_string();
-    let acked = keep(provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}})));
-    assert!(acked["resp"].as_str().unwrap().starts_with("ack"));
-    let refused = keep(provider.refused("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}})));
-    assert_eq!(refused["name"], "signed_session_required");
-    assert_eq!(refused["kind"], "refused");
-    assert_eq!(refused["code"], "credential_refused");
-    assert_eq!(refused["body"]["detail"], "signed_session_required", "carried verbatim");
+    let draft = library_draft(&origin(sd.port()));
+    let position = || provider.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
+    let before = position();
+    for frame in [
+        json!({"op": "create_new_document", "account": "1.0.1"}),
+        json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
+        json!({"op": "create_new_document", "account": "1.0.1", "published": true}),
+    ] {
+        let refused = keep(provider.refused("op", json!({"session": session, "frame": frame})));
+        assert_eq!((refused["name"].as_str(), refused["kind"].as_str(), refused["op"].as_str()), (Some("write_in_bare_session"), Some("shell"), frame["op"].as_str()), "{refused}");
+    }
+    assert_eq!(position(), before, "the refused writes committed nothing");
     // The op-at form.
     let at = health["health"]["log_position"].as_u64().unwrap();
     let at_answer = keep(provider.result("op", json!({"session": session, "frame": {"at": at, "frame": {"op": "key_set", "account": "1.0.1"}}})));
@@ -549,9 +581,9 @@ fn f2_the_events_arrive_on_the_stream() {
     let rx = provider.events();
     let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
     let session = provider.result("session", json!({"board": board, "principal": 1}))["session"].as_str().unwrap().to_string();
-    let draft = provider.result("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}}))["addr"].as_str().unwrap().to_string();
-    provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}}));
-    // `feed` with the board reference and the entry — the draft's insert
+    let draft = library_draft(&origin(port));
+    // `feed` with the board reference and the entry — the draft's insert,
+    // which the library wrote under a bare session of the principal's own,
     // rides the session's drafts supplement.
     let feed = next_event(&rx, "feed", |v| v["update"]["op"] == "insert" && v["update"]["docs"][0] == draft);
     assert_eq!(feed["board"], board);
@@ -860,11 +892,20 @@ fn f5_the_signed_mode_acks_a_publish_class_write() {
     assert_eq!(read["items"][0]["content"], "abc");
     signed.result("close", json!({"session": session}));
     assert_eq!(signed.stop(), 0);
-    // The same write under the bare mode: refused `signed_session_required`.
+    // The same write under the bare mode, the keyless session that reads
+    // alone: refused before any dial, a draft's mint beside it, the board's
+    // position unmoved.
     let bare = Provider::start(&["--board", &board_origin, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("bare-store"))]);
     let board = bare.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
     let session = bare.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
-    assert_eq!(bare.refused("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}}))["name"], "signed_session_required");
+    let position = || bare.result("health", json!({"board": board}))["health"]["log_position"].as_u64().unwrap();
+    let before = position();
+    for frame in [json!({"op": "create_new_document", "account": "1.0.1", "published": true}), json!({"op": "create_new_document", "account": "1.0.1"})] {
+        let refused = bare.refused("op", json!({"session": session, "frame": frame}));
+        assert_eq!((refused["name"].as_str(), refused["op"].as_str()), (Some("write_in_bare_session"), Some("create_new_document")), "{refused}");
+    }
+    assert_eq!(position(), before, "the refused writes committed nothing");
+    talk_holding(&bare, &["read alone, every write in them refused"]);
     assert_eq!(bare.stop(), 0);
     // The signed mode over a keyless store halts before serving (exit 3).
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-dev"));
@@ -898,25 +939,30 @@ fn f6_without_dev_hooks_the_fault_door_is_not_built_in() {
     sd.shutdown();
 }
 
-/// F6 under the feature: the daemon in-process with `--own`, the fault
-/// doors forcing `write_busy` and `scan_busy` live, the `daemon` event; the
-/// `poison` door poisoning the kernel, so a burst `op` answers `held` with
-/// `cause: poisoned` — its line `sent: true`, since the frames land at a
-/// restart — and `held(session)` lists it; a door that is no door refused
-/// naming the eleven.
+/// F6 under the feature: the daemon in-process with `--own`, in the signed
+/// mode — the store's one key the provider signs with, the board claimed
+/// under it — the fault doors forcing `write_busy` and `scan_busy` live, the
+/// `daemon` event; the `poison` door poisoning the kernel, so a burst `op`
+/// answers `held` with `cause: poisoned` — its line `sent: true`, since the
+/// frames land at a restart — and `held(session)` lists it; a door that is
+/// no door refused naming the eleven.
 #[cfg(feature = "dev-hooks")]
 #[test]
 fn f6_under_dev_hooks_the_fault_doors_force_the_daemons_states_live() {
     let dir = tempfile::tempdir().unwrap();
     let node_port = free_port().to_string();
-    let provider = Provider::start(&["--own", "--data-dir", s(&dir.path().join("own")), "--port", &node_port, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store"))]);
+    let store = dir.path().join("store");
+    let keys = FileStore::open(&store);
+    keys.generate(Some(Label::new("notebook").unwrap())).unwrap();
+    let provider = Provider::start(&["--own", "--data-dir", s(&dir.path().join("own")), "--port", &node_port, "--session", "signed", "--principal", "1", "--dir", s(&store)]);
     let rx = provider.events();
     let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
     let board_origin = provider.result("boards", json!({}))[0]["origin"].as_str().unwrap().to_string();
     assert!(provider.talk().contains("runs in-process"), "{}", provider.talk());
     assert_eq!(provider.result("probe", json!({}))["daemon"], "running");
-    // The board is claimed through the library, so writes stand.
-    claim_board(&board_origin, &dir.path().join("claimant"), &dir.path().join("anchors"));
+    // The board is claimed through the library under the provider's key, so
+    // its signed session opens and its writes stand.
+    claim_with(&board_origin, &keys, &dir.path().join("anchors"));
     next_event(&rx, "mode", |v| v["board"] == board);
     let session = provider.result("session", json!({"board": board, "principal": 1}))["session"].as_str().unwrap().to_string();
     let held = provider.result("fault/write_busy", json!({}));
@@ -985,7 +1031,9 @@ fn own_no_local_trust_is_named_as_the_flag_on_the_daemons_auth_line() {
 
 /// A burst held `unreachable` when the daemon the provider dials stops, the
 /// daemon restarted at the same port, and the held burst resent and `kept` —
-/// the `held` event on the provider's stream and the row read back.
+/// the `held` event on the provider's stream and the row read back. The
+/// provider runs in the signed mode over the claimant's store: a bare one
+/// reads alone, and its held bursts wait for a session that writes.
 #[test]
 fn a_held_burst_is_resent_through_the_provider_after_a_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -993,7 +1041,7 @@ fn a_held_burst_is_resent_through_the_provider_after_a_restart() {
     let port = sd.port();
     let board_origin = origin(port);
     claim_board(&board_origin, &dir.path().join("claimant"), &dir.path().join("anchors"));
-    let provider = Provider::start(&["--board", &board_origin, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("store"))]);
+    let provider = Provider::start(&["--board", &board_origin, "--session", "signed", "--principal", "1", "--dir", s(&dir.path().join("claimant"))]);
     let rx = provider.events();
     let board = provider.result("boards", json!({}))[0]["board"].as_str().unwrap().to_string();
     let session = provider.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
@@ -1004,7 +1052,8 @@ fn a_held_burst_is_resent_through_the_provider_after_a_restart() {
     let held = provider.result("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "2"}, "values": ["b"]}}));
     assert_eq!((held["resp"].as_str(), held["cause"].as_str()), (Some("held"), Some("unreachable")), "{held}");
     assert_eq!(provider.result("held", json!({"session": session})).as_array().unwrap().len(), 1);
-    // Restart at the same port; a fresh session re-acquired; the resend `kept`.
+    // Restart at the same port; the session ends — the restart arm re-opening
+    // it — a fresh one is opened beside it, and the resend is `kept`.
     let sd = spawn_at(&dir.path().join("board"), true, port);
     next_event(&rx, "session-died", |v| v["session"] == session);
     let session2 = provider.result("session", json!({"board": board}))["session"].as_str().unwrap().to_string();
@@ -1070,16 +1119,19 @@ fn f8_the_shapes_route_serves_the_declarations() {
 // ── F9 ─────────────────────────────────────────────────────────────────────
 
 /// F9: the conformance — the same sequence on the crate and through the
-/// provider yields deep-equal results (the references normalized) and the
-/// same events in the same order.
+/// provider, each in the signed mode over the claimant's store, yields
+/// deep-equal results (the references normalized) and the same events in
+/// the same order.
 #[test]
 fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
     let dir = tempfile::tempdir().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let board_origin = origin(sd.port());
-    claim_board(&board_origin, &dir.path().join("claimant"), &dir.path().join("anchors"));
-    /// The sequence, over any `call`: boards, session, a read, a draft
-    /// write, a publish-class refusal, close — the answers normalized.
+    let store = dir.path().join("claimant");
+    claim_board(&board_origin, &store, &dir.path().join("anchors"));
+    /// The sequence, over any `call`: boards, a signed session, a read, a
+    /// draft minted and written, a guest read the draft withholds, close —
+    /// the answers normalized.
     fn sequence(call: &dyn Fn(&str, Value) -> Value) -> Vec<Value> {
         let mut out = Vec::new();
         let boards = call("boards", json!({}));
@@ -1093,7 +1145,7 @@ fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
         let draft = minted["result"]["addr"].as_str().unwrap().to_string();
         out.push(minted);
         out.push(call("op", json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["same"]}})));
-        out.push(call("op", json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}})));
+        out.push(call("op", json!({"guest": true, "board": board, "frame": {"op": "doc_metadata", "doc": draft}})));
         out.push(call("close", json!({"session": session})));
         out.push(call("op", json!({"session": session, "frame": {"op": "principal_prefix", "principal": 1}})));
         out.into_iter().map(normalize).collect()
@@ -1112,7 +1164,7 @@ fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
     }
     // (a) directly on the crate.
     let talk: skep_shell::Talk = Arc::new(|_| {});
-    let shell = Shell::open(ShellOptions::new(vec![Origin::parse(&board_origin).unwrap()], dir.path().join("direct-store"), SessionMode::Bare { principal: 1 }, talk));
+    let shell = Shell::open(ShellOptions::new(vec![Origin::parse(&board_origin).unwrap()], store.clone(), SessionMode::Signed { principal: 1 }, talk));
     let direct_rx = shell.subscribe();
     let direct = sequence(&|name, args| match shell.call(name, &args) {
         Ok(v) => json!({"result": v}),
@@ -1120,9 +1172,12 @@ fn f9_the_crate_and_the_provider_answer_one_sequence_alike() {
     });
     thread::sleep(Duration::from_millis(500));
     let direct_events: Vec<String> = direct_rx.try_iter().map(|e| e.name.to_string()).filter(|n| n == "session-died" || n == "feed").collect();
+    // Dropped as well as stopped, so its locks on the store's directories are
+    // the provider's to take.
     shell.shutdown();
+    drop(shell);
     // (b) through the provider.
-    let provider = Provider::start(&["--board", &board_origin, "--session", "bare", "--principal", "1", "--dir", s(&dir.path().join("provider-store"))]);
+    let provider = Provider::start(&["--board", &board_origin, "--session", "signed", "--principal", "1", "--dir", s(&store)]);
     let rx = provider.events();
     let served = sequence(&|name, args| provider.call(name, args));
     thread::sleep(Duration::from_millis(500));

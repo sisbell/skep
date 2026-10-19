@@ -9,7 +9,10 @@
 //! recorded and a refusal or the death signal armed for a send — the holds
 //! over it with a session opened as the shell opens one and every line the
 //! hold says on TALK recorded (`Ground`), and each `held` event, `held` row
-//! and `held` answer held to its declaration.
+//! and `held` answer held to its declaration. The ground's session is a
+//! writer's — signed, under a key its store generates, since a bare session
+//! reads alone and no probe resends under it — save where a cell asks for a
+//! bare one (`bare_ground`) or for a key no store holds (`keyed_facts`).
 //! `write` holds the one path of a session's `op` — a burst's door and its
 //! hold, and a write the hold never holds; `resend` the probe and the resend
 //! walk.
@@ -24,6 +27,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use skep_client::board::{Token, HEAD_MEMBER_1};
 use skep_client::dial::{DialError, Dialer, Headers, Method, Request, RequestHead, Response, StreamedResponse};
+use skep_client::store::{KeyId, KeyStore};
 use skep_client::Origin;
 use tempfile::TempDir;
 
@@ -437,22 +441,59 @@ impl Ground {
         crate::shapes::assert_declared("HeldAnswer", &answer);
         answer
     }
+
+    /// The session's own hand as a `/changes` row's `key` names it (wire.md
+    /// §`/changes`): its key's fingerprint, or `bare`.
+    fn own_key(&self) -> String {
+        match &self.session.facts.kind {
+            SessionKind::Signed { fingerprint, .. } => fingerprint.to_hex(),
+            SessionKind::Bare => "bare".to_string(),
+        }
+    }
 }
 
-/// The facts of a bare session as principal 1.
+/// The facts of a bare session as principal 1: the keyless session, which
+/// reads alone.
 fn bare_facts() -> Facts {
     Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Bare }
 }
 
 /// The facts of a session that holds a key — the signed mode's, its set the
-/// account's own.
+/// account's own — its key in no store, for the cells that sign nothing.
 fn keyed_facts() -> Facts {
     let fingerprint = skep_identity::Fingerprint::parse_hex(&"5a".repeat(32)).unwrap();
     Facts { principal: 1, account: Some("1.0.1".into()), kind: SessionKind::Signed { fingerprint, set_account: "1.0.1".into() } }
 }
 
-/// The ground under a bare session opened at position 0.
+/// The facts of a writer as `principal`, acting as `account`: a signed
+/// session under a key generated into the key store under `store`, its set
+/// the account's own — a session that may write (`SessionEntry::may_write`),
+/// whose every write of the checked set the composer attests.
+fn writer_facts_as(store: &TempDir, principal: u64, account: &str) -> Facts {
+    let KeyId(fingerprint) = FileStore::open(store.path().join("store")).generate(None).unwrap();
+    Facts { principal, account: Some(account.into()), kind: SessionKind::Signed { fingerprint, set_account: account.into() } }
+}
+
+/// The facts of the ground's writer: principal 1, acting as `1.0.1`.
+fn writer_facts(store: &TempDir) -> Facts {
+    writer_facts_as(store, 1, "1.0.1")
+}
+
+/// The ground under a writer opened at position 0.
 fn ground() -> Ground {
+    writer_at(0)
+}
+
+/// The ground under a writer opened at `opened_at`.
+fn writer_at(opened_at: u64) -> Ground {
+    let store = TempDir::new().unwrap();
+    let facts = writer_facts(&store);
+    ground_in(store, facts, opened_at)
+}
+
+/// The ground under a bare session opened at position 0: the keyless
+/// session, which reads alone, so no probe resends a line it holds.
+fn bare_ground() -> Ground {
     ground_in(TempDir::new().unwrap(), bare_facts(), 0)
 }
 

@@ -1,43 +1,50 @@
-//! THE TWO SESSION MODES against a real daemon in-process: the bare mode's
-//! claim through the shell's own `claim` call (every PUBLIC moment answered
-//! as the page would), a session in the token's place, a draft write acked
-//! and its `feed` update the board's own row, a publish-class write refused
-//! `signed_session_required` verbatim, a history read past the head refused
-//! `beyond_head` under the board's own status, `accept`'s armed names read
-//! off the real walk, the stale and foreign references, the token's text, a
-//! seed the walk made and the store's location in no answer, no event and
-//! no log entry — a paper claim's among them — a scripted claim's anchors
-//! placed where its script says, a search's query recorded nowhere, the
-//! document index listed at the call's class, every event held to its
-//! declaration, and a closed session's drafts rows ahead of its
-//! `session-died`; a death signal at a call's own dial ending its
-//! session, a released supplement keeping its drafts cursor, and a session
-//! opened after its principal's narrow fed from its own open; then the
-//! signed mode over the same store: a publish-class write acked — the
-//! attest the shell composed — and the same write under the bare mode
-//! refused, and every kind with an entry frame judged and acked, an `emit`
-//! and a record deposited into a published document among them; a
-//! session's open position the board's own, read before it opened; the
-//! daemon's restart under the signed mode: the session it
-//! ended, ended once, re-opened under a fresh reference its arm names, and
-//! written under; a bare session's death at a restart and at the flip to
-//! ENFORCING; the declared fields of the real answers; a `write_busy`
-//! reissued once within the call; a death signal met at a read the attest
-//! needs ending the session; a close the board does not answer still the
+//! THE TWO SESSION MODES against a real daemon in-process. The bare mode,
+//! the keyless session that reads alone: its claim through the shell's own
+//! `claim` call (every PUBLIC moment answered as the page would), a session
+//! in the token's place, a draft the library minted under its token read
+//! back as its `feed` update — the board's own row — and every write of its
+//! refused `write_in_bare_session` before any dial, the board's position
+//! unmoved; a history read past the head refused `beyond_head` under the
+//! board's own status, `accept`'s armed names read off the real walk, the
+//! stale and foreign references, the token's text, a seed the walk made and
+//! the store's location in no answer, no event and no log entry — a paper
+//! claim's among them — a scripted claim's anchors placed where its script
+//! says, a search's query recorded nowhere, a death signal at a call's own
+//! dial ending its session, and a bare session's death at a restart and at
+//! the flip to ENFORCING. The signed mode, which writes, over the same
+//! store: a publish-class write acked — the attest the shell composed — and
+//! the same write under the bare mode refused before any dial; every kind
+//! with an entry frame judged and acked, an `emit` and a record deposited
+//! into a published document among them, each the board's own
+//! `signed_session_required` under a bare session's token; a closed
+//! session's drafts rows ahead of its `session-died`, a released supplement
+//! keeping its drafts cursor, a session opened after its principal's narrow
+//! fed from its own open, and the document index listed at the call's
+//! class; the daemon's restart: the session it ended, ended once, re-opened
+//! under a fresh reference its arm names, and written under; a `write_busy`
+//! reissued once within the call; and a death signal met at a read the
+//! attest needs ending the session. Beside them: a session's open position
+//! the board's own under either mode, read before it opened; the declared
+//! fields of the real answers; a close the board does not answer still the
 //! shell's close, and the stop's close of one said on TALK as `close` says
-//! it; and the codec's private budgets, each the shell's.
+//! it; every event held to its declaration; and the codec's private
+//! budgets, each the shell's.
 
 use super::*;
 
-/// THE BARE MODE, end to end — and the page handed nothing the shell
-/// builds: no token, no seed the walk made, no path under the store, in any
-/// answer, event or log entry or in the refusals it binds (the faces carried
-/// from `skep-client`, `no_key`'s among them, name the store as the library
-/// builds them), no seed on TALK, no search's query in the log, on TALK or
-/// in its refusal; and every event, and the claim's answer, held to its
-/// declaration.
+/// THE BARE MODE, end to end — the keyless session, which reads alone: its
+/// claim, its session, its reads, a draft the library minted under its
+/// token fed to the page, and every write of its refused before any dial
+/// (foundations §3.3 state 3, E16 (a′); the mutant that fences the guest
+/// form alone commits the bare session's writes unattested) — and the page
+/// handed nothing the shell builds: no token, no seed the walk made, no
+/// path under the store, in any answer, event or log entry or in the
+/// refusals it binds (the faces carried from `skep-client`, `no_key`'s among
+/// them, name the store as the library builds them), no seed on TALK, no
+/// search's query in the log, on TALK or in its refusal; and every event,
+/// and the claim's answer, held to its declaration.
 #[test]
-fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
+fn the_bare_mode_claims_opens_reads_and_hands_the_page_nothing() {
     let dir = TempDir::new().unwrap();
     let sd = spawn(&dir.path().join("board"), true);
     let origin = format!("http://127.0.0.1:{}", sd.port());
@@ -89,14 +96,14 @@ fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     let token = shell.sessions.get(&session).unwrap().token.as_str().to_string();
     assert_ne!(session, token);
     assert!(!session.contains(&token[..8]), "the reference is not derived from the token");
-    // A draft write: acked; its feed event carries the board reference.
-    let minted = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap();
+    // A draft the library itself minted under the session's token — the
+    // shell commits no write of a bare session's — read back by the page
+    // under it: its feed event carries the board reference.
+    let session_token = shell.sessions.get(&session).unwrap().token.clone();
+    let library = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    let Answer::Document(minted) = library.op(Some(&session_token), &skep_client::board::frames::create_document("1.0.1", false, None)).unwrap() else { panic!("the session stands") };
     let draft = minted["addr"].as_str().unwrap().to_string();
-    let acked = shell.call("op", &json!({"session": session, "frame": {"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}})).unwrap();
-    assert!(acked["resp"].as_str().unwrap().starts_with("ack"), "{acked}");
-    // The draft's own insert: the claim's records are inserts too, into the
-    // published home.
-    let feed = wait_for(&seen, |e| e.name == EventName::Feed && e.data["update"]["op"] == "insert" && e.data["update"]["docs"] == json!([draft]));
+    let feed = wait_for(&seen, |e| e.name == EventName::Feed && e.data["update"]["docs"] == json!([draft]));
     assert_eq!(feed.data["board"], board);
     // THE UPDATE's SHAPE (S-24 (b), this crate's own): the `/changes` row's
     // members verbatim, with `position` its `at`, `class` and, on a drafts
@@ -109,18 +116,27 @@ fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     for member in ["position", "class", "session"] {
         row.as_object_mut().unwrap().remove(member);
     }
-    let session_token = shell.sessions.get(&session).unwrap().token.clone();
     let served = changes_under(&shell.boards[0].board, &session_token, &draft, at - 1);
     assert_eq!(served.first(), Some(&row), "the update is the row the board serves, verbatim: {update}");
-    // A publish-class write: refused `signed_session_required`, verbatim.
-    let refused = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}})).unwrap_err();
-    assert_eq!(refused.name(), "signed_session_required");
-    assert_eq!(refused.to_value()["kind"], "refused");
+    // Every write under the bare session — the keyless session, which reads
+    // alone — refused before any dial: a draft's mint, an insert into the
+    // draft, a publish-class mint; the board's position stands.
+    let position = |v: &Value| v["health"]["log_position"].as_u64().unwrap();
+    let before = position(&shell.call("health", &json!({"board": board})).unwrap());
+    let writes = [
+        json!({"op": "create_new_document", "account": "1.0.1"}),
+        json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
+        json!({"op": "create_new_document", "account": "1.0.1", "published": true}),
+    ];
+    let refused: Vec<Refusal> = writes.iter().map(|frame| shell.call("op", &json!({"session": session, "frame": frame})).unwrap_err()).collect();
+    for (frame, refused) in writes.iter().zip(&refused) {
+        let v = refused.to_value();
+        assert_eq!((refused.name(), v["kind"].as_str(), v["op"].as_str()), ("write_in_bare_session", Some("shell"), frame["op"].as_str()), "{frame}: {v}");
+    }
+    assert_eq!(position(&shell.call("health", &json!({"board": board})).unwrap()), before, "the refused writes committed nothing");
     // The guest form: a read answers, a write is refused without a dial.
     let guest = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "doc_metadata", "doc": draft}})).unwrap_err();
     assert_eq!(guest.name(), "withheld", "a draft is withheld from a guest");
-    let position = |v: &Value| v["health"]["log_position"].as_u64().unwrap();
-    let before = position(&shell.call("health", &json!({"board": board})).unwrap());
     let write = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap_err();
     assert_eq!(write.name(), "write_in_guest_form");
     assert_eq!(position(&shell.call("health", &json!({"board": board})).unwrap()), before, "the refused write committed nothing");
@@ -167,8 +183,8 @@ fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     // The token's text, a seed the walk made, a path under the store: in no
     // answer, no refusal, no event and no log entry — the page holds
     // nothing — and no seed on TALK, the shell's own window.
-    let answers = [&boards, &keygen, &rows, &claimed, &bound, &health, &again, &opened, &minted, &acked, &answer];
-    let refusals = [&refused, &guest, &write, &reinstate, &too_long].map(Refusal::to_value);
+    let answers = [&boards, &keygen, &rows, &claimed, &bound, &health, &again, &opened, &answer];
+    let refusals: Vec<Value> = refused.iter().chain([&guest, &write, &reinstate, &too_long]).map(Refusal::to_value).collect();
     let all = format!("{answers:?}{refusals:?}{:?}{:?}{:?}", died.data, seen.lock().unwrap(), shell.log().entries());
     assert!(!all.contains(&token), "the token never crosses");
     let seeds = seeds_of(&store);
@@ -192,10 +208,10 @@ fn the_bare_mode_claims_opens_writes_and_hands_the_page_nothing() {
     sd.shutdown();
 }
 
-/// THE CLOSE's ORDER: the drafts rows a session committed are `feed` events
-/// ahead of the `session-died` its close emits — read under its token at
-/// the close, however far the board's feed thread trails the commits — so a
-/// page that closes straight after a write still sees the write, and every
+/// THE CLOSE's ORDER: the drafts rows a signed session committed are `feed`
+/// events ahead of the `session-died` its close emits — read under its token
+/// at the close, however far the board's feed thread trails the commits — so
+/// a page that closes straight after a write still sees the write, and every
 /// subscriber sees one sequence.
 #[test]
 fn a_closed_sessions_drafts_rows_precede_its_session_died() {
@@ -204,7 +220,7 @@ fn a_closed_sessions_drafts_rows_precede_its_session_died() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let rx = shell.subscribe();
     let board = shell.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
@@ -224,7 +240,7 @@ fn a_closed_sessions_drafts_rows_precede_its_session_died() {
 /// session and a publish-class write is acked — the attest the shell
 /// composed — its `feed` update the guest feed's own row, of the
 /// `published` class and naming no session; the same write under the bare
-/// mode is refused.
+/// mode, the keyless session that reads alone, is refused before any dial.
 #[test]
 fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     let dir = TempDir::new().unwrap();
@@ -275,12 +291,12 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
     assert_eq!(link["resp"], "ack_addr", "{link}");
     signed.call("close", &json!({"session": session})).unwrap();
     signed.shutdown();
-    // The same write under the bare mode: refused.
+    // The same write under the bare mode: refused before any dial.
     let (bare, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
     let board = bare.call("boards", &json!({})).unwrap()[0]["board"].as_str().unwrap().to_string();
     let session = bare.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let refused = bare.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1", "published": true}})).unwrap_err();
-    assert_eq!(refused.name(), "signed_session_required");
+    assert_eq!((refused.name(), refused.to_value()["kind"].as_str()), ("write_in_bare_session", Some("shell")), "{refused}");
     bare.shutdown();
     sd.shutdown();
 }
@@ -294,13 +310,15 @@ fn the_signed_mode_composes_the_attest_a_publish_class_write_needs() {
 /// of the PredDef class — Unary, so its `to` is empty, and a class that
 /// confers no behavior on what it names (wire.md's own example takes
 /// Retired, whose read filter would hide the member the edit cells read).
-/// Each frame goes first under a bare session of the same principal, whose
-/// `signed_session_required` proves the write publish-class, so the signed
-/// session's ack proves its attest verified, never dropped. Then the one
-/// `insert` a published document admits (PUB-2.59): a record deposited at
-/// the fresh position past its head member's extent, the member named and
-/// its trunk the frame's `doc` term — held from the bare session as the
-/// refused run the board's verdict makes it, and acked under the signed
+/// Each frame goes first under a bare session of the same principal — the
+/// shell refusing it `write_in_bare_session` before any dial, and the
+/// library dialing it under that session's token itself — whose
+/// `signed_session_required` from the board proves the write publish-class,
+/// so the signed session's ack proves its attest verified, never dropped.
+/// Then the one `insert` a published document admits (PUB-2.59): a record
+/// deposited at the fresh position past its head member's extent, the member
+/// named and its trunk the frame's `doc` term — the board's verdict on it
+/// under the bare session's token the same, and acked under the signed
 /// one (a composer arm that spells a doc term or a slot otherwise, signs
 /// over the member named, drops the declared deposit, or reads an atom as
 /// its bytes, is refused `attestation_invalid:signature`; one that reads no
@@ -319,6 +337,16 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string()
     };
     let (signed_session, bare_session) = (open(&signed), open(&bare));
+    // A write under the bare session: the shell sends none, and the board's
+    // own verdict on it is read by the library, under that session's token.
+    let bare_token = bare.sessions.get(&bare_session).unwrap().token.clone();
+    let library = Board::new(Origin::parse(&origin).unwrap(), skep_client::PlainHttp::new());
+    let bare_write = |what: &str, frame: &Value| {
+        let refused = bare.call("op", &json!({"session": bare_session, "frame": frame})).unwrap_err();
+        assert_eq!(refused.name(), "write_in_bare_session", "{what}: the shell sends no write of a bare session's: {refused}");
+        let Answer::Document(verdict) = library.op(Some(&bare_token), frame).unwrap() else { panic!("{what}: the bare session stands") };
+        assert_eq!((verdict["code"].as_str(), verdict["detail"].as_str()), (Some("credential_refused"), Some("signed_session_required")), "{what}: the write is publish-class: {verdict}");
+    };
     let talk = || lines.lock().unwrap().join("\n");
     let write = |frame: Value| -> Value { signed.call("op", &json!({"session": signed_session, "frame": frame})).unwrap_or_else(|r| panic!("{r}\n{}", talk())) };
     let addr = |v: Value| v["addr"].as_str().unwrap_or_else(|| panic!("no addr: {v}")).to_string();
@@ -362,22 +390,16 @@ fn every_kind_with_an_entry_frame_is_judged_and_acked_under_the_signed_session()
         ("emit", json!({"op": "emit", "home": doc, "ty": [{"start": "1.1.0.1.0.1.0.1.1", "width": "0.0.0.0.0.0.0.0.1"}], "from": member, "to": []})),
     ];
     for (kind, frame) in cells {
-        let refused = bare.call("op", &json!({"session": bare_session, "frame": frame})).unwrap_err();
-        assert_eq!(refused.name(), "signed_session_required", "{kind}: the bare session's write is publish-class: {refused}");
+        bare_write(kind, &frame);
         let acked = signed.call("op", &json!({"session": signed_session, "frame": frame})).unwrap_or_else(|r| panic!("{kind}: {r}\n{}", talk()));
         assert!(acked["resp"].as_str().is_some_and(|resp| resp.starts_with("ack")), "{kind}: {acked}");
     }
     // The record deposit names the head member, so a `doc` term that is not
-    // the trunk shows; under the bare session it is a burst, held as the
-    // REFUSED run `signed_session_required`'s permanent disposition makes it
-    // (the bare shell is another window here, so its answer says so).
+    // the trunk shows.
     let token = signed.sessions.get(&signed_session).unwrap().token.clone();
     let next = skep_client::ceremony::deposit::next_content_ordinal(&signed.boards[0].board, Some(&token), &other).unwrap();
     let deposit = json!({"op": "insert", "doc": other_member, "at": {"subspace": "1", "ordinal": next.to_string()}, "values": [{"atom": "xy"}], "deposit": "1.1.0.1.0.1.0.3.1"});
-    let held = bare.call("op", &json!({"session": bare_session, "frame": deposit})).unwrap();
-    assert_eq!(held["resp"], "held", "the bare session's deposit is a refused run: {held}");
-    let rows = bare.call("held", &json!({"session": bare_session})).unwrap();
-    assert_eq!((rows[0]["cause"].as_str(), rows[0]["refusal"]["detail"].as_str()), (Some("credential_refused:signed_session_required"), Some("signed_session_required")), "{rows}");
+    bare_write("the deposit", &deposit);
     let acked = signed.call("op", &json!({"session": signed_session, "frame": deposit})).unwrap_or_else(|r| panic!("the deposit: {r}\n{}", talk()));
     assert!(acked["resp"].as_str().is_some_and(|resp| resp.starts_with("ack")), "the deposit: {acked}");
     signed.shutdown();
@@ -519,12 +541,12 @@ fn the_real_answers_carry_the_declared_fields() {
 
 /// A `write_busy` IS REISSUED within the call, once, after the short wait
 /// (§4b.1's `op` row: "reissued by the shell and reach the page as the ack
-/// or the next refusal"): the daemon's write permits all held, a
-/// `create_new_document` is dialed twice — the log's two `POST /op` answered
-/// `503` at the frame's own size — and the reissue's `write_busy` is the
-/// refusal the page meets; the permits let go, the next mint is acked at its
-/// first dial (the mutants that face the first `write_busy`, or reissue it
-/// without bound).
+/// or the next refusal"): the daemon's write permits all held, a signed
+/// session's `create_new_document` is dialed twice — the log's two `POST
+/// /op` answered `503` at the attested frame's own size — and the reissue's
+/// `write_busy` is the refusal the page meets; the permits let go, the next
+/// mint is acked at its first dial (the mutants that face the first
+/// `write_busy`, or reissue it without bound).
 #[test]
 fn a_write_busy_is_reissued_once_within_the_call() {
     let dir = TempDir::new().unwrap();
@@ -532,11 +554,14 @@ fn a_write_busy_is_reissued_once_within_the_call() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let frame = json!({"op": "create_new_document", "account": "1.0.1"});
-    let busy_dials = || shell.log().entries().iter().filter(|e| e["kind"] == "dial" && e["path"] == "/op" && e["status"] == 503 && e["bytes_in"] == frame.to_string().len()).count();
+    // Every attest of one frame under one key is one size: the signature's
+    // width is the algorithm's.
+    let attested = json_len(&shell.sessions.get(&session).unwrap().attest(&shell.store, &frame).unwrap());
+    let busy_dials = || shell.log().entries().iter().filter(|e| e["kind"] == "dial" && e["path"] == "/op" && e["status"] == 503 && e["bytes_in"] == attested).count();
     let mut permits = Vec::new();
     while let Some(permit) = sd.daemon().try_hold_write_permit() {
         permits.push(permit);
@@ -793,12 +818,12 @@ fn a_death_signal_at_a_calls_own_dial_ends_the_session() {
 }
 
 /// A RELEASED SUPPLEMENT KEEPS ITS DRAFTS CURSOR (`Sessions::release`): two
-/// sessions of one principal — two tabs — and the first, having minted a
-/// draft and written it, closes; the supplement handed to the second reads
-/// on from where the reads left it, so each drafts row reaches the page
-/// once (the mutant whose widen resets the cursor to the second session's
-/// open feeds the first's rows again — a duplicate at every subscriber
-/// whenever one of two tabs closes).
+/// signed sessions of one principal — two tabs — and the first, having
+/// minted a draft and written it, closes; the supplement handed to the
+/// second reads on from where the reads left it, so each drafts row reaches
+/// the page once (the mutant whose widen resets the cursor to the second
+/// session's open feeds the first's rows again — a duplicate at every
+/// subscriber whenever one of two tabs closes).
 #[test]
 fn a_released_supplement_keeps_its_drafts_cursor() {
     let dir = TempDir::new().unwrap();
@@ -806,7 +831,7 @@ fn a_released_supplement_keeps_its_drafts_cursor() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.board_references().remove(0);
@@ -835,12 +860,13 @@ fn a_released_supplement_keeps_its_drafts_cursor() {
 
 /// A SESSION OPENED AFTER ITS PRINCIPAL's NARROW IS FED FROM ITS OWN OPEN
 /// (the `feed` update's definition: "a session's drafts at the position the
-/// session opened at"): a session mints a draft and closes, the last of its
-/// principal at the board, so the supplement narrows and its drafts cursor
-/// goes with it; a session opened after it mints another, fed under its own
-/// reference — and the first draft's row reaches the page once, never again
-/// under the new session (the mutant whose widen starts a fresh cursor at 0
-/// re-feeds the principal's whole drafts history at every reload).
+/// session opened at"): a signed session mints a draft and closes, the last
+/// of its principal at the board, so the supplement narrows and its drafts
+/// cursor goes with it; a session opened after it mints another, fed under
+/// its own reference — and the first draft's row reaches the page once,
+/// never again under the new session (the mutant whose widen starts a fresh
+/// cursor at 0 re-feeds the principal's whole drafts history at every
+/// reload).
 #[test]
 fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
     let dir = TempDir::new().unwrap();
@@ -848,7 +874,7 @@ fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let seen = Arc::new(Mutex::new(Vec::new()));
     let _answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
     let board = shell.board_references().remove(0);
@@ -873,8 +899,8 @@ fn a_session_opened_after_its_principals_narrow_is_fed_from_its_own_open() {
 ///
 /// Foundations §2's far scale is "drawn from the client's index read
 /// whole", masked at the reader's class. Against the real daemon, a draft
-/// written under a session reaches the session's listing, labelled by its
-/// first line and `yours_to_read`, beside the board's own published
+/// written under a signed session reaches the session's listing, labelled by
+/// its first line and `yours_to_read`, beside the board's own published
 /// documents; the guest's listing is the same documents, its drafts aside.
 /// Each answer and its parts are held to their declarations, the counts
 /// tallied over the documents listed, a prefix narrows both, and a
@@ -889,7 +915,7 @@ fn places_lists_the_boards_documents_at_the_calls_class() {
     let origin = format!("http://127.0.0.1:{}", sd.port());
     let store = dir.path().join("store");
     claim_board(&origin, &store);
-    let (shell, _) = open_shell(&origin, &store, SessionMode::Bare { principal: 1 });
+    let (shell, _) = open_shell(&origin, &store, SessionMode::Signed { principal: 1 });
     let board = shell.board_references().remove(0);
     let session = shell.call("session", &json!({"board": board})).unwrap()["session"].as_str().unwrap().to_string();
     let draft = shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})).unwrap()["addr"].as_str().unwrap().to_string();

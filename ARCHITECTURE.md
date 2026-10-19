@@ -1345,25 +1345,28 @@ an item the root re-exports counted as the module it is brought from
   statements (`NATIVE_RULES`: those naming where key material rests) sent
   to the arm.
 - `sessions.rs` `Sessions`: the token beside the board it stands at, under
-  its reference, the two openings, `SessionEntry::attest`, a session's END
-  (`Sessions::end`, under the key store the table holds) and the release of
-  its drafts supplement (`Sessions::release`).
-- `hold.rs` `Holds`: the one path of every `/op` under a session
-  (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold among it —
-  its answers read through `classify`, the one owner of every reissue's
-  bound, and the per-(board, principal) queue over `held.rs`'s file, each
-  board's hold under its own lock.
+  its reference, the two openings — bare, which reads alone
+  (`SessionEntry::may_write`), and signed — `SessionEntry::attest`, a
+  session's END (`Sessions::end`, under the key store the table holds) and
+  the release of its drafts supplement (`Sessions::release`).
+- `hold.rs` `Holds`: the one path of every `/op` the shell sends under a
+  session (`Holds::send`) — a burst's DOOR (`Burst::admit`) and its hold
+  among it — its answers read through `classify`, the one owner of every
+  reissue's bound, and the per-(board, principal) queue over `held.rs`'s
+  file, each board's hold under its own lock.
 - `hold/resend.rs` THE PROBE (`Holds::probe`) and THE RESEND: one
   `/changes` read per document before its first resend, §3c.5's three
-  outcomes, the lines then sent in `k` order across the documents, each
-  through the hold's one reader.
+  outcomes, the lines then sent in `k` order across the documents under a
+  session of the principal's that may write, each through the hold's one
+  reader.
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder` — the `feed`, `index`, `mode` and
   `daemon` events, the `search` call and the document index's listing
   `places`, the held-burst probe on its cadence and at every hand-over.
 - `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the private
-  row methods behind `call`, which logs each; `fetch`, `answer`, `cancel`,
-  `shutdown`; `ShellOptions` and `set_node_state`.
+  row methods behind `call`, which logs each — a write in the guest form,
+  and under a bare session, refused before any dial; `fetch`, `answer`,
+  `cancel`, `shutdown`; `ShellOptions` and `set_node_state`.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
 - `shapes.rs` the declarations' table and `declarations()`, pinned by its
@@ -1485,6 +1488,15 @@ Rules that hold across its files:
   its close — RELEASES the supplement (`Sessions::release`): handed to
   another session of the principal standing at the board, its token
   widened in, and narrowed only where none stands.
+- **A bare session writes nothing.** The bare session is the keyless
+  session for reading alone (foundations §3.3 state 3, E16 (a′): "no `bare`
+  write ever committed by this client"): the `op` row refuses every write
+  kind under it, the `/op-at` form's too, and its `resolve(send)` —
+  `write_in_bare_session`, before any dial (`SessionEntry::may_write`) —
+  as it refuses a write in the guest form; and the resend sends under a
+  session of the principal's that may write alone, so a principal with no
+  other session keeps its lines held. Its reads, `held(session)` and
+  `resolve`'s `drop`, which commits nothing to the board, stand.
 - **Attach when in doubt.** Every write of the ten kinds under a session
   that holds a key — the signed mode's — carries the attest the shell
   composed, signed by the key that opened the session; the daemon drops
@@ -1515,16 +1527,16 @@ Rules that hold across its files:
   in memory alone and resent like any held line; a line whose copy the
   device refused, or whose file is out of reach, stands in the queue the
   same way, its answer saying why as `unwritable`.
-- **One path for every session write.** Every `/op` under a session,
-  `/op-at`'s aside, goes through `Holds::send`, and its first dial and every
-  resend read the answer through `hold.rs`'s one reader, so they never
-  disagree on what a refusal means: a refusal the table holds nowhere is
-  faced at the act and, on a resend, leaves its line standing — never
-  `done`; a write the hold never holds faces what a burst's would hold;
-  every ack is noted for the base where it is read. `write_busy` and a
-  first and second `durability` are reissued within the call, every `/op`
-  under a session alike — the page meets the ack or the next refusal,
-  never `held` for one of them (§4b.1's `op` row) — and a third
+- **One path for every session write.** Every `/op` the shell sends under
+  a session, `/op-at`'s aside, goes through `Holds::send`, and its first
+  dial and every resend read the answer through `hold.rs`'s one reader, so
+  they never disagree on what a refusal means: a refusal the table holds
+  nowhere is faced at the act and, on a resend, leaves its line standing —
+  never `done`; a write the hold never holds faces what a burst's would
+  hold; every ack is noted for the base where it is read. `write_busy` and
+  a first and second `durability` are reissued within the call, every
+  `/op` under a session alike — the page meets the ack or the next
+  refusal, never `held` for one of them (§4b.1's `op` row) — and a third
   `durability` holds a burst; `classify` alone bounds them, so every
   reissue moves a write toward its bound.
 - **An argument is its row's.** A call's required member absent or of
@@ -1790,13 +1802,14 @@ short resumes, the refusals halt before any write, the insert frame the
 seed shares with the search budgets is one size, and a `--bin skep` build
 yields one binary; `serve`, the dev provider driven as the page would
 drive it over loopback HTTP with the admission headers — every call of
-`client.md` §4b.1 and the document index's listing in the bare mode, the
-events on the stream, the claim's PUBLIC moments answered and cancelled
-through the bridge, the admission's refusals before any dial, the signed
-mode's attested publish-class write, the fault doors under `dev-hooks`,
-the isolation of the shipped builds from `skepd`, the declarations served,
-and the conformance of the crate and the provider over one sequence; and
-`tidy`, the arrangement above over both roots, read off the source.
+`client.md` §4b.1 and the document index's listing in the bare mode, its
+writes refused before any dial, the events on the stream, the claim's
+PUBLIC moments answered and cancelled through the bridge, the admission's
+refusals before any dial, the signed mode's attested publish-class write,
+the fault doors under `dev-hooks`, the isolation of the shipped builds
+from `skepd`, the declarations served, and the conformance of the crate
+and the provider over one sequence; and `tidy`, the arrangement above over
+both roots, read off the source.
 `common` holds the spawn — alone,
 or behind a tap that keeps what a client put on the wire — a canned board
 that answers whatever bytes a test chose, and the runs, every setting's

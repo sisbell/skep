@@ -72,6 +72,13 @@ impl Name {
     pub const NOT_REACHED: Name = Name("not_reached");
     /// A WRITE frame in the guest form, refused without a dial.
     pub const WRITE_IN_GUEST_FORM: Name = Name("write_in_guest_form");
+    /// A write under a bare session, or its `resolve(send)`, refused without
+    /// a dial.
+    ///
+    /// The bare session is the keyless session for reading alone
+    /// (foundations §3.3 state 3, E16 (a′): "the shell refuses every write in
+    /// it"); the detail names the `op`, or the `act`.
+    pub const WRITE_IN_BARE_SESSION: Name = Name("write_in_bare_session");
     /// A guest form's origin is not a canonical origin.
     pub const NOT_CANONICAL: Name = Name("not_canonical");
     /// A query past the bridge's bound.

@@ -20,14 +20,15 @@
 //! off the store's own read of expiry and the media gate's hold, reading no
 //! reference; (b) THE HALTS — a designation directory under `blobs/`
 //! outside the pinned set, or a halt mark standing in the index, halts the
-//! unlink pass before its first unlink, with one operator line naming the
-//! directory or the schema; (c) THE UNREFERENCED FILES — for each file at a
-//! hex name under the pinned designation, under the credential lock's
-//! EXCLUSIVE ARM taken for that one file: the index re-read (no cell names
-//! the hash, and no halt mark stands), the lease log re-read (no key holds
-//! a live lease on it), the file RENAMED ASIDE to `.retired-<hex>-<n>` —
-//! the REPLACE's own aside name — the arm released; and the aside UNLINKED
-//! AFTER, under no arm, which is where the file's blocks are freed. A file
+//! unlink pass before its first unlink, and so does a read of them that
+//! failed — the pass's line naming the directory or the schema, or saying
+//! them unread; (c) THE UNREFERENCED FILES — for each file at a hex name
+//! under the pinned designation, under the credential lock's EXCLUSIVE ARM
+//! taken for that one file: the index re-read (no cell names the hash, and
+//! no halt mark stands), the lease log re-read (no key holds a live lease
+//! on it), the file RENAMED ASIDE to `.retired-<hex>-<n>` — the REPLACE's
+//! own aside name — the arm released; and the aside UNLINKED AFTER, under
+//! no arm, which is where the file's blocks are freed. A file
 //! a cell names or any live lease holds is KEPT (M-I5 (b): no housekeeping
 //! act creates a hole — the re-read and the rename are one interval under
 //! the arm, and a crash between the rename and the unlink leaves an aside
@@ -54,19 +55,23 @@
 //! freed. The pass never touches a partial whose upload stands, and reads
 //! no directory's bytes as a scope (M-I6: the scopes stay record-derived).
 //!
-//! THE PASS's EXIT (`operations.md` §4 row 5; §1.1 row 35): steps (a)–(c)
-//! run collecting the FIRST error a store call answers — the step it came
-//! from named, that step's loop stopped there and the steps after it
-//! skipped, as the `?` that once ended the pass skipped them — and step (d)
-//! runs on EVERY exit, the halt arm's included. The pass answers the error
-//! BESIDE its report ([`PrunePass::failed`]), never in place of it, so the
-//! compaction that lifts a stopped log runs whatever failed before it: the
-//! retirement a stopped `uploads.log` refuses at (a) was the very failure
-//! that, ending the pass before (d), left the stop standing for the uptime
-//! and the restart its one cure; now the same pass's (d) lifts it. The halt
-//! is the report's too — line 34 carries it, its reason and the expired
-//! partials removed, hourly (§1.1 row 36 RETIRED: the pass writes no
-//! standalone line of its own).
+//! **The pass's exit** (`operations.md` §4 row 5; §1.1 row 35). Every step
+//! runs whatever an earlier one answered, and each step's failure is the
+//! report's and never the pass's: the first error a store call answered in
+//! that step, the step named and that step's own loop stopped there
+//! ([`PrunePass::failed`], in step order). The one step whose failure stops
+//! another is (b). At the pruner an absence is a permission (ms5-T4, D13's
+//! carve-out), so halts it could not read halt the unlink pass as halts it
+//! read do, and (c) runs only where (b) read them and found none. So an
+//! expiry that fails at (a) — a stopped `uploads.log` refusing a
+//! retirement, a partial the OS will not remove — never costs the pass its
+//! unlinks: the room a full volume needs most, and the room (d) needs for a
+//! log's second copy as it rewrites it. Step (d) runs on every exit, the
+//! halt's included, so the compaction that lifts a stopped log runs
+//! whatever failed before it. The halt and the failures are the report's,
+//! and its one line says them — line 34, or line 35 where a step failed,
+//! each failure ahead of the figures — hourly (§1.1 row 36 RETIRED: the
+//! pass writes no standalone line of its own).
 //!
 //! THE ARM IS THE SESSION LAYER's and is handed in: this module sits
 //! beside the write path and names nothing above it, so the pass takes the
@@ -93,10 +98,11 @@ use crate::cell::PINNED_DESIGNATIONS;
 use crate::gate::MediaGate;
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 
-/// What one pass did — the test hook's answer, and, rendered through its
-/// [`fmt::Display`], the operator's line 34 (`operations.md` §1.1 row 34);
-/// where a step failed, the failure stands beside the figures
-/// ([`PrunePass::failed`]) and the daemon's loop renders line 35 from both.
+/// What one pass did: the test hook's answer, and the operator's line.
+///
+/// Rendered through its [`fmt::Display`], it is the pass's one line: line 34
+/// (`operations.md` §1.1 row 34), or line 35 (row 35) where a step failed,
+/// each failure named ahead of the same figures ([`PrunePass::failed`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrunePass {
     /// Expired uploads retired, their partials removed.
@@ -116,8 +122,10 @@ pub struct PrunePass {
     /// another name still holds it — so a pass that unlinked files and freed
     /// nothing, a hard-link backup holding the volume full, says so.
     pub freed: u64,
-    /// Why the unlink pass halted before its first unlink, if it did — the
-    /// operator line's reason, naming the directory or the schema.
+    /// Why the unlink pass halted before its first unlink, if it did.
+    ///
+    /// It is the operator line's reason: the directory or the schema it
+    /// halted on, or the halts unread where step (b)'s read of them failed.
     pub halted: Option<String>,
     /// The logs this pass COMPACTED — `(uploads, leases)`, each by the size
     /// it was rewritten from (`Store::compact_logs_if_past`), `None` where
@@ -140,18 +148,21 @@ pub struct PrunePass {
     /// as it stood before the rewrite: a log stopped before the rewrite and
     /// taking appends after it.
     pub lifted: (Option<LogStop>, Option<LogStop>),
-    /// THE FIRST FAILURE of steps (a)–(c), if one (`operations.md` §4 row
-    /// 5; §1.1 row 35): the step it came from and the cause the store
-    /// answered. The steps after it did not run — as the `?` that once
-    /// ended the pass skipped them — and step (d) ran regardless, so a stop
-    /// this pass met is lifted by its own compaction and not a restart's.
-    /// Line 35's `{e}`, said beside [`PrunePass::compaction`]; `None` is
-    /// line 34.
-    pub failed: Option<PassFailure>,
+    /// Each step's failure, in step order.
+    ///
+    /// Each is the first error a store call answered in that step, the step
+    /// named (`operations.md` §4 row 5; §1.1 row 35): at most one of (a)'s,
+    /// and one of (b)'s or (c)'s, since a failed (b) halts the unlink pass
+    /// (`halted`) and (c) never runs over halts unread. Every other step ran
+    /// past it, and step (d) on every exit, so a stop this pass met is lifted
+    /// by its own compaction and not a restart's. Empty, the pass's line is
+    /// line 34; else line 35, naming each failure ahead of the figures.
+    pub failed: Vec<PassFailure>,
 }
 
-/// The first failure of a pass's steps (a)–(c): the step and the cause the
-/// store answered — line 35's `{e}`, `{step}: {cause}`.
+/// One step's failure: the step and the store's first error in it.
+///
+/// Line 35 names it `{step}: {cause}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PassFailure {
     /// The step the store call failed in.
@@ -175,7 +186,10 @@ pub enum PassStep {
     /// retirement — the retirement an append `uploads.log` refuses while
     /// it has stopped.
     ExpiredPartials,
-    /// (b) THE HALTS' READ: the designation directories under `blobs/`.
+    /// (b) The halts' read: the designation directories under `blobs/`.
+    ///
+    /// Its failure halts the unlink pass as a halt read does: (c) never runs
+    /// over halts unread.
     Halts,
     /// (c) THE UNREFERENCED FILES: a listing, a rename aside, an unlink.
     UnreferencedFiles,
@@ -199,29 +213,21 @@ impl PassStep {
     }
 }
 
-impl PrunePass {
-    /// THE COMPACTION HALF of the pass's line — each log by its name within
-    /// the data directory, as every other blob-store line names it, with its
-    /// size: `; blobs/uploads.log {n} lines ({b} bytes)`, and where this
-    /// pass rewrote it ` — compacted from {n} lines ({b} bytes)`; then `;
-    /// {log}'s stop lifted, rewritten whole after {stop}`, `; a compaction
-    /// FAILED: {why}` and `; STOPPED: {log} takes no append until a
-    /// compaction completes — {stop}`, each where it applies — what line 34
-    /// ends with and line 35 carries after the failure, so the
-    /// stopped-or-compacted half is one rendering on both (`operations.md`
-    /// §1.1 row 35: "names the failure AND the stopped logs"). A stop is
-    /// said with its cause, the act that clears it turning on that cause —
-    /// room on a full volume, the mount or the device where they refuse —
-    /// how long it has stood and the appends it has refused: `{cause};
-    /// stopped {ms} ms, {n} appends refused`. Every figure is said with a
-    /// fixed label, `{n} lines` as `{n} files unlinked`, so one search finds
-    /// each whatever its count.
-    pub fn compaction(&self) -> impl fmt::Display + '_ {
-        Compaction(self)
-    }
-}
-
-/// [`PrunePass::compaction`]'s rendering.
+/// The compaction half of the pass's line.
+///
+/// Each log goes by its name within the data directory, as every other
+/// blob-store line names it, with its size: `; blobs/uploads.log {n} lines
+/// ({b} bytes)`, and where this pass rewrote it ` — compacted from {n} lines
+/// ({b} bytes)`. Then come `; {log}'s stop lifted, rewritten whole after
+/// {stop}`, `; a compaction FAILED: {why}` and `; STOPPED: {log} takes no
+/// append until a compaction completes — {stop}`, each where it applies
+/// (`operations.md` §1.1 row 35: "names the failure AND the stopped logs").
+/// A stop is said with its cause, the act that clears it turning on that
+/// cause — room on a full volume, the mount or the device where they refuse
+/// — how long it has stood and the appends it has refused: `{cause}; stopped
+/// {ms} ms, {n} appends refused`. Every figure is said with a fixed label,
+/// `{n} lines` as `{n} files unlinked`, so one search finds each whatever
+/// its count.
 struct Compaction<'a>(&'a PrunePass);
 
 impl fmt::Display for Compaction<'_> {
@@ -275,25 +281,36 @@ impl fmt::Display for Stop<'_> {
     }
 }
 
-/// The operator's line 34 for this pass — its figures and the bytes they
-/// freed, the halt, each log's size, the compaction and any stopped log —
-/// written to the formatter as it is composed, so the classed door that
-/// carries it (`skep_util::notice::emit`, through the daemon's `say`) builds
-/// no string of its own. The failure, if one, is not here: line 35 is the
-/// daemon's rendering of [`PrunePass::failed`] beside
-/// [`PrunePass::compaction`].
+/// The operator's line for this pass, line 34 or line 35, in one rendering.
+///
+/// It reads `pruner: `, then, where a step failed, `the pass failed:
+/// {failure}[; {failure}]; `, each in step order (`operations.md` §1.1 rows
+/// 34, 35); then the figures and the bytes they freed, the halt, each log's
+/// size, the compaction and any stopped log — so a failed pass says what it
+/// did beside what failed. It is written to the formatter as it is
+/// composed, so the classed door that carries it (`skep_util::notice::emit`,
+/// through the daemon's `say`) builds no string of its own; the class word
+/// is the daemon's, by [`PrunePass::failed`].
 impl fmt::Display for PrunePass {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("pruner: ")?;
+        if let Some((first, rest)) = self.failed.split_first() {
+            write!(f, "the pass failed: {first}")?;
+            for failure in rest {
+                write!(f, "; {failure}")?;
+            }
+            f.write_str("; ")?;
+        }
         write!(
             f,
-            "pruner: {} expired partials removed, {} files unlinked, {} kept, {} asides removed, \
-             {} bytes freed",
+            "{} expired partials removed, {} files unlinked, {} kept, {} asides removed, {} bytes \
+             freed",
             self.expired_partials, self.unlinked, self.kept, self.asides, self.freed
         )?;
         if let Some(why) = &self.halted {
             write!(f, " — the unlink pass halted: {why}")?;
         }
-        fmt::Display::fmt(&self.compaction(), f)
+        fmt::Display::fmt(&Compaction(self), f)
     }
 }
 
@@ -328,11 +345,12 @@ impl Pruner {
     /// next. `None` where the index is not ready: the pass does not start
     /// (ms5-R).
     ///
-    /// THE EXIT RULE (the module's card): steps (a)–(c) run to their first
-    /// store failure or the halt (`steps`), step (d) runs on EVERY exit, and
-    /// the answer is the report — a step's failure is its `failed` member,
-    /// beside the figures and the compaction's state, so no pass answers a
-    /// failure that skipped its compaction.
+    /// **The exit rule** (the module's card). Every step runs whatever an
+    /// earlier one failed — (c) only where (b) read the halts and found none
+    /// (`steps`) — and step (d) on every exit; the answer is the report.
+    /// Each step's failure is a member of its `failed`, beside the figures
+    /// and the compaction's state, so no failure costs the pass another
+    /// step's room or its compaction.
     pub fn pass<G>(&self, media_gate: &MediaGate, exclusive: impl Fn() -> G) -> Option<PrunePass> {
         if !media_gate.index().is_ready() {
             return None;
@@ -350,11 +368,11 @@ impl Pruner {
             compaction_failed: None,
             stopped: (None, None),
             lifted: (None, None),
-            failed: None,
+            failed: Vec::new(),
         };
-        // (a)–(c), to the first failure or the halt; the error kept beside
-        // the figures, the steps after it skipped.
-        report.failed = self.steps(media_gate, &exclusive, &mut report).err();
+        // (a)–(c), each step's failure kept beside the figures, (c) gated on
+        // (b)'s halts alone.
+        self.steps(media_gate, &exclusive, &mut report);
         // (d) THE LOGS' COMPACTION, under no arm — on EVERY exit: the stop a
         // failed step may have met is lifted here, by this pass.
         compact_logs(media_gate.store(), media_gate.now_ms(), &mut report);
@@ -399,13 +417,49 @@ impl Pruner {
         self.passes_completed.load(Ordering::Acquire)
     }
 
-    /// Steps (a)–(c) of the pass, to the FIRST store failure — answered as
-    /// the step and its cause, that step's loop stopped there and the steps
-    /// after it not run — or the halt, which ends them after (b) with the
-    /// report's `halted` set and nothing unlinked. The figures land in
-    /// `report` as each act completes, so a failure's report still counts
-    /// what ran before it.
-    fn steps<G>(
+    /// Runs steps (a)–(c) of the pass into `report`.
+    ///
+    /// Each step's failure is pushed onto the report's `failed` in step order
+    /// and ends no other step: (a) runs, then (b), and (c) only where (b) read
+    /// the halts and found none. A halt read is the report's `halted`, and so
+    /// is a read that failed ([`HALTS_UNREAD`]); nothing is unlinked under
+    /// either. The figures land in `report` as each act completes, so a failed
+    /// step's report still counts what ran before its failure.
+    fn steps<G>(&self, media_gate: &MediaGate, exclusive: &impl Fn() -> G, report: &mut PrunePass) {
+        if let Err(failure) = expire_partials(media_gate, report) {
+            report.failed.push(failure);
+        }
+        match halts(media_gate) {
+            Ok(None) => {
+                if let Err(failure) = self.unlink_unreferenced(media_gate, exclusive, report) {
+                    report.failed.push(failure);
+                }
+            }
+            // The report carries the halt; its line says it (row 36 RETIRED:
+            // no standalone line here).
+            Ok(Some(reason)) => report.halted = Some(reason),
+            // (b) gates (c): at the pruner an absence is a permission (ms5-T4,
+            // D13's carve-out), so halts the read could not see halt the
+            // unlink pass as halts it saw do.
+            Err(failure) => {
+                report.failed.push(failure);
+                report.halted = Some(HALTS_UNREAD.to_string());
+            }
+        }
+    }
+
+    /// Runs step (c), the unreferenced files, into `report`.
+    ///
+    /// It takes one file per acquisition of `exclusive`, under the pinned
+    /// designations alone: each file at a hex name re-read under the arm and
+    /// renamed aside where nothing holds it, the aside unlinked after under
+    /// no arm; then the asides the deferred step did not reach.
+    ///
+    /// # Errors
+    ///
+    /// The first store failure — a listing, a rename aside or an unlink — as
+    /// step (c)'s; the step stops there.
+    fn unlink_unreferenced<G>(
         &self,
         media_gate: &MediaGate,
         exclusive: &impl Fn() -> G,
@@ -413,50 +467,6 @@ impl Pruner {
     ) -> Result<(), PassFailure> {
         let store = media_gate.store();
         let index = media_gate.index();
-        let now = media_gate.now_ms();
-
-        // (a) THE EXPIRED PARTIALS — the store's own read of expiry, the media
-        // gate's hold; no reference read, no arm. The retirement is an append:
-        // a stopped `uploads.log` refuses it, and the failure is this step's.
-        for record in store.expired_uploads(now) {
-            // A stream holds it: left to that stream's end.
-            let Some(_hold) = media_gate.claim(record.id) else { continue };
-            if let Some(freed) =
-                store.expire_upload(&record.id, now).map_err(PassStep::ExpiredPartials.failed())?
-            {
-                report.expired_partials += 1;
-                report.freed += freed;
-            }
-        }
-
-        // (b) THE HALTS, before the first unlink.
-        let halt = {
-            let foreign = store
-                .designation_dirs()
-                .map_err(PassStep::Halts.failed())?
-                .into_iter()
-                .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
-            match (foreign, index.first_halt()) {
-                (Some(dir), _) => Some(format!(
-                    "a designation directory blobs/{dir}/ is outside the set this build pins ({}): a sidecar of another build's schema",
-                    PINNED_DESIGNATIONS.join(", ")
-                )),
-                (None, Some(mark)) => Some(format!(
-                    "a value at {} names the kind {} under no schema this build reads ({})",
-                    mark.at, mark.kind, mark.fault
-                )),
-                (None, None) => None,
-            }
-        };
-        if let Some(reason) = halt {
-            // The report carries the halt; line 34 says it (row 36 RETIRED: no
-            // standalone line here).
-            report.halted = Some(reason);
-            return Ok(());
-        }
-
-        // (c) THE UNREFERENCED FILES, one per acquisition, under the pinned
-        // designations alone.
         let failed = PassStep::UnreferencedFiles.failed();
         for designation in PINNED_DESIGNATIONS {
             for hex in store.blobs_of(designation).map_err(&failed)? {
@@ -497,6 +507,69 @@ impl Pruner {
         }
         Ok(())
     }
+}
+
+/// Runs step (a), the expired partials, into `report`.
+///
+/// It reads the store's own expiry and the media gate's hold, no reference
+/// and no arm: each expired upload no stream holds is retired, its partial
+/// removed first.
+///
+/// # Errors
+///
+/// The first store failure, as step (a)'s; the step stops there. The
+/// retirement is an append, so a stopped `uploads.log` refuses it; a partial
+/// the OS will not remove keeps its record standing, expired, and the next
+/// pass meets it again.
+fn expire_partials(media_gate: &MediaGate, report: &mut PrunePass) -> Result<(), PassFailure> {
+    let store = media_gate.store();
+    let now = media_gate.now_ms();
+    for record in store.expired_uploads(now) {
+        // A stream holds it: left to that stream's end.
+        let Some(_hold) = media_gate.claim(record.id) else { continue };
+        if let Some(freed) =
+            store.expire_upload(&record.id, now).map_err(PassStep::ExpiredPartials.failed())?
+        {
+            report.expired_partials += 1;
+            report.freed += freed;
+        }
+    }
+    Ok(())
+}
+
+/// The halt's reason where step (b)'s read of the halts failed.
+///
+/// The pass's line says it after `the unlink pass halted: `, so a pass that
+/// judged no file never reads as a board with none to judge.
+const HALTS_UNREAD: &str = "the halts are unread, so no file is judged";
+
+/// Returns step (b)'s reason to halt the unlink pass, or `None`.
+///
+/// The reason is a designation directory under `blobs/` outside the pinned
+/// set, or a halt mark standing in the index; it is read before the first
+/// unlink.
+///
+/// # Errors
+///
+/// The designation directories' listing failing, as step (b)'s.
+fn halts(media_gate: &MediaGate) -> Result<Option<String>, PassFailure> {
+    let foreign = media_gate
+        .store()
+        .designation_dirs()
+        .map_err(PassStep::Halts.failed())?
+        .into_iter()
+        .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
+    Ok(match (foreign, media_gate.index().first_halt()) {
+        (Some(dir), _) => Some(format!(
+            "a designation directory blobs/{dir}/ is outside the set this build pins ({}): a sidecar of another build's schema",
+            PINNED_DESIGNATIONS.join(", ")
+        )),
+        (None, Some(mark)) => Some(format!(
+            "a value at {} names the kind {} under no schema this build reads ({})",
+            mark.at, mark.kind, mark.fault
+        )),
+        (None, None) => None,
+    })
 }
 
 /// (d) THE LOGS' COMPACTION at `now_ms`, the media gate's clock: the lease
@@ -569,9 +642,26 @@ impl Cadence {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::time::Instant;
 
     use super::*;
+    use crate::index::Rebuild;
+
+    /// Returns a gate over `dir` whose index is ready, built by hand.
+    ///
+    /// It goes through the walk's door, with nothing walked.
+    fn ready_gate(dir: &Path) -> MediaGate {
+        let gate = MediaGate::open(dir).expect("the store opens");
+        gate.index().complete(Rebuild {
+            values: 0,
+            cells: 0,
+            halts: 0,
+            walk: Duration::ZERO,
+            parse: Duration::ZERO,
+        });
+        gate
+    }
 
     /// The cadence wakes at the interval, and at once at the stop — before
     /// and after it is asked.
@@ -601,8 +691,6 @@ mod tests {
         use skep_blobs::HashFunction;
         use skep_namespace::PrincipalId;
 
-        use crate::index::Rebuild;
-
         let pruner = Pruner::new();
         let unready_dir = tempfile::tempdir().expect("tempdir");
         let unready = MediaGate::open(unready_dir.path()).expect("the store opens");
@@ -610,14 +698,7 @@ mod tests {
         assert_eq!(pruner.passes_completed(), 0, "…and none is counted");
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let gate = MediaGate::open(dir.path()).expect("the store opens");
-        gate.index().complete(Rebuild {
-            values: 0,
-            cells: 0,
-            halts: 0,
-            walk: Duration::ZERO,
-            parse: Duration::ZERO,
-        });
+        let gate = ready_gate(dir.path());
         let now = gate.now_ms();
         let key = MediaGate::key(PrincipalId(1));
         let interval = Duration::from_millis(1_000);
@@ -634,5 +715,63 @@ mod tests {
         assert_eq!(pass_now().expired_partials, 1, "released: the next pass retires it");
         assert!(gate.store().expired_uploads(gate.now_ms()).is_empty(), "…its record with it");
         assert_eq!(pruner.passes_completed(), 2, "the two passes that ran");
+    }
+
+    /// Checks that a failure at step (a) never skips step (c).
+    ///
+    /// The pass's exit (`operations.md` §4 row 5; §1.1 row 35): an expired
+    /// upload whose partial the OS will not remove — a directory holding a
+    /// file stands at its name, which no unlink takes — fails (a), the step
+    /// named and the store's words for the act in its cause. The pass goes
+    /// on and unlinks the lapsed deposit no cell names, its bytes freed and
+    /// nothing halted, and its line names the failure ahead of what it did.
+    /// The record stands expired, so the next pass fails at (a) again, with
+    /// nothing left to unlink.
+    #[test]
+    fn a_failed_expiry_never_skips_the_unreferenced_files() {
+        use skep_namespace::PrincipalId;
+
+        use crate::cell::DESIGNATION;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let gate = ready_gate(dir.path());
+        gate.install_limits(None, None, Some(1_000), None, None).expect("a record installs");
+        let p = PrincipalId(1);
+        let now = gate.now_ms();
+        let stuck = gate.create_upload(p, 10, now).expect("an upload");
+        let partial =
+            dir.path().join("blobs").join(DESIGNATION).join(format!(".upload-{}", stuck.id));
+        std::fs::remove_file(&partial).expect("the empty partial");
+        std::fs::create_dir(&partial).expect("a directory at its name");
+        std::fs::write(partial.join("held"), b"x").expect("a file inside it");
+        let bytes = b"a picture no cell names";
+        let record = gate.create_upload(p, bytes.len() as u64, now).expect("a creation");
+        let mut stream =
+            gate.store().resume(&MediaGate::key(p), &record.id, 0, now).expect("a resume");
+        stream.append(bytes, now).expect("the bytes");
+        let hex = gate.finish_upload(stream, now).expect("a finish").hex;
+        let blob = gate.store().blob_path(DESIGNATION, &hex).expect("a path");
+        gate.advance_clock_ms(2_000);
+        let pruner = Pruner::new();
+        let pass = pruner.pass(&gate, || ()).expect("the index is ready");
+        let [failure] = pass.failed.as_slice() else { panic!("one failure, (a)'s: {pass:?}") };
+        assert_eq!(failure.step, PassStep::ExpiredPartials, "{pass:?}");
+        assert!(failure.cause.contains(": remove: "), "the store's words for the act: {failure}");
+        assert_eq!((pass.expired_partials, pass.unlinked, pass.kept), (0, 1, 0), "{pass:?}");
+        assert_eq!(pass.freed, bytes.len() as u64, "the deposit's bytes: {pass:?}");
+        assert_eq!(pass.halted, None, "{pass:?}");
+        assert!(!blob.exists(), "unlinked in the pass whose (a) failed");
+        let line = pass.to_string();
+        assert!(
+            line.starts_with(&format!(
+                "pruner: the pass failed: {failure}; 0 expired partials removed, 1 files \
+                 unlinked, 0 kept, 0 asides removed, {} bytes freed; blobs/uploads.log ",
+                bytes.len()
+            )),
+            "the failure named ahead of what the pass did: {line}"
+        );
+        let again = pruner.pass(&gate, || ()).expect("the index is ready");
+        assert_eq!(again.failed, pass.failed, "the record stands expired: (a) fails again");
+        assert_eq!((again.unlinked, again.kept, again.freed), (0, 0, 0), "{again:?}");
     }
 }

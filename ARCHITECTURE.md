@@ -2669,13 +2669,16 @@ the index's three readers consult, and a value naming the kind under no
 pinned schema stands in it as a halt mark. `pruner.rs` — THE PRUNER, one
 per daemon beside its gate, and its PASS: the
 expired partials removed off the record's expiry and the hold; the halts
-on a foreign designation directory or a halt mark; the unreferenced files
-renamed aside under an exclusive arm the caller hands in (the credential
-lock's write arm — named nowhere here), one file per acquisition,
-re-reading the index and the lease log there, each aside unlinked after
-under no arm; the two logs compacted on their trigger under no arm — the
-compaction step runs on every exit, the first error answered beside the
-report; and the cadence the daemon's transport thread waits on. `serve.rs` — THE
+on a foreign designation directory or a halt mark, or on a read of them
+that failed; the unreferenced files renamed aside under an exclusive arm
+the caller hands in (the credential lock's write arm — named nowhere
+here), one file per acquisition, re-reading the index and the lease log
+there, each aside unlinked after under no arm; the two logs compacted on
+their trigger under no arm; each step's failure answered beside the
+report and every other step run past it — but the unlink, past a failed
+read of the halts — and the compaction on every exit, the report's one
+line naming each failure ahead of what the pass did; and the cadence the
+daemon's transport thread waits on. `serve.rs` — THE
 FETCH's composed order: the shape, M10's read by identity as the gate, the
 one classification, the permit of the fetch pool, the whole file checked
 against its cell before its first byte, the stream's two re-check

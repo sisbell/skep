@@ -822,9 +822,9 @@ const PRUNER_NO_PASS_INDEX_FAILED: &str = "pruner: no pass runs — the cell ind
 /// It waits for the cell index to ready — in short waits, since nothing
 /// signals the walk's landing, each ended at once by the stop — runs the
 /// pass, then waits the cadence out or the stop, whichever comes first. The
-/// pass's line — row 34, or row 35 where a step failed, naming the failure
-/// and the compaction's state, since the pass runs its compaction whatever
-/// failed before it — goes through the daemon's classed door
+/// pass's line — row 34, or row 35 where a step failed, naming each failure
+/// ahead of what the pass did, since every step runs past another's failure
+/// and the compaction on every exit — goes through the daemon's classed door
 /// (`Daemon::say_the_pass`), and the next pass tries again.
 ///
 /// **The failed index** (`operations.md` §4 row 26). Where the index's walk

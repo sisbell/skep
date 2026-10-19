@@ -243,6 +243,31 @@ apart.
    what it was rewritten from: `— compacted from {n} lines ({n}
    bytes)`.
 
+   Where a step of the pass failed, the line is a `failure:`. It
+   names each failure, in step order, ahead of the same figures: the
+   step, then the store's words for the act that failed.
+
+   ```
+   failure: pruner: the pass failed: {step}: {cause}; {n} expired partials removed, {n} files unlinked, {n} kept, {n} asides removed, {n} bytes freed; blobs/uploads.log {n} lines ({n} bytes); blobs/leases.log {n} lines ({n} bytes); the pass took {ms} ms
+   ```
+
+   The rest of the pass runs past a failure, so the figures are what
+   it did. A failure at `step (a), the expired partials` or at `step
+   (c), the unreferenced files` leaves the other steps done. One at
+   `step (b), the halts' read` leaves no file judged, and the line
+   goes on `the unlink pass halted: the halts are unread, so no file
+   is judged`: the pass removes no file past halts it could not read,
+   and reads them again at the next pass. Every pass ends by
+   rewriting a log that stopped, whatever failed before it, so a
+   cause that names a stopped log is step 5's. Where step (a)'s
+   cause names a partial the OS will not remove — `a partial in
+   blobs/{designation}/: remove: {error}` — every pass meets it
+   again, and so does the next open, before it serves: the open
+   stops on it with step 4's `skepd: blob store:` line, and a board
+   that was serving reads is down. Clear that cause — a flag such as
+   immutable on the partial, its directory's permissions, the device,
+   as the error names — before any restart.
+
 4. **When the volume is full, never restart before there is
    room.** The open writes before it serves. It compacts the blob
    store's two logs where they hold superseded lines, and proves the

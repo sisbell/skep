@@ -475,31 +475,41 @@ impl Drop for Unreadable<'_> {
     }
 }
 
-/// `operations.md` §4 row 5; §1.1 row 35 (RULED: steps (a)–(c) collect the
-/// first error, step (d) runs on EVERY exit) — A FAILED STEP NEVER SKIPS THE
-/// COMPACTION THAT LIFTS A STOP. THE STOP: the records' log driven past its
-/// trigger (512 creations each ended — 1,024 retired lines over one standing
-/// record, past the minimum and past four times its records), then a pass
-/// run with `blobs/` unreadable: that pass's first failure is step (b)'s
-/// read of the designation directories, its (d) runs regardless and the
-/// compaction fails PAST its rename, so `uploads.log` STOPS — and its line
-/// 35 names the failure, each log's size — the records' log the rewrite's,
-/// the file at its name — AND the stop with its cause, the rewrite's failed
-/// fsync, its age and no append refused yet. THE STANDING EXPIRED UPLOAD:
-/// created before the stop on a ten-minute interval, lapsed by the clock
-/// after it, so step (a)'s retirement is an append the stopped log refuses —
-/// the `?` that once ended the pass there left the stop standing for the
-/// uptime, creations answering `500 blob_io` and a restart the one cure.
-/// NOW: the next pass fails at (a), the step named, and its (d) rewrites the
-/// stopped log whatever its count: the stop LIFTS — the report's members
-/// agree (`failed` step (a), `compacted` the size the log was rewritten
+/// Checks that a failed step never skips the compaction that lifts a stop.
+///
+/// `operations.md` §4 row 5; §1.1 row 35: every step runs past another's
+/// failure — but (c) past (b)'s, which halts the unlink pass — and step (d)
+/// on every exit, so no failure costs the pass another step's room.
+///
+/// **The stop.** The records' log is driven past its trigger (512 creations
+/// each ended — 1,024 retired lines over one standing record, past the
+/// minimum and past four times its records), beside a deposit no cell names
+/// on a one-second lease, lapsed by the clock once the cadence's first pass
+/// has ended; then a pass runs with `blobs/` unreadable. That pass fails at
+/// step (b)'s read of the designation directories, so its unlink pass halts
+/// on the halts unread and the lapsed deposit stands; its (d) runs
+/// regardless and the compaction fails past its rename, so `uploads.log`
+/// stops. Its line 35 names the failure, the halt, each log's size — the
+/// records' log the rewrite's, the file at its name — and the stop with its
+/// cause, the rewrite's failed fsync, its age and no append refused yet.
+///
+/// **The standing expired upload.** Created before the stop on a ten-minute
+/// interval and lapsed by the clock after it, it makes step (a)'s retirement
+/// an append the stopped log refuses.
+///
+/// **The pass that lifts.** It fails at (a), the step named, and runs on:
+/// its (c) unlinks the lapsed deposit, the room a full volume needs most,
+/// and its (d) rewrites the stopped log whatever its count, so the stop
+/// lifts. The report's members agree (`failed` step (a)'s alone, `unlinked`
+/// and `freed` the deposit's, `compacted` the size the log was rewritten
 /// from, `stopped` clear, `lifted` the stop as it stood, its cause and the
-/// two appends it refused, the creation and the retirement), its line 35
-/// names the failure AND the compaction AND the stop it lifted, with its
-/// figures — a creation resumes, and the pass after owes nothing, under line
-/// 34: the store's retirement had dropped the record in this process before
-/// the append the stopped log refused (its partial removed first), so the
-/// compaction wrote the log to the records as they stand.
+/// two appends it refused, the creation and the retirement), and its line
+/// 35 names the failure, what the pass did past it, the compaction and the
+/// stop it lifted, with its figures. A creation resumes without a restart,
+/// and the pass after owes nothing, under line 34: the store's retirement
+/// had dropped the record in this process before the append the stopped
+/// log refused (its partial removed first), so the compaction wrote the log
+/// to the records as they stand.
 #[cfg(unix)]
 #[test]
 fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
@@ -512,6 +522,11 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     let logs = dir.path().join("blobs");
     let lines = |name: &str| fs::read_to_string(logs.join(name)).unwrap().lines().count();
     let bytes = |name: &str| fs::metadata(logs.join(name)).unwrap().len();
+    // The deposit no cell names, on a one-second lease.
+    sd.daemon().install_media_limits(None, None, Some(1_000), None, None).expect("installs");
+    let lapsing = seeded_bytes(4_000, 11);
+    put_whole(port, &token, &lapsing);
+    let deposit = blobs_dir(dir.path()).join(blob_hex(&lapsing));
     // The upload that will stand expired under the stop.
     sd.daemon().install_media_limits(None, None, Some(600_000), None, None).expect("installs");
     let (st, _, resp) = blob_create(port, Some(&token), 10, b"hello");
@@ -533,19 +548,37 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         "past the minimum, and four times its one record: {written} lines"
     );
     assert!(pass_failures(&sd).is_empty(), "no pass has failed yet");
+    // The cadence's first pass, run as the index readied, has ended: the
+    // clock moves only after it, so the passes below are the ones that judge
+    // the lapsed deposit.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while sd.daemon().prune_passes_completed() == 0 {
+        assert!(Instant::now() < deadline, "the cadence's first pass did not complete");
+        thread::sleep(Duration::from_millis(20));
+    }
+    sd.daemon().advance_media_clock_ms(2_000);
     // THE STOP: one pass with the directory unreadable.
     let stopping = {
         let _unreadable = Unreadable::new(&logs);
         sd.daemon().prune_now().expect("ready")
     };
-    let Some(failed) = stopping.failed.clone() else {
+    let Some(failed) = stopping.failed.first().cloned() else {
         // A privileged process reads any directory: step (b)'s read passed
         // under the mode, so nothing was injected and the claim is not run.
         eprintln!("the directory's mode refused nothing: a privileged process; the claim is not run");
         sd.shutdown();
         return;
     };
+    assert_eq!(stopping.failed, [failed.clone()], "one failure, step (b)'s: {stopping:?}");
     assert_eq!(failed.step, PassStep::Halts, "{stopping:?}");
+    // (b) gates (c): halts unread halt the unlink pass as halts read do.
+    assert_eq!(
+        stopping.halted.as_deref(),
+        Some("the halts are unread, so no file is judged"),
+        "{stopping:?}"
+    );
+    assert_eq!((stopping.unlinked, stopping.kept), (0, 0), "no file judged: {stopping:?}");
+    assert!(deposit.is_file(), "the lapsed deposit stands under the halts unread");
     assert!(
         stopping.compaction_failed.is_some(),
         "FINDING (§4 row 5): the failed step skipped the compaction — no stop was met: {stopping:?}"
@@ -565,18 +598,22 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         (1, rewrite),
         "the records' log's size the rewrite's, the file at its name: {stopping:?}"
     );
+    let lease_log = bytes("leases.log");
     let said = pass_failures(&sd);
     assert_eq!(said.len(), 1, "{said:?}");
     assert_eq!(
         said[0],
         format!(
-            "failure: pruner: the pass failed: {failed}; blobs/uploads.log 1 lines ({rewrite} bytes); \
-             blobs/leases.log 0 lines (0 bytes); a compaction FAILED: {}; STOPPED: blobs/uploads.log takes \
-             no append until a compaction completes — {cause}; stopped {} ms, 0 appends refused",
+            "failure: pruner: the pass failed: {failed}; 0 expired partials removed, 0 files unlinked, 0 \
+             kept, 0 asides removed, 0 bytes freed — the unlink pass halted: the halts are unread, so no file \
+             is judged; blobs/uploads.log 1 lines ({rewrite} bytes); blobs/leases.log 1 lines ({lease_log} \
+             bytes); a compaction FAILED: {}; STOPPED: blobs/uploads.log takes no append until a compaction \
+             completes — {cause}; stopped {} ms, 0 appends refused",
             stopping.compaction_failed.as_ref().unwrap(),
             stop.age.as_millis()
         ),
-        "line 35 names the failure, the logs' sizes AND the stopped log, by its cause, its age and its count"
+        "line 35 names the failure, what the pass did past it — the unlink pass halted on the halts unread — \
+         the logs' sizes AND the stopped log, by its cause, its age and its count"
     );
     assert!(said[0].contains("step (b), the halts' read: "), "the step named: {}", said[0]);
     // THE STOP IN FORCE: a creation's record is an append the log refuses.
@@ -587,7 +624,10 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     sd.daemon().advance_media_clock_ms(700_000);
     // THE PASS THAT LIFTS: (a) fails at the retirement, (d) runs regardless.
     let lifting = sd.daemon().prune_now().expect("ready");
-    let failed = lifting.failed.clone().expect("step (a)'s retirement is refused by the stopped log");
+    let [failed] = lifting.failed.as_slice() else {
+        panic!("one failure, step (a)'s retirement the stopped log refused: {lifting:?}")
+    };
+    let failed = failed.clone();
     assert_eq!(failed.step, PassStep::ExpiredPartials, "{lifting:?}");
     assert!(failed.cause.contains("blobs/uploads.log takes no append until a compaction completes"), "{failed}");
     assert!(
@@ -595,6 +635,15 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         "the refused append names the stop's cause alone, no figure of the operator's: {failed}"
     );
     assert_eq!(lifting.expired_partials, 0, "{lifting:?}");
+    // (a)'s failure leaves (c) to run: the lapsed deposit goes, its bytes the
+    // room the pass made.
+    assert_eq!(lifting.halted, None, "{lifting:?}");
+    assert_eq!(
+        (lifting.unlinked, lifting.kept, lifting.freed),
+        (1, 0, 4_000),
+        "FINDING (#415): the failed expiry skipped the unreferenced files: {lifting:?}"
+    );
+    assert!(!deposit.exists(), "unlinked in the pass whose step (a) failed");
     let from = lifting.compacted.0.clone();
     assert_eq!(
         from.map(|from| (from.lines, from.bytes)),
@@ -616,12 +665,14 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     assert_eq!(
         said[1],
         format!(
-            "failure: pruner: the pass failed: {failed}; blobs/uploads.log 0 lines (0 bytes) — compacted from \
-             1 lines ({rewrite} bytes); blobs/leases.log 0 lines (0 bytes); blobs/uploads.log's stop lifted, \
-             rewritten whole after {cause}; stopped {} ms, 2 appends refused",
+            "failure: pruner: the pass failed: {failed}; 0 expired partials removed, 1 files unlinked, 0 \
+             kept, 0 asides removed, 4000 bytes freed; blobs/uploads.log 0 lines (0 bytes) — compacted from \
+             1 lines ({rewrite} bytes); blobs/leases.log 1 lines ({lease_log} bytes); blobs/uploads.log's stop \
+             lifted, rewritten whole after {cause}; stopped {} ms, 2 appends refused",
             lifted.age.as_millis()
         ),
-        "line 35 names the failure AND the compaction that lifted the stop, with the stop's figures"
+        "line 35 names the failure AND what the pass did past it AND the compaction that lifted the stop, \
+         with the stop's figures"
     );
     // The store's retirement drops the record from its map BEFORE the
     // append the stopped log refused, its partial removed before that
@@ -635,7 +686,7 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
     assert_eq!(lines("uploads.log"), 1, "the creation's record lands in the rewritten log");
     // The pass after owes nothing and says line 34.
     let after = sd.daemon().prune_now().expect("ready");
-    assert_eq!(after.failed, None, "{after:?}");
+    assert!(after.failed.is_empty(), "{after:?}");
     assert_eq!(after.expired_partials, 0, "the refused retirement had already retired the record in this process: {after:?}");
     assert_eq!(pass_failures(&sd).len(), 2, "a pass that failed nothing says line 34");
     let pruner_lines: Vec<String> =

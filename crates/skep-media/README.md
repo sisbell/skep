@@ -60,11 +60,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The pruner**, `pruner` — `Pruner` (`new`), one per daemon beside its
   gate, whose `pass(&gate, exclusive)` answers a `PrunePass` — or nothing
   where the index is not ready: its figures and the bytes they freed, the
-  halt, each log's size, the compaction half of its line (`compaction`)
-  and, where a step failed, the first failure beside them (`PassFailure`,
-  naming its `PassStep` and the cause), step (d) — the compaction — having
-  run on every exit; `Cadence` (`new`, `wait`, `stop`) and `Wake`, the
-  transport's thread's clock and stop.
+  halt, each log's size and compaction, and each step's failure beside
+  them in step order (`PassFailure`, naming its `PassStep` and the
+  cause), every other step having run past it — but the unlink, which a
+  failed read of the halts halts — and step (d), the compaction, on every
+  exit; its `Display` is the pass's one line, line 34 or line 35;
+  `Cadence` (`new`, `wait`, `stop`) and `Wake`, the transport's thread's
+  clock and stop.
 - **The pools**, `pools` — `FetchPool` (`new`), whose permit a fetch's
   answer holds, and its twin `UploadPool` (`new`, `admit`), whose permit a
   creation or a resume holds for the body's whole stream; each says its

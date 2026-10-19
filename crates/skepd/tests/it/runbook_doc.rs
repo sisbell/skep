@@ -12,9 +12,10 @@
 //! through those constants, §3 step 2's variables, read off the binary's
 //! own help, §2's line for the journal damage a history read meets and step
 //! 5's reading of an attest cut, §1's line for a write refused for a cause
-//! but room and its floor's line for a free space unread, and §1 step 8's
-//! standing clauses. Every loopback origin §3 and §9 dial is held to the
-//! daemon's default port, read through its constant.
+//! but room, its floor's line for a free space unread and step 3's line for
+//! a pass that failed, and §1 step 8's standing clauses. Every loopback
+//! origin §3 and §9 dial is held to the daemon's default port, read through
+//! its constant.
 
 use std::path::Path;
 
@@ -652,6 +653,56 @@ fn runbook_says_the_floor_binds_on_a_free_space_unread_and_names_its_cause() {
         ),
         "§3 step 3 quotes the open's unread form: {open}"
     );
+}
+
+/// Checks that §1 step 3 quotes the failed pass's line and what it leaves.
+///
+/// The line is the pass's one rendering — `skep-media`'s `pruner.rs` pins
+/// its words, and this crate's `pruner.rs` the line said — so step 3 quotes
+/// it under the class the binary writes it with, the figures and the logs'
+/// sizes those of line 34's quote beside it, without the resident set's
+/// reading. It names each step by the words the binary gives it
+/// (`PassStep`'s own `Display`), the halts unread, the stopped log sent to
+/// step 5, and the partial the next open stops on, cleared before any
+/// restart.
+#[test]
+fn runbook_quotes_the_failed_pass_and_what_each_failure_leaves() {
+    use skep_media::pruner::PassStep;
+
+    let step = passage(
+        "\n## 1. The full volume",
+        "3. **At the floor, run the pruner's pass early.**",
+        &["4. **When the volume is full"],
+    );
+    let (landing, after) = fenced(&step);
+    let (failure, rest) = fenced(after);
+    let figures = landing
+        .trim()
+        .strip_prefix(&format!("{}: pruner: ", Class::Landing))
+        .and_then(|line| line.split_once("; the pass took {ms} ms;"))
+        .map(|(figures, _)| figures)
+        .unwrap_or_else(|| panic!("§1 step 3 quotes line 34: {landing}"));
+    assert_eq!(
+        failure.trim(),
+        format!(
+            "{}: pruner: the pass failed: {{step}}: {{cause}}; {figures}; the pass took {{ms}} ms",
+            Class::Failure
+        ),
+        "§1 step 3 quotes line 35 as line 34's figures, the failure ahead of them"
+    );
+    let prose = collapsed(rest);
+    for step in [PassStep::ExpiredPartials, PassStep::Halts, PassStep::UnreferencedFiles] {
+        assert!(prose.contains(&format!("`{step}`")), "§1 step 3 names `{step}`: {prose}");
+    }
+    for fact in [
+        "`the unlink pass halted: the halts are unread, so no file is judged`",
+        "a cause that names a stopped log is step 5's",
+        "`a partial in blobs/{designation}/: remove: {error}`",
+        "the open stops on it with step 4's `skepd: blob store:` line",
+        "before any restart",
+    ] {
+        assert!(prose.contains(fact), "§1 step 3 says {fact:?}: {prose}");
+    }
 }
 
 /// §9.3 WINDOWS — A QUESTION, NO COMMAND (the runbook states only what this

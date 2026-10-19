@@ -685,38 +685,31 @@ impl Daemon {
 
     /// Says the pass (`operations.md` §1.1 rows 34, 35): one line per pass.
     ///
-    /// The line goes on the daemon's classed door — row 34 under
-    /// `Class::Landing` where no step failed: the report's own `Display` (its
-    /// figures, the halt, the compaction half), the pass's duration
-    /// (`; the pass took {d} ms`), then a reading of the resident set
+    /// The line is the report's own `Display` — each step's failure where one
+    /// failed (`the pass failed: {step}: {cause}`), then its figures and the
+    /// bytes they freed, the halt, and the compaction half: each log's size
+    /// and what a compaction rewrote it from, a stop lifted, a compaction
+    /// failed, a log `STOPPED` with its cause, its age and the appends it
+    /// refused — then the pass's duration (`; the pass took {d} ms`), on the
+    /// daemon's classed door. Row 34 goes under `Class::Landing` where no
+    /// step failed, followed by a reading of the resident set
     /// ([`ResidentRead`](super::ResidentRead)), so a board whose index walk
     /// completed reads its memory at the pass's cadence whether or not a
-    /// checkpoint lands; row 35 under `Class::Failure` where one did —
-    /// `pruner: the pass failed: {e}`, the step and the cause — then the same
-    /// compaction half (`PrunePass::compaction`: each log's size,
-    /// `{log} {n} lines ({b} bytes)`, and what a compaction rewrote it from;
-    /// `{log}'s stop lifted, rewritten whole after {stop}`; `a compaction
-    /// FAILED`; `STOPPED: {log} takes no append until a compaction completes
-    /// — {stop}`, a stop its cause, its age and the appends it refused), then
-    /// the pass's duration — so the line names the failure *and* whether the
+    /// checkpoint lands; row 35 under `Class::Failure` where one did — so the
+    /// line names each failure *and* what the pass did past it, whether the
     /// stop it may have met is lifted or stands, why it stood, what it cost
     /// and how long the pass held the credential lock's write arm. Nothing
     /// where the pass did not start (`None`: the index not ready). The
     /// cadence's loop and the test seam's pass say it alike.
     pub(super) fn say_the_pass(&self, pass: &Option<TimedPass>) {
         let Some(TimedPass { report, duration_ms }) = pass else { return };
-        match &report.failed {
-            None => self.say(
+        if report.failed.is_empty() {
+            self.say(
                 Class::Landing,
                 format_args!("{report}; the pass took {duration_ms} ms; {}", self.resident.read()),
-            ),
-            Some(failed) => self.say(
-                Class::Failure,
-                format_args!(
-                    "pruner: the pass failed: {failed}{}; the pass took {duration_ms} ms",
-                    report.compaction()
-                ),
-            ),
+            );
+        } else {
+            self.say(Class::Failure, format_args!("{report}; the pass took {duration_ms} ms"));
         }
     }
 

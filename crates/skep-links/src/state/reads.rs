@@ -3,14 +3,13 @@
 //! It holds the raw reads (READLINK / FOLLOWLINK), the typed-relation
 //! observers (Observe + the default predicates + BH1–BH4), ASN-0125
 //! currency, and the discovery primitives for M8 (`stab` / `match_links` /
-//! `type_slice`). All `&self` over any M2 `Snapshot`; nothing here writes.
+//! `type_slice`), `stab` answering from the spanfilade beside this file. All
+//! `&self` over any M2 `Snapshot`; nothing here writes.
 
 use im::OrdSet;
-use skep_address::{
-    classify_spans, document_of, is_prefix, ordinal, validate, Address, Span, SpanRel, SpanSet,
-    Tumbler,
-};
+use skep_address::{document_of, is_prefix, ordinal, validate, Address, SpanSet, Tumbler};
 
+use super::spanfilade::overlaps;
 use super::{lift, LinkState};
 use crate::class::{coverage_class, CoverageClass};
 use crate::endset::{Endset, Link};
@@ -97,25 +96,15 @@ pub struct CurrentMember {
     pub claims: Vec<Address>,
 }
 
-/// Returns whether two spans overlap, as the spanfilade counts it (§6).
-///
-/// Overlap is `ProperOverlap | Containment | Equal` — not `Adjacent`
-/// (abutting spans share no tumbler; matching them would false-positive every
-/// link whose slot coverage merely abuts the query) and never M1's
-/// `intersect` (which faults on the mixed-length endpoints M5's resolve runs
-/// routinely produce).
-fn overlaps(a: &Span, b: &Span) -> bool {
-    matches!(
-        classify_spans(a, b),
-        SpanRel::ProperOverlap | SpanRel::Containment | SpanRel::Equal
-    )
-}
-
 /// Returns whether `link`'s coverage at `slot` overlaps `query`.
 ///
-/// It is the spanfilade's per-link predicate. Absent slot ⇒ no match. The one
-/// statement of the test, so [`LinkState::stab`] and every later conjunct of
-/// [`LinkState::match_links`] cannot answer differently.
+/// It is the spanfilade's relation asked of one link — some span of the
+/// query [`overlaps`] some span of the slot — and an absent slot matches
+/// nothing. [`LinkState::match_links`] narrows by it after its first
+/// constraint. The index [`LinkState::stab`] answers from holds every span
+/// under the same `overlaps`, and `tests/it/spanfilade.rs` holds the two to
+/// agree over every slot, view and query of a world holding every span shape,
+/// so the AND cannot answer differently from its own conjuncts.
 fn slot_overlaps(link: &Link, slot: usize, query: &Endset) -> bool {
     link.slot(slot)
         .is_some_and(|endset| query.spans().any(|q| endset.spans().any(|s| overlaps(q, s))))
@@ -439,10 +428,7 @@ impl LinkState {
     /// of the family matched by coverage rather than denotation — collecting
     /// each match's `F.addrs()`, deduplicated, in Tumbler order, as
     /// `members`/`targets_of`. The active typed slice is the domain and
-    /// `covers` is the whole test — the store-wide span scan
-    /// [`LinkState::stab`] performs would read every link in the docuverse to
-    /// narrow a set that is a hint lookup away and already a subset of what it
-    /// scanned.
+    /// `covers` is the whole test.
     ///
     /// # Panics
     ///
@@ -658,26 +644,33 @@ impl LinkState {
     /// `view ∈ {Audit, Active}` only (`Default` reads as `Active`).
     ///
     /// **What this costs.** Stated because the query family reaches the wire
-    /// and no budget refuses one: the v1 bootstrap is a brute scan of `links`
-    /// reading each endset's spans — trivially correct, and
-    /// `Θ(|links| × |query spans| × |slot spans|)`. The store walk is linear,
-    /// and each link is tested by a double disjunction
-    /// ([`Endset::covers`]' structural cousin — some query span overlapping
-    /// some slot span), so the caller's query span count and the stored
-    /// slot's multiply the store size. Two of those three factors are bounded
-    /// at [`MAX_SLOT_SPANS`](crate::MAX_SLOT_SPANS) — the stored slot by this
-    /// module's deposit budget, the query by skepd's codec, M10's production
-    /// `Codec`, reusing the same number as its wire list cap — and the third,
-    /// the store size, is bounded by nothing and chosen by no caller. The
-    /// deferred interval index swaps in behind the same signature and overlap
-    /// predicate (Open build decisions); its absence is load-bearing rather
-    /// than a performance matter.
+    /// and no budget refuses one. The answer comes from the spanfilade, the
+    /// per-slot coverage index the hint fold keeps beside `links`
+    /// (`state/spanfilade.rs`), never from a walk of the store. Per query span
+    /// it is one ordered-set range over the starts of the slot's spans, one
+    /// lookup per prefix of the query span's start and one range per level of
+    /// each of those prefixes that is an axis, then one step per stored span
+    /// the query overlaps, and an overlap test of each stored span the index
+    /// holds as residue — spans no deposit path the wire reaches stores. The
+    /// store's size enters only as the logarithm inside each range. The query
+    /// is the caller's: its span count, which skepd's codec, M10's production
+    /// `Codec`, caps at [`MAX_SLOT_SPANS`](crate::MAX_SLOT_SPANS), and the
+    /// depth of its starts, which sets the prefixes probed. The hits are the
+    /// store's: a query over a widely linked region answers every link that
+    /// reaches it, one lift apiece.
     ///
     /// Every returned address is a key of `links`, so [`LinkState::readlink`]
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
     pub fn stab(&self, slot: usize, query: &Endset, view: View) -> OrdSet<Address> {
-        self.scan(view, |link| slot_overlaps(link, slot, query))
+        let active = default_to_active(view) == View::Active;
+        self.hints
+            .spanfilade
+            .stab(slot, query)
+            .into_iter()
+            .filter(|t| !(active && self.nullified(t)))
+            .map(lift)
+            .collect()
     }
 
     /// Returns the links that satisfy every per-slot overlap constraint.
@@ -689,22 +682,25 @@ impl LinkState {
     /// the whole `view` slice. `view ∈ {Audit, Active}` only (`Default` reads
     /// as `Active`).
     ///
-    /// The first constraint scans `links`; every later one narrows the
-    /// accumulator with the same per-link predicate [`stab`](LinkState::stab)
-    /// applies, rather than scanning the store again and intersecting
-    /// afterwards. Both read the store through the same per-link overlap test,
-    /// so the AND cannot come apart from its own conjuncts — and a caller's
-    /// constraint count multiplies the surviving set instead of the whole
-    /// store, which matters because the query is caller-supplied and the
-    /// constraint count with it.
+    /// The first constraint is answered by [`stab`](LinkState::stab) from the
+    /// spanfilade; every later one narrows that answer link by link, testing
+    /// each survivor's slot under the same overlap relation, rather than
+    /// probing the index again and intersecting afterwards. The index and the
+    /// per-link test answer by one relation, and `tests/it/spanfilade.rs`
+    /// holds them to agree, so the AND cannot come apart from its own
+    /// conjuncts — and a caller's constraint count multiplies the surviving
+    /// set instead of the store, which matters because the query is
+    /// caller-supplied and the constraint count with it.
     ///
-    /// It carries [`stab`](LinkState::stab)'s cost, and the unconstrained
-    /// branch carries a second: with no constraint to narrow it, every link
-    /// the view admits is lifted into the returned set, one `Tumbler` clone
-    /// apiece, before any caller-side filter or window applies. That branch is
-    /// reachable from a descriptor naming only non-slot fields — `home` is
-    /// not a link slot — so a request that constrains nothing this module can
-    /// index still materializes an address per link in the store.
+    /// It carries [`stab`](LinkState::stab)'s cost for its first constraint
+    /// and `|query spans| × |slot spans|` per survivor for each later one.
+    /// The unconstrained branch is the one store walk left: with no constraint
+    /// to answer from the index, every link the view admits is lifted into the
+    /// returned set, one `Tumbler` clone apiece, before any caller-side filter
+    /// or window applies. That branch is reachable from a descriptor naming
+    /// only non-slot fields — `home` is not a link slot — so a request that
+    /// constrains nothing this module can index still materializes an address
+    /// per link in the store.
     ///
     /// Each query is borrowed, as [`stab`](LinkState::stab) borrows its own:
     /// a constraint is read and dropped, never kept, so a caller assembling
@@ -716,7 +712,7 @@ impl LinkState {
     /// permanent enumeration key a cursor resumes from.
     pub fn match_links(&self, constraints: &[(usize, &Endset)], view: View) -> OrdSet<Address> {
         let Some((&(first_slot, first_query), rest)) = constraints.split_first() else {
-            return self.scan(view, |_| true); // no constraint: the whole view slice
+            return self.scan(view); // no constraint: the whole view slice
         };
         let mut acc = self.stab(first_slot, first_query, view);
         for &(slot, query) in rest {
@@ -753,26 +749,21 @@ impl LinkState {
 
     // ───────────────────────── internal helpers ─────────────────────────
 
-    /// Scans the whole store under a view, keeping every link `keep` admits.
+    /// Walks the whole store under a view, lifting every link the view admits.
     ///
-    /// They come back as addresses in M1's order. The one place a read walks
-    /// `links` end to end, and the one place a store scan turns `Default`
-    /// into `Active`, so [`LinkState::stab`] and [`LinkState::match_links`]'
-    /// unconstrained branch cannot answer differently about a view. (The
-    /// typed reads make the same conversion at their own one place, the slice
-    /// walk.)
-    fn scan(&self, view: View, keep: impl Fn(&Link) -> bool) -> OrdSet<Address> {
+    /// They come back as addresses in M1's order. It is the one place a read
+    /// walks `links` end to end — [`LinkState::match_links`]' unconstrained
+    /// branch, which has no constraint to answer from the spanfilade — and it
+    /// turns `Default` into `Active` for that branch. ([`LinkState::stab`] and
+    /// the typed reads' slice walk make the same conversion at their own
+    /// sites.)
+    fn scan(&self, view: View) -> OrdSet<Address> {
         let active = default_to_active(view) == View::Active;
-        let mut out = OrdSet::new();
-        for (addr, link) in self.links.iter() {
-            if active && self.nullified(addr) {
-                continue;
-            }
-            if keep(link) {
-                out.insert(lift(addr));
-            }
-        }
-        out
+        self.links
+            .keys()
+            .filter(|addr| !(active && self.nullified(addr)))
+            .map(lift)
+            .collect()
     }
 
     /// Walks the typed slice of a class, lazily, over the audit hint.
@@ -999,8 +990,7 @@ impl LinkState {
     /// Shared with `targets_keyed`, whose registry walk has classes, not
     /// endsets. Walks the active typed slice and applies the denotation test
     /// directly: "exactly one" is a property of the set, not of the iteration
-    /// order, so no prefilter is wanted — and a whole-store span scan to
-    /// narrow a hint lookup would cost more than the walk it replaced.
+    /// order.
     fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
         let mut survivor: Option<&Link> = None;
         for (_, link) in self.typed_links(class, View::Active) {

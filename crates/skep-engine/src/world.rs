@@ -87,9 +87,10 @@ use crate::publication::{self, Drafts};
 /// `Engine::check_hints` this crate's suite runs over a live engine checks
 /// exactly that. The `Deserialize` derived below establishes nothing — it
 /// leaves M7's hints empty, so every typed slice reads as absent, no
-/// supersession edge exists, nullification is invisible and `Active` equals
-/// `Audit`; it leaves the exception set EMPTY, so every document reads as
-/// PUBLISHED (the fail-open sign PUB-7.5 names, in the one place it is
+/// supersession edge exists, nullification is invisible, `Active` equals
+/// `Audit` and `stab` — every region read and constrained descriptor —
+/// matches nothing; it leaves the exception set EMPTY, so every document reads
+/// as PUBLISHED (the fail-open sign PUB-7.5 names, in the one place it is
 /// reachable); and it leaves the grant fold EMPTY, whose sign runs the OTHER
 /// way (PUB-7.68), so every grant reads as ungiven. The two therefore fail in
 /// opposite directions over one unrebuilt world, and no single answer looks
@@ -607,12 +608,11 @@ impl skep_febe::PublicationWorld for World {
     /// slot, DENOTATION for class membership — and the precondition that
     /// `target` is a registered document, which M10 checks before it asks. So
     /// through this seam `target` is ONE registered document, which bounds the
-    /// caller's share of the hits and neither the store scan every call pays
-    /// nor the rows a claim naming the target's account or node contributes
-    /// ([`World::edition_claims`]'s COST). The inherent method stays total
-    /// over every tier for a direct caller. Membership is the whole of what a
-    /// row is tested for — no home, issuer or publication test runs on this
-    /// side of the seam.
+    /// caller's share of the hits and not the rows a claim naming the target's
+    /// account or node contributes ([`World::edition_claims`]'s COST). The
+    /// inherent method stays total over every tier for a direct caller.
+    /// Membership is the whole of what a row is tested for — no home, issuer or
+    /// publication test runs on this side of the seam.
     fn edition_claims(&self, target: &Address) -> Vec<EditionClaim> {
         World::edition_claims(self, target)
     }

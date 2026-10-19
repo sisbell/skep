@@ -120,10 +120,10 @@ impl DeletePartition {
 /// And ONE refusal is the preview's own, which DELETE has no word for
 /// because DELETE stabs nothing: `ImageTooLarge`, asked last, when the runs
 /// the two stabs below would join are past [`crate::MAX_IMAGE_RUNS`]. Every
-/// stab walks the whole link store testing each query span against every
-/// slot span of every link, so these runs are the side of that join the
-/// preview supplies, held to the number the region family holds its image
-/// to. The runs counted are `d`'s own, content and link, plus one for each
+/// stab probes M7's coverage index once per query span and takes a step per
+/// link it finds, so these runs are the side of that join the preview
+/// supplies, held to the number the region family holds its image to. The
+/// runs counted are `d`'s own, content and link, plus one for each
 /// end of the range that falls INSIDE a run: M5's resolution clips a run to
 /// the span asked, so the prefix, the deleted range and the suffix each take
 /// a piece of a run the range cuts. So a `d` whose own runs are past the

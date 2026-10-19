@@ -59,13 +59,13 @@ use skep_core::commits::{CheckpointSignal, StreamStep, Woken};
 /// from being arithmetic a reader has to do across five files.
 ///
 /// Fourteen pooled slots plus two free is the smallest split that keeps the
-/// liveness probe, the handshake and every read answerable while every pool
-/// is saturated: one worker of slack over the minimum. Two free suffice
-/// because an ordinary request completes in milliseconds, where a pooled
-/// one is a whole-store scan, a whole-world replay, a whole file's transfer
-/// — the fetch's, which streams the file out, or the upload's, which
-/// streams it in: "a whole file's transfer" reads both ways, and each holds
-/// its worker to the end — or a write parked behind an inline checkpoint.
+/// liveness probe, the handshake and every read answerable while every pool is
+/// saturated: one worker of slack over the minimum. Two free suffice because an
+/// ordinary request completes in milliseconds, where a pooled one is a class
+/// scan the world sizes, a whole-world replay, a whole file's transfer — the
+/// fetch's, which streams the file out, or the upload's, which streams it in:
+/// "a whole file's transfer" reads both ways, and each holds its worker to the
+/// end — or a write parked behind an inline checkpoint.
 ///
 /// An embedder calling [`serve`] with its own count owes the same relation,
 /// and [`MIN_WORKERS`] is the form in which they can evaluate it.

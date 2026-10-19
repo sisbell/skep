@@ -123,8 +123,9 @@ foundation and on the stores above it.
 - `skep-links` — the link store: `LinkState`, the append-only map from a
   link's address to its value and the hints folded from it; `LinkWriter`,
   whose every deposit passes one gate; the raw and typed reads and the
-  matcher `skep-discovery` composes; the type registry, a compiled
-  constant. Its modules and rules: §The link store.
+  matcher `skep-discovery` composes, answered from a per-slot coverage
+  index; the type registry, a compiled constant. Its modules and rules:
+  §The link store.
 - `skep-retrieval` — the content and provenance queries: delivery by
   V-span (RETRIEVEV), a document's extents, the origins of a span
   (SHOWORIGIN), what one document deleted that another still holds
@@ -2283,7 +2284,8 @@ line saying what it holds; each names in code only the modules above it,
 and an item by its home module, never through the root's re-exports.
 `tests/it/tidy.rs` checks that, and that every file under `src/` and
 `tests/it/` is declared. `state.rs` is the slice and the fold; beneath it,
-`state/reads.rs` holds the read surface. `writes.rs` is the handle and what
+`state/reads.rs` holds the read surface and `state/spanfilade.rs` the
+coverage index `stab` answers from. `writes.rs` is the handle and what
 its ops share; beneath it, `writes/makelink.rs`, `writes/emit.rs`,
 `writes/nullify.rs` and `writes/supersession.rs` each hold one op family's
 `impl` block.
@@ -2296,9 +2298,17 @@ Rules that hold across its files:
   is the crate's one caller of M3's `mint_link`. `tests/it/tidy.rs` checks
   the last.
 - **One insertion point, one fold.** The map and the hints are private to
-  `state.rs` and its `reads` child; `apply_link` is the one insertion and
+  `state.rs` and its children; `apply_link` is the one insertion and
   asserts the address is fresh, and it and `rebuild_derived` fold through
   the one `fold_hints`.
+- **The index answers what a scan would.** `stab` answers from the
+  spanfilade, the per-slot coverage index `fold_hints` files every span
+  into, exactly the links a scan of `links` under the one overlap relation
+  would — `classify_spans` answering `ProperOverlap`, `Containment` or
+  `Equal` — and `match_links` narrows by that relation after its first
+  constraint. `tests/it/spanfilade.rs` checks it over every slot, view and
+  query of a world holding every span shape a deposit path stores, live and
+  after a rebuild.
 - **Type identity is a class.** Every comparison of types goes through
   `coverage_class` of a slot, never an `Endset`'s derived equality, and
   `class.rs` is the one place a `CoverageClass` is built.
@@ -2326,8 +2336,10 @@ Rules that hold across its files:
 Its integration suite is one binary, `tests/it/`: one file per op family,
 per gate that crosses them and per part of the read surface, over the
 shared `common` world and the kernels it opens; `carrier`, the contracts
-that need no kernel; `recovery`, the hints a checkpoint must rebuild; and
-`tidy`, which checks the module map and the first rule.
+that need no kernel; `recovery`, the hints a checkpoint must rebuild;
+`spanfilade`, the coverage index against a scan of the store; `heap`, the
+binary's byte-counting allocator; and `tidy`, which checks the module map
+and the first rule.
 
 ## The content queries, `skep-retrieval`
 

@@ -181,17 +181,18 @@ impl Default for FourSet {
 ///
 /// The constraints are handed to M7 SMALLEST FIRST, which is a cost decision
 /// and not a semantic one, and this element's because it is the one that asks
-/// M7: `match_links` drives one whole-store scan with the FIRST constraint and
-/// narrows the survivors with the rest, at `|query spans| × |slot spans|` per
-/// link tested, so the conjunct that pays the store-sized factor should be the
-/// cheapest one to test. An AND is order-free, so this moves work and never
-/// the answer — and the sort is stable, so equal spellings keep FROM/TO/TYPE
-/// order and one descriptor still names one constraint list.
+/// M7: `match_links` answers the FIRST constraint by one `stab` of M7's
+/// coverage index, a probe per query span, and narrows what it finds with the
+/// rest, at `|query spans| × |slot spans|` per survivor, so the constraint
+/// with the fewest spans costs the fewest probes up front. An AND is
+/// order-free, so this moves work and never the answer — and the sort is
+/// stable, so equal spellings keep FROM/TO/TYPE order and one descriptor still
+/// names one constraint list.
 fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
     match q.link_constraints() {
         None => OrdSet::new(), // FL-EMP: some slot is the zero
         Some(mut constraints) => {
-            constraints.sort_by_key(|(_, e)| e.len()); // the cheapest conjunct drives M7's scan
+            constraints.sort_by_key(|(_, e)| e.len()); // the cheapest conjunct drives M7's stab
             l.match_links(&constraints, View::Active)
         }
     }

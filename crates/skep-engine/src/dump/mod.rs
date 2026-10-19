@@ -724,7 +724,7 @@ impl crate::Engine {
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
     /// the grants class's typed slice admit the same RECORDS, each naming
-    /// the same `replaces`. It certifies nothing of the EIGHT derived
+    /// the same `replaces`. It certifies nothing of the nine derived
     /// structures the dump does not reach, and each of those drives
     /// something a caller can observe:
     ///
@@ -732,7 +732,9 @@ impl crate::Engine {
     ///   idempotence; `home_frontier` drives the address `next_link_address`
     ///   mints and the answers `age`/`stale` give; the typed slice of a class
     ///   outside the shipped five drives every typed read over ordinary
-    ///   content-typed links.
+    ///   content-typed links; and the spanfilade, M7's coverage index, drives
+    ///   `stab` and with it every region read, every constrained descriptor
+    ///   match and `World::edition_claims`.
     /// * The grant fold's TWO QUERY INDEXES — `by_grantee` and `universal` —
     ///   drive `grant_exists`, the read predicate's third clause, so a
     ///   mis-derived one is an authorization answer rather than a stale
@@ -750,8 +752,12 @@ impl crate::Engine {
     ///   grant a `replaces` link is the pair of. The `grants` section renders
     ///   each operative grant's `replaces` and neither structure.
     ///
-    /// A rebuild that mis-derived any of the eight passes here. For the two
-    /// indexes that is a gap in the CERTIFICATE rather than a live
+    /// A rebuild that mis-derived any of the nine passes here. For the
+    /// spanfilade, `skep-links`' own suite holds an index rebuilt from a
+    /// decoded checkpoint to a scan of the store over every slot, view and
+    /// query of a world holding every span shape
+    /// (`stab_answers_exactly_what_a_scan_of_the_store_would`). For the two
+    /// grant indexes that is a gap in the CERTIFICATE rather than a live
     /// divergence, and the argument belongs beside the claim: both halves of
     /// the discipline drive one `grants::fold_one`, and one pair step beside
     /// it, so an index is a function of the record SEQUENCE alone, and the

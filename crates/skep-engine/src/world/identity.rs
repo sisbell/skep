@@ -96,16 +96,17 @@ pub(super) fn fold(w: World, rec: &LinkRec) -> World {
 /// a body written without the slice — is resolved from the REBUILT link
 /// slice, or refused. The candidates are the deposits
 /// `match_links(&[(TYPE, enc([T]))], View::Audit)` answers for each
-/// credential type `T`, a deposit-level, registration-independent read off
-/// M7's SERIALIZED authoritative map (so the order among the rebuilds does
-/// not decide it), filtered EXACTLY by `kind_of` on each candidate's stored
-/// type slot (overlap ⊇ equality, so the filter loses nothing). No candidate
-/// recognized ⇒ the fold over that stream is provably empty ⇒ the genesis
-/// table, flagged RESOLVED for the open's warning (AUTH-2.86). Any
-/// recognized ⇒ `Err`: the table those deposits fold to depends on the order
-/// they committed in, which no checkpoint holds, so the base is NOT A START
-/// POINT (AUTH-2.84) and M2's fallback chain steps back to one that is — a
-/// REPLAY in position order, never a re-fold out of order.
+/// credential type `T`, a deposit-level, registration-independent read that M7
+/// answers from its coverage index — a hint the link slice's own rebuild
+/// re-derives from its serialized map, which is why `World::rebuild_derived`
+/// rebuilds that slice ahead of this one — filtered EXACTLY by `kind_of` on
+/// each candidate's stored type slot (overlap ⊇ equality, so the filter loses
+/// nothing). No candidate recognized ⇒ the fold over that stream is provably
+/// empty ⇒ the genesis table, flagged RESOLVED for the open's warning
+/// (AUTH-2.86). Any recognized ⇒ `Err`: the table those deposits fold to
+/// depends on the order they committed in, which no checkpoint holds, so the
+/// base is NOT A START POINT (AUTH-2.84) and M2's fallback chain steps back to
+/// one that is — a REPLAY in position order, never a re-fold out of order.
 pub(super) fn resolve(
     identity: Option<IdentityState>,
     links: &LinkState,

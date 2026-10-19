@@ -8,15 +8,19 @@
 //! gate that crosses them — `dedup` at the caller's visibility class,
 //! `ownership`, the sole-writer `fences`, the per-slot `budget` — and
 //! `attested` for the commit marker, `recovery` for the hints a checkpoint
-//! must rebuild, the typed reads in `reads` and the §G primitives in
-//! `discovery`. Beside them, `carrier` holds the carrier-type, registry and
-//! rejection contracts that need no kernel, `common` the assembled test world
-//! every suite shares and every kernel the suites open over it, and `tidy` the
-//! module map `src/lib.rs` declares — that every file of this tree and of
-//! `src/` is declared, each module naming only the modules above it, and that
-//! `emit_core` alone mints a link.
+//! must rebuild, the typed reads in `reads`, the §G primitives in
+//! `discovery`, and in `spanfilade` the coverage index `stab` answers from —
+//! that it answers what a scan of the store would, and pays nothing for a link
+//! it cannot match. Beside them, `carrier` holds the carrier-type, registry
+//! and rejection contracts that need no kernel, `common` the assembled test
+//! world every suite shares and every kernel the suites open over it, `heap`
+//! the binary's allocator, which counts the heap bytes each thread asks for so
+//! a cost claim is a number, and `tidy` the module map `src/lib.rs` declares —
+//! that every file of this tree and of `src/` is declared, each module naming
+//! only the modules above it, and that `emit_core` alone mints a link.
 
 mod common;
+mod heap;
 
 mod attested;
 mod budget;
@@ -30,5 +34,6 @@ mod nullify;
 mod ownership;
 mod reads;
 mod recovery;
+mod spanfilade;
 mod supersession;
 mod tidy;

@@ -105,7 +105,8 @@ mod budget;
 mod error;
 // M7's slice: `LinkState` (the authoritative map and the hints folded from
 // it), the one delta `LinkRec`, the fold; beneath it `state/reads.rs`, the
-// read surface.
+// read surface, and `state/spanfilade.rs`, the coverage index `stab` answers
+// from.
 mod state;
 // `LinkWriter` and what its ops share — `emit_core`, the one deposit gate,
 // the lock set, the `replaces` class; one file per op family beneath, each

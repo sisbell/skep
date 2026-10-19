@@ -83,13 +83,13 @@ impl World {
     /// together, the last two the STORE's — so this figure is not read off the
     /// request:
     ///
-    /// * The SCAN, which dominates: `match_links` drives its FIRST constraint
-    ///   through M7's `stab`, as built a brute scan of every stored link — up
-    ///   to one overlap test per `to`-slot span of every link in the store,
-    ///   retracted links included, each slot up to
-    ///   `skep_links::MAX_SLOT_SPANS` spans. The two ranges decide which links
-    ///   SURVIVE the walk, never how many it visits, so a registered document
-    ///   costs what a node does, and every call walks the whole store.
+    /// * The probe: `match_links` answers its first constraint, the `to`
+    ///   range, by one `stab` of M7's coverage index — a probe for the range's
+    ///   one span, logarithmic in the store — and narrows what that finds by
+    ///   the type range, one overlap test per type-slot span of each link it
+    ///   found, retracted links included, each slot up to
+    ///   `skep_links::MAX_SLOT_SPANS` spans. So a call pays for the links its
+    ///   `to` range reaches, never for the store's size.
     /// * The HITS. The `to` RANGE is `target`'s whole subtree and `target`'s
     ///   LEVEL is unrestricted here, so the breadth is the caller's: a version
     ///   member ranges over itself, a document over its versions, an ACCOUNT

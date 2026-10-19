@@ -6,11 +6,12 @@
 //! [`LinkState::apply_link`] the pure fold, and
 //! [`LinkState::rebuild_derived`] the load-time rebuild.
 //!
-//! Beneath it, `state/reads.rs` holds the read surface (§E/§F/§G). It is this
-//! file's child so that the map, the hints and their edges stay private to
-//! the two: the rest of the crate asks the slice the four questions the write
-//! surface needs — residence, the claim schema, the next link address and
-//! the dedup incumbent — and no other file reaches the map.
+//! Beneath it, `state/reads.rs` holds the read surface (§E/§F/§G) and
+//! `state/spanfilade.rs` the coverage index `stab` answers from (§6). They are
+//! this file's children so that the map, the hints and their edges stay
+//! private to the slice: the rest of the crate asks it the four questions the
+//! write surface needs — residence, the claim schema, the next link address
+//! and the dedup incumbent — and no other file reaches the map.
 
 use std::collections::BTreeSet;
 
@@ -27,10 +28,14 @@ use crate::registry::{registry, ShippedType};
 
 // The read surface over this slice — the raw reads, the typed observers and
 // the discovery primitives — as this file's child, so that the map and the
-// hints stay private to the two.
+// hints stay private to the slice.
 mod reads;
+// The spanfilade, the per-slot coverage index the fold files every span into
+// and `stab` answers from, as this file's child beside the reads that ask it.
+mod spanfilade;
 
 pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
+use spanfilade::Spanfilade;
 
 /// The one authoritative delta.
 ///
@@ -120,6 +125,11 @@ struct Hints {
     /// emission lands at `chain_d(f_d^Σ)`, and BH4 age is measured back from
     /// it.
     home_frontier: HashMap<Tumbler, u64>,
+    /// The spanfilade (§6): every span of every slot, filed under its link.
+    ///
+    /// `stab` answers from it rather than from a walk of `links`. It covers
+    /// the audit slice, and a read applies its view to the answer.
+    spanfilade: Spanfilade,
 }
 
 /// M7's slice of the engine's `WorldState`.
@@ -165,11 +175,13 @@ struct Hints {
 /// `links`, which is the whole of the Lampson spine's claim: on deserialize
 /// serde seeds it empty and [`LinkState::rebuild_derived`] recomputes it from
 /// the decoded map before replay. Load-bearing, because M2 recovers from the
-/// deserialized checkpoint whenever one exists and replay's `apply_link` folds
-/// read the hints they maintain. The type registry the fold reads alongside
-/// them is not carried here at all: it is the module's compiled format
-/// constant, [`crate::registry()`], so there is nothing per-slice to seed, to
-/// checkpoint, or to re-validate.
+/// deserialized checkpoint whenever one exists, replay's `apply_link` folds
+/// read the hints they maintain, and the reads answer from them: over an
+/// unrebuilt slice `stab` matches nothing, every typed slice reads as absent
+/// and the active view equals the audit one. The type registry the fold reads
+/// alongside them is not carried here at all: it is the module's compiled
+/// format constant, [`crate::registry()`], so there is nothing per-slice to
+/// seed, to checkpoint, or to re-validate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkState {
     /// The authoritative map: append-only, immutable values.
@@ -196,6 +208,10 @@ impl LinkState {
     /// board, so reading it costs the fold's purity nothing. Applied exactly
     /// once per committed record (M2 guarantees this — deliberately not coded
     /// idempotent).
+    ///
+    /// Filing the value into the spanfilade is a few `O(log n)` ordered-set
+    /// inserts per stored span, paid here: on a live write, inside the
+    /// transaction and so under M2's applier lock.
     ///
     /// Totality domain over `addr`, all three clauses owed by M3's `mint_link`
     /// and held by every record M7's own paths stage: `addr` is T4-valid, is
@@ -241,7 +257,7 @@ impl LinkState {
                     "apply_link: a Deposit must land at a fresh address (M3's mint never \
                      re-issues); replacing an immutable value voids Permanence (L12/R2)"
                 );
-                next.hints = fold_hints(&self.hints, addr, value);
+                fold_hints(&mut next.hints, addr, value);
                 next
             }
         }
@@ -252,7 +268,9 @@ impl LinkState {
     /// It runs once at load, before replay (M2's `rebuild_derived` slot),
     /// under the module's format registry. Required because `hints` is
     /// `#[serde(skip)]` — M2's default identity would leave it empty, and
-    /// replay's `apply_link` folds maintain exactly these hints.
+    /// replay's `apply_link` folds maintain exactly these hints. The pass
+    /// files every stored span into the spanfilade, a few `O(log n)` inserts
+    /// apiece, so an open pays for the index once per span.
     ///
     /// # Panics
     ///
@@ -264,7 +282,7 @@ impl LinkState {
     pub fn rebuild_derived(self) -> LinkState {
         let mut hints = Hints::default();
         for (addr, value) in self.links.iter() {
-            hints = fold_hints(&hints, addr, value);
+            fold_hints(&mut hints, addr, value);
         }
         LinkState {
             links: self.links,
@@ -447,20 +465,26 @@ fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
 }
 
-/// Returns `hints` with one deposit folded in.
+/// Folds one deposit into `hints`.
 ///
 /// It is the incremental hint fold shared by [`LinkState::apply_link`] (per
 /// record) and [`LinkState::rebuild_derived`] (whole-map pass) — one
 /// function so the recovered hints are exactly the live-maintained ones
 /// (M2's consistency obligation).
 ///
+/// It folds in place. `apply_link` folds into the copy of the prior hints its
+/// new state carries, still shared with the prior state, so each set it
+/// touches copies the path to the node it inserts at — the price of a
+/// persistent fold. The rebuild holds the only copy of the hints it builds,
+/// so its inserts land in place and an open pays each filing once.
+///
 /// Class recognition and every write-path guard evaluate the same pure
 /// [`coverage_class`] — the shipped classes this fold recognizes are that
 /// function's own verdicts, fixed once at `TypeRegistry::build`. No second
 /// classifier exists anywhere in M7 (class coherence, §Core data model). The
 /// registry it recognizes them through is the module's compiled constant, so
-/// this stays a pure function of `(hints, addr, value)`: the same three
-/// arguments give the same hints on every board.
+/// the folded hints are a function of `(hints, addr, value)` alone: the same
+/// three arguments give the same hints on every board.
 ///
 /// # Panics
 ///
@@ -468,9 +492,8 @@ fn lift(t: &Tumbler) -> Address {
 /// `expect`s mark the totality domain), or if a slot it classifies is not
 /// level-uniform: the type slot always, and all three where the class is
 /// registered idem⊤.
-fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
+fn fold_hints(out: &mut Hints, addr: &Tumbler, value: &Link) {
     let registry = registry();
-    let mut out = hints.clone();
     let class = coverage_class(value.type_slot());
 
     // type_slices — `L_K` per coverage class (L8).
@@ -540,7 +563,9 @@ fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
     .expect("link addresses are element-level, so their home Document exists");
     *out.home_frontier.entry(home.tumbler().clone()).or_insert(0) += 1;
 
-    out
+    // spanfilade — every span of every slot, filed under this link (§6), so
+    // `stab` answers from the index rather than from a walk of `links`.
+    out.spanfilade.file(addr, value);
 }
 
 #[cfg(test)]

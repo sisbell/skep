@@ -99,21 +99,20 @@
 //!
 //! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37)**: `/op` admits at
 //! most [`MAX_CONCURRENT_CLASS_SCANS`](scan::MAX_CONCURRENT_CLASS_SCANS)
-//! class-scan-shaped reads at once — the reads that walk the link store end
-//! to end, or the lineage pair the whole supersession class, which as M7 is
-//! built is every link-discovery read there is (`scan::is_class_scan`
-//! enumerates them and states why the shape of a query does not narrow
-//! one). [`ClassScans`] is the whole bound on one card — the op test, the
-//! pool, and the admission that takes the permit after the parse and the
-//! session read and before M10 is asked, so a refused request costs the
-//! parse and the session read alone and an admitted one holds its slot for
-//! the whole answer. The pool is a second instance of
-//! [`skep_util::permits::Permits`], disjoint from the reconstruction pool —
-//! a scan spends no reconstruction permit and a reconstruction spends no
-//! scan permit. The bound admits or refuses a request (`503 scan_busy`,
-//! retry-class, the body naming the op) and never alters an answer: M7 and
-//! M8 are not told a query is bounded. A concurrency bound, never a rate
-//! statement.
+//! class-scan-shaped reads at once — the link-discovery reads the wire names,
+//! each costing what the world sets rather than the request: the whole active
+//! slice, the whole supersession class, or every link a region or a class
+//! reaches (`scan::is_class_scan` enumerates them and states what each reads).
+//! [`ClassScans`] is the whole bound on one card — the op test, the pool, and
+//! the admission that takes the permit after the parse and the session read and
+//! before M10 is asked, so a refused request costs the parse and the session
+//! read alone and an admitted one holds its slot for the whole answer. The pool
+//! is a second instance of [`skep_util::permits::Permits`], disjoint from the
+//! reconstruction pool — a scan spends no reconstruction permit and a
+//! reconstruction spends no scan permit. The bound admits or refuses a request
+//! (`503 scan_busy`, retry-class, the body naming the op) and never alters an
+//! answer: M7 and M8 are not told a query is bounded. A concurrency bound,
+//! never a rate statement.
 //!
 //! **Writes go through one card** (`skep-core`'s `commits`): `POST /op` —
 //! the daemon's only write route — hands each write its sequence admits to

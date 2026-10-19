@@ -11,11 +11,11 @@ use skep_core::limits::EDGE_HOLD_DOWN;
 /// The cap on class scans admitted at `/op` at once (PUB-8.36, PUB-8.37).
 ///
 /// Class scans (wire v7.9) are the link-discovery reads [`is_class_scan`]
-/// enumerates, each of which walks the link store end to end — M7's `stab`
-/// is "a brute scan of `links`" and `match_links` drives its first
-/// constraint through it — or, the lineage pair, the whole supersession
-/// class, and pays a span comparison per link whose count the request
-/// sizes, repeatable at will from any unauthenticated peer.
+/// enumerates, each of which reads the link store at a cost the world sets
+/// rather than the request — the whole active slice for an unconstrained
+/// descriptor, the whole supersession class for the lineage pair, and every
+/// link a region or a class reaches for the reads M7 answers from its
+/// coverage index — repeatable at will from any unauthenticated peer.
 ///
 /// The reconstruction pool's own number
 /// ([`crate::history::MAX_CONCURRENT_RECONSTRUCTIONS`]), for the same reason
@@ -139,44 +139,47 @@ impl ClassScans {
 /// Returns whether `op` is a class scan, one of the reads the pool bounds.
 ///
 /// It is the class-scan test (wire v7.9; PUB-6.54, PUB-6.56, PUB-8.36) —
-/// the one statement of what the pool bounds. As M7 is built that is the op
-/// and never the shape of the query: `LinkState::stab` is "a brute scan of
-/// `links` reading each endset's spans — trivially correct, and
-/// `Θ(|links| × |query spans| × |slot spans|)`", and
-/// `LinkState::match_links` drives its first constraint through it and
-/// narrows the survivors with the rest. So there is no index for a narrow
-/// slot to be pinned against, and every read that reaches either primitive
-/// walks the whole store however its slots are spelled.
+/// the one statement of what the pool bounds — and it bounds the op, never
+/// the shape of the query. M7 answers `LinkState::stab` from its coverage
+/// index, a probe per query span and a step per link it finds, and
+/// `LinkState::match_links` answers its first constraint by a `stab` and
+/// narrows what that finds with the rest; only its unconstrained form walks
+/// the whole store. So a member costs the links its query reaches, or the
+/// world's whole slice or class, and the store sets either: a region over a
+/// widely linked document, a class every board writes into and the
+/// all-`"any"` query are each as large as the world makes them. The
+/// membership is the wire's list, held by op whatever each member costs.
 ///
-/// **The population**, by cost, each citing what it reaches:
+/// **The population**, each member citing what it reaches:
 ///
 /// * the FTT family (`find_links_ftt`, `count_ftt`, `window_ftt`) — one
-///   scan, at `|query spans| × |slot spans|` per link, with the span count
-///   and each span's start tumbler the request's. The all-`"any"` query is
-///   `match_links`' unconstrained branch, `scan(view, |_| true)`, one
-///   residence lookup per link and no span comparison, so it is the
-///   cheapest member: a query constraining a second slot is that scan plus
-///   work, never less;
+///   `match_links`: its smallest constraint answered by a `stab`, and each
+///   other tested on every link that finds, at
+///   `|query spans| × |slot spans|` apiece, with the span counts and each
+///   span's start tumbler the request's. The all-`"any"` and home-only
+///   queries are `match_links`' unconstrained branch, a walk of the whole
+///   active slice with one residence lookup per link, the one member whose
+///   cost is the store's size whatever its query;
 /// * the region family (`find_links_v`, `count_v`, `window_v`,
-///   `retrieve_endsets`) — three scans, one `stab` per v1 slot as
+///   `retrieve_endsets`) — three `stab`s, one per v1 slot as
 ///   [M8's cost statement](skep_discovery#cost) counts them, each at up to
-///   [`skep_discovery::MAX_IMAGE_RUNS`] query spans per link. That constant
-///   caps the image and assigns what it cannot reach — "`#runs(d)` and
-///   `|links|` are the WORLD's … they stay with request rate and
-///   concurrency, which are M10's" — to this seat;
-/// * `delete_orphans` — six, three `stab`s over the deleted runs and three
-///   over the retained (the same statement), and the dearest read on the
-///   surface: it takes no owner gate by design, so every asker reaches it on
-///   any registered document;
-/// * `edition_claims` — one, a `match_links` at a single-span query, behind
-///   a registration gate. The query span count is not the request's, but the
-///   store walk is the same walk, and it is strictly dearer per link than the
-///   all-`"any"` query above;
+///   [`skep_discovery::MAX_IMAGE_RUNS`] query spans and a step per link the
+///   region reaches. That constant caps the image and assigns what it cannot
+///   reach — "`#runs(d)` and `|links|` are the WORLD's … they stay with
+///   request rate and concurrency, which are M10's" — to this seat;
+/// * `delete_orphans` — six `stab`s, three over the deleted runs and three
+///   over the retained (the same statement), the most of any read, and it
+///   takes no owner gate by design, so every asker reaches it on any
+///   registered document;
+/// * `edition_claims` — one `match_links` at a single-span `to` range,
+///   behind a registration gate: a `stab`, then a type test on every claim
+///   the range reaches, so it costs the claims on the target, which its
+///   depositors choose;
 /// * `in_claims`, `out_claims` — no store walk: M8 asks M7's typed `observe`
 ///   of the supersession class, a walk of that class's typed slice behind a
 ///   residence gate, one coverage test per claim (the same statement). The
 ///   class is the world's, not the request's — every supersession claim in
-///   the docuverse is in it — so the walk is world-sized as the store's is.
+///   the docuverse is in it — so the walk is world-sized.
 ///
 /// **Nothing else is bounded**, and each absence is a fact about the read
 /// rather than a judgement: `image`, `project` and `discoverable_from` walk
@@ -228,11 +231,10 @@ mod tests {
 
     /// Checks the class-scan test over the op and not over the query's slots.
     ///
-    /// As M7 is built every link-discovery read walks the store end to end,
-    /// or — the lineage pair — the whole supersession class, so the eleven
-    /// bounded ops are bounded whatever their slots hold — a second
-    /// constrained slot, an annihilating `"empty"`, a narrow region — and the
-    /// reads that walk no link store are bounded by nothing.
+    /// The eleven bounded ops are the wire's class scans, and the pool bounds
+    /// them whatever their slots hold — a second constrained slot, an
+    /// annihilating `"empty"`, a narrow region — while the reads that walk no
+    /// link store are bounded by nothing.
     ///
     /// Every row is parsed through the codec rather than built by hand, so
     /// the test reads the frames a client sends. The two lists are disjoint,
@@ -241,7 +243,7 @@ mod tests {
     /// row's assertion where a list names it, and a new op's bounded row
     /// added without restating the count fails the last assertion.
     #[test]
-    fn every_link_store_walking_read_is_bounded_whatever_its_slots_hold() {
+    fn every_class_scan_is_bounded_whatever_its_slots_hold() {
         /// The bounded arm's size, restated.
         ///
         /// Moving the arm is a visible decision here, the discipline this
@@ -260,8 +262,8 @@ mod tests {
         let bounded = [
             // The FTT family, at every slot spelling: the wire's directory
             // shape, the whole store, the annihilated `"empty"`, home-only,
-            // and a second slot constrained, which is that same scan plus a
-            // comparison per link and so costs strictly more.
+            // and a second slot constrained, which tests each link the first
+            // finds.
             format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q("\"any\"", "\"any\"", "\"any\"", ty)),
             format!(
                 r#"{{"op":"find_links_ftt","q":{}}}"#,
@@ -278,18 +280,18 @@ mod tests {
                 r#"{{"cur":null,"n":16,"op":"window_ftt","q":{}}}"#,
                 q("\"any\"", "\"any\"", "\"empty\"", ty)
             ),
-            // The region family: three scans apiece, one per v1 link slot.
+            // The region family: three stabs apiece, one per v1 link slot.
             format!(r#"{{"d":"1.0.1.0.1","op":"find_links_v","region":{region}}}"#),
             format!(r#"{{"d":"1.0.1.0.1","op":"count_v","region":{region}}}"#),
             format!(
                 r#"{{"cur":null,"d":"1.0.1.0.1","n":16,"op":"window_v","region":{region}}}"#
             ),
             format!(r#"{{"d":"1.0.1.0.1","op":"retrieve_endsets","region":{region}}}"#),
-            // Six scans, and no owner gate: the dearest read on the surface.
+            // Six stabs, and no owner gate.
             r#"{"d":"1.0.1.0.1","op":"delete_orphans","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#
                 .to_string(),
-            // A walk of the supersession class apiece, and one store scan at
-            // a single-span query.
+            // A walk of the supersession class apiece, and one `match_links`
+            // at a single-span query.
             r#"{"op":"in_claims","y":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
             r#"{"op":"out_claims","x":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
             r#"{"op":"edition_claims","target":"1.0.1.0.1"}"#.to_string(),
@@ -311,7 +313,7 @@ mod tests {
         let mut names: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
         for frame in &bounded {
             let op = parse(frame);
-            assert!(is_class_scan(&op), "walks the link store, so it is bounded: {frame}");
+            assert!(is_class_scan(&op), "a class scan, so it is bounded: {frame}");
             names.insert(skep_core::codec::op_name(op.kind()));
         }
         for frame in &unbounded {

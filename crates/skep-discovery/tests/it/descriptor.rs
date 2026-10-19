@@ -91,8 +91,9 @@ fn the_descriptor_states_its_own_zero() {
 }
 
 /// §3 — the conjunction is handed to M7 smallest constraint first, because
-/// M7 drives ONE whole-store scan with the first and narrows the survivors
-/// with the rest. That order is cost, and no answer shows it. What an answer
+/// M7 answers the first by one probe of its coverage index per query span and
+/// narrows what it finds with the rest. That order is cost, and no answer
+/// shows it. What an answer
 /// can show is the one way a reordering could move it: by parting an endset
 /// from its slot. A descriptor whose big constraint is FROM and small is TO
 /// answers the links it would answer unsorted, and its MIRROR — the same two

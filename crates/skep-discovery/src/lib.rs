@@ -189,9 +189,12 @@
 //!
 //! ## Cost
 //!
-//! What each read walks: M7's link store, counted in M7's primitives (M7
-//! states `stab` and `match_links` as scans of the store in v1), and M5's
-//! arrangement, where a read walks one document's runs or joins against them.
+//! What each read walks: M7's link store, counted in M7's primitives — M7
+//! answers a `stab` from its coverage index, one probe per query span plus
+//! one step per link it finds, and `match_links` answers its first constraint
+//! by a `stab` and its unconstrained form by a walk of the whole store — and
+//! M5's arrangement, where a read walks one document's runs or joins against
+//! them.
 //! A caller that admission-controls these reads — the daemon's scan pool
 //! does — prices every one of them from this list, those that walk no link
 //! store included, so a change to what any line says of either store is a
@@ -218,9 +221,10 @@
 //!   adds one `readlink` per candidate the home rule admits.
 //! * the descriptor family ([`findlinks_ftt_on`], [`count_ftt_on`],
 //!   [`window_ftt_on`]) — one `match_links`, the smallest constraint driving
-//!   its scan (the whole active slice when nothing is constrained); none when
-//!   the descriptor is unsatisfiable. The home slot is a post-filter and
-//!   narrows nothing M7 walks.
+//!   its `stab` and the rest narrowing what that finds (a walk of the whole
+//!   active slice when nothing is constrained); none when the descriptor is
+//!   unsatisfiable. The home slot is a post-filter and narrows nothing M7
+//!   walks.
 //! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
 //!   over the retained (none when nothing is retained), and none at all for a
 //!   request past the run budget. Ahead of every one, each request past the

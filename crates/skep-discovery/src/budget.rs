@@ -10,7 +10,7 @@
 
 /// The most arrangement I-runs one request may make M8 materialize or join
 /// against, and so the ceiling on the multiplier the REQUEST applies to the
-/// world-sized scan behind it.
+/// stores' work behind it.
 ///
 /// ONE constant, held at the four sites that read a document's runs, each
 /// against the run count that site's OWN work multiplies — so the number is
@@ -47,19 +47,19 @@
 /// never the fragmentation itself.
 ///
 /// The budget: the runs become one side of a join in every case — lifted into
-/// a query `Endset` for M7's `stab`, which walks the whole store testing
-/// every query span against every slot span of every link; lifted into an
-/// I-extent apiece for the pointwise touch test; handed to M5's `project`,
-/// which states the cost as `#runs(d) × |coverage|` and leaves admission
-/// control to its caller. `2^12` is this workspace's existing answer for how
-/// large one side of a join may be (M6's COMPARE operand and its coverage
-/// budget both). It is also M7's `MAX_SLOT_SPANS`, the ceiling a STORED slot
-/// is held to — a query endset costs more than a stored one, never less — and
-/// M10's per-array wire cap, so a FLAT region of 4096 spans each resolving to
-/// one run — the largest region the transport admits — passes the run count
-/// unchanged. It passes the walk (below) too over any reading surface of at
-/// most 4096 content runs; over a more fragmented surface the walk decides,
-/// and it refuses such a region when its spans reach far along the run-list.
+/// a query `Endset` for M7's `stab`, which probes M7's coverage index once
+/// per query span and takes a step per link it finds; lifted into an I-extent
+/// apiece for the pointwise touch test; handed to M5's `project`, which
+/// states the cost as `#runs(d) × |coverage|` and leaves admission control to
+/// its caller. `2^12` is this workspace's existing answer for how large one
+/// side of a join may be (M6's COMPARE operand and its coverage budget both).
+/// It is also M7's `MAX_SLOT_SPANS`, the ceiling a STORED slot is held to,
+/// and M10's per-array wire cap, so a FLAT region of 4096 spans each
+/// resolving to one run — the largest region the transport admits — passes
+/// the run count unchanged. It passes the walk (below) too over any reading
+/// surface of at most 4096 content runs; over a more fragmented surface the
+/// walk decides, and it refuses such a region when its spans reach far along
+/// the run-list.
 ///
 /// What it refuses is the shape no wire cap prices: the region×image product,
 /// where each admitted span resolves to the whole of a fragmented document.

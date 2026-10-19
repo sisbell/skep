@@ -41,12 +41,17 @@
 /// `Resolve` slot reach without naming it. So a slot at budget is ~2 MB live
 /// at the shallow end and ~70 MB at the deep one (~21 MB journaled), and a
 /// three-slot MAKELINK stores up to ~200 MB from a ~6 MB frame; M10's
-/// `Codec::parse` doc carries the arithmetic. `MAX_TXN_BYTES` does not bound
-/// the live figure: it is charged against the encoded transaction after the
-/// closure returns, and a span's encoded form is a fraction of its live one,
-/// so the deep three-slot MAKELINK journals inside it. MAKELINK's three slots
-/// are built and held under M2's applier lock; `emit` builds its value before
-/// the transact, and an `editlink` successor is built entirely by its caller.
+/// `Codec::parse` doc carries the arithmetic. The spanfilade files every kept
+/// span once more — its start, a pointer to its link and its coordinates — at
+/// order 0.4 KB a span at the shallow end and 6 KB at the deep one, about as
+/// much again as the span and about half as much, so the index adds ~2 MB and
+/// ~26 MB a slot at budget, live and never journaled. `MAX_TXN_BYTES` does not
+/// bound the live figure: it is charged against the encoded transaction after
+/// the closure returns, and a span's encoded form is a fraction of its live
+/// one, so the deep three-slot MAKELINK journals inside it. MAKELINK's three
+/// slots are built and held under M2's applier lock, and every deposit's slots
+/// are filed there; `emit` builds its value before the transact, and an
+/// `editlink` successor is built entirely by its caller.
 ///
 /// It bounds a slot's result and, the resolution being pulled a run at a
 /// time and stopped here, the live peak of building it — and nothing else.
@@ -56,10 +61,10 @@
 /// list. And skepd's codec, M10's production `Codec`, additionally reuses
 /// this number as its wire list cap (`MAX_WIRE_LIST = MAX_SLOT_SPANS`), which
 /// makes it the bound on a query endset's span count too — a use this
-/// argument does not cover: a query's cost is
-/// `|links| × |query spans| × |slot spans|` ([`crate::LinkState::stab`]), and
-/// this constant bounds two of those three factors while the store size,
-/// which no caller chooses, is the third.
+/// argument does not cover: a stab ([`crate::LinkState::stab`]) probes the
+/// spanfilade once per query span, so this constant bounds its probes, and
+/// what it pays past them is its hits, which the store's contents set and no
+/// caller chooses.
 pub const MAX_SLOT_SPANS: usize = 4096;
 
 /// The most run-list steps one `Resolve` slot's specs may command.

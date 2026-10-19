@@ -48,8 +48,9 @@ const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 /// query, keying a cache on `canonical_key`) would owe the partition
 /// `Run::iextent` names. Empty `runs` skip the store: M7 answers
 /// `stab(slot, ⟨⟩, ·) = ∅` for the endset they lift to, so the short-circuit
-/// saves a scan rather than changing an answer — asked of the lifted endset,
-/// which is empty exactly when the runs were, every run lifting to one span.
+/// saves three stabs rather than changing an answer — asked of the lifted
+/// endset, which is empty exactly when the runs were, every run lifting to one
+/// span.
 ///
 /// The runs are taken as a SEQUENCE rather than a slice, because that is all
 /// the lift reads: a caller whose runs are already contiguous passes the

@@ -3973,11 +3973,13 @@ directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
 siblings (PUB-6.55, PUB-6.56), where the daemon pays a per-candidate home
 test over every link of the class. THE COST AS BUILT: constraining `home`
 narrows none of that walk. A home-constrained `find_links_ftt`,
-`count_ftt` or `window_ftt` is served by the same scan of the link
-store's whole ACTIVE slice, driven by its link-slot constraints (`from`,
-`to`, `ty`; none constrained is the whole slice), the `home` slot a
-per-link residence post-filter behind it — so its cost is the board's
-active links (the class's, where `ty` is constrained), never the home's.
+`count_ftt` or `window_ftt` is served by the same candidate set — the
+ACTIVE links its link-slot constraints match (`from`, `to`, `ty`),
+answered from the link store's coverage index, or the whole active slice
+when none is constrained — the `home` slot a per-link residence
+post-filter behind it, so its cost is the class's links where `ty` is
+constrained and the board's active links where nothing is, never the
+home's.
 No home-granular skip exists at this build — an index of links by home,
 and the skip in the descriptor scan, is not built — and until one is, a
 home-constrained query pays what the class scan pays while the bound

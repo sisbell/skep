@@ -83,10 +83,11 @@ use marshal::{j_response, req_pairs};
 /// it — an address is ~19 wire bytes and the span it becomes is two
 /// multi-component `BigUint` tumblers, order half a kilobyte — so a list
 /// bounded only by the request body names hundreds of thousands of spans.
-/// A QUERY endset is built the same way and then costs more, not less: M8
-/// answers the ftt family by scanning the link store and testing every
-/// query span against every slot span of every link, so a query's span
-/// count multiplies the whole store rather than one stored value.
+/// A QUERY endset is built the same way and then costs more, not less: M7
+/// answers a descriptor's first constraint from its coverage index at one
+/// probe per query span, and tests every later constraint's spans against
+/// every link the first finds, so a query's span count multiplies the links
+/// it reaches rather than one stored value.
 ///
 /// Reading the two budgets as one number is the point: a query slot larger
 /// than the largest slot that can be STORED cannot discriminate anything a

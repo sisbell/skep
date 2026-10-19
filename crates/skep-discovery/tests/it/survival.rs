@@ -362,15 +362,14 @@ fn the_preview_answers_a_published_target_the_delete_refuses() {
     );
 }
 
-/// §6 — the one refusal the preview holds and DELETE does not: the run
-/// budget, on the preview's own work. Its two stabs take the deleted range's
-/// runs and the retained as their query — `d`'s own arrangement split at most
-/// twice — and each walks the whole link store testing those spans against
-/// every slot span of every link, where DELETE stabs nothing. At the budget
-/// the preview answers; one run past it, it refuses every range, the whole
-/// document included, while the DELETE it previews still admits the request.
-/// The request's own faults are named first, on a document the budget
-/// refuses.
+/// §6 — the one refusal the preview holds and DELETE does not: the run budget,
+/// on the preview's own work. Its two stabs take the deleted range's runs and
+/// the retained as their query — `d`'s own arrangement split at most twice —
+/// and each probes M7's coverage index once per span, where DELETE stabs
+/// nothing. At the budget the preview answers; one run past it, it refuses
+/// every range, the whole document included, while the DELETE it previews still
+/// admits the request. The request's own faults are named first, on a document
+/// the budget refuses.
 #[test]
 fn delete_orphans_refuses_a_document_past_the_run_budget() {
     let k = kernel();

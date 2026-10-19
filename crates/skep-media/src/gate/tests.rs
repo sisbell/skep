@@ -34,6 +34,34 @@ fn the_deposit_function_is_the_cell_schemas_and_a_creation_takes_the_gates_terms
     assert_eq!(record.expires, now + 1_000);
 }
 
+/// Checks that the gate opens the blob store at its directory, `blobs`.
+///
+/// The name is the format every board holds its deposits under (M-I5 (e);
+/// wire.md §Media, "the blob store under `blobs/` in the data dir"), so the
+/// suite holds it to a literal: a change to it is a migration of every board,
+/// and wire.md §Media and RUNBOOK.md move with it. A fresh open makes that
+/// one directory in the data directory and nothing beside it, the store's two
+/// logs inside it.
+#[test]
+fn the_gate_opens_the_store_at_its_directory_and_the_directory_is_blobs() {
+    assert_eq!(
+        STORE_DIR, "blobs",
+        "the format every board holds its deposits under: a change is a migration of every \
+         board, and wire.md §Media and RUNBOOK.md move with it"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let _gate = MediaGate::open_with(dir.path(), MediaOptions::default()).expect("the store opens");
+    let mut made: Vec<String> = std::fs::read_dir(dir.path())
+        .expect("the data directory lists")
+        .map(|entry| entry.expect("an entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    made.sort();
+    assert_eq!(made, [STORE_DIR], "the open makes the store's directory and nothing beside it");
+    for log in ["uploads.log", "leases.log"] {
+        assert!(dir.path().join(STORE_DIR).join(log).is_file(), "the store's {log} stands in it");
+    }
+}
+
 /// THE FINISH through the gate (clause (7); `operations.md` §1.1 m9): the
 /// lease it takes runs the lease interval in force, and the finish is
 /// NOTED — with the floor's binding said and room back above the floor, the

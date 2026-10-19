@@ -44,13 +44,16 @@ use skep_util::source::Source;
 // and the help renders both figures from the constants. The default
 // per-account limit's two constants are the media resource's, re-exported
 // the same way, so the help's `--uploads` sentence renders the default it
-// describes from the constants that supply it. `DEFAULT_PORT` is the
-// library's too, because other programs' defaults are written to meet it —
-// `skep-mcp`'s `SKEPD_URL`, `skep-dev serve --own`'s `--port` — and their
-// suites read it there.
+// describes from the constants that supply it; and so are the blob store's
+// directory and the deposit's designation, so the `--data-dir` and `pull`
+// sentences name where the store stands and where a pulled file lands from
+// the names the gate uses. `DEFAULT_PORT` is the library's too, because other
+// programs' defaults are written to meet it — `skep-mcp`'s `SKEPD_URL`,
+// `skep-dev serve --own`'s `--port` — and their suites read it there.
 use skepd::{
     bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin,
-    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT, DEFAULT_WORKERS, MIN_WORKERS,
+    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT, DEFAULT_WORKERS, DESIGNATION,
+    MIN_WORKERS, STORE_DIR,
 };
 
 /// The bind's default: the loopback address (AUTH-4.57 (a)).
@@ -516,7 +519,7 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
 
   --data-dir <DIR>   the board's directory (env: SKEPD_DATA_DIR): the
                      journal and its checkpoints, the blob store under
-                     blobs/, and the change feed's files — commits.log,
+                     {STORE_DIR}/, and the change feed's files — commits.log,
                      the four index files feed-index.log, feed-offsets.log,
                      feed-masked.log and feed-streams.log, and
                      feed-attest.log; created if absent, recovered if
@@ -623,7 +626,7 @@ port, no session — and write no log line of the daemon's:
                      reported as journal.tail_cut; a copy the open cannot
                      write is refused by name — run it over a writable copy
   skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
-                     restore <FILE> at blobs/blake3/<its hash> by the PUT's
+                     restore <FILE> at {STORE_DIR}/{DESIGNATION}/<its hash> by the PUT's
                      own install order — REPLACE where a file stands — with
                      no lease, no record and no journal entry: a restore,
                      never a deposit. Without --hash the board's journal is

@@ -4,10 +4,10 @@
 //! WRITTEN", "AND THE BLOB STORE NEVER TAKES THE JOURNAL's LAST BYTES";
 //! §Recovery, the limits record; the register M-I6 (a), (b), (e), (f);
 //! M-I2 (e)): the daemon's media resource — the blob store opened under
-//! `blobs/` in the data dir, the limits in force, the hold a stream has on
-//! its upload, and the three scopes a PUT is refused on — and THE BINDING
-//! the write door asks for a cell: is this hash this principal's, under a
-//! live lease, and is the file whole?
+//! `blobs/` in the data dir ([`STORE_DIR`]), the limits in force, the hold
+//! a stream has on its upload, and the three scopes a PUT is refused on —
+//! and THE BINDING the write door asks for a cell: is this hash this
+//! principal's, under a live lease, and is the file whole?
 //!
 //! THE THREE SCOPES, in the order they are read — the requester's own
 //! record first (M-I2 (e)): THE OWN SCOPE, the principal's BASE plus its
@@ -206,6 +206,24 @@ const fn same_str(a: &str, b: &str) -> bool {
     }
     true
 }
+
+/// The blob store's directory in the board's data directory: `blobs`.
+///
+/// It is the one spelling of the store's root (wire.md §Media, "the blob
+/// store under `blobs/` in the data dir"; M-I5 (e), one volume, one moment's
+/// copy): the gate opens the store there ([`MediaGate::open_with`]), the
+/// gate's and the pruner's lines name what stands under it, and the
+/// operator's inventory and pull read and install the store's files there.
+///
+/// It is a format name, as the store's two log names are, and never a
+/// setting: every board already written holds its deposits under it. An open
+/// under another name makes an empty store beside the board's own and
+/// answers every picture's file missing, so the name moves only with a
+/// migration that carries the directory across. It is a direct child of the
+/// data directory, on the journal's own volume: the store fsyncs its root's
+/// parent as the board's directory (M-I5 (a)), and the floor reads the free
+/// space of the volume its root stands on (M-I5 (f)).
+pub const STORE_DIR: &str = "blobs";
 
 /// THE FLOOR's CONSTANT HALF — 256 MiB of the volume's free space, INTERIM
 /// (`media.md` Op inventory 1, "THE LARGER OF 256 MiB AND TWICE THE NEWEST
@@ -585,16 +603,17 @@ impl ClassedDoor {
 }
 
 impl MediaGate {
-    /// Open the blob store under `data_dir/blobs` — its reconciliation and
-    /// compaction complete before this returns — under `options`, with the
-    /// daemon's default limits in force (the volume's capacity read ONCE
-    /// here, off the opened store; a host that cannot answer it leaves the
-    /// default at its floor) and an EMPTY, NOT-READY cell index: the daemon
-    /// hands the index to the write path and starts the walk that readies
-    /// it.
+    /// Open the blob store at [`STORE_DIR`] in `data_dir` — its
+    /// reconciliation and compaction complete before this returns — under
+    /// `options`, with the daemon's default limits in force (the volume's
+    /// capacity read ONCE here, off the opened store; a host that cannot
+    /// answer it leaves the default at its floor) and an EMPTY, NOT-READY
+    /// cell index: the daemon hands the index to the write path and starts
+    /// the walk that readies it.
     pub fn open_with(data_dir: &Path, options: MediaOptions) -> io::Result<MediaGate> {
         let now = wall_clock_ms();
-        let store = Store::open(data_dir.join("blobs"), Duration::from_millis(LEASE_HORIZON_MS), now)?;
+        let root = data_dir.join(STORE_DIR);
+        let store = Store::open(root, Duration::from_millis(LEASE_HORIZON_MS), now)?;
         let capacity = store.capacity().ok();
         Ok(MediaGate {
             store,
@@ -1488,7 +1507,7 @@ impl fmt::Display for UnreadEndedLine<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "a deposit's file is read again (blobs/{}/{}), {} reads failed over {} ms",
+            "a deposit's file is read again ({STORE_DIR}/{}/{}), {} reads failed over {} ms",
             self.episode.designation,
             self.episode.hex,
             self.episode.failed,

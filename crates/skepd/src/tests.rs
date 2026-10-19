@@ -104,7 +104,10 @@ fn the_upload_setting_is_open_unless_closed() {
 /// named one by one and never by a glob such as `feed-*.log`, which matches
 /// `feed-attest.log` too: removing what that glob names, to force the index
 /// files' rebuild, would delete the only copy of each signature the attest
-/// store holds below the reclaim floor.
+/// store holds below the reclaim floor. The store's directory, and the place
+/// the pull's sentence installs a file at, are read through the constants
+/// the gate opens the store at and files every deposit under, so the help
+/// names no place the daemon does not use.
 #[test]
 fn the_usage_names_what_the_data_directory_holds() {
     let text = usage();
@@ -113,10 +116,11 @@ fn the_usage_names_what_the_data_directory_holds() {
         .nth(1)
         .and_then(|rest| rest.split("\n  --port <PORT>").next())
         .expect("the --data-dir sentence");
+    let store = format!("{STORE_DIR}/");
     for named in [
         "journal",
         "checkpoints",
-        "blobs/",
+        store.as_str(),
         "commits.log",
         "feed-index.log",
         "feed-offsets.log",
@@ -128,6 +132,9 @@ fn the_usage_names_what_the_data_directory_holds() {
         assert!(sentence.contains(named), "the --data-dir sentence names {named}: {sentence:?}");
     }
     assert!(!sentence.contains('*'), "no glob names the index files: {sentence:?}");
+    let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let pulled = format!("restore <FILE> at {STORE_DIR}/{DESIGNATION}/<its hash>");
+    assert!(folded.contains(&pulled), "the pull's sentence names {pulled:?}: {folded}");
 }
 
 /// THE LOOSE DIRECTORY's LINE at fixed inputs: the directory as named,

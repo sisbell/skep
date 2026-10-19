@@ -2632,7 +2632,10 @@ It reads the op's values and, for a shot, the staging draft's own runs off
 the locked snapshot, through M5's and M4's public reads and the
 `ReadableWorld` seam, and the index, the lease and the file through the
 gate. `gate.rs` — THE GATE: the blob store opened under `blobs/` in the
-data dir, the limits in force (the daemon's default — one eighth of the
+data dir — `STORE_DIR`, the one spelling of that directory's name, which
+the gate's and the pruner's lines and the daemon's two tools read: a format
+name every board holds its deposits under, moved only with a migration —
+the limits in force (the daemon's default — one eighth of the
 volume's capacity read once at the open, never below 256 MiB — and the
 install hook the serving layer's channel will call, compiled under
 `test-hooks` until it does, a cap past the route's refused, never

@@ -249,6 +249,15 @@ pub use skep_media::MediaOptions;
 /// media crate to read them.
 pub use skep_media::limits::{DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE};
 
+/// The blob store's directory and the deposit's designation, `skep-media`'s.
+///
+/// They are re-exported for the reason the default limit's two constants
+/// are: the binary's help names where the store stands in the data directory
+/// and where the pull installs a file from the names the gate opens the store
+/// at and files every deposit under (M-I5 (e)), so it cannot name a place the
+/// daemon does not use, and names no media crate to read them.
+pub use skep_media::{cell::DESIGNATION, gate::STORE_DIR};
+
 /// The dump [`Daemon::dump_visible_to`] answers with.
 ///
 /// It is re-exported for the reason the four above are, and only where that

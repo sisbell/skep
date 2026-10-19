@@ -91,7 +91,7 @@ use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, OpenError, SaltSource,
 };
 use skep_media::cell::{DESIGNATION, HASH_BYTES, PINNED_DESIGNATIONS};
-use skep_media::gate::{wall_clock_ms, Counted, MediaGate, DEPOSIT_FUNCTION};
+use skep_media::gate::{wall_clock_ms, Counted, MediaGate, DEPOSIT_FUNCTION, STORE_DIR};
 use skep_media::index::{self, CellIndex};
 use skep_namespace::{HasM3, PrincipalId};
 use skep_util::json::{obj, parse_lower_hex};
@@ -427,9 +427,9 @@ pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pull
         }
     };
     // The gate's function for the schema's designation — the designation
-    // the index read above names — so the file lands where the binding and
-    // the fetch read it.
-    let root = data_dir.join("blobs");
+    // the index read above names — under the store's directory the gate
+    // opens, so the file lands where the binding and the fetch read it.
+    let root = data_dir.join(STORE_DIR);
     let finished = Store::install_file(&root, DEPOSIT_FUNCTION, file, Some(&hex)).map_err(ToolError::Install)?;
     Ok(Pulled { path: root.join(&finished.designation).join(&finished.hex), hex: finished.hex, size: finished.size })
 }
@@ -508,7 +508,7 @@ fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
     })
 }
 
-/// Returns the store's inspection under `dir/blobs`.
+/// Returns the store's inspection at [`STORE_DIR`] in `dir`.
 ///
 /// `None` where no `blobs/` stands — a board that never opened its store.
 ///
@@ -517,7 +517,7 @@ fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
 /// [`ToolError::Io`] where the store cannot be inspected
 /// (`Store::inspect`'s refusals).
 fn inspect_store(dir: &Path) -> Result<Option<Inspection>, ToolError> {
-    let root = dir.join("blobs");
+    let root = dir.join(STORE_DIR);
     if !root.is_dir() {
         return Ok(None);
     }

@@ -95,7 +95,7 @@ use skep_blobs::{LogSize, LogStop, Store};
 use skep_util::notice::{self, Class};
 
 use crate::cell::PINNED_DESIGNATIONS;
-use crate::gate::MediaGate;
+use crate::gate::{MediaGate, STORE_DIR};
 use crate::limits::{COMPACTION_MIN_LINES, COMPACTION_TRIGGER};
 
 /// What one pass did: the test hook's answer, and the operator's line.
@@ -561,7 +561,7 @@ fn halts(media_gate: &MediaGate) -> Result<Option<String>, PassFailure> {
         .find(|name| !PINNED_DESIGNATIONS.contains(&name.as_str()));
     Ok(match (foreign, media_gate.index().first_halt()) {
         (Some(dir), _) => Some(format!(
-            "a designation directory blobs/{dir}/ is outside the set this build pins ({}): a sidecar of another build's schema",
+            "a designation directory {STORE_DIR}/{dir}/ is outside the set this build pins ({}): a sidecar of another build's schema",
             PINNED_DESIGNATIONS.join(", ")
         )),
         (None, Some(mark)) => Some(format!(

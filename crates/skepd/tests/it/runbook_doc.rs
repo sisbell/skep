@@ -6,9 +6,10 @@
 //! written, in the form `wire_doc.rs` pins the wire document.
 //!
 //! The setup a kept notebook runs under is pinned the same way, read at
-//! runtime: §3 step 2's command, §7's synced-folder sentence, and §9's two
-//! service units and its Windows question. The units are WORDS here — no
-//! test loads one. So are the figures the binary's constants supply, read
+//! runtime: §3 step 2's command and the blob store it keeps on the data
+//! directory's volume, §7's synced-folder sentence, and §9's two service
+//! units and its Windows question. The units are WORDS here — no test
+//! loads one. So are the figures the binary's constants supply, read
 //! through those constants, §3 step 2's variables, read off the binary's
 //! own help, §2's line for the journal damage a history read meets and step
 //! 5's reading of an attest cut, §1's line for a write refused for a cause
@@ -240,6 +241,44 @@ fn runbook_starts_a_kept_notebook_with_its_origin_and_local_trust_off() {
     ] {
         assert!(beneath.contains(place), "the paragraph beneath names {place}: {beneath}");
     }
+}
+
+/// Checks that §3 step 2 keeps the blob store on the data directory's volume.
+///
+/// The step says the directory is one volume with the store inside it (M-I5
+/// (e)), and that the store's directory — named through the constant the
+/// gate opens it at — never moves to another disk behind a symbolic link or
+/// a mount, which the daemon opens the store through and serves over: a
+/// snapshot then holds none of the pictures' files, and the free space the
+/// lines report is the other disk's. Room is the volume grown or the whole
+/// directory moved; and §1 step 2, where an operator at the floor looks for
+/// room, points there.
+#[test]
+fn runbook_keeps_the_blob_store_on_the_data_directorys_volume() {
+    use skepd::STORE_DIR;
+
+    let step =
+        collapsed(&passage("\n## 3. Start", "2. **Run it**", &["\n3. **Read the open's report**"]));
+    for fact in [
+        format!("The directory is one volume, the blob store inside it at `{STORE_DIR}/`"),
+        format!("Never move `{STORE_DIR}/` to another disk behind a symbolic link or a mount"),
+        "the daemon opens the store through either and serves on".to_string(),
+        "holds none of the pictures' files".to_string(),
+        "landing report is the other disk's".to_string(),
+        "grow the volume, or move the whole directory to a larger one".to_string(),
+    ] {
+        assert!(step.contains(&fact), "§3 step 2 says {fact:?}: {step}");
+    }
+    let room = collapsed(&passage(
+        "\n## 1. The full volume",
+        "2. **Make room first.**",
+        &["3. **At the floor"],
+    ));
+    let pointer = format!(
+        "Nor move `{STORE_DIR}/` to another disk behind a symbolic link or a mount to make room \
+         (Start, step 2)"
+    );
+    assert!(room.contains(&pointer), "§1 step 2 points to the store's volume: {room}");
 }
 
 /// §7 BACK UP, STEP 1 — NOTHING OF THE BOARD UNDER A SYNCED FOLDER (the

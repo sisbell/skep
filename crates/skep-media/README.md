@@ -23,7 +23,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The door**, `door` — `media_door(world, op, principal, &gate)`, the one
   step between the session layer's admission and the commit; `MediaRefusal`
   with its `token` and `disposition`, one variant per arm of the armed set.
-- **The gate**, `gate` — `MediaGate`: `open_with`; the admission API
+- **The gate**, `gate` — `MediaGate`: `open_with`, which opens the blob
+  store at `STORE_DIR` (`blobs`) in the data directory — the one spelling
+  of the store's directory, which the gate's and the pruner's lines and the
+  daemon's tools read, a format name every board holds its deposits under
+  and never a setting; the admission API
   `admit_declared`, `admit_creation`, `admit_bytes` and `claim` (its
   `Hold`), each refusal a `DepositScope` (`token`); THE DEPOSIT's TERMS —
   `create_upload` and `finish_upload`, the creation and the finish under

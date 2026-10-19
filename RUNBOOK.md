@@ -248,6 +248,8 @@ apart.
      and nothing rebuilds them.
 
    A pattern such as `feed-*.log` matches `feed-attest.log` too.
+   Nor move `blobs/` to another disk behind a symbolic link or a
+   mount to make room (Start, step 2).
 
 3. **At the floor, run the pruner's pass early.** A restart runs
    it, once the open is done and the cell index is rebuilt; after
@@ -841,6 +843,18 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    folder (Back up, step 1). One that does not exist is created
    readable by you alone, the directory mode 700 and each file 600;
    one that exists is recovered.
+
+   The directory is one volume, the blob store inside it at
+   `blobs/`. Never move `blobs/` to another disk behind a symbolic
+   link or a mount: the daemon opens the store through either and
+   serves on, but a snapshot of the data directory's volume (Back
+   up, step 1) then holds none of the pictures' files, nor does a
+   copy that keeps the link as a link, and the free space the open
+   and each checkpoint's landing report is the other disk's, so no
+   line says how near the journal's own volume is to full. For
+   room, grow the volume, or move the whole directory to a larger
+   one with the daemon stopped, starting it only once all of
+   `blobs/` has landed (Restore, step 4).
 
    `--origin` names the origin a signed session binds to, the
    loopback address at the daemon's port (8642 unless `--port`

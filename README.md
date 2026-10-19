@@ -50,7 +50,7 @@ beside them, the differential-conformance harness.
 | `skep-engine` | the one assembler: `World`, genesis, recovery, `world_at` |
 | `skep-core` | the daemon's core: the session layer, the commits (the door, the feed, the head), the wire codec; the daemon's two crates are what depends on the engine |
 | `skepd` | the daemon: HTTP/JSON wire v4, sessions, history, SSE |
-| `skep-mcp` | stdio MCP adapter for agent harnesses |
+| `skep-mcp` | stdio MCP adapter for agent harnesses, over the shell's core: one signed session, every wire op by name, search, a change pull, a blob fetch |
 | `skep-resolve` | the verifying registry resolver: a library a client embeds (no engine, no store, never `skepd`) |
 | `skep-search` | the search index: a library a client embeds — the document model, the tokenizer, the inverted index with positions (no engine, no store, never `skepd`) |
 | `skep-client` | the library every acting client embeds: the dialer, sessions, the key store, signing, the reader's verifier, the claim ceremony |
@@ -317,7 +317,9 @@ with a README and the two license texts:
 - `skep`, the command: the device key, the claim that makes a board
   yours, sessions, verify, health, bind, and the key ceremonies;
 - `skep-mcp`, the MCP adapter: an agent harness on stdio on one side,
-  the daemon's HTTP wire on the other;
+  the shell's core on the other — one signed session the adapter opens
+  at startup with the key its store holds for the agent's principal,
+  under which every tool is served;
 - `skep-provision`, the service behind a hosted board's sign-up: run on
   a host that serves boards for other people, as RUNBOOK.md §10 says —
   never on a notebook.

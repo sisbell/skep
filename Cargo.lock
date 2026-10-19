@@ -1482,8 +1482,9 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "skep-address",
+ "skep-client",
  "skep-identity",
- "skep-signature",
+ "skep-shell",
  "skepd",
 ]
 

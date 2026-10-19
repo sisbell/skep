@@ -866,10 +866,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    where with local trust on any loopback party may write as any
    principal. Leave local trust on only for a throwaway board you
    develop against, whose dev provider opens a bare session
-   (`README.md`, Running a daemon for frontend development), or
-   while you run `skep-mcp`, which opens bare sessions only, knowing
+   (`README.md`, Running a daemon for frontend development), knowing
    that every program on this machine, and every other user of it,
-   can then read your drafts and write as you.
+   can then read your drafts and write as you. `skep-mcp` needs none
+   of it: it opens a signed session with the key its store holds for
+   the agent's principal, so run it with local trust off, as you run
+   `skep`.
 
    The other settings follow, these two among them, each with its
    environment variable where it has one; a flag beats its variable.

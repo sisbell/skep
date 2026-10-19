@@ -201,7 +201,10 @@ foundation and on the stores above it.
 - `skepd` — the daemon (below), over its core, `skep-core`, and the
   operator's two tools over a board directory — the inventory and the pull
   — two subcommands of the one binary, run with no server.
-- `skep-mcp` — a stdio adapter for agent harnesses.
+- `skep-mcp` — a stdio adapter for agent harnesses over the shell's core
+  (`skep-shell`): one signed session for the process's life, every wire
+  op a tool of its name, the shell's calls, a change pull and a blob
+  fetch beside them.
 - `skep-resolve` — the verifying registry resolver, a LIBRARY a client
   embeds (the frontend, the `skep` command, a node's federation
   transport): the mirror of the registry board from a shipped root hint
@@ -1229,8 +1232,9 @@ each ceremony:
   board, its daemon walk in `tests/it/merge.rs`. Of the SURFACES the `skep
   merge` command is built — `skep-cli`'s `commands/merge.rs`, the one
   embedder that turns the feature on (§The command) — and no agent surface
-  is: the attendant is not built, and skep-mcp embeds no `skep-client`, so
-  its compose-and-report tool is not either. Neither is the supersession
+  is: the attendant is not built, and skep-mcp, which embeds `skep-client`
+  through `skep-shell`, turns the feature on nowhere, so its
+  compose-and-report tool is not either. Neither is the supersession
   claim over version members: the wire's `assert_sup` takes resident
   links alone, so the
   record's public link to the member and the daughter states the

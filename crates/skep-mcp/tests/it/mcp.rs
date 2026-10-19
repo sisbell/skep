@@ -1,195 +1,25 @@
 //! Integration against the real stack: an in-process skepd (it is a
 //! library crate in this workspace) on an ephemeral port over a temp data
-//! dir, a principal provisioned exactly as wire.md's end-to-end example,
-//! and the built `skep-mcp` binary spawned with env pointing at the daemon
-//! — real JSON-RPC driven through its stdin/stdout. Store semantics are
-//! trusted to the stores' own tests; these assert the adapter: protocol
-//! framing, verbatim pass-through (rejections included), the session's
-//! open, reissue and token, the reopen-and-reissue path across a daemon
-//! restart, and startup's refusals, the tools-file↔dispatch no-drift
-//! errors among them. The daemon and the principal are `common`'s; this
-//! file is the adapter's driver and the tests.
-//!
-//! Where a rule shows only in an answer the real daemon never gives —
-//! `unauthenticated` on cue, a reply cut short, bytes no canonical marshal
-//! writes — `common::stub_daemon` answers instead and hands back the
-//! requests it read; startup and the line protocol need no daemon at all.
+//! dir, its board claimed through the library so the adapter's store holds
+//! the claimant's key, and the built `skep-mcp` binary spawned with its
+//! settings naming the board — real JSON-RPC driven through its
+//! stdin/stdout. Store semantics are trusted to the stores' own tests;
+//! these assert the adapter: protocol framing, the board's verdict as
+//! data, the session's re-open across a daemon restart, the token in no
+//! answer and no log line, and startup's refusals — the settings, the
+//! tools-file↔dispatch no-drift errors among them. The fence's cases — the
+//! signed session, the seam, the tools, the pull, `SKEP_BOARD`, the
+//! session's life, a refusal as a result, the stream — are `agent.rs`'s.
+//! The daemon, the claim and the driver are `common`'s.
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{provision_principal_1, reply, spawn_daemon, stub_daemon, TempDir};
-
-// ── the adapter under test ───────────────────────────────────────────────
-
-struct Mcp {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
-    /// The adapter's log, when the test reads it (`spawn_logged`).
-    stderr: Option<ChildStderr>,
-    next_id: u64,
-}
-
-impl Mcp {
-    fn spawn(port: u16, principal: &str) -> Mcp {
-        Mcp::launch(port, principal, None, Stdio::inherit())
-    }
-
-    fn spawn_with_commons(port: u16, principal: &str, commons: Option<&str>) -> Mcp {
-        Mcp::launch(port, principal, commons, Stdio::inherit())
-    }
-
-    /// An adapter whose log the test reads, through `finish_logged`.
-    fn spawn_logged(port: u16, principal: &str) -> Mcp {
-        Mcp::launch(port, principal, None, Stdio::piped())
-    }
-
-    /// An adapter whose log no one reads: its stderr a pipe whose read end
-    /// is already closed, so every line it writes there fails (EPIPE).
-    fn spawn_unread(port: u16, principal: &str) -> Mcp {
-        let (reader, writer) = std::io::pipe().expect("a pipe");
-        drop(reader);
-        Mcp::launch(port, principal, None, Stdio::from(writer))
-    }
-
-    fn launch(port: u16, principal: &str, commons: Option<&str>, log: Stdio) -> Mcp {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
-        cmd.env("SKEPD_URL", format!("http://127.0.0.1:{port}"))
-            .env("SKEP_PRINCIPAL", principal)
-            .env_remove("SKEP_COMMONS")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(log);
-        if let Some(addr) = commons {
-            cmd.env("SKEP_COMMONS", addr);
-        }
-        let mut child = cmd.spawn().expect("spawn skep-mcp");
-        let stdin = child.stdin.take().expect("child stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
-        let stderr = child.stderr.take();
-        Mcp { child, stdin: Some(stdin), stdout, stderr, next_id: 0 }
-    }
-
-    fn send_line(&mut self, line: &str) {
-        let stdin = self.stdin.as_mut().expect("stdin open");
-        stdin.write_all(line.as_bytes()).expect("write to adapter");
-        stdin.write_all(b"\n").expect("write newline");
-        stdin.flush().expect("flush to adapter");
-    }
-
-    /// Raw bytes onto the adapter's stdin — for a line no `&str` can hold.
-    fn send_bytes(&mut self, bytes: &[u8]) {
-        let stdin = self.stdin.as_mut().expect("stdin open");
-        stdin.write_all(bytes).expect("write to adapter");
-        stdin.flush().expect("flush to adapter");
-    }
-
-    fn read_message(&mut self) -> Value {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let n = self.stdout.read_line(&mut line).expect("read from adapter");
-            assert!(n > 0, "adapter closed stdout unexpectedly");
-            if !line.trim().is_empty() {
-                return serde_json::from_str(line.trim()).unwrap_or_else(|e| {
-                    panic!("adapter wrote a non-JSON line ({e}): {line:?}")
-                });
-            }
-        }
-    }
-
-    /// One request → its response (the adapter answers in order).
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        self.next_id += 1;
-        let id = self.next_id;
-        self.send_line(
-            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string(),
-        );
-        let v = self.read_message();
-        assert_eq!(v["id"], json!(id), "responses correlate by id: {v}");
-        v
-    }
-
-    fn notify(&mut self, method: &str) {
-        self.send_line(&json!({"jsonrpc": "2.0", "method": method}).to_string());
-    }
-
-    fn initialize(&mut self) -> Value {
-        let v = self.request(
-            "initialize",
-            json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "test-harness", "version": "0"}
-            }),
-        );
-        self.notify("notifications/initialized");
-        v["result"].clone()
-    }
-
-    /// tools/call, returning (isError, text).
-    fn call(&mut self, tool: &str, args: Value) -> (bool, String) {
-        let v = self.request("tools/call", json!({"name": tool, "arguments": args}));
-        assert!(v.get("error").is_none(), "a call the adapter runs is never a JSON-RPC error: {v}");
-        let result = &v["result"];
-        assert_eq!(result["content"][0]["type"], "text", "one text block: {result}");
-        let is_error = result["isError"].as_bool().expect("isError present");
-        let text = result["content"][0]["text"].as_str().expect("text block").to_string();
-        (is_error, text)
-    }
-
-    /// tools/call that must reach skepd: its tool result's text, parsed as
-    /// JSON — a response document, or session_info's report.
-    fn call_json(&mut self, tool: &str, args: Value) -> Value {
-        let (is_error, text) = self.call(tool, args);
-        assert!(!is_error, "unexpected transport failure: {text}");
-        serde_json::from_str(&text)
-            .unwrap_or_else(|e| panic!("tool result's text is not JSON ({e}): {text}"))
-    }
-
-    /// Close stdin (EOF) and reap — the clean-exit path under test.
-    fn finish(mut self) -> std::process::ExitStatus {
-        drop(self.stdin.take());
-        self.child.wait().expect("wait for adapter")
-    }
-
-    /// Close stdin (EOF), read the adapter's log to its end, and reap.
-    fn finish_logged(mut self) -> (std::process::ExitStatus, String) {
-        drop(self.stdin.take());
-        let mut log = String::new();
-        let mut stderr = self.stderr.take().expect("an adapter spawned logged");
-        stderr.read_to_string(&mut log).expect("read the adapter's log");
-        (self.child.wait().expect("wait for adapter"), log)
-    }
-}
-
-impl Drop for Mcp {
-    fn drop(&mut self) {
-        drop(self.stdin.take());
-        for _ in 0..100 {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-/// The catalog the binary embeds — the expected tools/list and the base
-/// for the drift fixtures.
-fn embedded_catalog() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tools.json");
-    serde_json::from_str(&std::fs::read_to_string(path).expect("read tools.json"))
-        .expect("tools.json parses")
-}
+use crate::common::{embedded_catalog, holds_a_token, Fixture, Launch, TempDir, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, VARIABLES};
 
 /// A width tumbler at `addr`'s own depth: zeros with `last` in the final
 /// component. `width_of(a, 1)` is the unit subtree span width the daemon
@@ -202,59 +32,9 @@ fn width_of(addr: &str, last: u64) -> String {
     comps.join(".")
 }
 
-/// wire.md §Rejections' own example: the write gate's answer to a frame
-/// that carries no live session — the adapter's one cue to reissue.
-const UNAUTHENTICATED: &str =
-    r#"{"code":"unauthenticated","disposition":"permanent","op":"insert","resp":"rejected"}"#;
-
-/// An acknowledged write, as skepd spells one.
-const ACK: &str = r#"{"addr":"1.0.1.0.1.0.1.1","at":7,"resp":"ack_addr"}"#;
-
-/// Session tokens a stub issues (wire.md §Sessions: 32 lowercase hex).
-const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
-const OLD: &str = "0123456789abcdef0123456789abcdef";
-const NEW: &str = "fedcba9876543210fedcba9876543210";
-
-/// One insert's arguments — any write will do; the stub reads none of it.
-fn an_insert() -> Value {
-    json!({"doc": "1.0.1.0.1", "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]})
-}
-
-/// A `/session` 200 issuing `token` to principal 1.
-fn session_reply(token: &str) -> Vec<u8> {
-    reply(200, &format!(r#"{{"principal":1,"session":"{token}"}}"#))
-}
-
-/// A reply the connection broke in the middle of: its `Content-Length`
-/// promises 64 bytes, and 7 arrive.
-fn cut_short() -> Vec<u8> {
-    b"HTTP/1.1 200 X\r\nContent-Length: 64\r\nConnection: close\r\n\r\n{\"at\":7".to_vec()
-}
-
-/// The session token a stub request carried, if any.
-fn session_of(request: &str) -> Option<&str> {
-    let (head, _) = request.split_once("\r\n\r\n").expect("a request head");
-    head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("skepd-session").then(|| value.trim())
-    })
-}
-
-/// A stub request's body: what follows its head.
-fn body_of(request: &str) -> &str {
-    request.split_once("\r\n\r\n").expect("a request head").1
-}
-
-/// The adapter run to completion: `args`, the three variables removed and
-/// then `env` set, stdin empty.
-fn run_adapter(args: &[&str], env: &[(&str, &str)]) -> Output {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
-    cmd.args(args);
-    for var in ["SKEPD_URL", "SKEP_PRINCIPAL", "SKEP_COMMONS"] {
-        cmd.env_remove(var);
-    }
-    cmd.envs(env.iter().copied());
-    cmd.output().expect("run skep-mcp")
+/// A fresh draft of the claimant's account, through the adapter.
+fn draft_of(mcp: &mut crate::common::Mcp) -> String {
+    mcp.acked("create_new_document", json!({"account": CLAIMANT_ACCOUNT}))["addr"].as_str().expect("doc addr").to_string()
 }
 
 // ── the tests ────────────────────────────────────────────────────────────
@@ -263,14 +43,13 @@ fn run_adapter(args: &[&str], env: &[(&str, &str)]) -> Output {
 /// consulted: ONE line on stdout — `skep-mcp <crate version> (<commit>)`,
 /// the version this test's own `CARGO_PKG_VERSION` and the commit
 /// `SKEP_GIT_SHA` named at build time, `unknown` where it named none —
-/// nothing on stderr, exit 0, with no `SKEP_PRINCIPAL` set (a start would
-/// refuse that) and stdin held open by the test, which a read of it would
-/// wait on.
+/// nothing on stderr, exit 0, with no setting set (a start would refuse
+/// that) and stdin held open by the test, which a read of it would wait on.
 #[test]
 fn version_is_one_line_on_stdout_before_the_environment_or_stdin_is_read() {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
     cmd.arg("--version").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    for var in ["SKEPD_URL", "SKEP_PRINCIPAL", "SKEP_COMMONS"] {
+    for var in VARIABLES {
         cmd.env_remove(var);
     }
     let mut child = cmd.spawn().expect("spawn skep-mcp");
@@ -281,52 +60,29 @@ fn version_is_one_line_on_stdout_before_the_environment_or_stdin_is_read() {
     child.stdout.take().expect("child stdout").read_to_string(&mut stdout).expect("read stdout");
     child.stderr.take().expect("child stderr").read_to_string(&mut stderr).expect("read stderr");
     assert_eq!(status.code(), Some(0), "exit 0: {stderr}");
-    assert_eq!(
-        stdout,
-        format!(
-            "skep-mcp {} ({})\n",
-            env!("CARGO_PKG_VERSION"),
-            option_env!("SKEP_GIT_SHA").unwrap_or("unknown")
-        ),
-        "the one line"
-    );
+    assert_eq!(stdout, format!("skep-mcp {} ({})\n", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")), "the one line");
     assert!(stderr.is_empty(), "nothing on stderr: {stderr}");
 }
 
 #[test]
 fn initialize_and_tools_list_serve_the_catalog() {
-    // No daemon: nothing below dials skepd.
-    let mut mcp = Mcp::spawn(1, "1");
+    let fixture = Fixture::new("catalog");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     let init = mcp.initialize();
-    assert_eq!(
-        init["protocolVersion"], "2025-06-18",
-        "a client naming 2025-06-18 is answered it — also the fallback, so this cannot tell \
-         an echo from a constant"
-    );
+    assert_eq!(init["protocolVersion"], "2025-06-18", "a client naming 2025-06-18 is answered it — also the fallback, so this cannot tell an echo from a constant");
     assert_eq!(init["serverInfo"]["name"], "skep");
-    assert!(
-        init["instructions"].as_str().is_some_and(|s| !s.is_empty()),
-        "instructions non-empty: {init}"
-    );
+    assert!(init["instructions"].as_str().is_some_and(|s| !s.is_empty()), "instructions non-empty: {init}");
     assert!(init["capabilities"]["tools"].is_object(), "tools capability: {init}");
 
     let v = mcp.request("tools/list", json!({}));
     let tools = v["result"]["tools"].as_array().expect("tools array").clone();
     let listed: Vec<&str> = tools.iter().map(|t| t["name"].as_str().expect("name")).collect();
     let file = embedded_catalog();
-    let expected: Vec<&str> = file["tools"]
-        .as_array()
-        .expect("file tools")
-        .iter()
-        .map(|t| t["name"].as_str().expect("file name"))
-        .collect();
+    let expected: Vec<&str> = file["tools"].as_array().expect("file tools").iter().map(|t| t["name"].as_str().expect("file name")).collect();
     assert_eq!(listed, expected, "exactly the tools file's names, in file order");
     assert_eq!(v["result"]["tools"], file["tools"], "tools/list is the file's entries, verbatim");
     for t in &tools {
-        assert!(
-            t["description"].as_str().is_some_and(|s| !s.is_empty()),
-            "every tool carries a description: {t}"
-        );
+        assert!(t["description"].as_str().is_some_and(|s| !s.is_empty()), "every tool carries a description: {t}");
         assert!(t["inputSchema"].is_object(), "every tool carries a schema: {t}");
     }
 
@@ -351,10 +107,11 @@ fn initialize_and_tools_list_serve_the_catalog() {
 
 /// A client that names no protocolVersion is answered the revision this
 /// server was written against, 2025-06-18 — params without one, or no
-/// params at all. No daemon: initialize never dials.
+/// params at all.
 #[test]
 fn initialize_answers_the_fallback_revision_when_none_is_named() {
-    let mut mcp = Mcp::spawn(1, "1");
+    let fixture = Fixture::new("fallback");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     let v = mcp.request("initialize", json!({"capabilities": {}}));
     assert_eq!(v["result"]["protocolVersion"], "2025-06-18", "params without a revision: {v}");
     mcp.send_line(r#"{"jsonrpc":"2.0","id":"bare","method":"initialize"}"#);
@@ -362,90 +119,60 @@ fn initialize_answers_the_fallback_revision_when_none_is_named() {
     assert_eq!((&v["id"], &v["result"]["protocolVersion"]), (&json!("bare"), &json!("2025-06-18")));
 }
 
+/// `session_info` reports the adapter's standing: the principal, its
+/// account, the key it signs with — the claimant's, by fingerprint and
+/// label — the board's origin, `writes`, the board's mode and its health
+/// document whole, `log_position` among its members.
 #[test]
-fn session_info_reports_principal_account_health() {
-    let dir = TempDir::new("sessinfo");
-    let daemon = spawn_daemon(dir.path(), 0);
-    let port = daemon.port();
-    let account = provision_principal_1(port);
-
-    let mut mcp = Mcp::spawn(port, "1");
+fn session_info_reports_the_adapters_standing() {
+    let fixture = Fixture::new("sessinfo");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let info = mcp.call_json("session_info", json!({}));
     assert_eq!(info["principal"], json!(1));
-    assert_eq!(info["account"].as_str(), Some(account.as_str()), "account: {info}");
+    assert_eq!(info["account"], CLAIMANT_ACCOUNT, "{info}");
+    assert_eq!(info["key"]["fingerprint"], fixture.fingerprint, "{info}");
+    assert_eq!(info["key"]["label"], "notebook", "{info}");
+    assert_eq!(info["board"], fixture.origin(), "{info}");
+    assert_eq!(info["writes"], true, "{info}");
+    assert_eq!(info["mode"], "CLAIMED-PERMISSIVE", "{info}");
     assert_eq!(info["health"]["ok"], json!(true));
     assert!(info["health"]["log_position"].is_u64(), "health rides along: {info}");
-
-    // An undelegated principal's account is null — wire.md's maybe_addr for
-    // an unknown principal — and session_info still answers, never isError.
-    let mut stranger = Mcp::spawn(port, "2");
-    stranger.initialize();
-    let info = stranger.call_json("session_info", json!({}));
-    assert_eq!(info["principal"], json!(2), "{info}");
-    assert!(info["account"].is_null(), "an undelegated principal's account: {info}");
-
-    daemon.shutdown();
+    assert_eq!(info["health"]["auth"]["claimant"], CLAIMANT_ACCOUNT, "{info}");
+    assert!(mcp.finish().success());
 }
 
 #[test]
 fn lifecycle_create_insert_retrieve_link_and_rejections() {
-    let dir = TempDir::new("life");
-    let daemon = spawn_daemon(dir.path(), 0);
-    let port = daemon.port();
-    let account = provision_principal_1(port);
-
-    let mut mcp = Mcp::spawn(port, "1");
+    let fixture = Fixture::new("life");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
 
     // create → insert → retrieve. The string write form is per-byte:
     // "hello" seats five values at positions 1..=5, so width "0.5" covers
     // it exactly and the delivery is one content item.
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    assert_eq!(v["resp"], "ack_addr", "create: {v}");
-    let doc = v["addr"].as_str().expect("doc addr").to_string();
-
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
-    );
+    let doc = draft_of(&mut mcp);
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
 
-    let v = mcp.call_json(
-        "retrieve_v",
-        json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.5"}}]}),
-    );
+    let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.5"}}]}));
     assert_eq!(v["resp"], "delivery");
     assert_eq!(v["items"], json!([{"content": "hello"}]));
 
     // An atom form: ONE composite value at ONE position, never coalesced
     // into the per-byte run beside it.
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [{"atom": "chunk"}]}),
-    );
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [{"atom": "chunk"}]}));
     assert_eq!(v["resp"], "ack_addr", "atom insert: {v}");
-    let v = mcp.call_json(
-        "retrieve_v",
-        json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.6"}}]}),
-    );
+    let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.6"}}]}));
     assert_eq!(v["items"], json!([{"content": "hello"}, {"atom": "chunk"}]));
 
     // make_link (through the schema's from_ → the wire's from) and
     // follow_link on the TO slot.
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    let doc2 = v["addr"].as_str().expect("doc2 addr").to_string();
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": doc2, "at": {"subspace": "1", "ordinal": "1"}, "values": ["linked"]}),
-    );
+    let doc2 = draft_of(&mut mcp);
+    let v = mcp.call_json("insert", json!({"doc": doc2, "at": {"subspace": "1", "ordinal": "1"}, "values": ["linked"]}));
     assert_eq!(v["resp"], "ack_addr");
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    let tdoc = v["addr"].as_str().expect("tdoc addr").to_string();
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": tdoc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["type:jump"]}),
-    );
+    let tdoc = draft_of(&mut mcp);
+    let v = mcp.call_json("insert", json!({"doc": tdoc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["type:jump"]}));
     assert_eq!(v["resp"], "ack_addr");
 
     let v = mcp.call_json(
@@ -462,19 +189,16 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
 
     let v = mcp.call_json("follow_link", json!({"a": link, "slot": 2}));
     assert_eq!(v["resp"], "follow");
-    assert!(
-        v["result"]["ok"].as_array().is_some_and(|s| !s.is_empty()),
-        "TO coverage nonempty: {v}"
-    );
+    assert!(v["result"]["ok"].as_array().is_some_and(|s| !s.is_empty()), "TO coverage nonempty: {v}");
 
-    // A rejection is a NORMAL result: isError false, response document
-    // verbatim.
-    let v = mcp.call_json(
-        "retrieve_v",
-        json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]}),
-    );
-    assert_eq!(v["resp"], "rejected", "rejections pass through as content: {v}");
-    assert_eq!(v["code"], "doc_not_registered");
+    // A rejection is a NORMAL result: isError false, the board's verdict
+    // verbatim under `body`, the shell's envelope beside it.
+    let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]}));
+    assert_eq!(v["kind"], "refused", "rejections pass through as content: {v}");
+    assert_eq!(v["name"], "doc_not_registered");
+    assert_eq!(v["body"]["resp"], "rejected", "the verdict verbatim: {v}");
+    assert_eq!(v["body"]["code"], "doc_not_registered");
+    assert_eq!(v["body"]["op"], "retrieve_v");
 
     // A malformed JSON line gets -32700 with id null, and the process
     // survives to answer the next request.
@@ -492,49 +216,38 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert!(v["id"].is_null(), "parse errors carry id null: {v}");
     let v = mcp.request("ping", json!({}));
     assert_eq!(v["result"], json!({}), "the adapter survives a non-UTF-8 line");
-
-    daemon.shutdown();
+    assert!(mcp.finish().success());
 }
 
+/// THE RESTART ARM through the adapter: the daemon killed mid-session —
+/// every token dies with it — and started again on the same data dir at
+/// the SAME port; the adapter's next write answers through the session
+/// the shell re-opened silently under a fresh reference, which the
+/// adapter took from the death that met it, reissuing the write once, so
+/// the agent sees an ack (the mutant that keeps the first reference serves
+/// `session_ended` forever after the restart); the log says the session
+/// was re-opened, and `session_info` still answers.
 #[test]
 fn daemon_restart_reopens_the_session_and_reissues() {
-    let dir = TempDir::new("restart");
-    let daemon = spawn_daemon(dir.path(), 0);
-    let port = daemon.port();
-    let account = provision_principal_1(port);
-
-    let mut mcp = Mcp::spawn(port, "1");
+    let mut fixture = Fixture::new("restart");
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    let doc = v["addr"].as_str().expect("doc addr").to_string();
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
-    );
+    let doc = draft_of(&mut mcp);
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "the pre-restart write: {v}");
 
-    // Kill the daemon mid-session — tokens die with the process — and
-    // restart on the same data dir and the SAME port (the adapter's URL is
-    // fixed for its lifetime).
-    daemon.shutdown();
-    let daemon = spawn_daemon(dir.path(), port);
+    fixture.restart();
 
-    // The adapter holds a stale token: the daemon answers unauthenticated,
-    // the adapter reopens its session and reissues the frame once —
-    // invisible here.
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}),
-    );
-    assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}");
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}));
+    assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}\n{}", mcp.talk());
 
-    let v = mcp.call_json(
-        "retrieve_v",
-        json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.11"}}]}),
-    );
+    let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.11"}}]}));
     assert_eq!(v["items"], json!([{"content": "hello, wire"}]));
-
-    daemon.shutdown();
+    let info = mcp.call_json("session_info", json!({}));
+    assert_eq!(info["writes"], true, "{info}");
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(log.contains("the board restarted: the session was re-opened under a fresh reference"), "the re-open is said:\n{log}");
 }
 
 /// Wire v5's two-form slots through the adapter, one link exercising both:
@@ -544,25 +257,16 @@ fn daemon_restart_reopens_the_session_and_reissues() {
 /// address, the TYPE a ghost nothing occupies).
 #[test]
 fn make_link_addrs_form_records_names_verbatim() {
-    let dir = TempDir::new("addrs");
-    let daemon = spawn_daemon(dir.path(), 0);
-    let port = daemon.port();
-    let account = provision_principal_1(port);
-
-    let mut mcp = Mcp::spawn(port, "1");
+    let fixture = Fixture::new("addrs");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
 
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    let doc = v["addr"].as_str().expect("doc addr").to_string();
-    let v = mcp.call_json(
-        "insert",
-        json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
-    );
+    let doc = draft_of(&mut mcp);
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
     assert_eq!(v["resp"], "ack_addr", "insert: {v}");
     let i_start = v["addr"].as_str().expect("first minted I-address").to_string();
 
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    let doc2 = v["addr"].as_str().expect("doc2 addr").to_string();
+    let doc2 = draft_of(&mut mcp);
     // A ghost: doc2's never-occupied subspace 3. Nothing resides there and
     // nothing has to — the addrs form records names, not contents.
     let ghost = format!("{doc2}.0.3.6.1");
@@ -582,239 +286,70 @@ fn make_link_addrs_form_records_names_verbatim() {
     let v = mcp.call_json("read_link", json!({"a": link}));
     assert_eq!(
         v["link"]["slots"],
-        json!([
-            [{"start": i_start, "width": width_of(&i_start, 5)}],
-            [{"start": doc2, "width": width_of(&doc2, 1)}],
-            [{"start": ghost, "width": width_of(&ghost, 1)}]
-        ]),
+        json!([[{"start": i_start, "width": width_of(&i_start, 5)}], [{"start": doc2, "width": width_of(&doc2, 1)}], [{"start": ghost, "width": width_of(&ghost, 1)}]]),
         "recorded endsets — resolved I-span, then names verbatim: {v}"
     );
-
-    daemon.shutdown();
+    assert!(mcp.finish().success());
 }
 
-/// The slot forms' failure modes are data, not transport errors: an object
+/// The slot forms' failure modes are the board's verdicts, data: an object
 /// mixing the two forms is the daemon's unparseable rejection, an empty
 /// addrs TYPE its empty_type_resolution, and FROM spelled both ways the
-/// daemon's unknown-field refusal — all isError false.
+/// daemon's unknown-field refusal — each `isError` false, the verdict
+/// under `body`.
 #[test]
 fn slot_form_faults_surface_as_normal_results() {
-    let dir = TempDir::new("slotfault");
-    let daemon = spawn_daemon(dir.path(), 0);
-    let port = daemon.port();
-    let account = provision_principal_1(port);
-
-    let mut mcp = Mcp::spawn(port, "1");
+    let fixture = Fixture::new("slotfault");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
-    let v = mcp.call_json("create_new_document", json!({"account": account}));
-    let doc = v["addr"].as_str().expect("doc addr").to_string();
+    let doc = draft_of(&mut mcp);
 
     // Both forms at once in one slot: not a form ('resolve' is not a
     // make_link key), so the frame never becomes an operation.
-    let v = mcp.call_json(
-        "make_link",
-        json!({
-            "home": doc,
-            "from_": [],
-            "to": [],
-            "ty": {"addrs": ["1.1"], "resolve": []}
-        }),
-    );
-    assert_eq!(v["resp"], "rejected", "mixed forms: {v}");
-    assert_eq!(v["op"], "unparseable");
-    assert_eq!(v["code"], "malformed");
+    let v = mcp.call_json("make_link", json!({"home": doc, "from_": [], "to": [], "ty": {"addrs": ["1.1"], "resolve": []}}));
+    assert_eq!(v["kind"], "refused", "mixed forms: {v}");
+    assert_eq!(v["body"]["resp"], "rejected");
+    assert_eq!(v["body"]["op"], "unparseable");
+    assert_eq!(v["body"]["code"], "malformed");
 
     // An empty addrs TYPE parses; the store rejects it exactly as an empty
     // resolution always has — the type floor reads the slot as given.
-    let v = mcp.call_json(
-        "make_link",
-        json!({"home": doc, "from_": [], "to": [], "ty": {"addrs": []}}),
-    );
-    assert_eq!(v["resp"], "rejected", "empty addrs type: {v}");
-    assert_eq!(v["code"], "empty_type_resolution");
+    let v = mcp.call_json("make_link", json!({"home": doc, "from_": [], "to": [], "ty": {"addrs": []}}));
+    assert_eq!(v["kind"], "refused", "empty addrs type: {v}");
+    assert_eq!(v["name"], "empty_type_resolution");
+    assert_eq!(v["body"]["code"], "empty_type_resolution");
 
     // FROM spelled both ways at once: the relay resolves nothing, so the
     // daemon's unknown-field refusal answers, as it would the raw frame.
-    let v = mcp.call_json(
-        "make_link",
-        json!({"home": doc, "from": [], "from_": [], "to": [], "ty": {"addrs": []}}),
-    );
-    assert_eq!((&v["op"], &v["code"]), (&json!("unparseable"), &json!("malformed")), "{v}");
-    assert!(v["detail"].as_str().is_some_and(|d| d.contains("from_")), "{v}");
-
-    daemon.shutdown();
+    let v = mcp.call_json("make_link", json!({"home": doc, "from": [], "from_": [], "to": [], "ty": {"addrs": []}}));
+    assert_eq!((&v["body"]["op"], &v["body"]["code"]), (&json!("unparseable"), &json!("malformed")), "{v}");
+    assert!(v["body"]["detail"].as_str().is_some_and(|d| d.contains("from_")), "{v}");
+    assert!(mcp.finish().success());
 }
 
-// ── the session rules, against a stub daemon ─────────────────────────────
-
-/// Every answer but `unauthenticated` is the tool result, byte for byte and
-/// never `isError`, from ONE exchange: an ack — whose reissue would apply
-/// the write twice — a rejection of each disposition, `retry` among them,
-/// and a non-200's `{"error"}` body, which wire.md §HTTP status codes calls
-/// a transport-level failure and the adapter relays as the daemon's answer
-/// to the frame. The session is held first, so no open rides along; a
-/// second exchange would take the next case's reply as a session answer,
-/// or meet the stub's closed listener, and come back `isError`. The ack is
-/// spelled as skepd never spells one (wire.md §Determinism: sorted keys, no
-/// whitespace), so a result rebuilt from parsed JSON cannot match it.
-#[test]
-fn every_answer_but_unauthenticated_comes_back_verbatim_from_one_exchange() {
-    let answers = [
-        r#"{"resp": "ack_addr", "at": 7, "addr": "1.0.1.0.1.0.1.2"}"#,
-        r#"{"code":"durability","disposition":"retry","op":"insert","resp":"rejected"}"#,
-        r#"{"code":"doc_not_registered","disposition":"reorder","op":"insert","resp":"rejected"}"#,
-        r#"{"code":"poisoned","disposition":"halt","op":"insert","resp":"rejected"}"#,
-        r#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#,
-    ];
-    let refusal = r#"{"error":"internal_panic"}"#;
-    let mut replies = vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)];
-    replies.extend(answers.iter().map(|a| reply(200, a)));
-    replies.push(reply(500, refusal));
-    let (port, stub) = stub_daemon(replies);
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "premise: a session");
-    for answer in answers.into_iter().chain([refusal]) {
-        assert_eq!(mcp.call("insert", an_insert()), (false, answer.to_string()), "{answer}");
-    }
-    let requests = stub.join().expect("the stub daemon");
-    assert_eq!(requests.len(), 3 + answers.len() + 1, "one exchange each");
-}
-
-/// `unauthenticated` is the cue: the adapter opens a bare session — a
-/// request that carries no token — and reissues the very frame once under
-/// the token it was issued; the reissue's answer is the tool result.
-#[test]
-fn unauthenticated_opens_a_bare_session_and_reissues_the_frame_once_under_its_token() {
-    let (port, stub) =
-        stub_daemon(vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)]);
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "the reissue's answer");
-    let r = stub.join().expect("the stub daemon");
-    let lines: Vec<&str> = r.iter().map(|q| q.lines().next().unwrap_or("")).collect();
-    assert_eq!(lines, ["POST /op HTTP/1.1", "POST /session HTTP/1.1", "POST /op HTTP/1.1"]);
-    let tokens: Vec<Option<&str>> = r.iter().map(|q| session_of(q)).collect();
-    assert_eq!(tokens, [None, None, Some(TOKEN)], "the token each exchange carried");
-    assert_eq!(body_of(&r[2]), body_of(&r[0]), "the reissue is the very frame");
-}
-
-/// A second `unauthenticated`, answered to the reissue, is data like any
-/// other rejection: the tool result, `isError` false, after three
-/// exchanges — no second open, no loop.
-#[test]
-fn a_second_unauthenticated_passes_through_as_data() {
-    let (port, stub) = stub_daemon(vec![
-        reply(200, UNAUTHENTICATED),
-        session_reply(TOKEN),
-        reply(200, UNAUTHENTICATED),
-    ]);
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    assert_eq!(mcp.call("insert", an_insert()), (false, UNAUTHENTICATED.to_string()));
-    assert_eq!(stub.join().expect("the stub daemon").len(), 3, "three exchanges, no more");
-}
-
-/// A failed exchange is never reissued — not even one whose answer broke
-/// off mid-body, after the daemon may well have committed the write: the
-/// failure is the tool result, `isError` — though the frame reached the
-/// daemon whole, so the write's outcome is unknown — and the reply a
-/// reissue would have taken is still waiting when the test comes for it.
-#[test]
-fn a_failed_exchange_is_never_reissued() {
-    let (port, stub) = stub_daemon(vec![cut_short(), reply(200, ACK)]);
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    let (is_error, text) = mcp.call("insert", an_insert());
-    assert!(is_error, "the broken answer is the result, not a reissue's ack: {text}");
-    assert!(text.starts_with(&format!("skepd at http://127.0.0.1:{port}: response: ")), "{text}");
-    let mut drain = TcpStream::connect(("127.0.0.1", port)).expect("the stub still listens");
-    drain.write_all(b"GET /drain HTTP/1.1\r\n\r\n").expect("the drain request");
-    let requests = stub.join().expect("the stub daemon");
-    let mut frame = an_insert();
-    frame["op"] = json!("insert");
-    assert!(requests[0].starts_with("POST /op "), "the write went out: {}", requests[0]);
-    assert_eq!(body_of(&requests[0]), frame.to_string(), "the frame reached the daemon whole");
-    assert!(requests[1].starts_with("GET /drain "), "the second reply went to: {}", requests[1]);
-}
-
-/// The token the adapter holds is the newest the daemon issued, and it
-/// rides every op from that op's first attempt on: a held token goes out at
-/// once, with no reopen; after a restart's `unauthenticated` the reopen
-/// carries no token, dead or live, and the reissue the new one alone.
-#[test]
-fn the_held_token_rides_each_op_until_a_reopen_replaces_it() {
-    let (port, stub) = stub_daemon(vec![
-        reply(200, UNAUTHENTICATED), // the first write opens
-        session_reply(OLD),
-        reply(200, ACK),
-        reply(200, ACK),             // the next rides OLD at once
-        reply(200, UNAUTHENTICATED), // a restart killed OLD
-        session_reply(NEW),
-        reply(200, ACK),
-    ]);
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    for _ in 0..3 {
-        assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()));
-    }
-    let r = stub.join().expect("the stub daemon");
-    let tokens: Vec<Option<&str>> = r.iter().map(|q| session_of(q)).collect();
-    assert_eq!(tokens, [None, None, Some(OLD), Some(OLD), Some(OLD), None, Some(NEW)]);
-    assert!(r[5].starts_with("POST /session "), "the reopen: {}", r[5]);
-}
-
-/// GET /health is token-blind (wire.md §Sessions): the health read carries
-/// no token even while one is held. Its answer rides in session_info whole,
-/// a member this adapter never heard of included (wire.md: a seventh member
-/// is no violation).
-#[test]
-fn the_health_read_carries_no_token_and_is_reported_whole() {
-    let health = r#"{"log_position":9,"ok":true,"seventh":"unheard of"}"#;
-    let (port, stub) = stub_daemon(vec![
-        reply(200, UNAUTHENTICATED),
-        session_reply(TOKEN),
-        reply(200, ACK),
-        reply(200, r#"{"addr":"1.0.2","as_of":9,"resp":"maybe_addr"}"#),
-        reply(200, health),
-    ]);
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "premise: a session");
-    let info = mcp.call_json("session_info", json!({}));
-    let whole: Value = serde_json::from_str(health).expect("the stub's health is JSON");
-    assert_eq!(info, json!({"account": "1.0.2", "health": whole, "principal": 1}));
-    let r = stub.join().expect("the stub daemon");
-    assert!(r[4].starts_with("GET /health "), "{}", r[4]);
-    assert_eq!(session_of(&r[4]), None, "a held token rode GET /health: {}", r[4]);
-}
-
-/// `doc_metadata` IS DISPATCHED (the fork-source design record, decision 10:
-/// forty ops), the first rule holding — the name the frame's `op`, the
-/// arguments the frame — and its answer carries the `source` a fork was born
-/// sharing. Principal 1 forks the claimant's published doc 1 through the
-/// adapter (a cross-owner `version`, private, into its own account), then
-/// reads the fork's metadata: `doc` the fork itself, `owner` its account,
-/// `source` the document forked; the document forked answers `source` null;
-/// and an unregistered document is the daemon's own rejection, verbatim.
+/// `doc_metadata` IS DISPATCHED (the fork-source design record, decision 10),
+/// the first rule holding — the name the frame's `op`, the arguments the
+/// frame — and its answer carries the `source` a fork was born sharing.
+/// The agent space's principal, signing by reference with the claimant's
+/// key, forks the claimant's published doc 1 through the adapter (a
+/// cross-owner `version`, private, into its own account), then reads the
+/// fork's metadata: `doc` the fork itself, `owner` its account, `source`
+/// the document forked; the document forked answers `source` null; and an
+/// unregistered document is the daemon's own rejection, as data.
 #[test]
 fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
-    /// The claimant's published doc 1, the ceremony's home mint.
-    const CLAIMANT_DOC1: &str = "1.0.1.0.1";
-    let dir = TempDir::new("doc-metadata");
-    let daemon = spawn_daemon(dir.path(), 0);
-    let port = daemon.port();
-    let account = provision_principal_1(port);
-    let mut mcp = Mcp::spawn(port, "1");
+    let fixture = Fixture::new("doc-metadata");
+    let agent = fixture.agent_principal();
+    let mut mcp = Launch::over(&fixture, agent).spawn();
     mcp.initialize();
     let forked = mcp.call_json("version", json!({"d_src": CLAIMANT_DOC1, "published": false}));
     assert_eq!(forked["resp"], "ack_addr", "the fork minted: {forked}");
     let fork = forked["addr"].as_str().expect("the fork's address").to_string();
-    assert!(fork.starts_with(&format!("{account}.0.")), "a document of principal 1's own: {fork}");
+    assert!(fork.starts_with(&format!("{AGENT_SPACE}.0.")), "a document of the agent space's own: {fork}");
     let meta = mcp.call_json("doc_metadata", json!({"doc": fork}));
     assert_eq!(meta["resp"], "doc_metadata", "{meta}");
     assert_eq!(meta["doc"], json!(fork), "the fork is its own trunk: {meta}");
-    assert_eq!(meta["owner"], json!(account), "{meta}");
+    assert_eq!(meta["owner"], json!(AGENT_SPACE), "{meta}");
     assert_eq!(meta["published"], json!(false), "{meta}");
     assert_eq!(meta["source"], json!(CLAIMANT_DOC1), "born sharing the document forked: {meta}");
     assert!(meta["birth"].is_null() && meta["placed"].is_null(), "no member, no shot: {meta}");
@@ -823,204 +358,160 @@ fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
     assert!(meta["source"].is_null(), "the document forked was minted by no `version`: {meta}");
     assert_eq!(meta["published"], json!(true), "{meta}");
     let v = mcp.call_json("doc_metadata", json!({"doc": "1.0.1.0.9.0.1.7"}));
-    assert_eq!(v["resp"], "rejected", "{v}");
-    assert_eq!(v["code"], "doc_not_registered", "the daemon's own rejection, verbatim: {v}");
-    assert_eq!(v["op"], "doc_metadata", "{v}");
-    mcp.finish();
-}
-
-/// The account read is a query: principal_prefix's maybe_addr, its null
-/// the wire's "absent" — and an answer that is no well-formed maybe_addr is
-/// neither an account nor its absence. A rejection — `unauthenticated`
-/// included, which no skepd answers a read and which opens no session here
-/// — a non-200's error body, or a maybe_addr whose `addr` is missing or
-/// neither a string nor null comes back isError quoting it, never as an
-/// account of null, and no health read follows.
-#[test]
-fn an_account_read_answered_no_maybe_addr_answers_is_error_never_null() {
-    let answers = [
-        (200, UNAUTHENTICATED),
-        (500, r#"{"error":"internal_panic"}"#),
-        (200, r#"{"as_of":9,"resp":"maybe_addr"}"#),
-        (200, r#"{"addr":7,"as_of":9,"resp":"maybe_addr"}"#),
-    ];
-    let (port, stub) = stub_daemon(answers.iter().map(|&(status, a)| reply(status, a)).collect());
-    let mut mcp = Mcp::spawn(port, "1");
-    mcp.initialize();
-    for (_, answer) in answers {
-        let (is_error, text) = mcp.call("session_info", json!({}));
-        assert!(is_error, "no account read as null: {text}");
-        assert!(text.contains(answer), "the answer is quoted: {text}");
-    }
-    let r = stub.join().expect("the stub daemon");
-    let lines: Vec<&str> = r.iter().map(|q| q.lines().next().unwrap_or("")).collect();
-    assert_eq!(lines, ["POST /op HTTP/1.1"; 4], "no session open, no health read");
+    assert_eq!(v["kind"], "refused", "{v}");
+    assert_eq!(v["body"]["code"], "doc_not_registered", "the daemon's own rejection, verbatim: {v}");
+    assert_eq!(v["body"]["op"], "doc_metadata", "{v}");
+    assert!(mcp.finish().success());
 }
 
 /// No session token leaves the adapter: not in a tool result — an answer,
-/// or a failure after the token rode the request — and not in a log line,
-/// across a session's open and its reopen. The stub issues the tokens, so
-/// the test knows exactly what must never appear.
+/// a refusal, or `session_info` — and not in a log line, across the
+/// session's open, a restart's re-open and the stop. The shell's
+/// references (`s-…`, `b-…`) are names, never the token; a 32-lowercase-hex
+/// run is the token's shape, and none appears.
 #[test]
 fn a_session_token_reaches_no_tool_result_and_no_log_line() {
-    let (port, stub) = stub_daemon(vec![
-        reply(200, UNAUTHENTICATED),
-        session_reply(OLD),
-        reply(200, ACK),
-        reply(200, UNAUTHENTICATED),
-        session_reply(NEW),
-        cut_short(),
-    ]);
-    let mut mcp = Mcp::spawn_logged(port, "1");
+    let mut fixture = Fixture::new("token");
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
-    let (_, answer) = mcp.call("insert", an_insert());
-    let (is_error, failure) = mcp.call("insert", an_insert());
-    assert!(is_error, "premise: the reissue's broken answer is a failure: {failure}");
+    let mut texts = Vec::new();
+    texts.push(mcp.call("session_info", json!({})).1);
+    let doc = draft_of(&mut mcp);
+    texts.push(mcp.call("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]})).1);
+    fixture.restart();
+    texts.push(mcp.call("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "2"}, "values": ["y"]})).1);
+    texts.push(mcp.call("boards", json!({})).1);
+    texts.push(mcp.call("retrieve_v", json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]})).1);
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}");
-    let r = stub.join().expect("the stub daemon");
-    assert_eq!((session_of(&r[2]), session_of(&r[5])), (Some(OLD), Some(NEW)), "both rode");
-    assert_eq!(log.matches("bare session opened").count(), 2, "both opens logged: {log}");
-    let channels = [("an answer", &answer), ("a failure", &failure), ("the log", &log)];
-    for token in [OLD, NEW] {
-        for (channel, text) in channels {
-            assert!(!text.contains(token), "{channel} carries a session token: {text}");
-        }
+    assert!(log.contains("re-opened under a fresh reference"), "premise: the re-open happened:\n{log}");
+    for text in &texts {
+        assert!(!holds_a_token(text), "a token-shaped run in an answer: {text}");
     }
+    assert!(!holds_a_token(&log), "a token-shaped run in the log:\n{log}");
 }
 
 /// MCP's stdio transport lets a client ignore the server's stderr, and a
 /// log no one reads fails every line written to it. No log line is worth
-/// the work it reports on: startup, the session open its line reports, the
-/// reissue, the answer and the clean exit all go on without it, and a
-/// refusal is still exit 1.
+/// the work it reports on: startup's lines, the shell's TALK, a write's
+/// answer and the clean exit all go on without it, and a refusal is still
+/// exit 1.
 #[test]
 fn a_log_no_one_reads_fails_no_work() {
-    let (port, stub) =
-        stub_daemon(vec![reply(200, UNAUTHENTICATED), session_reply(TOKEN), reply(200, ACK)]);
-    let mut mcp = Mcp::spawn_unread(port, "1");
+    let fixture = Fixture::new("unread");
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let mut mcp = Launch::over(&fixture, 1).stderr(Stdio::from(writer)).spawn();
     mcp.initialize();
-    assert_eq!(mcp.call("insert", an_insert()), (false, ACK.to_string()), "the reissue's answer");
-    assert_eq!(stub.join().expect("the stub daemon").len(), 3, "the open and the reissue ran");
+    let doc = draft_of(&mut mcp);
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
+    assert_eq!(v["resp"], "ack_addr", "{v}");
     assert!(mcp.finish().success(), "the clean exit, its log unwritable");
     let (reader, writer) = std::io::pipe().expect("a pipe");
     drop(reader);
-    let status = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-        .env("SKEPD_URL", "http://127.0.0.1:1")
-        .env_remove("SKEP_PRINCIPAL")
-        .env_remove("SKEP_COMMONS")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(writer)
-        .status()
-        .expect("run skep-mcp");
-    assert_eq!(status.code(), Some(1), "a refusal its log cannot carry is still exit 1");
+    let (code, _) = Launch::new().env("SKEP_BOARD", fixture.origin()).env("SKEP_KEYSTORE", &fixture.store).stderr(Stdio::from(writer)).refusal();
+    assert_eq!(code, Some(1), "a refusal its log cannot carry is still exit 1");
 }
 
-// ── startup, and no daemon behind the adapter ────────────────────────────
-
-/// A daemon the adapter cannot reach is what `isError` marks: a wire op and
-/// session_info alike answer `isError`, the adapter's own message naming
-/// the origin and the failed step, and the adapter keeps answering. Port 1
-/// sits below 1024, where no unprivileged process can listen, so the
-/// connect is refused.
+/// A board the adapter cannot reach stops startup: the session cannot
+/// open, so nothing is served — exit 1, the plain line naming the stop and
+/// the board, nothing on stdout. Port 1 sits below 1024, where no
+/// unprivileged process can listen, so the connect is refused.
 #[test]
-fn calls_to_an_unreachable_daemon_answer_is_error_naming_its_origin() {
-    let mut mcp = Mcp::spawn(1, "1");
-    mcp.initialize();
-    for (tool, args) in [("insert", an_insert()), ("session_info", json!({}))] {
-        let (is_error, text) = mcp.call(tool, args);
-        assert!(is_error, "{tool}, no daemon: isError: {text}");
-        assert!(text.starts_with("skepd at http://127.0.0.1:1: connect: "), "{tool}: {text}");
-    }
-    assert_eq!(mcp.request("ping", json!({}))["result"], json!({}), "the adapter keeps answering");
+fn a_board_that_does_not_answer_stops_startup() {
+    let dir = TempDir::new("noboard");
+    let out = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").output();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("stopped before serving: the board did not answer"), "{err}");
+    assert!(err.contains("http://127.0.0.1:1"), "the board named: {err}");
+    assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
 }
 
 /// The adapter's own refusals of a call it will not run take the channel
-/// call_params' faults take — -32602 under the call's id, never isError,
-/// which marks the daemon side's failure alone: a name outside the catalog,
-/// and an argument session_info does not take (its schema takes none, and
-/// the adapter is the one party that reads them: ignored, a `principal` of
-/// 2 would be answered with this adapter's own principal, as if it were
-/// 2's). Neither reaches skepd, so none stands behind the adapter.
+/// call_params' faults take — -32602 under the call's id, never isError: a
+/// name outside the catalog, a ceremony's name among them, and an argument
+/// an adapter tool's row does not take (the adapter is the one party that
+/// reads those: ignored, a `principal` of 2 to `session_info` would be
+/// answered with this adapter's own standing, as if it were 2's; an
+/// `under` to `changes_since` is a narrowing the tool does not take yet).
+/// A wire op's arguments pass through unread: the board's verdict on a
+/// stranger member is data.
 #[test]
 fn a_call_the_adapter_will_not_run_is_invalid_params_naming_why() {
-    let mut mcp = Mcp::spawn(1, "1");
+    let fixture = Fixture::new("refuse");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     for (call, names) in [
         (json!({"name": "frobnicate", "arguments": {}}), "'frobnicate'"),
+        (json!({"name": "keygen", "arguments": {"label": "x"}}), "'keygen'"),
         (json!({"name": "session_info", "arguments": {"principal": 2}}), "'principal'"),
+        (json!({"name": "search", "arguments": {"query": "x", "board": "b-1"}}), "'board'"),
+        (json!({"name": "changes_since", "arguments": {"since": 0, "under": "1.0.1"}}), "'under'"),
+        (json!({"name": "fetch", "arguments": {"i": "1.0.1.0.1.0.1.1", "session": "s-1"}}), "'session'"),
     ] {
         let v = mcp.request("tools/call", call);
         assert_eq!(v["error"]["code"], json!(-32602), "{v}");
         let message = v["error"]["message"].as_str().unwrap_or_default();
         assert!(message.contains(names), "the refusal names {names}: {v}");
     }
+    let v = mcp.call_json("doc_metadata", json!({"doc": CLAIMANT_DOC1, "stranger": 1}));
+    assert_eq!((v["kind"].as_str(), v["body"]["op"].as_str()), (Some("refused"), Some("unparseable")), "a wire op's stranger member is the board's to refuse: {v}");
+    assert!(mcp.finish().success());
 }
 
-/// SKEP_PRINCIPAL is required and an id a board can register: unset,
-/// startup refuses by name; set to anything that is no integer from 0 to
-/// 2^53 − 1, it refuses quoting the value — never binding a default
-/// principal, or one no board can seat.
+/// The principal is required and one the board seats: unset, startup
+/// refuses by name; set to anything that is no integer from 0 to 2^53 − 1,
+/// it refuses quoting the value; set to an id the board seats no account
+/// for — 2^53 − 1, the largest a board registers, and an undelegated 2 —
+/// the session's pre-check stops startup `not_registered`, exit 1, with
+/// nothing served. A flag beats its variable.
 #[test]
-fn skep_principal_is_required_and_an_id_a_board_can_register() {
-    let url = ("SKEPD_URL", "http://127.0.0.1:1");
-    let out = run_adapter(&[], &[url]);
-    assert_eq!(out.status.code(), Some(1), "unset: {out:?}");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("SKEP_PRINCIPAL is required"), "{out:?}");
+fn the_principal_is_required_and_one_the_board_seats() {
+    let fixture = Fixture::new("principal");
+    let (code, err) = Launch::new().env("SKEP_BOARD", fixture.origin()).env("SKEP_KEYSTORE", &fixture.store).refusal();
+    assert_eq!(code, Some(1), "unset: {err}");
+    assert!(err.contains("--principal (or SKEP_PRINCIPAL) is required"), "{err}");
     for bad in ["", "abc", "-1", "1.5", "9007199254740992", "18446744073709551616"] {
-        let out = run_adapter(&[], &[url, ("SKEP_PRINCIPAL", bad)]);
-        assert_eq!(out.status.code(), Some(1), "'{bad}': {out:?}");
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains(&format!("SKEP_PRINCIPAL: '{bad}' is not a principal")), "{err}");
+        let (code, err) = Launch::over(&fixture, 1).env("SKEP_PRINCIPAL", bad).refusal();
+        assert_eq!(code, Some(1), "'{bad}': {err}");
+        assert!(err.contains(&format!("'{bad}' is not a principal")), "{err}");
     }
-    let out = run_adapter(&[], &[url, ("SKEP_PRINCIPAL", "9007199254740991")]);
-    assert!(out.status.success(), "2^53 - 1, the largest id a board registers, binds: {out:?}");
+    for unseated in ["9007199254740991", "2"] {
+        let (code, err) = Launch::over(&fixture, 1).env("SKEP_PRINCIPAL", unseated).refusal();
+        assert_eq!(code, Some(1), "{unseated}: {err}");
+        assert!(err.contains("stopped before serving: the signed session did not open: not_registered"), "{unseated}: {err}");
+    }
+    let mut mcp = Launch::over(&fixture, 1).env("SKEP_PRINCIPAL", "2").args(["--principal", "1"]).spawn();
+    mcp.initialize();
+    assert_eq!(mcp.call_json("session_info", json!({}))["principal"], json!(1), "the flag beats the variable");
+    assert!(mcp.finish().success());
 }
 
-/// A word the usage does not name, `--tools-file` without its path, or
-/// `--tools-file` given twice, is a usage error — exit 2, the usage on
-/// stderr — never ignored: a mistyped `--tools-file` must not quietly serve
-/// the embedded catalog instead, nor a second one quietly win.
+/// A word the usage does not name, a flag without its value, or a flag
+/// given twice, is a usage error — exit 2, the usage on stderr — never
+/// ignored: a mistyped `--tools-file` must not quietly serve the embedded
+/// catalog instead, nor a second `--board` quietly win.
 #[test]
 fn an_unknown_word_or_a_flag_without_its_value_or_given_twice_is_a_usage_error() {
-    let env = [("SKEPD_URL", "http://127.0.0.1:1"), ("SKEP_PRINCIPAL", "1")];
+    let dir = TempDir::new("usage");
+    let settings = [("SKEP_BOARD", "http://127.0.0.1:1"), ("SKEP_KEYSTORE", dir.path().to_str().expect("a UTF-8 path")), ("SKEP_PRINCIPAL", "1")];
     for (args, says) in [
         (&["--tool-file", "mine.json"][..], "unknown argument '--tool-file'"),
         (&["--tools-file"][..], "--tools-file needs a value"),
-        (
-            &["--tools-file", "a.json", "--tools-file", "b.json"][..],
-            "--tools-file is given at most once",
-        ),
+        (&["--tools-file", "a.json", "--tools-file", "b.json"][..], "--tools-file is given at most once"),
+        (&["--board"][..], "--board needs a value"),
+        (&["--board", "http://127.0.0.1:1", "--board", "http://127.0.0.1:2"][..], "--board is given at most once"),
+        (&["--principal", "1", "--principal", "2"][..], "--principal is given at most once"),
+        (&["--dir"][..], "--dir needs a value"),
     ] {
-        let out = run_adapter(args, &env);
-        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
-        let err = String::from_utf8_lossy(&out.stderr);
+        let mut launch = Launch::new().args(args);
+        for (var, value) in settings {
+            launch = launch.env(var, value);
+        }
+        let (code, err) = launch.refusal();
+        assert_eq!(code, Some(2), "{args:?}: {err}");
         assert!(err.contains(says) && err.contains("usage: skep-mcp"), "{args:?}: {err}");
-    }
-}
-
-/// Checks that an unset `SKEPD_URL` dials the daemon's own default origin.
-///
-/// The origin is loopback at `skepd::DEFAULT_PORT`, where a daemon started
-/// with no `--port` listens, so an adapter beside such a daemon finds it
-/// with no variable set. Set but malformed, startup refuses naming the
-/// variable, never falling back to that default. Nothing is dialed: stdin
-/// is empty.
-#[test]
-fn skepd_url_unset_is_the_default_origin_and_malformed_refuses() {
-    let out = run_adapter(&[], &[("SKEP_PRINCIPAL", "1")]);
-    assert!(out.status.success(), "{out:?}");
-    let err = String::from_utf8_lossy(&out.stderr);
-    let default = format!("skepd at http://127.0.0.1:{},", skepd::DEFAULT_PORT);
-    assert!(
-        err.contains(&default),
-        "the startup line dials the daemon's default origin, {default}: {err}"
-    );
-    for bad in ["https://127.0.0.1:8642", "127.0.0.1:8642", "http://127.0.0.1:8642/op"] {
-        let out = run_adapter(&[], &[("SKEPD_URL", bad), ("SKEP_PRINCIPAL", "1")]);
-        assert_eq!(out.status.code(), Some(1), "'{bad}': {out:?}");
-        assert!(String::from_utf8_lossy(&out.stderr).contains("SKEPD_URL"), "'{bad}': {out:?}");
     }
 }
 
@@ -1029,20 +520,13 @@ fn skepd_url_unset_is_the_default_origin_and_malformed_refuses() {
 /// requests whose answers nobody reads.
 #[test]
 fn a_closed_stdout_ends_the_adapter() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-        .env("SKEPD_URL", "http://127.0.0.1:1")
-        .env("SKEP_PRINCIPAL", "1")
-        .env_remove("SKEP_COMMONS")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn skep-mcp");
+    let fixture = Fixture::new("hangup");
+    let mut child = Launch::over(&fixture, 1).stderr(Stdio::null()).child();
     drop(child.stdout.take());
     let mut stdin = child.stdin.take().expect("child stdin");
     stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n").expect("a request");
     stdin.flush().expect("flush");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     let exited = loop {
         match child.try_wait().expect("poll the adapter") {
             Some(status) => break Some(status),
@@ -1055,76 +539,60 @@ fn a_closed_stdout_ends_the_adapter() {
         let _ = child.wait();
     }
     drop(stdin);
-    assert!(exited.is_some(), "the adapter outlived its closed stdout by 10 s, stdin open");
+    assert!(exited.is_some(), "the adapter outlived its closed stdout by 30 s, stdin open");
 }
 
 /// SKEP_COMMONS set: the instructions carry the commons sentence with the
-/// address substituted. Unset: byte-identical to the tools file's
-/// instructions. Malformed: startup refusal naming the variable. No daemon
-/// anywhere — initialize never dials skepd.
+/// address substituted, and the serving line names the commons. Unset:
+/// byte-identical to the tools file's instructions.
 #[test]
 fn skep_commons_appends_the_commons_sentence() {
+    let fixture = Fixture::new("commons");
     let file = embedded_catalog();
     let base = file["instructions"].as_str().expect("instructions").to_string();
     let template = file["commons_instructions"].as_str().expect("template").to_string();
 
     let commons = "1.0.2.0.9";
-    let mut mcp = Mcp::spawn_with_commons(1, "1", Some(commons));
+    let mut mcp = Launch::over(&fixture, 1).env("SKEP_COMMONS", commons).logged().spawn();
     let init = mcp.initialize();
     let expected = format!("{base}\n\n{}", template.replace("{addr}", commons));
-    assert_eq!(
-        init["instructions"].as_str(),
-        Some(expected.as_str()),
-        "the sentence is appended with the address substituted"
-    );
-    assert!(
-        expected.contains(&format!("{commons}.0.3.50")),
-        "the defines-type address rides in the sentence: {expected}"
-    );
-    assert!(mcp.finish().success());
+    assert_eq!(init["instructions"].as_str(), Some(expected.as_str()), "the sentence is appended with the address substituted");
+    assert!(expected.contains(&format!("{commons}.0.3.50")), "the defines-type address rides in the sentence: {expected}");
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success());
+    assert!(log.contains(", commons 1.0.2.0.9"), "the serving line names the commons:\n{log}");
 
-    let mut mcp = Mcp::spawn_with_commons(1, "1", None);
+    let mut mcp = Launch::over(&fixture, 1).spawn();
     let init = mcp.initialize();
-    assert_eq!(
-        init["instructions"].as_str(),
-        Some(base.as_str()),
-        "unset leaves the instructions byte-identical"
-    );
+    assert_eq!(init["instructions"].as_str(), Some(base.as_str()), "unset leaves the instructions byte-identical");
     assert!(mcp.finish().success());
 }
 
+/// A malformed SKEP_COMMONS refuses startup naming the variable — before
+/// any dial: the board here answers nothing, and the refusal is the
+/// commons' own.
 #[test]
 fn malformed_skep_commons_refuses_startup() {
+    let dir = TempDir::new("badcommons");
     for bad in ["", "banana", "1..2", "0.1", "1.0", "1.0.0.1", "1.0.1.0.1.0.1.0.2"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-            .env("SKEPD_URL", "http://127.0.0.1:1")
-            .env("SKEP_PRINCIPAL", "1")
-            .env("SKEP_COMMONS", bad)
-            .output()
-            .expect("run skep-mcp");
-        assert!(!out.status.success(), "'{bad}' must refuse startup");
-        let err = String::from_utf8_lossy(&out.stderr);
+        let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", bad).refusal();
+        assert_eq!(code, Some(1), "'{bad}' must refuse startup: {err}");
         assert!(err.contains("SKEP_COMMONS"), "stderr names the variable for '{bad}': {err}");
+        assert!(!err.contains("did not answer"), "refused before any dial: {err}");
     }
 }
 
 /// A variable set to bytes that are not UTF-8 is refused by name, never
-/// read as unset: an unreadable SKEPD_URL must not run against the default.
+/// read as unset: an unreadable SKEP_BOARD must not fall back to anything.
 #[cfg(unix)]
 #[test]
 fn non_utf8_environment_refuses_startup() {
     use std::os::unix::ffi::OsStrExt;
+    let dir = TempDir::new("nonutf8");
     let bytes = std::ffi::OsStr::from_bytes(b"\xff");
-    for var in ["SKEP_PRINCIPAL", "SKEPD_URL", "SKEP_COMMONS"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-            .env("SKEPD_URL", "http://127.0.0.1:1")
-            .env("SKEP_PRINCIPAL", "1")
-            .env_remove("SKEP_COMMONS")
-            .env(var, bytes)
-            .output()
-            .expect("run skep-mcp");
-        assert!(!out.status.success(), "a non-UTF-8 {var} must refuse startup");
-        let err = String::from_utf8_lossy(&out.stderr);
+    for var in ["SKEP_PRINCIPAL", "SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_COMMONS"] {
+        let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env(var, bytes).refusal();
+        assert_eq!(code, Some(1), "a non-UTF-8 {var} must refuse startup: {err}");
         assert!(err.contains(&format!("{var}: the value is not UTF-8 text")), "{var}: {err}");
     }
 }
@@ -1136,72 +604,62 @@ fn non_utf8_environment_refuses_startup() {
 #[test]
 fn non_utf8_tools_file_path_is_a_path() {
     use std::os::unix::ffi::OsStrExt;
-    let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-        .arg("--tools-file")
-        .arg(std::ffi::OsStr::from_bytes(b"/nonexistent/\xff.json"))
-        .env("SKEPD_URL", "http://127.0.0.1:1")
-        .env("SKEP_PRINCIPAL", "1")
-        .env_remove("SKEP_COMMONS")
-        .output()
-        .expect("run skep-mcp");
-    assert_eq!(out.status.code(), Some(1), "a refusal, not a panic: {out:?}");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--tools-file"), "{out:?}");
+    let (code, err) = Launch::new().arg("--tools-file").arg(std::ffi::OsStr::from_bytes(b"/nonexistent/\xff.json")).refusal();
+    assert_eq!(code, Some(1), "a refusal, not a panic: {err}");
+    assert!(err.contains("--tools-file"), "{err}");
 }
 
+/// The catalog is checked against the dispatch's two kinds in both
+/// directions before any setting or dial: a file entry the dispatch
+/// doesn't know — a stranger, a ceremony's name — refuses startup naming
+/// it; a dispatch tool with no file entry — a wire op, an adapter tool —
+/// refuses naming it; and the undoctored file starts, then exits cleanly on
+/// immediate EOF.
 #[test]
 fn tools_file_dispatch_drift_refuses_startup_both_directions() {
-    // Catalog validation precedes any network use, so no daemon is needed
-    // and SKEPD_URL can point nowhere.
     let dir = TempDir::new("drift");
     let real = embedded_catalog();
 
-    // Direction one: a file entry the dispatch doesn't know.
-    let mut extra = real.clone();
-    extra["tools"].as_array_mut().expect("tools").push(json!({
-        "name": "frobnicate",
-        "description": "no such wire op",
-        "inputSchema": {"type": "object"}
-    }));
-    let path = dir.path().join("extra.json");
-    std::fs::write(&path, extra.to_string()).expect("write doctored file");
-    let err = tools_file_refusal(&path);
-    assert!(err.contains("frobnicate"), "stderr names the unknown tool: {err}");
+    for stranger in ["frobnicate", "retire"] {
+        let mut extra = real.clone();
+        extra["tools"].as_array_mut().expect("tools").push(json!({"name": stranger, "description": "no tool of the dispatch", "inputSchema": {"type": "object"}}));
+        let path = dir.path().join(format!("extra-{stranger}.json"));
+        std::fs::write(&path, extra.to_string()).expect("write doctored file");
+        let err = tools_file_refusal(&path);
+        assert!(err.contains(stranger), "stderr names the unknown tool: {err}");
+    }
 
-    // Direction two: a dispatch op with no file entry.
-    let mut missing = real.clone();
-    missing["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
-    let path = dir.path().join("missing.json");
-    std::fs::write(&path, missing.to_string()).expect("write doctored file");
-    let err = tools_file_refusal(&path);
-    assert!(err.contains("insert"), "stderr names the uncovered op: {err}");
+    for missing in ["insert", "changes_since"] {
+        let mut doctored = real.clone();
+        doctored["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != missing);
+        let path = dir.path().join(format!("missing-{missing}.json"));
+        std::fs::write(&path, doctored.to_string()).expect("write doctored file");
+        let err = tools_file_refusal(&path);
+        assert!(err.contains(missing), "stderr names the uncovered tool: {err}");
+    }
 
-    // And the undoctored file starts, then exits cleanly on immediate EOF.
+    let fixture = Fixture::new("drift-real");
     let path = dir.path().join("real.json");
     std::fs::write(&path, real.to_string()).expect("write real file");
-    let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-        .args(["--tools-file", path.to_str().expect("utf-8 path")])
-        .env("SKEPD_URL", "http://127.0.0.1:1")
-        .env("SKEP_PRINCIPAL", "1")
-        .env_remove("SKEP_COMMONS")
-        .output()
-        .expect("run skep-mcp");
-    assert!(
-        out.status.success(),
-        "the real catalog must start: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = Launch::over(&fixture, 1).args(["--tools-file", path.to_str().expect("utf-8 path")]).output();
+    assert!(out.status.success(), "the real catalog must start: {}", String::from_utf8_lossy(&out.stderr));
 }
 
 /// The adapter run to completion on `tools_file`, which startup must
-/// refuse: its stderr, the refusal.
+/// refuse before any setting is read: its stderr, the refusal.
 fn tools_file_refusal(tools_file: &Path) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-        .args(["--tools-file", tools_file.to_str().expect("utf-8 path")])
-        .env("SKEPD_URL", "http://127.0.0.1:1")
-        .env("SKEP_PRINCIPAL", "1")
-        .env_remove("SKEP_COMMONS")
-        .output()
-        .expect("run skep-mcp");
-    assert!(!out.status.success(), "a drifted tools file must refuse startup");
-    String::from_utf8_lossy(&out.stderr).into_owned()
+    let (code, err) = Launch::new().args(["--tools-file", tools_file.to_str().expect("utf-8 path")]).refusal();
+    assert_eq!(code, Some(1), "a drifted tools file must refuse startup: {err}");
+    assert!(err.contains("tools file:"), "{err}");
+    err
+}
+
+/// The drift fixtures and the reader beside them read the one catalog the
+/// binary embeds.
+#[test]
+fn the_embedded_catalog_is_the_file_beside_the_manifest() {
+    let file = embedded_catalog();
+    let names: Vec<&str> = file["tools"].as_array().expect("tools").iter().map(|t| t["name"].as_str().expect("name")).collect();
+    assert_eq!(names.len(), 57, "forty-seven wire ops, seven shell calls, three apparatus tools: {names:?}");
+    let _: Value = file;
 }

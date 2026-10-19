@@ -1,5 +1,5 @@
 {
-  "instructions": "skep is a substrate of documents, immutable content, and first-class links, served by the skepd daemon. Each tool here but session_info (adapter apparatus) is one wire operation, and its result text is skepd's answer to the frame, verbatim JSON: its response document, tagged by resp — or, where the daemon refuses the request itself, an {\"error\", \"detail\"?} object with no resp (scan_busy: retry shortly).\n\nEncodings. Tumblers and addresses are dotted-decimal strings (\"1.0.1.0.1.0.1.1\"), zeros explicit. Unbounded naturals (widths, V-position components) are decimal strings (\"5\"); non-negative integers are accepted. Log positions (at/as_of), slots, window sizes, and principal ids are plain JSON numbers. Spans are {\"start\": <tumbler>, \"width\": <tumbler>}, half-open in the tumbler order; zero-width is invalid; the depth-2 content V-span {\"start\": \"1.1\", \"width\": \"0.5\"} names subspace 1 (content), ordinal 1, five positions. V-positions are {\"subspace\", \"ordinal\"} naturals; subspace 1 = content, 2 = links; ordinals 1-based.\n\nContent granularity is said, never fallen into. In insert's values array, a bare string mints one single-byte value per UTF-8 byte (\"hello\" is five values at five positions) and {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at ONE position whose interior is permanently unaddressable — no link, transclusion, or compare can ever reach inside it, in any document, for the value's whole lifetime. Deliveries are injective: a maximal run of single-byte values renders as one {\"content\"} item ({\"hex\"} when the run is not UTF-8), each composite value as its own {\"atom\"}/{\"atom_hex\"} item, and a link position as {\"ref\"}. Count positions, not items: {\"content\": \"hello\"} spans five positions, {\"atom\": \"hello\"} one.\n\nRejections are data, not errors. A failed operation answers {\"resp\": \"rejected\", \"op\", \"code\", \"disposition\", ...} as a normal tool result. isError marks only the adapter's failure to bring back an answer, its message naming the failed step: the daemon unreachable or silent, an exchange that broke or timed out, an answer past the adapter's size cap (narrow the request), an answer it could not use (an unreadable one; for session_info, a refused health or account read), or the daemon refusing to open this adapter's session (a board that admits signed sessions only refuses every write here). A write that answers isError may still have committed — its frame may have reached the daemon before the exchange failed — so check before reissuing it. disposition is advisory: permanent (reissuing the same request cannot succeed), reorder (a future committed state may satisfy the precondition; reissue after it commits), retry (transient; the operation did nothing), halt (writes stopped; reads still work). Every write acknowledgment carries at (the commit that made it true); every read carries as_of (its snapshot).\n\nSessions are this adapter's job: it opens one for its configured principal when a write needs it — its first write, and the first after the daemon has ended the old one (a restart ends them all) — and tokens never surface here. While no session is open, reads run at guest class, which sees published documents alone: a draft, your own included, answers withheld, and the links it homes drop out of the link reads. A principal must be delegated an account before the stores accept its writes; session_info reports your principal, your account address (null until delegated), and daemon health. One naming note: in make_link and emit, the schema argument from_ is the wire's from.",
+  "instructions": "skep is a substrate of documents, immutable content, and first-class links, served by the skepd daemon. You reach one board through this adapter under ONE SIGNED SESSION it opened at startup for your principal, with your principal's key: every write you make is signed by that key and attributed to your account forever. Tools come in two kinds. A WIRE OPERATION tool (create_new_document, insert, make_link, publish, retrieve_v, image, ...) is one operation of the wire: its name is the frame's op, its arguments are the frame, and its result text is the board's answer to the frame as JSON — the response document, tagged by resp. The other tools are the shell's own calls and this adapter's apparatus: session_info, search, places, changes_since, fetch, held, resolve, boards, health, probe.\n\nWHO YOU ARE. Call session_info first. It reports your principal, your account (null until delegated), the key you sign with (its fingerprint and label), the board, writes (whether this session may write), and the board's health with its mode and log_position. You cannot run key or claim ceremonies here — there is no keygen, enroll, rotate, retire, claim, handoff, accept or recover: those are your person's, at their own client. Your person stops you by retiring your key, and this adapter then stops.\n\nFIND BEFORE YOU WRITE. search(query) finds passages by their words at your class; places() lists every document you may read, each with its first line; find_links_v and find_links_ftt find the links on a region or by their slots. Read state on every search and places answer: while state.arm is none or building (or busy), the index is not yet built from the board, so a miss is not absence — ask again later, or read the documents directly. Link, never copy: cite another's passage with make_link, or transclude it with copy, which shares its identity; never retype its text. Version, never rewrite: a published document is never edited in place; stage the change in a draft and publish it as the next member of its chain.\n\nYOUR DOCUMENTS. Your account's first document is your PUBLISHED HOME, doc 1, born published: an insert into it is refused published_target. Mint a second document with create_new_document(account) for your text; it is a DRAFT, yours alone to read and write until you publish it. TO PUBLISH a draft: image(d: draft, region) answers the draft's runs ({i_start, width}); publish(doc, draft, runs: [{origin: draft, i_start, width}]) then appends the next member of doc's chain, born published. Give base and base_extent both (the member the draft was staged from, and the number of content positions the staged copy took) or neither (the birth version). For a first publication, mint the published document with create_new_document(account, published: true), then publish the draft into it.\n\nENCODINGS. Tumblers and addresses are dotted-decimal strings (\"1.0.1.0.1.0.1.1\"), zeros explicit. Unbounded naturals (widths, V-position components) are decimal strings (\"5\"); non-negative integers are accepted. Log positions (at/as_of), slots, window sizes, and principal ids are plain JSON numbers. Spans are {\"start\": <tumbler>, \"width\": <tumbler>}, half-open in the tumbler order; zero-width is invalid; the depth-2 content V-span {\"start\": \"1.1\", \"width\": \"0.5\"} names subspace 1 (content), ordinal 1, five positions. V-positions are {\"subspace\", \"ordinal\"} naturals; subspace 1 = content, 2 = links; ordinals 1-based. Content granularity is said, never fallen into: in insert's values array, a bare string mints one single-byte value per UTF-8 byte (\"hello\" is five values at five positions) and {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at ONE position whose interior is permanently unaddressable — no link, transclusion, or compare can ever reach inside it. Deliveries are injective: a maximal run of single-byte values renders as one {\"content\"} item ({\"hex\"} when the run is not UTF-8), each composite value as its own {\"atom\"}/{\"atom_hex\"} item, and a link position as {\"ref\"}. Count positions, not items: {\"content\": \"hello\"} spans five positions, {\"atom\": \"hello\"} one.\n\nREJECTIONS ARE DATA. A refused operation is a normal tool result (isError false) whose text is {\"kind\": \"refused\", \"name\", \"status\", \"code\", \"detail\", \"op\", \"body\"}: body is the board's verdict verbatim — {\"resp\": \"rejected\", \"op\", \"code\", \"disposition\", ...} for an operation, or a route's {\"error\", ...} document — and name is the one token to act on. disposition is advisory: permanent (reissuing the same request cannot succeed), reorder (a future committed state may satisfy the precondition; reissue after it commits), retry (transient; the operation did nothing), halt (writes stopped; reads still work). isError true means the shell could not get the board's verdict, and its text is a refusal of another kind: unreachable (the board is not answering), halt (a face with state, cause and act), blocked, or shell (the shell's own, by name: malformed_args naming the argument, session_ended, session_died, query_too_long, ...). The shell reissues within a call exactly what the wire says to reissue — write_busy once, durability twice — and never more; a write that answers isError did not commit, save a burst the next paragraph names. Every write acknowledgment carries at (the commit that made it true); every read carries as_of (its snapshot).\n\nHELD WRITES. An insert, delete, copy, reinstate or rearrange on a draft that the board cannot take now — the board unreachable, its writes halted — answers {\"resp\": \"held\", \"held\": <ordinal>, \"cause\"} as data: the shell keeps the burst and resends it in order when the board returns. After a held answer, call held() until the line is gone; a line that comes back refused or moved stays until you resolve(held, act) it — \"drop\" discards it, \"send\" resends it. A held line with sent true may already have landed, its answer lost: check before writing it again.\n\nWHAT CHANGED. changes_since(since, limit?) answers what changed on the board since the position since, at your class: {\"entries\", \"next\", \"head\"}. Keep next and pass it as the next since; start from session_info's health.log_position, or from 0 for everything. An entry names its docs, op, position, the key that signed it (a fingerprint, \"bare\" or \"system\") and its time; a draft you may not read never appears.\n\nFETCH. fetch(i) answers the bytes of the picture whose cell sits at the content address i: an image block (PNG, JPEG, GIF or WebP) where the bytes' magic names one — the type is sniffed off the bytes, never attested — else an embedded resource blob of application/octet-stream; a file past this adapter's cap of 8 MiB is refused naming it. Uploading is not offered here yet.\n\nOne naming note: in make_link and emit, the schema argument from_ is the wire's from.",
   "commons_instructions": "The commons is at {addr}: link-type names are addresses in its subspace 3, each documented by a link of type {addr}.0.3.50 (\"defines\").",
   "tools": [
     {
@@ -97,6 +97,22 @@
       }
     },
     {
+      "name": "effective_owner",
+      "description": "Who owns addr: the LONGEST registered prefix containing it and the principal seated there, from one walk of the board's principal list. addr is any address in the board's local form; it need not be allocated. Response: effective_owner — {prefix, principal}, both present together, or null together where no registered principal's prefix contains addr. An account is allocated iff prefix equals the address asked; any other prefix names the nearest seat ABOVE it. Public registry data: no session needed, nothing withheld.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Any address in this board's local form."
+          }
+        },
+        "required": ["addr"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "doc_metadata",
       "description": "A document's publication metadata: doc (the trunk a version member projects to), published, owner, birth and birth_extent (its first version and the content it was born with; null before any version), placed and base_extent (the publish shot's terms of the address named; null where no shot minted it), and source (the version member or bare document the address named was born sharing, where a version minted it — a fork's parent, read by whoever may read the fork; null otherwise). Response: doc_metadata; an unreadable document answers withheld, an unregistered one doc_not_registered.",
       "inputSchema": {
@@ -109,6 +125,22 @@
           }
         },
         "required": ["doc"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "key_set",
+      "description": "The credential table of account: who can sign for it, now and historically — enrolled and retired entries, each with its fingerprint and key. Principal-free: no session needed, a guest and a bound principal answered byte-identically. Response: key_set; a non-account address rejects not_an_account; a keyless account answers empty lists (such an account opens by reference, with a key enrolled in the nearest set above it).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The account address."
+          }
+        },
+        "required": ["account"],
         "additionalProperties": false
       }
     },
@@ -409,6 +441,62 @@
           }
         },
         "required": ["d_src"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "publish",
+      "description": "THE SHOT: append the next member of doc's version chain, born published, in one commit, its arrangement the runs you compose. Stage the change in a draft of yours; image(d: draft, region) answers the draft's runs; each run here is {origin, i_start, width} as image answers it — origin the draft, whose runs are re-inserted as fresh identity under doc's own I-space, or another document whose content the member keeps by reference. base and base_extent go together or not at all: base is the member the draft was staged from (doc itself while the chain is empty), base_extent the number of content positions the staged copy took; neither is the birth version. Owner-gated, every run's origin readable to you; the shell signs the shot with your key. Response: ack_addr with the member's address. A replayed shot names a base its own commit left behind and mints that base's daughter, never the trunk's next.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The published document (the trunk) the member is appended to; you own it."
+          },
+          "draft": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The staging draft whose runs are re-inserted as fresh identity under doc's own I-space."
+          },
+          "runs": {
+            "type": "array",
+            "description": "The member's arrangement in V-order: each run origin, i_start, width — what image(d, region) answers for the draft, origin the draft.",
+            "items": {
+              "type": "object",
+              "description": "One run of permanent content I-addresses.",
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The document the run's addresses were minted under: the draft, or a document kept by reference."
+                },
+                "i_start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The run's first content I-address, a full element position (doc.0.1.ordinal)."
+                },
+                "width": {
+                  "type": ["string", "integer"],
+                  "description": "Number of positions, an unbounded natural: decimal string canonically (\"5\"); a non-negative integer is accepted."
+                }
+              },
+              "required": ["origin", "i_start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The member the draft was staged from — doc itself while the chain is empty. With base_extent, or neither."
+          },
+          "base_extent": {
+            "type": ["string", "integer"],
+            "description": "The number of content positions the staged copy took, an unbounded natural (decimal string canonically). With base, or neither."
+          }
+        },
+        "required": ["doc", "draft", "runs"],
         "additionalProperties": false
       }
     },
@@ -945,6 +1033,54 @@
           }
         },
         "required": ["specs"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "retrieve_i",
+      "description": "THE READ BY IDENTITY: deliver the values at the I-ADDRESSES the spans name, each {start, width} a run of width content positions from the element address start, in span order. start is an element address of a document's content subspace (doc.0.1.ordinal). Response: i_delivery — one item per position, the value held there or null where the document minted none. Gated by the read predicate: a span into a document you may not read is withheld naming it. A delivery past 131072 items is refused too_many_items.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spans": {
+            "type": "array",
+            "description": "The I-spans to deliver, in order.",
+            "items": {
+              "type": "object",
+              "description": "A run of content I-addresses: its first element address and its width in positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "The run's first content I-address, a full element position (doc.0.1.ordinal)."
+                },
+                "width": {
+                  "type": ["string", "integer"],
+                  "description": "Number of positions, an unbounded natural: decimal string canonically (\"5\"); a non-negative integer is accepted."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["spans"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "content_frontier",
+      "description": "The next unminted content ordinal under doc — its mint count plus one, the home's content chain peeked and not advanced. Every value doc ever minted (arranged, deleted, or never placed) lies below the frontier, so the read says how many it minted and nothing of what they hold. Response: frontier; an unreadable document answers withheld, an unregistered one doc_not_registered.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          }
+        },
+        "required": ["doc"],
         "additionalProperties": false
       }
     },
@@ -1924,11 +2060,189 @@
       }
     },
     {
-      "name": "session_info",
-      "description": "Adapter apparatus, not a wire operation: reports {\"principal\", \"account\", \"health\"} — this adapter's configured principal, that principal's account address via principal_prefix (null until delegated), and the daemon's GET /health answer, verbatim ({\"ok\", \"log_position\", …}).",
+      "name": "edition_claims",
+      "description": "The audit-view edition-claim lookup: every admitted, unsuperseded claim of the edition class (type under 1.1.0.1.0.1.0.3.14, its subtypes included) whose to slot denotes target — the document or a version of it — whether or not retracted, each with its home (the edition) and its active flag. target is a document argument (unreadable: withheld); rows are then filtered to those whose home you may read. Response: edition_claims.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The document, or a version of it, the claims are about."
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "universal_grants",
+      "description": "The any-principal discovery read: the grant fold's LIVE universal set — every content prefix an admitted, unrevoked grant with an EMPTY to names, a document or an account — with the issuers who granted it, one row per prefix in prefix order. Takes no argument; every bound principal is answered the same rows, and a guest none. Revocation is immediate. Response: universal_grants.",
       "inputSchema": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "boards",
+      "description": "The shell's boards call: the one board this adapter serves, [{board, name, origin}] — board the shell's opaque reference, which no tool here takes (the adapter supplies it on every call), name and origin the board's origin.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "health",
+      "description": "The shell's health call for the board: {health, mode} — the board's GET /health document verbatim ({ok, log_position, head_time, chain_head, auth: {claimant, local_trust, origins, signed_origins}, media, writes: {halted}}) and the mode derived from it: UNCLAIMED, CLAIMED-PERMISSIVE or ENFORCING. writes.halted true means every write is refused poisoned until the board restarts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "probe",
+      "description": "The shell's probe call: {daemon, dialed, signed} — whether the board answers (running, else unreachable; stopped where the shell runs the node, which this adapter never does), the origin it is dialed at and the origin it is signed for.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "search",
+      "description": "The shell's search over the board's index at your class: query is words, matched across the published documents and the drafts you may read. Response: {hits, places, state, total, truncated, more_terms, fuzzy_bounded, positions_bounded} — each hit {doc, member, as_of, span: {start, width}, score, snippet: {text, start, marks}, kind: edition|draft, standing, occurrences, matched}; places the exact address or label matches; state the index's state ({arm: none|building|widening|complete|at_the_floor|resumed_from_the_floor|unplaced|past_the_ceiling|newer_skep|busy, ...}) — while it is none, building or busy a miss is not absence. A query past 1024 bytes is refused query_too_long.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The words to find; at most 1024 bytes."
+          },
+          "opts": {
+            "type": "object",
+            "description": "The search's options; each absent takes its default.",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "At most this many hits (the index's own bound by default)."
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Skip this many hits first (0 by default)."
+              },
+              "reindex": {
+                "type": "boolean",
+                "description": "Refresh the index pair before answering (false by default)."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "places",
+      "description": "The shell's document listing: every document of the board's index you may read, in address order, each {doc, kind: edition|draft, label (its first line, or null), standing}, with the count per account and the index's state. opts.under narrows the listing to one address prefix (an account, a document). Response: {docs, counts: [{account, documents}], state} — while state.arm is none, building or busy the listing is not yet whole.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opts": {
+            "type": "object",
+            "description": "The listing's options.",
+            "properties": {
+              "under": {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                "description": "List the documents at or under this address prefix alone."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "held",
+      "description": "The shell's held call: your held bursts at the board, in resend order — each {held (the ordinal resolve takes), doc, base, frame (the write as composed), cause (why it is held: unreachable, halted, poisoned, durability, behind, moved, or a refused run's token), sent (whether the write may have landed, its answer lost), time, refusal? (the board's verdict on a refused run)}. Empty once every held write has landed. Response: a JSON array.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "resolve",
+      "description": "The shell's resolve call: your act on a held burst the board refused, or whose document moved — \"drop\" marks the line (and the lines behind it in a refused run) dropped; \"send\" hands it back to the resend. A line still holding or sending is not_resolvable until the board answers; an ordinal that stands no longer is no_such_held. Response: {}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "held": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The held line's ordinal, as held() lists it."
+          },
+          "act": {
+            "type": "string",
+            "enum": ["drop", "send"],
+            "description": "drop the line, or send it again."
+          }
+        },
+        "required": ["held", "act"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "session_info",
+      "description": "Adapter apparatus, not a wire operation: this adapter's standing — {principal, account (null until delegated), key: {fingerprint, label} (the key this session signs with, enrolled in the account's set or the nearest set above it), board (the origin), writes (whether this session may write), mode (UNCLAIMED, CLAIMED-PERMISSIVE or ENFORCING) and health (the board's GET /health document verbatim, log_position among its members)}. Call it first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "changes_since",
+      "description": "The shell's changes call as a pull: what changed on the board since the log position since, at your class — {entries, next, head}. Each entry is a /changes row with its position and class (published, or drafts for a draft you may read): {position, at, op, docs, class, key (the signing key's fingerprint, \"bare\" or \"system\"), time, attest?, link?, new_prefix?, new_id?, placed?, base_extent?}, oldest first. next is the position to ask from next time — keep it; head the board's latest position. Bounded by limit and the board's page budget; a since below the board's memory is refused history_reclaimed naming the floor. Start from session_info's health.log_position, or from 0.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The log position to read from: the page is (since, head]."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096,
+            "description": "At most this many entries (the board's default, 256, when absent)."
+          }
+        },
+        "required": ["since"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "fetch",
+      "description": "The bytes of the picture whose reference cell sits at the content address i (doc.0.1.ordinal), fetched whole from the board under your session and checked by the board against the cell's hash and size before its first byte. The result is one content block: an image block (mimeType image/png, image/jpeg, image/gif or image/webp) where the bytes' magic names one — the type is sniffed off the bytes by this adapter and never attested by the board, which declares none — else an embedded resource blob of application/octet-stream at the fetch's own URI. A file past this adapter's cap of 8 MiB (8388608 bytes) is refused naming the cap, no byte of it read; a file you may not read is withheld; a cell that is none is not_a_cell. The client-side recovery order is not run: the bytes are what the board served.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "i": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The content address the cell sits at, as insert's ack_addr named it."
+          }
+        },
+        "required": ["i"],
         "additionalProperties": false
       }
     }

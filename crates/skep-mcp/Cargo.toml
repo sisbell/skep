@@ -5,29 +5,40 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, skepd's HTTP/JSON wire on the other. One static binary an operator points a harness at; tool name → wire op is mechanical, skepd's response documents pass through verbatim, rejections are data."
+description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an operator points a harness at; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch — and a board's verdict comes back as data."
 readme = "README.md"
 
 [dependencies]
-# Both protocols are small enough to own — a written-out HTTP/1.1 client
-# over std::net (skepd is one-request-per-connection, Connection: close),
-# and newline-delimited JSON-RPC over stdio. JSON encoding is the one thing
-# taken from a library.
+# THE BACKEND: the shell's core, written once for the dev provider, the
+# desktop shell and this adapter — the signed session with its attest, the
+# hold that keeps a burst the board cannot take, the feed consumer behind
+# `search` and `places`, the change feed's page behind `changes_since`, and
+# the streamed blob fetch. The adapter is a transport over it: stdio
+# JSON-RPC in, `Shell::call` and `Shell::fetch` out.
+skep-shell = { path = "../skep-shell" }
+# The board's canonical origin, which `ShellOptions` takes and the shell
+# does not re-export; the key's public facts (`KeyFacts`) the startup line
+# and `session_info` name the signing key by.
+skep-client = { path = "../skep-client" }
+# The bridge's values: every call's input and output is a
+# `serde_json::Value`; JSON-RPC's framing is this crate's own.
 serde_json.workspace = true
 
 [dev-dependencies]
-# The real stack: tests build a daemon in-process on an ephemeral port over
-# a temp data dir, claim its board over the wire (an unclaimed daemon runs
-# nothing but the claim ceremony — RES-27), provision a principal, and
-# drive the built skep-mcp binary through its stdin/stdout. `test-hooks`
-# compiles in `skepd::fuzz_support`, which tests/it/fuzz_mcp.rs drives.
+# The real daemon in-process on an ephemeral port over a temp data dir,
+# restarted at the same port where a suite needs the restart arm; the
+# suites claim its board through the library and drive the built skep-mcp
+# binary through its stdin/stdout. `test-hooks` compiles in
+# `skepd::fuzz_support`, which tests/it/fuzz_mcp.rs drives.
 skepd = { path = "../skepd", features = ["test-hooks"] }
-# The ceremony's record grammar and session-payload framing.
+# The library with its scripted person on: the fixture claims each board
+# through `ceremony::claim::notebook` over a `FileStore` — the claimant's
+# key and its binding then sit in the store the adapter signs from — and
+# enrolls and retires keys through the walks for the session's death arms.
+skep-client = { path = "../skep-client", features = ["test-hooks"] }
+# The enrollment record a second key is enrolled by (`encode_enroll`), which
+# the fixture composes for the library's `enroll` walk as `keygen` prints it.
 skep-identity = { path = "../skep-identity" }
-# The ceremony's signer: each seed (`Seed`, a `test-hooks` door, and no key
-# itself) and the hybrid key it seeds (`HybridSigner`), which signs the
-# session blobs; the daemon only verifies.
-skep-signature = { path = "../skep-signature", features = ["test-hooks"] }
 # The SKEP_COMMONS gate's reference: the gate reproduces skep-address's T4
 # validator rather than importing it, and a unit test holds the two equal
 # over every short dotted decimal.

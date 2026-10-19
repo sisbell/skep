@@ -1198,10 +1198,27 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        failure: checkpoint thread: the OS refused it ({error}); …
        ```
 
-   18. Later, on a thread of its own, the rebuilt cell index:
+       The cell index's walk takes its thread earlier, as the open's
+       last act, and where the OS refuses it the open says so, ahead
+       of item 13's warnings:
 
        ```
-       landing: cell index rebuilt at open: {n} values walked, {n} cells, {n} halt marks, {duration} ({duration} past the prefix test)
+       failure: cell index: the OS refused the rebuild's thread ({error}); the walk runs at open
+       ```
+
+       The open then walks the board itself and goes on once the walk
+       lands (item 18), so the board answers nothing until then: on a
+       large board the start takes that much longer. `{error}` is the
+       OS's own words for the limit the spawn met. Where the worker
+       refusal above follows it, the limit still holds: retry under a
+       higher one, as that line says.
+
+   18. Later, on a thread of its own — or at the open, ahead of item
+       13, where the OS refused that thread (item 17) — the rebuilt
+       cell index:
+
+       ```
+       landing: cell index rebuilt at open: {n} values walked, {n} cells, {n} halt marks, {ms} ms ({ms} ms past the prefix test)
        ```
 
        Until then an upload's creation and resume, and the listing
@@ -1213,6 +1230,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        ```
        failure: cell index: the walk failed ({cause}); the upload family and the door's index arm refuse for the uptime; the act: a restart, or the build's fix where it recurs
        ```
+
+       `{cause}` is the panic's message where the code wrote it as a
+       literal, else `a panic`. The line before it, `failure:
+       skepd-cell-index: a thread panicked at {location}` (`main` in
+       place of `skepd-cell-index` where the walk ran at the open),
+       names where the walk died. Where a restart meets the same
+       failure, the act is the build's fix: keep both lines for it.
 
        The pruner's first pass follows (The full volume, step 3).
 
@@ -1472,6 +1496,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    failure runs the open again each time; where the same line comes
    at each attempt, it is a defect of the build, which a restart does
    not mend: stop the unit and keep the line.
+
+   One such panic is caught, and the daemon goes on: the cell index's
+   walk, where it ran at the open because the OS refused its thread
+   (Start, step 3, item 17). Its line names `main`, the walk's own
+   line follows it (Start, step 3, item 18), and the board serves,
+   uploads and the listing of one's deposits answered `503
+   index_failed` until a restart.
 
 ## 5. Restart
 

@@ -155,6 +155,19 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     classed("H.1 written at open", Class::Landing);
     classed("pruner: the OS refused its thread (", Class::Failure);
     classed("cell index rebuilt at open:", Class::Landing);
+    // …its two durations in whole milliseconds, the stream's one spelling of
+    // a duration, as the walk's landing line writes them.
+    assert!(
+        list.contains("halt marks, {ms} ms ({ms} ms past the prefix test)"),
+        "the walk's landing quotes its durations in milliseconds:\n{list}"
+    );
+    // The walk's two failures, each under the class the binary writes it
+    // with: its thread refused, naming the OS's words, and its catch.
+    classed(
+        "cell index: the OS refused the rebuild's thread ({error}); the walk runs at open",
+        Class::Failure,
+    );
+    classed("cell index: the walk failed (", Class::Failure);
     // The blocked list's absence, a line of the report like the rest.
     classed("no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES):", Class::Open);
 }

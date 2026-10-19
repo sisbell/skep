@@ -891,16 +891,20 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     third.child.kill();
 }
 
-/// THE CLASSED DOOR IS THE ONLY DOOR: every line on the binary's stderr
-/// carries the grammar's head, `skepd: {time} {class}: `, for a class the
-/// door spells — judged over the WHOLE stream of a served open, the cell
-/// index's landing awaited so the walk thread's line is among the lines
-/// judged, on a fresh board and again on the same board with a stray
+/// Checks that every line of a served open carries a class word.
+///
+/// **The classed door is the only door.** Every line on the binary's stderr
+/// carries the grammar's head, `skepd: {time} {class}: `, for a class the door
+/// spells, judged over the whole stream of a served open. The cell index's
+/// landing is awaited, so the walk thread's line is among the lines judged,
+/// and its two durations are read as whole milliseconds, the one spelling
+/// `operations.md` §1 gives a duration on the stream (§1.1 row 13). The open
+/// is judged on a fresh board, and again on the same board with a stray
 /// `checkpoint.tmp` planted before the open, whose report (`open:
-/// checkpoint.tmp found ({bytes} bytes) and removed: …`) is then judged
-/// too. One claim over every line: a line through no door, or a head spelled
-/// by hand at its site, fails it. The class words come from the door's own
-/// type, so a word the door spells one way and a site another fails here.
+/// checkpoint.tmp found ({bytes} bytes) and removed: …`) is then judged too.
+/// One claim over every line: a line through no door, or a head spelled by
+/// hand at its site, fails it. The class words come from the door's own type,
+/// so a word the door spells one way and a site another fails here.
 #[test]
 fn every_line_of_a_served_open_carries_a_class_word_the_door_spells() {
     let classes: Vec<String> = [
@@ -935,7 +939,18 @@ fn every_line_of_a_served_open_carries_a_class_word_the_door_spells() {
     // FIRST LIFE: a fresh board, served; the walk's landing awaited, the
     // media gate's limits line — once un-classed — among the lines read.
     let mut first = serve_and_read_the_open(&dir, &[]);
-    await_said(&mut first.stderr, "landing", "cell index rebuilt at open: ");
+    let landed = await_said(&mut first.stderr, "landing", "cell index rebuilt at open: ");
+    // The walk's two durations, each in whole milliseconds: digits alone, so
+    // one pattern reads every duration the stream carries.
+    let in_ms = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    let durations = landed
+        .split_once(" halt marks, ")
+        .and_then(|(_, rest)| rest.strip_suffix(" ms past the prefix test)"))
+        .and_then(|rest| rest.split_once(" ms ("));
+    assert!(
+        durations.is_some_and(|(walk, parse)| in_ms(walk) && in_ms(parse)),
+        "FINDING (§1): the walk's durations are not whole milliseconds: {landed}"
+    );
     first.child.kill();
     let whole = first.stderr.whole();
     every_line_classed(&whole, "first");

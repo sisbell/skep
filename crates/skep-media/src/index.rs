@@ -234,20 +234,15 @@ impl CellIndex {
         self.rebuild.lock().clone()
     }
 
-    /// THE WALK's COMPLETION: the report kept, the readiness flipped, the
-    /// operator told — the walk's landing with its figures and durations
-    /// (`operations.md` §1.1 row 13), and, where a value names a kind under
-    /// no schema this build reads, the standing failure that halts the
-    /// pruner's unlink pass (row 14), said once here. The walk's own door; a
-    /// test readies an index it built by hand through it.
+    /// Completes the walk, keeping its report and flipping the readiness.
+    ///
+    /// It says the walk's landing (`operations.md` §1.1 row 13), its figures
+    /// and its two durations in milliseconds ([`RebuiltLine`]), and, where a
+    /// value names a kind under no schema this build reads, the standing
+    /// failure that halts the pruner's unlink pass (row 14), once. It is the
+    /// walk's own door; a test readies an index it built by hand through it.
     pub(crate) fn complete(&self, report: Rebuild) {
-        notice::emit(
-            Class::Landing,
-            format_args!(
-                "cell index rebuilt at open: {} values walked, {} cells, {} halt marks, {:?} ({:?} past the prefix test)",
-                report.values, report.cells, report.halts, report.walk, report.parse
-            ),
-        );
+        notice::emit(Class::Landing, RebuiltLine { report: &report });
         if let Some(mark) = self.first_halt() {
             notice::emit(
                 Class::Failure,
@@ -265,8 +260,8 @@ impl CellIndex {
     ///
     /// It is the walk's failure (`operations.md` §4 row 26; §1.1 row 41): the
     /// line goes out under `Class::Failure` in the operator's terms
-    /// ([`WalkFailedLine`]) — the panic's text where the code wrote it, what
-    /// refuses from here and the act. The walk's catch alone calls it
+    /// ([`WalkFailedLine`]) — the literal a `panic!` wrote, else `a panic`;
+    /// what refuses from here; and the act. The walk's catch alone calls it
     /// ([`walk_under_the_catch`]), whichever thread the walk ran on, once per
     /// life of the process; a test fails an index it built by hand through
     /// it. The binary's hook has already said the panic's location (row 41:
@@ -480,18 +475,73 @@ impl CellIndex {
     }
 }
 
-/// THE CATCH's LINE (`operations.md` §4 row 26; §1.1 row 41), the ruled
-/// words: `cell index: the walk failed ({payload}); the upload family and
-/// the door's index arm refuse for the uptime; the act: a restart, or the
-/// build's fix where it recurs` — the panic's text in the parenthesis
-/// ([`payload_text`]), the hook's line having said the location. A pure
+/// The walk's landing line: its figures and its two durations.
+///
+/// Its words (`operations.md` §1.1 row 13): `cell index rebuilt at open: {n}
+/// values walked, {n} cells, {n} halt marks, {ms} ms ({ms} ms past the prefix
+/// test)` — the walk's whole duration, then its time past the prefix test,
+/// each in whole milliseconds, the one spelling `operations.md` §1 gives a
+/// duration on the stream. The line ends the readiness window: from the open
+/// until it, the index's three readers refuse `index_rebuilding`. A pure
 /// value pinned by `to_string()` in the unit suite; emitted under
-/// `Class::Failure` by [`CellIndex::fail`], once.
-struct WalkFailedLine<'a> {
-    payload: &'a str,
+/// `Class::Landing` by [`CellIndex::complete`], once.
+struct RebuiltLine<'a> {
+    report: &'a Rebuild,
 }
 
-impl fmt::Display for WalkFailedLine<'_> {
+impl fmt::Display for RebuiltLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let r = self.report;
+        write!(
+            f,
+            "cell index rebuilt at open: {} values walked, {} cells, {} halt marks, {} ms ({} ms \
+             past the prefix test)",
+            r.values,
+            r.cells,
+            r.halts,
+            r.walk.as_millis(),
+            r.parse.as_millis()
+        )
+    }
+}
+
+/// The line the walk's refused thread says: the OS's cause, and what runs.
+///
+/// Its words (`operations.md` §1.1 row 15, in the form of the pruner's and
+/// the checkpoint thread's, rows 21 and 22): `cell index: the OS refused the
+/// rebuild's thread ({error}); the walk runs at open` — the error in the OS's
+/// own words, which name the limit the spawn met. A pure value pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Failure` by
+/// [`start_walk`], once, where the spawn is refused.
+struct ThreadRefusedLine<'a> {
+    error: &'a io::Error,
+}
+
+impl fmt::Display for ThreadRefusedLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "cell index: the OS refused the rebuild's thread ({}); the walk runs at open",
+            self.error
+        )
+    }
+}
+
+/// The catch's line: the walk failed, what refuses for the uptime, the act.
+///
+/// Its words (`operations.md` §4 row 26; §1.1 row 41): `cell index: the walk
+/// failed ({cause}); the upload family and the door's index arm refuse for
+/// the uptime; the act: a restart, or the build's fix where it recurs` — the
+/// cause the panic's literal, else `a panic` ([`payload_text`]). Row 41 puts
+/// the panic's location in the parenthesis, which no catch can read: the
+/// binary's hook says it on the line before, written at the panic on the same
+/// thread. A pure value pinned by `to_string()` in the unit suite; emitted
+/// under `Class::Failure` by [`CellIndex::fail`], once.
+struct WalkFailedLine {
+    payload: &'static str,
+}
+
+impl fmt::Display for WalkFailedLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -502,18 +552,15 @@ impl fmt::Display for WalkFailedLine<'_> {
     }
 }
 
-/// The panic's text as the catch's line carries it: the `&'static str` a
-/// `panic!` with a literal wrote, or the `String` a formatted one did, else
-/// the words `a panic` — never a `Debug` of a payload the code did not
-/// write, so nothing of `operations.md` §1's NEVER list rides the line.
-fn payload_text(payload: &(dyn Any + Send)) -> &str {
-    if let Some(text) = payload.downcast_ref::<&'static str>() {
-        text
-    } else if let Some(text) = payload.downcast_ref::<String>() {
-        text.as_str()
-    } else {
-        "a panic"
-    }
+/// Returns a caught panic's payload as the catch's line may carry it.
+///
+/// It is the literal where the payload is one, the words a `panic!` wrote,
+/// which the binary's hook carries too (`operations.md` §1.1 row 41). Any
+/// other payload reads `a panic`: a formatted message among them, whose text
+/// the walk's values may have made and which may span lines, so nothing of
+/// `operations.md` §1's never list rides the line.
+fn payload_text(payload: &(dyn Any + Send)) -> &'static str {
+    payload.downcast_ref::<&'static str>().copied().unwrap_or("a panic")
 }
 
 /// THE WALK AT OPEN: every value of the world `snapshot` holds, through the
@@ -564,9 +611,10 @@ pub fn walk<W: FebeWorld>(snapshot: &Snapshot<W>, index: &CellIndex) -> Rebuild 
 ///
 /// The walk runs on a thread of its own and completes `index` when it is
 /// done; `kernel` is the daemon's engine's kernel, the one thing of the
-/// engine the walk needs. Where the OS refuses the thread, the walk runs
-/// here instead, on the opening thread, before this returns: the daemon
-/// then serves later rather than never readying (P22: a derived
+/// engine the walk needs. Where the OS refuses the thread, this says so in
+/// the OS's words (`ThreadRefusedLine`; `operations.md` §1.1 row 15) and
+/// runs the walk here instead, on the opening thread, before it returns: the
+/// daemon then serves later rather than never readying (P22: a derived
 /// structure's loss is a slower answer, not an outage).
 ///
 /// **The catch** (`operations.md` §4 row 26; §1.1 row 41, the same
@@ -592,11 +640,8 @@ pub fn start_walk<W: FebeWorld>(kernel: &Kernel<W>, index: Arc<CellIndex>) {
     } else {
         thread::Builder::new().name("skepd-cell-index".into()).spawn(body)
     };
-    if spawned.is_err() {
-        notice::emit(
-            Class::Failure,
-            "cell index: the OS refused the rebuild's thread; the walk runs at open",
-        );
+    if let Err(error) = spawned {
+        notice::emit(Class::Failure, ThreadRefusedLine { error: &error });
         walk_under_the_catch(&kernel.snapshot(), &index);
     }
 }
@@ -793,8 +838,8 @@ mod tests {
     /// no fault, and where it meets one it is caught here as on its own
     /// thread — the index failed, and no unwind reaching the caller, whose
     /// open goes on. Then the line's words, verbatim, at a literal payload;
-    /// and the payload's rendering — a literal, a formatted `String`, and a
-    /// payload of neither kind as the words `a panic`.
+    /// and the payload's rendering — a literal as written, and a formatted
+    /// `String` and a payload of neither kind each as the words `a panic`.
     #[test]
     fn a_walk_that_panics_marks_the_index_failed_and_never_ready() {
         let engine = skep_engine::Engine::open(KernelConfig {
@@ -842,7 +887,7 @@ mod tests {
         let literal: Box<dyn Any + Send> = Box::new("a literal the code wrote");
         assert_eq!(payload_text(literal.as_ref()), "a literal the code wrote");
         let formatted: Box<dyn Any + Send> = Box::new(format!("formatted at {}", 7));
-        assert_eq!(payload_text(formatted.as_ref()), "formatted at 7");
+        assert_eq!(payload_text(formatted.as_ref()), "a panic", "a formatted payload never rides");
         let other: Box<dyn Any + Send> = Box::new(7u8);
         assert_eq!(payload_text(other.as_ref()), "a panic");
         // The door by hand, as the gate's suite takes it: FAILED set, ready
@@ -850,5 +895,35 @@ mod tests {
         let by_hand = CellIndex::new();
         by_hand.fail(other.as_ref());
         assert!(by_hand.is_failed() && !by_hand.is_ready());
+    }
+
+    /// Checks the walk's landing and its refused thread's line in their words.
+    ///
+    /// The landing (`operations.md` §1.1 row 13) says the walk's two durations
+    /// in whole milliseconds, the stream's one spelling of a duration (§1),
+    /// truncated as every other duration on it is: 23,456,789 µs reads `23456
+    /// ms`, and 152 µs reads `0 ms`. The refused thread's line (row 15)
+    /// carries the OS's own words for the limit the spawn met, as the
+    /// pruner's and the checkpoint thread's lines do (rows 21, 22).
+    #[test]
+    fn the_walks_landing_says_milliseconds_and_its_refused_thread_the_oss_words() {
+        let report = Rebuild {
+            values: 1_000_000,
+            cells: 3,
+            halts: 1,
+            walk: Duration::from_micros(23_456_789),
+            parse: Duration::from_micros(152),
+        };
+        assert_eq!(
+            RebuiltLine { report: &report }.to_string(),
+            "cell index rebuilt at open: 1000000 values walked, 3 cells, 1 halt marks, 23456 ms \
+             (0 ms past the prefix test)"
+        );
+        let error = io::Error::other("Resource temporarily unavailable");
+        assert_eq!(
+            ThreadRefusedLine { error: &error }.to_string(),
+            "cell index: the OS refused the rebuild's thread (Resource temporarily unavailable); \
+             the walk runs at open"
+        );
     }
 }

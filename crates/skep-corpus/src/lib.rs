@@ -9,9 +9,18 @@
 //! §7's pins over the design repository's prose, and the dev board's seeding
 //! tool (`skep-dev seed`, a binary of `skep-cli`), which lands the same
 //! documents on a running claimed board as editions, citation links, second
-//! versions and drafts. The repository's path and the pin are the CALLERS'
+//! versions and drafts. The repository's path and the pin are the callers'
 //! — the suite reads its `SKEP_SEARCH_CORPUS`, the tool its `--repo` and
-//! `--pin` — so this crate names no environment variable and reads none.
+//! `--pin` — and this crate reads no environment variable of its own.
+//!
+//! **The repository read is the one handed in.** Every `git` the crate runs
+//! is `git -C <repo>` started without the repository-local variables git
+//! itself lists ([`GIT_LOCAL_VARIABLES`]). `-C` moves only where git
+//! starts: an exported `GIT_DIR` names a repository whatever `-C` says, and
+//! `GIT_COMMON_DIR` and the object directories steer refs and objects the
+//! same way. A hook runs with them exported, and githooks(5) tells a hook
+//! that runs git in another repository to clear them. Cleared, the pin is
+//! judged and read in the repository the caller named.
 //!
 //! THE RECORDS TIER ([`in_tier`]): every file tracked at the pin whose
 //! basename is not `_context.*` and whose extension is not an image's or a
@@ -85,6 +94,33 @@ pub const CUT_RULE_SUBTREE: &str = "cut-v2";
 /// compared case-insensitively.
 pub const MEDIA_EXTENSIONS: [&str; 8] =
     ["png", "jpg", "jpeg", "gif", "webp", "avif", "mp4", "webm"];
+
+/// Git's repository-local variables, cleared from every `git` the crate runs.
+///
+/// Git's own list, as `git rev-parse --local-env-vars` prints it and in its
+/// order, less `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`. Each name
+/// here locates a repository or a part of one — its directory, its common
+/// directory, its objects and their alternates, its index, its work tree —
+/// and an exported one overrides `git -C`. The two left out carry the
+/// configuration a person gave (`git -c`, or counted `GIT_CONFIG_KEY_n`
+/// pairs such as a container's `safe.directory`) and locate nothing; git
+/// keeps the same two when it runs a command in another repository
+/// (`prepare_other_repo_env`).
+pub const GIT_LOCAL_VARIABLES: [&str; 13] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
 
 /// Whether a tracked path belongs to the records tier.
 pub fn in_tier(path: &str) -> bool {
@@ -246,11 +282,23 @@ struct Source {
 }
 
 impl Corpus {
-    /// The repository at `repo` read at `pin` — judged now: `git cat-file -e
-    /// <pin>^{commit}` answers whether the pin names a commit there
-    /// ([`Error::NoCommit`] where it does not), and nothing else is read.
+    /// Opens the repository at `repo`, to be read at `pin`.
+    ///
+    /// Both are judged now, and nothing else is read: the repository first
+    /// (`git rev-parse --git-dir`), then the pin (`git cat-file -e
+    /// <pin>^{commit}`).
+    ///
+    /// # Errors
+    ///
+    /// In the order judged:
+    ///
+    /// 1. [`Error::Git`] where `git` cannot be run, or will not read `repo`
+    ///    as a repository — absent, no repository, or one git does not
+    ///    trust — with what git said, its `safe.directory` advice included.
+    /// 2. [`Error::NoCommit`] where the pin names no commit of it.
     pub fn open(repo: impl Into<PathBuf>, pin: &str) -> Result<Corpus, Error> {
         let corpus = Corpus { repo: repo.into(), pin: pin.to_string(), subtree: None };
+        corpus.output(&["rev-parse", "--git-dir"])?;
         let mut cmd = corpus.git();
         cmd.args(["cat-file", "-e", &format!("{pin}^{{commit}}")])
             .stdout(Stdio::null())
@@ -300,20 +348,31 @@ impl Corpus {
         }
     }
 
+    /// Returns `git -C <repo>`, started without [`GIT_LOCAL_VARIABLES`].
+    ///
+    /// The one place the crate builds a git command, so no read it makes
+    /// can be steered to another repository by what the caller's
+    /// environment exports.
     fn git(&self) -> Command {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.repo);
+        for name in GIT_LOCAL_VARIABLES {
+            cmd.env_remove(name);
+        }
         cmd
     }
 
-    /// The records tier's entries at the pin, in `ls-tree` order, with their
-    /// sizes.
-    pub fn tier(&self) -> Result<Vec<Entry>, Error> {
-        let command = format!("git -C {} ls-tree -r -l {}", self.repo.display(), self.pin);
+    /// Runs `git -C <repo>` with `args` to its end and returns its stdout.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Git`] where git cannot be run, or fails: the command and
+    /// what git said on stderr.
+    fn output(&self, args: &[&str]) -> Result<Vec<u8>, Error> {
+        let command = format!("git -C {} {}", self.repo.display(), args.join(" "));
         let out = self
             .git()
-            .args(["ls-tree", "-r", "-l", &self.pin])
-            .stderr(Stdio::piped())
+            .args(args)
             .output()
             .map_err(|e| Error::Git { command: command.clone(), said: e.to_string() })?;
         if !out.status.success() {
@@ -322,7 +381,14 @@ impl Corpus {
                 said: String::from_utf8_lossy(&out.stderr).into_owned(),
             });
         }
-        let text = String::from_utf8_lossy(&out.stdout);
+        Ok(out.stdout)
+    }
+
+    /// The records tier's entries at the pin, in `ls-tree` order, with their
+    /// sizes.
+    pub fn tier(&self) -> Result<Vec<Entry>, Error> {
+        let out = self.output(&["ls-tree", "-r", "-l", &self.pin])?;
+        let text = String::from_utf8_lossy(&out);
         let mut entries = Vec::new();
         for line in text.lines() {
             let unreadable = || Error::Unreadable { line: line.to_string() };

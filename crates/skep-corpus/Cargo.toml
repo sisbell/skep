@@ -10,7 +10,8 @@ readme = "README.md"
 
 # No dependency: the crate is `std` and a `git` child process. The two
 # callers — skep-search's budgets suite and skep-cli's dev binary — hand it
-# the repository's path and the pin; it names no environment variable.
+# the repository's path and the pin; it reads no environment variable of
+# its own, and clears git's repository-local ones from every git it runs.
 [dependencies]
 
 [dev-dependencies]

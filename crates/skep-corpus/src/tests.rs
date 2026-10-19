@@ -3,7 +3,8 @@
 //! system temp dir — `git init`, one commit — so the rule is checked over
 //! bytes the test chose, with no corpus of the world's in the tree.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
@@ -82,9 +83,19 @@ fn prose_file(file: &str, n: usize) -> String {
     })
 }
 
+/// Runs the suite's own `git -C <repo>` with `args` and returns its stdout.
+///
+/// The stdout comes back trimmed. No person's configuration reaches the
+/// command, and none of [`GIT_LOCAL_VARIABLES`]: an exported `GIT_DIR`
+/// would make the temp dir the work tree of the repository it names, and
+/// the fixture's commit would land there.
+///
+/// # Panics
+///
+/// Where git cannot be run, or fails.
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(repo)
         .args([
             "-c",
@@ -96,9 +107,11 @@ fn git(repo: &Path, args: &[&str]) -> String {
         ])
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .expect("git runs");
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    for name in GIT_LOCAL_VARIABLES {
+        cmd.env_remove(name);
+    }
+    let out = cmd.output().expect("git runs");
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
@@ -285,10 +298,24 @@ fn the_pin_is_judged_at_open_and_the_bytes_are_the_commits_not_the_trees() {
         Err(Error::NoCommit { pin, .. }) => assert_eq!(pin, "0000000"),
         other => panic!("{other:?}"),
     }
-    assert!(matches!(
-        Corpus::open(tmp.path().join("absent"), &head),
-        Err(Error::Git { .. }) | Err(Error::NoCommit { .. })
-    ));
+    // The repository is judged before the pin, and its refusal is git's
+    // own: an absent path, and a directory that is no repository, whatever
+    // the pin.
+    match Corpus::open(tmp.path().join("absent"), &head) {
+        Err(Error::Git { command, said }) => {
+            assert!(command.ends_with("rev-parse --git-dir"), "{command}");
+            assert!(!said.trim().is_empty(), "git's own words");
+        }
+        other => panic!("an absent path: {other:?}"),
+    }
+    let empty = tempfile::tempdir().expect("a temp dir");
+    match Corpus::open(empty.path(), "0000000") {
+        Err(Error::Git { command, said }) => {
+            assert!(command.ends_with("rev-parse --git-dir"), "{command}");
+            assert!(!said.trim().is_empty(), "git's own words");
+        }
+        other => panic!("a directory that is no repository: {other:?}"),
+    }
     let corpus = Corpus::open(tmp.path(), &head[..8]).expect("an abbreviated pin resolves");
     let before = corpus.cut(1).unwrap();
     std::fs::write(tmp.path().join("README.md"), "the working tree moved on\n").unwrap();
@@ -299,4 +326,120 @@ fn the_pin_is_judged_at_open_and_the_bytes_are_the_commits_not_the_trees() {
     let moved = Corpus::open(tmp.path(), &later).unwrap();
     assert_ne!(moved.cut(1).unwrap(), before, "the new pin reads the new bytes");
     assert_eq!(moved.records().unwrap()[0].bytes, b"the working tree moved on\n");
+}
+
+// ── GIT'S OWN VARIABLES ─────────────────────────────────────────────────
+
+/// Checks that a decoy's `GIT_DIR` and its kin move no read and no write.
+///
+/// `GIT_DIR`, `GIT_COMMON_DIR`, the object and alternate directories, the
+/// work tree and the index all name a decoy repository, as a hook's
+/// exports name the hook's: the pin, by name and by hash, is judged and
+/// read in the repository named all the same, the decoy's head is no
+/// commit of it, and a repository the suite builds holds what it wrote
+/// while the decoy stands as it was. Judged in a child of this test binary
+/// (skepd's self-exec pattern), because the variables are process-wide and
+/// the suite's other claims run beside this one; the child prints a line
+/// its parent reads, so a child that ran no test is no pass.
+#[test]
+fn a_repository_variable_in_the_environment_never_moves_the_read() {
+    const CHILD: &str = "SKEP_CORPUS_TEST_CHILD";
+    const HELD: &str = "the child's claims held";
+    if let Some(given) = std::env::var_os(CHILD) {
+        // The child: the parent named the repository, its head, the decoy
+        // and the decoy's head, one to a line.
+        let given = given.into_string().expect("the parent's lines are text");
+        let lines: Vec<&str> = given.lines().collect();
+        let [named, head, decoy, decoy_head] = lines[..] else {
+            panic!("four lines from the parent: {given:?}");
+        };
+        let (named, decoy) = (Path::new(named), Path::new(decoy));
+        let by_name =
+            Corpus::open(named, "HEAD").expect("HEAD is a commit of the repository named");
+        let readme = &by_name.records().expect("the blobs")[0];
+        assert_eq!(
+            (readme.name.as_str(), String::from_utf8_lossy(&readme.bytes)),
+            ("README.md", prose_file("README", 4).into()),
+            "the README read at HEAD is the named repository's"
+        );
+        let by_hash = Corpus::open(named, head).expect("the named head is a commit of it");
+        assert_eq!(
+            by_hash.markdown().expect("ls-tree"),
+            ["README.md", "_designs/a.md", "_designs/b.md", "ux/c.md"]
+        );
+        match Corpus::open(named, decoy_head) {
+            Err(Error::NoCommit { pin, .. }) => assert_eq!(pin, decoy_head),
+            other => panic!("the decoy's head opened in the repository named: {other:?}"),
+        }
+        let prose = b"the built repository's prose\n";
+        let (built, built_head) = repository(&[("x.md", prose)]);
+        let records = Corpus::open(built.path(), &built_head).unwrap().records().unwrap();
+        assert_eq!(
+            records,
+            [Document { name: "x.md".into(), bytes: prose.to_vec() }],
+            "the suite's commit holds what it wrote"
+        );
+        assert_eq!(git(decoy, &["rev-parse", "HEAD"]), decoy_head, "the decoy's head stands");
+        assert_eq!(git(decoy, &["status", "--porcelain"]), "", "the decoy's index and tree stand");
+        println!("{HELD}");
+        return;
+    }
+    let (named, head) = suite_repository();
+    let (decoy, decoy_head) = repository(&[("README.md", b"the decoy's own prose\n")]);
+    let decoy_git = decoy.path().join(".git");
+    let given =
+        format!("{}\n{head}\n{}\n{decoy_head}", named.path().display(), decoy.path().display());
+    let exe = std::env::current_exe().expect("the test binary");
+    let out = Command::new(exe)
+        .args([
+            "tests::a_repository_variable_in_the_environment_never_moves_the_read",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, given)
+        .env("GIT_DIR", &decoy_git)
+        .env("GIT_COMMON_DIR", &decoy_git)
+        .env("GIT_OBJECT_DIRECTORY", decoy_git.join("objects"))
+        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", decoy_git.join("objects"))
+        .env("GIT_WORK_TREE", decoy.path())
+        .env("GIT_INDEX_FILE", decoy_git.join("index"))
+        .output()
+        .expect("run the child");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains(HELD),
+        "the child's claims did not all run and hold:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Checks that the crate's `git` clears git's repository-local variables.
+///
+/// Every name `git rev-parse --local-env-vars` prints is cleared but the
+/// two that carry configuration, which are kept; the list read is git's
+/// own, so a git that grows it fails here until [`GIT_LOCAL_VARIABLES`]
+/// names the new one. The command clears that constant whole.
+#[test]
+fn every_git_the_crate_runs_starts_without_the_repository_local_variables() {
+    let listed =
+        Command::new("git").args(["rev-parse", "--local-env-vars"]).output().expect("git runs");
+    assert!(listed.status.success(), "{}", String::from_utf8_lossy(&listed.stderr));
+    let listed = String::from_utf8(listed.stdout).expect("the names are text");
+    let corpus = Corpus { repo: PathBuf::from("."), pin: "HEAD".into(), subtree: None };
+    let cmd = corpus.git();
+    let cleared: BTreeSet<&str> = cmd
+        .get_envs()
+        .filter(|(_, value)| value.is_none())
+        .map(|(name, _)| name.to_str().expect("a variable's name is text"))
+        .collect();
+    assert!(listed.lines().count() > 2, "git lists its variables: {listed:?}");
+    for name in listed.lines() {
+        if ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"].contains(&name) {
+            assert!(!cleared.contains(name), "{name} carries configuration, and is kept");
+        } else {
+            assert!(cleared.contains(name), "git lists {name} as repository-local: clear it");
+        }
+    }
+    assert_eq!(cleared, BTreeSet::from(GIT_LOCAL_VARIABLES), "the one list, cleared whole");
 }

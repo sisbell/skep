@@ -32,12 +32,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 
 The repository's path and the pin are the callers' — the budgets suite
 reads its `SKEP_SEARCH_CORPUS`, the seeding tool its `--repo` and `--pin`
-— so the crate names no environment variable. It reads the pin, never the
-working tree (`git ls-tree` for the tier, `git cat-file --batch` for the
-bytes), copies nothing of the repository anywhere, and depends on nothing
-but `std` and a `git` on the path. Every failure is an `Error` a caller
-renders. The rules that hold across its files are in the workspace's
-`ARCHITECTURE.md` §The corpus crate.
+— and the crate reads no environment variable of its own. Every `git` it
+runs starts without the repository-local variables git lists
+(`GIT_LOCAL_VARIABLES`: `GIT_DIR` and its kin, which a hook exports and
+`git -C` does not override), so the repository read is the one handed
+in; `Corpus::open` judges the repository, then the pin, before anything
+is read. It reads the pin, never the working tree (`git ls-tree` for the
+tier, `git cat-file --batch` for the bytes), copies nothing of the
+repository anywhere, and depends on nothing but `std` and a `git` on the
+path. Every failure is an `Error` a caller renders. The rules that hold
+across its files are in the workspace's `ARCHITECTURE.md` §The corpus
+crate.
 
 ## License
 

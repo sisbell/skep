@@ -713,10 +713,16 @@ holding it.
 Rules that hold across its files:
 
 - **The callers name the repository and the pin.** The crate reads no
-  environment variable: the search budgets suite reads its
+  environment variable of its own: the search budgets suite reads its
   `SKEP_SEARCH_CORPUS` and the dev binary its `--repo` and `--pin`, and
-  each hands the crate a path and a commit. The pin is judged at
-  `Corpus::open` (`cat-file -e <pin>^{commit}`), and every read names it.
+  each hands the crate a path and a commit. Every `git` it runs starts
+  without git's repository-local variables (`GIT_LOCAL_VARIABLES`, git's
+  own `--local-env-vars` list less the two that carry configuration), so
+  a `GIT_DIR` a hook exported cannot override `-C` and the repository
+  read is the one handed in. `Corpus::open` judges the repository
+  (`rev-parse --git-dir`, git's refusal an `Error::Git` in its own words)
+  and then the pin (`cat-file -e <pin>^{commit}`, `Error::NoCommit`), and
+  every read names the pin.
 - **Nothing of skep below it, nothing of the world in it.** The crate
   depends on `std` and a `git` child process alone — no skep crate, no
   feature, no platform call — and copies nothing of a repository into

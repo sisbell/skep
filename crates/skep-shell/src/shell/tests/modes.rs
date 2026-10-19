@@ -28,7 +28,10 @@
 //! fields of the real answers; a close the board does not answer still the
 //! shell's close, and the stop's close of one said on TALK as `close` says
 //! it; every event held to its declaration; and the codec's private
-//! budgets, each the shell's.
+//! budgets, each the shell's. The `session` answer saying whether its
+//! session writes, under either mode. And THE REFUSING ARM, the setting of
+//! a client with no person present: every SECRET and CONSENT moment a walk
+//! reaches refused `person_required` and answered by nothing.
 
 use super::*;
 
@@ -964,5 +967,122 @@ fn places_lists_the_boards_documents_at_the_calls_class() {
     let refused = shell.call("places", &json!({"session": session, "board": "b-elsewhere"})).unwrap_err();
     assert_eq!((refused.name(), refused.to_value()["what"].as_str()), ("malformed_args", Some("board")), "a session lists its own board");
     shell.shutdown();
+    sd.shutdown();
+}
+
+/// THE SESSION ANSWER SAYS WHETHER ITS SESSION WRITES (`writes`): `false`
+/// under the bare mode — the keyless session, which reads alone, its mint
+/// refused `write_in_bare_session` — and `true` under the signed mode, the
+/// same mint acked; each answer held to its declaration, and the shell's
+/// own verdict on the write agreeing with what the answer said before it
+/// was offered (the mutant that answers `true` for every session has the
+/// page offer a keyless reader an edit the shell refuses at the save).
+#[test]
+fn the_session_answer_says_whether_the_session_writes() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    for (mode, writes) in [(SessionMode::Bare { principal: 1 }, false), (SessionMode::Signed { principal: 1 }, true)] {
+        let (shell, lines) = open_shell(&origin, &store, mode);
+        let board = shell.board_references().remove(0);
+        let opened = shell.call("session", &json!({"board": board})).unwrap();
+        crate::shapes::assert_declared("SessionOpened", &opened);
+        assert_eq!(opened["writes"], json!(writes), "{}: {opened}", mode.name());
+        let session = opened["session"].as_str().unwrap();
+        match shell.call("op", &json!({"session": session, "frame": {"op": "create_new_document", "account": "1.0.1"}})) {
+            Ok(acked) => assert!(writes && acked["resp"] == "ack_addr", "{}: a write under a session whose answer said `writes: {writes}` was acked: {acked}", mode.name()),
+            Err(refused) => assert!(
+                !writes && refused.name() == "write_in_bare_session",
+                "{}: a write under a session whose answer said `writes: {writes}` was refused: {refused}\n{}",
+                mode.name(),
+                lines.lock().unwrap().join("\n")
+            ),
+        }
+        shell.shutdown();
+    }
+    sd.shutdown();
+}
+
+/// THE REFUSING ARM (`ArmConfig::Refuse`, the setting of a client with no
+/// person present): every SECRET and CONSENT moment a walk reaches is
+/// refused and answered by nothing — `retire` at its preview's typed
+/// confirmation (CONSENT), the key still enrolled and nothing retired;
+/// `accept` at the agent space, at its pair's first destination (SECRET),
+/// no anchor placed anywhere — each call answering `person_required` naming
+/// the walk, the moment and its class, a confirmation's text beside it and
+/// no SECRET moment's prompt; no answer recorded on TALK, where the
+/// person's own refusals are said and the walk's NATIVE statement (§3a,
+/// the key file written) still lands, in the arm's place and on no event;
+/// the PUBLIC moments still the page's; the board's position unmoved (the
+/// mutant that falls back to the auto arm retires the key and places the
+/// pair under `<store>-anchors/`; the one that names the refusal
+/// `abandoned` tells the caller a person cancelled).
+#[test]
+fn the_refusing_arm_refuses_every_secret_and_consent_moment_and_answers_nothing() {
+    let dir = TempDir::new().unwrap();
+    let sd = spawn(&dir.path().join("board"), true);
+    let origin = format!("http://127.0.0.1:{}", sd.port());
+    let store = dir.path().join("store");
+    claim_board(&origin, &store);
+    let (talk, lines) = talk();
+    let mut opts = ShellOptions::new(vec![Origin::parse(&origin).unwrap()], store.clone(), SessionMode::Bare { principal: 1 }, talk);
+    opts.arm = ArmConfig::Refuse;
+    let shell = Shell::open(opts);
+    assert!(!shell.arm_is_script());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let answerer = answer_moments(shell.subscribe(), Arc::clone(&shell.pending), Arc::clone(&seen));
+    let board = shell.board_references().remove(0);
+    let position = || shell.call("health", &json!({"board": board})).unwrap()["health"]["log_position"].as_u64().unwrap();
+    let anchor_files = || -> usize {
+        let mut anchors = store.as_os_str().to_owned();
+        anchors.push("-anchors");
+        std::fs::read_dir(PathBuf::from(anchors)).into_iter().flatten().flatten().map(|dir| std::fs::read_dir(dir.path()).map(Iterator::count).unwrap_or(0)).sum()
+    };
+    let (before, placed) = (position(), anchor_files());
+    assert_eq!(placed, 2, "the claim's pair, placed by the auto arm that claimed");
+    let k1 = shell.call("fingerprint", &json!({})).unwrap()[0]["fingerprint"].as_str().unwrap().to_string();
+    // CONSENT: the retirement's typed confirmation.
+    let refused = shell.call("retire", &json!({"board": board, "fingerprint": k1})).unwrap_err();
+    let v = refused.to_value();
+    assert_eq!(
+        (v["name"].as_str(), v["kind"].as_str(), v["walk"].as_str(), v["moment"].as_str(), v["class"].as_str()),
+        (Some("person_required"), Some("shell"), Some("retire"), Some("confirm_typed"), Some("consent")),
+        "{v}\n{}",
+        lines.lock().unwrap().join("\n")
+    );
+    assert!(v["text"].as_str().is_some_and(|text| text.contains("CONFIRM THE RETIREMENT")), "the confirmation's text, public data, rides the refusal: {v}");
+    let set = shell.call("op", &json!({"guest": true, "board": board, "frame": {"op": "key_set", "account": "1.0.1"}})).unwrap();
+    assert!(set["enrolled"].as_array().unwrap().iter().any(|e| e["fingerprint"] == k1) && set["retired"].as_array().is_none_or(Vec::is_empty), "the key stands enrolled, nothing retired: {set}");
+    // SECRET: the pair's first destination at the agent space's accept.
+    let refused = shell.call("accept", &json!({"board": board, "address": "1.0.1.1", "label": "agent"})).unwrap_err();
+    let v = refused.to_value();
+    assert_eq!(
+        (v["name"].as_str(), v["walk"].as_str(), v["moment"].as_str(), v["class"].as_str(), v.get("text")),
+        (Some("person_required"), Some("accept"), Some("destination"), Some("secret"), None),
+        "{v}\n{}",
+        lines.lock().unwrap().join("\n")
+    );
+    assert_eq!(anchor_files(), placed, "no anchor was placed");
+    assert_eq!(position(), before, "no write reached the board");
+    let talked = lines.lock().unwrap().join("\n");
+    assert!(!talked.contains("dev arm:"), "no answer was recorded:\n{talked}");
+    assert!(
+        talked.contains("person: the confirm_typed moment (CONSENT) of `retire` is refused") && talked.contains("person: the destination moment (SECRET) of `accept` is refused"),
+        "the refusals are said:\n{talked}"
+    );
+    assert!(talked.contains("person: §3a: key file written: "), "the native statement is said on TALK in the arm's place:\n{talked}");
+    let events = seen.lock().unwrap();
+    assert!(
+        events.iter().all(|e| !e.data.to_string().contains("§3a") && !e.data.to_string().contains(&store.display().to_string())),
+        "a native statement, or a path under the store, crossed to the page"
+    );
+    assert!(events.iter().any(|e| e.name == EventName::Moment && e.data["walk"] == "accept" && e.data["kind"] == "label"), "the PUBLIC boxes still cross to the page");
+    assert_events_declared(&events);
+    drop(events);
+    shell.shutdown();
+    drop(shell);
+    answerer.join().unwrap();
     sd.shutdown();
 }

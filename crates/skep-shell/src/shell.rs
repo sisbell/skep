@@ -9,7 +9,9 @@
 //! §4b.1 — and of `places`, the document index's listing beside `search`
 //! (A-255) — each taking the row's input as a value and answering the row's
 //! output or a [`Refusal`] under the row's armed name, the board's own
-//! refusals carried verbatim. The row methods are this module's alone
+//! refusals carried verbatim — and of `changes`, the change feed's page
+//! from a position at the session's class, read for a client that comes
+//! back to a board. The row methods are this module's alone
 //! behind ONE DOOR, [`Shell::call`], which dispatches on the bridge's
 //! spelling — one arm per call, the compiler holding the match exhaustive —
 //! and logs every call, so no call reaches a row past the log;
@@ -18,7 +20,11 @@
 //! two and the eight walks over `skep_client::ceremony` — are the child
 //! module `ceremony`'s, `pub(super)` to the door; a transport runs each call
 //! on the connection's thread. The page's two answers,
-//! [`Shell::answer`] and [`Shell::cancel`], route to the walk that asked. A
+//! [`Shell::answer`] and [`Shell::cancel`], route to the walk that asked;
+//! the SECRET and CONSENT moments of a walk go to the dev arm the run
+//! named ([`ArmConfig`]) — or, under [`ArmConfig::Refuse`], the setting of
+//! a client with no person present, are refused `person_required` and
+//! answered by nothing. A
 //! death signal a call meets ends the session by the one sequence the
 //! board's feed thread runs too (`Sessions::end`), and the call answers
 //! `session_died` with the reason that sequence derived.
@@ -66,10 +72,10 @@ use skep_client::Origin;
 
 use crate::dev_arm::DevArm;
 use crate::events::{Event, EventBus, EventName};
-use crate::feed::{answer_without_index, places_without_index, query_too_long, BridgeSearchOpts, Feed, FeedThreads, Searcher, Shared};
+use crate::feed::{answer_without_index, changes_since, places_without_index, query_too_long, BridgeSearchOpts, ChangesRead, Feed, FeedThreads, Searcher, Shared};
 use crate::hold::{Holds, OpAnswer, ResolveAct, Resolved};
 use crate::log::{CallOutcome, Log, ShellDialer};
-use crate::person::Pending;
+use crate::person::{Answerer, Pending};
 use crate::refs::BoardEntry;
 use crate::refusal::{Name, Refusal};
 use crate::script;
@@ -120,14 +126,24 @@ impl SessionMode {
     }
 }
 
-/// The dev arm a run names: the auto-answer, the default, or a script's
-/// answers.
+/// Who answers the SECRET and CONSENT moments of a walk (`client.md`
+/// §4b.3): the dev arm a run names — the auto-answer, the default, or a
+/// script's answers — or no one, every such moment refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ArmConfig {
+    /// The auto arm: each moment answered the way a developer on a
+    /// throwaway board would, the anchor files placed beside the store.
     #[default]
     Auto,
+    /// A script's answers, one per moment in order (`script`'s grammar).
     Script(Vec<script::Answer>),
+    /// No person is present — an agent's client, or any unattended one:
+    /// every SECRET and CONSENT moment is refused `person_required`,
+    /// answered by no arm and sent to no page, and the walk is abandoned
+    /// there; PUBLIC moments still cross to the page as `moment` events,
+    /// and a NATIVE statement is said on TALK as the arm would say it.
+    Refuse,
 }
 
 /// What a shell is opened over: [`ShellOptions::new`]'s four, and the two
@@ -145,6 +161,7 @@ pub struct ShellOptions {
     pub store_dir: PathBuf,
     /// The SESSION MODE every `session` call opens under (P-5).
     pub session_mode: SessionMode,
+    /// Who answers the SECRET and CONSENT moments: the auto arm unless set.
     pub arm: ArmConfig,
     /// Where the TALK lines go.
     pub talk: Talk,
@@ -235,11 +252,13 @@ enum Call {
     Places,
     Held,
     Resolve,
+    Changes,
 }
 
 impl Call {
-    /// Every call, in §4b.1's order, `places` beside `search`.
-    const ALL: [Call; 23] = [
+    /// Every call, in §4b.1's order, `places` beside `search` and the change
+    /// feed's `changes` last.
+    const ALL: [Call; 24] = [
         Call::Boards,
         Call::Session,
         Call::Close,
@@ -263,6 +282,7 @@ impl Call {
         Call::Places,
         Call::Held,
         Call::Resolve,
+        Call::Changes,
     ];
 
     /// The call as the bridge spells it.
@@ -291,6 +311,7 @@ impl Call {
             Call::Places => "places",
             Call::Held => "held",
             Call::Resolve => "resolve",
+            Call::Changes => "changes",
         }
     }
 
@@ -300,11 +321,11 @@ impl Call {
     }
 }
 
-/// The bridge's twenty-three calls, as it spells them, in its order.
+/// The bridge's twenty-four calls, as it spells them, in its order.
 ///
-/// They are §4b.1's twenty-two and the document index's listing, `places`
-/// (A-255): the list a transport admits a call by, every name of it one
-/// [`Shell::call`] answers.
+/// They are §4b.1's twenty-two, the document index's listing, `places`
+/// (A-255), and the change feed's page, `changes`: the list a transport
+/// admits a call by, every name of it one [`Shell::call`] answers.
 pub const CALLS: [&str; Call::ALL.len()] = {
     let mut names = [""; Call::ALL.len()];
     let mut i = 0;
@@ -371,7 +392,9 @@ pub struct Shell {
     sessions: Arc<Sessions>,
     bus: Arc<EventBus>,
     pending: Arc<Pending>,
-    arm: Arc<DevArm>,
+    /// Who answers the SECRET and CONSENT moments: the dev arm, or no one
+    /// under [`ArmConfig::Refuse`], where the person refuses each.
+    arm: Arc<Answerer>,
     log: Arc<Log>,
     /// The one dialer every board — the shell's own and a guest form's —
     /// dials through, cloned: one record, one stop (`ShellDialer::stop`, at
@@ -534,9 +557,11 @@ impl Shell {
             ArmConfig::Auto => {
                 let mut anchors = opts.store_dir.as_os_str().to_owned();
                 anchors.push("-anchors");
-                DevArm::auto(PathBuf::from(anchors), Arc::clone(&opts.talk))
+                Answerer::Arm(DevArm::auto(PathBuf::from(anchors), Arc::clone(&opts.talk)))
             }
-            ArmConfig::Script(answers) => DevArm::script(answers, Arc::clone(&opts.talk)),
+            ArmConfig::Script(answers) => Answerer::Arm(DevArm::script(answers, Arc::clone(&opts.talk))),
+            // No arm: the person refuses every SECRET and CONSENT moment.
+            ArmConfig::Refuse => Answerer::Refuse(Arc::clone(&opts.talk)),
         });
         let mut boards = Vec::new();
         let mut own_node_reference = None;
@@ -585,9 +610,9 @@ impl Shell {
         &self.log
     }
 
-    /// Whether the dev arm is a script.
+    /// Whether the dev arm is a script; false where the run holds no arm.
     pub fn arm_is_script(&self) -> bool {
-        self.arm.is_script()
+        matches!(&*self.arm, Answerer::Arm(arm) if arm.is_script())
     }
 
     /// The board references issued, in the list's order.
@@ -703,6 +728,7 @@ impl Shell {
             Some(Call::Places) => self.places(args),
             Some(Call::Held) => self.held(args),
             Some(Call::Resolve) => self.resolve(args),
+            Some(Call::Changes) => self.changes(args),
             None => Err(Refusal::shell(Name::UNKNOWN_CALL, json!({"call": name}))),
         };
         let (bytes_out, outcome) = match &answer {
@@ -723,9 +749,13 @@ impl Shell {
         Value::Array(self.boards.iter().map(|entry| json!({"board": entry.reference, "name": entry.board.dialed().as_str(), "origin": entry.board.dialed().as_str()})).collect())
     }
 
-    /// `session(board, principal)` → `{session, principal, account}`: the
-    /// mode's opening as `principal`, the reference issued in the token's
-    /// place.
+    /// `session(board, principal)` → `{session, principal, account, writes}`:
+    /// the mode's opening as `principal`, the reference issued in the
+    /// token's place, and `writes` — whether a write may go out under it
+    /// ([`SessionEntry::may_write`]): the signed mode's session writes, the
+    /// bare mode's keyless one reads alone and has every write refused
+    /// `write_in_bare_session`, which the page learns here, before it
+    /// offers one.
     fn session_call(&self, args: &Value) -> Result<Value, Refusal> {
         let entry = self.board_entry(&args["board"])?;
         let principal = optional(args, "principal", principal_arg)?.unwrap_or(self.session_mode.principal());
@@ -741,7 +771,7 @@ impl Shell {
         // and its daemon-running tick drive it once a session that may write
         // stands (§3c.5).
         self.holds.open_session(&session);
-        Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account}))
+        Ok(json!({"session": session.reference, "principal": principal, "account": session.facts.account, "writes": session.may_write()}))
     }
 
     /// `close(session)` → `{}`: the session out of the table; its drafts
@@ -1079,6 +1109,40 @@ impl Shell {
             Resolved::HandedBack => self.feed(&session.board_reference).probe(),
         }
         Ok(json!({}))
+    }
+
+    /// Answers `changes(session, since, limit?)` with `{entries, next, head}`.
+    ///
+    /// It is the board's change feed from the position `since`, read at the
+    /// session's class under its token (`feed::changes_since`) — what a
+    /// client that comes back to a board missed: each entry in the `feed`
+    /// event's update shape, `published` or `drafts` by the read that
+    /// answered it, oldest first, bounded by `limit` and the wire's page
+    /// budget; `next` the position to ask from next time, past every entry
+    /// answered and never past one withheld; `head` the board's latest
+    /// position, its own `/health` read, taken before the page. A draft the
+    /// session may not read never appears: the gating is the board's, at the
+    /// token's class. The read is one call's, on the caller's thread: the
+    /// board's feed thread keeps its own cursors and is not asked.
+    ///
+    /// # Errors
+    ///
+    /// In this order: `malformed_args` naming `since` where it is no
+    /// non-negative integer, then `limit` where one is given in another
+    /// form; `malformed_args` naming `session`, then `session_ended`; the
+    /// board's own — `history_reclaimed` with its floor where `since` lies
+    /// below the feed's memory, `malformed_changes` for a `limit` off the
+    /// route's range, `feed_rebuilding` — and `unreachable`; `session_died`
+    /// where the read met the death signal, the session ended by the one
+    /// sequence.
+    fn changes(&self, args: &Value) -> Result<Value, Refusal> {
+        let since = args["since"].as_u64().ok_or_else(|| Refusal::malformed("since"))?;
+        let limit = optional(args, "limit", Value::as_u64)?;
+        let session = self.session(&args["session"])?;
+        match changes_since(&session, since, limit)? {
+            ChangesRead::Page(page) => Ok(json!({"entries": page.entries, "next": page.next, "head": page.head})),
+            ChangesRead::Died => Err(self.died(&session)),
+        }
     }
 
     // ── THE TWO ANSWERS ──────────────────────────────────────────────────

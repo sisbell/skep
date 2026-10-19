@@ -59,7 +59,7 @@ fn every_call_is_named_by_its_own_spelling() {
         assert_eq!(Call::named(call.as_str()), Some(call));
     }
     assert_eq!(CALLS.map(Call::named), Call::ALL.map(Some));
-    assert_eq!((CALLS.len(), CALLS[0], CALLS[22]), (23, "boards", "resolve"));
+    assert_eq!((CALLS.len(), CALLS[0], CALLS[23]), (24, "boards", "changes"));
     assert_eq!((CALLS[19], CALLS[20]), ("search", "places"));
     assert_eq!(Call::named("verify"), None);
     let (dir, (talk, _)) = (TempDir::new().unwrap(), talk());
@@ -191,7 +191,7 @@ fn every_declared_optional_argument_is_read_in_its_form() {
             asked += 1;
         }
     }
-    assert_eq!(asked, 21, "the optional members of the ten rows of one form that declare any");
+    assert_eq!(asked, 22, "the optional members of the eleven rows of one form that declare any");
 }
 
 /// THE GUEST FORM's SEARCH reads the board its reference or its canonical

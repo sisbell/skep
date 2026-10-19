@@ -504,6 +504,21 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     assert!(guest_listed["docs"].as_array().unwrap().iter().all(|p| p["kind"] == "edition"), "{guest_listed}");
     let not_an_address = keep(provider.refused("places", json!({"guest": true, "board": board, "opts": {"under": "not an address"}})));
     assert_eq!((not_an_address["name"].as_str(), not_an_address["what"].as_str()), (Some("malformed_args"), Some("opts.under")), "{not_an_address}");
+    // changes, the change feed's page at the session's class: `entries`,
+    // `next` and `head` — the library's draft rows under the claimant's own
+    // class ride it as `drafts` under the session, the claim's rows as
+    // `published`, each with its position; a `since` of another form
+    // refused by name.
+    let caught_up = keep(provider.result("changes", json!({"session": session, "since": 0})));
+    let members: std::collections::BTreeSet<&str> = caught_up.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(members, ["entries", "head", "next"].into(), "{caught_up}");
+    let entries = caught_up["entries"].as_array().unwrap();
+    assert!(entries.iter().all(|e| e["position"] == e["at"] && e["at"].is_u64() && (e["class"] == "published" || e["class"] == "drafts")), "{caught_up}");
+    assert!(entries.iter().any(|e| e["class"] == "drafts" && e["docs"][0] == draft && e["session"] == session), "the draft's rows at the session's class: {caught_up}");
+    assert!(entries.iter().any(|e| e["class"] == "published" && e.get("session").is_none()), "the claim's published rows: {caught_up}");
+    assert!(caught_up["next"].as_u64().unwrap() >= entries.last().unwrap()["at"].as_u64().unwrap() && caught_up["head"].is_u64(), "{caught_up}");
+    let since_of_no_form = keep(provider.refused("changes", json!({"session": session, "since": "x"})));
+    assert_eq!((since_of_no_form["name"].as_str(), since_of_no_form["what"].as_str()), (Some("malformed_args"), Some("since")), "{since_of_no_form}");
     // held and resolve: no burst is held on this up board, so `held` is empty
     // and `resolve` of an ordinal that does not stand is `no_such_held`.
     assert_eq!(keep(provider.result("held", json!({"session": session}))), json!([]));
@@ -556,7 +571,30 @@ fn f1_every_call_over_http_in_the_bare_mode() {
     assert_eq!(status, 200);
     let log: Value = serde_json::from_slice(&body).unwrap();
     let calls: Vec<&str> = log.as_array().unwrap().iter().filter(|e| e["kind"] == "call").filter_map(|e| e["call"].as_str()).collect();
-    for name in ["boards", "health", "probe", "session", "op", "keygen", "fingerprint", "search", "places", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "fetch", "close"] {
+    for name in [
+        "boards",
+        "health",
+        "probe",
+        "session",
+        "op",
+        "keygen",
+        "fingerprint",
+        "search",
+        "places",
+        "changes",
+        "claim",
+        "enroll",
+        "bind",
+        "recover",
+        "rotate",
+        "retire",
+        "handoff",
+        "accept",
+        "upload",
+        "restore",
+        "fetch",
+        "close",
+    ] {
         assert!(calls.contains(&name), "the log lists {name}: {calls:?}");
     }
     assert!(log.as_array().unwrap().iter().any(|e| e["kind"] == "dial" && e["path"] == "/op"), "the dials are logged");

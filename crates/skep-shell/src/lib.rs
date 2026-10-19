@@ -2,7 +2,8 @@
 //!
 //! The bridge of `client.md` §4b — "the contract between the bundled app's
 //! shell and its page" — as a library over `skep-client`: [`Shell`] answers
-//! every call of §4b.1, and `places`, the document index's listing (A-255),
+//! every call of §4b.1, `places`, the document index's listing (A-255), and
+//! `changes`, the change feed's page at the session's class,
 //! through ONE DOOR, [`Shell::call`], which logs each, and pushes every
 //! event of §4b.2 on one stream; and the three things the library does not
 //! hold and every shell needs are written here once, so the dev provider
@@ -62,7 +63,9 @@
 //!   moments become `moment(id, kind, data)` events and block on a channel
 //!   the page's `answer(id, …)` — of the form the moment's kind takes — or
 //!   `cancel(id)` fills, and whose SECRET and CONSENT moments, and NATIVE
-//!   statements, go to the dev arm.
+//!   statements, go to the dev arm — or, where the run holds none
+//!   ([`ArmConfig::Refuse`], a client with no person present), are refused
+//!   there, `person_required`, reaching no arm and no page.
 //! * `sessions` — THE SESSION TABLE: every token this shell holds, beside
 //!   the board it is valid at, under the reference the page holds, the two
 //!   openings (bare, which reads alone, and signed, which writes too), the
@@ -90,11 +93,13 @@
 //!   the listing `places` — answered off it; it also
 //!   hands each tick's `/health` read to the hold, which reads its
 //!   `writes.halted`, and runs THE PROBE on a deadline of its own and at a
-//!   hand-over.
+//!   hand-over; and beside the thread, the one read behind `changes` — the
+//!   same feed from a position a client names, at its session's class.
 //! * `shell` — [`Shell`]: the boards, the sessions, the session mode
 //!   (bare as the claimant, which reads alone — every write in it refused
-//!   before any dial — or signed with a dev key), and one private method
-//!   per §4b.1 row, and per `places`, behind [`Shell::call`], whose
+//!   before any dial — or signed with a dev key; the `session` answer says
+//!   which, `writes`), and one private method
+//!   per §4b.1 row, per `places` and per `changes`, behind [`Shell::call`], whose
 //!   dispatch the compiler holds to one arm per call — the ten ceremonial
 //!   rows in its child `ceremony` — each row taking and answering values
 //!   shaped exactly as the row's columns — an argument of another form

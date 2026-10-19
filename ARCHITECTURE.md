@@ -253,11 +253,14 @@ foundation and on the stores above it.
   `acting`) the `search` module. Its modules and rules: §The client.
 - `skep-shell` — the SHELL's CORE, written once for the dev provider and
   the desktop shell (the design's `client.md` §4b; the dev provider
-  record, ruled P-1 … P-12): the bridge's twenty-three calls — §4b.1's
-  twenty-two and the document index's listing — and seven events over
+  record, ruled P-1 … P-12): the bridge's twenty-four calls — §4b.1's
+  twenty-two, the document index's listing and the change feed's page —
+  and seven events over
   `skep-client`, the board and session references the page is
   handed in a credential's place, the person seam that forwards PUBLIC
-  moments to the page and answers SECRET and CONSENT ones from a dev arm,
+  moments to the page and answers SECRET and CONSENT ones from a dev arm
+  — or refuses them, where the run names no arm because no person is
+  present —
   the feed thread per board, the attest a signed session composes for the
   checked set, the held-burst store and the hold that resends what a board
   could not take (`client.md` §3c), and the TypeScript declarations of
@@ -1310,7 +1313,8 @@ served; the search module's over a scripted board of its own
 ## The shell's core, `skep-shell`
 
 `skep-shell` is the bridge of `client.md` §4b as a library — one method
-per call of §4b.1 and of the document index's listing `places` (A-255),
+per call of §4b.1, of the document index's listing `places` (A-255) and of
+the change feed's page `changes`,
 every event of §4b.2 on one stream — and the three things `skep-client`
 does not hold and every shell needs, written once so the dev provider
 (`skep-dev serve`) and the desktop shell share them and rewrite the
@@ -1354,7 +1358,10 @@ an item the root re-exports counted as the module it is brought from
 - `person.rs` `BridgePerson`: the PUBLIC moments as `moment` events
   answered through `Pending`, the SECRET and CONSENT ones and the NATIVE
   statements (`NATIVE_RULES`: those naming where key material rests) sent
-  to the arm.
+  to the arm — or, where the run names none (`ArmConfig::Refuse`, a client
+  with no person present), the SECRET and CONSENT moments refused there,
+  `person_required`, reaching no arm and no page, and the NATIVE
+  statements said on TALK in the arm's place.
 - `sessions.rs` `Sessions`: the token beside the board it stands at, under
   its reference, the two openings — bare, which reads alone
   (`SessionEntry::may_write`), and signed — `SessionEntry::attest`, a
@@ -1373,10 +1380,15 @@ an item the root re-exports counted as the module it is brought from
 - `feed.rs` `FeedThreads` and `Feed`: per board, the `/events` reader and
   the feed thread, its state the `Feeder` — the `feed`, `index`, `mode` and
   `daemon` events, the `search` call and the document index's listing
-  `places`, the held-burst probe on its cadence and at every hand-over.
-- `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, the private
+  `places`, the held-burst probe on its cadence and at every hand-over;
+  and `changes_since`, the read behind the `changes` call — the same feed
+  from a position a client names, two reads merged by position so each
+  entry carries its class — on the caller's thread.
+- `shell.rs` `Shell`: the boards, the sessions, `SessionMode`, `ArmConfig`
+  (the auto arm, a script, or `Refuse`), the private
   row methods behind `call`, which logs each — a write in the guest form,
-  and under a bare session, refused before any dial; `fetch`, `answer`,
+  and under a bare session, refused before any dial, the `session` answer's
+  `writes` saying which; `fetch`, `answer`,
   `cancel`, `shutdown`; `ShellOptions` and `set_node_state`.
 - `shell/ceremony.rs` the ten ceremonial rows — `keygen`, `fingerprint` and
   the eight walks over `skep_client::ceremony` — `pub(super)` to `call`.
@@ -1520,7 +1532,11 @@ Rules that hold across its files:
   default, the answer then that default; a question a string; a yes-or-no
   a boolean), one of another form refused with the moment still waiting,
   so no walk is handed a value it must coerce; a cancel abandons; a walk
-  that ends without its answer is `abandoned` to the page.
+  that ends without its answer is `abandoned` to the page. A SECRET or
+  CONSENT moment is the dev arm's — or, under `ArmConfig::Refuse`, where
+  no person is present, no one's: refused at the person, the walk ending
+  there `person_required`, so nothing is ever confirmed or typed on an
+  absent person's behalf.
 - **The declarations are pinned.** Every shape in the table has a sample
   the suite round-trips; a required field missing, or a built field
   undeclared on a shape the table does not mark `open`, is red, the

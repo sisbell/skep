@@ -8,10 +8,12 @@
 //! (`changes_under`), every seed a walk made (`seeds_of`), and every event
 //! held to its declaration (`assert_events_declared`).
 //! `door` holds the shell alone, with no daemon behind it; `modes`
-//! the bare and the signed session modes end to end; `ceremonies` the
-//! ceremonial rows end to end, each death they cause read for its hand;
-//! `boards` each board's own node, wait and stop beside another's; `held`
-//! the held-burst store against the real daemon.
+//! the bare and the signed session modes end to end, and the refusing arm;
+//! `ceremonies` the ceremonial rows end to end, each death they cause read
+//! for its hand; `boards` each board's own node, wait and stop beside
+//! another's; `held` the held-burst store against the real daemon;
+//! `changes` the catch-up call, against the daemon and over a scripted
+//! board.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -33,6 +35,7 @@ use crate::sessions::SessionKind;
 
 mod boards;
 mod ceremonies;
+mod changes;
 mod door;
 mod held;
 mod modes;

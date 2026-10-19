@@ -31,11 +31,11 @@ only those above it (held by `tests/it/tidy.rs`):
 | `held` | the held-burst store (§3c): one append-only file per (board, principal) beside the key store, read line by line with P38's faces, each line synced before `op` answers `held`; `HeldQueue`, a principal's queue — its memory, the file its copy — a hold adding none past its frames' bytes or its lines (`MAX_HELD_LINES`), and its file's re-marks within their budget |
 | `script` | the dev arm's SCRIPT: the grammar a script file's answers are parsed by, one per line in order |
 | `dev_arm` | `DevArm`, the answerer of the SECRET and CONSENT moments (§4b.3): a script's answers in order, or the auto arm, every answer said on TALK and never sent to the page, the NATIVE statements — those naming where key material rests — said there too |
-| `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones, and the NATIVE statements (`NATIVE_RULES`), sent to the dev arm |
+| `person` | `BridgePerson`: the PUBLIC moments as `moment` events answered through `Pending` in their kind's form, the SECRET and CONSENT ones, and the NATIVE statements (`NATIVE_RULES`), sent to the dev arm — or, where the shell was opened with none (`ArmConfig::Refuse`, a client with no person present), the SECRET and CONSENT moments refused here, `person_required` naming the walk, the moment and its class, answered by no arm and no page, and the NATIVE statements said on TALK in the arm's place |
 | `sessions` | `Sessions`, the session table: each session's token beside the board it stands at, the two openings — bare, which reads alone (`SessionEntry::may_write`), and signed, which writes too — the attest a session's key signs, a session's end run once whichever caller met the death signal, under the key store the table holds, and a leaving session's drafts supplement released to another of its principal |
 | `hold` | `Holds`: the one path of every `/op` under a session that may write (`Holds::send`) — a burst's door (`Burst::admit`) and its hold among it — each answer read through the classification table (`classify`), and the per-(board, principal) queue over `held`'s file; `hold/resend.rs`, the probe and the resend walk, its lines sent in `k` order across the documents under a session of the principal's that may write, never a bare one |
-| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call and the document index's listing `places`, the held-burst probe on its cadence |
-| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row — and per `places`, the document index's listing at the call's class (A-255) — behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; a write under a bare session, and its `resolve(send)`, refused before any dial (`write_in_bare_session`); `shell/ceremony.rs`, the ten ceremonial rows |
+| `feed` | `FeedThreads`, `Feed` and the `Feeder`: per board, the feed thread — the `feed`, `index`, `mode` and `daemon` events, the `search` call and the document index's listing `places`, the held-burst probe on its cadence; and `changes_since`, the one read behind the `changes` call, on the caller's thread |
+| `shell` | `Shell`: the boards, the sessions, and one private method per §4b.1 row — per `places`, the document index's listing at the call's class (A-255), and per `changes`, the change feed's page from a position at the session's class — behind `call`, which logs every call — `fetch` public beside it, because it streams, and logging its own; a write under a bare session, and its `resolve(send)`, refused before any dial (`write_in_bare_session`), and the `session` answer's `writes` saying so ahead of any write; `shell/ceremony.rs`, the ten ceremonial rows |
 | `shapes` | `declarations()`, the TypeScript declaration file for every value that crosses the bridge, pinned by a round-trip of each type's sample |
 
 ## The `feed` update's shape
@@ -51,6 +51,40 @@ first answers with — at the thread's start, or at its first `/health` after
 it, never at 0 for a board not yet up — and a session's drafts at the
 position the session opened at: a page re-reads what it shows on open and
 takes the updates from there.
+
+## The `changes` call
+
+`changes(session, since, limit?)` → `{entries, next, head}`: what changed
+since the position `since`, at the session's class — the catch-up of a
+client that comes back to a board, whose `feed` events began at its
+connection. It is the board's change feed read TWICE from `since` and
+merged by position: the published feed as a guest, token-free, and the
+session's drafts supplement under its token (`drafts=true`), so each entry
+is a `FeedUpdate` with the `class` the `feed` event gives a row —
+`published` or `drafts`, the latter naming the `session` — which one plain
+read under the token could not tell apart; a position both reads answer (a
+straddle) is answered once, by the rendering naming more documents. The
+board's head is read first (`/health`), each read is one page bounded by
+`limit` and the wire's page budget (a page past it re-asked at the limit
+that fits), and the merged page is cut where either read's `more` stands,
+then to `limit`, so no position is skipped: `next` is the position to ask
+from next time — past every entry answered, never past one withheld, and
+at the head where both reads were complete, so a quiet board's next ask is
+the empty page at once. A draft the session may not read never appears:
+the gating is the board's. Its refusals: `malformed_args` naming `since`
+or `limit`, `session_ended`, the board's own (`history_reclaimed` with its
+floor, `malformed_changes`, `feed_rebuilding`), and `session_died`.
+
+## The refusing arm
+
+`ArmConfig::Refuse` is the setting of a client with no person present (an
+agent's): every SECRET and CONSENT moment a walk reaches is refused
+`person_required` — the refusal naming the `walk`, the `moment` (the
+seam's own name for it: `sheet`, `retype`, `destination`, `confirm_typed`,
+`import`, `kept_or_placed`), its `class` and, a confirmation's, the `text`
+that was asked — answered by no arm and no page, and the walk abandoned
+there; `Auto` and `Script` are unchanged. PUBLIC moments still cross to
+the page, and a NATIVE statement is said on TALK as the arm would say it.
 
 ## Where the library stops at this pin
 

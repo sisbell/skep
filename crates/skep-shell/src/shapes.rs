@@ -3,7 +3,8 @@
 //! bridge has its shape defined on the Rust side and declared for the page
 //! from that definition"): [`declarations`] renders one TypeScript
 //! declaration file — every call's input and output, every event, the
-//! refusal, the `feed` update's shape and the index state's ten arms — from
+//! refusal, the `feed` update's shape (a `changes` entry's too) and the
+//! index state's ten arms — from
 //! THE TABLE below, which is written by hand beside the code that builds
 //! each value (`shell`, `feed`, `sessions`, `refusal`, `person`) and PINNED
 //! by this module's suite: a sample of each type, built as the code builds
@@ -66,7 +67,12 @@ pub struct Shape {
 /// declares it under.
 const SHAPES: &[Shape] = &[
     Shape { name: "BoardRow", open: false, doc: "`boards()` — one entry per board in the shell's list; `board` the opaque reference every board-touching call takes", fields: &[req("board", "string"), req("name", "string"), req("origin", "string")] },
-    Shape { name: "SessionOpened", open: false, doc: "`session(board, principal)` — the session's opaque reference in the token's place", fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null")] },
+    Shape {
+        name: "SessionOpened",
+        open: false,
+        doc: "`session(board, principal)` — the session's opaque reference in the token's place; `writes` whether a write may go out under it: the signed mode's session writes, the bare mode's keyless one reads alone and has every write refused `write_in_bare_session`",
+        fields: &[req("session", "string"), req("principal", "number"), req("account", "string | null"), req("writes", "boolean")],
+    },
     Shape { name: "Keygen", open: false, doc: "`keygen({label?})` — the device key's fingerprint, its enrollment record, and the outstanding act", fields: &[req("fingerprint", "string"), req("payload", "string"), req("outstanding", "string")] },
     Shape { name: "FingerprintRow", open: false, doc: "`fingerprint({select?, payload?})` — one key of the store, its bindings, the pending state", fields: &[req("fingerprint", "string"), req("label", "string | null"), req("bindings", "string[]"), req("unbound", "boolean"), req("payload", "string | null")] },
     Shape { name: "Claimed", open: false, doc: "`claim(board, opts)` — the three facts and the agent space; the display name held", fields: &[req("account", "string"), req("principal", "number"), req("fingerprint", "string"), req("agent_space", "string | null"), req("display_name", "string | null"), req("warnings", "string[]")] },
@@ -93,6 +99,12 @@ const SHAPES: &[Shape] = &[
         fields: &[req("docs", "Place[]"), req("counts", "AccountCount[]"), req("state", "IndexState")],
     },
     Shape { name: "AccountCount", open: false, doc: "how many of a listing's documents lie under one account, the counts in address order", fields: &[req("account", "string"), req("documents", "number")] },
+    Shape {
+        name: "ChangesAnswer",
+        open: false,
+        doc: "`changes(session, since, limit?)` — what changed since the position `since` at the session's class: the entries in the `feed` update's shape, oldest first, each `published` or `drafts` by the read that answered it (two reads, the published feed as a guest and the session's drafts supplement under its token, merged by position); `next` the position to ask from next time, past every entry answered and never past one withheld; `head` the board's latest position, read before the page",
+        fields: &[req("entries", "FeedUpdate[]"), req("next", "number"), req("head", "number")],
+    },
     Shape { name: "RefusedByBoard", open: false, doc: "a refusal: the board's own verdict, verbatim", fields: &[req("kind", "'refused'"), req("name", "string"), req("status", "number"), req("code", "string"), req("detail", "string | null"), req("op", "string | null"), req("body", "unknown")] },
     Shape { name: "HaltFace", open: false, doc: "a refusal: a halt's face under the armed name", fields: &[req("kind", "'halt'"), req("name", "string"), req("state", "string"), req("cause", "string"), req("act", "string")] },
     Shape { name: "BlockedFace", open: false, doc: "a refusal: the block", fields: &[req("kind", "'blocked'"), req("name", "'blocked'"), req("record", "string"), req("named_by", "string"), req("ground", "string | null")] },
@@ -103,7 +115,7 @@ const SHAPES: &[Shape] = &[
     Shape { name: "DeathReason", open: true, doc: "the reason a death carries: its `arm`, the trigger it names, and the arm's own members beside it", fields: &[req("arm", "'closed' | 'mode' | 'retired' | 'seeded' | 'blocked' | 'restart' | 'unreachable'")] },
     Shape { name: "DaemonEvent", open: false, doc: "`daemon(board, state)`", fields: &[req("board", "string"), req("state", "'running' | 'stopped' | 'unreachable'")] },
     Shape { name: "FeedEvent", open: false, doc: "`feed(board, update)`", fields: &[req("board", "string"), req("update", "FeedUpdate")] },
-    Shape { name: "FeedUpdate", open: false, doc: "the `/changes` row verbatim, with `position` and `class` — THIS CRATE's definition of the update's shape", fields: &[req("position", "number"), req("at", "number"), req("op", "string | null"), req("docs", "string[] | null"), req("class", "'published' | 'drafts'"), opt("session", "string"), opt("key", "string | null"), opt("time", "number | null"), opt("attest", "{ alg: string; sig: string } | null"), opt("new_prefix", "string"), opt("new_id", "number"), opt("link", "string"), opt("placed", "string"), opt("base_extent", "string | null")] },
+    Shape { name: "FeedUpdate", open: false, doc: "the `/changes` row verbatim, with `position` and `class` — THIS CRATE's definition of the update's shape, a `feed` event's `update` and a `changes` entry alike", fields: &[req("position", "number"), req("at", "number"), req("op", "string | null"), req("docs", "string[] | null"), req("class", "'published' | 'drafts'"), opt("session", "string"), opt("key", "string | null"), opt("time", "number | null"), opt("attest", "{ alg: string; sig: string } | null"), opt("new_prefix", "string"), opt("new_id", "number"), opt("link", "string"), opt("placed", "string"), opt("base_extent", "string | null")] },
     Shape { name: "IndexEvent", open: false, doc: "`index(board, session?, state)`", fields: &[req("board", "string"), req("session", "string | null"), req("state", "IndexState")] },
     Shape { name: "IndexState", open: true, doc: "the index's ten arms; the arm's own members beside it", fields: &[req("arm", "'none' | 'building' | 'widening' | 'complete' | 'at_the_floor' | 'resumed_from_the_floor' | 'unplaced' | 'past_the_ceiling' | 'newer_skep' | 'busy'")] },
     Shape { name: "MomentEvent", open: false, doc: "`moment(id, kind, data)` — a PUBLIC moment of a walk; answered by `answer(id, value)` — a string for a `label`, or `null` where its `data.default` names one, the answer then that default; a string for an `ask`; a boolean for a `yes_no` — or declined by `cancel(id)` where `answerable`", fields: &[req("id", "string"), req("kind", "'statement' | 'label' | 'ask' | 'yes_no'"), req("data", "unknown"), req("walk", "string"), req("board", "string | null"), req("answerable", "boolean")] },
@@ -195,6 +207,7 @@ pub(crate) const CALL_ROWS: &[CallRow] = &[
     },
     CallRow { name: "held", forms: &[&[req("session", "string")]], result: "HeldRow[]" },
     CallRow { name: "resolve", forms: &[&[req("session", "string"), req("held", "number"), req("act", "'drop' | 'send'")]], result: "Empty" },
+    CallRow { name: "changes", forms: &[&[req("session", "string"), req("since", "number"), opt("limit", "number")]], result: "ChangesAnswer" },
 ];
 
 /// One form of a call's argument object as the file spells it: `{}` where
@@ -236,7 +249,7 @@ pub fn declarations() -> String {
         }
         out.push_str("}\n\n");
     }
-    out.push_str("/** The calls (client.md §4b.1, and the document index's listing `places`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
+    out.push_str("/** The calls (client.md §4b.1, the document index's listing `places`, and the change feed's page `changes`): `POST /bridge/<name>` with the argument object; `{result}` or `{refused}` back. */\n");
     out.push_str("export interface Bridge {\n");
     for row in CALL_ROWS {
         let forms: Vec<String> = row.forms.iter().map(|form| argument_object(form)).collect();

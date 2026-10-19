@@ -88,6 +88,11 @@ impl Name {
     /// The walk was abandoned: the page cancelled a moment, or the dev arm
     /// left.
     pub const ABANDONED: Name = Name("abandoned");
+    /// A SECRET or CONSENT moment of the walk was refused because no person
+    /// is present to answer it (`ArmConfig::Refuse`): nothing answered it,
+    /// no arm and no page, and the walk was abandoned there — the detail
+    /// names the `walk`, the `moment` and its `class`.
+    pub const PERSON_REQUIRED: Name = Name("person_required");
     /// A label refused at the box — empty, holding a line break, or past its
     /// byte bound (AUTH-1.24's whole domain, one refusal with its `cause`;
     /// §4b.1's `keygen` row) — `keygen`'s, and `accept`'s box as a halt's

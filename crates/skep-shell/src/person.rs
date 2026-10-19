@@ -4,14 +4,20 @@
 //! facts — become `moment(id, kind, data)` events on the bus and BLOCK on a
 //! channel the page's `answer(id, value)` or `cancel(id)` fills, and whose
 //! SECRET and CONSENT moments go to the dev arm ([`DevArm`]) and never to
-//! the page. The trait is synchronous — `label(&mut self, …) -> Result<String,
-//! Abandoned>` — so each walk runs on its own thread and the person it
-//! holds waits here; a `cancel` answers `Abandoned`, which takes the walk's
-//! own abandonment exit, and the person names the walk's halt as the call's
-//! refusal `abandoned` ([`BridgePerson::walk_refusal`]). A statement needs
+//! the page — or, where the shell was opened with NO ARM
+//! (`ArmConfig::Refuse`: no person is present, an agent's client), REACH NO
+//! ARM: each such moment is refused here, answered by nothing, said on TALK,
+//! and the walk abandoned at it, the call's refusal then `person_required`
+//! naming the moment and its class. The trait is synchronous —
+//! `label(&mut self, …) -> Result<String, Abandoned>` — so each walk runs on
+//! its own thread and the person it holds waits here; a `cancel` answers
+//! `Abandoned`, which takes the walk's own abandonment exit, and the person
+//! names the walk's halt as the call's refusal — `abandoned`, or
+//! `person_required` ([`BridgePerson::walk_refusal`]). A statement needs
 //! no answer and is forwarded as a moment whose `answerable` is false; the
 //! page may ignore it — save a NATIVE one ([`NATIVE_RULES`]), a statement
-//! naming where key material rests on disk, which goes to the dev arm and
+//! naming where key material rests on disk, which goes to the dev arm — or,
+//! with no arm, is said on TALK here, the shell's own window's line — and
 //! never to the page. AN ANSWER's FORM is its moment's kind's
 //! ([`MomentKind::takes`]): a label box takes a string, or `null` where the
 //! box offers a default, which the answer then is; a question a string; a
@@ -26,7 +32,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use skep_client::halt::Halt;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 
@@ -34,6 +40,7 @@ use crate::events::{EventBus, EventName};
 use crate::refs::moment_id;
 use crate::dev_arm::DevArm;
 use crate::refusal::{Name, Refusal};
+use crate::Talk;
 
 /// What the page sent for a pending moment.
 #[derive(Debug, Clone, PartialEq)]
@@ -202,41 +209,92 @@ fn no_such_moment(id: &str) -> Refusal {
     Refusal::shell(Name::NO_SUCH_MOMENT, json!({"id": id}))
 }
 
+/// Why a moment of the walk went unanswered — what the walk's halt is then
+/// named as the call's refusal ([`BridgePerson::walk_refusal`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Unanswered {
+    /// The page cancelled a moment, or the dev arm left one: `abandoned`.
+    Abandoned,
+    /// No person is present to answer a SECRET or CONSENT moment
+    /// (`ArmConfig::Refuse`): `person_required`, naming the moment by the
+    /// seam's own name for it, its class, and — a confirmation's — the text
+    /// that was asked, public data (`client.md` §4b.3).
+    Refused { moment: &'static str, class: &'static str, text: Option<String> },
+}
+
+/// Who answers a walk's SECRET and CONSENT moments, as the shell holds it
+/// for the run: the dev arm (`ArmConfig::Auto`, `ArmConfig::Script`), or
+/// no one (`ArmConfig::Refuse`) — the person then refuses each such
+/// moment, reaching no arm, and says the refusal and the NATIVE statements
+/// on the TALK sink carried here. Its `Debug` leaves out the sink, a
+/// closure.
+pub enum Answerer {
+    /// The dev arm answers.
+    Arm(DevArm),
+    /// No person is present: every SECRET and CONSENT moment is refused,
+    /// said on this sink.
+    Refuse(Talk),
+}
+
+impl std::fmt::Debug for Answerer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Answerer::Arm(arm) => f.debug_tuple("Arm").field(arm).finish(),
+            Answerer::Refuse(_) => f.write_str("Refuse"),
+        }
+    }
+}
+
 /// The person a walk is handed: the bus its PUBLIC moments go out on, the
-/// pending table their answers come back through, the dev arm the SECRET
-/// and CONSENT moments go to, and the walk's name and board reference for
-/// the event.
+/// pending table their answers come back through, the answerer the SECRET
+/// and CONSENT moments go to — the dev arm, or none, under which they are
+/// refused here — and the walk's name and board reference for the event.
 #[derive(Debug)]
 pub struct BridgePerson {
     bus: Arc<EventBus>,
     pending: Arc<Pending>,
-    arm: Arc<DevArm>,
+    answerer: Arc<Answerer>,
     walk: &'static str,
     /// The board reference the walk runs at; none for a walk that touches
     /// no board (`keygen`'s box).
     board_reference: Option<String>,
-    /// A moment was cancelled by the page or left by the dev arm: the
-    /// walk's halt is the abandonment's ([`BridgePerson::walk_refusal`]).
-    abandoned: bool,
+    /// A moment went unanswered — cancelled by the page, left by the dev
+    /// arm, or refused here with no arm: the walk's halt is that refusal
+    /// ([`BridgePerson::walk_refusal`]).
+    unanswered: Option<Unanswered>,
 }
 
 impl BridgePerson {
-    /// The person for `walk` at the board `board_reference` names.
-    pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, arm: Arc<DevArm>, walk: &'static str, board_reference: Option<String>) -> BridgePerson {
-        BridgePerson { bus, pending, arm, walk, board_reference, abandoned: false }
+    /// The person for `walk` at the board `board_reference` names, its
+    /// SECRET and CONSENT moments `answerer`'s — the dev arm's, or refused
+    /// where the run holds none.
+    pub fn new(bus: Arc<EventBus>, pending: Arc<Pending>, answerer: Arc<Answerer>, walk: &'static str, board_reference: Option<String>) -> BridgePerson {
+        BridgePerson { bus, pending, answerer, walk, board_reference, unanswered: None }
     }
 
-    /// The walk's halt `h` as the call's refusal: the abandonment where a
-    /// moment of the walk was cancelled by the page or left by the dev arm,
-    /// else the family's member — a halt's face under `armed` where the row
-    /// diagnosed its armed name.
+    /// The walk's halt `h` as the call's refusal: `person_required` where a
+    /// SECRET or CONSENT moment of the walk was refused for want of a
+    /// person, the abandonment where a moment was cancelled by the page or
+    /// left by the dev arm, else the family's member — a halt's face under
+    /// `armed` where the row diagnosed its armed name.
     pub fn walk_refusal(&self, h: Halt, armed: Option<Name>) -> Refusal {
-        if self.abandoned {
-            return Refusal::shell(Name::ABANDONED, json!({"halt": h.to_string()}));
-        }
-        match armed {
-            Some(name) => Refusal::of_named(name, h),
-            None => Refusal::from(h),
+        match &self.unanswered {
+            Some(Unanswered::Refused { moment, class, text }) => {
+                let mut detail = Map::new();
+                detail.insert("walk".into(), Value::from(self.walk));
+                detail.insert("moment".into(), Value::from(*moment));
+                detail.insert("class".into(), Value::from(*class));
+                if let Some(text) = text {
+                    detail.insert("text".into(), Value::from(text.as_str()));
+                }
+                detail.insert("halt".into(), Value::from(h.to_string()));
+                Refusal::shell(Name::PERSON_REQUIRED, Value::Object(detail))
+            }
+            Some(Unanswered::Abandoned) => Refusal::shell(Name::ABANDONED, json!({"halt": h.to_string()})),
+            None => match armed {
+                Some(name) => Refusal::of_named(name, h),
+                None => Refusal::from(h),
+            },
         }
     }
 
@@ -249,7 +307,7 @@ impl BridgePerson {
         let answerable = kind.answerable();
         let rx = if answerable {
             let Some(rx) = self.pending.register(&id, kind) else {
-                self.abandoned = true;
+                self.unanswered = Some(Unanswered::Abandoned);
                 return Err(Abandoned);
             };
             Some(rx)
@@ -268,23 +326,40 @@ impl BridgePerson {
         match rx.recv() {
             Ok(Reply::Answer(v)) => Ok(v),
             Ok(Reply::Cancel) | Err(_) => {
-                self.abandoned = true;
+                self.unanswered = Some(Unanswered::Abandoned);
                 Err(Abandoned)
             }
         }
     }
 
-    /// The dev arm's answer passed on, the person marked abandoned where
-    /// the arm left the moment.
-    fn mark_if_abandoned<T>(&mut self, answer: Result<T, Abandoned>) -> Result<T, Abandoned> {
-        answer.inspect_err(|_| self.abandoned = true)
+    /// A SECRET or CONSENT moment handed to the dev arm, where the shell
+    /// holds one, its answer passed on and the person marked abandoned
+    /// where the arm left the moment; REFUSED where it holds none
+    /// (`ArmConfig::Refuse`): nothing answers it, the refusal is said on
+    /// TALK naming the moment and its class, and the walk takes its
+    /// abandonment exit, the halt then named `person_required`.
+    fn hand<T>(&mut self, moment: &'static str, class: &'static str, text: Option<String>, ask: impl FnOnce(&DevArm) -> Result<T, Abandoned>) -> Result<T, Abandoned> {
+        let answerer = Arc::clone(&self.answerer);
+        match &*answerer {
+            Answerer::Arm(arm) => ask(arm).inspect_err(|_| self.unanswered = Some(Unanswered::Abandoned)),
+            Answerer::Refuse(talk) => {
+                talk(&format!("person: the {moment} moment ({}) of `{}` is refused — no person is present to answer it, and the walk is abandoned there", class.to_uppercase(), self.walk));
+                self.unanswered = Some(Unanswered::Refused { moment, class, text });
+                Err(Abandoned)
+            }
+        }
     }
 }
 
 impl Person for BridgePerson {
     fn say(&mut self, m: Public<Statement>) {
         if NATIVE_RULES.contains(&m.0.rule) {
-            self.arm.native(&m.0);
+            // The shell's own window's line: the arm's where one stands,
+            // said here where none does — never the page's.
+            match &*self.answerer {
+                Answerer::Arm(arm) => arm.native(&m.0),
+                Answerer::Refuse(talk) => talk(&format!("person: {}: {}", m.0.rule, m.0.text)),
+            }
             return;
         }
         let _ = self.moment(MomentKind::Statement, json!({"rule": m.0.rule, "text": m.0.text}));
@@ -317,37 +392,41 @@ impl Person for BridgePerson {
     }
 
     fn sheet(&mut self, m: Secret<Sheet>) -> Result<(), Abandoned> {
-        self.arm.sheet(m.0.fields);
-        Ok(())
+        let fields = m.0.fields;
+        self.hand("sheet", "secret", None, |arm| {
+            arm.sheet(fields);
+            Ok(())
+        })
     }
 
     fn dismiss(&mut self) {
-        self.arm.dismiss();
+        match &*self.answerer {
+            Answerer::Arm(arm) => arm.dismiss(),
+            Answerer::Refuse(talk) => talk("person: the sheet is dismissed (nothing was displayed)"),
+        }
     }
 
     fn retype(&mut self, _m: Secret<Retype>) -> Result<Retyped, Abandoned> {
-        let answer = self.arm.retype();
-        self.mark_if_abandoned(answer)
+        self.hand("retype", "secret", None, DevArm::retype)
     }
 
     fn destination(&mut self, m: Secret<Destination>) -> Result<std::path::PathBuf, Abandoned> {
-        let answer = self.arm.destination(m.0.which);
-        self.mark_if_abandoned(answer)
+        let which = m.0.which;
+        self.hand("destination", "secret", None, |arm| arm.destination(which))
     }
 
     fn confirm_typed(&mut self, m: Consent<Confirmation>) -> Result<String, Abandoned> {
-        let answer = self.arm.confirm(&m.0);
-        self.mark_if_abandoned(answer)
+        let confirmation = m.0;
+        self.hand("confirm_typed", "consent", Some(confirmation.text.clone()), |arm| arm.confirm(&confirmation))
     }
 
     fn import(&mut self, _m: Secret<Import>) -> Result<Imported, Abandoned> {
-        let answer = self.arm.import();
-        self.mark_if_abandoned(answer)
+        self.hand("import", "secret", None, DevArm::import)
     }
 
     fn kept_or_placed(&mut self, m: Secret<HandedPath>) -> Result<KeptOrPlaced, Abandoned> {
-        let answer = self.arm.kept_or_placed(&m.0.path);
-        self.mark_if_abandoned(answer)
+        let path = m.0.path;
+        self.hand("kept_or_placed", "secret", None, |arm| arm.kept_or_placed(&path))
     }
 }
 
@@ -358,9 +437,12 @@ mod tests {
 
     use super::*;
 
-    fn fixture() -> (Arc<EventBus>, Arc<Pending>, Arc<DevArm>) {
-        let talk: crate::Talk = Arc::new(|_| {});
-        (Arc::new(EventBus::new()), Arc::new(Pending::new()), Arc::new(DevArm::auto(PathBuf::from("/tmp/x"), talk)))
+    fn quiet() -> crate::Talk {
+        Arc::new(|_| {})
+    }
+
+    fn fixture() -> (Arc<EventBus>, Arc<Pending>, Arc<Answerer>) {
+        (Arc::new(EventBus::new()), Arc::new(Pending::new()), Arc::new(Answerer::Arm(DevArm::auto(PathBuf::from("/tmp/x"), quiet()))))
     }
 
     /// A PUBLIC moment is an event with its id and kind, answered by the
@@ -391,9 +473,9 @@ mod tests {
         });
         let label = person.label(Public(LabelBox { title: "name".into(), statements: vec![], default: None })).unwrap();
         assert_eq!(label, "phone");
-        assert!(!person.abandoned);
+        assert!(person.unanswered.is_none());
         assert_eq!(person.yes_no(Public(Question { text: "?".into() })), Err(Abandoned));
-        assert!(person.abandoned);
+        assert_eq!(person.unanswered, Some(Unanswered::Abandoned));
         answerer.join().unwrap();
     }
 
@@ -471,7 +553,7 @@ mod tests {
         let talk: crate::Talk = Arc::new(move |l: &str| kept.lock().unwrap().push(l.to_string()));
         let bus = Arc::new(EventBus::new());
         let rx = bus.subscribe();
-        let mut person = BridgePerson::new(bus, Arc::new(Pending::new()), Arc::new(DevArm::auto(PathBuf::from("/tmp/x"), talk)), "claim", Some("b-1".into()));
+        let mut person = BridgePerson::new(bus, Arc::new(Pending::new()), Arc::new(Answerer::Arm(DevArm::auto(PathBuf::from("/tmp/x"), talk))), "claim", Some("b-1".into()));
         for rule in ["AUTH-5.40", "AUTH-5.41", "§4.1 S3", "AUTH-5.54 step 3", "§3a", "§9 item 36"] {
             person.say(Public(Statement { rule, text: "anchor file written: /store-anchors/a".into() }));
             assert!(rx.try_recv().is_err(), "{rule}: a native statement crossed to the page");
@@ -486,10 +568,10 @@ mod tests {
     #[test]
     fn a_moment_the_arm_leaves_marks_the_person_abandoned() {
         let talk: crate::Talk = Arc::new(|_| {});
-        let arm = Arc::new(DevArm::script(vec![crate::script::Answer::Abandon], talk));
+        let arm = Arc::new(Answerer::Arm(DevArm::script(vec![crate::script::Answer::Abandon], talk)));
         let mut person = BridgePerson::new(Arc::new(EventBus::new()), Arc::new(Pending::new()), arm, "retire", Some("b-1".into()));
         assert_eq!(person.confirm_typed(Consent(Confirmation { text: "retire?".into(), expected: "abcd".into() })), Err(Abandoned));
-        assert!(person.abandoned);
+        assert_eq!(person.unanswered, Some(Unanswered::Abandoned));
     }
 
     /// THE WALK's HALT as the call's refusal is the person's to name: before

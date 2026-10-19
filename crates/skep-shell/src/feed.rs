@@ -50,7 +50,15 @@
 //! `/health` after it, never at 0 for a board not yet up — and a session's
 //! drafts at the position the session opened at: a page re-reads what it
 //! shows on open and takes the updates from there.
+//!
+//! THE CATCH-UP ([`changes_since`], the `changes` call): what a client that
+//! comes back to a board missed — the same feed, read ONCE from a position
+//! the client names rather than streamed from the head, on the caller's
+//! thread and not this one, each entry in the update's shape above with its
+//! class, bounded by the call's `limit` and the wire's page budget, and
+//! answered with the position to ask from next and the board's head.
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -61,8 +69,9 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 use skep_address::Address;
-use skep_client::board::{ChangesAnswer, ChangesQuery};
+use skep_client::board::{ChangesAnswer, ChangesPage, ChangesQuery};
 use skep_client::derive::Mode;
+use skep_client::halt::Halt;
 use skep_client::search::{events, Consumer, Lost, Newer, Place, PlacesAnswer, QueryTooLong, Range, SearchAnswer, SearchDir, SearchOpts, State, Stop, Who};
 use skep_client::Board;
 use skep_search::{GrantKind, Hit, Kind, Mark, MarkKind, Rung, Standing};
@@ -549,16 +558,10 @@ impl<'b> Feeder<'b> {
         }
     }
 
-    /// One row as a `feed` event: the row verbatim, its `position`, its
-    /// `class`, and — a drafts row's — the `session` it was read under.
+    /// One row as a `feed` event: the row in the update's shape
+    /// ([`update_of`]) under the event's `board`.
     fn emit_feed(&self, row: &Value, class: UpdateClass<'_>) {
-        let mut update = row.clone();
-        update["position"] = row["at"].clone();
-        update["class"] = Value::from(class.as_str());
-        if let UpdateClass::Drafts(session) = class {
-            update["session"] = Value::from(session.reference.as_str());
-        }
-        self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update}));
+        self.bus.emit(EventName::Feed, json!({"board": self.entry.reference, "update": update_of(row, class)}));
     }
 
     /// THE `/health` READ of the thread's start and of each tick: the `mode`
@@ -666,6 +669,171 @@ impl UpdateClass<'_> {
             UpdateClass::Drafts(_) => "drafts",
         }
     }
+}
+
+/// Returns one `/changes` row in THE UPDATE's SHAPE (the module doc).
+///
+/// It is the row verbatim, plus `position` (its `at`), `class` — `class`'s
+/// word — and, a drafts row's, the `session` it was read under: what a
+/// `feed` event carries as `update` and a `changes` entry is.
+fn update_of(row: &Value, class: UpdateClass<'_>) -> Value {
+    let mut update = row.clone();
+    update["position"] = row["at"].clone();
+    update["class"] = Value::from(class.as_str());
+    if let UpdateClass::Drafts(session) = class {
+        update["session"] = Value::from(session.reference.as_str());
+    }
+    update
+}
+
+/// What `changes(session, since, limit?)` answers: the page, or the death
+/// signal met on the session's token, whose end is the caller's to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangesRead {
+    /// The page.
+    Page(CaughtUp),
+    /// The death signal on the session's token.
+    Died,
+}
+
+/// One page of catching up, as the `changes` call answers it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaughtUp {
+    /// The entries, oldest first, each in the update's shape with its
+    /// `class`.
+    pub entries: Vec<Value>,
+    /// The position to ask from next: past every entry answered, never past
+    /// one withheld.
+    pub next: u64,
+    /// The board's latest position, read before the page.
+    pub head: u64,
+}
+
+/// Reads what changed since `since` at `session`'s class — the `changes`
+/// call's page (`CaughtUp`), the entries bounded by `limit`.
+///
+/// TWO READS, merged by position: the published feed as a guest,
+/// token-free, and the session's drafts supplement under its token, the
+/// `drafts=true` page — so each entry carries the `class` the `feed` event
+/// gives a row, `published` or `drafts`, which one plain read under the
+/// token could not tell apart; a position both reads answer (a straddle,
+/// PUB-6.47: a guest's `[T]` beside the supplement's `[D, T]`) is answered
+/// once, by the rendering naming more documents, the token's where they
+/// name as many (wire.md §The change feed, Narrowings: "deduplicating by
+/// position with the wider rendering winning"). The board's head is read
+/// first (`/health`, as the feed thread takes it); each read is one page
+/// from `since`, re-asked at the limit that `fits` where it passes the page
+/// budget; and the merged page is CUT at the lower `last` of a read whose
+/// `more` stands, then to `limit` entries, so no position is skipped —
+/// `next` is that cut, or the last entry kept, or, both reads read to the
+/// head, the greater of their `last`s and the head read first, which a
+/// quiet board's next ask meets with the empty page at once (`since ≥
+/// head`). A draft the session may not read never appears: the gating is
+/// the board's, at the token's class.
+///
+/// # Errors
+///
+/// `history_reclaimed`, the board's own 410 with its floor, where `since`
+/// lies below the feed's memory; the board's other refusals
+/// (`malformed_changes` for a `limit` off the route's range,
+/// `feed_rebuilding`) and the unreachable board, as every read carries
+/// them; and a `/changes` answer the shell does not read, as a halt.
+pub fn changes_since(session: &SessionEntry, since: u64, limit: Option<u64>) -> Result<ChangesRead, Refusal> {
+    let board: &Board = &session.board;
+    let head = board.health()?.log_position();
+    let published = match page_from(board, UpdateClass::Published, since, limit)? {
+        PageRead::Page(page) => page,
+        PageRead::Died => return Ok(ChangesRead::Died),
+    };
+    let drafts = match page_from(board, UpdateClass::Drafts(session), since, limit)? {
+        PageRead::Page(page) => page,
+        PageRead::Died => return Ok(ChangesRead::Died),
+    };
+    // Merged by position, the wider rendering winning — the token's on a
+    // tie, read second.
+    let docs_named = |update: &Value| update["docs"].as_array().map_or(0, Vec::len);
+    let mut by_position: BTreeMap<u64, Value> = BTreeMap::new();
+    for (page, class) in [(&published, UpdateClass::Published), (&drafts, UpdateClass::Drafts(session))] {
+        for row in &page.changes {
+            // A row with no `at` is no row of the wire's: nothing places it.
+            let Some(at) = row["at"].as_u64() else { continue };
+            let update = update_of(row, class);
+            match by_position.entry(at) {
+                Entry::Vacant(v) => {
+                    v.insert(update);
+                }
+                Entry::Occupied(mut o) => {
+                    if docs_named(&update) >= docs_named(o.get()) {
+                        o.insert(update);
+                    }
+                }
+            }
+        }
+    }
+    // The cut: where a read's `more` stands, nothing past its `last` is
+    // answered, since the other read may hold a position between.
+    let covered = |page: &ChangesPage| if page.more { page.last } else { u64::MAX };
+    let cut = covered(&published).min(covered(&drafts));
+    let mut entries: Vec<Value> = by_position.into_iter().filter(|(at, _)| *at <= cut).map(|(_, update)| update).collect();
+    let cap = limit.map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let next = if entries.len() > cap {
+        entries.truncate(cap);
+        entries.last().and_then(|update| update["at"].as_u64()).unwrap_or(since)
+    } else if cut < u64::MAX {
+        cut
+    } else {
+        published.last.max(drafts.last).max(head)
+    };
+    Ok(ChangesRead::Page(CaughtUp { entries, next, head }))
+}
+
+/// One page read for the catch-up: the page, or the death signal.
+enum PageRead {
+    Page(ChangesPage),
+    Died,
+}
+
+/// Reads ONE PAGE of `class`'s feed from `since` for the catch-up.
+///
+/// It is the published feed token-free, or the session's drafts supplement
+/// under its token; a page past the page budget is re-asked at the limit
+/// that `fits` (wire.md §The change feed, Paging), and every answer but a
+/// page is the caller's to face: the retention floor as the board's own
+/// refusal, the death signal as [`PageRead::Died`].
+///
+/// # Errors
+///
+/// `history_reclaimed` with its floor; the board's refusals and the
+/// unreachable board; an answer the shell does not read, as a halt.
+fn page_from(board: &Board, class: UpdateClass<'_>, since: u64, limit: Option<u64>) -> Result<PageRead, Refusal> {
+    let (token, drafts) = match class {
+        UpdateClass::Published => (None, false),
+        UpdateClass::Drafts(session) => (Some(&session.token), true),
+    };
+    let mut limit = limit;
+    loop {
+        match board.changes(token, &ChangesQuery { since, under: None, drafts, limit })? {
+            ChangesAnswer::Page(page) => return Ok(PageRead::Page(page)),
+            ChangesAnswer::TooLarge { fits } => limit = Some(fits),
+            ChangesAnswer::HistoryReclaimed { floor } => return Err(history_reclaimed(floor)),
+            ChangesAnswer::Closed => return Ok(PageRead::Died),
+            other => {
+                let state = format!("the board answered `/changes` with {other:?}, which is no answer the shell reads");
+                return Err(Refusal::from(Halt::face(state, "`skep-client` read a `/changes` answer this shell does not carry", "report it: the shell's `changes` row is behind the library")));
+            }
+        }
+    }
+}
+
+/// The retention floor as the board's verdict: its `410 history_reclaimed`
+/// error document, `floor` riding it where known (wire.md §The change feed,
+/// Retention), rebuilt from the answer `skep-client` read it into.
+fn history_reclaimed(floor: Option<u64>) -> Refusal {
+    let mut body = json!({"error": "history_reclaimed"});
+    if let Some(floor) = floor {
+        body["floor"] = Value::from(floor);
+    }
+    Refusal::board(410, body)
 }
 
 /// ONE FEED READ TO THE BOARD's HEAD — `class`'s feed: the published feed's,

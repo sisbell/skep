@@ -27,7 +27,7 @@ fn samples() -> Vec<(&'static str, Value)> {
     let facts = json!({"principal": 1, "account": "1.0.1", "origin": "http://127.0.0.1:8642"});
     vec![
         ("BoardRow", json!({"board": "b-0", "name": "http://127.0.0.1:8642", "origin": "http://127.0.0.1:8642"})),
-        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1"})),
+        ("SessionOpened", json!({"session": "s-0", "principal": 1, "account": "1.0.1", "writes": true})),
         ("Keygen", json!({"fingerprint": "ab", "payload": "{}", "outstanding": "x"})),
         ("FingerprintRow", json!({"fingerprint": "ab", "label": "phone", "bindings": [], "unbound": true, "payload": null})),
         ("Claimed", json!({"account": "1.0.1", "principal": 1, "fingerprint": "ab", "agent_space": "1.0.1.1", "display_name": null, "warnings": []})),
@@ -49,6 +49,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("Place", json!({"doc": "1.0.1.0.1", "kind": "draft", "label": null, "standing": "yours_to_read"})),
         ("PlacesAnswer", places_without_index()),
         ("AccountCount", json!({"account": "1.0.1", "documents": 2})),
+        ("ChangesAnswer", json!({"entries": [{"position": 3, "at": 3, "op": "insert", "docs": ["1.0.1.0.1"], "class": "published", "key": "bare", "time": 1}], "next": 3, "head": 3})),
         ("RefusedByBoard", Refusal::Board(Refused { status: 200, code: "credential_refused".into(), detail: Some("signed_session_required".into()), op: Some("publish".into()), body: json!({}) }).to_value()),
         ("HaltFace", Refusal::named(Name::NO_KEY, Face { state: "s".into(), cause: "c".into(), act: "a".into() }).to_value()),
         ("BlockedFace", Refusal::Blocked(Blocked { record: "1.0.1.0.7.1".into(), named_by: "http://x".into(), ground: None }).to_value()),
@@ -98,12 +99,12 @@ fn every_declared_type_round_trips_its_sample_against_the_table() {
     }
 }
 
-/// The file names every shape, every call of §4b.1 and the document index's
-/// listing — its rows the dispatch's calls, in the dispatch's order, each
-/// form of a row's argument object its members in their order, the forms
-/// joined as a union and a form of no member `{}` — both answers and the
-/// seven events; a field's optionality renders as `?`, as the field spells
-/// itself.
+/// The file names every shape, every call of §4b.1, the document index's
+/// listing and the change feed's page — its rows the dispatch's calls, in
+/// the dispatch's order, each form of a row's argument object its members
+/// in their order, the forms joined as a union and a form of no member `{}`
+/// — both answers and the seven events; a field's optionality renders as
+/// `?`, as the field spells itself.
 #[test]
 fn the_file_names_every_shape_call_and_event() {
     assert_eq!([req("position", "number").to_string(), opt("warning", "string").to_string()], ["position: number", "warning?: string"], "a field spells itself as the declarations spell it");
@@ -114,14 +115,17 @@ fn the_file_names_every_shape_call_and_event() {
     for row in CALL_ROWS {
         assert!(text.contains(&format!("  {}(args: ", row.name)), "{}", row.name);
     }
-    assert_eq!(CALL_ROWS.len(), 23, "the twenty-three calls: §4b.1's and the document index's listing");
+    assert_eq!(CALL_ROWS.len(), 24, "the twenty-four calls: §4b.1's, the document index's listing and the change feed's page");
     assert_eq!(CALL_ROWS.iter().map(|row| row.name).collect::<Vec<_>>(), crate::CALLS, "the declared rows are the dispatch's calls, in its order");
     for line in [
         "  boards(args: {}): Promise<Outcome<BoardRow[]>>;\n",
         "  session(args: { board: string; principal?: number }): Promise<Outcome<SessionOpened>>;\n",
         "  op(args: { session: string; frame: unknown } | { guest: true; board?: string; origin?: string; frame: unknown }): Promise<Outcome<unknown>>;\n",
         "  places(args: { session: string; board?: string; opts?: PlacesOpts } | { guest: true; board?: string; origin?: string; opts?: PlacesOpts }): Promise<Outcome<PlacesAnswer>>;\n",
+        "  changes(args: { session: string; since: number; limit?: number }): Promise<Outcome<ChangesAnswer>>;\n",
         "export interface PlacesOpts { under?: string }\n",
+        "  writes: boolean;\n",
+        "  entries: FeedUpdate[];\n",
     ] {
         assert!(text.contains(line), "the row renders as declared: {line}");
     }

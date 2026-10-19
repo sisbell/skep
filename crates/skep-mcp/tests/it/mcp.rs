@@ -1000,15 +1000,23 @@ fn an_unknown_word_or_a_flag_without_its_value_or_given_twice_is_a_usage_error()
     }
 }
 
-/// SKEPD_URL unset is the origin the usage names; set but malformed,
-/// startup refuses naming the variable — never falling back to that
-/// default. Nothing is dialed: stdin is empty.
+/// Checks that an unset `SKEPD_URL` dials the daemon's own default origin.
+///
+/// The origin is loopback at `skepd::DEFAULT_PORT`, where a daemon started
+/// with no `--port` listens, so an adapter beside such a daemon finds it
+/// with no variable set. Set but malformed, startup refuses naming the
+/// variable, never falling back to that default. Nothing is dialed: stdin
+/// is empty.
 #[test]
 fn skepd_url_unset_is_the_default_origin_and_malformed_refuses() {
     let out = run_adapter(&[], &[("SKEP_PRINCIPAL", "1")]);
     assert!(out.status.success(), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("http://127.0.0.1:8642"), "the startup line names the default: {err}");
+    let default = format!("skepd at http://127.0.0.1:{},", skepd::DEFAULT_PORT);
+    assert!(
+        err.contains(&default),
+        "the startup line dials the daemon's default origin, {default}: {err}"
+    );
     for bad in ["https://127.0.0.1:8642", "127.0.0.1:8642", "http://127.0.0.1:8642/op"] {
         let out = run_adapter(&[], &[("SKEPD_URL", bad), ("SKEP_PRINCIPAL", "1")]);
         assert_eq!(out.status.code(), Some(1), "'{bad}': {out:?}");

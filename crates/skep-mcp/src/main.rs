@@ -81,6 +81,16 @@ environment:
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio; the skepd side
 is specified in skep/docs/wire.md.";
 
+/// `SKEPD_URL`'s default: the daemon's origin at its own defaults.
+///
+/// It is the loopback address the daemon's `--bind` defaults to
+/// (AUTH-4.57 (a)), at the daemon's default port, `skepd::DEFAULT_PORT`, so
+/// an adapter beside a daemon started with neither flag finds it with no
+/// variable set. The usage states it, held by a unit test; the integration
+/// suite holds the origin a start with no variable dials to the daemon's
+/// own constant, `skepd` being a test dependency alone.
+const DEFAULT_URL: &str = "http://127.0.0.1:8642";
+
 /// The largest principal id a board registers: `2^53 − 1`, the top of the
 /// range a JSON number carries exactly — skepd's `delegate` refuses a
 /// larger `new_id` at the parse (wire.md §Value encodings), so every
@@ -154,7 +164,7 @@ fn main() {
         },
         None => die("SKEP_PRINCIPAL is required (the principal this adapter binds)"),
     };
-    let url = env_text("SKEPD_URL").unwrap_or_else(|| String::from("http://127.0.0.1:8642"));
+    let url = env_text("SKEPD_URL").unwrap_or_else(|| String::from(DEFAULT_URL));
     let http = match Http::parse(&url) {
         Ok(h) => h,
         Err(e) => die(&format!("SKEPD_URL {e}")),
@@ -313,5 +323,15 @@ mod tests {
             )
         );
         assert!(USAGE.contains("\n  --version            this binary's version"), "{USAGE}");
+    }
+
+    /// Checks that the usage names the origin the adapter dials by default.
+    ///
+    /// `SKEPD_URL`'s line states [`DEFAULT_URL`], the one value startup reads
+    /// where the variable is unset, so a default moved in one place and not
+    /// the other fails here.
+    #[test]
+    fn the_usage_names_the_default_origin_the_adapter_dials() {
+        assert!(USAGE.contains(&format!("the daemon's origin (default {DEFAULT_URL})")), "{USAGE}");
     }
 }

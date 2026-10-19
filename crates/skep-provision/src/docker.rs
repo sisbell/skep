@@ -90,9 +90,13 @@ const CLAIM_BIND: &str = "127.0.0.1";
 
 /// The port the image's daemon listens on: the baked `SKEPD_PORT`.
 ///
-/// It is the `Dockerfile`'s, which the unit suite reads back: the claim
-/// run's, which the sidecar dials ([`dialed_origin`]), and the serving run's,
-/// reached at `<name>:8642` on the bridge.
+/// It is the `Dockerfile`'s, which the unit suite reads back with its
+/// `EXPOSE` and the documents that name it: the claim run's, which the
+/// sidecar dials ([`dialed_origin`]), and the serving run's, which the proxy
+/// reaches at the container's name on the bridge. It is the image's own
+/// port, baked so the daemon binary's default never reaches it: every
+/// board's snippet names it from the board's making (`caddy.rs`'s
+/// `snippet`), so moving it is a migration of every standing board's route.
 pub const BOARD_PORT: u16 = 8642;
 
 /// Returns the dialed origin: the board the sidecar dials.

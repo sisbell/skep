@@ -755,8 +755,12 @@ pub mod dev {
     /// the dev provider record's example names (its §3.2).
     pub const DEFAULT_LISTEN: u16 = 8742;
 
-    /// `serve --port`'s default under `--own`: the daemon's own default,
-    /// the local record's recipe (`RUNBOOK.md` §3).
+    /// `serve --port`'s default under `--own`: the daemon's own default port.
+    ///
+    /// It is `skepd::DEFAULT_PORT`, so the in-process daemon answers where one
+    /// started by the local record's recipe (`RUNBOOK.md` §3) does. A unit
+    /// test holds it there, since the default build and the sidecar's carry
+    /// no `skepd` to read it from.
     pub const DEFAULT_NODE_PORT: u16 = 8642;
 
     /// `serve`'s principal where `--principal` is omitted: the one `skep

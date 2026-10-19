@@ -85,7 +85,7 @@ fn every_default_is_its_named_constant() {
     }
     // The constants' own values, as the documents name them.
     assert_eq!(DEFAULT_LISTEN.to_string(), "127.0.0.1:8842");
-    assert!(DEFAULT_LISTEN.ip().is_loopback() && DEFAULT_LISTEN.port() != 8642);
+    assert!(DEFAULT_LISTEN.ip().is_loopback() && DEFAULT_LISTEN.port() != crate::docker::BOARD_PORT);
     assert_eq!((DEFAULT_BOARDS_DIR, DEFAULT_IMAGE, DEFAULT_CLI_IMAGE, DEFAULT_NETWORK, DEFAULT_CADDY, DEFAULT_SUFFIX), ("/etc/caddy/boards", "skep-hosted", "skep-cli", "skep", "caddy", "skep.host"));
     assert_eq!((DEFAULT_LOG_MAX_SIZE, DEFAULT_LOG_MAX_FILE.get()), ("10m", 5), "the README's serving line");
     assert_eq!(DEFAULT_WORKERS.get(), 3, "the owner's number");

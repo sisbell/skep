@@ -601,6 +601,18 @@ fn the_seeds_pin_and_variable_are_the_budgets() {
     assert_eq!(literal("PIN"), dev::DEFAULT_PIN);
     assert_eq!(literal("VAR"), dev::CORPUS_VARIABLE);
 }
+
+/// Checks that the in-process daemon's default port is the daemon's own.
+///
+/// `serve --own`'s `--port` defaults to `skepd::DEFAULT_PORT`, so the daemon
+/// it runs answers where one started by the local record's recipe does.
+/// It is held here, since the default build carries no `skepd`: a port moved
+/// in the daemon and not here fails here.
+#[test]
+fn the_own_daemons_default_port_is_the_daemons() {
+    assert_eq!(dev::DEFAULT_NODE_PORT, skepd::DEFAULT_PORT);
+}
+
 /// THE VERSION LINE IS AN ANSWER, as the help is: `--version`, as the
 /// first argument or as a flag of any command, parses to `Parsed::Version`
 /// carrying `<program> <crate version> (<commit>)` — `skep`'s line under

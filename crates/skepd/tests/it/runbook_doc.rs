@@ -13,11 +13,13 @@
 //! own help, §2's line for the journal damage a history read meets and step
 //! 5's reading of an attest cut, §1's line for a write refused for a cause
 //! but room and its floor's line for a free space unread, and §1 step 8's
-//! standing clauses.
+//! standing clauses. Every loopback origin §3 and §9 dial is held to the
+//! daemon's default port, read through its constant.
 
 use std::path::Path;
 
 use skep_util::notice::Class;
+use skepd::DEFAULT_PORT;
 
 fn runbook_md() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RUNBOOK.md");
@@ -52,6 +54,16 @@ fn fenced(text: &str) -> (&str, &str) {
 /// moves no pin — `wire_doc.rs`'s `prose`, for a passage already cut.
 fn collapsed(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The port of every `127.0.0.1:` origin or address in `text`, in order.
+///
+/// Each is the digits that follow the colon. `readme_doc.rs` reads the
+/// README's recipe through it too.
+pub(crate) fn loopback_ports(text: &str) -> Vec<String> {
+    text.match_indices("127.0.0.1:")
+        .map(|(at, m)| text[at + m.len()..].chars().take_while(char::is_ascii_digit).collect())
+        .collect()
 }
 
 /// §9 RUNNING IT AS A SERVICE, the subsection headed `heading`: from it to
@@ -202,8 +214,8 @@ fn runbook_says_the_client_feature_serves_the_guest_reader() {
 fn runbook_starts_a_kept_notebook_with_its_origin_and_local_trust_off() {
     let step = passage("\n## 3. Start", "2. **Run it**", &["\n3. **Read the open's report**"]);
     let (command, beneath) = fenced(&step);
-    for flag in ["--origin http://127.0.0.1:8642", "--no-local-trust"] {
-        assert!(command.contains(flag), "step 2's command passes {flag}:\n{command}");
+    for flag in [format!("--origin http://127.0.0.1:{DEFAULT_PORT}"), "--no-local-trust".into()] {
+        assert!(command.contains(&flag), "step 2's command passes {flag}:\n{command}");
     }
     let beneath = collapsed(beneath);
     for place in [
@@ -255,11 +267,12 @@ fn runbook_carries_a_launchd_agent_and_a_systemd_user_unit_closed() {
         .collect();
     let args = args.join(" ");
     for arg in [
-        "--data-dir /Users/USERNAME/Library/Application Support/skep/board",
-        "--origin http://127.0.0.1:8642",
-        "--no-local-trust",
+        "--data-dir /Users/USERNAME/Library/Application Support/skep/board".into(),
+        format!("--port {DEFAULT_PORT}"),
+        format!("--origin http://127.0.0.1:{DEFAULT_PORT}"),
+        "--no-local-trust".into(),
     ] {
-        assert!(args.contains(arg), "the agent passes {arg}: {args}");
+        assert!(args.contains(&arg), "the agent passes {arg}: {args}");
     }
     assert!(plist.contains("<string>io.skep.skepd</string>"), "the agent's label:\n{plist}");
     let umask = plist
@@ -274,8 +287,13 @@ fn runbook_carries_a_launchd_agent_and_a_systemd_user_unit_closed() {
         .lines()
         .find(|l| l.starts_with("ExecStart="))
         .unwrap_or_else(|| panic!("the unit carries its ExecStart line:\n{unit}"));
-    for arg in ["--data-dir %h/.local/share/skep/board", "--origin http://127.0.0.1:8642", "--no-local-trust"] {
-        assert!(exec.contains(arg), "the unit's ExecStart passes {arg}: {exec}");
+    for arg in [
+        "--data-dir %h/.local/share/skep/board".into(),
+        format!("--port {DEFAULT_PORT}"),
+        format!("--origin http://127.0.0.1:{DEFAULT_PORT}"),
+        "--no-local-trust".into(),
+    ] {
+        assert!(exec.contains(&arg), "the unit's ExecStart passes {arg}: {exec}");
     }
     // Exit 2 is a command line the daemon cannot read, which no restart
     // mends: the unit stops on it, failed, rather than looping.
@@ -289,16 +307,41 @@ fn runbook_carries_a_launchd_agent_and_a_systemd_user_unit_closed() {
     }
 }
 
-/// THE FIGURES THE CONSTANTS SUPPLY, quoted from them (`operations.md` §2.3
-/// F1 and F4; §1.1 row 7): §3 step 2's worker count — the default and the
-/// minimum, which moves by itself with the permit pools — and the default
-/// per-account limit's share and floor where §1 step 2 and §3 step 3's media
-/// line name them, each read here through the library's own constants and
-/// never a literal, as the binary's help renders them, so a figure that
-/// moves fails here rather than leaving the runbook naming the old one.
-/// Beside the worker count, what each worker can hold: one frame body at
-/// the frame routes' cap, parsed whole at about twenty times its size, the
-/// multiple `skep_core::limits::MAX_REQUEST_BODY`'s own card prices.
+/// Checks that the runbook dials the daemon where it listens.
+///
+/// §3 step 2 starts the notebook with no `--port`, so at the daemon's
+/// default; step 7 names the board to `skep claim` exactly as step 2's
+/// `--origin` does, since the key store binds by origin; and §9's units run
+/// the same notebook as a service, its port and origin passed together. So
+/// every loopback origin §3 and §9 name is at `skepd::DEFAULT_PORT`: a
+/// default moved in the binary and not here fails here, where the recipe
+/// would otherwise configure an origin at a port its daemon is not bound to
+/// and claim at an address nothing answers.
+#[test]
+fn runbook_dials_the_daemon_at_its_default_port() {
+    for heading in ["\n## 3. Start", "\n## 9. Running it as a service"] {
+        let ports = loopback_ports(&passage("", heading, &["\n## "]));
+        assert!(!ports.is_empty(), "{heading:?} dials the daemon");
+        assert!(
+            ports.iter().all(|p| *p == DEFAULT_PORT.to_string()),
+            "{heading:?} dials {ports:?}, not the daemon's default {DEFAULT_PORT}"
+        );
+    }
+}
+
+/// Checks that the runbook quotes the figures the constants supply.
+///
+/// The figures are §3 step 2's port — its default, and the one the origin
+/// paragraph names beside it — and its worker count, the default and the
+/// minimum, which moves by itself with the permit pools; and the default
+/// per-account limit's share and floor where §1 step 2 and §3 step 3's
+/// media line name them (`operations.md` §2.3 F1 and F4; §1.1 row 7). Each
+/// is read here through the library's own constant and never a literal, as
+/// the binary's help renders it, so a figure that moves fails here rather
+/// than leaving the runbook naming the old one. Beside the worker count,
+/// what each worker can hold: one frame body at the frame routes' cap,
+/// parsed whole at about twenty times its size, the multiple
+/// `skep_core::limits::MAX_REQUEST_BODY`'s own card prices.
 #[test]
 fn runbook_quotes_the_figures_the_constants_supply() {
     use skep_core::limits::MAX_REQUEST_BODY;
@@ -312,6 +355,11 @@ fn runbook_quotes_the_figures_the_constants_supply() {
     let mib = |bytes: usize| bytes / (1024 * 1024);
     let text = collapsed(&runbook_md());
     for figure in [
+        format!("Default {DEFAULT_PORT}; `0` picks a free port."),
+        format!(
+            "the loopback address at the daemon's port ({DEFAULT_PORT} unless `--port` names \
+             another)"
+        ),
         format!("request threads. Default {DEFAULT_WORKERS}, minimum {MIN_WORKERS}."),
         format!(
             "Each worker can hold one request body of up to {} MiB on `/op` and `/op-at`",

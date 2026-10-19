@@ -7,7 +7,8 @@
 //! reload, the two inspects, the two removals, a failed run's last lines
 //! read before its removal, the labelled volume and the listing by its
 //! label (T19); the image's port and its volume read back from the
-//! `Dockerfile`; the real `Command` built from that argv and nothing else;
+//! `Dockerfile`, and that port as the README's hosted section and RUNBOOK
+//! §10 name it; the real `Command` built from that argv and nothing else;
 //! the real runner, over a recording script in `docker`'s place — no Docker
 //! is run — passing the argv, the record on stdin and nothing on any other
 //! call's, and the two streams apart; each named method running its own
@@ -277,17 +278,57 @@ fn the_runbooks_remake_line_is_the_serving_runs() {
     assert_eq!(Call::RunServing(&alice()).argv(&settings()), words);
 }
 
-/// THE IMAGE's BAKED FACTS ARE THE DOCKERFILE's: the port its daemon
-/// listens on — the claim run's, which the sidecar dials, and the serving
-/// run's on the bridge — and the volume a board's data lives on, read back
-/// from the `Dockerfile` at test time, so a change there is a red test here
-/// until the constants follow it.
+/// The port of every `127.0.0.1:` origin or address in `text`, in order.
+///
+/// Each is the digits that follow the colon, so a run line's
+/// `-p 127.0.0.1:<port>:<port>` reads as the host's port.
+fn loopback_ports(text: &str) -> Vec<String> {
+    text.match_indices("127.0.0.1:").map(|(at, m)| text[at + m.len()..].chars().take_while(char::is_ascii_digit).collect()).collect()
+}
+
+/// Checks that the image's baked facts are the `Dockerfile`'s.
+///
+/// They are the port its daemon listens on — the claim run's, which the
+/// sidecar dials, and the serving run's on the bridge — baked as
+/// `SKEPD_PORT`, declared by `EXPOSE` and named by every loopback origin the
+/// `Dockerfile`'s comments give; and the volume a board's data lives on.
+/// Each is read back from the `Dockerfile` at test time, so a change there
+/// is a red test here until the constants follow it.
 #[test]
 fn the_images_port_and_volume_are_the_dockerfiles() {
     let dockerfile = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Dockerfile")).expect("the Dockerfile");
     let words: Vec<&str> = dockerfile.split_whitespace().collect();
     assert!(words.contains(&format!("SKEPD_PORT={BOARD_PORT}").as_str()), "the Dockerfile bakes another port than {BOARD_PORT}");
+    let port = BOARD_PORT.to_string();
+    assert!(words.windows(2).any(|w| w[0] == "EXPOSE" && w[1] == port), "the Dockerfile exposes another port than {BOARD_PORT}");
+    let ports = loopback_ports(&dockerfile);
+    assert!(!ports.is_empty() && ports.iter().all(|p| *p == port), "the Dockerfile's loopback origins: {ports:?}");
     assert!(words.windows(2).any(|w| w == ["VOLUME", VOLUME_MOUNT]), "the Dockerfile's volume is not {VOLUME_MOUNT}");
+}
+
+/// Checks that the documents name the image's port, `BOARD_PORT`.
+///
+/// They are the README's hosted section — the baked `SKEPD_PORT`, the
+/// bridge's port the proxy reaches, and every loopback origin it gives: the
+/// sidecar's `--board` inside the claim run's namespace, the `origin` line
+/// it prints, the debug tag's `wget`, the rehearsal's published port — and
+/// RUNBOOK §10's route at `<name>:`, so an operator claiming or probing a
+/// board by hand dials where the image listens.
+#[test]
+fn the_documents_name_the_images_port() {
+    let read = |file: &str| std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+    let collapsed = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let readme = read("README.md");
+    let start = readme.find("\n## Running the hosted image").expect("the README's hosted section");
+    let end = readme[start + 1..].find("\n## ").map_or(readme.len(), |n| start + 1 + n);
+    let hosted = collapsed(&readme[start..end]);
+    for named in [format!("`SKEPD_PORT={BOARD_PORT}`"), format!("on the bridge, port {BOARD_PORT}")] {
+        assert!(hosted.contains(&named), "the hosted section names {named}");
+    }
+    let ports = loopback_ports(&hosted);
+    assert!(!ports.is_empty() && ports.iter().all(|p| *p == BOARD_PORT.to_string()), "the hosted section's loopback ports: {ports:?}");
+    let runbook = collapsed(&read("RUNBOOK.md"));
+    assert!(runbook.contains(&format!("routes each board at `<name>:{BOARD_PORT}` on the bridge")), "RUNBOOK §10 routes each board at the image's port");
 }
 
 /// T4: THE REAL COMMAND is `docker` and the argv, nothing else: no variable

@@ -1,7 +1,8 @@
 //! The socket server: the worker budget, the accept loop, the event streams.
 //!
-//! It holds `Skepd`, `Listener`, `bind`, `serve` and `serve_bound`, and the
-//! worker counts `DEFAULT_WORKERS` and `MIN_WORKERS`.
+//! It holds `Skepd`, `Listener`, `bind`, `serve` and `serve_bound`, the
+//! worker counts `DEFAULT_WORKERS` and `MIN_WORKERS`, and the port the binary
+//! binds by default, `DEFAULT_PORT`.
 
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -97,6 +98,26 @@ const _: () = assert!(
     "the shipped default must satisfy serve's own pooled-permit obligation: a caller \
      inside every bound would otherwise occupy every worker"
 );
+
+/// The port `skepd` binds when the operator names none.
+///
+/// The operator names one with `--port` or `SKEPD_PORT`, `0` for a free
+/// port. It is held here rather than in the binary, as [`DEFAULT_WORKERS`]
+/// is, because other programs' defaults are written to meet it and none can
+/// read it at run time: `skep-mcp`'s `SKEPD_URL` default, the daemon's
+/// origin at its defaults, and `skep-dev serve --own`'s `--port`, so the
+/// in-process daemon answers where one started apart does. `skep-mcp`
+/// takes nothing of skep and `skep-cli`'s shipped builds carry no `skepd`,
+/// so each suite holds its copy to this constant, `skepd` being a test
+/// dependency there. This crate's suite holds `RUNBOOK.md`'s and
+/// `README.md`'s recipes, which run the daemon at this port and dial it
+/// there, to it too.
+///
+/// The hosted image does not follow it. The `Dockerfile` bakes its own
+/// `SKEPD_PORT`, the port every board's proxy route names from the board's
+/// making (`skep-provision`'s `BOARD_PORT`, held to the `Dockerfile`), so a
+/// move here moves no board.
+pub const DEFAULT_PORT: u16 = 8642;
 
 // ── the wire loop ────────────────────────────────────────────────────────
 

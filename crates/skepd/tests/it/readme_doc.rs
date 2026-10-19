@@ -2,9 +2,13 @@
 //! the daemon, and where it tells an operator hosting boards how to build
 //! and start one: each section is read at test RUNTIME from the repo root —
 //! a changed sentence needs no rebuild — as `runbook_doc.rs` reads the
-//! runbook.
+//! runbook. The developer's recipe dials the daemon at its default port,
+//! read through its constant; the hosted section names the image's own
+//! port, which `skep-provision`'s suite holds to the `Dockerfile`.
 
 use std::path::Path;
+
+use crate::runbook_doc::loopback_ports;
 
 fn readme_md() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
@@ -40,6 +44,24 @@ fn readme_runs_a_throwaway_board_for_the_dev_provider_with_local_trust_on() {
         .unwrap_or_else(|| panic!("the recipe says local trust stays on: {recipe}"));
     assert!(trust.contains("bare session"), "the local-trust sentence gives its reason: {trust}");
     assert!(!recipe.contains("--no-local-trust"), "the throwaway keeps local trust on: {recipe}");
+}
+
+/// Checks that the developer's recipe dials the daemon where it listens.
+///
+/// The recipe runs the daemon with no `--port`, so at `skepd::DEFAULT_PORT`,
+/// and every loopback origin the section names is at that port: the
+/// daemon's `--origin`, the address it says the daemon listens on, the
+/// claim's and the dev provider's `--board`, and the viewer's URL. A default
+/// moved in the binary and not here fails here.
+#[test]
+fn readme_dials_the_developers_daemon_at_its_default_port() {
+    let ports = loopback_ports(&section("\n## Running a daemon for frontend development"));
+    assert!(!ports.is_empty(), "the recipe dials the daemon");
+    assert!(
+        ports.iter().all(|p| *p == skepd::DEFAULT_PORT.to_string()),
+        "the recipe dials {ports:?}, not the daemon's default {}",
+        skepd::DEFAULT_PORT
+    );
 }
 
 /// Checks that a board hosted without the image is built as the image is.

@@ -26,7 +26,8 @@ use crate::mail_address::{address_rule, MailAddress};
 
 /// The listen address's default: loopback, port 8842.
 ///
-/// It is not the daemon's 8642 and not the dev provider's 8742. How Caddy,
+/// It is not a board's port (`docker.rs`'s `BOARD_PORT`, which a rehearsal
+/// publishes on this loopback) and not the dev provider's 8742. How Caddy,
 /// in its container, reaches the service on the host is the VM's
 /// configuration; `--listen` takes any address the operator gives.
 const DEFAULT_LISTEN: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8842));

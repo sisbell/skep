@@ -40,13 +40,14 @@ use skep_util::source::Source;
 // and the help renders both figures from the constants. The default
 // per-account limit's two constants are the media resource's, re-exported
 // the same way, so the help's `--uploads` sentence renders the default it
-// describes from the constants that supply it.
+// describes from the constants that supply it. `DEFAULT_PORT` is the
+// library's too, because other programs' defaults are written to meet it —
+// `skep-mcp`'s `SKEPD_URL`, `skep-dev serve --own`'s `--port` — and their
+// suites read it there.
 use skepd::{
     bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin,
-    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_WORKERS, MIN_WORKERS,
+    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT, DEFAULT_WORKERS, MIN_WORKERS,
 };
-
-const DEFAULT_PORT: u16 = 8642;
 
 /// The bind's default: the loopback address (AUTH-4.57 (a)).
 ///

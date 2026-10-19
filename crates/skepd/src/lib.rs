@@ -171,8 +171,8 @@ pub use skep_core::auth::{
 pub use skep_core::codec::JsonCodec;
 pub use server::{
     bind, body_cap, embed, serve, serve_bound, Body, Daemon, DaemonError, EmbedError, Fetch,
-    HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, DEFAULT_WORKERS, MIN_WORKERS,
-    UNIVERSAL_HEADERS,
+    HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, DEFAULT_PORT,
+    DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 /// Which arm of the parse set a setting, `skep-util`'s, re-exported too.
 ///

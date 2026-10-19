@@ -255,7 +255,9 @@ pub use skep_core::auth::session::Peer;
 pub use embed::embed_seeded;
 pub use embed::{embed, EmbedError, IndexNotReady};
 pub use http::UNIVERSAL_HEADERS;
-pub use listen::{bind, serve, serve_bound, Listener, Skepd, DEFAULT_WORKERS, MIN_WORKERS};
+pub use listen::{
+    bind, serve, serve_bound, Listener, Skepd, DEFAULT_PORT, DEFAULT_WORKERS, MIN_WORKERS,
+};
 pub use reply::{Body, Fetch, Reply, Routed};
 pub use request::HttpRequest;
 

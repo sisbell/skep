@@ -123,6 +123,11 @@ VOLUME /var/lib/skepd
 # the run line's. The CLAIM RUN overrides the bind — `-e SKEPD_BIND=127.0.0.1`,
 # no port published — so the board is claimed on loopback before the
 # override is set (AUTH-4.57 (a)); the serving run takes the baked bind.
+# SKEPD_PORT is baked, never left to the binary's default: it is the image's
+# own port, which every board's proxy route names from the board's making
+# (skep-provision's BOARD_PORT, held to this line and to EXPOSE), so a
+# binary whose default moves moves no board. Moving this one is a migration:
+# every standing board's snippet names the old port.
 ENV SKEPD_DATA_DIR=/var/lib/skepd/board \
     SKEPD_LOCAL_TRUST=false \
     SKEPD_BIND=0.0.0.0 \

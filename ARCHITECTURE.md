@@ -633,7 +633,10 @@ carrying its time, each put on a bounded queue that one thread,
 write's result discarded so a lost log pipe never fails the work the
 notice is about and a stalled one never waits it; a line a full queue
 cannot take is dropped and counted on the next; `drain` waits the queue
-out at the binary's exits. `set_sink` is the embedding program's door: a
+out at the binary's exits while the sink takes lines, and gives up
+(`Stalled`) on a sink that has taken none for the caller's bound — the
+binary's `DRAIN_STALL` — so a stalled reader costs an exit its last lines
+and never the exit. `set_sink` is the embedding program's door: a
 sink of its own in stderr's place — the stream made over it at the call,
 as the first line would make it — installed before the first line, once;
 the stream lives for the process, so a later install is refused
@@ -669,8 +672,9 @@ Its unit suites sit beside their code: `json/tests.rs` (the sort and the
 duplicate-key rule) and `notice/tests.rs` (the line's bytes at a known
 instant, pinned as bytes and never through the constant; the civil date at
 instants computed by hand; the queue over a sink the test owns — a door
-that never waits on it, the bound, the drop and its count, the drain, a
-parked writer's line).
+that never waits on it, the bound, the drop and its count, the drain, its
+giving up on a sink that takes no line and its patience with one that
+takes lines slowly, a parked writer's line).
 
 ## The corpus crate, `skep-corpus`
 

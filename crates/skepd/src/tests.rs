@@ -268,6 +268,21 @@ fn the_exits_line_says_every_worker_has_ended_and_the_board_serves_nothing() {
     assert_eq!(WORKERS_ENDED, "every worker thread has ended; the board serves nothing");
 }
 
+/// THE EXIT's BOUND ON A READER THAT HAS STOPPED, as the operator reads it:
+/// the README's hosted run line states how long an exit waits on a log
+/// driver that takes nothing, and the figure is `DRAIN_STALL`'s, in whole
+/// seconds — so a bound moved here and not there fails here.
+#[test]
+fn the_readme_states_the_exits_bound_on_a_stalled_log_driver() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md");
+    let readme =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let flat = readme.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(DRAIN_STALL.subsec_nanos(), 0, "the bound is whole seconds, as the README says it");
+    let said = format!("an exit waits on a stalled one {} seconds at most", DRAIN_STALL.as_secs());
+    assert!(flat.contains(&said), "README.md states the exit's bound as {said:?}");
+}
+
 /// THE TOOLS' LINES: a leading verb names the tool before any flag; the
 /// inventory takes its directory and `--no-rehash`, the pull its
 /// directory, an optional `--hash` and one file; a missing directory or

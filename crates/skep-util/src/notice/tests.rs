@@ -3,7 +3,10 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Instant;
+
+/// The drain's bound wherever the sink takes its lines: far past any write
+/// a sink here makes, so only a sink that takes none meets it.
+const PATIENCE: Duration = Duration::from_secs(10);
 
 /// A day in seconds.
 const DAY: u64 = 86_400;
@@ -128,6 +131,25 @@ impl Write for Failing {
     }
 }
 
+/// A sink that takes each write `delay` after it is offered, counting the
+/// writes: a reader that is slow and still reading.
+struct Slow {
+    delay: Duration,
+    writes: Arc<AtomicUsize>,
+}
+
+impl Write for Slow {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        thread::sleep(self.delay);
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 fn stream_over(sink: &Arc<Sink>) -> Arc<Stream> {
     Stream::over(Box::new(Writer(Arc::clone(sink))))
 }
@@ -139,15 +161,18 @@ fn say(stream: &Stream, what: &str) {
     stream.take(example(), &body(None, what, &[]));
 }
 
-/// `act` on a thread of its own, waited for `within`: an act that blocks
-/// fails its test by name rather than wedging the suite.
-fn returns_within(within: Duration, act: impl FnOnce() + Send + 'static) -> bool {
+/// `act` on a thread of its own, waited for `within`: its answer, or `None`
+/// where it did not return in time — so an act that blocks fails its test
+/// by name rather than wedging the suite.
+fn returns_within<T: Send + 'static>(
+    within: Duration,
+    act: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        act();
-        let _ = tx.send(());
+        let _ = tx.send(act());
     });
-    rx.recv_timeout(within).is_ok()
+    rx.recv_timeout(within).ok()
 }
 
 /// §1 THE HEAD BYTES: a line is the program's name, a colon and a space,
@@ -184,7 +209,7 @@ fn lines_carry_the_prefix_on_every_line_the_time_on_the_head_alone_and_end_once(
     let sink = Sink::released();
     let stream = stream_over(&sink);
     stream.take(example(), &body(Some(Class::Landing), "head", &rest));
-    stream.drain();
+    assert_eq!(stream.drain(PATIENCE), Ok(()));
     assert_eq!(sink.writes(), 1, "one notice, one write");
     assert_eq!(sink.text(), whole);
 }
@@ -278,7 +303,7 @@ fn a_sink_that_never_takes_a_byte_blocks_no_door() {
             }
         }
     });
-    assert!(returned, "a door waited on a sink that never took a byte");
+    assert!(returned.is_some(), "a door waited on a sink that never took a byte");
     assert_eq!(sink.writes(), 0, "the sink took nothing, and the doors returned anyway");
 }
 
@@ -300,10 +325,10 @@ fn the_bound_holds_the_newest_line_is_the_one_dropped_and_the_next_carries_the_c
         say(&stream, &format!("dropped {i}"));
     }
     sink.release();
-    stream.drain();
+    assert_eq!(stream.drain(PATIENCE), Ok(()));
     say(&stream, "after");
     say(&stream, "last");
-    stream.drain();
+    assert_eq!(stream.drain(PATIENCE), Ok(()));
     let text = sink.text();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 1 + QUEUE_BOUND + 2, "{text}");
@@ -318,8 +343,10 @@ fn the_bound_holds_the_newest_line_is_the_one_dropped_and_the_next_carries_the_c
 
 /// §1 DRAINED AT EXIT: the drain returns only after every line enqueued
 /// before it has reached the sink — not while the sink holds them — and the
-/// sink's bytes hold them all, in order; a stream with nothing waiting
-/// returns at once, whatever its sink would do.
+/// sink's bytes hold them all, in order; under a bound past the clock's
+/// reach, which leaves the drain no deadline, it waits as long as the sink
+/// does. A stream with nothing waiting returns at once, whatever its sink
+/// would do.
 #[test]
 fn drain_returns_after_every_line_before_it_landed_and_at_once_when_none_waits() {
     let sink = Sink::held();
@@ -330,17 +357,17 @@ fn drain_returns_after_every_line_before_it_landed_and_at_once_when_none_waits()
     let (tx, rx) = mpsc::channel();
     let s = Arc::clone(&stream);
     thread::spawn(move || {
-        s.drain();
-        let _ = tx.send(());
+        let _ = tx.send(s.drain(Duration::MAX));
     });
     assert!(
         rx.recv_timeout(Duration::from_millis(300)).is_err(),
         "the drain returned while the sink held every line"
     );
     sink.release();
-    assert!(
-        rx.recv_timeout(Duration::from_secs(10)).is_ok(),
-        "the drain did not return once the lines landed"
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(10)),
+        Ok(Ok(())),
+        "the drain did not land the lines once the sink took them"
     );
     let text = sink.text();
     let lines: Vec<&str> = text.lines().collect();
@@ -349,9 +376,64 @@ fn drain_returns_after_every_line_before_it_landed_and_at_once_when_none_waits()
         assert!(line.ends_with(&format!(" line {i}")), "in order: {line}");
     }
     let empty = stream_over(&Sink::held());
-    assert!(
-        returns_within(Duration::from_secs(5), move || empty.drain()),
+    assert_eq!(
+        returns_within(Duration::from_secs(5), move || empty.drain(PATIENCE)),
+        Some(Ok(())),
         "nothing waits: at once"
+    );
+}
+
+/// §1 DRAINED AT EXIT, BOUNDED: with the sink holding the first line inside
+/// its write and three more queued behind it, a drain bounded at 200 ms
+/// gives up — `Stalled`, no sooner than its bound, the sink having taken
+/// nothing — rather than wait on a reader that takes no byte; once the sink
+/// moves, a drain lands all four.
+#[test]
+fn a_drain_gives_up_on_a_sink_that_takes_no_line_for_its_bound() {
+    let sink = Sink::held();
+    let stream = stream_over(&sink);
+    say(&stream, "first");
+    sink.wait_until_a_write_waits();
+    for i in 0..3 {
+        say(&stream, &format!("behind {i}"));
+    }
+    let bound = Duration::from_millis(200);
+    let s = Arc::clone(&stream);
+    let (drained, took) = returns_within(Duration::from_secs(10), move || {
+        let began = Instant::now();
+        (s.drain(bound), began.elapsed())
+    })
+    .expect("the drain did not give up within 10 s on a sink that took no line");
+    assert_eq!(drained, Err(Stalled));
+    assert!(took >= bound, "the drain gave up after {took:?}, short of its bound {bound:?}");
+    assert_eq!(sink.writes(), 0, "the sink took nothing");
+    sink.release();
+    assert_eq!(stream.drain(PATIENCE), Ok(()));
+    assert_eq!(sink.writes(), 4, "{}", sink.text());
+}
+
+/// §1 DRAINED AT EXIT, BOUNDED — the bound is the sink's silence, not the
+/// drain's length: a sink that takes each line 100 ms after it is offered,
+/// 25 lines queued, and a drain bounded at one second. The drain outlasts
+/// its bound, each line landing well inside it of the last, and returns
+/// `Ok` with all 25 taken; a bound on the whole drain gives up a second in.
+#[test]
+fn a_drain_bounds_the_sinks_silence_and_waits_out_a_slow_sink() {
+    const LINES: usize = 25;
+    let bound = Duration::from_secs(1);
+    let writes = Arc::new(AtomicUsize::new(0));
+    let slow = Slow { delay: Duration::from_millis(100), writes: Arc::clone(&writes) };
+    let stream = Stream::over(Box::new(slow));
+    for i in 0..LINES {
+        say(&stream, &format!("line {i}"));
+    }
+    let began = Instant::now();
+    assert_eq!(stream.drain(bound), Ok(()), "a sink still taking lines is waited for");
+    let took = began.elapsed();
+    assert_eq!(writes.load(Ordering::SeqCst), LINES, "every line landed");
+    assert!(
+        took > bound,
+        "the drain took {took:?}, inside its bound {bound:?}: nothing was proved"
     );
 }
 
@@ -385,16 +467,16 @@ fn a_failing_write_fails_no_door_and_stops_no_later_line() {
     let returned = returns_within(Duration::from_secs(10), move || {
         say(&s, "a");
         say(&s, "b");
-        s.drain();
+        let first = s.drain(PATIENCE);
         say(&s, "c");
-        s.drain();
+        (first, s.drain(PATIENCE))
     });
-    assert!(returned, "a refused write held a door or the drain");
+    assert_eq!(returned, Some((Ok(()), Ok(()))), "a refused write held a door or the drain");
     assert_eq!(attempts.load(Ordering::SeqCst), 3, "every line offered, every refusal discarded");
     let attempts = Arc::new(AtomicUsize::new(0));
     let direct = Stream::synchronous(Box::new(Failing(Arc::clone(&attempts))));
     say(&direct, "a");
-    direct.drain();
+    assert_eq!(direct.drain(PATIENCE), Ok(()));
     assert_eq!(attempts.load(Ordering::SeqCst), 1);
 }
 
@@ -406,7 +488,10 @@ fn where_no_thread_drains_each_door_writes_for_itself() {
     let stream = Stream::synchronous(Box::new(Writer(Arc::clone(&sink))));
     say(&stream, "now");
     assert_eq!(sink.text(), "skepd: 2026-10-06T22:31:04.512Z now\n", "written at the door");
-    assert!(returns_within(Duration::from_secs(5), move || stream.drain()));
+    assert_eq!(
+        returns_within(Duration::from_secs(5), move || stream.drain(PATIENCE)),
+        Some(Ok(()))
+    );
 }
 
 /// THE SINK SETTER's REFUSAL, over a cell of the test's own and never the
@@ -422,7 +507,7 @@ fn a_second_sink_is_refused_and_the_first_keeps_the_stream() {
     assert_eq!(install(&cell, Box::new(Writer(Arc::clone(&refused)))), Err(StreamAlreadyMade));
     let stream = cell.get().expect("the first install made the stream");
     say(stream, "after the refusal");
-    stream.drain();
+    assert_eq!(stream.drain(PATIENCE), Ok(()));
     assert_eq!(first.text(), "skepd: 2026-10-06T22:31:04.512Z after the refusal\n");
     assert_eq!(refused.writes(), 0, "the refused sink took nothing");
 }
@@ -433,7 +518,7 @@ fn a_second_sink_is_refused_and_the_first_keeps_the_stream() {
 /// thread.
 #[test]
 fn the_two_doors_and_the_drain_return_over_the_process_stream() {
-    drain();
+    assert_eq!(drain(PATIENCE), Ok(()), "a drain with no stream has nothing to wait for");
     assert!(STREAM.get().is_none(), "a drain with no line through starts no stream");
     emit(Class::Open, "the classed door");
     emit_lines(
@@ -441,7 +526,7 @@ fn the_two_doors_and_the_drain_return_over_the_process_stream() {
         "the classed door, several lines",
         &["one".to_string()],
     );
-    assert!(returns_within(Duration::from_secs(10), drain), "the process stream's drain");
+    assert_eq!(drain(PATIENCE), Ok(()), "the process stream's drain");
     let stream = STREAM.get().expect("the first line made the stream");
     let st = stream.lock();
     assert!(st.queued, "the thread was spawned");

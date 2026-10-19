@@ -12,10 +12,14 @@
 //! written synchronously with the write's result discarded, as the operator
 //! stream writes, so a lost reader costs the line and never the daemon or
 //! its exit code; the hook's line and the exit's go through the stream's
-//! classed door. And the operator's two tools over a board directory, run
-//! with no server — `skepd inventory` and `skepd pull` (`skepd::tools`) — a
-//! leading verb parsed before any flag; and `skepd --version`, read the
-//! same way, the one line a release's check holds the shipped binaries to.
+//! classed door. Every drain of the stream gives up on a reader that has
+//! taken no line for `DRAIN_STALL`, and a refusal after the stream's first
+//! line is written only behind a stream that drained, so a reader that has
+//! stopped costs the lines and never the exit. And the operator's two tools
+//! over a board directory, run with no server — `skepd inventory` and
+//! `skepd pull` (`skepd::tools`) — a leading verb parsed before any flag;
+//! and `skepd --version`, read the same way, the one line a release's check
+//! holds the shipped binaries to.
 
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
@@ -150,6 +154,20 @@ const SKEPD_TEST_MAIN_FAULT: &str = "SKEPD_TEST_MAIN_FAULT";
 /// stand alone here so the unit suite pins them.
 const WORKERS_ENDED: &str = "every worker thread has ended; the board serves nothing";
 
+/// How long a drain waits on an operator stream that takes no line.
+///
+/// Each of the binary's drains waits until the lines queued at its call
+/// have reached the stream, and gives up once the stream has taken no line
+/// for this long, counted from the call and afresh at each line that lands
+/// (`operations.md` §0 fact 1: a lost reader costs the line and never the
+/// exit, held for a reader that has stopped). So a slow reader still taking
+/// lines receives every line that explains the exit, and one that has
+/// stopped — a log driver that blocks, a terminal held by `^S` — holds the
+/// exit this long and not for the stall's whole life, which a supervisor
+/// restarting on failure would wait out. It is past any pause a live reader
+/// takes under load, and short beside a restart's backoff.
+const DRAIN_STALL: Duration = Duration::from_secs(10);
+
 /// Returns a panic's site as the hook's line names it.
 ///
 /// It is the location as std spells it, `file:line:column`, or `an unknown
@@ -276,8 +294,9 @@ static HOOK_MEMORY: LazyLock<Mutex<HookMemory>> = LazyLock::new(|| Mutex::new(Ho
 /// open's before it reach the stream (`operations.md` §0 fact 1). A panic on
 /// `main` that a catch contains — the cell index's walk, run at the open
 /// where the OS refused its thread — finds the drain only a wait for the
-/// lines already queued, and the open goes on. A sink that never takes the
-/// bytes holds that drain, as it holds every exit's.
+/// lines already queued, and the open goes on. A reader that takes no line
+/// holds that drain [`DRAIN_STALL`] and no longer, as it holds every exit's,
+/// and the unwind goes on without the lines.
 fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let thread = std::thread::current();
@@ -291,9 +310,11 @@ fn install_the_panic_hook() {
         // A panic on `main` ends the process at exit 101 with the stream's
         // thread wherever it is, unless a catch contains it (the cell index's
         // walk at the open): drained first, whether or not the rate let this
-        // line be said, so the lines queued before it reach the stream.
+        // line be said, so the lines queued before it reach the stream — or
+        // the stream has taken none for `DRAIN_STALL`, and nothing after
+        // this writes stderr.
         if thread.name() == Some("main") {
-            notice::drain();
+            let _ = notice::drain(DRAIN_STALL);
         }
     }));
 }
@@ -303,11 +324,26 @@ fn install_the_panic_hook() {
 /// It is written synchronously with the write's result discarded
 /// (`operations.md` §0 fact 1): a lost reader costs the line and never the
 /// exit code, where `eprintln!` would panic and turn an exit 1 or 2 into
-/// 101. Synchronous because the exit follows at once, and the stream's
-/// queue is drained before it wherever a line of the open's could still be
-/// waiting.
+/// 101. Synchronous because the exit follows at once; where a line of the
+/// open's could still be waiting, [`refuse_once_drained`] drains the stream
+/// first and writes the refusal only behind a stream that drained.
 fn refuse(line: fmt::Arguments<'_>) {
     let _ = writeln!(io::stderr(), "{line}");
+}
+
+/// Writes an exit's refusal behind the operator stream's queued lines.
+///
+/// The stream is drained first, so the open's lines reach it ahead of the
+/// refusal that ends them, and the refusal is written only where the drain
+/// landed them. Where the stream has taken no line for [`DRAIN_STALL`], its
+/// thread is parked in a write to stderr holding stderr's lock, and a
+/// refusal written now would wait behind it for as long as the reader
+/// stands still: the line could reach no reader, so it is not written, and
+/// the exit code stands without it (`operations.md` §0 fact 1).
+fn refuse_once_drained(line: fmt::Arguments<'_>) {
+    if notice::drain(DRAIN_STALL).is_ok() {
+        refuse(line);
+    }
 }
 
 /// Returns the refusal of a command line the binary cannot read, `e` its cause.
@@ -1140,8 +1176,7 @@ fn main() {
     let daemon = match Daemon::open_configured(&args.data_dir, opts, media) {
         Ok(d) => d,
         Err(e) => {
-            notice::drain();
-            refuse(format_args!("skepd: {e}"));
+            refuse_once_drained(format_args!("skepd: {e}"));
             exit(1);
         }
     };
@@ -1160,8 +1195,7 @@ fn main() {
     let running = match serve_bound(daemon, listener, args.workers) {
         Ok(s) => s,
         Err(e) => {
-            notice::drain();
-            refuse(format_args!(
+            refuse_once_drained(format_args!(
                 "skepd: the OS refused a worker thread at start: {e}; the workers that started \
                  are stopped, the port and the data directory released, and nothing serves; \
                  retry under a higher thread limit"
@@ -1174,9 +1208,12 @@ fn main() {
     // board, and the one echo of the bound address, outside the stream's
     // grammar — written once the open's report has reached the stream, so
     // an operator reads the board's standing before the line that says it
-    // serves; the write's result discarded: a stdout whose reader is gone
-    // costs this line and never the daemon, which serves on.
-    notice::drain();
+    // serves, or once the stream has taken no line for `DRAIN_STALL`: a
+    // stderr whose reader has stopped costs the report and never the wait
+    // below, nor the exit it leads to. The write's result discarded: a
+    // stdout whose reader is gone costs this line and never the daemon,
+    // which serves on.
+    let _ = notice::drain(DRAIN_STALL);
     let _ = writeln!(
         io::stdout(),
         "skepd: serving http://{bound_addr}:{bound_port}/ data-dir {} log-position {} workers {}",
@@ -1188,9 +1225,11 @@ fn main() {
     // The workers' end: `wait` returns only when every worker thread has
     // ended — a failure in serve mode, said as one and exited 1 on, never
     // the fall-off's 0 a supervisor reads as a clean end. The queue is
-    // drained so the line, and the hook's before it, reach the stream.
+    // drained so the line, and the hook's before it, reach the stream; a
+    // stream that has taken no line for `DRAIN_STALL` costs them, and never
+    // the exit.
     notice::emit(Class::Failure, WORKERS_ENDED);
-    notice::drain();
+    let _ = notice::drain(DRAIN_STALL);
     exit(1);
 }
 

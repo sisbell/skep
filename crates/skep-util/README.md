@@ -15,8 +15,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   notice of several, every line opening `skepd: ` so a shared stream
   attributes it and the head carrying its time, handed to one thread that
   writes them in order so that a failed write never panics the work the
-  notice is about and a stalled reader never waits it. The crate root says
-  why a library spells the name.
+  notice is about and a stalled reader never waits it. `drain` waits the
+  queue out at an exit while the sink takes lines, and gives up
+  (`Stalled`) on a sink that has taken none for the caller's bound, so a
+  stalled reader holds no exit past it. The crate root says why a library
+  spells the name.
 - **The JSON determinism helpers**, `json` — `obj`, the key-sorting object
   builder every JSON object the daemon emits is built through, under
   which the last pair given wins; `hex_string`, lowercase hex; and

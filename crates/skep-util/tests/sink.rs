@@ -8,8 +8,13 @@
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use skep_util::notice::{self, Class, StreamAlreadyMade};
+
+/// The drain's bound: far past any write the kept sink makes, which takes
+/// every line at once.
+const PATIENCE: Duration = Duration::from_secs(10);
 
 /// A sink the test reads back: every byte written to it, kept in order.
 #[derive(Clone, Default)]
@@ -67,7 +72,7 @@ fn the_line_saying<'t>(text: &'t str, said: &str) -> &'t str {
 fn a_sink_installed_before_the_first_line_takes_it_prefixed_timed_and_classed() {
     let sink = the_first_sink();
     notice::emit(Class::Landing, "the embedder's own sink took this line");
-    notice::drain();
+    assert_eq!(notice::drain(PATIENCE), Ok(()), "the kept sink takes every line");
     let text = sink.text();
     let line = the_line_saying(&text, " landing: the embedder's own sink took this line");
     assert!(text.contains(&format!("{line}\n")), "the line ends with its newline:\n{text}");
@@ -94,7 +99,7 @@ fn a_second_sink_is_refused_and_the_lines_still_reach_the_first() {
         "the stream is made: a later sink is refused"
     );
     notice::emit(Class::Failure, "said after a refused install");
-    notice::drain();
+    assert_eq!(notice::drain(PATIENCE), Ok(()), "the kept sink takes every line");
     let text = first.text();
     the_line_saying(&text, " failure: said after a refused install");
     assert_eq!(refused.text(), "", "the refused sink took no byte");

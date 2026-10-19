@@ -17,8 +17,9 @@
 //! * [`notice`] — the operator's stream: one line, or one notice of several
 //!   lines, every line opening with the program's name and the head carrying
 //!   its time, handed to one thread that writes them in order — so that a
-//!   failed write never panics the work the notice is about, and a stalled
-//!   reader never waits it.
+//!   failed write never panics the work the notice is about, a stalled
+//!   reader never waits it, and the drain at an exit waits on a stalled
+//!   reader for the caller's bound and no longer.
 //! * [`json`] — the determinism helpers: [`json::obj`], the key-sorting
 //!   object builder every JSON object the daemon emits goes through;
 //!   [`json::hex_string`], lowercase hex; [`json::parse_lower_hex`] and

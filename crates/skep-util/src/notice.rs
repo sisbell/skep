@@ -43,7 +43,10 @@
 //! line, so an in-process daemon under a suite and the shipped binary are
 //! served alike; where the OS refuses it, every door writes for itself,
 //! under the lock, as every notice once did. The queue is drained before
-//! `main` exits through [`drain`]. The alternative, `O_NONBLOCK` on fd 2, is
+//! `main` exits through [`drain`], for as long as the sink takes lines: a
+//! sink that has taken none for the caller's bound is given up on
+//! ([`Stalled`]), so a stalled reader costs an exit the lines it did not
+//! take and never the exit. The alternative, `O_NONBLOCK` on fd 2, is
 //! refused: the flag sits on the open file description a parent shell or
 //! supervisor shares, and `write_all` on a `WouldBlock` leaves a TORN line.
 //!
@@ -60,7 +63,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Display, Write as _};
 use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The program every notice names — spelled once. The crate root's doc
 /// states why a library holds it: one program writes the operator's stream,
@@ -172,20 +175,54 @@ pub fn emit_lines(class: Class, head: impl Display, rest: &[String]) {
     submit(class, head, rest);
 }
 
-/// Wait until every line enqueued before this call has reached the sink —
-/// the binary's call at each of its exits after the open, because
+/// Waits for the lines enqueued before this call to reach the sink.
+///
+/// It is the binary's call at each of its exits after the open, because
 /// `std::process::exit` and a returning `main` both end the process without
-/// the drain thread's leave. Returns at once when nothing waits, and without
-/// starting the stream when no line ever went through it. A line another
-/// thread enqueues after this call is not waited for: the drain is of what
-/// stood at the call, and a thread still running past it is its caller's
-/// concern. A sink that never takes the bytes holds the call, as it held
-/// every synchronous write before.
-pub fn drain() {
-    if let Some(stream) = STREAM.get() {
-        stream.drain();
+/// the drain thread's leave, and before its serving line, so the open's
+/// report stands on the stream ahead of it. It returns at once when nothing
+/// waits, and without starting the stream when no line ever went through
+/// it. A line another thread enqueues after this call is not waited for:
+/// the drain is of what stood at the call, and a thread still running past
+/// it is its caller's concern.
+///
+/// `stall` bounds the sink's silence, not the drain: the wait gives up once
+/// the sink has taken no line for `stall`, counted from the call and afresh
+/// from each line that lands. So a slow reader still taking lines receives
+/// every line that explains the exit, and a reader that has stopped holds
+/// the exit `stall` and no longer. The bound is the caller's, a constant of
+/// the program that exits, and one past the clock's reach waits as long as
+/// the lines take.
+///
+/// # Errors
+///
+/// [`Stalled`] where the sink took no line for `stall` with lines of the
+/// call's still unwritten: the stream's thread has not come back from a
+/// write to the sink, and those lines may never reach it.
+pub fn drain(stall: Duration) -> Result<(), Stalled> {
+    STREAM.get().map_or(Ok(()), |stream| stream.drain(stall))
+}
+
+/// [`drain`] gave up: the sink took no line for the caller's bound.
+///
+/// The stream's thread has not come back from a write to the sink, and
+/// holds what that write holds — over stderr, the process's stderr lock,
+/// which every write through `std::io::stderr` takes — so a write of the
+/// caller's to the same sink waits behind it for as long as the reader
+/// stands still.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stalled;
+
+impl Display for Stalled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "the operator's stream took no line for the drain's bound: its reader has stopped, \
+             and the lines still queued may never reach it",
+        )
     }
 }
+
+impl std::error::Error for Stalled {}
 
 /// Install `sink` as the operator's stream's sink, in stderr's place — the
 /// door of a program that runs the daemon in its own process and takes the
@@ -402,14 +439,33 @@ impl Stream {
     }
 
     /// [`drain()`]'s wait: until every line enqueued at the call has been
-    /// written; at once where none waits, or where the doors write for
-    /// themselves.
-    fn drain(&self) {
+    /// written, or until no line has landed for `stall`; at once where none
+    /// waits, or where the doors write for themselves. The deadline moves
+    /// only when a line lands, so a wakeup that lands none cannot stretch
+    /// it; a `stall` past the clock's reach leaves no deadline at all.
+    fn drain(&self, stall: Duration) -> Result<(), Stalled> {
         let mut st = self.lock();
         let target = st.enqueued;
+        let mut landed = st.written;
+        let mut deadline = Instant::now().checked_add(stall);
         while st.queued && st.written < target {
-            st = self.landed.wait(st).unwrap_or_else(|poisoned| poisoned.into_inner());
+            if st.written != landed {
+                landed = st.written;
+                deadline = Instant::now().checked_add(stall);
+            }
+            st = match deadline {
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(Stalled);
+                    }
+                    let waited = self.landed.wait_timeout(st, left);
+                    waited.unwrap_or_else(|poisoned| poisoned.into_inner()).0
+                }
+                None => self.landed.wait(st).unwrap_or_else(|poisoned| poisoned.into_inner()),
+            };
         }
+        Ok(())
     }
 }
 

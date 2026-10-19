@@ -197,8 +197,9 @@ the only writable path), `--cap-drop ALL`, `--security-opt
 no-new-privileges`, `--ulimit nofile=1024:1024` (the daemon sizes its 64
 event streams against a 256 soft limit), `--restart on-failure`, a log
 driver with rotation (the operator stream never waits: a full pipe costs
-lines, counted on the next, never service), and ONE named volume per
-board, on a filesystem of its own where the floor must be the board's:
+lines, counted on the next, never service, and an exit waits on a stalled
+one 10 seconds at most, so the restart still comes), and ONE named volume
+per board, on a filesystem of its own where the floor must be the board's:
 
 ```
 docker volume create alice

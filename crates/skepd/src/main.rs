@@ -578,8 +578,9 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
                      a board started without one blocks nothing until a
                      restart names a file, so start one that may need a
                      takedown on a file holding {{\"entries\": []}}. The
-                     FILE is read at EVERY start (a file that cannot be
-                     read, or is not a list, stops the start) and re-read
+                     FILE is read at EVERY start, before the data
+                     directory is touched (a file that cannot be read, or
+                     is not a list, stops the start) and re-read
                      whenever it is REPLACED — write the new list beside it
                      and rename it over, a container mounting its
                      directory and never the file; the next request
@@ -1158,8 +1159,9 @@ fn main() {
     }
     opts.configured = args.origins;
     opts.configured_source = args.origins_source;
-    // Supplied at every start, as `--origin` is (AUTH-4.70): the file is
-    // read inside the open, and one that is not a list stops the start.
+    // Supplied at every start, as `--origin` is (AUTH-4.70): the open reads
+    // the file first, before it touches the data directory, and one that is
+    // not a list stops the start with the directory as it was.
     opts.blocked_supply_path = args.blocked_prefixes;
     // The node prefix (REG-1.69): egress and assertion config, supplied at
     // every start and never journaled — a fresh one is this binary

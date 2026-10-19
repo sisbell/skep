@@ -89,14 +89,16 @@ pub struct AuthOptions {
     /// It is the file the operator maintains from the standing takedown
     /// records of the board it fronts — `--blocked-prefixes <FILE>`. It is
     /// supplied at every start, as `configured` is: a named file is read at
-    /// open, and one that cannot be read or is not a list fails the open, so
-    /// no restart starts the daemon on an empty list the standing records do
-    /// not support. The path is read at open alone; the file it names is
-    /// looked at again on each request, and installed where it was replaced
-    /// (`BlockedSupply`'s format and re-read). `None` is a board whose
-    /// operator supplies none — the notebook — and no prefix is blocked until
-    /// a restart names a file, which the open says
-    /// ([`super::AuthState::blocked_supply_absent_line`]).
+    /// open, before the open touches the data directory
+    /// ([`super::AuthStart::read`]), and one that cannot be read or is not a
+    /// list fails the open there — so no restart starts the daemon on an
+    /// empty list the standing records do not support, and a start refused
+    /// for its list leaves the directory as it found it. The path is read at
+    /// open alone; the file it names is looked at again on each request, and
+    /// installed where it was replaced (`BlockedSupply`'s format and
+    /// re-read). `None` is a board whose operator supplies none — the
+    /// notebook — and no prefix is blocked until a restart names a file,
+    /// which the open says ([`super::AuthState::blocked_supply_absent_line`]).
     ///
     /// Deliberately not `blocked_prefixes`, as `configured` is deliberately
     /// not `origins`: `blocked_prefixes` is `AuthConfig`'s read of the list
@@ -230,7 +232,8 @@ impl AuthConfig {
             configured: opts.configured.into_iter().collect(),
             configured_source: opts.configured_source,
             port: OnceLock::new(),
-            // Empty until [`AuthState::open`] installs the start-up supply.
+            // Empty until [`AuthState::open`] installs the list
+            // [`AuthStart::read`] took off the start-up supply.
             blocked: parking_lot::RwLock::new(Arc::new(BlockedPrefixes::default())),
             node_prefix: opts.node_prefix,
             node_prefix_source: opts.node_prefix_source,

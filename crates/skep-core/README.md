@@ -14,8 +14,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The session layer**, `auth` — `AuthState` (`open`,
   `reinstall_blocked_at_claim`, `reissue_blocked_prefixes`,
   `blocked_supply_path`, `blocked_supply_absent_line`, `auth_object`,
-  `commit_tail`), the daemon's one handle on the layer, and its parts:
-  `AuthConfig` (`node_prefix`,
+  `commit_tail`), the daemon's one handle on the layer, opened from an
+  `AuthStart` (`read`) — the options, with the blocked-prefix list they
+  name read before the daemon's open touches its data directory — and its
+  parts: `AuthConfig` (`node_prefix`,
   `node_prefix_line`, `mode`, `auth_line`, `claimed_permissive`,
   `blocked_prefixes`, `bind_port`, `port`) with `Mode` (`of`), the
   challenge store and the sessions store below, `CredentialLock` (`new`,

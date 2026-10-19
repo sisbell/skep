@@ -235,7 +235,7 @@ use std::sync::{Arc, OnceLock};
 
 use skep_core::auth::session::CHALLENGE_TTL_MS;
 use skep_core::auth::{
-    startup_warnings, AuthOptions, AuthState, PortAlreadyBound, Reissue, MAX_LIVE_NONCES,
+    startup_warnings, AuthOptions, AuthStart, AuthState, PortAlreadyBound, Reissue, MAX_LIVE_NONCES,
 };
 use skep_core::codec::JsonCodec;
 use crate::history::History;
@@ -407,7 +407,10 @@ pub enum DaemonError {
     /// the last two both `InvalidData`; the error names the file and, for
     /// the cap, the number. The list is supplied at every start (AUTH-4.70),
     /// so a daemon that cannot read the one it was handed does not start on
-    /// an empty one: that would lapse every standing block in silence.
+    /// an empty one: that would lapse every standing block in silence. It is
+    /// read before the open touches the data directory, so this refusal
+    /// leaves the directory as it found it: mend the file, or name the one
+    /// the board was started with, and start again.
     BlockedPrefixes(std::io::Error),
     /// The blob store under `blobs/` in the data dir could not be opened.
     ///
@@ -862,14 +865,18 @@ impl Daemon {
     /// engine's open skipped or resolved on the way to that World is logged
     /// here as the two warnings that rule names.
     ///
-    /// A supply file the options name is read here, at every start, and the
-    /// list installed from it before anything is served.
+    /// A supply file the options name is read here, at every start — first,
+    /// before anything under the data directory is touched — and the list
+    /// installed from it, against the recovered world's claimant, before
+    /// anything is served.
     ///
     /// # Errors
     ///
-    /// [`Daemon::open`]'s, in its order, then
-    /// [`DaemonError::BlockedPrefixes`] where the supply file `opts` names
-    /// cannot be read, is not a list, or is past the channel's byte cap.
+    /// [`DaemonError::Registry`] where the seeding check refuses the genesis,
+    /// then [`DaemonError::BlockedPrefixes`] where the supply file `opts`
+    /// names cannot be read, is not a list, or is past the channel's byte
+    /// cap — both before anything under `data_dir` is touched — then the rest
+    /// of [`Daemon::open`]'s, in its order.
     pub fn open_with(data_dir: impl AsRef<Path>, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         Self::open_configured(data_dir, opts, MediaOptions::default())
     }
@@ -912,11 +919,12 @@ impl Daemon {
     /// # Errors
     ///
     /// In the order this body meets them: [`DaemonError::Registry`] where
-    /// the seeding check refuses the genesis, [`DaemonError::Engine`] where
-    /// the engine cannot genesis or recover, [`DaemonError::Media`] where the
-    /// blob store cannot be opened, [`DaemonError::Sidecar`] where the change
-    /// feed cannot be, and [`DaemonError::BlockedPrefixes`] where the supply
-    /// file `opts` names cannot be read as a list.
+    /// the seeding check refuses the genesis and
+    /// [`DaemonError::BlockedPrefixes`] where the supply file `opts` names
+    /// cannot be read as a list, both before anything under `data_dir` is
+    /// touched; then [`DaemonError::Engine`] where the engine cannot genesis
+    /// or recover, [`DaemonError::Media`] where the blob store cannot be
+    /// opened, and [`DaemonError::Sidecar`] where the change feed cannot be.
     fn open_under(
         data_dir: &Path,
         opts: AuthOptions,
@@ -960,6 +968,20 @@ impl Daemon {
         // is a genesis that does not complete: no claim, no session and no
         // board record, nothing written, no engine opened.
         skep_core::auth::policy::genesis_seeding_check().map_err(DaemonError::Registry)?;
+        // The blocked-prefix list, read before the directory is touched
+        // (PATTERNS P13; AUTH-4.70): the open's one refusal that is the
+        // operator's configuration and not the directory's state, decidable
+        // from the file alone — so it is answered here, before the engine's
+        // open creates the directory, takes `kernel.lock`, removes a stray
+        // `checkpoint.tmp`, cuts the journal's tail or begins a board, and
+        // before the blob store and the change feed repair their files. Each
+        // of those is said once, by the open that makes it, so a start
+        // refused after them would spend those lines on a start that serves
+        // nothing, and the start that serves once the list is mended would
+        // have none left to say. The install waits for the recovered world
+        // below, whose claimant the list is compared against (AUTH-4.36
+        // step 4b).
+        let auth_start = AuthStart::read(opts).map_err(DaemonError::BlockedPrefixes)?;
         // The engine's open, timed: the daemon's own `Instant` around the
         // call, the figure the recovery's landing carries.
         let began = Instant::now();
@@ -1090,7 +1112,7 @@ impl Daemon {
         let febe = OperationSurface::new(Box::new(engine.stores()), MEMO_CAPACITY);
         let auth = {
             let snap = engine.kernel().snapshot();
-            AuthState::open(opts, snap.world()).map_err(DaemonError::BlockedPrefixes)?
+            AuthState::open(auth_start, snap.world())
         };
         #[cfg(any(test, feature = "test-hooks"))]
         let said = Arc::clone(commits.lines_said());

@@ -754,6 +754,36 @@ fn a_restart_reinstalls_the_list_and_a_bad_issue_installs_nothing() {
     );
 }
 
+/// #408 — A START REFUSED AT THE LIST BEGINS NOTHING: over a data directory
+/// that does not exist — the path a volume not mounted, or a mistyped
+/// `--data-dir`, leaves — a list that is not a list refuses the open before
+/// the directory is made, so no genesis stands there; and the start that
+/// opens it once the list is mended is the one that begins the board and
+/// reports it (`Recovery::began`, behind the open's beginning line — the one
+/// tell that the directory named is not where a board's journal lives).
+#[test]
+fn a_start_refused_at_the_list_begins_nothing_and_the_start_that_opens_reports_the_beginning() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let dir = root.path().join("not-mounted");
+    let list = root.path().join("blocked.json");
+    issue_blocked_list_bytes(&list, b"not a list");
+    let mut opts = skepd::AuthOptions::default();
+    opts.blocked_supply_path = Some(list.clone());
+    let refused = skepd::Daemon::open_with(&dir, opts.clone());
+    assert!(
+        matches!(refused, Err(skepd::DaemonError::BlockedPrefixes(_))),
+        "a list that is not one refuses the open"
+    );
+    assert!(!dir.exists(), "FINDING (#408): the refused open made the directory and began a board");
+    issue_blocked_list(&list, BlockedHeader::default(), &[]);
+    let daemon = skepd::Daemon::open_with(&dir, opts).expect("the mended list opens");
+    assert!(
+        daemon.recovery().is_some_and(|r| r.began),
+        "FINDING (#408): a start that served nothing began this board, and the one that opens it \
+         reports no beginning"
+    );
+}
+
 /// RES-115's RUNTIME half, on the accident the operator is likeliest to have:
 /// the supply file DELETED while the daemon runs. Its identity moved, so the
 /// channel looks — and the read fails, which installs NOTHING (the list is

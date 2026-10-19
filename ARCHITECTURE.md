@@ -3172,8 +3172,10 @@ crates the daemon composes with:
   registry sequence's admission and the seeding check the open runs ahead
   of every genesis, the write-path check, the upload gate — the readers of
   the World's identity slice and the signature verification. `AuthState`
-  is a field of `Daemon`, opened by `server.rs` over the recovered world;
-  the routes resolve the caller through it and run its checks.
+  is a field of `Daemon`, opened by `server.rs` over the recovered world
+  from the `AuthStart` the open read first — the options, and the
+  blocked-prefix list they name, read before the open touches the data
+  directory; the routes resolve the caller through it and run its checks.
 - **The write path** is `skep-core`'s `commits` (§The daemon's core): the
   one door every write passes through, one at a time, the head writer
   behind it, the change feed and its five files, the attest store.

@@ -62,6 +62,11 @@
 //!   tail cut ({n} bytes): …` ONCE, `{n}` the inventory's
 //!   `journal.tail_cut` over a copy of the same directory; a clean close
 //!   says none.
+//! * A START REFUSED AT THE BLOCKED-PREFIX LIST TOUCHES NOTHING (#408;
+//!   PATTERNS P13): one line naming the list's file, exit 1, no recovery
+//!   and no tail cut said, every file under the data directory as it stood;
+//!   the start that serves once the list is mended is the one that cuts the
+//!   torn tail, and says so once.
 //!
 //! The daemon's fault door (`Daemon::panic_the_next_worker`) reaches the
 //! child through the variable `main.rs` reads under `test-hooks`, the
@@ -1059,6 +1064,86 @@ fn the_open_says_the_bytes_it_cut_off_a_torn_tail_once_and_nothing_after_a_clean
         tail_cut_lines(&whole).is_empty(),
         "FINDING (m3): the cut is said again at an open that cut nothing:\n{}",
         whole.join("\n")
+    );
+}
+
+/// #408 — A START REFUSED AT THE BLOCKED-PREFIX LIST TOUCHES NOTHING
+/// (PATTERNS P13; AUTH-4.70): a board closed in-process, 777 bytes that
+/// spell no frame appended past its last marker (the tail cut's own
+/// fixture), and a list file that is not a list. The binary started under
+/// `--blocked-prefixes` exits 1, its stderr the open's version and
+/// directory lines and then the list's refusal naming the file — no
+/// recovery and no tail cut said — and every file under the data directory
+/// stands as it stood, the torn tail included.
+/// The list mended, the next start serves, and it is THAT start — the one
+/// an operator reads — that cuts the tail and says so, once.
+#[test]
+fn a_start_refused_at_the_list_touches_nothing_and_the_serving_start_says_the_cut() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    {
+        let sd = spawn_unclaimed(&dir);
+        let (home, session) = delegate_a_home(sd.port());
+        insert_into_the_home(sd.port(), &session, &home, 1, 2);
+        sd.shutdown();
+    }
+    let segment = active_segment(&dir);
+    let clean_len = fs::metadata(&segment).expect("the segment").len();
+    let mut f = fs::OpenOptions::new().append(true).open(&segment).expect("open the segment");
+    f.write_all(&[0xA5u8; 777]).expect("append the garbage");
+    drop(f);
+    let before = crate::tools::tree(&dir);
+    let list = tmp.path().join("blocked.json");
+    fs::write(&list, b"not a list").expect("a list that is not one");
+    let list_flag = list.to_str().expect("a UTF-8 path");
+
+    let mut cmd = skepd(&dir, &["--port", "0", "--blocked-prefixes", list_flag]);
+    let mut refused = Spawned::launch(&mut cmd);
+    let stderr = Stderr::of(&mut refused.child);
+    let status = refused.wait_within(PATIENCE);
+    let whole = stderr.whole();
+    assert_eq!(status.code(), Some(1), "the list stops the start:\n{}", whole.join("\n"));
+    let last = whole.last().expect("the refusal");
+    assert!(
+        last.starts_with(&format!("skepd: blocked-prefix list: {}: ", list.display())),
+        "the refusal names the list's file: {last:?}"
+    );
+    assert!(
+        !whole.iter().any(|l| said(l, "open", "recovered from "))
+            && tail_cut_lines(&whole).is_empty(),
+        "FINDING (#408): the refused start opened the journal and cut its tail:\n{}",
+        whole.join("\n")
+    );
+    assert!(
+        whole.len() == 3
+            && said(&whole[0], "open", "version ")
+            && said(&whole[1], "open", "data-dir "),
+        "the refusal follows the version and directory lines, nothing between:\n{}",
+        whole.join("\n")
+    );
+    assert_eq!(
+        crate::tools::tree(&dir),
+        before,
+        "FINDING (#408): the refused start changed the data directory"
+    );
+
+    // THE LIST MENDED: the start that serves is the one that cuts, and says
+    // so.
+    fs::write(&list, br#"{"entries": []}"#).expect("the empty list");
+    let mut served = serve_and_read_the_open_with(&dir, &["--blocked-prefixes", list_flag], &[]);
+    await_said(&mut served.stderr, "open", "media uploads: ");
+    served.child.kill();
+    let whole = served.stderr.whole();
+    assert_eq!(
+        tail_cut_lines(&whole).len(),
+        1,
+        "the serving start says the cut the refused one left standing:\n{}",
+        whole.join("\n")
+    );
+    assert_eq!(
+        fs::metadata(&segment).expect("the segment").len(),
+        clean_len,
+        "the serving start cut the segment back to its last marker"
     );
 }
 

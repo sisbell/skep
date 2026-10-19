@@ -551,11 +551,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    defaults instead, the board comes back with local trust on, no
    configured origin and its off-board test off, each said in the
    open's report. The blocked list costs more: with the flag kept and
-   its file absent the start is refused, exit 1, and with the flag
-   dropped to get the board up, every standing takedown lapses, the
-   open saying only that no file was named. Read the open's items 13
-   to 16 (Start, step 3) against the board's last report before the
-   copy, and restart under the right settings where they differ.
+   its file absent the start is refused, exit 1, before the open
+   touches the directory, and with the flag dropped to get the board
+   up, every standing takedown lapses, the open saying only that no
+   file was named. Read the open's items 13 to 16 (Start, step 3)
+   against the board's last report before the copy, and restart
+   under the right settings where they differ.
 
 4. **Start only once all of `blobs/` has landed.** The open
    reconciles the blob store whether or not it then serves: it
@@ -822,10 +823,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    - `--blocked-prefixes <FILE>` (`SKEPD_BLOCKED_PREFIXES`): the
      blocked-prefix list. The path is read at start alone, so a
      board started without one blocks nothing until a restart names
-     a file. The file is read at every start, where a file that
-     cannot be read, or is not a list, stops the start; and read
-     again whenever it is replaced, at the next request: write the
-     new list beside it and rename it over (step 8).
+     a file. The file is read at every start, before anything under
+     the data directory is touched: a file that cannot be read, or is
+     not a list, stops the start and leaves the directory as it found
+     it. It is read again whenever it is replaced, at the next
+     request: write the new list beside it and rename it over
+     (step 8).
    - `--node-prefix <PREFIX>` (`SKEPD_NODE_PREFIX`): the board's
      node prefix, `1.N`. Without it the blocked-prefix list's
      off-board test is off.
@@ -1204,9 +1207,16 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
    Every other refusal names what refused, after the `skepd: `:
    `registry seeding:`, `blob store:`, `change-feed sidecar:` or
-   `blocked-prefix list:`. The blob store's then names the file, by
-   its place in the data directory, and the act that failed, the
-   OS's cause last; a partial is named by its directory alone:
+   `blocked-prefix list:`. The list's refusal comes before the open
+   touches the data directory — it follows the `data-dir` line, with
+   no recovery line between — so nothing in the directory has moved:
+   mend the file, or name the one the board was started with, and
+   start again. Under a unit that restarts on exit 1 the refusal
+   repeats until then, each attempt touching nothing, and the start
+   that serves is the one that makes the open's repairs and says
+   them. The blob store's refusal names the file, by its place in
+   the data directory, and the act that failed, the OS's cause last;
+   a partial is named by its directory alone:
 
    ```
    skepd: blob store: {file}: {act}: {error}

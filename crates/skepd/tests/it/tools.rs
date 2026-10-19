@@ -30,9 +30,11 @@ use crate::common;
 use crate::media::{seed_pre_fence_draft, unknown_schema_value};
 use common::*;
 
-/// Every file under `blobs/` with its length and its modification time —
-/// what the inventory must leave exactly as it found it.
-fn tree(root: &Path) -> BTreeMap<PathBuf, (u64, SystemTime)> {
+/// Every file under `root` with its length and its modification time — what
+/// the inventory must leave exactly as it found it under `blobs/`, and a
+/// start refused at the blocked-prefix list under the whole data directory
+/// (`open.rs`).
+pub(crate) fn tree(root: &Path) -> BTreeMap<PathBuf, (u64, SystemTime)> {
     fn walk(dir: &Path, out: &mut BTreeMap<PathBuf, (u64, SystemTime)>) {
         for entry in fs::read_dir(dir).expect("a directory") {
             let entry = entry.expect("an entry");

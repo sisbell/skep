@@ -24,10 +24,11 @@ use crate::codec::{check_keys, wire_address};
 /// read-to-end followed by a whole `serde_json::Value` over those bytes, at
 /// the ~20× transient heap this crate prices on
 /// [`crate::limits::MAX_REQUEST_BODY`]. It is paid at
-/// [`super::AuthState::open`] before the daemon serves a request, where the
-/// open promises a named refusal rather than a hang; and at every reissue
-/// with the supply's `seen` held at the head of routing, so every request
-/// that arrives meanwhile waits on it, `/health` and `/session` included.
+/// [`super::AuthStart::read`], before the daemon's open touches its data
+/// directory, where the open promises a named refusal rather than a hang;
+/// and at every reissue with the supply's `seen` held at the head of
+/// routing, so every request that arrives meanwhile waits on it, `/health`
+/// and `/session` included.
 ///
 /// The number is a relation to the frame routes' body cap,
 /// [`crate::limits::MAX_REQUEST_BODY`], and moves with it: this file

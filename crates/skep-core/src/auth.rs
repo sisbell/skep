@@ -90,6 +90,42 @@ use origin::{bare_origins, signed_origins};
 /// holds and nothing of who asked.
 pub const MAX_LIVE_NONCES: usize = 4096;
 
+/// The auth state's start: the session layer's options, and the
+/// blocked-prefix list read off the start-up supply they name (AUTH-4.70;
+/// RES-115).
+///
+/// It is the one half of the auth state's open that can fail, and a half
+/// that reads no world, so the daemon reads it before its own open touches
+/// the data directory (PATTERNS P13): a list that cannot be read refuses a
+/// start that has created, locked, cut or repaired nothing.
+/// [`AuthState::open`] installs what it holds, against the recovered
+/// world's claimant (AUTH-4.36 step 4b); nothing else reads it. The options
+/// ride with the list, so the install never reads one path's list under
+/// options that name another.
+#[derive(Debug)]
+pub struct AuthStart {
+    opts: AuthOptions,
+    supply: Option<(BlockedSupply, BlockedIssue)>,
+}
+
+impl AuthStart {
+    /// Reads the start-up supply `opts` names; options naming none read
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// The auth state's one refusal: a path the options name that is no
+    /// regular file, or a file that cannot be read, is not a list, or is
+    /// past the channel's byte cap (`MAX_BLOCKED_SUPPLY_BYTES`). An operator
+    /// condition — a daemon that started on an empty list instead would
+    /// lapse every standing block in silence, which is the one thing
+    /// "supplied at every start" rules out.
+    pub fn read(opts: AuthOptions) -> io::Result<AuthStart> {
+        let supply = opts.blocked_supply_path.as_deref().map(BlockedSupply::open).transpose()?;
+        Ok(AuthStart { opts, supply })
+    }
+}
+
 /// The whole auth state one daemon holds.
 ///
 /// It is the config, the two ephemeral stores, the credential write lock,
@@ -119,23 +155,14 @@ impl AuthState {
     ///
     /// The engine resolved that world's identity slice at load (AUTH-2.86:
     /// the daemon serves from the resolved World). The open installs the
-    /// blocked-prefix list from the start-up supply (AUTH-4.70; RES-115)
-    /// against the claimant that slice names.
-    ///
-    /// # Errors
-    ///
-    /// Fails only on that supply: a path the options name that is no regular
-    /// file, or a file that cannot be read, is not a list, or is past the
-    /// channel's byte cap (`MAX_BLOCKED_SUPPLY_BYTES`). An operator
-    /// condition — a daemon that started on an empty list instead would
-    /// lapse every standing block in silence, which is the one thing
-    /// "supplied at every start" rules out.
-    pub fn open(opts: AuthOptions, world: &World) -> io::Result<AuthState> {
-        let (blocked_supply, issue) = match opts.blocked_supply_path.as_deref() {
-            Some(path) => {
-                let (supply, issue) = BlockedSupply::open(path)?;
-                (Some(supply), issue)
-            }
+    /// blocked-prefix list `start` read (AUTH-4.70; RES-115) against the
+    /// claimant that slice names (AUTH-4.36 step 4b). It cannot fail: the
+    /// auth state's one refusal is [`AuthStart::read`]'s, taken before the
+    /// daemon's open touched its data directory.
+    pub fn open(start: AuthStart, world: &World) -> AuthState {
+        let AuthStart { opts, supply } = start;
+        let (blocked_supply, issue) = match supply {
+            Some((supply, issue)) => (Some(supply), issue),
             None => (None, BlockedIssue::default()),
         };
         let state = AuthState {
@@ -147,7 +174,7 @@ impl AuthState {
             blocked_supply,
         };
         state.install_blocked(&state.credential_lock.write(), issue, world.identity());
-        Ok(state)
+        state
     }
 
     /// Installs one issue, whole, under the credential write lock.
@@ -232,7 +259,7 @@ impl AuthState {
     ///
     /// `None` where the options named one: the open says that list in force
     /// instead ([`BlockedPrefixes::log_lines`]). The path is read at
-    /// [`AuthState::open`] alone, so a board that names none blocks no
+    /// [`AuthStart::read`] alone, so a board that names none blocks no
     /// prefix until a restart names a file (AUTH-4.70) — what the line says,
     /// beside the empty issue a board that may need a takedown starts with.
     pub fn blocked_supply_absent_line(&self) -> Option<&'static str> {
@@ -361,7 +388,8 @@ mod tests {
     #[test]
     fn the_absent_supply_line_is_answered_where_no_file_was_named_alone() {
         let world = World::genesis();
-        let unnamed = AuthState::open(AuthOptions::default(), &world).expect("no supply to read");
+        let start = AuthStart::read(AuthOptions::default()).expect("no supply to read");
+        let unnamed = AuthState::open(start, &world);
         assert_eq!(
             unnamed.blocked_supply_absent_line(),
             Some(
@@ -374,7 +402,7 @@ mod tests {
         let path = dir.path().join("blocked.json");
         std::fs::write(&path, br#"{"entries": []}"#).expect("write the empty list");
         let opts = AuthOptions { blocked_supply_path: Some(path), ..AuthOptions::default() };
-        let named = AuthState::open(opts, &world).expect("the empty list opens");
+        let named = AuthState::open(AuthStart::read(opts).expect("the empty list reads"), &world);
         assert_eq!(named.blocked_supply_absent_line(), None, "a named file's list says itself");
     }
 }

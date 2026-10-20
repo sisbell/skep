@@ -1,20 +1,21 @@
 //! Startup: what the adapter reads before it serves, and what it refuses.
 //!
 //! The flags answered before anything else is read (`--version`, `--help`), and
-//! a usage error; the log opening on the version it runs; each setting refused
-//! by name where it is missing or malformed — the principal, the board (an
-//! `https://` one among them), the key store (one that does not stand among
-//! them), the commons, a value that is not UTF-8 — and served where it is
-//! given: a flag beating its variable, a board off the loopback warned of, the
-//! commons sentence, a tools file in the embedded catalog's place, named where
-//! it is served, and a drifted one refused naming it; the board's refusals of
-//! the open, a board said halted exactly where its writes are, the log inert
-//! and no token in it; and what the start finds under the store: an earlier
-//! run's held bursts, a halted held file, a search index another adapter
-//! holds. Most run the built binary with no board, or a stand-in one answering
-//! what a real board never does; the rest over a claimed board (`common`'s
-//! `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`, a retired
-//! key's relaunch — are `agent.rs`'s.
+//! a usage error; the log opening on the version it runs and the process; each
+//! setting refused by name where it is missing or malformed — the principal,
+//! the board (an `https://` one among them), the key store (one that does not
+//! stand among them), the commons, a value that is not UTF-8 — and served
+//! where it is given: a flag beating its variable, a board off the loopback
+//! warned of, the commons sentence, a tools file in the embedded catalog's
+//! place, named where it is served, and a drifted one refused naming it; the
+//! board's refusals of the open, a board said halted exactly where its writes
+//! are, the log inert and no token in it, nor a document's text an answer the
+//! client cannot parse quoted; and what the start finds under the store: an
+//! earlier run's held bursts, a halted held file, a search index another
+//! adapter holds. Most run the built binary with no board, or a stand-in one
+//! answering what a real board never does; the rest over a claimed board
+//! (`common`'s `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`,
+//! a retired key's relaunch — are `agent.rs`'s.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -23,9 +24,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use serde_json::json;
-use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose};
+use skep_client::store::{FileStore, KeyFacts, KeySelector, KeyStore, Purpose};
 
-use crate::common::{draft_of, embedded_catalog, Fixture, Launch, TempDir, CLAIMANT_ACCOUNT, VARIABLES};
+use crate::common::{draft_of, embedded_catalog, stamped, Fixture, Launch, TempDir, CLAIMANT_ACCOUNT, VARIABLES};
 
 /// `--version` is answered before the catalog, the environment or stdin is
 /// consulted: ONE line on stdout — `skep-mcp <crate version> (<commit>)`,
@@ -103,6 +104,50 @@ fn answered(body: &str) -> String {
     format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
+/// Returns the `404` a stand-in board answers a request it does not serve.
+fn not_found() -> String {
+    let body = r#"{"error":"not_found"}"#;
+    format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+}
+
+/// Returns a store holding one fresh key, and the key's facts.
+fn keyed_store(tag: &str) -> (TempDir, KeyFacts) {
+    let dir = TempDir::new(tag);
+    let store = FileStore::open(dir.path());
+    let id = store.generate(None).expect("keygen");
+    let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).expect("the key's facts");
+    (dir, key)
+}
+
+/// Returns the port of a stand-in board `key` opens a signed session at.
+///
+/// It passes every check the signed open makes — `/health` naming the origin
+/// it is dialed at as signed, the principal's account, a key set `key` is
+/// enrolled in, a challenge — and answers `POST /session` by `session`, any
+/// other `/op` frame by `other`, handed the frame, and every other request
+/// `404`.
+fn signing_stand_in(key: &KeyFacts, session: impl Fn() -> String + Send + 'static, other: impl Fn(&str) -> String + Send + 'static) -> u16 {
+    let enrolled = json!({"resp": "key_set", "as_of": 0, "enrolled": [{"alg": key.public.alg(), "key": key.public.to_hex(), "fingerprint": key.fingerprint.to_hex(), "anchor": false}], "retired": []});
+    stand_in(move |head, body| {
+        let host = head.lines().find_map(|line| line.strip_prefix("Host: ")).unwrap_or_default();
+        if head.starts_with("GET /health ") {
+            answered(&json!({"ok": true, "log_position": 0, "auth": {"claimant": CLAIMANT_ACCOUNT, "local_trust": true, "signed_origins": [format!("http://{host}")]}}).to_string())
+        } else if head.starts_with("POST /op ") && body.contains("\"principal_prefix\"") {
+            answered(&json!({"resp": "maybe_addr", "addr": CLAIMANT_ACCOUNT, "as_of": 0}).to_string())
+        } else if head.starts_with("POST /op ") && body.contains("\"key_set\"") {
+            answered(&enrolled.to_string())
+        } else if head.starts_with("GET /challenge?principal=1 ") {
+            answered(r#"{"nonce":"n-1","principal":1,"ttl_ms":60000}"#)
+        } else if head.starts_with("POST /session ") {
+            session()
+        } else if head.starts_with("POST /op ") {
+            other(body)
+        } else {
+            not_found()
+        }
+    })
+}
+
 /// A board's text reaches the log inert.
 ///
 /// A stand-in board answers every request with one `/health` reading whose
@@ -125,10 +170,11 @@ fn a_boards_text_reaches_the_log_inert() {
 /// A board is said halted at startup exactly where its writes are halted.
 ///
 /// A stand-in board's `/health` reports its writes halted, running, or says
-/// nothing of them; the adapter says the board's line before its keyless store
-/// stops startup, and the halted board's line alone says what a write meets
-/// through the shell until the board restarts: a burst held for the shell's
-/// resend, any other write refused `poisoned`.
+/// nothing of them; the adapter says the board's line, naming the position it
+/// attaches at, before its keyless store stops startup, and the halted board's
+/// line alone says what a write meets through the shell until the board
+/// restarts: a burst held for the shell's resend, any other write refused
+/// `poisoned`.
 #[test]
 fn a_board_is_said_halted_at_startup_exactly_where_its_writes_are_halted() {
     let halted = "; writes HALTED until the board restarts: a burst is held for the shell's resend, and any other write refused `poisoned`";
@@ -139,6 +185,7 @@ fn a_board_is_said_halted_at_startup_exactly_where_its_writes_are_halted() {
         let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", keyless.path()).env("SKEP_PRINCIPAL", "1").refusal();
         assert_eq!(code, Some(1), "the keyless store stops startup: {err}");
         assert!(err.contains(&format!("board http://127.0.0.1:{port} (reference ")), "premise: the board's line is said: {err}");
+        assert!(err.contains(") at position 0: mode "), "the board's line names the position the adapter attaches at: {err}");
         assert_eq!(err.contains(halted), said, "{writes:?}: {err}");
     }
 }
@@ -154,34 +201,51 @@ fn a_board_is_said_halted_at_startup_exactly_where_its_writes_are_halted() {
 #[test]
 fn a_token_in_a_session_answer_the_client_cannot_read_reaches_no_log_line() {
     const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
-    let dir = TempDir::new("unreadable-session");
-    let store = FileStore::open(dir.path());
-    let id = store.generate(None).expect("keygen");
-    let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).expect("the key's facts");
-    let enrolled = json!({"resp": "key_set", "as_of": 0, "enrolled": [{"alg": key.public.alg(), "key": key.public.to_hex(), "fingerprint": key.fingerprint.to_hex(), "anchor": false}], "retired": []});
+    let (dir, key) = keyed_store("unreadable-session");
     let (opened, opens) = std::sync::mpsc::channel::<()>();
-    let port = stand_in(move |head, body| {
-        let host = head.lines().find_map(|line| line.strip_prefix("Host: ")).unwrap_or_default();
-        if head.starts_with("GET /health ") {
-            answered(&json!({"ok": true, "log_position": 0, "auth": {"claimant": CLAIMANT_ACCOUNT, "local_trust": true, "signed_origins": [format!("http://{host}")]}}).to_string())
-        } else if head.starts_with("POST /op ") && body.contains("\"principal_prefix\"") {
-            answered(&json!({"resp": "maybe_addr", "addr": CLAIMANT_ACCOUNT, "as_of": 0}).to_string())
-        } else if head.starts_with("POST /op ") && body.contains("\"key_set\"") {
-            answered(&enrolled.to_string())
-        } else if head.starts_with("GET /challenge?principal=1 ") {
-            answered(r#"{"nonce":"n-1","principal":1,"ttl_ms":60000}"#)
-        } else if head.starts_with("POST /session ") {
-            let _ = opened.send(());
-            format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"principal\":1,\"session\":\"{TOKEN}\"")
-        } else {
-            "HTTP/1.1 404 Not Found\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"error\":\"not_found\"}".to_string()
-        }
-    });
+    let session = move || {
+        let _ = opened.send(());
+        format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"principal\":1,\"session\":\"{TOKEN}\"")
+    };
+    let port = signing_stand_in(&key, session, |_| not_found());
     let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
     assert!(opens.try_recv().is_ok(), "premise: the open's POST /session was answered:\n{err}");
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("stopped before serving: the signed session did not open: unreachable"), "{err}");
     assert!(!err.contains(TOKEN), "the session's token reaches the log:\n{err}");
+}
+
+/// A document's text in an answer the client cannot parse reaches no log line.
+///
+/// A stand-in board opens the adapter's signed session, and answers the feed
+/// thread's first read of a document's text — the head document's, which the
+/// index's open reads — with a delivery an intermediary cut short, its length
+/// undeclared, whose text holds a sentence of the document's: the feed says
+/// the index could not open in skep-client's words, the parse error kept and
+/// the answer's text cut, its bytes counted, and no line carries the
+/// sentence (D9).
+#[test]
+fn a_documents_text_in_an_answer_the_client_cannot_parse_reaches_no_log_line() {
+    const SENTENCE: &str = "a sentence of the document's own";
+    let (dir, key) = keyed_store("quoted-answer");
+    let session = || answered(r#"{"principal":1,"session":"0123456789abcdef0123456789abcdef"}"#);
+    let read = |frame: &str| {
+        if frame.contains("\"retrieve_v\"") {
+            format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"resp\":\"delivery\",\"items\":[{{\"content\":\"{SENTENCE}")
+        } else {
+            not_found()
+        }
+    };
+    let port = signing_stand_in(&key, session, read);
+    let mut mcp = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").logged().spawn();
+    mcp.initialize();
+    let log = mcp.log_holding(&["the index could not open: "], Duration::from_secs(30));
+    let line = log.lines().find(|line| line.contains("the index could not open: ")).expect("the feed's line");
+    assert!(line.contains(": the answer was not JSON (") && line.contains(" at line 1 column "), "the parse error kept: {line}");
+    assert!(line.contains("): the answer's text and the rest of this line not shown ("), "the answer's text cut, counted: {line}");
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(!log.contains(SENTENCE), "the document's text reaches the log:\n{log}");
 }
 
 /// A board the adapter cannot reach stops startup, and nothing is served.
@@ -202,17 +266,23 @@ fn a_board_that_does_not_answer_stops_startup() {
     assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
 }
 
-/// The log opens on the build it runs, before anything else is said.
+/// The log opens on the build it runs and the process, before anything else.
 ///
-/// Its first line is `skep-mcp: version <crate version> (<commit>)`, the
-/// version line's build, so every line after it is read as that binary's.
+/// Its first line is `skep-mcp: <moment> version <crate version> (<commit>),
+/// pid <id>`, the version line's build beside the process's id, so every line
+/// after it is read as that binary's, and joins by the id what the host says
+/// of the process.
 #[test]
 fn the_log_opens_on_the_version_it_runs() {
     let dir = TempDir::new("version-first");
-    let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
-    assert_eq!(code, Some(1), "{err}");
-    let version = format!("skep-mcp: version {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"));
-    assert_eq!(err.lines().next(), Some(version.as_str()), "the first line names the build: {err}");
+    let child = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").stderr(Stdio::piped()).child();
+    let pid = child.id();
+    let out = child.wait_with_output().expect("the adapter's run");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    let first = err.lines().next().and_then(stamped).map(|(_, text)| text);
+    let version = format!("version {} ({}), pid {pid}", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"));
+    assert_eq!(first, Some(version.as_str()), "the first line names the build and the process: {err}");
 }
 
 /// A board off this machine's loopback is warned of where the setting is read.
@@ -510,19 +580,22 @@ fn tools_file_refusal(tools_file: &Path) -> String {
 /// What an earlier run's held bursts left, and a halted held file, are said.
 ///
 /// A burst the board refuses is held as a refused run, and stands in the
-/// principal's held file once the adapter that held it has stopped: the next
-/// start says one burst is left, waiting on the agent's `resolve`. A held file
-/// a newer skep wrote halts the principal's bursts at the board: the start
-/// says the file is halted and why, and a burst is refused `store_halted`.
+/// principal's held file once the adapter that held it has stopped: its stop
+/// says it leaves one burst held, and the next start says one burst is left,
+/// waiting on the agent's `resolve`. A held file a newer skep wrote halts the
+/// principal's bursts at the board: the start says the file is halted and
+/// why, and a burst is refused `store_halted`.
 #[test]
 fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let fixture = Fixture::new("held-at-start");
-    let mut mcp = Launch::over(&fixture, 1).spawn();
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
     let refused = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
     assert_eq!(refused["resp"], "held", "premise: a refused run is held: {refused}");
-    assert!(mcp.finish().success());
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(log.contains("; it leaves 1 burst held at this board (0 sent and so perhaps landed), which the next start counts"), "the stop says what it leaves held:\n{log}");
     let mut again = Launch::over(&fixture, 1).logged().spawn();
     again.initialize();
     again.log_holding(&["held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 1 waiting on the agent's `resolve`"], Duration::from_secs(10));

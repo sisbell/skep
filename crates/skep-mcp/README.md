@@ -23,9 +23,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   loopback, the warning that its session's token rides in the clear
   unless a tunnel carries it, and the principal's held bursts an earlier
   run left at the board, or a held file the shell halted. Every line on
-  stderr opens `skep-mcp: `: a C0 control, DEL or bidi control a board's
-  text carries there is shown as its code point, and a line break in it
-  continues the line indented.
+  stderr opens `skep-mcp: ` and the moment it was said: a C0 control, DEL or
+  bidi control a board's text carries there is shown as its code point, and
+  a line break in it continues the line indented.
 - **Every tool is one call of the shell.** The wire operations of
   `docs/wire.md` §Operations are tools of their own names — the name is the
   frame's `op`, the arguments are the frame — the shell's own calls
@@ -89,10 +89,18 @@ stdout, the session closed at the board; 1 at a refusal before serving or
 a stop while serving; 2 at a usage error; 101 at a panic, a bug said in
 one line of the log.
 
-The log is stderr: every line opens `skep-mcp: `, and the first names the
-version the run began with. A harness may read it or leave it: a reader
-that stops reading never holds the adapter up — the lines it leaves are
-dropped, and the next line it takes says how many went.
+The log is stderr: every line opens `skep-mcp: ` and the moment it was said,
+RFC 3339 UTC to the millisecond, as the daemon's own lines do, and the first
+names the version the run began with and its process id. The lines of the
+session's life name the session by its reference, as the shell's own lines
+and the refusals an agent is answered name it; a call that holds the loop
+past a dial's read bound is said with its tool, its request's id and how
+long it held; and the clean stop's line says what the loop answered. No line
+quotes an answer's text — the client's refusal of an answer it cannot parse
+is cut at its parse error — and none runs past four kilobytes. A harness
+may read the log or leave it: a reader that stops reading never holds the
+adapter up — the lines it leaves are dropped, and the next line it takes
+says how many went, at the moment the first of them was said.
 
 ## Starting it from an agent app
 

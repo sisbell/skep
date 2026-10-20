@@ -507,6 +507,24 @@ pub fn base64_decode(text: &str) -> Vec<u8> {
     out
 }
 
+/// Returns a log line's moment and text: `skep-mcp: <moment> <text>`.
+///
+/// The moment is RFC 3339 UTC to the millisecond,
+/// `2026-10-20T14:05:12.345Z`; `None` where the line opens otherwise.
+pub fn stamped(line: &str) -> Option<(&str, &str)> {
+    let (moment, text) = line.strip_prefix("skep-mcp: ")?.split_once(' ')?;
+    let shaped = moment.len() == 24
+        && moment.bytes().enumerate().all(|(k, b)| match k {
+            4 | 7 => b == b'-',
+            10 => b == b'T',
+            13 | 16 => b == b':',
+            19 => b == b'.',
+            23 => b == b'Z',
+            _ => b.is_ascii_digit(),
+        });
+    shaped.then_some((moment, text))
+}
+
 /// Whether `text` holds a 32-lowercase-hex run that is no part of a longer
 /// one — the shape of a session token.
 pub fn holds_a_token(text: &str) -> bool {

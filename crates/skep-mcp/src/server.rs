@@ -16,6 +16,7 @@ use std::io::{BufRead, Write};
 use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 use skep_shell::Refusal;
@@ -29,6 +30,15 @@ use crate::tools::{wire_frame, Catalog, Tool};
 /// It is the newest revision this server was written against; a client that
 /// names one, as it always should, is answered that one (`Server::respond`).
 const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// The longest a call holds the loop before the log says it held it.
+///
+/// It is one dial's read bound (skep-client's `IO_TIMEOUT`), longer than any
+/// exchange with a board that answers. The calls are served one at a time, so
+/// every request behind a call this long — `ping` among them — waited on it,
+/// and a harness that timed it out holds no answer to join its own record to:
+/// the line is that join (`slow_call_line`).
+const SLOW_CALL: Duration = skep_client::dial::IO_TIMEOUT;
 
 /// The JSON-RPC 2.0 error codes this server answers (the spec's §5.1),
 /// each the spec's own number: a name for it, never a new one.
@@ -98,6 +108,39 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
     thread::Builder::new().name("skep-mcp-stdin".into()).spawn(reader).expect("the OS starts the adapter's stdin thread");
 }
 
+/// What the loop answered, counted for the clean stop's line.
+///
+/// Each answer written on stdout is counted once it is written: a tool
+/// result, `isError` or not, a JSON-RPC error, or any other method's result.
+#[derive(Debug, Default)]
+struct Served {
+    /// The answers written.
+    answers: u64,
+    /// The tool results among them, and those of them `isError`.
+    tool_results: u64,
+    is_error: u64,
+    /// The JSON-RPC errors among them.
+    rpc_errors: u64,
+}
+
+impl Served {
+    /// Counts one answer written.
+    fn count(&mut self, reply: &Value) {
+        self.answers += 1;
+        if let Some(is_error) = reply["result"]["isError"].as_bool() {
+            self.tool_results += 1;
+            self.is_error += u64::from(is_error);
+        }
+        self.rpc_errors += u64::from(reply.get("error").is_some());
+    }
+
+    /// Returns the figures as the clean stop says them, over `serving`.
+    fn said(&self, serving: Duration) -> String {
+        let Served { answers, tool_results, is_error, rpc_errors } = self;
+        format!("{answers} answers written in {:.1} s of serving: {tool_results} tool results, {is_error} of them isError, and {rpc_errors} JSON-RPC errors", serving.as_secs_f64())
+    }
+}
+
 /// The MCP side's state: the backend every tool calls and the catalog
 /// `tools/list` and `initialize` answer from.
 #[derive(Debug)]
@@ -118,11 +161,12 @@ impl Server {
     /// at stdin's end and at a closed stdout (the harness hung up), each a
     /// success, and at the backend's stop, exit 1, each end said in the log,
     /// its cause before the stop's line; the clean stop (`Backend::shutdown`)
-    /// runs after any of the three, and the exit code is returned for `main`
-    /// to exit with.
+    /// runs after any of the three, its line carrying what the loop served
+    /// (`Served`), and the exit code is returned for `main` to exit with.
     pub fn run(self, inbox: &Receiver<Inbound>) -> ExitCode {
         let mut out = std::io::stdout();
         let mut code = ExitCode::SUCCESS;
+        let (serving, mut served) = (Instant::now(), Served::default());
         for message in inbox {
             match message {
                 Inbound::Line(line) => {
@@ -133,6 +177,7 @@ impl Server {
                         crate::log(format_args!("stdout: {e}: the harness reads no more answers"));
                         break;
                     }
+                    served.count(&reply);
                 }
                 Inbound::Stop(line) => {
                     crate::log(format_args!("stopped: {line}"));
@@ -145,7 +190,7 @@ impl Server {
                 }
             }
         }
-        self.backend.shutdown();
+        self.backend.shutdown(&served.said(serving.elapsed()));
         code
     }
 
@@ -207,7 +252,9 @@ impl Server {
     /// named none, beside the server's name and version, the catalog's
     /// instructions and the tools capability. `ping` answers `{}`,
     /// `tools/list` the catalog's tools, `tools/call` its tool result or
-    /// -32602 (`Server::call`), and any other method -32601.
+    /// -32602 (`Server::call`) — a call that held the loop `SLOW_CALL` or
+    /// longer said in the log (`slow_call_line`) — and any other method
+    /// -32601.
     fn respond(&self, method: &str, params: Option<Value>, id: Value) -> Value {
         match method {
             "initialize" => {
@@ -224,13 +271,21 @@ impl Server {
             }
             "ping" => rpc_result(id, json!({})),
             "tools/list" => rpc_result(id, json!({"tools": self.catalog.tools()})),
-            "tools/call" => {
-                let outcome = call_params(params).and_then(|(name, args)| self.call(&name, args));
-                match outcome {
-                    Ok(result) => rpc_result(id, result),
-                    Err(message) => rpc_error(id, ErrorCode::InvalidParams, &message),
+            "tools/call" => match call_params(params) {
+                Err(message) => rpc_error(id, ErrorCode::InvalidParams, &message),
+                Ok((name, args)) => {
+                    let started = Instant::now();
+                    let outcome = self.call(&name, args);
+                    let held = started.elapsed();
+                    if held >= SLOW_CALL {
+                        crate::log(slow_call_line(&name, &id, held, &outcome));
+                    }
+                    match outcome {
+                        Ok(result) => rpc_result(id, result),
+                        Err(message) => rpc_error(id, ErrorCode::InvalidParams, &message),
+                    }
                 }
-            }
+            },
             other => {
                 let message = format!("method '{other}' not supported");
                 rpc_error(id, ErrorCode::MethodNotFound, &message)
@@ -336,6 +391,27 @@ fn call_params(params: Option<Value>) -> Result<(String, Map<String, Value>), St
         Some(_) => return Err("'arguments' must be a JSON object".into()),
     };
     Ok((name, args))
+}
+
+/// Returns the line a call that held the loop `held` says, with its answer.
+///
+/// It names the tool, the request by its id — the harness's own record of the
+/// call joins it there, the id as JSON spells it, its first 64 characters —
+/// how long the call held the loop, and how it was answered: a tool result,
+/// one `isError`, or the -32602 of a call the adapter will not run. No
+/// argument rides it.
+fn slow_call_line(name: &str, id: &Value, held: Duration, outcome: &Result<Value, String>) -> String {
+    let id = id.to_string();
+    let id = match id.char_indices().nth(64) {
+        Some((cut, _)) => format!("{}…", &id[..cut]),
+        None => id,
+    };
+    let answered = match outcome {
+        Ok(result) if result["isError"] == true => "answered isError",
+        Ok(_) => "answered",
+        Err(_) => "refused -32602",
+    };
+    format!("the `{name}` call of request {id} held the loop {:.1} s: {answered}", held.as_secs_f64())
 }
 
 /// Returns a JSON-RPC response carrying `result` under `id`, both moved in.
@@ -473,5 +549,41 @@ mod tests {
         assert_eq!(rpc_error(json!("x"), ErrorCode::InvalidParams, "no"), json!({"jsonrpc": "2.0", "id": "x", "error": {"code": -32602, "message": "no"}}));
         assert_eq!(text_result("t".into(), IsError::Yes), json!({"content": [{"type": "text", "text": "t"}], "isError": true}));
         assert_eq!(text_result("t".into(), IsError::No), json!({"content": [{"type": "text", "text": "t"}], "isError": false}));
+    }
+
+    /// A call that held the loop is said by its tool, request and answer.
+    ///
+    /// The line names the tool, the request's id as given — a long one cut at
+    /// 64 characters — the time held, and the answer: a tool result, one
+    /// `isError`, or the -32602; no argument rides it.
+    #[test]
+    fn a_call_that_held_the_loop_is_said_by_its_tool_request_and_answer() {
+        let held = Duration::from_millis(10_240);
+        let answered = slow_call_line("fetch", &json!(7), held, &Ok(text_result("x".into(), IsError::No)));
+        assert_eq!(answered, "the `fetch` call of request 7 held the loop 10.2 s: answered");
+        let is_error = slow_call_line("create_new_document", &json!("call-1"), held, &Ok(text_result("x".into(), IsError::Yes)));
+        assert_eq!(is_error, "the `create_new_document` call of request \"call-1\" held the loop 10.2 s: answered isError");
+        let long = json!("x".repeat(100));
+        let refused = slow_call_line("search", &long, held, &Err("search's opts take 'limit', 'offset'; got 'reindex'".into()));
+        assert_eq!(refused, format!("the `search` call of request \"{}… held the loop 10.2 s: refused -32602", "x".repeat(63)));
+    }
+
+    /// What the loop served is counted by the answers written.
+    ///
+    /// Every answer counts; a tool result counts as one, `isError` or not, and
+    /// a JSON-RPC error as one; the figures are said over the time served.
+    #[test]
+    fn what_the_loop_served_is_counted_by_the_answers_written() {
+        let mut served = Served::default();
+        for reply in [
+            rpc_result(json!(1), json!({"protocolVersion": "2025-06-18"})),
+            rpc_result(json!(2), text_result("x".into(), IsError::No)),
+            rpc_result(json!(3), text_result("x".into(), IsError::Yes)),
+            rpc_error(json!(4), ErrorCode::InvalidParams, "no"),
+            rpc_error(Value::Null, ErrorCode::ParseError, "parse error"),
+        ] {
+            served.count(&reply);
+        }
+        assert_eq!(served.said(Duration::from_millis(1_500)), "5 answers written in 1.5 s of serving: 2 tool results, 1 of them isError, and 2 JSON-RPC errors");
     }
 }

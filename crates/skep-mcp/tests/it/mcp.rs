@@ -535,7 +535,7 @@ fn a_closed_stdout_ends_the_adapter() {
     let status = exited.unwrap_or_else(|| panic!("the adapter outlived its closed stdout by 30 s, stdin open"));
     let log = log.join().expect("the log's reader");
     assert!(status.success(), "a harness that hung up is the clean exit: {status:?}");
-    let said = log.find("skep-mcp: stdout: ").unwrap_or_else(|| panic!("the hang-up said, with its cause:\n{log}"));
+    let said = log.find("Z stdout: ").unwrap_or_else(|| panic!("the hang-up said, with its cause:\n{log}"));
     assert!(log[said..].contains(": the harness reads no more answers"), "{log}");
     let stopping = log.find("stopping: closing the session at the board, saving the index").unwrap_or_else(|| panic!("the clean stop ran, its session closed at the board:\n{log}"));
     assert!(said < stopping, "the end's cause before the stop's line:\n{log}");

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{base64_decode, draft_of, seeded_bytes, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
+use crate::common::{base64_decode, draft_of, seeded_bytes, stamped, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
 /// The ten ceremonial rows, the two media rows the shell does not reach,
 /// and the three calls the adapter makes of the shell itself (`op`,
@@ -59,10 +59,11 @@ fn entry_at(mcp: &mut Mcp, since: u64, at: u64) -> Value {
 /// `attest`, the entry's own signature, and a draft write's row the key's
 /// fingerprint, the board's testimony (wire.md §The change feed: `key` on an
 /// unsigned entry, `attest` on a signed one; the mutant with a bare fallback
-/// lands them `key: "bare"` and `signed_session_required`). With the key
-/// removed — a fresh, keyless store — startup stops with the plain face
-/// (`no_key`) and serves nothing: an `initialize` on stdin is answered by
-/// the end of stdout, exit 1.
+/// lands them `key: "bare"` and `signed_session_required`). The startup line
+/// names the key, the account and the session opened, which the clean stop's
+/// line names again. With the key removed — a fresh, keyless store — startup
+/// stops with the plain face (`no_key`) and serves nothing: an `initialize`
+/// on stdin is answered by the end of stdout, exit 1.
 #[test]
 fn a1_the_signed_session_writes_and_no_key_stops_startup() {
     let fixture = Fixture::new("a1");
@@ -83,10 +84,13 @@ fn a1_the_signed_session_writes_and_no_key_stops_startup() {
     assert_eq!((row["class"].as_str(), &row["docs"]), (Some("drafts"), &json!([draft])), "{row}");
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}");
+    let signed = log.lines().find(|line| line.contains("signed as principal ")).unwrap_or_else(|| panic!("the startup line:\n{log}"));
     assert!(
-        log.contains(&format!("signed as principal 1 (account {CLAIMANT_ACCOUNT}) with the key {} (notebook) from ", fixture.fingerprint)),
+        signed.contains(&format!("signed as principal 1 (account {CLAIMANT_ACCOUNT}) with the key {} (notebook) from ", fixture.fingerprint)),
         "the startup line names the key and the account:\n{log}"
     );
+    let session = signed.split(" under session ").nth(1).and_then(|rest| rest.split(':').next()).unwrap_or_else(|| panic!("the session named: {signed}"));
+    assert!(session.starts_with("s-") && log.contains(&format!("saving the index (session {session})")), "the session opened is the one the stop closes:\n{log}");
     // The key removed: a keyless store in its place.
     let keyless = fixture.dir.path().join("keyless");
     std::fs::create_dir_all(&keyless).expect("a keyless store");
@@ -260,11 +264,12 @@ fn a3_fetch_answers_an_image_block_a_resource_blob_and_refuses_past_the_cap() {
 /// The board's fetch stream is held after its first chunk, so the body stops
 /// until skep-client's read bound ends the read: `isError`, the bytes that
 /// came of the declared length said, and "fetch it again" — which answers
-/// the file whole once the stream is free.
+/// the file whole once the stream is free. The call held the loop past a
+/// dial's read bound, and the log says so, by its tool and its answer.
 #[test]
 fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
     let fixture = Fixture::alone("a3-cut");
-    let mut mcp = Launch::over(&fixture, 1).spawn();
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     // Sixteen of the board's 64 KiB chunks, so the stream stops after one.
     let bytes = seeded_bytes(1024 * 1024, 5, b"SKEP");
@@ -275,6 +280,7 @@ fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
     assert!(is_error, "a cut stream is isError: {text}");
     assert!(text.starts_with(&format!("the fetch of {i} ended before the file was whole: ")) && text.ends_with("fetch it again"), "{text}");
     assert!(text.contains(&format!(" of {} bytes came", bytes.len())) && !text.contains(&format!("{0} of {0}", bytes.len())), "short of the declared length: {text}");
+    mcp.log_holding(&["the `fetch` call of request ", " held the loop ", " s: answered isError"], Duration::from_secs(10));
     let (is_error, block) = mcp.call_block("fetch", json!({"i": i}));
     assert!(!is_error, "{block}");
     assert_eq!(base64_decode(block["resource"]["blob"].as_str().expect("base64")), bytes, "fetched again, the file is whole");
@@ -499,17 +505,20 @@ fn a7_a_board_rejection_is_data_and_an_unreachable_board_is_an_error() {
 /// exchange: the call answers `isError`, `unreachable`, the pool one permit
 /// short — exactly one attempt reached the board (a reissue parks a second).
 /// Released, the write commits, as the catalog warns it may — its document
-/// reads back — and once: the next mint is the one after it.
+/// reads back — and once: the next mint is the one after it. The call held
+/// the loop past a dial's read bound, and the log says so, by its tool and
+/// its answer.
 #[test]
 fn a7_a_write_whose_answer_is_lost_is_unreachable_and_lands_once() {
     let fixture = Fixture::alone("a7-lost");
-    let mut mcp = Launch::over(&fixture, 1).spawn();
+    let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     let before = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
     let pool = fixture.free_write_permits();
     let hold = WriteGuardHeld::arm(&fixture);
     let lost = mcp.call_error("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
     assert_eq!(lost["kind"], "unreachable", "a lost answer is faced unreachable: {lost}");
+    mcp.log_holding(&["the `create_new_document` call of request ", " held the loop ", " s: answered isError"], Duration::from_secs(10));
     assert_eq!(fixture.free_write_permits(), pool - 1, "exactly one attempt reached the board, parked there");
     drop(hold);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -588,9 +597,10 @@ fn a7_a_burst_the_board_refuses_is_held_and_the_bursts_behind_it_wait() {
 ///
 /// Every line on stdout is JSON-RPC, while the shell's talk — the feed thread's
 /// lines at a restart, and the adapter's own re-open line, the drain's — goes
-/// to stderr under the adapter's prefix; and stdin's end closes the session at
-/// the board: the end is said, then the stop line, the shell's close met no
-/// silence, exit 0.
+/// to stderr under the adapter's prefix, each line opening on the moment it
+/// was said; and stdin's end closes the session at the board: the end is
+/// said, then the stop line with what the loop answered, the shell's close met
+/// no silence, exit 0.
 #[test]
 fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     let mut fixture = Fixture::new("a8");
@@ -609,8 +619,14 @@ fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     assert!(status.success(), "{status:?}\n{log}");
     assert!(log.contains("re-opened under a fresh reference"), "the drain's re-open line, on stderr:\n{log}");
     assert!(log.lines().filter(|l| !l.is_empty()).all(|l| l.starts_with("skep-mcp: ") || l.starts_with("  ")), "every stderr line is the adapter's stream:\n{log}");
-    let ended = log.find("skep-mcp: stdin's end: no request follows").unwrap_or_else(|| panic!("the end said:\n{log}"));
+    for line in log.lines().filter(|l| l.starts_with("skep-mcp: ")) {
+        assert!(stamped(line).is_some(), "each line opens on the moment it was said: {line}");
+    }
+    let ended = log.find("stdin's end: no request follows").unwrap_or_else(|| panic!("the end said:\n{log}"));
     let stopping = log.find("stopping: closing the session at the board, saving the index").unwrap_or_else(|| panic!("the stop said:\n{log}"));
     assert!(ended < stopping, "the end's cause before the stop's line:\n{log}");
+    // The initialize, the draft's mint, the insert and the three pings.
+    let stop = log[stopping..].lines().next().unwrap_or_default();
+    assert!(stop.contains(" — 6 answers written in ") && stop.ends_with(" s of serving: 2 tool results, 0 of them isError, and 0 JSON-RPC errors"), "the stop says what the loop answered: {stop}");
     assert!(!log.contains("did not close"), "the board closed the session:\n{log}");
 }

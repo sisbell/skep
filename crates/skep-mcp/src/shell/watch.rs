@@ -2,12 +2,13 @@
 //!
 //! `SessionState` is the session every call names, or the one that died and
 //! what its end left; `Death` is what a death's reason asks of it (`classify`),
-//! or a refused open (`refused_reopen`, `refused_afresh`). `SessionWatch` holds
-//! the state behind one door, `move_off`, which moves it off the session that
-//! died only while the state still names that session, never off a stop, and
-//! wakes every call waiting in `settled_within`. The drain moves it by a death
-//! (`settle`), and the backend by a session it opens itself (`move_off`) or by
-//! the board's refusal of one (`settle`).
+//! or a refused open (`refused_reopen`, `refused_afresh`), and `lapse_cause`
+//! why a death that leaves the adapter serving on left no session.
+//! `SessionWatch` holds the state behind one door, `move_off`, which moves it
+//! off the session that died only while the state still names that session,
+//! never off a stop, and wakes every call waiting in `settled_within`. The
+//! drain moves it by a death (`settle`), and the backend by a session it opens
+//! itself (`move_off`) or by the board's refusal of one (`settle`).
 //!
 //! The state's lock and its signal are private to this module, so the backend
 //! moves the state through `move_off` alone, and every holder of the lock is a
@@ -69,12 +70,14 @@ pub(super) fn classify(reason: &Value) -> Death {
         "restart" => refused_reopen(reason["refused"].as_str().unwrap_or("refused")),
         "retired" => {
             let hand = match (reason["hand"].as_str(), reason["label"].as_str()) {
+                (Some("bare"), _) => " by a bare session".to_string(),
                 (Some(hand), Some(label)) => format!(" by the key {hand} ({label})"),
-                (Some(hand), None) => format!(" by {hand}"),
-                _ => String::new(),
+                (Some(hand), None) => format!(" by the key {hand}"),
+                (None, _) => String::new(),
             };
+            let landed = reason["position"].as_u64().map(|position| format!(" (its retirement landed at position {position})")).unwrap_or_default();
             Death::Stop(format!(
-                "the key {} was retired at the board{hand}: the person who enrolled it stops this agent so, and the adapter stops with it — a relaunch over this store is refused `retired` until the person gives the agent a key enrolled anew (`skep keygen`, `skep enroll`, `skep bind`)",
+                "the key {} was retired at the board{hand}: the person who enrolled it stops this agent so{landed}, and the adapter stops with it — a relaunch over this store is refused `retired` until the person gives the agent a key enrolled anew (`skep keygen`, `skep enroll`, `skep bind`)",
                 reason["fingerprint"].as_str().unwrap_or("this adapter signs with")
             ))
         }
@@ -82,16 +85,42 @@ pub(super) fn classify(reason: &Value) -> Death {
             "the board's operator blocked this account's prefix (record {}): the session is gone and no call is served — the block stands until the board's operator lifts it, and a relaunch is refused until then",
             reason["record"].as_str().unwrap_or("named by the board")
         )),
-        "seeded" => Death::Stop(format!(
-            "the account {} now holds a key set of its own, so the key enrolled above it opens it by reference no longer: start the adapter again with a key enrolled at that account",
-            reason["account"].as_str().unwrap_or("this adapter acts as")
-        )),
+        "seeded" => {
+            let first = match (reason["writer"].as_str(), reason["as_of"].as_u64()) {
+                (Some(writer), Some(as_of)) => format!(" (its first key {writer}, as of position {as_of})"),
+                (Some(writer), None) => format!(" (its first key {writer})"),
+                (None, Some(as_of)) => format!(" (as of position {as_of})"),
+                (None, None) => String::new(),
+            };
+            Death::Stop(format!(
+                "the account {} now holds a key set of its own{first}, so the key enrolled above it opens it by reference no longer: start the adapter again with a key enrolled at that account",
+                reason["account"].as_str().unwrap_or("this adapter acts as")
+            ))
+        }
         "mode" => Death::Stop(format!("the board's mode moved to {} and ended the session; start the adapter again", reason["mode"].as_str().unwrap_or("another mode"))),
         "unreachable" | "closed" => Death::ServeOn,
         // A spelling skep-shell does not declare — the test below holds the
         // arms read here to its declaration — is served through, as the
         // unreachable board is.
         _ => Death::ServeOn,
+    }
+}
+
+/// Returns why a death that leaves the adapter serving on left no session.
+///
+/// It is read off the death's reason, as `classify` reads the arm: the board
+/// did not answer the end's read, its text the client's own; the board
+/// restarted and did not answer the re-open; or the arm itself, where another
+/// served on.
+pub(super) fn lapse_cause(reason: &Value) -> String {
+    match (reason["arm"].as_str(), reason["refused"].as_str()) {
+        (Some("unreachable"), _) => match reason["text"].as_str() {
+            Some(text) => format!("the board did not answer: {text}"),
+            None => "the board did not answer".to_string(),
+        },
+        (Some("restart"), Some("unreachable")) => "the board restarted, and did not answer the re-open".to_string(),
+        (Some(arm), _) => format!("its end's arm was {arm}"),
+        (None, _) => "its end named no arm".to_string(),
     }
 }
 
@@ -219,20 +248,25 @@ mod tests {
     ///
     /// The restart's re-open names the fresh reference; a restart the board
     /// refused, a retirement, a block, a seeding and a mode flip each stop
-    /// with a line naming the arm's fact; the unreachable board, a re-open
-    /// that met a board that did not answer, the adapter's own close, and a
-    /// spelling no arm has serve on. The arms the cases name are exactly the
-    /// ones skep-shell declares for a death's reason (`shapes::shape`), so an
-    /// arm the shell adds or renames fails here before `classify`'s wildcard
-    /// serves a death of it through.
+    /// with a line naming the arm's fact — a retirement its hand, a bare
+    /// session's or a key's, and the position it landed at, a seeding its
+    /// first key and position; the unreachable board, a re-open that met a
+    /// board that did not answer, the adapter's own close, and a spelling no
+    /// arm has serve on, each lapse said with its cause. The arms the cases
+    /// name are exactly the ones skep-shell declares for a death's reason
+    /// (`shapes::shape`), so an arm the shell adds or renames fails here
+    /// before `classify`'s wildcard serves a death of it through.
     #[test]
     fn every_arm_of_a_death_asks_one_thing() {
         assert_eq!(classify(&json!({"arm": "restart", "reopened": true, "session": "s-fresh"})), Death::Reopened("s-fresh".into()));
         let stops = [
             (json!({"arm": "restart", "reopened": false, "refused": "origin_state"}), "origin_state"),
-            (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second", "position": 9, "own": false}), "enrolled it stops this agent"),
+            (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second", "position": 9, "own": false}), "stops this agent so (its retirement landed at position 9)"),
+            (json!({"arm": "retired", "fingerprint": "ab12", "hand": "bare", "position": 9}), "retired at the board by a bare session"),
+            (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34"}), "retired at the board by the key cd34: "),
             (json!({"arm": "blocked", "record": "1.0.1.0.7.1", "ground": null}), "1.0.1.0.7.1"),
-            (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": null}), "1.0.1.1"),
+            (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": null}), "1.0.1.1 now holds a key set of its own (as of position 9)"),
+            (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": "ef56"}), "of its own (its first key ef56, as of position 9)"),
             (json!({"arm": "mode", "mode": "ENFORCING"}), "ENFORCING"),
         ];
         for (reason, names) in &stops {
@@ -245,6 +279,13 @@ mod tests {
         let Death::Stop(line) = classify(&retired) else { panic!() };
         assert!(line.contains("ab12") && line.contains("cd34 (second)"), "the key and the hand: {line}");
         assert!(line.contains("a relaunch over this store is refused `retired`"), "the act that clears it: {line}");
+        for (reason, cause) in [
+            (json!({"arm": "unreachable", "text": "connect refused"}), "the board did not answer: connect refused"),
+            (json!({"arm": "restart", "reopened": false, "refused": "unreachable"}), "the board restarted, and did not answer the re-open"),
+            (json!({"arm": "closed"}), "its end's arm was closed"),
+        ] {
+            assert_eq!(lapse_cause(&reason), cause, "{reason}");
+        }
         let Death::Stop(line) = classify(&json!({"arm": "blocked", "record": "1.0.1.0.7.1"})) else { panic!() };
         assert!(line.contains("until the board's operator lifts it"), "the act that clears it: {line}");
         let serve_on = [

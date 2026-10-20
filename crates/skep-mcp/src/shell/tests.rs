@@ -239,9 +239,10 @@ fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
 ///
 /// A stand-in board refuses the `POST /session` a call opens after a lapse
 /// (401): the refusal is the call's, no attempt runs, the session's state
-/// stops, and the stop's line, naming the open this adapter made, is handed
-/// on once, by the thread that made the call — in the adapter, the loop
-/// itself, which is why the stop is built on an unbounded channel alone.
+/// stops, and the stop's line, naming the open this adapter made and the
+/// session whose end it is, is handed on once, by the thread that made the
+/// call — in the adapter, the loop itself, which is why the stop is built on
+/// an unbounded channel alone.
 #[test]
 fn a_refused_open_of_the_adapters_own_stops_it_on_the_calling_thread() {
     let origin = stand_in(|head| {
@@ -262,6 +263,7 @@ fn a_refused_open_of_the_adapters_own_stops_it_on_the_calling_thread() {
     assert_eq!(stops.len(), 1, "the stop is handed on once: {stops:?}");
     assert_eq!(stops[0].0, thread::current().id(), "by the thread that made the call");
     assert!(stops[0].1.contains("opened afresh (session_rejected)"), "the line names the adapter's own open: {}", stops[0].1);
+    assert!(stops[0].1.ends_with(" (session s-1)"), "and the session whose end it is: {}", stops[0].1);
 }
 
 /// A lapsed session is opened afresh, and the call runs under it.
@@ -270,7 +272,8 @@ fn a_refused_open_of_the_adapters_own_stops_it_on_the_calling_thread() {
 /// `POST /session` with a token, any later one refused, so an adapter that
 /// opened without adopting ends in that refusal instead of opening forever:
 /// one session is opened, the session's state moves to it, the adapter says
-/// so once, and the attempt runs once, under the fresh reference.
+/// so once, naming the session that died and the one opened, and the attempt
+/// runs once, under the fresh reference.
 #[test]
 fn a_lapsed_session_is_opened_afresh_and_the_call_runs_under_it() {
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
@@ -304,9 +307,9 @@ fn a_lapsed_session_is_opened_afresh_and_the_call_runs_under_it() {
     assert_eq!(outcome.map_err(|refusal| refusal.to_string()), Ok("ack"), "the call is served");
     let SessionState::Open(fresh) = backend.session.current() else { panic!("no session stands: {:?}", backend.session.current()) };
     assert_ne!(fresh, "s-1", "a fresh reference");
-    assert_eq!(ran, [fresh], "the attempt ran once, under the session opened");
+    assert_eq!(ran, std::slice::from_ref(&fresh), "the attempt ran once, under the session opened");
     assert_eq!(opens.load(Ordering::SeqCst), 1, "one open at the board");
-    assert_eq!(*lines.lock().expect("the lines' lock"), ["the session had ended with no re-open: a session was opened afresh, and the call is served under it"]);
+    assert_eq!(*lines.lock().expect("the lines' lock"), [format!("the session s-1 had ended with no re-open: session {fresh} was opened afresh, and the call is served under it")]);
 }
 
 /// A session opened afresh after the drain settled is closed at the board.
@@ -314,7 +317,8 @@ fn a_lapsed_session_is_opened_afresh_and_the_call_runs_under_it() {
 /// The drain's late re-open of the lapsed session lands while the adapter's
 /// own open is in flight at a stand-in board: the session that open made is
 /// adopted by nothing, so it is closed at the board under its own token, the
-/// re-open stands, and nothing is said.
+/// re-open stands, and the close is said once, naming the session closed, the
+/// one the drain settled and the one that stands.
 #[test]
 fn a_session_opened_afresh_after_the_drain_settled_is_closed_at_the_board() {
     const TOKEN: &str = "fedcba9876543210fedcba9876543210";
@@ -348,7 +352,11 @@ fn a_session_opened_afresh_after_the_drain_settled_is_closed_at_the_board() {
     let closes: Vec<&String> = heads.iter().filter(|head| head.starts_with("POST /session/close ")).collect();
     assert_eq!(closes.len(), 1, "the session that open made is closed at the board, once: {heads:?}");
     assert!(closes[0].to_ascii_lowercase().contains(&format!("skepd-session: {TOKEN}")), "under its own token: {}", closes[0]);
-    assert!(lines.lock().expect("the lines' lock").is_empty(), "nothing is said");
+    let said = lines.lock().expect("the lines' lock").clone();
+    let [closed] = &said[..] else { panic!("the close said once: {said:?}") };
+    let fresh = closed.strip_prefix("session ").and_then(|rest| rest.split_once(", opened afresh for a call, is closed at the board: ")).map(|(fresh, _)| fresh);
+    assert!(fresh.is_some_and(|fresh| fresh.starts_with("s-") && fresh != "s-1" && fresh != "s-2"), "the session closed, by its reference: {closed}");
+    assert!(closed.ends_with(": the drain settled s-1 first, and s-2 stands"), "{closed}");
 }
 
 /// The drain settles the session's state by its deaths, and says so once.
@@ -358,7 +366,9 @@ fn a_session_opened_afresh_after_the_drain_settled_is_closed_at_the_board() {
 /// session the state never named, or one heard twice; a `session-died` of the
 /// live session moves the state as its reason asks — to the fresh session on
 /// the restart arm's re-open and to a lapse on the unreachable arm, each said
-/// once, and to the stop on a stopping arm, its line handed to the stop alone.
+/// once, naming the session that died, the re-open the one in its place and
+/// the lapse its cause, and to the stop on a stopping arm, its line handed to
+/// the stop alone, naming the session whose end it is.
 #[test]
 fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event() {
     let scratch = Scratch::new("drain");
@@ -381,23 +391,116 @@ fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event(
         bus.send(event).expect("the drain listens");
     }
     let line = stopped.recv_timeout(Duration::from_secs(10)).expect("the stopping death hands the stop its line");
-    assert!(line.starts_with("the key ab12 was retired at the board"), "the live session's stop: {line}");
+    assert!(line.starts_with("the key ab12 was retired at the board") && line.ends_with(" (session s-2)"), "the live session's stop: {line}");
     // A line said after the stop would land within this beat.
     thread::sleep(Duration::from_millis(200));
     assert_eq!(backend.session.current(), SessionState::Stopped("s-2".into()));
     assert!(stopped.try_recv().is_err(), "the stop is handed one line");
     let said = lines.lock().expect("the lines' lock").clone();
     assert_eq!(said.len(), 2, "the re-open and the lapse said once each, and nothing else: {said:?}");
-    assert!(said[0].starts_with("the board restarted: the session was re-opened"), "{said:?}");
-    assert!(said[1].starts_with("the session ended and was not re-opened"), "{said:?}");
+    assert!(said[0].starts_with("the board restarted: the session was re-opened under a fresh reference, s-2 in s-1's place, "), "{said:?}");
+    assert!(said[1].starts_with("the session s-2 ended and was not re-opened (the board did not answer: connect refused): "), "{said:?}");
+}
+
+/// The drain says an outage's end, and a move of the board's pair.
+///
+/// Fed by hand in the bus's place: a `daemon` `running` with no outage before
+/// it says nothing; the outage's `unreachable`, heard twice, and its
+/// `running` say the stream answers again and how long it did not, once; a
+/// `mode` event says the pair it moved to. The members and the states read
+/// are ones skep-shell declares for the two events (`DaemonEvent`,
+/// `ModeEvent`).
+#[test]
+fn the_drain_says_an_outages_end_and_a_move_of_the_boards_pair() {
+    let scratch = Scratch::new("drain-daemon");
+    let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+    let lines = said_by(&mut backend);
+    let (bus, events) = std::sync::mpsc::channel::<Event>();
+    backend.drain(events, Path::new("/store/index"));
+    let daemon = |state: &str| Event { name: EventName::Daemon, data: json!({"board": "b-1", "state": state}) };
+    for event in [
+        daemon("running"),
+        daemon("unreachable"),
+        daemon("unreachable"),
+        daemon("running"),
+        daemon("running"),
+        Event { name: EventName::Mode, data: json!({"board": "b-1", "mode": "CLAIMED-ENFORCING", "claimant": "1.0.1", "local_trust": false}) },
+    ] {
+        bus.send(event).expect("the drain listens");
+    }
+    let said = said_within(&lines, 2);
+    assert!(said[0].starts_with("the board's commit stream answers again, ") && said[0].ends_with(" s after it stopped answering"), "{said:?}");
+    assert_eq!(said[1], "the board's mode moved to CLAIMED-ENFORCING (claimant 1.0.1, local_trust false)", "{said:?}");
+    let fields = |event: &str| skep_shell::shapes::shape(event).unwrap_or_else(|| panic!("skep-shell declares {event}")).fields;
+    let daemon_state = fields("DaemonEvent").iter().find(|field| field.name == "state").expect("the daemon event's state").ty;
+    for state in ["unreachable", "running"] {
+        assert!(daemon_state.contains(&format!("'{state}'")), "`{state}` is a state skep-shell declares: {daemon_state}");
+    }
+    let mode: BTreeSet<&str> = fields("ModeEvent").iter().map(|field| field.name).collect();
+    for member in ["mode", "claimant", "local_trust"] {
+        assert!(mode.contains(member), "`{member}` is a member skep-shell declares for the mode event: {mode:?}");
+    }
+}
+
+/// The end of each face's build of the index is said once, with its time.
+///
+/// Fed by hand in the bus's place: the published face's `building`, heard
+/// twice, then `complete` say the build's end as of its position; a later
+/// `complete` nothing; a session's `widening` that ends at another arm says
+/// that arm; a face never seen building says nothing at its `complete`. The
+/// arms read are ones skep-shell declares for the index's state
+/// (`IndexState`).
+#[test]
+fn the_end_of_each_faces_build_of_the_index_is_said_once() {
+    let scratch = Scratch::new("drain-build");
+    let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+    let lines = said_by(&mut backend);
+    let (bus, events) = std::sync::mpsc::channel::<Event>();
+    backend.drain(events, Path::new("/store/index"));
+    let index = |session: Value, state: Value| Event { name: EventName::Index, data: json!({"board": "b-1", "session": session, "state": state}) };
+    for event in [
+        index(json!("s-3"), json!({"arm": "complete", "as_of": 4, "floor": 0})),
+        index(Value::Null, json!({"arm": "building", "position": 0, "units": 0, "lost": null, "aside": false})),
+        index(Value::Null, json!({"arm": "building", "position": 7, "units": 2, "lost": null, "aside": false})),
+        index(Value::Null, json!({"arm": "complete", "as_of": 9, "floor": 0})),
+        index(Value::Null, json!({"arm": "complete", "as_of": 10, "floor": 0})),
+        index(json!("s-1"), json!({"arm": "widening", "range": {"under": "1.0.1"}})),
+        index(json!("s-1"), json!({"arm": "at_the_floor", "floor": 3})),
+    ] {
+        bus.send(event).expect("the drain listens");
+    }
+    let said = said_within(&lines, 2);
+    assert!(said[0].starts_with("the search index at /store/index is complete for the published documents as of position 9, built in "), "{said:?}");
+    assert!(said[1].starts_with("the search index at /store/index is built for session s-1's reading in ") && said[1].ends_with(" s, its state `at_the_floor`"), "{said:?}");
+    let declared = skep_shell::shapes::shape("IndexState").and_then(|shape| shape.fields.iter().find(|field| field.name == "arm")).expect("skep-shell declares the index's arm").ty;
+    for arm in ["building", "widening", "complete", "at_the_floor", "none"] {
+        assert!(declared.contains(&format!("'{arm}'")), "`{arm}` is an arm skep-shell declares: {declared}");
+    }
+}
+
+/// Returns the lines `lines` holds once it holds `count`, and no more after.
+///
+/// It waits up to ten seconds for them, then a beat in which a line past them
+/// would land.
+fn said_within(lines: &Mutex<Vec<String>>, count: usize) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while lines.lock().expect("the lines' lock").len() < count {
+        assert!(Instant::now() < deadline, "the {count} lines never said: {:?}", lines.lock().expect("the lines' lock"));
+        thread::sleep(Duration::from_millis(20));
+    }
+    thread::sleep(Duration::from_millis(200));
+    let said = lines.lock().expect("the lines' lock").clone();
+    assert_eq!(said.len(), count, "{count} lines, and nothing else: {said:?}");
+    said
 }
 
 /// The index's states that ask an act are said once, naming the index.
 ///
 /// Fed by hand in the bus's place: `busy`, from the guest face and then a
-/// session's, is said once; a newer skep's file and an index past its ceiling
-/// once each, with what each names; a `building` index nothing. The arms read
-/// are ones skep-shell declares for the index's state (`IndexState`).
+/// session's, is said once, and its end once the guest face answers
+/// otherwise; a newer skep's file and an index past its ceiling once each,
+/// with what each names; a `building` index nothing. The arms read are ones
+/// skep-shell declares for the index's state (`IndexState`).
 #[test]
 fn the_index_states_that_ask_an_act_are_said_once() {
     let scratch = Scratch::new("drain-index");
@@ -415,18 +518,11 @@ fn the_index_states_that_ask_an_act_are_said_once() {
     ] {
         bus.send(event).expect("the drain listens");
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while lines.lock().expect("the lines' lock").len() < 3 {
-        assert!(Instant::now() < deadline, "the three states never said: {:?}", lines.lock().expect("the lines' lock"));
-        thread::sleep(Duration::from_millis(20));
-    }
-    // A line said after the third would land within this beat.
-    thread::sleep(Duration::from_millis(200));
-    let said = lines.lock().expect("the lines' lock").clone();
-    assert_eq!(said.len(), 3, "busy once, the two others once each, building nothing: {said:?}");
+    let said = said_within(&lines, 4);
     assert!(said[0].starts_with("the search index at /store/index answers busy: another process holds this directory"), "{said:?}");
-    assert!(said[1].starts_with("the search index at /store/index was written by a newer skep (index version 3)"), "{said:?}");
-    assert!(said[2].starts_with("the search index at /store/index is past its ceiling of 93075924 bytes of text: 4 units"), "{said:?}");
+    assert_eq!(said[1], "the search index at /store/index answers again: its busy was the board's history at the index's resume, now past", "{said:?}");
+    assert!(said[2].starts_with("the search index at /store/index was written by a newer skep (index version 3)"), "{said:?}");
+    assert!(said[3].starts_with("the search index at /store/index is past its ceiling of 93075924 bytes of text: 4 units"), "{said:?}");
     let declared = skep_shell::shapes::shape("IndexState").and_then(|shape| shape.fields.iter().find(|field| field.name == "arm")).expect("skep-shell declares the index's arm").ty;
     for arm in ["busy", "newer_skep", "past_the_ceiling"] {
         assert!(declared.contains(&format!("'{arm}'")), "`{arm}` is an arm skep-shell declares: {declared}");
@@ -497,11 +593,12 @@ fn the_backends_debug_names_its_stop_and_shows_no_closure() {
 ///
 /// A session the calls run under is said closed at the board; a lapsed one
 /// and a stopped one ended there already, and the line says so: the
-/// backend's one line, said before the shell's stop runs.
+/// backend's one line, said before the shell's stop runs, naming the session
+/// and carrying what the loop served, as the loop words it.
 #[test]
 fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
-    let closing = "stopping: closing the session at the board, saving the index";
-    let ended = "stopping: the session already ended at the board; saving the index";
+    let closing = "stopping: closing the session at the board, saving the index (session s-1) — what the loop served";
+    let ended = "stopping: the session already ended at the board; saving the index (session s-1) — what the loop served";
     for (k, death, said) in [(0, None, closing), (1, Some(Death::ServeOn), ended), (2, Some(Death::Stop("stopped".into())), ended)] {
         let scratch = Scratch::new(&format!("clean-stop-{k}"));
         let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
@@ -510,7 +607,19 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
         }
         let lines = said_by(&mut backend);
         let state = backend.session.current();
-        backend.shutdown();
+        backend.shutdown("what the loop served");
         assert_eq!(*lines.lock().expect("the lines' lock"), [said], "{state:?}");
     }
+}
+
+/// What the clean stop leaves held is counted as it stands.
+///
+/// No tail where no burst stands; else the bursts counted, and those sent and
+/// so perhaps landed, which the next start counts again.
+#[test]
+fn what_the_clean_stop_leaves_held_is_counted_as_it_stands() {
+    assert_eq!(left_held(&json!([])), None, "no tail where no burst stands");
+    let line = |k: u64, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": "unreachable", "sent": sent, "time": k});
+    assert_eq!(left_held(&json!([line(1, true), line(2, false)])).as_deref(), Some("; it leaves 2 bursts held at this board (1 sent and so perhaps landed), which the next start counts"));
+    assert_eq!(left_held(&json!([line(1, false)])).as_deref(), Some("; it leaves 1 burst held at this board (0 sent and so perhaps landed), which the next start counts"));
 }

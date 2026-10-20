@@ -76,8 +76,10 @@
 //! against when loaded, the dispatch's door (`Tool::admit`, which admits a call
 //! or refuses it -32602), and a wire op's call mapped onto its frame (*every
 //! tool is one call of the shell*). `log.rs` is the adapter's log on stderr,
-//! which every module and the shell's TALK write through, and which never
-//! waits on its reader, with the panic hook that makes a panic one line of it.
+//! which every module and the shell's TALK write through: each line stamped
+//! with the moment it was said and cut of any answer's text, and never
+//! waiting on its reader, with the panic hook that makes a panic one line of
+//! it.
 //! This file is startup — flags, environment, the `SKEP_COMMONS` check, the
 //! shell's open — and the loop's two inputs (stdin's reader, the backend's
 //! stop) wired onto one channel.
@@ -153,9 +155,11 @@ exit status:
   101  a panic: a bug, said in one line of the log
 
 log:
-  stderr, every line opening 'skep-mcp: ', the first naming the version.
-  A reader that stops reading never holds the adapter up: the lines it
-  leaves are dropped, and the next line it takes says how many went
+  stderr, every line opening 'skep-mcp: ' and the moment it was said,
+  RFC 3339 UTC to the millisecond, the first naming the version and the
+  process id. A reader that stops reading never holds the adapter up: the
+  lines it leaves are dropped, and the next line it takes says how many
+  went, at the moment the first of them was said
 
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio, and serves every
 tool through the shell's core (skep-shell) under one signed session it
@@ -177,7 +181,8 @@ const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
 /// developer's own build never does. Both are read at compile time, so the run
 /// consults no file and no variable; the release scripts set the variable and
 /// hold the four shipped binaries to one version and one commit. The log's
-/// first line names it (`version <build>`), and the version line answers it.
+/// first line names it beside the process (`version <build>, pid <id>`), a
+/// panic's line names it again, and the version line answers it.
 fn build() -> String {
     format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
 }
@@ -273,8 +278,11 @@ fn serve() -> ExitCode {
             _ => die_usage(format_args!("unknown argument '{}'", arg.to_string_lossy())),
         }
     }
-    // The build first, so every line after it is read as this binary's.
-    log(format_args!("version {}", build()));
+    // The build and the process first, so every line after it is read as
+    // this binary's, and joins what the host says of the process — an OOM
+    // kill, a crash report, the harness's own record of its child — by the
+    // id.
+    log(format_args!("version {}, pid {}", build(), std::process::id()));
     // The catalog next: a drifted tools file is a startup error before any
     // environment or network is consulted. Its source is named where it is
     // refused and where the serving line counts its tools.
@@ -545,7 +553,10 @@ mod tests {
     /// The usage says where the log is, and that its reader holds nothing up.
     #[test]
     fn the_usage_says_where_the_log_is() {
-        for said in ["\nlog:\n  stderr, every line opening 'skep-mcp: ', the first naming the version", "never holds the adapter up"] {
+        for said in [
+            "\nlog:\n  stderr, every line opening 'skep-mcp: ' and the moment it was said,\n  RFC 3339 UTC to the millisecond, the first naming the version and the\n  process id",
+            "never holds the adapter up",
+        ] {
             assert!(USAGE.contains(said), "the usage says {said:?}: {USAGE}");
         }
     }

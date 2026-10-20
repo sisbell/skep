@@ -2134,10 +2134,6 @@
                 "type": "integer",
                 "minimum": 0,
                 "description": "Skip this many hits first (0 by default)."
-              },
-              "reindex": {
-                "type": "boolean",
-                "description": "Refresh the index pair before answering (false by default)."
               }
             },
             "additionalProperties": false

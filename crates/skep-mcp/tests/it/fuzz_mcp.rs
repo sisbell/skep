@@ -178,9 +178,12 @@ fn budget(default: usize) -> usize {
     }
 }
 
-/// The JSON-RPC corpus the storm mutates: requests of each dispatch kind —
-/// a wire op, a shell call, an apparatus tool — a notification, an id-less
-/// non-request, and a stray response.
+/// Returns the JSON-RPC corpus the storm mutates.
+///
+/// It holds requests of each dispatch kind — a wire op, a shell call, an
+/// apparatus tool — and a shell call whose `opts` the door refuses,
+/// `search`'s withheld `reindex`; a notification, an id-less non-request,
+/// and a stray response.
 fn corpus() -> Vec<Vec<u8>> {
     [
         r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
@@ -195,6 +198,7 @@ fn corpus() -> Vec<Vec<u8>> {
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
         r#"{"jsonrpc":"2.0","id":10,"result":{}}"#,
         r#"{"jsonrpc":"2.0","id":11,"method":"no/such/method"}"#,
+        r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"search","arguments":{"query":"hello","opts":{"reindex":true}}}}"#,
     ]
     .iter()
     .map(|s| s.as_bytes().to_vec())

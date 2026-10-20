@@ -38,7 +38,7 @@
 //!   §3c.2), or answered `500 internal_panic` past its commit — each the
 //!   board's verdict, and so data. A call the adapter will not run — a tool
 //!   outside the catalog, a member an adapter tool's row or its `opts` does not
-//!   name, a wire op's arguments of the shell's `/op-at` shape — is no tool
+//!   take, a wire op's arguments of the shell's `/op-at` shape — is no tool
 //!   result at all: it is refused -32602, as malformed `tools/call` params are;
 //!   a member of the wrong form is the shell's `malformed_args`.
 //! * **A signed session, opened at startup**, before the first tool call, for
@@ -50,8 +50,10 @@
 //!   re-open the board refused — stops the process with one plain line naming
 //!   the arm, and so does the board's refusal of a session the adapter opens
 //!   itself where the shell's end left none. No person is at the seam
-//!   (`ArmConfig::Refuse`): no ceremony tool is offered, and every SECRET or
-//!   CONSENT moment would be refused `person_required`.
+//!   (`ArmConfig::Refuse`): no ceremony tool is offered, every SECRET or
+//!   CONSENT moment would be refused `person_required`, and `search` takes no
+//!   `opts.reindex`, the person's refresh of the index (`search.md` §5.5),
+//!   which re-reads every document the index holds while the call waits.
 //!
 //! `server.rs` is the MCP side: the stdio transport — stdin's reader, and the
 //! loop that answers each line on stdout — the JSON-RPC dispatch, and `call`,

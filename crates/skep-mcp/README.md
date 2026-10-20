@@ -48,7 +48,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   no ceremony tool is offered (no `keygen`, `fingerprint`, `claim`,
   `enroll`, `bind`, `recover`, `rotate`, `retire`, `handoff`, `accept`);
   nor `upload` or `restore`, whose media walk the shell does not reach
-  yet (skep #502).
+  yet (skep #502). Nor does `search` take `opts.reindex`: the index's
+  refresh, the person's act, re-reads every document the index holds while
+  the call waits; the index follows the board's commits without it.
 - **One call at a time.** Calls are served in arrival order, one at a time;
   a `fetch` of a large file, up to its body's deadline, or a `search` while
   the index is building holds the calls behind it. Stdin's end is the clean

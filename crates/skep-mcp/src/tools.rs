@@ -138,10 +138,20 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
 /// The options an adapter tool's `opts` takes, where its row takes one.
 ///
 /// They are skep-shell's `SearchOpts` and `PlacesOpts`, the members the
-/// catalog's closed `opts` schemas name. The shell reads these and ignores
-/// any other, so the door refuses a member outside them, as it refuses one
-/// outside the row.
-const OPTS_MEMBERS: &[(Tool, &[&str])] = &[(Tool::Search, &["limit", "offset", "reindex"]), (Tool::Places, &["under"])];
+/// catalog's closed `opts` schemas name, bar one the door withholds: `search`'s
+/// `reindex`, the index's refresh, which is the person's act (`search.md` §5.5;
+/// `client.md` §4b.1). Asked, it re-reads every unit the index holds before the
+/// search answers — every published document, whoever published it, and every
+/// draft the session reads, each its extent and then its whole text — on the
+/// shell's feed thread for the board, while the call waits and this adapter,
+/// which answers one call at a time, serves nothing else. No person is at this
+/// adapter's seam, and a document's text can steer an agent into asking the
+/// refresh on every search. The feed keeps the index current commit by commit
+/// and retries a recorded refusal as the index widens; an `unplaced` count,
+/// which the refresh alone clears, stands, and the index's state says so. The
+/// shell ignores an option it does not read, so the door refuses one outside
+/// these, as it refuses a member outside the row.
+const OPTS_MEMBERS: &[(Tool, &[&str])] = &[(Tool::Search, &["limit", "offset"]), (Tool::Places, &["under"])];
 
 impl Tool {
     /// Admits the call a `tools/call` names, or refuses it.
@@ -151,8 +161,8 @@ impl Tool {
     /// save one shape: a numeric `at` beside an object `frame`, which
     /// skep-shell's `op` row reads as its `/op-at` form and would send as
     /// another frame. An adapter tool's every member must be one its row
-    /// takes, and every member of its `opts` one the row's options take — the
-    /// members the adapter and the shell read.
+    /// takes, and every member of its `opts` one of the row's options the door
+    /// takes (`OPTS_MEMBERS`) — members the adapter and the shell read.
     ///
     /// # Errors
     ///
@@ -162,7 +172,8 @@ impl Tool {
     /// 1. a name the dispatch does not answer;
     /// 2. for a wire op, arguments of the `/op-at` shape;
     /// 3. for an adapter tool, a member its row does not take, then a member
-    ///    of its `opts` the row's options do not take.
+    ///    of its `opts` outside `OPTS_MEMBERS`, `search`'s withheld `reindex`
+    ///    among them.
     pub fn admit(name: &str, args: &Map<String, Value>) -> Result<Tool, String> {
         let tool = Tool::named(name).ok_or_else(|| format!("unknown tool '{name}'; tools/list names the available tools"))?;
         let Some(members) = tool.members() else {
@@ -216,8 +227,8 @@ impl Tool {
 
     /// Returns the options an adapter tool's `opts` takes, where it takes one.
     ///
-    /// They are the only ones the shell reads, so any other is refused by
-    /// name; `None` where the tool's row takes no `opts`.
+    /// They are the row's options the door admits (`OPTS_MEMBERS`), so any
+    /// other is refused by name; `None` where the tool's row takes no `opts`.
     fn opts_members(self) -> Option<&'static [&'static str]> {
         OPTS_MEMBERS.iter().find(|(tool, _)| *tool == self).map(|(_, members)| *members)
     }

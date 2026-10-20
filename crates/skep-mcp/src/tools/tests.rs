@@ -187,7 +187,8 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
 /// beside an object `frame`, which alone is refused; a name it does not
 /// answer is refused before its arguments are read; a member an adapter
 /// tool's row does not take is refused naming the row's own, and a member of
-/// its `opts` naming the options, the row's stranger speaking first.
+/// its `opts` naming the options — `search`'s withheld `reindex` among them —
+/// the row's stranger speaking first.
 #[test]
 fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     let args = |v: Value| -> Map<String, Value> {
@@ -209,7 +210,11 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     }
     let err = Tool::admit("places", &args(json!({"opts": {"undr": "1.0.1"}}))).expect_err("an opts stranger");
     assert!(err.contains("'under'") && err.contains("'undr'"), "{err}");
-    assert_eq!(Tool::admit("search", &args(json!({"query": "x", "opts": {"limit": 3, "offset": 0, "reindex": false}}))), Ok(Tool::Search));
+    assert_eq!(Tool::admit("search", &args(json!({"query": "x", "opts": {"limit": 3, "offset": 0}}))), Ok(Tool::Search));
+    for reindex in [json!(true), json!(false)] {
+        let err = Tool::admit("search", &args(json!({"query": "x", "opts": {"reindex": reindex}}))).expect_err("the withheld refresh");
+        assert!(err.contains("'limit', 'offset'") && err.contains("'reindex'"), "{err}");
+    }
     let err = Tool::admit("search", &args(json!({"query": "x", "board": "b-1", "opts": {"undr": 1}}))).expect_err("two strangers");
     assert!(err.contains("'board'") && !err.contains("'undr'"), "the row's stranger speaks first: {err}");
 }
@@ -295,21 +300,25 @@ fn every_paragraph_the_catalog_names_opens_its_instructions() {
     assert!(named > 0, "premise: the catalog names a paragraph");
 }
 
-/// The options the door admits are the ones skep-shell declares.
+/// The options the door admits are the ones skep-shell declares, bar `reindex`.
 ///
 /// Each `opts` row of the door's table is held to the shell's own
-/// declaration of its options type (`shapes::declarations`), so an option the
+/// declaration of its options type (`shapes::declarations`) less the option
+/// the door withholds, `search`'s `reindex` (`OPTS_MEMBERS`): an option the
 /// shell adds or renames fails here before the door refuses it, or admits
-/// one the shell would ignore.
+/// one the shell would ignore, and the one withheld stays one the shell
+/// declares, so the withholding names a refresh the shell still offers.
 #[test]
-fn the_opts_the_door_admits_are_the_ones_skep_shell_declares() {
+fn the_opts_the_door_admits_are_the_ones_skep_shell_declares_bar_reindex() {
     let declarations = skep_shell::shapes::declarations();
-    for (tool, interface) in [(Tool::Search, "SearchOpts"), (Tool::Places, "PlacesOpts")] {
+    for (tool, interface, withheld) in [(Tool::Search, "SearchOpts", &["reindex"][..]), (Tool::Places, "PlacesOpts", &[][..])] {
         let head = format!("export interface {interface} {{");
         let body = declarations.split_once(head.as_str()).and_then(|(_, rest)| rest.split_once('}')).map(|(body, _)| body).unwrap_or_else(|| panic!("skep-shell declares {interface}"));
         let declared: BTreeSet<&str> = body.split(';').filter_map(|member| member.split(':').next()).map(|name| name.trim().trim_end_matches('?')).filter(|name| !name.is_empty()).collect();
+        let withheld: BTreeSet<&str> = withheld.iter().copied().collect();
+        assert!(withheld.is_subset(&declared), "{interface}: the option withheld is one the shell declares: {withheld:?}");
         let taken: BTreeSet<&str> = tool.opts_members().expect("the row takes opts").iter().copied().collect();
-        assert_eq!(taken, declared, "{interface}: the door's options are the shell's");
+        assert_eq!(taken, &declared - &withheld, "{interface}: the door's options are the shell's, bar the one withheld");
     }
 }
 

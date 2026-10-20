@@ -32,7 +32,6 @@
 //! clones every event to every subscriber), and the one event this adapter
 //! acts on is `session-died`; every other is read and dropped.
 
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -44,26 +43,11 @@ use skep_client::store::KeyFacts;
 use skep_client::Origin;
 use skep_shell::{ArmConfig, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
 
-use crate::media::MAX_FETCH_BYTES;
-
 /// How long a call whose reference the feed thread ended waits for that
 /// thread's re-open to reach the shared reference before it opens a
 /// session itself: the end's derivation makes a few dials and completes in
 /// milliseconds, so the wait is a bound, not an expected delay.
 const SWAP_WAIT: Duration = Duration::from_secs(2);
-
-/// What a fetched file came back as.
-#[derive(Debug)]
-pub enum FetchAnswer {
-    /// The file's bytes, whole.
-    Bytes(Vec<u8>),
-    /// The file's declared length passes [`MAX_FETCH_BYTES`]: no byte of it
-    /// was read.
-    PastTheCap { length: u64 },
-    /// The stream ended short of the declared length — the board's RESET
-    /// (wire.md §Media, THE FETCH), or a read that failed: `read` bytes came.
-    Cut { read: usize, length: Option<u64>, error: String },
-}
 
 /// What a death's reason asks of the adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +109,7 @@ fn shell_refusal(refusal: &Refusal, named: Name) -> Option<&Value> {
 /// under its armed name, state, cause and act on their lines; the board's
 /// verdict, the block and the unreachable board as the library spells them;
 /// the shell's own by name with its detail.
-pub fn plain(refusal: &Refusal) -> String {
+fn plain(refusal: &Refusal) -> String {
     match refusal {
         Refusal::Halt { name, face } => format!("{name}: {}\n  cause: {}\n  act: {}", face.state, face.cause, face.act),
         Refusal::Board(r) => format!("the board refused: {r}"),
@@ -358,40 +342,20 @@ impl Backend {
         })
     }
 
-    /// The board's bytes at the address `i`, under the session: the shell's
-    /// streamed fetch, its declared length held to [`MAX_FETCH_BYTES`]
-    /// before a byte is read, the body then read whole.
+    /// Fetches the board's bytes at the address `i` under the session.
+    ///
+    /// The answer is the shell's streamed fetch, its head and its body still
+    /// unread, which [`read_whole`](crate::media::read_whole) reads under the
+    /// adapter's cap.
     ///
     /// # Errors
     ///
     /// The shell's refusal of the fetch: the board's verdict on the address
     /// (`withheld`, `not_a_cell`, `no_value`, `blob_missing`, …) under its
     /// own status, the unreachable board, or the session's end as
-    /// `session_call` carries it. A file past the cap and a stream cut
-    /// short are answers, not errors.
-    pub fn fetch(&self, i: &str) -> Result<FetchAnswer, Refusal> {
-        let fetched = self.under_session(|session| self.shell.fetch(&json!({"session": session, "i": i})))?;
-        let Fetched { headers, body, .. } = fetched;
-        let length = headers.get("Content-Length").and_then(|v| v.trim().parse::<u64>().ok());
-        if let Some(length) = length {
-            if length > MAX_FETCH_BYTES {
-                return Ok(FetchAnswer::PastTheCap { length });
-            }
-        }
-        let mut bytes = Vec::new();
-        let read = body.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
-        if bytes.len() as u64 > MAX_FETCH_BYTES {
-            return Ok(FetchAnswer::PastTheCap { length: bytes.len() as u64 });
-        }
-        if let Err(e) = read {
-            return Ok(FetchAnswer::Cut { read: bytes.len(), length, error: e.to_string() });
-        }
-        if let Some(length) = length {
-            if (bytes.len() as u64) < length {
-                return Ok(FetchAnswer::Cut { read: bytes.len(), length: Some(length), error: "the stream ended short of its declared length".into() });
-            }
-        }
-        Ok(FetchAnswer::Bytes(bytes))
+    /// `session_call` carries it.
+    pub fn fetch(&self, i: &str) -> Result<Fetched, Refusal> {
+        self.under_session(|session| self.shell.fetch(&json!({"session": session, "i": i})))
     }
 
     /// `session_info`: the principal, its account, the signing key's

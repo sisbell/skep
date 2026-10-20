@@ -1,5 +1,8 @@
-//! The bytes of a fetched file as a tool result: the type SNIFFED off the
-//! bytes' magic, and the base64 the content block carries.
+//! A fetched file's bytes: read whole under a cap, sniffed, and encoded.
+//!
+//! [`read_whole`] reads the shell's streamed fetch under the adapter's cap,
+//! [`sniff_image`] names the bytes' type off their magic, and [`base64`]
+//! encodes them for the content block, which `server.rs` builds.
 //!
 //! The board declares no media type — a picture's cell is `{type, hash,
 //! size}` and the fetch's `Content-Type` is always `application/octet-stream`
@@ -12,6 +15,10 @@
 //! here rather than taken from a crate (RFC 4648 §4, the standard alphabet
 //! with `=` padding), held to the RFC's own vectors by the unit tests.
 
+use std::io::Read;
+
+use skep_client::dial::Headers;
+
 /// The most bytes `fetch` answers: one JSON-RPC line carries the whole file
 /// as base64, so the bound is the line's, well under the board's 64 MiB per
 /// file (wire.md §Transport). Eight mebibytes is the frame routes' request
@@ -21,6 +28,51 @@
 /// model takes as one image. Checked against the answer's `Content-Length`
 /// before a byte is read; a file past it is refused naming the cap.
 pub const MAX_FETCH_BYTES: u64 = 8 * 1024 * 1024;
+
+/// What a fetched file came back as.
+#[derive(Debug)]
+pub enum FetchAnswer {
+    /// The file's bytes, whole.
+    Bytes(Vec<u8>),
+    /// The file passes [`MAX_FETCH_BYTES`]: its declared `length` does, and
+    /// no byte of it was read, or its body ran past the cap and the read
+    /// stopped at `length`, one byte past it.
+    PastTheCap { length: u64 },
+    /// The stream ended short of the declared length — the board's RESET
+    /// (wire.md §Media, THE FETCH), or a read that failed: `read` bytes came.
+    Cut { read: usize, length: Option<u64>, error: String },
+}
+
+/// Reads a fetched file's body whole under [`MAX_FETCH_BYTES`].
+///
+/// `headers` is the fetch's head: its `Content-Length`, where it declares
+/// one, is held to the cap before a byte of `body` is read, and the body is
+/// then read to one byte past the cap at most. A file past the cap and a
+/// stream cut short are answers, not errors: the shell's refusal of the
+/// fetch came earlier, as [`Backend::fetch`](crate::shell::Backend::fetch)'s
+/// `Err`.
+pub fn read_whole(headers: &Headers, body: impl Read) -> FetchAnswer {
+    let length = headers.get("Content-Length").and_then(|v| v.trim().parse::<u64>().ok());
+    if let Some(length) = length {
+        if length > MAX_FETCH_BYTES {
+            return FetchAnswer::PastTheCap { length };
+        }
+    }
+    let mut bytes = Vec::new();
+    let read = body.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
+    if bytes.len() as u64 > MAX_FETCH_BYTES {
+        return FetchAnswer::PastTheCap { length: bytes.len() as u64 };
+    }
+    if let Err(e) = read {
+        return FetchAnswer::Cut { read: bytes.len(), length, error: e.to_string() };
+    }
+    if let Some(length) = length {
+        if (bytes.len() as u64) < length {
+            return FetchAnswer::Cut { read: bytes.len(), length: Some(length), error: "the stream ended short of its declared length".into() };
+        }
+    }
+    FetchAnswer::Bytes(bytes)
+}
 
 /// Returns the image media type the bytes' magic names, where it names one.
 ///

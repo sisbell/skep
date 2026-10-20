@@ -26,7 +26,7 @@ pub const EMBEDDED: &str = include_str!("../tools.json");
 /// §Operations, each spelled exactly as the wire spells it, since the tool
 /// name IS the frame's `op`. No general `op` tool ships: every op has a
 /// name here.
-pub const DISPATCH_OPS: &[&str] = &[
+const DISPATCH_OPS: &[&str] = &[
     // Namespace.
     "create_new_document",
     "delegate",
@@ -141,7 +141,7 @@ impl Tool {
 
     /// Every name the dispatch answers, the wire ops first, then the
     /// adapter's own in their table's order.
-    pub fn names() -> impl Iterator<Item = &'static str> {
+    fn names() -> impl Iterator<Item = &'static str> {
         DISPATCH_OPS.iter().copied().chain(ADAPTER_TOOLS.iter().map(|(name, _, _)| *name))
     }
 

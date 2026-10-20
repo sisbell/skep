@@ -13,8 +13,6 @@
 //! real JSON-RPC driven through its stdin/stdout, its stderr read where a
 //! test wants the lines.
 
-#![allow(dead_code)]
-
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -96,14 +94,15 @@ pub const CLAIMANT_ACCOUNT: &str = "1.0.1";
 pub const CLAIMANT_DOC1: &str = "1.0.1.0.1";
 pub const AGENT_SPACE: &str = "1.0.1.1";
 
-/// A claimed board: its daemon, its port, the store that claimed it (the
-/// claimant's key and binding), the anchors' directory beside it.
+/// A claimed board: its daemon, its port, and the store that claimed it.
+///
+/// The store holds the claimant's key and its binding; the claim's anchors
+/// sit beside it under `dir`.
 pub struct Fixture {
     pub dir: TempDir,
     daemon: Option<Skepd>,
-    pub port: u16,
+    port: u16,
     pub store: PathBuf,
-    pub anchors: PathBuf,
     /// The claimant's device key, in hex.
     pub fingerprint: String,
 }
@@ -117,7 +116,7 @@ impl Fixture {
         let store = dir.path().join("store");
         let anchors = dir.path().join("anchors");
         let fingerprint = claim_board(&origin(port), &store, &anchors);
-        Fixture { dir, daemon: Some(daemon), port, store, anchors, fingerprint }
+        Fixture { dir, daemon: Some(daemon), port, store, fingerprint }
     }
 
     pub fn origin(&self) -> String {
@@ -132,11 +131,6 @@ impl Fixture {
     /// The board's data directory.
     pub fn board_dir(&self) -> PathBuf {
         self.dir.path().join("board")
-    }
-
-    /// The daemon, for its test hooks.
-    pub fn daemon(&self) -> &Skepd {
-        self.daemon.as_ref().expect("the daemon runs")
     }
 
     /// The daemon stopped: the board gone until [`Fixture::restart`].
@@ -166,11 +160,6 @@ impl Fixture {
     pub fn restart_signing_elsewhere(&mut self) {
         self.stop();
         self.daemon = Some(spawn_signing_at(&self.board_dir(), self.port, |port| format!("http://localhost:{port}")));
-    }
-
-    /// The board's committed head, `/health`'s `log_position`.
-    pub fn head(&self) -> u64 {
-        self.board().health().expect("health").log_position()
     }
 
     /// A bare session of the library's as `principal`, on the permissive
@@ -448,6 +437,7 @@ impl Launch {
         self
     }
 
+    #[cfg(unix)]
     pub fn arg(mut self, arg: impl AsRef<std::ffi::OsStr>) -> Launch {
         self.cmd.arg(arg);
         self
@@ -523,7 +513,7 @@ impl Default for Launch {
 
 /// A running adapter.
 pub struct Mcp {
-    pub child: Child,
+    child: Child,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     /// The adapter's log so far, where the launch was `logged`.

@@ -67,8 +67,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   closes the session at the board and saves the index. A signal ends the
   process with neither — the session then lives on at the board until it
   restarts.
-- **Deliberately dependency-light** — the shell's core and `serde_json`;
-  the stdio framing, the type sniff and the base64 are this crate's own.
+- **Deliberately dependency-light** — the shell's core, `skep-client` for
+  the types the shell's surface names and a key label's inert rendering,
+  and `serde_json`; the stdio framing, the type sniff and the base64 are
+  this crate's own.
 
 ## Settings
 

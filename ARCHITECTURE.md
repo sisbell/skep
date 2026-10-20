@@ -204,7 +204,13 @@ foundation and on the stores above it.
 - `skep-mcp` — a stdio adapter for agent harnesses over the shell's core
   (`skep-shell`): one signed session for the process's life, every wire
   op a tool of its name, the shell's calls, a change pull and a blob
-  fetch beside them.
+  fetch beside them. One binary: of the skep crates it depends on
+  `skep-shell` and `skep-client` — the latter for the types the shell's
+  surface names and a key label's inert rendering — and never `skepd`,
+  which its suite spawns as a dev-dependency. No feature; every test build
+  compiles it with `skep-client`'s `test-hooks` on, so
+  `scripts/gate-full.sh` checks the binary as it ships. Its modules and
+  the rules that hold across them: its crate doc, `src/main.rs`.
 - `skep-resolve` — the verifying registry resolver, a LIBRARY a client
   embeds (the frontend, the `skep` command, a node's federation
   transport): the mirror of the registry board from a shipped root hint
@@ -1233,7 +1239,7 @@ each ceremony:
   merge` command is built — `skep-cli`'s `commands/merge.rs`, the one
   embedder that turns the feature on (§The command) — and no agent surface
   is: the attendant is not built, and skep-mcp, which embeds `skep-client`
-  through `skep-shell`, turns the feature on nowhere, so its
+  directly and through `skep-shell`, turns the feature on nowhere, so its
   compose-and-report tool is not either. Neither is the supersession
   claim over version members: the wire's `assert_sup` takes resident
   links alone, so the
@@ -3270,7 +3276,7 @@ imports it.
 | `client` | off | `GET /`, the embedded GUEST READER (read-only), so opted into (`Cargo.toml` carries the ruling) | `scripts/gate-full.sh`'s `--features client` check and `--all-features` run |
 | `test-hooks` | off | `Daemon`'s `#[doc(hidden)]` test hooks, `fuzz_support`, the `Permit` re-export — and, forwarded, four seams in other crates: `skep-core`'s `test-hooks` (the feed walk's hold, notice and panic arm, the head writer's clock and refusal, the feed's and the attest store's failure arms, the lines said, the checkpoint signal's tick — the surface the daemon's hooks on its core call; it forwards nothing), `skep-media`'s `test-hooks` (the holds, the gate's overrides, the index's report and counts, the pools' `try_hold` the daemon's media hooks call), `skep-blobs`'s (the hazard seam `Daemon::hold_blob_finish_at` is a door to) and `skep-kernel`'s (the write-fault seam: the next checkpoint write, journal append, barrier or repair failing with a named `io::ErrorKind`, or a panic in the checkpoint write, through the kernel's own `#[doc(hidden)]` doors) | every test build (the crate's self dev-dependency); `scripts/gate-full.sh` checks the library and binary without it |
 | `skep-signature`'s `sign` | off — skepd depends with no feature, so the daemon's build holds no signer, and skep-provision likewise for the record's decode | the signer's half: the KDF, keygen from a seed, signing, the signer's OS draw | every workspace build (skep-client's default `acting`) and every test build (the suites' dev-dependencies); `scripts/gate-full.sh` checks the crate without it (the verify-only build a daemon links) and with it, and that skep-provision's shipped build resolves it off |
-| `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks — every item whose doc opens `TEST HOOK`, hidden from the docs, named together in the crate's `src/hooks.rs` | every test build (its self dev-dependency, and skepd's and skep-mcp's dev-dependencies on it) |
+| `skep-signature`'s `test-hooks` | off | implies `sign`; the fixtures' hooks — every item whose doc opens `TEST HOOK`, hidden from the docs, named together in the crate's `src/hooks.rs` | every test build (its self dev-dependency, and skep-core's and skepd's dev-dependencies on it) |
 
 ## Rules that hold across files
 

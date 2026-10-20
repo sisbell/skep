@@ -1,3 +1,5 @@
+use std::io;
+
 use super::*;
 
 /// The encoder against RFC 4648 §10's test vectors — the seven the RFC
@@ -64,4 +66,52 @@ fn the_cap_sits_well_under_the_boards_per_file_cap() {
     assert_eq!(MAX_FETCH_BYTES, 8 * 1024 * 1024);
     assert!(MAX_FETCH_BYTES * 8 <= board_per_file, "the board serves eight times the cap");
     assert!(base64(&vec![0u8; MAX_FETCH_BYTES as usize]).len() < line_bound as usize, "the base64 line at the cap");
+}
+
+/// The read holds the cap both ways and tells a whole file from a cut one.
+///
+/// A declared length past the cap is refused before a byte of the body is
+/// read, and a body that declares no length is refused once a byte past the
+/// cap has come; a body short of its declared length, or broken off by a
+/// failed read, is cut, the bytes that came counted; a body at its declared
+/// length is whole, and so is one at the cap that declares no length.
+#[test]
+fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
+    // A body no read may touch.
+    struct Untouched;
+    impl Read for Untouched {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            panic!("a byte of a file past the cap was read")
+        }
+    }
+    // A body that breaks off after its bytes, as a reset stream does.
+    struct BreaksAfter(&'static [u8]);
+    impl Read for BreaksAfter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(io::Error::other("connection reset"));
+            }
+            let n = self.0.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+    let declared = |n: u64| Headers(vec![("Content-Length".to_string(), n.to_string())]);
+    let undeclared = Headers(Vec::new());
+    let past = MAX_FETCH_BYTES + 1;
+    assert!(matches!(read_whole(&declared(past), Untouched), FetchAnswer::PastTheCap { length } if length == past));
+    let oversized = io::repeat(7).take(MAX_FETCH_BYTES + 2);
+    assert!(matches!(read_whole(&undeclared, oversized), FetchAnswer::PastTheCap { length } if length == past), "the read stops one byte past the cap");
+    match read_whole(&declared(10), &b"abcd"[..]) {
+        FetchAnswer::Cut { read: 4, length: Some(10), error } => assert!(error.contains("short of its declared length"), "{error}"),
+        other => panic!("a short body is cut: {other:?}"),
+    }
+    match read_whole(&declared(10), BreaksAfter(b"abc")) {
+        FetchAnswer::Cut { read: 3, length: Some(10), error } => assert!(error.contains("connection reset"), "{error}"),
+        other => panic!("a broken read is cut: {other:?}"),
+    }
+    assert!(matches!(read_whole(&declared(5), &b"hello"[..]), FetchAnswer::Bytes(bytes) if bytes == b"hello"));
+    let at_cap = read_whole(&undeclared, io::repeat(1).take(MAX_FETCH_BYTES));
+    assert!(matches!(at_cap, FetchAnswer::Bytes(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file at the cap is whole");
 }

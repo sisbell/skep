@@ -235,6 +235,19 @@ done <<< "$tree"
 RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
     cargo doc -p skep-provision --bins --no-deps --document-private-items || exit $?
 
+# skep-mcp's binary as `release-pack.sh` builds it (`-p skep-mcp`): every
+# test build compiles it against a skep-client with `test-hooks` on (the
+# suite's dev-dependency), and the workspace run below with `merge` on too
+# (skep-client's self dev-dependency, skep-cli's dependency), so no test
+# run compiles the adapter that ships, and a `src` use of either feature's
+# items would pass every one of them and fail at release. This check
+# compiles it with the features it ships with. Its docs, like
+# skep-provision's, link across its modules through `main.rs`'s `mod`
+# tree, which no `--lib` line reaches.
+cargo check -p skep-mcp --bins || exit $?
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" \
+    cargo doc -p skep-mcp --bins --no-deps --document-private-items || exit $?
+
 # --run-ignored all re-admits the #[ignore] timing partition. One test is
 # excluded BY NAME, not by ignore-ness: hazard G (disk exhaustion) is
 # env-gated by its owners (hdiutil, mount rights, macOS only — "run it

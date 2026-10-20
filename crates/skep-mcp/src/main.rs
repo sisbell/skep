@@ -37,17 +37,19 @@
 //!   the seam (`ArmConfig::Refuse`): no ceremony tool is offered, and every
 //!   SECRET or CONSENT moment would be refused `person_required`.
 //!
-//! `server.rs` is the MCP side: the loop over the inbound lines, the
-//! JSON-RPC dispatch, and `call`, which keeps the second rule. `shell.rs`
-//! is the one seam onto `skep-shell`: the open and its checks, the one
-//! session's reference and its life, the bus drained. `media.rs` is the
-//! fetched file's sniff and its base64. `tools.rs` holds the catalog
-//! (`tools.json`, embedded) with its commons sentence, the dispatch's two
-//! kinds the catalog is checked against when loaded, and the first rule's
-//! mapping of a wire op's call onto a frame. This file is startup — flags,
-//! environment, the `SKEP_COMMONS` check, the shell's open — the two
-//! threads beside the loop (stdin's reader, the bus's drain), and `log`,
-//! the operator's stream every module and the shell's TALK write through.
+//! `server.rs` is the MCP side: the stdio transport — stdin's reader, and
+//! the loop that answers each line on stdout — the JSON-RPC dispatch, and
+//! `call`, which keeps the second rule. `shell.rs` is the one seam onto
+//! `skep-shell`: the open and its checks, the one session's reference and
+//! its life, the bus drained. `media.rs` is the fetched file: its bytes
+//! read whole under the adapter's cap, its type sniffed, its base64.
+//! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
+//! sentence, the dispatch's two kinds the catalog is checked against when
+//! loaded, and the first rule's mapping of a wire op's call onto a frame.
+//! This file is startup — flags, environment, the `SKEP_COMMONS` check, the
+//! shell's open — the loop's two inputs (stdin's reader, the bus's drain)
+//! wired onto one channel, and `log`, the operator's stream every module
+//! and the shell's TALK write through.
 //!
 //! stdout is protocol-only; all logging goes to stderr, through `log`,
 //! whose failure fails nothing. Stdin EOF is the clean exit: the shell's
@@ -64,16 +66,15 @@ use std::borrow::Cow;
 use std::env::{self, VarError};
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::io::{BufRead, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
 
 use skep_client::Origin;
 
-use crate::server::{Inbound, Server};
+use crate::server::{read_stdin, Inbound, Server};
 use crate::shell::Backend;
 use crate::tools::Catalog;
 
@@ -249,27 +250,11 @@ fn main() -> ExitCode {
         catalog.tools().len(),
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     ));
-    // THE TWO THREADS beside the loop: stdin's reader, whose lines and end
-    // reach the loop on one channel, and the bus's drain, whose stop does.
+    // The loop's two inputs, on one channel: stdin's lines and its end, which
+    // `read_stdin` sends from a thread of its own, and the bus's drain, which
+    // sends the backend's stop.
     let (inbound, lines) = mpsc::channel::<Inbound>();
-    let reader = inbound.clone();
-    thread::spawn(move || {
-        let stdin = std::io::stdin();
-        for line in stdin.lock().split(b'\n') {
-            match line {
-                Ok(l) => {
-                    if reader.send(Inbound::Line(l)).is_err() {
-                        return;
-                    }
-                }
-                Err(e) => {
-                    log(format_args!("stdin: {e}"));
-                    break;
-                }
-            }
-        }
-        let _ = reader.send(Inbound::Eof);
-    });
+    read_stdin(inbound.clone());
     backend.drain(move |line| {
         let _ = inbound.send(Inbound::Stop(line));
     });

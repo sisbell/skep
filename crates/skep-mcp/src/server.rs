@@ -1,5 +1,9 @@
-//! The MCP side: the loop over the inbound lines, JSON-RPC 2.0 dispatch, and
-//! `tools/call` onto the backend's calls; stdout carries protocol only.
+//! The MCP side: the stdio transport, JSON-RPC 2.0 dispatch, and the tools.
+//!
+//! [`read_stdin`] reads stdin on a thread of its own and hands each line to
+//! the loop, [`Server::run`], which answers it on stdout, where nothing but
+//! the protocol is written; the dispatch takes `tools/call` onto the
+//! backend's calls.
 //!
 //! A REFUSAL AS A RESULT: every tool's answer is the shell's — a value, or a
 //! [`Refusal`] of one of five kinds — and the tool result says which. A
@@ -14,14 +18,15 @@
 //! catalog, an argument an adapter tool does not take — is no tool result
 //! at all: it is refused -32602, as malformed `tools/call` params are.
 
-use std::io::Write;
-use std::sync::mpsc::Receiver;
+use std::io::{BufRead, Write};
+use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
 
 use serde_json::{json, Map, Value};
 use skep_shell::Refusal;
 
-use crate::media::{base64, sniff_image, MAX_FETCH_BYTES};
-use crate::shell::{Backend, FetchAnswer};
+use crate::media::{base64, read_whole, sniff_image, FetchAnswer, MAX_FETCH_BYTES};
+use crate::shell::Backend;
 use crate::tools::{wire_frame, Catalog, Tool};
 
 /// When the client's `initialize` names no protocolVersion (it always
@@ -49,6 +54,34 @@ pub enum Inbound {
     Eof,
     /// The backend's stop: the plain line the loop says before it exits.
     Stop(String),
+}
+
+/// Reads stdin on a thread of its own, sending each line to the loop.
+///
+/// The stdio framing is one message per line: each line split off at `\n`
+/// goes to `inbound` as raw bytes, for `handle_line` to judge, and stdin's
+/// end follows the last; a read that fails is said on the operator's stream
+/// and ends the reading as the end does. The reading has a thread of its
+/// own so that the loop hears the backend's stop, which rides the same
+/// channel, between lines.
+pub fn read_stdin(inbound: Sender<Inbound>) {
+    thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().split(b'\n') {
+            match line {
+                Ok(l) => {
+                    if inbound.send(Inbound::Line(l)).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    crate::log(format_args!("stdin: {e}"));
+                    break;
+                }
+            }
+        }
+        let _ = inbound.send(Inbound::Eof);
+    });
 }
 
 /// The MCP side's state: the backend every tool calls and the catalog
@@ -208,7 +241,7 @@ impl Server {
         let Some(i) = i.and_then(Value::as_str) else {
             return tool_result(Err(Refusal::malformed("i")));
         };
-        match self.backend.fetch(i) {
+        match self.backend.fetch(i).map(|fetched| read_whole(&fetched.headers, fetched.body)) {
             Ok(FetchAnswer::Bytes(bytes)) => {
                 let data = base64(&bytes);
                 let block = match sniff_image(&bytes) {

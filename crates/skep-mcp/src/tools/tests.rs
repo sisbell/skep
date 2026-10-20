@@ -68,6 +68,7 @@ fn every_fault_that_would_load_refuses_by_name() {
         (refusal(|v| tool(v, "insert")["title"] = json!("Insert")), "'title'"),
         (refusal(|v| tool(v, "insert")["description"] = json!("")), "'description'"),
         (refusal(|v| tool(v, "insert")["inputSchema"] = json!("object")), "'inputSchema'"),
+        (refusal(|v| tool(v, "insert")["inputSchema"] = json!({"properties": {}})), "'inputSchema'"),
         (
             refusal(|v| {
                 let twin = tool(v, "insert").clone();
@@ -169,9 +170,12 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
 
 /// The dispatch's door admits a call or refuses it, naming the culprit.
 ///
-/// A name it answers is admitted, a wire op's arguments unread; a name it
-/// does not answer is refused before its arguments are read, and a member
-/// an adapter tool's row does not take is refused naming the row's own.
+/// A name it answers is admitted, a wire op's arguments unread save the one
+/// shape skep-shell's `op` row reads as its `/op-at` form, a numeric `at`
+/// beside an object `frame`, which alone is refused; a name it does not
+/// answer is refused before its arguments are read; a member an adapter
+/// tool's row does not take is refused naming the row's own, and a member of
+/// its `opts` naming the options, the row's stranger speaking first.
 #[test]
 fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     let args = |v: Value| -> Map<String, Value> {
@@ -186,6 +190,16 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     assert!(err.contains("session_info takes no arguments") && err.contains("'principal'"), "{err}");
     let err = Tool::admit("changes_since", &args(json!({"since": 0, "under": "1"}))).expect_err("a stranger");
     assert!(err.contains("'since', 'limit'") && err.contains("'under'"), "{err}");
+    let err = Tool::admit("doc_metadata", &args(json!({"at": 5, "frame": {"op": "retrieve_v"}}))).expect_err("the /op-at shape");
+    assert!(err.contains("'at'") && err.contains("'frame'"), "{err}");
+    for plain in [json!({"at": {"subspace": "1", "ordinal": "1"}, "frame": {}}), json!({"at": "5", "frame": {}}), json!({"at": -1, "frame": {}}), json!({"at": 5, "frame": "f"}), json!({"at": 5})] {
+        assert_eq!(Tool::admit("insert", &args(plain.clone())), Ok(Tool::Op("insert")), "{plain}: no /op-at shape, so the frame goes to the daemon's parse");
+    }
+    let err = Tool::admit("places", &args(json!({"opts": {"undr": "1.0.1"}}))).expect_err("an opts stranger");
+    assert!(err.contains("'under'") && err.contains("'undr'"), "{err}");
+    assert_eq!(Tool::admit("search", &args(json!({"query": "x", "opts": {"limit": 3, "offset": 0, "reindex": false}}))), Ok(Tool::Search));
+    let err = Tool::admit("search", &args(json!({"query": "x", "board": "b-1", "opts": {"undr": 1}}))).expect_err("two strangers");
+    assert!(err.contains("'board'") && !err.contains("'undr'"), "the row's stranger speaks first: {err}");
 }
 
 /// Every adapter tool's schema names exactly the members its row takes.
@@ -193,15 +207,44 @@ fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
 /// The schema is what the agent is told to send and `Tool::admit` refuses
 /// -32602 what the row lacks: a schema member the row lacks is a documented
 /// argument refused at every call, a row member the schema lacks one no
-/// agent is told of. Each schema is closed too.
+/// agent is told of. Each schema is closed too, and so is its `opts` schema,
+/// which names exactly the options the row's `opts` takes, and stands only
+/// where the row takes one.
 #[test]
 fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
-    for (name, _, members) in ADAPTER_TOOLS {
+    for (name, tool, members) in ADAPTER_TOOLS {
         let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
         let schema = &entry["inputSchema"];
         let named: BTreeSet<&str> = schema["properties"].as_object().expect("a schema's properties").keys().map(String::as_str).collect();
         assert_eq!(named, members.iter().copied().collect::<BTreeSet<&str>>(), "{name}: the schema's members are the row's");
         assert_eq!(schema["additionalProperties"], false, "{name}: the schema is closed");
+        let opts = &schema["properties"]["opts"];
+        match tool.opts_members() {
+            Some(taken) => {
+                let named: BTreeSet<&str> = opts["properties"].as_object().expect("the opts schema's properties").keys().map(String::as_str).collect();
+                assert_eq!(named, taken.iter().copied().collect::<BTreeSet<&str>>(), "{name}: the opts schema names the row's options");
+                assert_eq!(opts["additionalProperties"], false, "{name}: the opts schema is closed");
+            }
+            None => assert!(opts.is_null(), "{name}: no opts schema where the row takes none"),
+        }
+    }
+}
+
+/// The options the door admits are the ones skep-shell declares.
+///
+/// Each `opts` row of the door's table is held to the shell's own
+/// declaration of its options type (`shapes::declarations`), so an option the
+/// shell adds or renames fails here before the door refuses it, or admits
+/// one the shell would ignore.
+#[test]
+fn the_opts_the_door_admits_are_the_ones_skep_shell_declares() {
+    let declarations = skep_shell::shapes::declarations();
+    for (tool, interface) in [(Tool::Search, "SearchOpts"), (Tool::Places, "PlacesOpts")] {
+        let head = format!("export interface {interface} {{");
+        let body = declarations.split_once(head.as_str()).and_then(|(_, rest)| rest.split_once('}')).map(|(body, _)| body).unwrap_or_else(|| panic!("skep-shell declares {interface}"));
+        let declared: BTreeSet<&str> = body.split(';').filter_map(|member| member.split(':').next()).map(|name| name.trim().trim_end_matches('?')).filter(|name| !name.is_empty()).collect();
+        let taken: BTreeSet<&str> = tool.opts_members().expect("the row takes opts").iter().copied().collect();
+        assert_eq!(taken, declared, "{interface}: the door's options are the shell's");
     }
 }

@@ -9,8 +9,9 @@
 //! to the one call whose row names it, so no tool's arguments name either. The
 //! references are the shell's opaque names (THE PIN of `client.md` §4b.1):
 //! never a token, never a credential. Every session it opens goes through one
-//! door, `open_session`, whose refusal carries no answer's text, since the
-//! answer to `POST /session` carries the token.
+//! door, `open_session`, the one reader of the row's answer, whose refusal
+//! carries no answer's text, since the answer to `POST /session` carries the
+//! token.
 //!
 //! **The session's life.** The calls run under one session, its state held here
 //! (`SessionState`, in a `SessionWatch` that wakes a waiting call when it
@@ -51,6 +52,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
+use skep_client::address::is_address_text;
 use skep_client::sheet::render_inert;
 use skep_client::store::KeyFacts;
 use skep_client::{DialError, Origin};
@@ -183,17 +185,43 @@ fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
     format!("stopped before serving: {what}: {refusal}")
 }
 
+/// A session the shell opened, as its `session` row answers it.
+///
+/// The answer is skep-shell's `SessionOpened`: the fresh reference, the
+/// principal's account where the board named one, and whether a write may go
+/// out under the session.
+#[derive(Debug)]
+struct SessionOpened {
+    /// The session's opaque reference, in the token's place.
+    reference: String,
+    /// The principal's account, where the board named one.
+    account: Option<String>,
+    /// Whether a write may go out under the session.
+    writes: bool,
+}
+
 /// Opens a session at the board `board` names: the shell's `session` row.
 ///
 /// It is the one way this adapter opens a session — at startup, and afresh
-/// where a death left none — so every refusal of an open it reads comes back
-/// `unquoted`.
+/// where a death left none — and the one reader of the row's answer, so every
+/// refusal of an open it reads comes back `unquoted`.
 ///
 /// # Errors
 ///
 /// The shell's refusal of the open, with no answer's text in it.
-fn open_session(shell: &Shell, board: &str) -> Result<Value, Refusal> {
-    shell.call("session", &json!({"board": board})).map_err(unquoted)
+///
+/// # Panics
+///
+/// Where the answer is no `SessionOpened` — a `session` string and a
+/// `writes` boolean — which skep-shell's row always answers.
+fn open_session(shell: &Shell, board: &str) -> Result<SessionOpened, Refusal> {
+    let opened = shell.call("session", &json!({"board": board})).map_err(unquoted)?;
+    let promised = "the shell's `session` row answers `SessionOpened`";
+    Ok(SessionOpened {
+        reference: opened["session"].as_str().expect(promised).to_string(),
+        account: opened["account"].as_str().map(str::to_string),
+        writes: opened["writes"].as_bool().expect(promised),
+    })
 }
 
 /// Returns a refusal of a session's open with no answer's text in it.
@@ -286,11 +314,24 @@ impl Backend {
     ///
     /// # Errors
     ///
-    /// The refusal the shell gave, in plain words, at the first check that
-    /// refused: the board not answering; `no_key` or `store_unreadable` at
-    /// the key; the session's armed names — `origin_state`, `not_registered`,
-    /// `retired`, `not_enrolled`, `busy` — or the board's own. The shell is
-    /// dropped before the error is returned, so its stop has run.
+    /// The line naming the first check that refused, the shell's refusal
+    /// after it in the library's own words, in this order:
+    ///
+    /// 1. the board's `/health` unanswered or refused;
+    /// 2. no key to sign with: `no_key` or `store_unreadable`;
+    /// 3. the signed session not opened: its armed names (`origin_state`,
+    ///    `not_registered`, `retired`, `not_enrolled`, `busy`), the
+    ///    unreachable board, the block, or the board's own verdict.
+    ///
+    /// The shell is dropped before the error is returned, so its stop has
+    /// run.
+    ///
+    /// # Panics
+    ///
+    /// Where skep-shell breaks a promise the open reads: one reference for the
+    /// one board its options name (`Shell::open`), the store's key at every
+    /// board under the signed mode (`Shell::check_signed_key`), and the
+    /// `session` row's `SessionOpened` (`open_session`).
     pub fn open(origin: Origin, store_dir: PathBuf, principal: u64, talk: Talk, on_stop: OnStop) -> Result<Backend, String> {
         let mut options = ShellOptions::new(vec![origin.clone()], store_dir.clone(), SessionMode::Signed { principal }, Arc::clone(&talk));
         options.arm = ArmConfig::Refuse;
@@ -306,10 +347,8 @@ impl Backend {
         // Subscribed before the session opens, so the drain hears every
         // death of it: the bus keeps nothing for a later subscriber.
         let events = shell.subscribe();
-        let Some(board) = shell.board_references().into_iter().next() else {
-            return Err("the shell opened no board".into());
-        };
-        let health = shell.call("health", &json!({"board": board})).map_err(|r| stopped_before_serving("the board did not answer", &r))?;
+        let board = shell.board_references().into_iter().next().expect("`Shell::open` issues one reference per board, and these options name one");
+        let health = shell.call("health", &json!({"board": board})).map_err(|r| stopped_before_serving("the board's health was not read", &r))?;
         let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) { "; writes HALTED: every write is refused `poisoned` until the board restarts" } else { "" };
         talk(&format!(
             "board {origin} (reference {board}): mode {} (claimant {}, local_trust {}){halted}",
@@ -318,15 +357,8 @@ impl Backend {
             health["health"]["auth"]["local_trust"]
         ));
         let keys = shell.check_signed_key().map_err(|r| stopped_before_serving("no key to sign with", &r))?;
-        let Some(key) = keys.into_iter().next() else {
-            return Err("stopped before serving: the store selected no key".into());
-        };
-        let opened = open_session(&shell, &board).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
-        let Some(reference) = opened["session"].as_str() else {
-            return Err("stopped before serving: the session answer names no session".into());
-        };
-        let account = opened["account"].as_str().map(str::to_string);
-        let writes = opened["writes"].as_bool().unwrap_or(false);
+        let key = keys.into_iter().next().expect("the signed mode's check answers the store's key at every board, and the shell holds one");
+        let SessionOpened { reference, account, writes } = open_session(&shell, &board).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
         talk(&format!(
             "signed as principal {principal} (account {}) with the key {} ({}) from {}: enrolled in that account's set or the nearest set above it; the person who enrolled it stops this adapter by retiring it",
             account.as_deref().unwrap_or("none"),
@@ -335,7 +367,7 @@ impl Backend {
             store_dir.display()
         ));
         talk(&format!("person seam: {person_seam} — no secret or consent moment is answered here: no key or claim ceremony runs through this adapter"));
-        let session = Arc::new(SessionWatch::new(reference.to_string()));
+        let session = Arc::new(SessionWatch::new(reference));
         let backend = Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk };
         backend.drain(events);
         Ok(backend)
@@ -396,11 +428,11 @@ impl Backend {
     ///
     /// # Panics
     ///
-    /// Where the shell's answer to the open names no session, which the
-    /// `session` row's answer (`SessionOpened`) always does.
+    /// As `open_session` does: where the `session` row's answer is no
+    /// `SessionOpened`.
     fn open_afresh(&self, died: &str) -> Result<(), Refusal> {
         let fresh = match open_session(&self.shell, &self.board) {
-            Ok(opened) => opened["session"].as_str().expect("the shell's session answer names its session").to_string(),
+            Ok(opened) => opened.reference,
             Err(refusal) => {
                 self.session.settle(died, refused_afresh(refusal.name()), &*self.on_stop);
                 return Err(refusal);
@@ -552,18 +584,29 @@ impl Backend {
     ///
     /// It is the route the shell's fetch dials, `GET /blob?i=<i>` at the
     /// board's origin (wire.md §Media, THE FETCH), which a resource block
-    /// names.
+    /// names; `i` rides the query as written.
+    ///
+    /// # Panics
+    ///
+    /// In a debug build, where `i` is no address in its one spelling
+    /// (`is_address_text`): the caller's obligation, which every `i` the
+    /// shell's `fetch` row admits meets.
     pub fn blob_uri(&self, i: &str) -> String {
+        debug_assert!(is_address_text(i), "blob_uri's precondition: `{i}` is an address in its one spelling, as the shell's `fetch` row admits alone");
         format!("{}/blob?i={i}", self.origin.as_str())
     }
 
-    /// `session_info`: the principal, its account, the signing key's
+    /// Returns who this adapter acts as, and its session's facts.
+    ///
+    /// The answer is the principal, its account, the signing key's
     /// fingerprint and label, the board's origin, `writes`, and the board's
-    /// `health` with its derived `mode` — the shell's `health` call, made now.
+    /// `health` with its derived `mode` — the shell's `health` call, made now;
+    /// the rest is the session's open's, kept since startup.
     ///
     /// # Errors
     ///
-    /// The health call's refusal: the unreachable board, or a halt.
+    /// `Backend::health`'s: the unreachable board, or the board's refusal of
+    /// the read — its verdict, which *a refusal as a result* renders as data.
     pub fn session_info(&self) -> Result<Value, Refusal> {
         let health = self.health()?;
         Ok(json!({

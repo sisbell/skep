@@ -536,17 +536,18 @@ fn a_token_in_a_session_answer_the_client_cannot_read_reaches_no_log_line() {
     assert!(!err.contains(TOKEN), "the session's token reaches the log:\n{err}");
 }
 
-/// A board the adapter cannot reach stops startup: the session cannot
-/// open, so nothing is served — exit 1, the plain line naming the stop and
-/// the board, nothing on stdout. Port 1 sits below 1024, where no
-/// unprivileged process can listen, so the connect is refused.
+/// A board the adapter cannot reach stops startup, and nothing is served.
+///
+/// The session cannot open: exit 1, the plain line naming the stop, the
+/// refusal's kind and the board, nothing on stdout. Port 1 sits below 1024,
+/// where no unprivileged process can listen, so the connect is refused.
 #[test]
 fn a_board_that_does_not_answer_stops_startup() {
     let dir = TempDir::new("noboard");
     let out = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").output();
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("stopped before serving: the board did not answer"), "{err}");
+    assert!(err.contains("stopped before serving: the board's health was not read: unreachable"), "{err}");
     assert!(err.contains("http://127.0.0.1:1"), "the board named: {err}");
     assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
 }
@@ -555,15 +556,18 @@ fn a_board_that_does_not_answer_stops_startup() {
 ///
 /// The adapter's own refusals of a call it will not run take the channel
 /// `call_params`' faults take — -32602 under the call's id, never `isError`:
-/// a name outside the catalog, a ceremony's name among them, and an argument
-/// an adapter tool's row does not take (the adapter is the one party that
-/// reads those: ignored, a `principal` of 2 to `session_info` would be
-/// answered with this adapter's own facts, as if they were 2's; an `under`
-/// to `changes_since` is a narrowing the tool does not take yet). A wire
-/// op's arguments pass through unread: the board's verdict on a stranger
-/// member is data. A member of the wrong form, or missing, reaches the
-/// shell, which refuses it `malformed_args` naming it, `isError`; the adapter
-/// never crashes on it.
+/// a name outside the catalog, a ceremony's name among them; an argument an
+/// adapter tool's row does not take, or its `opts` (the adapter is the one
+/// party that refuses those: ignored, a `principal` of 2 to `session_info`
+/// would be answered with this adapter's own facts, as if they were 2's, and
+/// a misspelt `under` would list the whole index as though narrowed; an
+/// `under` to `changes_since` is a narrowing the tool does not take yet);
+/// and a wire op's arguments of the shape the shell reads as its `/op-at`
+/// form, whose inner frame it would send to the board's history. A wire
+/// op's other arguments pass through unread: the board's verdict on a
+/// stranger member is data. A member of the wrong form, or missing, reaches
+/// the shell, which refuses it `malformed_args` naming it, `isError`; the
+/// adapter never crashes on it.
 #[test]
 fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_the_shells_refusal() {
     let fixture = Fixture::new("refuse");
@@ -576,6 +580,8 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
         (json!({"name": "search", "arguments": {"query": "x", "board": "b-1"}}), "'board'"),
         (json!({"name": "changes_since", "arguments": {"since": 0, "under": "1.0.1"}}), "'under'"),
         (json!({"name": "fetch", "arguments": {"i": "1.0.1.0.1.0.1.1", "session": "s-1"}}), "'session'"),
+        (json!({"name": "places", "arguments": {"opts": {"undr": "1.0.1"}}}), "'undr'"),
+        (json!({"name": "doc_metadata", "arguments": {"at": 1, "frame": {"op": "retrieve_v", "specs": []}}}), "'frame'"),
     ] {
         let v = mcp.request("tools/call", call);
         assert_eq!(v["error"]["code"], json!(-32602), "{v}");
@@ -635,7 +641,7 @@ fn the_key_store_is_required_and_never_the_persons_own() {
         let (code, err) = launch.refusal();
         assert_eq!(code, Some(1), "{args:?} {store:?}: {err}");
         assert!(err.contains("--dir (or SKEP_KEYSTORE) is required") && err.contains("~/.skep is never consulted"), "{args:?} {store:?}: {err}");
-        assert!(!err.contains("did not answer"), "refused before any dial: {err}");
+        assert!(!err.contains("health was not read"), "refused before any dial: {err}");
     }
 }
 
@@ -732,7 +738,7 @@ fn malformed_skep_commons_refuses_startup() {
         let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", bad).refusal();
         assert_eq!(code, Some(1), "'{bad}' must refuse startup: {err}");
         assert!(err.contains("SKEP_COMMONS"), "stderr names the variable for '{bad}': {err}");
-        assert!(!err.contains("did not answer"), "refused before any dial: {err}");
+        assert!(!err.contains("health was not read"), "refused before any dial: {err}");
     }
 }
 
@@ -749,6 +755,22 @@ fn non_utf8_environment_refuses_startup() {
         assert_eq!(code, Some(1), "a non-UTF-8 {var} must refuse startup: {err}");
         assert!(err.contains(&format!("{var}: the value is not UTF-8 text")), "{var}: {err}");
     }
+}
+
+/// `SKEPD_URL` is read no longer, so its value is never decoded.
+///
+/// Set to bytes that are not UTF-8, with no board named, the missing board's
+/// refusal speaks and says the old variable is set — never a refusal of the
+/// old variable's own by its name.
+#[cfg(unix)]
+#[test]
+fn skepd_url_is_never_decoded() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = TempDir::new("skepd-url");
+    let (code, err) = Launch::new().env("SKEPD_URL", std::ffi::OsStr::from_bytes(b"\xff")).env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("--board (or SKEP_BOARD) is required") && err.contains("SKEPD_URL is set and no longer read"), "{err}");
+    assert!(!err.contains("SKEPD_URL: the value is not UTF-8 text"), "{err}");
 }
 
 /// A flag set to bytes that are not UTF-8 is refused by name, never decoded.

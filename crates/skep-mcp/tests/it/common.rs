@@ -8,9 +8,10 @@
 //! agent space `1.0.1.1` delegated beside it); the library's walks for the
 //! acts a person makes beside a running adapter — a second key enrolled, a
 //! key retired; the blob seeding, copied from skepd's own suite: the
-//! resumable upload's creation, the cell and its insert; and the holds of
+//! resumable upload's creation, the cell and its insert; the holds of
 //! skepd's two process-wide seams, the write guard and the fetch stream,
-//! armed only on a board run alone ([`Fixture::alone`]). The driver
+//! armed only on a board run alone ([`Fixture::alone`]); and the poison of
+//! the board's own kernel at its next commit. The driver
 //! ([`Mcp`], from a [`Launch`]): the built `skep-mcp` binary spawned with its
 //! settings — the fixture's, or any a test names — and real JSON-RPC driven
 //! through its stdin/stdout, its stderr read where a test wants the lines.
@@ -33,7 +34,7 @@ use skep_client::sheet::Label;
 use skep_client::store::{Binding, FileStore, KeySelector, KeyStore, Purpose};
 use skep_client::{Origin, Token};
 use skep_identity::{encode_enroll, Enrollment, Fingerprint};
-use skepd::{embed, AuthOptions, Daemon, MediaOptions, Skepd, DEFAULT_WORKERS};
+use skepd::{embed, AuthOptions, Daemon, MediaOptions, Skepd, Step, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────
 
@@ -269,6 +270,20 @@ impl Fixture {
         let daemon = self.daemon.as_ref().expect("the board's daemon runs").daemon();
         let taken: Vec<_> = std::iter::from_fn(|| daemon.try_hold_write_permit()).collect();
         taken.len()
+    }
+
+    /// Poisons the board's kernel at its next commit.
+    ///
+    /// The commit's barrier fails, and so does the truncation that would
+    /// repair it (`Daemon::fail_the_next_checkpoint_step` at `JournalBarrier`
+    /// and `JournalRepair`, the dev provider's `poison` door): the write that
+    /// meets it answers `poisoned`, its frames left in the journal the board's
+    /// restart replays. Each arm fires once, and the kernel is the board's
+    /// own, so no other test's board meets it.
+    pub fn poison_the_next_commit(&self) {
+        let daemon = self.daemon.as_ref().expect("the board's daemon runs").daemon();
+        daemon.fail_the_next_checkpoint_step(Step::JournalBarrier, std::io::ErrorKind::Other);
+        daemon.fail_the_next_checkpoint_step(Step::JournalRepair, std::io::ErrorKind::Other);
     }
 
     /// Returns the claimant's key's private seed, in hex, off its key file.

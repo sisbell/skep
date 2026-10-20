@@ -24,26 +24,29 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   there is shown as its code point, and a line break in it continues the
   line indented.
 - **Every tool is one call of the shell.** The WIRE OPERATIONS of
-  `docs/wire.md` §Operations are tools of their own names — the name is
-  the frame's `op`, the arguments are the frame — sent as `op(session,
-  frame)`: attested where the session's key attests the kind, held where
-  the board cannot take a burst (the `held` answer comes back as data), a
-  `write_busy` reissued once and a `durability` twice within the call, as
-  the shell does. No general `op` tool ships: every op has a name. The
-  shell's own calls are tools of their names — `boards`, `health`,
-  `probe`, `search`, `places`, `held`, `resolve` — their arguments the
-  bridge's row minus the session and the board, the adapter supplying
-  each where the row requires it. Three are the adapter's apparatus:
-  `session_info` (the principal, the account, the key's fingerprint and
-  label, the board, `writes`, the board's health with its mode),
-  `changes_since(since, limit?)` (the shell's `changes`: a pull of what
-  changed, the agent keeping `next`) and `fetch(i)` (a picture's bytes as
-  an image block — the type sniffed off the bytes' magic for PNG, JPEG,
-  GIF and WebP, never attested — else an embedded resource blob, under a
-  cap of 8 MiB checked before a byte is read, and a deadline of ten and a
-  half minutes on its body, an honest board's own bound on the stream). The
-  catalog is `tools.json` beside `Cargo.toml`, checked against the
-  dispatch's two kinds at startup in both directions.
+  `docs/wire.md` §Operations are tools of their own names — the name is the
+  frame's `op`, the arguments are the frame — sent as `op(session, frame)`:
+  attested where the session's key attests the kind, held where the board
+  cannot take a burst or rejects one (the `held` answer comes back as data;
+  a refused run's line, and the bursts behind it on its document, wait on
+  the agent's `resolve`), a `write_busy` reissued once and a `durability`
+  twice within the call, as the shell does. No general `op` tool ships:
+  every op has a name, and the one argument shape the shell's `op` row
+  reads as its `/op-at` form — a numeric `at` beside an object `frame`,
+  which no wire op takes — is refused. The shell's own calls are tools of
+  their names — `boards`, `health`, `probe`, `search`, `places`, `held`,
+  `resolve` — their arguments the bridge's row minus the session and the
+  board, the adapter supplying each where the row requires it. Three are
+  the adapter's apparatus: `session_info` (the principal, the account, the
+  key's fingerprint and label, the board, `writes`, the board's health with
+  its mode), `changes_since(since, limit?)` (the shell's `changes`: a pull
+  of what changed, the agent keeping `next`) and `fetch(i)` (a picture's
+  bytes as an image block — the type sniffed off the bytes' magic for PNG,
+  JPEG, GIF and WebP, never attested — else an embedded resource blob,
+  under a cap of 8 MiB checked before a byte is read, and a deadline of ten
+  and a half minutes on its body, an honest board's own bound on the
+  stream). The catalog is `tools.json` beside `Cargo.toml`, checked against
+  the dispatch's two kinds at startup in both directions.
 - **A refusal as a result.** The board's verdict on a frame — a `refused`
   refusal — is DATA: `isError: false`, the verdict's body verbatim under
   `body`, the refusal's own `name`, `status`, `code`, `detail` and `op`
@@ -53,7 +56,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the adapter's own, each `isError` with a plain sentence: a file past its
   cap, and a stream cut short. A write refused `unreachable` may still have
   committed — its frame may have reached the board before its answer was
-  lost — and the adapter never reissues it.
+  lost — and the adapter never reissues it. So may a write the board
+  refused `poisoned`, whose frames its restart replays from the journal, or
+  answered `500 internal_panic` past its commit — each the board's verdict,
+  and so data.
 - **The session's life.** A board restart is met by the shell's silent
   re-open under a fresh reference, which the adapter takes from the
   `session-died` event it drains for the process's life, subscribed before
@@ -96,7 +102,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 | `--tools-file <path>` | — | override the embedded catalog |
 
 A flag beats its variable. `--version` and `--help` answer before any
-setting or stdin is read.
+setting or stdin is read. The process exits 0 at stdin's end or a closed
+stdout, the session closed at the board; 1 at a refusal before serving or
+a stop while serving; 2 at a usage error.
 
 ## Starting it from an agent app
 

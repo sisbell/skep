@@ -6,20 +6,23 @@
 //!
 //! * **Every tool is one call of the shell** under that session. A WIRE OP's
 //!   tool name IS the frame's `op` and its arguments ARE the frame (the one
-//!   mapping is `from_` → `from` on make_link/emit, when the arguments carry
-//!   no `from` of their own), sent as `op(session, frame)`: attested where
-//!   the session's key attests the kind, held where the board cannot take a
-//!   burst (the `held` answer comes back as data), a `write_busy` reissued
-//!   once and a `durability` twice within the call, as the shell does. The
-//!   shell's own calls — `boards`, `health`, `probe`, `search`, `places`,
-//!   `held`, `resolve` — are tools of those names, their arguments the
-//!   bridge's row minus the session and the board, the adapter supplying
-//!   each where the row requires it; and three are the adapter's apparatus:
-//!   `session_info`, `changes_since` (the shell's `changes`, a pull), and
-//!   `fetch` (the shell's streamed fetch as an image or resource block, the
-//!   type sniffed off the bytes, the size capped). Arguments pass through
-//!   unvalidated on a wire op — the daemon's strict parse is the validator,
-//!   and its rejection comes back as data.
+//!   mapping is `from_` → `from` on make_link/emit, when the arguments carry no
+//!   `from` of their own), sent as `op(session, frame)`: attested where the
+//!   session's key attests the kind, held where the board cannot take a burst
+//!   or rejects one (the `held` answer comes back as data; a refused run's
+//!   line, and the bursts behind it on its document, wait on the agent's
+//!   `resolve`), a `write_busy` reissued once and a `durability` twice within
+//!   the call, as the shell does. The shell's own calls — `boards`, `health`,
+//!   `probe`, `search`, `places`, `held`, `resolve` — are tools of those names,
+//!   their arguments the bridge's row minus the session and the board, the
+//!   adapter supplying each where the row requires it; and three are the
+//!   adapter's apparatus: `session_info`, `changes_since` (the shell's
+//!   `changes`, a pull), and `fetch` (the shell's streamed fetch as an image or
+//!   resource block, the type sniffed off the bytes, the size capped).
+//!   Arguments pass through unvalidated on a wire op — the daemon's strict
+//!   parse is the validator, and its rejection comes back as data — save the
+//!   one shape the shell's `op` row reads as its `/op-at` form, a numeric `at`
+//!   beside an object `frame`, which no wire op takes.
 //! * **A refusal as a result.** The board's verdict is data: a `refused`
 //!   refusal is a normal tool result, the verdict's body verbatim under `body`
 //!   with the refusal's `name`, `status`, `code`, `detail` and `op` beside it,
@@ -30,10 +33,14 @@
 //!   past its cap and a stream cut short, each a plain sentence. A write
 //!   refused `unreachable` may have committed: the shell faces a lost answer to
 //!   any write but a burst (whose line it holds, `sent`), and the adapter never
-//!   reissues it. A call the adapter will not run — a tool outside the catalog,
-//!   a member an adapter tool's row does not name — is no tool result at all:
-//!   it is refused -32602, as malformed `tools/call` params are; a member of
-//!   the wrong form is the shell's `malformed_args`.
+//!   reissues it. So may a write the board refused `poisoned`, whose frames its
+//!   restart replays from the journal (wire.md §Rejection codes; client.md
+//!   §3c.2), or answered `500 internal_panic` past its commit — each the
+//!   board's verdict, and so data. A call the adapter will not run — a tool
+//!   outside the catalog, a member an adapter tool's row or its `opts` does not
+//!   name, a wire op's arguments of the shell's `/op-at` shape — is no tool
+//!   result at all: it is refused -32602, as malformed `tools/call` params are;
+//!   a member of the wrong form is the shell's `malformed_args`.
 //! * **A signed session, opened at startup**, before the first tool call, for
 //!   the configured principal with the store's key for it — enrolled in its
 //!   account's set or the nearest set above it — and no bare mode exists. No
@@ -116,6 +123,14 @@ environment:
                   instructions point agents at it
   SKEPD_URL       no longer read: the board is named by --board or
                   SKEP_BOARD, as the skep command names it
+
+exit status:
+  0  stdin's end, or a read of it that failed, or a closed stdout: the
+     session closed at the board; --help and --version
+  1  a refusal before serving (the catalog, a setting, the board, the
+     key, the session's open), or a stop while serving (the key retired,
+     the prefix blocked, the account seeded, an open the board refused)
+  2  a usage error
 
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio, and serves every
 tool through the shell's core (skep-shell) under one signed session it
@@ -246,7 +261,9 @@ fn main() -> ExitCode {
             None => die(format_args!("{}: '{text}' is not a canonical origin (http://host[:port], lowercase, no path, no trailing slash)", board.named())),
         },
         None => {
-            let retired = if env_text("SKEPD_URL").is_some() { format!(" — SKEPD_URL is set and no longer read: the board is named by {} alone", board.named()) } else { String::new() };
+            // `SKEPD_URL` is read no longer: whether it is set is said, its
+            // value never decoded.
+            let retired = if env::var_os("SKEPD_URL").is_some() { format!(" — SKEPD_URL is set and no longer read: the board is named by {} alone", board.named()) } else { String::new() };
             die(format_args!("{} is required: the board this adapter serves{retired}", board.named()))
         }
     };
@@ -492,6 +509,17 @@ mod tests {
     fn the_usage_names_the_settings_and_retires_skepd_url() {
         for named in ["--board <ORIGIN>", "SKEP_BOARD", "--dir <PATH>", "SKEP_KEYSTORE", "--principal <N>", "SKEP_PRINCIPAL", "SKEP_COMMONS", "SKEPD_URL       no longer read"] {
             assert!(USAGE.contains(named), "the usage names {named}: {USAGE}");
+        }
+    }
+
+    /// The usage states the exit statuses the suites pin.
+    ///
+    /// 0 at stdin's end or a closed stdout, 1 a refusal before serving or a
+    /// stop while serving, 2 a usage error.
+    #[test]
+    fn the_usage_states_the_exit_statuses() {
+        for status in ["\nexit status:\n  0  stdin's end", "\n  1  a refusal before serving", "\n  2  a usage error"] {
+            assert!(USAGE.contains(status), "the usage states {status:?}: {USAGE}");
         }
     }
 }

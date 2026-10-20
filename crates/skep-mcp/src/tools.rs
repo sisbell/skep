@@ -132,27 +132,56 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("fetch", Tool::Fetch, &["i"]),
 ];
 
+/// The options an adapter tool's `opts` takes, where its row takes one.
+///
+/// They are skep-shell's `SearchOpts` and `PlacesOpts`, the members the
+/// catalog's closed `opts` schemas name. The shell reads these and ignores
+/// any other, so the door refuses a member outside them, as it refuses one
+/// outside the row.
+const OPTS_MEMBERS: &[(Tool, &[&str])] = &[(Tool::Search, &["limit", "offset", "reindex"]), (Tool::Places, &["under"])];
+
 impl Tool {
     /// Admits the call a `tools/call` names, or refuses it.
     ///
-    /// `name` must be one the dispatch answers and, for an adapter tool,
-    /// every member of `args` one its row takes — the members the adapter
-    /// reads. A wire op's arguments pass through unread as the frame, the
-    /// daemon's strict parse their validator.
+    /// `name` must be one the dispatch answers. A wire op's arguments pass
+    /// through unread as the frame, the daemon's strict parse their validator,
+    /// save one shape: a numeric `at` beside an object `frame`, which
+    /// skep-shell's `op` row reads as its `/op-at` form and would send as
+    /// another frame. An adapter tool's every member must be one its row
+    /// takes, and every member of its `opts` one the row's options take — the
+    /// members the adapter and the shell read.
     ///
     /// # Errors
     ///
     /// The refusal of a call the adapter will not run, which
-    /// `Server::respond` answers -32602, in this order: a name the dispatch
-    /// does not answer, then a member an adapter tool's row does not take.
+    /// `Server::respond` answers -32602, in this order:
+    ///
+    /// 1. a name the dispatch does not answer;
+    /// 2. for a wire op, arguments of the `/op-at` shape;
+    /// 3. for an adapter tool, a member its row does not take, then a member
+    ///    of its `opts` the row's options do not take.
     pub fn admit(name: &str, args: &Map<String, Value>) -> Result<Tool, String> {
         let tool = Tool::named(name).ok_or_else(|| format!("unknown tool '{name}'; tools/list names the available tools"))?;
-        if let Some(members) = tool.members() {
-            if let Some(arg) = args.keys().find(|k| !members.contains(&k.as_str())) {
-                return Err(match members {
-                    [] => format!("{name} takes no arguments; got '{arg}'"),
-                    _ => format!("{name} takes {}; got '{arg}'", members.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(", ")),
-                });
+        let Some(members) = tool.members() else {
+            // The shell sends this shape's inner frame, whatever its op, to
+            // the board's history; no wire op takes a top-level `frame`, so
+            // the refusal narrows no frame the daemon's parse admits.
+            if args.get("at").is_some_and(Value::is_u64) && args.get("frame").is_some_and(Value::is_object) {
+                return Err(format!(
+                    "{name}'s arguments carry a numeric 'at' beside an object 'frame', which the shell would send as another frame to the board's history: no wire op takes a 'frame', and history reads are not offered here"
+                ));
+            }
+            return Ok(tool);
+        };
+        if let Some(arg) = args.keys().find(|k| !members.contains(&k.as_str())) {
+            return Err(match members {
+                [] => format!("{name} takes no arguments; got '{arg}'"),
+                _ => format!("{name} takes {}; got '{arg}'", listed(members)),
+            });
+        }
+        if let (Some(Value::Object(opts)), Some(taken)) = (args.get("opts"), tool.opts_members()) {
+            if let Some(arg) = opts.keys().find(|k| !taken.contains(&k.as_str())) {
+                return Err(format!("{name}'s opts take {}; got '{arg}'", listed(taken)));
             }
         }
         Ok(tool)
@@ -181,6 +210,19 @@ impl Tool {
             other => ADAPTER_TOOLS.iter().find(|(_, tool, _)| *tool == other).map(|(_, _, members)| *members),
         }
     }
+
+    /// Returns the options an adapter tool's `opts` takes, where it takes one.
+    ///
+    /// They are the only ones the shell reads, so any other is refused by
+    /// name; `None` where the tool's row takes no `opts`.
+    fn opts_members(self) -> Option<&'static [&'static str]> {
+        OPTS_MEMBERS.iter().find(|(tool, _)| *tool == self).map(|(_, members)| *members)
+    }
+}
+
+/// Returns `members` as a refusal lists them, each quoted, comma-separated.
+fn listed(members: &[&str]) -> String {
+    members.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(", ")
 }
 
 /// The ops whose wire `from` argument rides as `from_` in the tool schema
@@ -312,10 +354,18 @@ impl Catalog {
     }
 }
 
-/// Check one catalog entry — an MCP tool definition: a nonempty string
-/// `name` and `description`, an object `inputSchema`, and no other field —
-/// and answer its name. A definition's fields are named here and nowhere
-/// else in the adapter.
+/// Checks one catalog entry, an MCP tool definition, and returns its name.
+///
+/// The definition is a nonempty string `name` and `description`, an
+/// `inputSchema` of type `"object"` (MCP 2025-06-18's `Tool.inputSchema`),
+/// and no other field. A definition's fields are named here and nowhere else
+/// in the adapter.
+///
+/// # Errors
+///
+/// The first fault found, named: the entry no object, a field no definition
+/// has, a missing or empty `name` or `description`, then a missing
+/// `inputSchema` or one whose type is not `"object"`.
 fn check_tool(v: &Value) -> Result<&str, String> {
     let Value::Object(m) = v else {
         return Err("must be an object".into());
@@ -331,8 +381,8 @@ fn check_tool(v: &Value) -> Result<&str, String> {
         return Err("'name' and 'description' must be nonempty".into());
     }
     let schema = m.get("inputSchema").ok_or("missing field 'inputSchema'")?;
-    if !schema.is_object() {
-        return Err("'inputSchema' must be a JSON Schema object".into());
+    if schema.get("type").and_then(Value::as_str) != Some("object") {
+        return Err("'inputSchema' must be a JSON Schema of type \"object\" (MCP 2025-06-18, Tool.inputSchema)".into());
     }
     Ok(name)
 }

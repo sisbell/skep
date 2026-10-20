@@ -12,9 +12,11 @@
 //! a re-open the board refuses stops naming it, the board gone answers
 //! `unreachable` and the adapter stays up (the restart's re-open is
 //! `mcp.rs`'s); A7 a board rejection as data, an unreachable board as an
-//! error, and a write whose answer was lost unreachable, landing once; A8 the
-//! TALK lines on stderr alone and stdin's end closing the session. The
-//! daemon, the claim, the library's walks and the driver are `common`'s.
+//! error, a write whose answer was lost unreachable, landing once, a write
+//! refused `poisoned` landing at the restart, and a burst the board refuses
+//! held, the bursts behind it waiting on `resolve`; A8 the TALK lines on
+//! stderr alone and stdin's end closing the session. The daemon, the claim,
+//! the library's walks and the driver are `common`'s.
 
 use std::time::{Duration, Instant};
 
@@ -517,6 +519,65 @@ fn a7_a_write_whose_answer_is_lost_is_unreachable_and_lands_once() {
     let landed = mcp.call_json("doc_metadata", json!({"doc": format!("{docs}.{}", n + 1)}));
     assert_eq!(landed["resp"], "doc_metadata", "the write answered unreachable landed: {landed}");
     assert_eq!(draft_of(&mut mcp, CLAIMANT_ACCOUNT), format!("{docs}.{}", n + 2), "it landed once");
+    assert!(mcp.finish().success());
+}
+
+/// A7: a write refused `poisoned` is data, and lands at the restart.
+///
+/// The kernel's next commit is poisoned, so the write that meets it is
+/// refused `poisoned` — the board's verdict, `isError` false, disposition
+/// `halt` — its frames left in the journal. The board restarted, the write
+/// has landed, as the catalog warns it may: the document it minted reads
+/// back.
+#[test]
+fn a7_a_write_refused_poisoned_is_data_and_lands_at_the_restart() {
+    let mut fixture = Fixture::new("a7-poisoned");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let before = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    fixture.poison_the_next_commit();
+    let poisoned = mcp.call_json("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    assert_eq!((poisoned["kind"].as_str(), poisoned["name"].as_str(), poisoned["body"]["disposition"].as_str()), (Some("refused"), Some("poisoned"), Some("halt")), "{poisoned}");
+    fixture.restart();
+    let (docs, last) = before.rsplit_once('.').expect("a document address");
+    let n: u64 = last.parse().expect("a document ordinal");
+    let landed = mcp.call_json("doc_metadata", json!({"doc": format!("{docs}.{}", n + 1)}));
+    assert_eq!(landed["resp"], "doc_metadata", "the write refused poisoned landed at the restart: {landed}");
+    assert!(mcp.finish().success());
+}
+
+/// A7: a burst the board refuses is held, and the bursts behind it wait.
+///
+/// An insert at an ordinal past the draft's end is rejected `out_of_bounds`,
+/// a permanent rejection — and, a burst, answers `held` as data, its cause
+/// the rejection's token and held() listing the board's verdict beside its
+/// line, never the `refused` verdict a write that is no burst answers. A
+/// later insert on the draft answers `held`, cause `behind`, unsent;
+/// `resolve(drop)` drops the refused line and the line behind it, neither of
+/// which lands — the draft's frontier counts the one insert acked after —
+/// and an insert into the published home is held as its rejection's run too.
+#[test]
+fn a7_a_burst_the_board_refuses_is_held_and_the_bursts_behind_it_wait() {
+    let fixture = Fixture::new("a7-refused-run");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let refused = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+    assert_eq!(refused["resp"], "held", "a rejected burst is held, as data: {refused}");
+    assert!(refused["cause"].as_str().is_some_and(|c| c.starts_with("out_of_bounds")), "its cause the rejection's token: {refused}");
+    let lines = mcp.call_json("held", json!({}));
+    assert_eq!(lines[0]["refusal"]["code"], "out_of_bounds", "the board's verdict beside the line: {lines}");
+    let behind = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
+    assert_eq!((behind["resp"].as_str(), behind["cause"].as_str()), (Some("held"), Some("behind")), "a later burst waits behind it: {behind}");
+    let k = refused["held"].as_u64().expect("the refused line's ordinal");
+    assert_eq!(mcp.call_json("resolve", json!({"held": k, "act": "drop"})), json!({}));
+    assert_eq!(mcp.call_json("held", json!({})), json!([]), "the drop takes the line behind it too");
+    mcp.acked("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
+    let frontier = mcp.call_json("content_frontier", json!({"doc": draft}));
+    assert_eq!(frontier["next"], "2", "the insert acked is the one value the draft minted: neither dropped line landed: {frontier}");
+    let home = mcp.call_json("insert", json!({"doc": CLAIMANT_DOC1, "at": {"subspace": "1", "ordinal": "1"}, "values": ["h"]}));
+    assert_eq!(home["resp"], "held", "an insert into the published home is held: {home}");
+    assert!(home["cause"].as_str().is_some_and(|c| c.starts_with("published_target")), "its cause the rejection's token: {home}");
     assert!(mcp.finish().success());
 }
 

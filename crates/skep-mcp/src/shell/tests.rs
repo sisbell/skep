@@ -317,3 +317,16 @@ fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
     let retired = Refusal::named(Name::RETIRED, Face { state: "s".into(), cause: "c".into(), act: "a".into() });
     assert_eq!(unquoted(retired.clone()), retired, "a refusal of another kind is untouched");
 }
+
+/// A blob's URI is the fetch's route at the board's origin, `i` as written.
+///
+/// An `i` in its one spelling rides the query untouched; one that is no
+/// address breaks the precondition, which a debug build checks.
+#[test]
+fn a_blob_uri_is_the_fetch_route_and_takes_an_address_alone() {
+    let scratch = Scratch::new("blob-uri");
+    let backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+    assert_eq!(backend.blob_uri("1.0.1.0.1.0.1.1"), "http://127.0.0.1:1/blob?i=1.0.1.0.1.0.1.1");
+    let broken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.blob_uri("1.0.1&i=2")));
+    assert!(broken.is_err(), "an `i` that is no address breaks the precondition");
+}

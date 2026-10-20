@@ -219,10 +219,11 @@ impl Server {
     /// # Errors
     ///
     /// The refusal of a call the adapter will not run, `Tool::admit`'s — a
-    /// name outside the catalog, or a member an adapter tool's row does not
-    /// take — which `respond` answers -32602, the channel `call_params`'
-    /// faults take (MCP 2025-06-18, Tools §Error Handling: unknown tools and
-    /// invalid arguments are protocol errors).
+    /// name outside the catalog, a wire op's arguments of the shell's `/op-at`
+    /// shape, or a member an adapter tool's row or its `opts` does not take —
+    /// which `respond` answers -32602, the channel `call_params`' faults take
+    /// (MCP 2025-06-18, Tools §Error Handling: unknown tools and invalid
+    /// arguments are protocol errors).
     fn call(&self, name: &str, args: Map<String, Value>) -> Result<Value, String> {
         let tool = Tool::admit(name, &args)?;
         let answer = match tool {
@@ -250,13 +251,19 @@ impl Server {
     /// past the cap is refused in plain words naming it, and a stream cut
     /// short is said so, each `isError`; the shell's refusal goes by
     /// `tool_result`'s rule.
+    ///
+    /// # Panics
+    ///
+    /// Where the shell fetched an `i` that is no string, which its `fetch`
+    /// row refuses.
     fn fetch(&self, i: &Value) -> Value {
         let fetched = match self.backend.fetch(i) {
             Ok(fetched) => fetched,
             Err(refusal) => return tool_result(Err(refusal)),
         };
-        // The shell fetched, so `i` is an address in its one spelling.
-        let i = i.as_str().unwrap_or_default();
+        // The shell fetched, so `i` is an address in its one spelling: its
+        // `fetch` row refuses any other `malformed_args`.
+        let i = i.as_str().expect("the shell's `fetch` row admits a string `i` alone");
         let cap = format!("this adapter's cap of {MAX_FETCH_BYTES} bytes ({} MiB) on one fetch", MAX_FETCH_BYTES / (1024 * 1024));
         match read_whole(&fetched.headers, fetched.body) {
             FetchAnswer::Whole(bytes) => {

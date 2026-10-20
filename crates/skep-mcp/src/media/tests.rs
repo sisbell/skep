@@ -70,12 +70,13 @@ fn the_cap_sits_well_under_the_boards_per_file_cap() {
 
 /// The read holds the cap both ways and tells a whole file from a cut one.
 ///
-/// A declared length past the cap is refused before a byte of the body is
-/// read, and a body that declares no length, or overruns the one it
-/// declares, is refused once a byte past the cap has come — the two told
-/// apart; a body short of its declared length, or broken off by a
-/// failed read, is cut, the bytes that came counted; a body at its declared
-/// length is whole, and so is one at the cap that declares no length.
+/// A declared length past the cap is refused before a byte of the body is read,
+/// and a body that declares no length, or overruns the one it declares, is
+/// refused once a byte past the cap has come — the two told apart; a body short
+/// of its declared length is cut `UnexpectedEof`, and one broken off by a
+/// failed read is cut with that read's own error, the bytes that came counted;
+/// a body at its declared length is whole, and so is one at the cap that
+/// declares no length.
 #[test]
 fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
     // A body no read may touch.
@@ -107,11 +108,17 @@ fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
     let overrun = io::repeat(7).take(MAX_FETCH_BYTES + 2);
     assert!(matches!(read_whole(&declared(10), overrun), FetchAnswer::RanPastTheCap { read } if read == past), "a body past its own declared length is read to the cap too");
     match read_whole(&declared(10), &b"abcd"[..]) {
-        FetchAnswer::Cut { read: 4, length: Some(10), error } => assert!(error.contains("short of its declared length"), "{error}"),
+        FetchAnswer::Cut { read: 4, length: Some(10), error } => {
+            assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof, "{error}");
+            assert!(error.to_string().contains("short of its declared length"), "{error}");
+        }
         other => panic!("a short body is cut: {other:?}"),
     }
     match read_whole(&declared(10), BreaksAfter(b"abc")) {
-        FetchAnswer::Cut { read: 3, length: Some(10), error } => assert!(error.contains("connection reset"), "{error}"),
+        FetchAnswer::Cut { read: 3, length: Some(10), error } => {
+            assert_eq!(error.kind(), io::ErrorKind::Other, "the failed read's own error: {error}");
+            assert!(error.to_string().contains("connection reset"), "{error}");
+        }
         other => panic!("a broken read is cut: {other:?}"),
     }
     assert!(matches!(read_whole(&declared(5), &b"hello"[..]), FetchAnswer::Bytes(bytes) if bytes == b"hello"));

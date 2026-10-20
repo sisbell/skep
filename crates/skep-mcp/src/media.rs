@@ -15,7 +15,7 @@
 //! here rather than taken from a crate (RFC 4648 §4, the standard alphabet
 //! with `=` padding), held to the RFC's own vectors by the unit tests.
 
-use std::io::Read;
+use std::io::{self, Read};
 
 use skep_client::dial::Headers;
 
@@ -43,9 +43,12 @@ pub enum FetchAnswer {
     /// No length was declared, or one the body overran: `read` bytes came,
     /// one past the cap, and how long the file is, nothing here knows.
     RanPastTheCap { read: u64 },
-    /// The stream ended short of the declared length — the board's RESET
-    /// (wire.md §Media, THE FETCH), or a read that failed: `read` bytes came.
-    Cut { read: usize, length: Option<u64>, error: String },
+    /// The stream ended short of the declared length, or a read failed.
+    ///
+    /// The board's RESET (wire.md §Media, THE FETCH) is one: `read` bytes
+    /// came, and `error` says why — the failed read's own, or `UnexpectedEof`
+    /// where the stream ended short.
+    Cut { read: u64, length: Option<u64>, error: io::Error },
 }
 
 /// Reads a fetched file's body whole under [`MAX_FETCH_BYTES`].
@@ -68,12 +71,13 @@ pub fn read_whole(headers: &Headers, body: impl Read) -> FetchAnswer {
     if bytes.len() as u64 > MAX_FETCH_BYTES {
         return FetchAnswer::RanPastTheCap { read: bytes.len() as u64 };
     }
-    if let Err(e) = read {
-        return FetchAnswer::Cut { read: bytes.len(), length, error: e.to_string() };
+    if let Err(error) = read {
+        return FetchAnswer::Cut { read: bytes.len() as u64, length, error };
     }
     if let Some(length) = length {
         if (bytes.len() as u64) < length {
-            return FetchAnswer::Cut { read: bytes.len(), length: Some(length), error: "the stream ended short of its declared length".into() };
+            let error = io::Error::new(io::ErrorKind::UnexpectedEof, "the stream ended short of its declared length");
+            return FetchAnswer::Cut { read: bytes.len() as u64, length: Some(length), error };
         }
     }
     FetchAnswer::Bytes(bytes)

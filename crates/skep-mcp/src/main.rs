@@ -75,7 +75,7 @@ mod tools;
 use std::borrow::Cow;
 use std::env::{self, VarError};
 use std::ffi::OsString;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -161,9 +161,9 @@ impl Setting {
     /// A flag with no value after it, or given before, is a usage error.
     fn take(&mut self, args: &mut impl Iterator<Item = OsString>) {
         match args.next() {
-            Some(_) if self.given.is_some() => die_usage(&format!("{} is given at most once", self.flag)),
+            Some(_) if self.given.is_some() => die_usage(format_args!("{} is given at most once", self.flag)),
             Some(value) => self.given = Some(value),
-            None => die_usage(&format!("{} needs a value", self.flag)),
+            None => die_usage(format_args!("{} needs a value", self.flag)),
         }
     }
 
@@ -174,7 +174,7 @@ impl Setting {
         match &self.given {
             Some(value) => match value.to_str() {
                 Some(text) => Some(text.to_string()),
-                None => die(&format!("{}: the value is not UTF-8 text", self.flag)),
+                None => die(format_args!("{}: the value is not UTF-8 text", self.flag)),
             },
             None => self.var.and_then(env_text),
         }
@@ -214,7 +214,7 @@ fn main() -> ExitCode {
                 println!("{}", version_line());
                 return ExitCode::SUCCESS;
             }
-            _ => die_usage(&format!("unknown argument '{}'", arg.to_string_lossy())),
+            _ => die_usage(format_args!("unknown argument '{}'", arg.to_string_lossy())),
         }
     }
     // The catalog first: a drifted tools file is a startup error before any
@@ -223,42 +223,42 @@ fn main() -> ExitCode {
         None => Cow::Borrowed(tools::EMBEDDED),
         Some(path) => match std::fs::read_to_string(path) {
             Ok(t) => Cow::Owned(t),
-            Err(e) => die(&format!("{} {}: {e}", tools_file.flag, Path::new(path).display())),
+            Err(e) => die(format_args!("{} {}: {e}", tools_file.flag, Path::new(path).display())),
         },
     };
     let mut catalog = match Catalog::load(&text) {
         Ok(c) => c,
-        Err(e) => die(&format!("tools file: {e}")),
+        Err(e) => die(format_args!("tools file: {e}")),
     };
     // Then the settings, each refused by name and the first refusal ending
     // startup: the principal, the board, the store, the commons.
     let principal = match principal.text() {
         Some(v) => match v.parse::<u64>().ok().filter(|p| *p <= MAX_PRINCIPAL) {
             Some(p) => p,
-            None => die(&format!("{}: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})", principal.named())),
+            None => die(format_args!("{}: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})", principal.named())),
         },
-        None => die(&format!("{} is required: the principal this adapter acts as", principal.named())),
+        None => die(format_args!("{} is required: the principal this adapter acts as", principal.named())),
     };
     let origin = match board.text() {
         Some(text) => match Origin::parse(&text) {
             Some(origin) => origin,
-            None => die(&format!("{}: '{text}' is not a canonical origin (http://host[:port], lowercase, no path, no trailing slash)", board.named())),
+            None => die(format_args!("{}: '{text}' is not a canonical origin (http://host[:port], lowercase, no path, no trailing slash)", board.named())),
         },
         None => {
             let retired = if env_text("SKEPD_URL").is_some() { format!(" — SKEPD_URL is set and no longer read: the board is named by {} alone", board.named()) } else { String::new() };
-            die(&format!("{} is required: the board this adapter serves{retired}", board.named()))
+            die(format_args!("{} is required: the board this adapter serves{retired}", board.named()))
         }
     };
     let store_dir = match dir.text() {
         Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => die(&format!("{} is required: the key store this adapter signs from, one directory per adapter process (~/.skep is never consulted)", dir.named())),
+        _ => die(format_args!("{} is required: the key store this adapter signs from, one directory per adapter process (~/.skep is never consulted)", dir.named())),
     };
     // The commons pointer: an address the instructions hand to agents,
     // never dereferenced here — T4 well-formedness is the whole startup
     // check, the same class of refusal as a bad board.
     let commons = env_text("SKEP_COMMONS").inspect(|a| {
         if !is_t4_address(a) {
-            die(&format!("SKEP_COMMONS: '{a}' is not a T4-valid address"));
+            die(format_args!("SKEP_COMMONS: '{a}' is not a T4-valid address"));
         }
     });
     if let Some(addr) = &commons {
@@ -295,7 +295,7 @@ fn main() -> ExitCode {
     let code = server.run(&lines);
     log("stopping: closing the session at the board, saving the index");
     server.backend.shutdown();
-    ExitCode::from(code)
+    code
 }
 
 /// One line on the operator's stream: stderr, prefixed `skep-mcp: `,
@@ -311,14 +311,18 @@ fn log(line: impl Display) {
     let _ = writeln!(std::io::stderr(), "skep-mcp: {line}");
 }
 
-/// A refusal before the shell is open: the line, exit 1. Never called past
-/// `Backend::open`, whose stop returns from `main` so the shell drops.
-fn die(msg: &str) -> ! {
+/// Says a refusal before the shell is open, and exits 1.
+///
+/// `msg` is the refusal's line as `format_args!` makes it, so no caller
+/// builds a `String` to lend. It is never called past `Backend::open`, whose
+/// stop returns from `main` so the shell drops.
+fn die(msg: fmt::Arguments<'_>) -> ! {
     log(msg);
     std::process::exit(1);
 }
 
-fn die_usage(msg: &str) -> ! {
+/// Says a usage error and the usage after it, and exits 2.
+fn die_usage(msg: fmt::Arguments<'_>) -> ! {
     log(format_args!("{msg}\n\n{USAGE}"));
     std::process::exit(2);
 }
@@ -331,7 +335,7 @@ fn env_text(var: &str) -> Option<String> {
     match env::var(var) {
         Ok(text) => Some(text),
         Err(VarError::NotPresent) => None,
-        Err(VarError::NotUnicode(_)) => die(&format!("{var}: the value is not UTF-8 text")),
+        Err(VarError::NotUnicode(_)) => die(format_args!("{var}: the value is not UTF-8 text")),
     }
 }
 

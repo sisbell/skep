@@ -13,6 +13,7 @@
 //! tool result at all.
 
 use std::io::{BufRead, Write};
+use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
 
@@ -35,6 +36,18 @@ enum ErrorCode {
     InvalidRequest = -32600,
     MethodNotFound = -32601,
     InvalidParams = -32602,
+}
+
+/// Whether a tool result is MCP's `isError`.
+///
+/// *A refusal as a result* decides it for the shell's answers (`tool_result`),
+/// and `Server::fetch` for its own two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IsError {
+    /// A normal result: an answer, or the board's verdict as data.
+    No,
+    /// The shell could not get the board's verdict, or `fetch` declined a file.
+    Yes,
 }
 
 /// What reaches the loop: a stdin line, stdin's end, or the backend's stop.
@@ -82,6 +95,7 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
 
 /// The MCP side's state: the backend every tool calls and the catalog
 /// `tools/list` and `initialize` answer from.
+#[derive(Debug)]
 pub struct Server {
     /// The backend, its one session open.
     pub backend: Backend,
@@ -90,32 +104,34 @@ pub struct Server {
 }
 
 impl Server {
-    /// The loop: one JSON-RPC message per line in, one per line out,
-    /// nothing else ever on stdout, the calls served one at a time in
-    /// arrival order. Stdin's end is the clean exit, `0`; a stop the backend
-    /// asked is said and exits `1`; a closed stdout (the harness hung up)
-    /// ends the loop too. Each line goes to `handle_line` as raw bytes: what
-    /// a line is, its encoding included, is that method's call. The exit
-    /// code; the caller runs the shell's stop and exits with it.
-    pub fn run(&self, inbound: &Receiver<Inbound>) -> u8 {
+    /// Serves the loop: one JSON-RPC message per line in, one per line out.
+    ///
+    /// Nothing else is ever written on stdout, and the calls are served one at
+    /// a time in arrival order. Each line goes to `handle_line` as raw bytes:
+    /// what a line is, its encoding included, is that method's call. It
+    /// returns the exit code the caller exits with once it has run the shell's
+    /// stop: success at stdin's end and at a closed stdout (the harness hung
+    /// up), and 1 where the backend asked a stop, its line said first.
+    pub fn run(&self, inbound: &Receiver<Inbound>) -> ExitCode {
         let mut out = std::io::stdout();
-        loop {
-            match inbound.recv() {
-                Ok(Inbound::Line(line)) => {
+        for message in inbound {
+            match message {
+                Inbound::Line(line) => {
                     let Some(reply) = self.handle_line(&line) else { continue };
                     let mut bytes = serde_json::to_vec(&reply).expect("serializing a serde_json::Value cannot fail");
                     bytes.push(b'\n');
                     if out.write_all(&bytes).and_then(|()| out.flush()).is_err() {
-                        return 0;
+                        break;
                     }
                 }
-                Ok(Inbound::Stop(line)) => {
+                Inbound::Stop(line) => {
                     crate::log(format_args!("stopped: {line}"));
-                    return 1;
+                    return ExitCode::from(1);
                 }
-                Ok(Inbound::Eof) | Err(_) => return 0,
+                Inbound::Eof => break,
             }
         }
+        ExitCode::SUCCESS
     }
 
     /// One inbound line, as raw bytes → at most one outbound message,
@@ -210,15 +226,15 @@ impl Server {
     fn call(&self, name: &str, args: Map<String, Value>) -> Result<Value, String> {
         let tool = Tool::admit(name, &args)?;
         let answer = match tool {
-            Tool::Op(op) => self.backend.session_call("op", json!({"frame": wire_frame(op, args)})),
+            Tool::Op(op) => self.backend.session_call("op", Map::from_iter([(String::from("frame"), wire_frame(op, args))])),
             Tool::Boards => self.backend.boards(),
             Tool::Health => self.backend.health(),
             Tool::Probe => self.backend.probe(),
-            Tool::Search => self.backend.session_call("search", Value::Object(args)),
-            Tool::Places => self.backend.session_call("places", Value::Object(args)),
-            Tool::Held => self.backend.session_call("held", Value::Object(args)),
-            Tool::Resolve => self.backend.session_call("resolve", Value::Object(args)),
-            Tool::ChangesSince => self.backend.session_call("changes", Value::Object(args)),
+            Tool::Search => self.backend.session_call("search", args),
+            Tool::Places => self.backend.session_call("places", args),
+            Tool::Held => self.backend.session_call("held", args),
+            Tool::Resolve => self.backend.session_call("resolve", args),
+            Tool::ChangesSince => self.backend.session_call("changes", args),
             Tool::SessionInfo => self.backend.session_info(),
             Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),
         };
@@ -244,23 +260,26 @@ impl Server {
         let cap = format!("this adapter's cap of {MAX_FETCH_BYTES} bytes ({} MiB) on one fetch", MAX_FETCH_BYTES / (1024 * 1024));
         match read_whole(&fetched.headers, fetched.body) {
             FetchAnswer::Bytes(bytes) => {
-                let data = base64(&bytes);
+                let data = Value::String(base64(&bytes));
                 let block = match sniff_image(&bytes) {
-                    Some(mime) => json!({"type": "image", "data": data, "mimeType": mime}),
-                    None => json!({"type": "resource", "resource": {"uri": self.backend.blob_uri(i), "mimeType": "application/octet-stream", "blob": data}}),
+                    Some(mime) => Value::from_iter([("type", Value::from("image")), ("data", data), ("mimeType", Value::from(mime))]),
+                    None => {
+                        let resource = Value::from_iter([("uri", Value::String(self.backend.blob_uri(i))), ("mimeType", Value::from("application/octet-stream")), ("blob", data)]);
+                        Value::from_iter([("type", Value::from("resource")), ("resource", resource)])
+                    }
                 };
-                json!({"content": [block], "isError": false})
+                block_result(block, IsError::No)
             }
-            FetchAnswer::DeclaredPastTheCap { length } => text_result(format!("the file at {i} is {length} bytes, past {cap}: no byte of it was read; a smaller file is served whole"), true),
+            FetchAnswer::DeclaredPastTheCap { length } => text_result(format!("the file at {i} is {length} bytes, past {cap}: no byte of it was read; a smaller file is served whole"), IsError::Yes),
             FetchAnswer::RanPastTheCap { read } => {
-                text_result(format!("the file at {i} runs past {cap}: its body was read to {read} bytes, one past the cap, and dropped; a smaller file is served whole"), true)
+                text_result(format!("the file at {i} runs past {cap}: its body was read to {read} bytes, one past the cap, and dropped; a smaller file is served whole"), IsError::Yes)
             }
             FetchAnswer::Cut { read, length, error } => text_result(
                 format!(
                     "the fetch of {i} ended before the file was whole: {read} of {} bytes came ({error}); the board resets a stream whose requester it can no longer serve — fetch it again",
                     length.map_or("an undeclared number of".to_string(), |n| n.to_string())
                 ),
-                true,
+                IsError::Yes,
             ),
         }
     }
@@ -282,17 +301,29 @@ fn call_params(params: Option<Value>) -> Result<(String, Map<String, Value>), St
     Ok((name, args))
 }
 
+/// Returns a JSON-RPC response carrying `result` under `id`, both moved in.
+///
+/// Every response, tool result and block here is built by move, and `json!`
+/// takes only what is borrowed — the catalog's members, an error's message:
+/// it serializes what it is handed by reference, so a value it wrapped would
+/// be copied whole, a fetched file's base64 among them.
 fn rpc_result(id: Value, result: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "result": result})
+    Value::from_iter([("jsonrpc", Value::from("2.0")), ("id", id), ("result", result)])
 }
 
+/// Returns a JSON-RPC error response under `id`, `id` moved in.
 fn rpc_error(id: Value, code: ErrorCode, message: &str) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code as i64, "message": message}})
+    Value::from_iter([("jsonrpc", Value::from("2.0")), ("id", id), ("error", json!({"code": code as i64, "message": message}))])
 }
 
-/// A tool result of one text content block, `isError` as given.
-fn text_result(text: String, is_error: bool) -> Value {
-    json!({"content": [{"type": "text", "text": text}], "isError": is_error})
+/// Returns a tool result of one content block, `isError` as `is_error` says.
+fn block_result(block: Value, is_error: IsError) -> Value {
+    Value::from_iter([("content", Value::Array(vec![block])), ("isError", Value::Bool(is_error == IsError::Yes))])
+}
+
+/// Returns a tool result of one text content block.
+fn text_result(text: String, is_error: IsError) -> Value {
+    block_result(Value::from_iter([("type", Value::from("text")), ("text", Value::String(text))]), is_error)
 }
 
 /// Renders the shell's answer as a tool result: *a refusal as a result*.
@@ -300,12 +331,22 @@ fn text_result(text: String, is_error: bool) -> Value {
 /// An answer is the result's text, `isError` false; the board's verdict
 /// (`Refusal::Board`) is data, its value — the `refused` refusal, the verdict's
 /// body verbatim under `body` — the text, `isError` false; every other refusal
-/// is its value as the text, `isError` true. `Server::fetch` answers its own
-/// two — a file past the cap, a stream cut short — itself.
+/// is its value as the text, `isError` true. Each of the refusal's five kinds
+/// is named here, so a kind skep-shell adds stops this crate's build until the
+/// rule places it. `Server::fetch` answers its own two — a file past the cap,
+/// a stream cut short — itself.
 fn tool_result(answer: Result<Value, Refusal>) -> Value {
     match answer {
-        Ok(v) => text_result(v.to_string(), false),
-        Err(refusal) => text_result(refusal.to_value().to_string(), !matches!(refusal, Refusal::Board(_))),
+        Ok(value) => text_result(value.to_string(), IsError::No),
+        Err(refusal) => {
+            let is_error = match refusal {
+                // The board's verdict on the frame: data.
+                Refusal::Board(_) => IsError::No,
+                // The shell could not get the board's verdict.
+                Refusal::Halt { .. } | Refusal::Blocked(_) | Refusal::Unreachable(_) | Refusal::Shell { .. } => IsError::Yes,
+            };
+            text_result(refusal.to_value().to_string(), is_error)
+        }
     }
 }
 
@@ -372,5 +413,18 @@ mod tests {
             assert!(is_error, "{expected}");
             assert_eq!(text, expected, "the refusal's value is the text");
         }
+    }
+
+    /// The builders move what they wrap into the shapes the two specs name.
+    ///
+    /// Each equals what `json!` builds from the same members: a JSON-RPC
+    /// response and error (JSON-RPC 2.0 §5), and a tool result of one text
+    /// block, `isError` as given (MCP 2025-06-18, Tools).
+    #[test]
+    fn the_builders_move_what_they_wrap_into_the_shapes_the_specs_name() {
+        assert_eq!(rpc_result(json!(7), json!({"tools": []})), json!({"jsonrpc": "2.0", "id": 7, "result": {"tools": []}}));
+        assert_eq!(rpc_error(json!("x"), ErrorCode::InvalidParams, "no"), json!({"jsonrpc": "2.0", "id": "x", "error": {"code": -32602, "message": "no"}}));
+        assert_eq!(text_result("t".into(), IsError::Yes), json!({"content": [{"type": "text", "text": "t"}], "isError": true}));
+        assert_eq!(text_result("t".into(), IsError::No), json!({"content": [{"type": "text", "text": "t"}], "isError": false}));
     }
 }

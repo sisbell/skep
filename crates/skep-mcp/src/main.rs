@@ -67,8 +67,8 @@
 //! or refuses it -32602), and a wire op's call mapped onto its frame (*every
 //! tool is one call of the shell*). This file is startup — flags, environment,
 //! the `SKEP_COMMONS` check, the shell's open — the loop's two inputs (stdin's
-//! reader, the backend's stop) wired onto one channel, and `log`, the
-//! operator's stream every module and the shell's TALK write through.
+//! reader, the backend's stop) wired onto one channel, and `log`, the adapter's
+//! log on stderr, which every module and the shell's TALK write through.
 //!
 //! stdout is protocol-only; all logging goes to stderr, through `log`,
 //! whose failure fails nothing. Stdin EOF is the clean exit: the shell's
@@ -308,7 +308,7 @@ fn main() -> ExitCode {
     Server { backend, catalog }.run(&inbox)
 }
 
-/// Writes one line on the operator's stream, stderr, as `logged` renders it.
+/// Writes one line of the log, stderr, as `logged` renders it.
 ///
 /// It is written by `writeln!` with the result discarded — never
 /// `eprintln!`, which panics when the write fails. MCP's stdio transport
@@ -322,18 +322,18 @@ fn log(line: impl Display) {
     let _ = writeln!(std::io::stderr(), "{}", logged(line));
 }
 
-/// Returns `line` as the operator's stream carries it.
+/// Returns `line` as the log carries it.
 ///
 /// It is prefixed `skep-mcp: `; every control `render_inert` disarms — the
 /// C0 controls, DEL and the bidi controls (AUTH-5.2) — is shown as its code
 /// point; and every line it breaks onto is indented two spaces, an empty one
 /// left empty. A board's text rides many lines here — a refusal's code and
 /// detail, the `/health` claimant, a block's record and ground, the shell's
-/// `Talk` of its feed and held threads — and the stream is a terminal, or a
-/// log a terminal shows later, where a control acts: ESC opens a sequence
-/// that retitles the window, moves the cursor or writes the clipboard, CR
-/// overwrites the line. So no C0 control, DEL or bidi control a board chose
-/// acts there, and no text it chose opens a line of this stream as
+/// `Talk` of its feed and held threads — and the log is read on a terminal,
+/// or kept and shown on one later, where a control acts: ESC opens a
+/// sequence that retitles the window, moves the cursor or writes the
+/// clipboard, CR overwrites the line. So no C0 control, DEL or bidi control
+/// a board chose acts there, and no text it chose opens a line of the log as
 /// `skep-mcp: `. A C1 control passes as it came, as `render_inert` passes
 /// it.
 fn logged(line: impl Display) -> String {

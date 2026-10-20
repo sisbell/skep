@@ -167,11 +167,11 @@ fn open_session(shell: &Shell, board: &str) -> Result<SessionOpened, Refusal> {
 /// cannot read quotes that answer: a `200` an intermediary re-framed, or cut
 /// short with no length to catch it, comes back as a dial fault quoting a
 /// live token — a bearer credential this adapter would hand the agent in a
-/// tool result and the operator in a log line. So a dial fault stands only
-/// where its variant names the fault and no answer's bytes; any other — a
-/// malformed answer, or a variant this crate does not know — is replaced by
-/// one sentence, `UNQUOTED`. The refusal's kind and name stand, and the open
-/// is judged by them (`refused_open`), never by its text.
+/// tool result, and whoever reads its log in a line of it. So a dial fault
+/// stands only where its variant names the fault and no answer's bytes; any
+/// other — a malformed answer, or a variant this crate does not know — is
+/// replaced by one sentence, `UNQUOTED`. The refusal's kind and name stand,
+/// and the open is judged by them (`refused_open`), never by its text.
 fn unquoted(refusal: Refusal) -> Refusal {
     match refusal {
         Refusal::Unreachable(dial) => Refusal::Unreachable(match dial {
@@ -509,11 +509,12 @@ impl Backend {
         })
     }
 
-    /// Fetches the board's bytes at the address `i` names, under the session.
+    /// Fetches a picture's file by the I-address `i` of its cell.
     ///
-    /// `i` goes to the shell as the agent gave it: the shell refuses one that
-    /// is no address in its one spelling, as it refuses every row's argument.
-    /// The answer is the shell's streamed fetch, its head and its body still
+    /// The fetch runs under the session, and `i` goes to the shell as the
+    /// agent gave it: the shell refuses one that is no address in its one
+    /// spelling, as it refuses every row's argument. The answer is the shell's
+    /// streamed fetch (wire.md §Media, THE FETCH), its head and its body still
     /// unread, which [`read_whole`](crate::media::read_whole) reads under the
     /// adapter's cap and deadline.
     ///
@@ -527,7 +528,7 @@ impl Backend {
         self.under_session(|reference| self.shell.fetch(&json!({"session": reference, "i": i})))
     }
 
-    /// Returns the URI of the board's bytes at the address `i`.
+    /// Returns the URI of a picture's file by the I-address `i` of its cell.
     ///
     /// It is the route the shell's fetch dials, `GET /blob?i=<i>` at the
     /// board's origin (wire.md §Media, THE FETCH), which a resource block

@@ -262,6 +262,37 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     assert!(catalog.instructions().contains(&format!("cap of {mib} MiB")), "the fetch paragraph names the cap");
 }
 
+/// Every paragraph the catalog sends an agent to opens its instructions.
+///
+/// A tool's description, or the instructions themselves, name a paragraph by
+/// its heading in capitals, in parentheses — `(HELD BURSTS)` or
+/// `(FETCH below)` — and every heading so named opens one paragraph of the
+/// instructions: a heading renamed in one place alone sends an agent to a
+/// paragraph that is not there.
+#[test]
+fn every_paragraph_the_catalog_names_opens_its_instructions() {
+    /// Returns whether `text` is a heading.
+    ///
+    /// A heading is capitals and spaces, with a capital at each end.
+    fn is_heading(text: &str) -> bool {
+        text.len() > 1 && text.starts_with(|c: char| c.is_ascii_uppercase()) && text.ends_with(|c: char| c.is_ascii_uppercase()) && text.chars().all(|c| c.is_ascii_uppercase() || c == ' ')
+    }
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let headings: BTreeSet<&str> = catalog.instructions().split("\n\n").filter_map(|paragraph| paragraph.split_once(". ")).map(|(head, _)| head).filter(|head| is_heading(head)).collect();
+    let texts = std::iter::once(("the instructions", catalog.instructions())).chain(catalog.tools.iter().filter_map(|t| Some((t["name"].as_str()?, t["description"].as_str()?))));
+    let mut named = 0;
+    for (whose, text) in texts {
+        for (inner, _) in text.split('(').skip(1).filter_map(|rest| rest.split_once(')')) {
+            let heading = inner.strip_suffix(" below").unwrap_or(inner);
+            if is_heading(heading) {
+                assert!(headings.contains(heading), "{whose} names the paragraph {heading}, which no paragraph opens: {headings:?}");
+                named += 1;
+            }
+        }
+    }
+    assert!(named > 0, "premise: the catalog names a paragraph");
+}
+
 /// The options the door admits are the ones skep-shell declares.
 ///
 /// Each `opts` row of the door's table is held to the shell's own

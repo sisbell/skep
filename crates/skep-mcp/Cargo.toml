@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an operator points a harness at; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch — and a board's verdict comes back as data."
+description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the shell's core (skep-shell) on the other. One static binary an agent harness runs; every tool is one call of the shell under ONE signed session the adapter opens at startup — the wire ops by name, the shell's own calls, a change pull, a blob fetch — and a board's verdict comes back as data."
 readme = "README.md"
 
 [dependencies]

@@ -280,14 +280,16 @@ fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
     assert!(mcp.finish().success());
 }
 
-/// A4 CHANGES_SINCE: a PUBLISHED write after the position N — a second key
-/// enrolled into the claimant's set, the library's declared deposit into
-/// the claimant's published doc 1 under its own signed session — appears
-/// in `changes_since(N)` of the `published` class; `next` advances past
-/// it, and the next ask from `next` answers nothing new; a draft written
-/// by a second session of the claimant's appears of the `drafts` class; a
-/// sibling account's published home appears, and its draft — which the
-/// claimant's class never reads — never does.
+/// A4: what changed after a position is answered, and `next` advances.
+///
+/// A published write after the position N — a second key enrolled into the
+/// claimant's set, the library's declared deposit into the claimant's
+/// published doc 1 under its own signed session — appears in
+/// `changes_since(N)` of the `published` class; `next` advances past it, and
+/// the next ask from `next` answers nothing new; a draft written by a second
+/// session of the claimant's appears of the `drafts` class; a sibling
+/// account's published home appears, and its draft — which the claimant's
+/// reader class never reads — never does.
 #[test]
 fn a4_changes_since_answers_a_published_write_after_a_position_and_next_advances() {
     let fixture = Fixture::new("a4");

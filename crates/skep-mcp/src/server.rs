@@ -67,10 +67,10 @@ pub enum Inbound {
 ///
 /// The stdio framing is one message per line: each line split off at `\n`
 /// goes to `inbound` as raw bytes, for `handle_line` to judge, and stdin's
-/// end follows the last; a read that fails is said on the operator's stream
-/// and ends the reading as the end does. The reading has a thread of its
-/// own so that the loop hears the backend's stop, which rides the same
-/// channel, between lines.
+/// end follows the last; a read that fails is said in the log and ends the
+/// reading as the end does. The reading has a thread of its own so that the
+/// loop hears the backend's stop, which rides the same channel, between
+/// lines.
 pub fn read_stdin(inbound: Sender<Inbound>) {
     thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -247,13 +247,13 @@ impl Server {
 
     /// Answers `fetch(i)` as a content block.
     ///
-    /// The board's bytes at `i` — `i` as the agent gave it, the shell its one
-    /// doorkeeper — are sniffed: an image block with the type the magic
-    /// names, else an embedded resource blob of `application/octet-stream`
-    /// at the URI the backend names for the bytes, base64 within. A file
-    /// past the cap is refused in plain words naming it, and a stream cut
-    /// short is said so, each `isError`; the shell's refusal goes by
-    /// `tool_result`'s rule.
+    /// The file of the picture whose cell sits at `i` — `i` as the agent gave
+    /// it, the shell its one doorkeeper — is sniffed: an image block with the
+    /// type the magic names, else an embedded resource blob of
+    /// `application/octet-stream` at the URI the backend names for the file,
+    /// base64 within. A file past the cap is refused in plain words naming
+    /// it, and a stream cut short is said so, each `isError`; the shell's
+    /// refusal goes by `tool_result`'s rule.
     ///
     /// # Panics
     ///
@@ -280,9 +280,11 @@ impl Server {
                 };
                 block_result(block, IsError::No)
             }
-            FetchAnswer::DeclaredPastTheCap { length } => text_result(format!("the file at {i} is {length} bytes, past {cap}: no byte of it was read; a smaller file is served whole"), IsError::Yes),
+            FetchAnswer::DeclaredPastTheCap { length } => {
+                text_result(format!("the file the cell at {i} names is {length} bytes, past {cap}: no byte of it was read; a smaller file is served whole"), IsError::Yes)
+            }
             FetchAnswer::RanPastTheCap { read } => {
-                text_result(format!("the file at {i} runs past {cap}: its body was read to {read} bytes, one past the cap, and dropped; a smaller file is served whole"), IsError::Yes)
+                text_result(format!("the file the cell at {i} names runs past {cap}: its body was read to {read} bytes, one past the cap, and dropped; a smaller file is served whole"), IsError::Yes)
             }
             FetchAnswer::Cut { read, length, error } => text_result(
                 format!(

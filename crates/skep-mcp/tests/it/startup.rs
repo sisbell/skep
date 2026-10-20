@@ -6,11 +6,10 @@
 //! that is not UTF-8 — and served where it is given: a flag beating its
 //! variable, the commons sentence, a tools file in the embedded catalog's place
 //! and a drifted one refused; and the board's refusals of the open, a halted
-//! board's line, the operator's stream inert and no token in it. Most run the
-//! built binary with no board, or a stand-in one answering what a real board
-//! never does; the rest over a claimed board (`common`'s `Fixture`). The
-//! fence's startup cases — no key, `SKEP_BOARD`, a retired key's relaunch — are
-//! `agent.rs`'s.
+//! board's line, the log inert and no token in it. Most run the built binary
+//! with no board, or a stand-in one answering what a real board never does;
+//! the rest over a claimed board (`common`'s `Fixture`). The fence's startup
+//! cases — no key, `SKEP_BOARD`, a retired key's relaunch — are `agent.rs`'s.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -98,7 +97,7 @@ fn answered(body: &str) -> String {
     format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
 }
 
-/// A board's text reaches the operator's stream inert.
+/// A board's text reaches the log inert.
 ///
 /// A stand-in board answers every request with one `/health` reading whose
 /// claimant carries a terminal sequence and a forged line; the adapter says
@@ -106,14 +105,14 @@ fn answered(body: &str) -> String {
 /// byte reaches stderr, the claimant is shown by its code points, and no line
 /// opens as the adapter's but the adapter's own.
 #[test]
-fn a_boards_text_reaches_the_operators_stream_inert() {
+fn a_boards_text_reaches_the_log_inert() {
     let health = r#"{"ok":true,"log_position":0,"auth":{"claimant":"\u001b]0;owned\u0007\nskep-mcp: forged","local_trust":false}}"#;
     let port = stand_in(move |_, _| answered(health));
     let keyless = TempDir::new("inert");
     let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", keyless.path()).env("SKEP_PRINCIPAL", "1").refusal();
     assert_eq!(code, Some(1), "the keyless store stops startup: {err}");
     assert!(err.contains("claimant <U+001B>]0;owned<U+0007>"), "the claimant, shown by its code points: {err:?}");
-    assert!(!err.contains(['\u{1b}', '\u{7}']), "no control byte reaches the stream: {err:?}");
+    assert!(!err.contains(['\u{1b}', '\u{7}']), "no control byte reaches the log: {err:?}");
     assert!(!err.lines().any(|l| l.starts_with("skep-mcp: forged")), "a line the board wrote opens as the adapter's: {err:?}");
 }
 

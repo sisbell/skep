@@ -1,8 +1,9 @@
 //! A fetched file's bytes: read whole under a cap, sniffed, and encoded.
 //!
-//! [`read_whole`] reads the shell's streamed fetch under the adapter's cap,
-//! [`sniff_image`] names the bytes' type off their magic, and [`base64`]
-//! encodes them for the content block, which `server.rs` builds.
+//! [`read_whole`] reads the shell's streamed fetch under the adapter's cap
+//! and its deadline, [`sniff_image`] names the bytes' type off their magic,
+//! and [`base64`] encodes them for the content block, which `server.rs`
+//! builds.
 //!
 //! The board declares no media type — a picture's cell is `{type, hash,
 //! size}` and the fetch's `Content-Type` is always `application/octet-stream`
@@ -16,6 +17,7 @@
 //! with `=` padding), held to the RFC's own vectors by the unit tests.
 
 use std::io::{self, Read};
+use std::time::{Duration, Instant};
 
 use skep_client::dial::Headers;
 
@@ -28,6 +30,37 @@ use skep_client::dial::Headers;
 /// model takes as one image. Checked against the answer's `Content-Length`
 /// before a byte is read; a file past it is refused naming the cap.
 pub const MAX_FETCH_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The longest a fetched file's body is read.
+///
+/// It is an honest board's own bound on its fetch stream — wire.md
+/// §Transport's transfer bound of ten minutes and idle bound of thirty
+/// seconds (skepd's `BLOB_TRANSFER_BOUND` and `BLOB_IDLE_BOUND`) — past which
+/// the board has ended the stream itself, at its length or by a RESET short
+/// of it, so it cuts nothing an honest board still sends. It bounds the
+/// slowness skep-client's per-read bound cannot: the streamed form leaves
+/// the body's time to its caller, a peer pacing a byte inside each per-read
+/// bound renews that bound for as long as it likes, and this adapter
+/// answers one call at a time. It is checked before each read, so the read
+/// ends within one per-read bound past it.
+const FETCH_DEADLINE: Duration = Duration::from_secs(10 * 60 + 30);
+
+/// A body read under a deadline.
+///
+/// A read begun at or past `deadline` is refused `TimedOut`, unmade.
+struct Deadlined<R> {
+    body: R,
+    deadline: Instant,
+}
+
+impl<R: Read> Read for Deadlined<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if Instant::now() >= self.deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "the file did not arrive within the fetch's deadline"));
+        }
+        self.body.read(buf)
+    }
+}
 
 /// What a fetched file came back as.
 #[derive(Debug)]
@@ -43,23 +76,31 @@ pub enum FetchAnswer {
     /// No length was declared, or one the body overran: `read` bytes came,
     /// one past the cap, and how long the file is, nothing here knows.
     RanPastTheCap { read: u64 },
-    /// The stream ended short of the declared length, or a read failed.
+    /// The stream ended short, a read failed, or its deadline passed.
     ///
     /// The board's RESET (wire.md §Media, THE FETCH) is one: `read` bytes
-    /// came, and `error` says why — the failed read's own, or `UnexpectedEof`
-    /// where the stream ended short.
+    /// came, and `error` says why — the failed read's own, `UnexpectedEof`
+    /// where the stream ended short of the declared length, or `TimedOut`
+    /// where `FETCH_DEADLINE` passed before the file was whole.
     Cut { read: u64, length: Option<u64>, error: io::Error },
 }
 
-/// Reads a fetched file's body whole under [`MAX_FETCH_BYTES`].
+/// Reads a fetched file's body whole under the adapter's cap and deadline.
 ///
 /// `headers` is the fetch's head: its `Content-Length`, where it declares
-/// one, is held to the cap before a byte of `body` is read, and the body is
-/// then read to one byte past the cap at most. A file past the cap and a
-/// stream cut short are answers, not errors: the shell's refusal of the
-/// fetch came earlier, as [`Backend::fetch`](crate::shell::Backend::fetch)'s
-/// `Err`.
+/// one, is held to [`MAX_FETCH_BYTES`] before a byte of `body` is read, and
+/// the body is then read to one byte past the cap at most, each read begun
+/// before `FETCH_DEADLINE` has passed. A file past the cap and a stream cut
+/// short are answers, not errors: the shell's refusal of the fetch came
+/// earlier, as [`Backend::fetch`](crate::shell::Backend::fetch)'s `Err`.
 pub fn read_whole(headers: &Headers, body: impl Read) -> FetchAnswer {
+    read_within(headers, body, FETCH_DEADLINE)
+}
+
+/// Reads a fetched file's body whole, its reads begun within `within`.
+///
+/// It is [`read_whole`] with the deadline given, so a test can shorten it.
+fn read_within(headers: &Headers, body: impl Read, within: Duration) -> FetchAnswer {
     let length = headers.get("Content-Length").and_then(|v| v.trim().parse::<u64>().ok());
     if let Some(length) = length {
         if length > MAX_FETCH_BYTES {
@@ -67,7 +108,7 @@ pub fn read_whole(headers: &Headers, body: impl Read) -> FetchAnswer {
         }
     }
     let mut bytes = Vec::new();
-    let read = body.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
+    let read = Deadlined { body, deadline: Instant::now() + within }.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
     if bytes.len() as u64 > MAX_FETCH_BYTES {
         return FetchAnswer::RanPastTheCap { read: bytes.len() as u64 };
     }

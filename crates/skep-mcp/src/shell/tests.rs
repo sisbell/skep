@@ -1,11 +1,62 @@
 use std::collections::BTreeSet;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::time::Instant;
 
-use skep_client::halt::Refused;
+use skep_client::halt::{Face, Refused};
 use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose};
 use skep_client::DialError;
 
 use super::*;
+
+/// A scratch store, removed with the test.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    /// Returns a fresh scratch directory named for `tag` and this process.
+    fn new(tag: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("skep-mcp-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch store");
+        Scratch(dir)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Returns a backend over a real shell at `origin` in `mode`.
+///
+/// Its store is `dir`, holding one fresh key; its one session is `s-1`, open;
+/// its stop and its talk say nothing.
+fn backend_at(dir: &Path, origin: Origin, mode: SessionMode) -> Backend {
+    let store = FileStore::open(dir);
+    let id = store.generate(None).expect("keygen");
+    let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).expect("the key's facts");
+    let talk: Talk = Arc::new(|_: &str| {});
+    let shell = Shell::open(ShellOptions::new(vec![origin.clone()], dir.to_path_buf(), mode, Arc::clone(&talk)));
+    let board = shell.board_references().into_iter().next().expect("the shell's one board");
+    let on_stop: OnStop = Arc::new(|_: String| {});
+    Backend { shell, board, origin, principal: mode.principal(), account: None, writes: true, key, session: Arc::new(SessionWatch::new("s-1".into())), on_stop, talk }
+}
+
+/// Returns one request off a stand-in board's connection: its head, as text.
+///
+/// The body its `Content-Length` declares is read too, so the answer that
+/// follows is never cut by a reset over bytes left unread.
+fn read_request(conn: &mut TcpStream) -> String {
+    let (mut raw, mut byte) = (Vec::new(), [0u8; 1]);
+    while !raw.ends_with(b"\r\n\r\n") && conn.read(&mut byte).is_ok_and(|n| n == 1) {
+        raw.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&raw).into_owned();
+    let length = head.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").and_then(|n| n.trim().parse::<usize>().ok())).unwrap_or(0);
+    let _ = conn.read_exact(&mut vec![0u8; length]);
+    head
+}
 
 /// Each arm of a death's reason asks one thing.
 ///
@@ -164,13 +215,6 @@ fn a_startup_stop_names_what_did_not_hold_then_the_refusal_once() {
 /// attempt once, as it died.
 #[test]
 fn a_call_is_reissued_once_and_only_after_a_death_settled_into_a_session() {
-    /// A scratch store, removed with the test.
-    struct Scratch(PathBuf);
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
     /// Returns one call's attempts and answer, from the session `s-1`.
     ///
     /// The session first moves by `from`; each attempt is answered off
@@ -200,17 +244,8 @@ fn a_call_is_reissued_once_and_only_after_a_death_settled_into_a_session() {
         }
         (ran, outcome)
     }
-    let scratch = Scratch(std::env::temp_dir().join(format!("skep-mcp-under-session-{}", std::process::id())));
-    std::fs::create_dir_all(&scratch.0).expect("a scratch store");
-    let store = FileStore::open(&scratch.0);
-    let id = store.generate(None).expect("keygen");
-    let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).expect("the key's facts");
-    let origin = Origin::parse("http://127.0.0.1:1").expect("a canonical origin");
-    let talk: Talk = Arc::new(|_: &str| {});
-    let shell = Shell::open(ShellOptions::new(vec![origin.clone()], scratch.0.clone(), SessionMode::Signed { principal: 1 }, Arc::clone(&talk)));
-    let board = shell.board_references().into_iter().next().expect("the shell's one board");
-    let on_stop: OnStop = Arc::new(|_: String| {});
-    let mut backend = Backend { shell, board, origin, principal: 1, account: None, writes: true, key, session: Arc::new(SessionWatch::new("s-1".into())), on_stop, talk };
+    let scratch = Scratch::new("under-session");
+    let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Signed { principal: 1 });
     let died = || -> Result<&'static str, Refusal> { Err(Refusal::shell(Name::SESSION_DIED, json!({"session": "s-1"}))) };
     let ended = || -> Result<&'static str, Refusal> { Err(Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}))) };
     let named = |outcome: Result<&'static str, Refusal>| outcome.map_err(|refusal| refusal.name().to_string());
@@ -239,4 +274,46 @@ fn a_call_is_reissued_once_and_only_after_a_death_settled_into_a_session() {
     assert_eq!(backend.session.current(), SessionState::Lapsed("s-1".into()), "the lapse stands for the next call");
     let (ran, outcome) = call(&mut backend, Some(Death::Stop("stopped".into())), vec![ended()], None);
     assert_eq!((ran, named(outcome)), (s(&["s-1"]), Err("session_ended".to_string())), "a stopped adapter's call, as the shell answers it");
+}
+
+/// A session's open is refused with no answer's text in it.
+///
+/// A stand-in board answers the open's `POST /session` with a `200` the client
+/// cannot read — a byte short, with no length to catch it, as a connection an
+/// intermediary re-framed and then lost — whose text holds the session's token:
+/// the afresh open's refusal is `unreachable`, the session lapses as at a board
+/// that did not answer, and neither the refusal's text, its value nor its
+/// `Debug` carries the token. A dial fault that names no answer's bytes stands
+/// whole, and a refusal of another kind is untouched.
+#[test]
+fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
+    const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a stand-in board");
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().expect("its port").port())).expect("a canonical origin");
+    let (opened, opens) = std::sync::mpsc::channel::<()>();
+    thread::spawn(move || {
+        for mut conn in listener.incoming().flatten() {
+            let answer = if read_request(&mut conn).starts_with("POST /session ") {
+                let _ = opened.send(());
+                format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"principal\":1,\"session\":\"{TOKEN}\"")
+            } else {
+                let health = r#"{"ok":true,"log_position":0,"auth":{"claimant":null,"local_trust":true}}"#;
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{health}", health.len())
+            };
+            let _ = conn.write_all(answer.as_bytes());
+        }
+    });
+    let scratch = Scratch::new("open-afresh");
+    let backend = backend_at(&scratch.0, origin, SessionMode::Bare { principal: 1 });
+    let refusal = backend.open_afresh("s-1").expect_err("an answer this client cannot read opens no session");
+    assert!(opens.try_recv().is_ok(), "premise: the open's `POST /session` was answered");
+    assert_eq!(refusal.name(), "unreachable", "{refusal}");
+    for shown in [refusal.to_string(), refusal.to_value().to_string(), format!("{refusal:?}")] {
+        assert!(!shown.contains(TOKEN), "the session's token is quoted: {shown}");
+    }
+    assert_eq!(backend.session.current(), SessionState::Lapsed("s-1".into()), "the session lapses, as at a board that did not answer");
+    let refused = Refusal::Unreachable(DialError::Connect("refused".into()));
+    assert_eq!(unquoted(refused.clone()), refused, "a fault that names no answer's bytes stands whole");
+    let retired = Refusal::named(Name::RETIRED, Face { state: "s".into(), cause: "c".into(), act: "a".into() });
+    assert_eq!(unquoted(retired.clone()), retired, "a refusal of another kind is untouched");
 }

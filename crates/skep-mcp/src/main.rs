@@ -82,6 +82,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::sync::Arc;
 
+use skep_client::sheet::render_inert;
 use skep_client::Origin;
 
 use crate::server::{read_stdin, Inbound, Server};
@@ -298,17 +299,47 @@ fn main() -> ExitCode {
     code
 }
 
-/// One line on the operator's stream: stderr, prefixed `skep-mcp: `,
-/// written by `writeln!` with the result discarded — never `eprintln!`,
-/// which panics when the write fails. MCP's stdio transport lets a client
-/// ignore the server's stderr, and an unread log fails its writes (a pipe
-/// whose reader has gone answers EPIPE, a full volume ENOSPC): a line is
-/// never worth the work it reports on, the rule skep-util's `notice` keeps
-/// for the daemon. So a log line never fails and never reports. The
-/// shell's TALK lines come through here too, so stdout stays the JSON-RPC
-/// stream alone.
+/// Writes one line on the operator's stream, stderr, as `logged` renders it.
+///
+/// It is written by `writeln!` with the result discarded — never
+/// `eprintln!`, which panics when the write fails. MCP's stdio transport
+/// lets a client ignore the server's stderr, and an unread log fails its
+/// writes (a pipe whose reader has gone answers EPIPE, a full volume
+/// ENOSPC): a line is never worth the work it reports on, the rule
+/// skep-util's `notice` keeps for the daemon. So a log line never fails and
+/// never reports. The shell's `Talk` lines come through here too, so stdout
+/// stays the JSON-RPC stream alone, and every line on stderr is rendered.
 fn log(line: impl Display) {
-    let _ = writeln!(std::io::stderr(), "skep-mcp: {line}");
+    let _ = writeln!(std::io::stderr(), "{}", logged(line));
+}
+
+/// Returns `line` as the operator's stream carries it.
+///
+/// It is prefixed `skep-mcp: `; every control `render_inert` disarms — the
+/// C0 controls, DEL and the bidi controls (AUTH-5.2) — is shown as its code
+/// point; and every line it breaks onto is indented two spaces, an empty one
+/// left empty. A board's text rides many lines here — a refusal's code and
+/// detail, the `/health` claimant, a block's record and ground, the shell's
+/// `Talk` of its feed and held threads — and the stream is a terminal, or a
+/// log a terminal shows later, where a control acts: ESC opens a sequence
+/// that retitles the window, moves the cursor or writes the clipboard, CR
+/// overwrites the line. So no C0 control, DEL or bidi control a board chose
+/// acts there, and no text it chose opens a line of this stream as
+/// `skep-mcp: `. A C1 control passes as it came, as `render_inert` passes
+/// it.
+fn logged(line: impl Display) -> String {
+    let text = line.to_string();
+    let mut out = String::from("skep-mcp: ");
+    for (k, piece) in text.split('\n').enumerate() {
+        if k > 0 {
+            out.push('\n');
+            if !piece.is_empty() {
+                out.push_str("  ");
+            }
+        }
+        out.push_str(&render_inert(piece));
+    }
+    out
 }
 
 /// Says a refusal before the shell is open, and exits 1.
@@ -424,6 +455,24 @@ mod tests {
     fn the_version_line_names_the_binary_its_version_and_the_build_commit() {
         assert_eq!(version_line(), format!("skep-mcp {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")));
         assert!(USAGE.contains("\n  --version            this binary's version"), "{USAGE}");
+    }
+
+    /// A log line is inert, and only its first line opens as the adapter's.
+    ///
+    /// A control a board's text carries — ESC opening a terminal sequence,
+    /// BEL, CR, a bidi override — is shown as its code point, on any line; a
+    /// line break it carries continues the line indented, so a forged
+    /// `skep-mcp: ` opens no line; a face's own lines keep their order, each
+    /// indented; an empty line stays empty; printable text passes as written.
+    #[test]
+    fn a_log_line_is_inert_and_opens_as_the_adapters_once() {
+        assert_eq!(logged("claimant \u{1b}]0;owned\u{7}"), "skep-mcp: claimant <U+001B>]0;owned<U+0007>");
+        assert_eq!(logged("x\r\u{202e}y"), "skep-mcp: x<U+000D><U+202E>y");
+        assert_eq!(logged("a\nb\u{1b}c"), "skep-mcp: a\n  b<U+001B>c");
+        assert_eq!(logged("the board refused: x\nskep-mcp: signed as principal 0"), "skep-mcp: the board refused: x\n  skep-mcp: signed as principal 0");
+        assert_eq!(logged("no_key: s\n  cause: c\n  act: a"), "skep-mcp: no_key: s\n    cause: c\n    act: a");
+        assert_eq!(logged("unknown argument 'x'\n\nusage: skep-mcp"), "skep-mcp: unknown argument 'x'\n\n  usage: skep-mcp");
+        assert_eq!(logged("person seam: refuse — é"), "skep-mcp: person seam: refuse — é");
     }
 
     /// A setting names its flag and variable, and holds the flag's value.

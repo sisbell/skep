@@ -18,7 +18,9 @@ readme = "README.md"
 skep-shell = { path = "../skep-shell" }
 # The board's canonical origin, which `ShellOptions` takes and the shell
 # does not re-export; the key's public facts (`KeyFacts`) the startup line
-# and `session_info` name the signing key by.
+# and `session_info` name the signing key by; the dial faults (`DialError`)
+# a refusal of the session's open keeps or replaces; and `render_inert`,
+# the rendering every log line takes (AUTH-5.2).
 skep-client = { path = "../skep-client" }
 # The bridge's values: every call's input and output is a
 # `serde_json::Value`; JSON-RPC's framing is this crate's own.

@@ -13,11 +13,13 @@
 //! The daemon, the claim and the driver are `common`'s.
 
 use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
+use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose};
 
 use crate::common::{embedded_catalog, holds_a_token, Fixture, Launch, TempDir, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, VARIABLES};
 
@@ -444,6 +446,94 @@ fn a_log_no_one_reads_fails_no_work() {
     drop(reader);
     let (code, _) = Launch::new().env("SKEP_BOARD", fixture.origin()).env("SKEP_KEYSTORE", &fixture.store).stderr(Stdio::from(writer)).refusal();
     assert_eq!(code, Some(1), "a refusal its log cannot carry is still exit 1");
+}
+
+/// Returns the port of a stand-in board answering each request by `answer`.
+///
+/// `answer` is handed the request's head and body as text, and its answer's
+/// bytes are written whole before the connection closes.
+fn stand_in(answer: impl Fn(&str, &str) -> String + Send + 'static) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a stand-in board");
+    let port = listener.local_addr().expect("its port").port();
+    std::thread::spawn(move || {
+        for mut conn in listener.incoming().flatten() {
+            let (mut head, mut byte) = (Vec::new(), [0u8; 1]);
+            while !head.ends_with(b"\r\n\r\n") && conn.read(&mut byte).is_ok_and(|n| n == 1) {
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let length = head.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").and_then(|n| n.trim().parse::<usize>().ok())).unwrap_or(0);
+            let mut body = vec![0u8; length];
+            let _ = conn.read_exact(&mut body);
+            let _ = conn.write_all(answer(&head, &String::from_utf8_lossy(&body)).as_bytes());
+        }
+    });
+    port
+}
+
+/// Returns a `200` answer carrying `body`, its length declared.
+fn answered(body: &str) -> String {
+    format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+}
+
+/// A board's text reaches the operator's stream inert.
+///
+/// A stand-in board answers every request with one `/health` reading whose
+/// claimant carries a terminal sequence and a forged line; the adapter says
+/// the board's line and stops before serving, its store keyless: no control
+/// byte reaches stderr, the claimant is shown by its code points, and no line
+/// opens as the adapter's but the adapter's own.
+#[test]
+fn a_boards_text_reaches_the_operators_stream_inert() {
+    let health = r#"{"ok":true,"log_position":0,"auth":{"claimant":"\u001b]0;owned\u0007\nskep-mcp: forged","local_trust":false}}"#;
+    let port = stand_in(move |_, _| answered(health));
+    let keyless = TempDir::new("inert");
+    let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", keyless.path()).env("SKEP_PRINCIPAL", "1").refusal();
+    assert_eq!(code, Some(1), "the keyless store stops startup: {err}");
+    assert!(err.contains("claimant <U+001B>]0;owned<U+0007>"), "the claimant, shown by its code points: {err:?}");
+    assert!(!err.contains(['\u{1b}', '\u{7}']), "no control byte reaches the stream: {err:?}");
+    assert!(!err.lines().any(|l| l.starts_with("skep-mcp: forged")), "a line the board wrote opens as the adapter's: {err:?}");
+}
+
+/// A token in a session answer the client cannot read reaches no log line.
+///
+/// A stand-in board passes every check the signed open makes — the origin, the
+/// principal's account, the store's one key enrolled — and answers its `POST
+/// /session` with a `200` the client cannot read, a byte short with no length
+/// to catch it, as a connection an intermediary re-framed and then lost, whose
+/// text holds the session's token: startup stops naming the open's refusal,
+/// and no line on stderr carries the token.
+#[test]
+fn a_token_in_a_session_answer_the_client_cannot_read_reaches_no_log_line() {
+    const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
+    let store = TempDir::new("unreadable-session");
+    let keys = FileStore::open(store.path());
+    let id = keys.generate(None).expect("keygen");
+    let key = keys.select(&KeySelector::Path(&keys.key_path(&id.0)), Purpose::Read).expect("the key's facts");
+    let enrolled = json!({"resp": "key_set", "as_of": 0, "enrolled": [{"alg": key.public.alg(), "key": key.public.to_hex(), "fingerprint": key.fingerprint.to_hex(), "anchor": false}], "retired": []});
+    let (opened, opens) = std::sync::mpsc::channel::<()>();
+    let port = stand_in(move |head, body| {
+        let host = head.lines().find_map(|line| line.strip_prefix("Host: ")).unwrap_or_default();
+        if head.starts_with("GET /health ") {
+            answered(&json!({"ok": true, "log_position": 0, "auth": {"claimant": CLAIMANT_ACCOUNT, "local_trust": true, "signed_origins": [format!("http://{host}")]}}).to_string())
+        } else if head.starts_with("POST /op ") && body.contains("\"principal_prefix\"") {
+            answered(&json!({"resp": "maybe_addr", "addr": CLAIMANT_ACCOUNT, "as_of": 0}).to_string())
+        } else if head.starts_with("POST /op ") && body.contains("\"key_set\"") {
+            answered(&enrolled.to_string())
+        } else if head.starts_with("GET /challenge?principal=1 ") {
+            answered(r#"{"nonce":"n-1","principal":1,"ttl_ms":60000}"#)
+        } else if head.starts_with("POST /session ") {
+            let _ = opened.send(());
+            format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"principal\":1,\"session\":\"{TOKEN}\"")
+        } else {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"error\":\"not_found\"}".to_string()
+        }
+    });
+    let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", store.path()).env("SKEP_PRINCIPAL", "1").refusal();
+    assert!(opens.try_recv().is_ok(), "premise: the open's POST /session was answered:\n{err}");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("stopped before serving: the signed session did not open: unreachable"), "{err}");
+    assert!(!err.contains(TOKEN), "the session's token reaches the log:\n{err}");
 }
 
 /// A board the adapter cannot reach stops startup: the session cannot

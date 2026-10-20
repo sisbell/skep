@@ -19,7 +19,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   key in the store, or a key the board refuses, stops the adapter before
   it serves, with the shell's face in plain words; no bare mode exists.
   The startup lines on stderr name the board and its mode, the key and
-  the account, and the person seam.
+  the account, and the person seam. Every line on stderr opens
+  `skep-mcp: `: a C0 control, DEL or bidi control a board's text carries
+  there is shown as its code point, and a line break in it continues the
+  line indented.
 - **Every tool is one call of the shell.** The WIRE OPERATIONS of
   `docs/wire.md` §Operations are tools of their own names — the name is
   the frame's `op`, the arguments are the frame — sent as `op(session,
@@ -37,9 +40,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   changed, the agent keeping `next`) and `fetch(i)` (a picture's bytes as
   an image block — the type sniffed off the bytes' magic for PNG, JPEG,
   GIF and WebP, never attested — else an embedded resource blob, under a
-  cap of 8 MiB checked before a byte is read). The catalog is `tools.json`
-  beside `Cargo.toml`, checked against the dispatch's two kinds at startup
-  in both directions.
+  cap of 8 MiB checked before a byte is read, and a deadline of ten and a
+  half minutes on its body, an honest board's own bound on the stream). The
+  catalog is `tools.json` beside `Cargo.toml`, checked against the
+  dispatch's two kinds at startup in both directions.
 - **A refusal as a result.** The board's verdict on a frame — a `refused`
   refusal — is DATA: `isError: false`, the verdict's body verbatim under
   `body`, the refusal's own `name`, `status`, `code`, `detail` and `op`
@@ -71,15 +75,15 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   nor `upload` or `restore`, whose media walk the shell does not reach
   yet (skep #502).
 - **One call at a time.** Calls are served in arrival order, one at a time;
-  a `fetch` of a large file or a `search` while the index is building holds
-  the calls behind it. Stdin's end is the clean exit: the shell's stop
-  closes the session at the board and saves the index. A signal ends the
-  process with neither — the session then lives on at the board until it
-  restarts.
+  a `fetch` of a large file, up to its body's deadline, or a `search` while
+  the index is building holds the calls behind it. Stdin's end is the clean
+  exit: the shell's stop closes the session at the board and saves the
+  index. A signal ends the process with neither — the session then lives
+  on at the board until it restarts.
 - **Deliberately dependency-light** — the shell's core, `skep-client` for
-  the types the shell's surface names and a key label's inert rendering,
-  and `serde_json`; the stdio framing, the type sniff and the base64 are
-  this crate's own.
+  the types the shell's surface names and the inert rendering a key's
+  label and every log line take, and `serde_json`; the stdio framing, the
+  type sniff and the base64 are this crate's own.
 
 ## Settings
 

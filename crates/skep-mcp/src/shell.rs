@@ -8,7 +8,9 @@
 //! that session's reference to every call that runs under it, and the board's
 //! to the one call whose row names it, so no tool's arguments name either. The
 //! references are the shell's opaque names (THE PIN of `client.md` §4b.1):
-//! never a token, never a credential.
+//! never a token, never a credential. Every session it opens goes through one
+//! door, `open_session`, whose refusal carries no answer's text, since the
+//! answer to `POST /session` carries the token.
 //!
 //! **The session's life.** The calls run under one session, its state held here
 //! (`SessionState`, in a `SessionWatch` that wakes a waiting call when it
@@ -51,7 +53,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 use skep_client::sheet::render_inert;
 use skep_client::store::KeyFacts;
-use skep_client::Origin;
+use skep_client::{DialError, Origin};
 use skep_shell::{ArmConfig, Event, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
 
 /// The longest a call waits for the drain to settle a session the shell ended.
@@ -181,6 +183,54 @@ fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
     format!("stopped before serving: {what}: {refusal}")
 }
 
+/// Opens a session at the board `board` names: the shell's `session` row.
+///
+/// It is the one way this adapter opens a session — at startup, and afresh
+/// where a death left none — so every refusal of an open it reads comes back
+/// `unquoted`.
+///
+/// # Errors
+///
+/// The shell's refusal of the open, with no answer's text in it.
+fn open_session(shell: &Shell, board: &str) -> Result<Value, Refusal> {
+    shell.call("session", &json!({"board": board})).map_err(unquoted)
+}
+
+/// Returns a refusal of a session's open with no answer's text in it.
+///
+/// The open reads the answer to `POST /session` (AUTH-6.2), whose body
+/// carries the session's token, and the client's refusal of an answer it
+/// cannot read quotes that answer: a `200` an intermediary re-framed, or cut
+/// short with no length to catch it, comes back as a dial fault quoting a
+/// live token — a bearer credential this adapter would hand the agent in a
+/// tool result and the operator in a log line. So a dial fault stands only
+/// where its variant names the fault and no answer's bytes; any other — a
+/// malformed answer, or a variant this crate does not know — is replaced by
+/// one sentence, `UNQUOTED`. The refusal's kind and name stand, and the open
+/// is judged by them (`refused_open`), never by its text.
+fn unquoted(refusal: Refusal) -> Refusal {
+    match refusal {
+        Refusal::Unreachable(dial) => Refusal::Unreachable(match dial {
+            DialError::NotHeld(_)
+            | DialError::Resolve(_)
+            | DialError::Connect(_)
+            | DialError::Timeout(_)
+            | DialError::Io(_)
+            | DialError::Truncated { .. }
+            | DialError::TooLarge { .. }
+            | DialError::Tls(_)
+            | DialError::Request(_) => dial,
+            _ => DialError::Response(UNQUOTED.to_string()),
+        }),
+        other => other,
+    }
+}
+
+/// The text that stands in for a dial fault that may quote an answer.
+///
+/// A refusal of a session's open carries it where `unquoted` replaces one.
+const UNQUOTED: &str = "the session's open met an answer this client could not read; its text is not shown, since the answer to `POST /session` carries the session's token";
+
 /// The backend: the shell, and what the adapter holds beside it for the calls.
 ///
 /// It holds the shell, the one board's reference, the one session's state, the
@@ -271,7 +321,7 @@ impl Backend {
         let Some(key) = keys.into_iter().next() else {
             return Err("stopped before serving: the store selected no key".into());
         };
-        let opened = shell.call("session", &json!({"board": board})).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
+        let opened = open_session(&shell, &board).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
         let Some(reference) = opened["session"].as_str() else {
             return Err("stopped before serving: the session answer names no session".into());
         };
@@ -341,14 +391,15 @@ impl Backend {
     ///
     /// # Errors
     ///
-    /// The shell's refusal of the open.
+    /// The shell's refusal of the open, with no answer's text in it
+    /// (`open_session`).
     ///
     /// # Panics
     ///
     /// Where the shell's answer to the open names no session, which the
     /// `session` row's answer (`SessionOpened`) always does.
     fn open_afresh(&self, died: &str) -> Result<(), Refusal> {
-        let fresh = match self.shell.call("session", &json!({"board": self.board})) {
+        let fresh = match open_session(&self.shell, &self.board) {
             Ok(opened) => opened["session"].as_str().expect("the shell's session answer names its session").to_string(),
             Err(refusal) => {
                 self.session.settle(died, refused_afresh(refusal.name()), &*self.on_stop);
@@ -485,7 +536,7 @@ impl Backend {
     /// is no address in its one spelling, as it refuses every row's argument.
     /// The answer is the shell's streamed fetch, its head and its body still
     /// unread, which [`read_whole`](crate::media::read_whole) reads under the
-    /// adapter's cap.
+    /// adapter's cap and deadline.
     ///
     /// # Errors
     ///

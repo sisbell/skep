@@ -352,6 +352,8 @@ fn tool_result(answer: Result<Value, Refusal>) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use skep_client::halt::{Face, Refused};
     use skep_shell::Name;
 
@@ -377,12 +379,13 @@ mod tests {
 
     /// *A refusal as a result*: the board's verdict is data, and so is a value.
     ///
-    /// The board's verdict rides with its body verbatim under `body`, the
-    /// refusal's members beside it, `isError` false; a halt, the block, the
-    /// unreachable board and the shell's own refusals are `isError` true with
-    /// the refusal's value as the text (the mutant that marks every refusal
-    /// `isError` loses "rejections are data"; the one that marks none loses
-    /// `unreachable`).
+    /// A value is the text whole; the board's verdict rides as the refusal's
+    /// whole value — its body verbatim under `body`, every member skep-shell
+    /// declares for it beside it and no other — `isError` false; a halt, the
+    /// block, the unreachable board and the shell's own refusals are `isError`
+    /// true with the refusal's value as the text (the mutant that marks every
+    /// refusal `isError` loses "rejections are data"; the one that marks none
+    /// loses `unreachable`).
     #[test]
     fn a_refusal_as_a_result_follows_the_rule() {
         let read = |v: &Value| -> (bool, Value) {
@@ -390,15 +393,22 @@ mod tests {
             let text = v["content"][0]["text"].as_str().expect("a text block");
             (v["isError"].as_bool().expect("isError"), serde_json::from_str(text).expect("JSON text"))
         };
-        let (is_error, text) = read(&tool_result(Ok(json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 7}))));
+        let answer = json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 7});
+        let (is_error, text) = read(&tool_result(Ok(answer.clone())));
         assert!(!is_error);
-        assert_eq!(text["resp"], "ack_addr");
+        assert_eq!(text, answer, "the shell's answer, whole");
         let verdict = json!({"code": "doc_not_registered", "disposition": "reorder", "op": "retrieve_v", "resp": "rejected"});
-        let refused = Refusal::Board(Refused { status: 200, code: "doc_not_registered".into(), detail: None, op: Some("retrieve_v".into()), body: verdict.clone() });
+        let detail = Some("the frame names no registered document".to_string());
+        let refused = Refusal::Board(Refused { status: 200, code: "doc_not_registered".into(), detail, op: Some("retrieve_v".into()), body: verdict.clone() });
+        let expected = refused.to_value();
         let (is_error, text) = read(&tool_result(Err(refused)));
         assert!(!is_error, "the board's verdict is data");
         assert_eq!((text["kind"].as_str(), text["name"].as_str(), text["status"].as_u64()), (Some("refused"), Some("doc_not_registered"), Some(200)));
         assert_eq!(text["body"], verdict, "the verdict's body verbatim");
+        assert_eq!(text, expected, "the board's verdict rides as the refusal's whole value");
+        let declared: BTreeSet<&str> = skep_shell::shapes::shape("RefusedByBoard").expect("skep-shell declares the board's refusal").fields.iter().map(|field| field.name).collect();
+        let members: BTreeSet<&str> = text.as_object().expect("the refusal is an object").keys().map(String::as_str).collect();
+        assert_eq!(members, declared, "every member skep-shell declares, and no other");
         let face = Face { state: "s".into(), cause: "c".into(), act: "a".into() };
         for other in [
             Refusal::named(Name::NO_KEY, face.clone()),

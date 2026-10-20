@@ -1,6 +1,6 @@
 //! H2 tier 1 — the skep-mcp JSON-RPC line protocol under hostile lines.
 //!
-//! Driven through the REAL binary (spawned, stdin/stdout) over a claimed
+//! Driven through the real binary (spawned, stdin/stdout) over a claimed
 //! board the adapter's signed session stands at — the most faithful test
 //! of the line protocol there is: it exercises the actual process, the
 //! actual stdio framing, and the survive-and-keep-answering property. The
@@ -18,9 +18,10 @@
 //! then a uniquely-id'd ping, and read until the ping's answer — everything
 //! before it is the fuzz line's response(s). The documented shapes are
 //! pinned one at a time first, none of them reaching the board; the storm
-//! then bounds what arbitrary and mutated lines may draw. A violation fails
-//! loudly with the line; per the H3 finding protocol the test is then
-//! converted to `#[ignore = "FINDING-n: …"]`, assertion intact.
+//! then holds every arbitrary and mutated line to the answer its shape owes
+//! (`owed`). A violation fails loudly with the line; per the H3 finding
+//! protocol the test is then converted to `#[ignore = "FINDING-n: …"]`,
+//! assertion intact.
 //!
 //! skep-mcp is binary-only (no library target), so there is no per-input
 //! libFuzzer target for it — this spawn-storm IS its fuzzing, and can be run
@@ -99,14 +100,6 @@ impl Mcp {
         }
     }
 
-    /// `responses_for_raw` of a storm line, its newlines dropped: they would
-    /// split one fuzz input into several lines and skew the count — the
-    /// payload, not the framing, is under test there.
-    fn responses_for_storm_line(&mut self, line: &str) -> Vec<Value> {
-        let sanitized: String = line.chars().filter(|&c| c != '\n' && c != '\r').collect();
-        self.responses_for_raw(sanitized.as_bytes())
-    }
-
     fn request(&mut self, method: &str, id: u64, params: Value) -> Value {
         self.send_line(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string());
         let v = self.read_message();
@@ -132,6 +125,35 @@ impl Drop for Mcp {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Returns the answer one line is owed, by `handle_line`'s documented rule.
+///
+/// It reads `method` (a string) and `id` (any JSON value) alone: `None` where
+/// no response is owed — a blank line, a notification, a stray response, an
+/// id-less non-request — else the id the one response carries and, where
+/// the adapter refuses the line itself, its code: -32700 for no JSON and
+/// -32600 for no object, under a null id; -32600 for a bare id. A request's
+/// own outcome is left free.
+fn owed(line: &str) -> Option<(Value, Option<i64>)> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    let Ok(message) = serde_json::from_str::<Value>(line) else { return Some((Value::Null, Some(-32700))) };
+    let Value::Object(message) = message else { return Some((Value::Null, Some(-32600))) };
+    match (message.get("method").and_then(Value::as_str), message.get("id")) {
+        (Some(_), Some(id)) => Some((id.clone(), None)),
+        (None, Some(id)) if !message.contains_key("result") && !message.contains_key("error") => Some((id.clone(), Some(-32600))),
+        _ => None,
+    }
+}
+
+/// Returns a storm line as one frame, its newlines dropped.
+///
+/// A newline would split one fuzz input into several lines and skew the
+/// count: the payload, not the framing, is under test there.
+fn framed(line: &str) -> String {
+    line.chars().filter(|&c| c != '\n' && c != '\r').collect()
 }
 
 /// Every emitted message is well-formed JSON-RPC 2.0: version tag, an `id`
@@ -194,27 +216,36 @@ fn random_utf8_line(rng: &mut u64, max_len: usize) -> String {
     s
 }
 
-/// Each line shape `handle_line` names gets its documented answer and no
-/// other — counted by the sentinel, so a reply where none is owed shows: a
-/// request, one response under its own id, a CRLF-ended one included; a
-/// notification of any method, a stray response, an id-less non-request and
-/// a blank line (`\r` alone included), none; a line that is no JSON — bytes
-/// that are not UTF-8, and nesting far past the parser's depth bound,
-/// included — the -32700 parse error, and JSON that is no object the
-/// -32600, both id null. No line here reaches the board.
+/// Each line shape `handle_line` names gets its documented answer, no other.
+///
+/// Counted by the sentinel, so a reply where none is owed shows: a request,
+/// one response under its id as given — whatever JSON the id is, `jsonrpc`
+/// absent or another version — a CRLF-ended one included; a notification of
+/// any method, a stray response, an id-less non-request and a blank line
+/// (`\r` alone included), none; a line that is no JSON — bytes that are not
+/// UTF-8, and nesting far past the parser's depth bound, included — the
+/// -32700 parse error, and JSON that is no object the -32600, both id null.
+/// No line here reaches the board.
 #[test]
 fn each_line_shape_gets_its_documented_answer() {
     let fixture = Fixture::new("shapes");
     let mut mcp = Mcp::spawn(&fixture);
-    let requests: [(&[u8], Value, Option<i64>); 3] = [
+    let requests: [(&[u8], Value, Option<i64>); 5] = [
         (br#"{"jsonrpc":"2.0","id":"probe","method":"ping"}"#, json!("probe"), None),
         (b"{\"jsonrpc\":\"2.0\",\"id\":\"crlf\",\"method\":\"ping\"}\r", json!("crlf"), None),
         (br#"{"jsonrpc":"2.0","id":99,"method":"no/such"}"#, json!(99), Some(-32601)),
+        (br#"{"id":"bare","method":"ping"}"#, json!("bare"), None),
+        (br#"{"jsonrpc":"1.0","id":"old","method":"ping"}"#, json!("old"), None),
     ];
     for (line, id, code) in requests {
         let r = mcp.responses_for_raw(line);
         assert_eq!(r.len(), 1, "a request gets exactly one response: {r:?}");
         assert_eq!((&r[0]["id"], r[0]["error"]["code"].as_i64()), (&id, code), "{:?}", r[0]);
+    }
+    for id in [json!(null), json!(true), json!(-7), json!(1.5), json!(""), json!([1, "a"]), json!({"k": [null]})] {
+        let r = mcp.responses_for_raw(json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string().as_bytes());
+        assert_eq!(r.len(), 1, "a request under {id} gets exactly one response: {r:?}");
+        assert_eq!((r[0].get("id"), &r[0]["result"]), (Some(&id), &json!({})), "answered under {id}, as given");
     }
     let unanswered: [&[u8]; 8] = [
         br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
@@ -242,8 +273,14 @@ fn each_line_shape_gets_its_documented_answer() {
     assert!(mcp.finish().success());
 }
 
+/// The storm: every line is answered as its shape owes, and the adapter lives.
+///
+/// Each arbitrary or mutated line draws exactly what `owed` reads off it —
+/// no response, or one well-formed response under the line's own id, the
+/// adapter's own refusal under its code — and `tools/list` still answers the
+/// catalog whole after the last.
 #[test]
-fn mcp_line_protocol_storm_survives_and_answers_each_line_at_most_once() {
+fn mcp_line_protocol_storm_survives_and_answers_each_line_as_its_shape_owes() {
     let fixture = Fixture::new("storm");
     let mut mcp = Mcp::spawn(&fixture);
 
@@ -257,16 +294,22 @@ fn mcp_line_protocol_storm_survives_and_answers_each_line_at_most_once() {
     let corpus = corpus();
     let mut rng = 0x4D43_5000_0000_0001; // "MCP\0\0\0\0\1"
     for i in 0..budget(400) {
-        let line = if splitmix64(&mut rng).is_multiple_of(3) { random_utf8_line(&mut rng, 160) } else { String::from_utf8_lossy(&mutate(splitmix64(&mut rng), &corpus)).into_owned() };
-        let responses = mcp.responses_for_storm_line(&line);
+        let raw = if splitmix64(&mut rng).is_multiple_of(3) { random_utf8_line(&mut rng, 160) } else { String::from_utf8_lossy(&mutate(splitmix64(&mut rng), &corpus)).into_owned() };
+        let line = framed(&raw);
+        let responses = mcp.responses_for_raw(line.as_bytes());
         for v in &responses {
             assert_jsonrpc(v);
         }
-        // At most one response per line (the sentinel counts the rest); an
-        // id-bearing request must be answered, but classifying a mutated line
-        // is the adapter's job — the robust invariants are: ≤1 response, each
-        // well-formed, and (below) the process stays alive.
-        assert!(responses.len() <= 1, "FINDING (fuzz_mcp): line {i} produced {} responses: {line:?}", responses.len());
+        match owed(&line) {
+            None => assert!(responses.is_empty(), "FINDING (fuzz_mcp): line {i} is owed no response and drew {responses:?}: {line:?}"),
+            Some((id, code)) => {
+                assert_eq!(responses.len(), 1, "FINDING (fuzz_mcp): line {i} is owed one response under {id}, drew {responses:?}: {line:?}");
+                assert_eq!(responses[0].get("id"), Some(&id), "FINDING (fuzz_mcp): line {i} is answered under another id: {line:?}");
+                if let Some(code) = code {
+                    assert_eq!(responses[0]["error"]["code"], json!(code), "FINDING (fuzz_mcp): line {i} is refused under another code: {line:?}");
+                }
+            }
+        }
     }
 
     // Survival: tools/list still answers the catalog it answered before the

@@ -1,24 +1,26 @@
-//! THE FENCE: the adapter as an agent's door, each case keyed to the
-//! rulings it rests on. A1 signed only — the session writes, attested,
-//! and no key stops startup; A1b a principal under the claimant's account
-//! signs by reference with the key enrolled in the set above; A2 the
-//! startup line names the refusing seam and no ceremony tool is listed;
-//! A3 the tools — every wire op, the shell's calls, the apparatus — a
-//! publish landing a version, and `fetch`'s image block, resource blob and
-//! cap; A4 `changes_since` answering a published write after a position,
-//! `next` advancing; A5 `SKEP_BOARD` read and `SKEPD_URL` alone refused;
-//! A6 the session's life — the key retired stops the process, a re-open the
-//! board refuses stops naming it, the board gone answers `unreachable` and
-//! the adapter stays up (the restart's re-open is `mcp.rs`'s); A7 a board
-//! rejection as data and an unreachable board as an error; A8 the TALK
-//! lines on stderr alone and stdin's end closing the session. The daemon,
-//! the claim, the library's walks and the driver are `common`'s.
+//! The fence: the adapter as an agent's door, each case keyed to its rulings.
+//!
+//! A1 signed only — the session writes, attested, and no key stops startup;
+//! A1b a principal under the claimant's account signs by reference with the
+//! key enrolled in the set above; A2 the startup line names the refusing
+//! seam and no ceremony tool is listed; A3 the tools — every wire op, the
+//! shell's calls, the apparatus — a publish landing a version, and `fetch`'s
+//! image block, resource blob, cap and cut stream; A4 `changes_since`
+//! answering a published write after a position, `next` advancing; A5
+//! `SKEP_BOARD` read and `SKEPD_URL` alone refused; A6 the session's life —
+//! the key retired stops the process, and a relaunch refuses before serving,
+//! a re-open the board refuses stops naming it, the board gone answers
+//! `unreachable` and the adapter stays up (the restart's re-open is
+//! `mcp.rs`'s); A7 a board rejection as data, an unreachable board as an
+//! error, and a write whose answer was lost unreachable, landing once; A8 the
+//! TALK lines on stderr alone and stdin's end closing the session. The
+//! daemon, the claim, the library's walks and the driver are `common`'s.
 
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{base64_decode, seeded_bytes, Fixture, Launch, Mcp, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
+use crate::common::{base64_decode, seeded_bytes, Fixture, Launch, Mcp, StreamHeld, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
 /// The ten ceremonial rows, the two media rows the shell does not reach,
 /// and the three calls the adapter makes of the shell itself (`op`,
@@ -255,6 +257,32 @@ fn a3_fetch_answers_an_image_block_a_resource_blob_and_refuses_past_the_cap() {
     assert!(mcp.finish().success());
 }
 
+/// A3: a fetch cut short is an error in plain words; fetched again, whole.
+///
+/// The board's fetch stream is held after its first chunk, so the body stops
+/// until skep-client's read bound ends the read: `isError`, the bytes that
+/// came of the declared length said, and "fetch it again" — which answers
+/// the file whole once the stream is free.
+#[test]
+fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
+    let fixture = Fixture::alone("a3-cut");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    // Sixteen of the board's 64 KiB chunks, so the stream stops after one.
+    let bytes = seeded_bytes(1024 * 1024, 5, b"SKEP");
+    let i = fixture.seed_picture(&bytes);
+    let held = StreamHeld::arm(&fixture);
+    let (is_error, text) = mcp.call("fetch", json!({"i": i}));
+    drop(held);
+    assert!(is_error, "a cut stream is isError: {text}");
+    assert!(text.starts_with(&format!("the fetch of {i} ended before the file was whole: ")) && text.ends_with("fetch it again"), "{text}");
+    assert!(text.contains(&format!(" of {} bytes came", bytes.len())) && !text.contains(&format!("{0} of {0}", bytes.len())), "short of the declared length: {text}");
+    let (is_error, block) = mcp.call_block("fetch", json!({"i": i}));
+    assert!(!is_error, "{block}");
+    assert_eq!(base64_decode(block["resource"]["blob"].as_str().expect("base64")), bytes, "fetched again, the file is whole");
+    assert!(mcp.finish().success());
+}
+
 /// A4 CHANGES_SINCE: a PUBLISHED write after the position N — a second key
 /// enrolled into the claimant's set, the library's declared deposit into
 /// the claimant's published doc 1 under its own signed session — appears
@@ -335,15 +363,18 @@ fn a5_skep_board_is_read_and_skepd_url_alone_is_refused_naming_skep_board() {
     assert!(err.contains("is not a canonical origin"), "{err}");
 }
 
-/// A6 THE SESSION's LIFE, the key retired (ruling 4 (c)): a second key
-/// enrolled into the claimant's set from the claimant's own device, then
-/// the adapter's key retired from the second device's store — the
-/// retirement of a set's LAST key being refused, "it would empty the set"
-/// — and the adapter's session dies on the `retired` arm, which the shell
-/// does not re-open: the process STOPS, exit 1, with one plain line naming
-/// the retirement and the hand, and serves nothing after.
+/// A6: a retired key stops the adapter, and a relaunch refuses it.
+///
+/// A second key is enrolled into the claimant's set from the claimant's own
+/// device, then the adapter's key retired from the second device's store —
+/// the retirement of a set's last key being refused, "it would empty the
+/// set" — and the adapter's session dies on the `retired` arm, which the
+/// shell does not re-open (ruling 4 (c)): the process stops, exit 1, with one
+/// plain line naming the retirement and the hand, and serves nothing after.
+/// Started again over the same store, it stays stopped: the open is refused
+/// `retired` before anything is served, and no bare session stands in.
 #[test]
-fn a6_a_retired_key_stops_the_adapter_with_the_plain_line() {
+fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     let fixture = Fixture::new("a6-retired");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
@@ -356,6 +387,11 @@ fn a6_a_retired_key_stops_the_adapter_with_the_plain_line() {
     let log = mcp.talk_holding(&["stopped: the key "], Duration::from_secs(5));
     assert!(log.contains(&format!("stopped: the key {} was retired at the board by the key {k2} (second): your person stops you by retiring your key", fixture.fingerprint)), "the plain line:\n{log}");
     assert!(mcp.stdout_closed(), "nothing is served after the stop");
+    let out = Launch::over(&fixture, 1).output();
+    assert_eq!(out.status.code(), Some(1), "a relaunch with the retired key refuses: {out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("stopped before serving: the signed session did not open: retired"), "the refusal names the retirement:\n{err}");
+    assert!(out.stdout.is_empty(), "nothing is served: {:?}", String::from_utf8_lossy(&out.stdout));
 }
 
 /// A6 THE SESSION's LIFE, a re-open the board refuses: the board restarted
@@ -448,6 +484,39 @@ fn a7_a_board_rejection_is_data_and_an_unreachable_board_is_an_error() {
     let (is_error, text) = mcp.call("session_info", json!({}));
     assert!(is_error, "session_info needs the board's health: {text}");
     fixture.restart();
+    assert!(mcp.finish().success());
+}
+
+/// A7: a write whose answer is lost is unreachable, and lands once.
+///
+/// The board's write guard is held, so the write parks inside the daemon
+/// with its permit, its frame read, until skep-client's read bound ends the
+/// exchange: the call answers `isError`, `unreachable`, the pool one permit
+/// short — exactly one attempt reached the board (a reissue parks a second).
+/// Released, the write commits, as the catalog warns it may — its document
+/// reads back — and once: the next mint is the one after it.
+#[test]
+fn a7_a_write_whose_answer_is_lost_is_unreachable_and_lands_once() {
+    let fixture = Fixture::alone("a7-lost");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let before = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let pool = fixture.free_write_permits();
+    let held = WriteGuardHeld::arm(&fixture);
+    let lost = mcp.call_error("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    assert_eq!(lost["kind"], "unreachable", "a lost answer is faced unreachable: {lost}");
+    assert_eq!(fixture.free_write_permits(), pool - 1, "exactly one attempt reached the board, parked there");
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while fixture.free_write_permits() < pool {
+        assert!(Instant::now() < deadline, "the released write never finished");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (docs, last) = before.rsplit_once('.').expect("a document address");
+    let n: u64 = last.parse().expect("a document ordinal");
+    let landed = mcp.call_json("doc_metadata", json!({"doc": format!("{docs}.{}", n + 1)}));
+    assert_eq!(landed["resp"], "doc_metadata", "the write answered unreachable landed: {landed}");
+    assert_eq!(draft_of(&mut mcp, CLAIMANT_ACCOUNT), format!("{docs}.{}", n + 2), "it landed once");
     assert!(mcp.finish().success());
 }
 

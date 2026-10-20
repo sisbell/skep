@@ -1,23 +1,25 @@
-//! The board the suites talk to, and the adapter under test. THE FIXTURE
-//! ([`Fixture`]): a temp data dir, an in-process daemon over it at an
-//! ephemeral port — restarted at that port where a suite needs the
-//! restart arm — and its board CLAIMED THROUGH THE LIBRARY over a
-//! `FileStore` with a scripted person, so the claimant's key and its
-//! binding sit in the store the adapter signs from (principal 1 at
-//! `1.0.1`, its agent space `1.0.1.1` delegated beside it); the library's
-//! walks for the acts a person makes beside a running adapter — a second
-//! key enrolled, a key retired; and the blob seeding, copied from skepd's
-//! own suite: the resumable upload's creation, the cell and its insert.
-//! THE DRIVER ([`Mcp`], from a [`Launch`]): the built `skep-mcp` binary
-//! spawned with its settings — the fixture's, or any a test names — and
-//! real JSON-RPC driven through its stdin/stdout, its stderr read where a
-//! test wants the lines.
+//! The board the suites talk to, and the adapter under test.
+//!
+//! The fixture ([`Fixture`]): a temp data dir, an in-process daemon over it
+//! at an ephemeral port — restarted at that port where a suite needs the
+//! restart arm — and its board claimed through the library over a
+//! `FileStore` with a scripted person, so the claimant's key and its binding
+//! sit in the store the adapter signs from (principal 1 at `1.0.1`, its
+//! agent space `1.0.1.1` delegated beside it); the library's walks for the
+//! acts a person makes beside a running adapter — a second key enrolled, a
+//! key retired; the blob seeding, copied from skepd's own suite: the
+//! resumable upload's creation, the cell and its insert; and the holds of
+//! skepd's two process-wide seams, the write guard and the fetch stream,
+//! armed only on a board run alone ([`Fixture::alone`]). The driver
+//! ([`Mcp`], from a [`Launch`]): the built `skep-mcp` binary spawned with its
+//! settings — the fixture's, or any a test names — and real JSON-RPC driven
+//! through its stdin/stdout, its stderr read where a test wants the lines.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -30,8 +32,8 @@ use skep_client::person::scripted::{Script, Scripted};
 use skep_client::sheet::Label;
 use skep_client::store::{Binding, FileStore, KeySelector, KeyStore, Purpose};
 use skep_client::{Origin, Token};
-use skep_identity::{encode_enroll, Enrollment};
-use skepd::{embed, AuthOptions, MediaOptions, Skepd, DEFAULT_WORKERS};
+use skep_identity::{encode_enroll, Enrollment, Fingerprint};
+use skepd::{embed, AuthOptions, Daemon, MediaOptions, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────
 
@@ -105,18 +107,34 @@ pub struct Fixture {
     pub store: PathBuf,
     /// The claimant's device key, in hex.
     pub fingerprint: String,
+    /// The fixture's hold on [`SEAMS`], released once its daemon has stopped.
+    seams: SeamsHeld,
 }
 
 impl Fixture {
-    /// A fresh board, claimed by a fresh store.
+    /// Returns a fresh board, claimed by a fresh store, beside other tests'.
     pub fn new(tag: &str) -> Fixture {
+        Fixture::open(tag, SeamsHeld::Shared { _guard: SEAMS.read().unwrap_or_else(PoisonError::into_inner) })
+    }
+
+    /// Returns a fresh board, claimed, while no other test's board runs.
+    ///
+    /// It is the fixture of a test that arms one of skepd's process-wide
+    /// seams ([`WriteGuardHeld`], [`StreamHeld`]), which park every board's
+    /// work in the process.
+    pub fn alone(tag: &str) -> Fixture {
+        Fixture::open(tag, SeamsHeld::Alone { _guard: SEAMS.write().unwrap_or_else(PoisonError::into_inner) })
+    }
+
+    /// Returns a fresh board, claimed by a fresh store, under `seams`.
+    fn open(tag: &str, seams: SeamsHeld) -> Fixture {
         let dir = TempDir::new(tag);
         let daemon = spawn_daemon(&dir.path().join("board"), 0);
         let port = daemon.port();
         let store = dir.path().join("store");
         let anchors = dir.path().join("anchors");
         let fingerprint = claim_board(&origin(port), &store, &anchors);
-        Fixture { dir, daemon: Some(daemon), port, store, fingerprint }
+        Fixture { dir, daemon: Some(daemon), port, store, fingerprint, seams }
     }
 
     pub fn origin(&self) -> String {
@@ -242,6 +260,23 @@ impl Fixture {
         let (hash, size) = upload(self.port, token.as_str(), bytes);
         insert_cell(self.port, token.as_str(), &draft, &cell_of(&hash, size))
     }
+
+    /// Returns the free permits of the board's write pool.
+    ///
+    /// Each is taken and handed back at once, so the count is the pool's
+    /// width less the writes the board holds in flight.
+    pub fn free_write_permits(&self) -> usize {
+        let daemon = self.daemon.as_ref().expect("the board's daemon runs").daemon();
+        let taken: Vec<_> = std::iter::from_fn(|| daemon.try_hold_write_permit()).collect();
+        taken.len()
+    }
+
+    /// Returns the claimant's key's private seed, in hex, off its key file.
+    pub fn key_seed_hex(&self) -> String {
+        let store = FileStore::open(&self.store);
+        let fingerprint = Fingerprint::parse_hex(&self.fingerprint).expect("the claimant's fingerprint");
+        store.load(&store.key_path(&fingerprint)).expect("the claimant's key file").seed_hex()
+    }
 }
 
 impl Drop for Fixture {
@@ -249,6 +284,83 @@ impl Drop for Fixture {
         if let Some(sd) = self.daemon.take() {
             sd.shutdown();
         }
+    }
+}
+
+/// The suite's fence around skepd's process-wide test seams.
+///
+/// A test that arms one runs its board alone ([`Fixture::alone`]); every
+/// other fixture holds the fence shared for its life. Under nextest — a
+/// process per test, the gate's runner — it never waits; under `cargo test`
+/// a hold never parks another test's board, whose adapter would answer
+/// `unreachable` once its read bound ran out. No test holds two fixtures.
+static SEAMS: RwLock<()> = RwLock::new(());
+
+/// One fixture's hold on [`SEAMS`].
+enum SeamsHeld {
+    /// Beside every board but a seam-arming test's.
+    Shared { _guard: RwLockReadGuard<'static, ()> },
+    /// No other test's board beside it.
+    Alone { _guard: RwLockWriteGuard<'static, ()> },
+}
+
+/// The board's write guard held: every plain write parks inside its daemon.
+///
+/// A write parks having taken its permit and both locks, its frame read,
+/// until the drop (`Daemon::hold_the_write_guard`). The hold borrows the
+/// board it is armed on, so it drops before that board: the daemon's stop
+/// joins a parked worker.
+#[must_use = "every plain write in the process parks until the drop"]
+pub struct WriteGuardHeld<'f> {
+    _board: &'f Fixture,
+}
+
+impl<'f> WriteGuardHeld<'f> {
+    /// Returns the hold, armed on `board`.
+    ///
+    /// # Panics
+    ///
+    /// Where `board` does not run alone ([`Fixture::alone`]): the hold parks
+    /// every board's writes in the process.
+    pub fn arm(board: &'f Fixture) -> WriteGuardHeld<'f> {
+        assert!(matches!(board.seams, SeamsHeld::Alone { .. }), "the write guard is held on a board run alone");
+        Daemon::hold_the_write_guard();
+        WriteGuardHeld { _board: board }
+    }
+}
+
+impl Drop for WriteGuardHeld<'_> {
+    fn drop(&mut self) {
+        Daemon::release_the_write_guard();
+    }
+}
+
+/// Every fetch stream held after its first chunk, until the drop.
+///
+/// It is `Daemon::hold_the_fetch_stream`, process-wide like the write guard,
+/// and borrows the board it is armed on as the write guard's hold does.
+#[must_use = "every fetch stream in the process parks until the drop"]
+pub struct StreamHeld<'f> {
+    _board: &'f Fixture,
+}
+
+impl<'f> StreamHeld<'f> {
+    /// Returns the hold, armed on `board`.
+    ///
+    /// # Panics
+    ///
+    /// Where `board` does not run alone ([`Fixture::alone`]): the hold parks
+    /// every board's fetch streams in the process.
+    pub fn arm(board: &'f Fixture) -> StreamHeld<'f> {
+        assert!(matches!(board.seams, SeamsHeld::Alone { .. }), "the fetch stream is held on a board run alone");
+        Daemon::hold_the_fetch_stream();
+        StreamHeld { _board: board }
+    }
+}
+
+impl Drop for StreamHeld<'_> {
+    fn drop(&mut self) {
+        Daemon::release_the_fetch_stream();
     }
 }
 

@@ -40,10 +40,12 @@ fn decode(text: &str) -> Vec<u8> {
     out
 }
 
-/// The sniff names the four image types by their magic alone and nothing
-/// else: a JPEG by its SOI and the marker byte after it, a WebP by both
-/// halves of its RIFF header, and a string that opens like one but is cut
-/// short, or is text, or is empty, is no image.
+/// The sniff names the four image types by their magic alone, and nothing else.
+///
+/// A JPEG by its SOI and the marker byte after it, a WebP by both halves of
+/// its RIFF header — a header no longer than its twelve bytes included — and
+/// a string that opens like one but is cut short, or is text, or is empty,
+/// is no image.
 #[test]
 fn the_sniff_names_the_four_image_types_by_their_magic_alone() {
     assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\nIHDR..."), Some("image/png"));
@@ -51,6 +53,7 @@ fn the_sniff_names_the_four_image_types_by_their_magic_alone() {
     assert_eq!(sniff_image(b"GIF89a\x01\x00\x01\x00"), Some("image/gif"));
     assert_eq!(sniff_image(b"GIF87a\x01\x00\x01\x00"), Some("image/gif"));
     assert_eq!(sniff_image(b"RIFF\x24\x00\x00\x00WEBPVP8 "), Some("image/webp"));
+    assert_eq!(sniff_image(b"RIFF\x04\x00\x00\x00WEBP"), Some("image/webp"), "a WebP header no longer than its twelve bytes");
     for not_an_image in
         [&b""[..], b"\x89PNG\r\n", b"\xff\xd8\xd8", b"GIF90a", b"RIFF\x24\x00\x00\x00WAVE", b"RIFF\x24\x00\x00WEB", b"PNG\r\n\x1a\n", b"{\"type\":\"1.1.0.1.0.1.0.3.89\"}", b"hello, world"]
     {
@@ -74,9 +77,9 @@ fn the_cap_sits_well_under_the_boards_per_file_cap() {
 /// and a body that declares no length, or overruns the one it declares, is
 /// refused once a byte past the cap has come — the two told apart; a body short
 /// of its declared length is cut `UnexpectedEof`, and one broken off by a
-/// failed read is cut with that read's own error, the bytes that came counted;
-/// a body at its declared length is whole, and so is one at the cap that
-/// declares no length.
+/// failed read is cut with that read's own error, the bytes that came counted
+/// — an undeclared file's length unknown; a body at its declared length is
+/// whole, and so is one at the cap, declared or not.
 #[test]
 fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
     // A body no read may touch.
@@ -121,7 +124,10 @@ fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
         }
         other => panic!("a broken read is cut: {other:?}"),
     }
+    assert!(matches!(read_whole(&undeclared, BreaksAfter(b"abc")), FetchAnswer::Cut { read: 3, length: None, .. }), "a broken read of an undeclared file is cut, its length unknown");
     assert!(matches!(read_whole(&declared(5), &b"hello"[..]), FetchAnswer::Bytes(bytes) if bytes == b"hello"));
     let at_cap = read_whole(&undeclared, io::repeat(1).take(MAX_FETCH_BYTES));
     assert!(matches!(at_cap, FetchAnswer::Bytes(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file at the cap is whole");
+    let declared_at_cap = read_whole(&declared(MAX_FETCH_BYTES), io::repeat(1).take(MAX_FETCH_BYTES));
+    assert!(matches!(declared_at_cap, FetchAnswer::Bytes(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file declared at the cap is whole");
 }

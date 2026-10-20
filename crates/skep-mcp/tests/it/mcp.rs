@@ -47,8 +47,33 @@ fn draft_of(mcp: &mut crate::common::Mcp) -> String {
 /// that) and stdin held open by the test, which a read of it would wait on.
 #[test]
 fn version_is_one_line_on_stdout_before_the_environment_or_stdin_is_read() {
+    let (code, stdout, stderr) = answered_up_front(&["--version"]);
+    assert_eq!(code, Some(0), "exit 0: {stderr}");
+    assert_eq!(stdout, format!("skep-mcp {} ({})\n", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")), "the one line");
+    assert!(stderr.is_empty(), "nothing on stderr: {stderr}");
+}
+
+/// `--help` is the usage on stdout, answered before anything is consulted.
+///
+/// Exit 0, the usage whole, nothing on stderr — `-h` the same, and what
+/// follows the flag unread.
+#[test]
+fn help_is_the_usage_on_stdout_before_the_environment_or_stdin_is_read() {
+    let (code, usage, stderr) = answered_up_front(&["--help"]);
+    assert_eq!(code, Some(0), "exit 0: {stderr}");
+    assert!(usage.starts_with("usage: skep-mcp [--board <ORIGIN>]") && usage.ends_with("with the store's key for it.\n"), "the usage whole on stdout: {usage:?}");
+    assert!(stderr.is_empty(), "nothing on stderr: {stderr}");
+    for args in [&["-h"][..], &["--help", "--no-such-flag"][..]] {
+        assert_eq!(answered_up_front(args), (Some(0), usage.clone(), String::new()), "{args:?}");
+    }
+}
+
+/// Returns a run of the binary on `args` alone: its exit code, stdout, stderr.
+///
+/// No setting is set and stdin is held open, which a read of it would wait on.
+fn answered_up_front(args: &[&str]) -> (Option<i32>, String, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
-    cmd.arg("--version").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     for var in VARIABLES {
         cmd.env_remove(var);
     }
@@ -59,9 +84,7 @@ fn version_is_one_line_on_stdout_before_the_environment_or_stdin_is_read() {
     let (mut stdout, mut stderr) = (String::new(), String::new());
     child.stdout.take().expect("child stdout").read_to_string(&mut stdout).expect("read stdout");
     child.stderr.take().expect("child stderr").read_to_string(&mut stderr).expect("read stderr");
-    assert_eq!(status.code(), Some(0), "exit 0: {stderr}");
-    assert_eq!(stdout, format!("skep-mcp {} ({})\n", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")), "the one line");
-    assert!(stderr.is_empty(), "nothing on stderr: {stderr}");
+    (status.code(), stdout, stderr)
 }
 
 #[test]
@@ -368,14 +391,18 @@ fn doc_metadata_is_dispatched_with_the_source_a_fork_was_born_sharing() {
     assert!(mcp.finish().success());
 }
 
-/// No session token leaves the adapter: not in a tool result — an answer,
-/// a refusal, or `session_info` — and not in a log line, across the
-/// session's open, a restart's re-open and the stop. The shell's
-/// references (`s-…`, `b-…`) are names, never the token; a 32-lowercase-hex
-/// run is the token's shape, and none appears.
+/// No session token and no key seed reaches a tool result or a log line.
+///
+/// Not in a tool result — an answer, a refusal, or `session_info` — and not
+/// in a log line, across the session's open, a restart's re-open and the
+/// stop. The shell's references (`s-…`, `b-…`) are names, never the token;
+/// a 32-lowercase-hex run is the token's shape, and none appears. The key's
+/// private seed is read off the store's own key file, so the test knows
+/// exactly what must never appear.
 #[test]
-fn a_session_token_reaches_no_tool_result_and_no_log_line() {
+fn no_session_token_and_no_key_seed_reaches_a_tool_result_or_a_log_line() {
     let mut fixture = Fixture::new("token");
+    let seed = fixture.key_seed_hex();
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
     let mut texts = Vec::new();
@@ -391,8 +418,10 @@ fn a_session_token_reaches_no_tool_result_and_no_log_line() {
     assert!(log.contains("re-opened under a fresh reference"), "premise: the re-open happened:\n{log}");
     for text in &texts {
         assert!(!holds_a_token(text), "a token-shaped run in an answer: {text}");
+        assert!(!text.contains(&seed), "the key's seed in an answer: {text}");
     }
     assert!(!holds_a_token(&log), "a token-shaped run in the log:\n{log}");
+    assert!(!log.contains(&seed), "the key's seed in the log:\n{log}");
 }
 
 /// MCP's stdio transport lets a client ignore the server's stderr, and a
@@ -432,17 +461,21 @@ fn a_board_that_does_not_answer_stops_startup() {
     assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
 }
 
+/// A call the adapter will not run is -32602; one of the wrong form, refused.
+///
 /// The adapter's own refusals of a call it will not run take the channel
-/// call_params' faults take — -32602 under the call's id, never isError: a
-/// name outside the catalog, a ceremony's name among them, and an argument
+/// `call_params`' faults take — -32602 under the call's id, never `isError`:
+/// a name outside the catalog, a ceremony's name among them, and an argument
 /// an adapter tool's row does not take (the adapter is the one party that
 /// reads those: ignored, a `principal` of 2 to `session_info` would be
-/// answered with this adapter's own facts, as if they were 2's; an
-/// `under` to `changes_since` is a narrowing the tool does not take yet).
-/// A wire op's arguments pass through unread: the board's verdict on a
-/// stranger member is data.
+/// answered with this adapter's own facts, as if they were 2's; an `under`
+/// to `changes_since` is a narrowing the tool does not take yet). A wire
+/// op's arguments pass through unread: the board's verdict on a stranger
+/// member is data. A member of the wrong form, or missing, reaches the
+/// shell, which refuses it `malformed_args` naming it, `isError`; the adapter
+/// never crashes on it.
 #[test]
-fn a_call_the_adapter_will_not_run_is_invalid_params_naming_why() {
+fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_the_shells_refusal() {
     let fixture = Fixture::new("refuse");
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
@@ -461,6 +494,10 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_naming_why() {
     }
     let v = mcp.call_json("doc_metadata", json!({"doc": CLAIMANT_DOC1, "stranger": 1}));
     assert_eq!((v["kind"].as_str(), v["body"]["op"].as_str()), (Some("refused"), Some("unparseable")), "a wire op's stranger member is the board's to refuse: {v}");
+    for args in [json!({}), json!({"i": 7}), json!({"i": "1..2"})] {
+        let refused = mcp.call_error("fetch", args.clone());
+        assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some("i")), "{args}: {refused}");
+    }
     assert!(mcp.finish().success());
 }
 
@@ -492,6 +529,26 @@ fn the_principal_is_required_and_one_the_board_seats() {
     assert!(mcp.finish().success());
 }
 
+/// The key store is required, and never the person's own.
+///
+/// Unset, set empty, or given empty by its flag, startup refuses naming the
+/// setting — ~/.skep is never consulted — before any dial: an agent never
+/// signs with its person's store, nor keeps its index where it was launched.
+#[test]
+fn the_key_store_is_required_and_never_the_persons_own() {
+    let cases: [(&[&str], Option<&str>); 3] = [(&[], None), (&[], Some("")), (&["--dir", ""], None)];
+    for (args, store) in cases {
+        let mut launch = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_PRINCIPAL", "1").args(args);
+        if let Some(value) = store {
+            launch = launch.env("SKEP_KEYSTORE", value);
+        }
+        let (code, err) = launch.refusal();
+        assert_eq!(code, Some(1), "{args:?} {store:?}: {err}");
+        assert!(err.contains("--dir (or SKEP_KEYSTORE) is required") && err.contains("~/.skep is never consulted"), "{args:?} {store:?}: {err}");
+        assert!(!err.contains("did not answer"), "refused before any dial: {err}");
+    }
+}
+
 /// A word the usage does not name, a flag without its value, or a flag
 /// given twice, is a usage error — exit 2, the usage on stderr — never
 /// ignored: a mistyped `--tools-file` must not quietly serve the embedded
@@ -519,9 +576,11 @@ fn an_unknown_word_or_a_flag_without_its_value_or_given_twice_is_a_usage_error()
     }
 }
 
-/// A harness that hangs up stdout ends the adapter: the first answer it
-/// cannot write is its exit, stdin still open — no orphan goes on taking
-/// requests whose answers nobody reads.
+/// A harness that hangs up stdout ends the adapter, cleanly.
+///
+/// The first answer it cannot write is its exit, stdin still open — no
+/// orphan goes on taking requests whose answers nobody reads — and the exit
+/// is the clean one.
 #[test]
 fn a_closed_stdout_ends_the_adapter() {
     let fixture = Fixture::new("hangup");
@@ -543,7 +602,8 @@ fn a_closed_stdout_ends_the_adapter() {
         let _ = child.wait();
     }
     drop(stdin);
-    assert!(exited.is_some(), "the adapter outlived its closed stdout by 30 s, stdin open");
+    let status = exited.unwrap_or_else(|| panic!("the adapter outlived its closed stdout by 30 s, stdin open"));
+    assert!(status.success(), "a harness that hung up is the clean exit: {status:?}");
 }
 
 /// SKEP_COMMONS set: the instructions carry the commons sentence with the
@@ -601,6 +661,20 @@ fn non_utf8_environment_refuses_startup() {
     }
 }
 
+/// A flag set to bytes that are not UTF-8 is refused by name, never decoded.
+#[cfg(unix)]
+#[test]
+fn a_flag_that_is_not_utf8_refuses_startup_by_name() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = TempDir::new("nonutf8-flag");
+    for flag in ["--principal", "--board", "--dir"] {
+        let (code, err) =
+            Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").arg(flag).arg(std::ffi::OsStr::from_bytes(b"\xff")).refusal();
+        assert_eq!(code, Some(1), "{flag}: {err}");
+        assert!(err.contains(&format!("{flag}: the value is not UTF-8 text")), "{flag}: {err}");
+    }
+}
+
 /// A path is an OS string: a `--tools-file` that is not UTF-8 is read as a
 /// path — here one that does not exist, a refusal naming the flag — never a
 /// panic in argument parsing.
@@ -647,6 +721,22 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     std::fs::write(&path, real.to_string()).expect("write real file");
     let out = Launch::over(&fixture, 1).args(["--tools-file", path.to_str().expect("utf-8 path")]).output();
     assert!(out.status.success(), "the real catalog must start: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// A tools file is the catalog served, in place of the embedded one.
+#[test]
+fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
+    let fixture = Fixture::new("tools-file");
+    let mut catalog = embedded_catalog();
+    catalog["instructions"] = json!("These instructions are the tools file's own.");
+    let fork = catalog["tools"].as_array_mut().expect("tools").iter_mut().find(|t| t["name"] == "fork").expect("fork");
+    fork["description"] = json!("The tools file's own description of fork.");
+    let path = fixture.dir.path().join("own.json");
+    std::fs::write(&path, catalog.to_string()).expect("write the tools file");
+    let mut mcp = Launch::over(&fixture, 1).args(["--tools-file", path.to_str().expect("a UTF-8 path")]).spawn();
+    assert_eq!(mcp.initialize()["instructions"], catalog["instructions"], "the file's instructions are served");
+    assert_eq!(mcp.request("tools/list", json!({}))["result"]["tools"], catalog["tools"], "the file's tools are listed");
+    assert!(mcp.finish().success());
 }
 
 /// The adapter run to completion on `tools_file`, which startup must

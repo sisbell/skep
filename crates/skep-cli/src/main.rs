@@ -1,12 +1,13 @@
-//! `skep` — the command over `skep-client` (`client.md` §1.2, §2): flag
-//! parsing in the daemon's style (a flag beats its environment variable),
-//! one file per command, a `Person` over the terminal, stdout DATA and
-//! stderr TALK (§2.4), §2.3's exit codes. Every ceremony is a library walk
-//! with the terminal as its `Person`; `bind` and `keygen` sequence the
-//! library's compositions themselves.
+//! `skep`, the command over `skep-client` (`client.md` §1.2, §2).
 //!
-//! THE FIFTEEN COMMANDS: `keygen`, `claim`, `session`, `fingerprint`,
-//! `verify`, `health`, `bind` — the ceremonies over 5.1a's seams:
+//! It is flag parsing in the daemon's style (a flag beats its environment
+//! variable), one file per command, a `Person` over the terminal, stdout
+//! data and stderr talk (§2.4), §2.3's exit codes. Every ceremony is a
+//! library walk with the terminal as its `Person`; `bind` and `keygen`
+//! sequence the library's compositions themselves.
+//!
+//! **The fifteen commands.** `keygen`, `claim`, `session`, `fingerprint`,
+//! `verify`, `health`, `bind` — the ceremonies over the library's seams:
 //! `enroll`, `recover`, `retire`, `rotate`, `handoff`, `accept` — `merge`,
 //! the editor's act on a daughter over `skep_client::merge` (the merge
 //! record's §6), the one command that touches content — and `share`, a
@@ -33,7 +34,7 @@ mod args;
 // doors make.
 mod terminal;
 // What both binaries share: the stops and §2.3's exit codes (`Stop`,
-// `finish`), DATA's two writers, and the plumbing from the flags to a
+// `finish`), data's two writers, and the plumbing from the flags to a
 // board, a store, a principal and a key.
 mod shared;
 // The fifteen commands, one file each beneath it, and what they share

@@ -1,23 +1,25 @@
-//! THE FIFTEEN COMMANDS — `client.md` §2.2's thirteen, each exactly as it
-//! writes it, `merge`, the fourteenth, as the merge record's §6 writes it,
-//! and `share`, the fifteenth, as the grant rules write it (PUB-5.29;
-//! PUB-5.108) — one file per command beneath this one, each a `pub fn` that `main`
-//! dispatches to and that answers `Ok` or the [`Stop`] it came to, every
-//! walk a library call — and what they share AMONG THEMSELVES ALONE,
-//! private here and so visible to each of them: `require_terminal`, the
-//! person doors' check, whose refusal is a halt naming the [`Door`]'s own
-//! moments; a payload read to its cap ([`MAX_PAYLOAD_BYTES`]); the anchor
-//! boxes' per-run default ([`BoxDefault`]); the three facts' one spelling
-//! (`print_facts`); a landed binding line said as the store reads it back
-//! (`binding_said`); the outstanding-act line `keygen` and `fingerprint`
-//! share (`OUTSTANDING_ACT`); and the whole-set compare, from the held set
-//! to its halt (`held_set`, `compare_genesis`). What the dev binary shares
-//! with them — the two streams, the stops and their exit codes, the
-//! plumbing from the flags to a board, a store, a principal and a key —
-//! is `shared.rs`'s, taken here and handed down to the command files — the
-//! one spelling of a key on an operator's line (`key_named`) and the one
-//! bound on a third party's text a halt echoes (`clipped`) among it;
-//! `finish` and `help` are the `skep` [`Program`]'s own.
+//! The fifteen commands, one file each beneath this one, and what they share.
+//!
+//! The commands are `client.md` §2.2's thirteen, each exactly as it writes
+//! it, `merge`, the fourteenth, as the merge record's §6 writes it, and
+//! `share`, the fifteenth, as the grant rules write it (PUB-5.29;
+//! PUB-5.108) — each a `pub fn` that `main` dispatches to and that answers
+//! `Ok` or the [`Stop`] it came to, every walk a library call. What they
+//! share among themselves alone is private here and so visible to each of
+//! them: `require_terminal`, the person doors' check, whose refusal is a
+//! halt naming the [`Door`]'s own moments; a payload read to its cap
+//! ([`MAX_PAYLOAD_BYTES`]); the anchor boxes' per-run default
+//! ([`BoxDefault`]); the three facts' one spelling (`print_facts`); a
+//! landed binding line said as the store reads it back (`binding_said`);
+//! the outstanding-act line `keygen` and `fingerprint` share
+//! (`OUTSTANDING_ACT`); and the whole-set compare, from the held set to its
+//! halt (`held_set`, `compare_genesis`). What the dev binary shares with
+//! them — the two streams, the stops and their exit codes, the plumbing
+//! from the flags to a board, a store, a principal and a key — is
+//! `shared.rs`'s, taken here and handed down to the command files — the one
+//! spelling of a key on an operator's line (`key_named`) and the one bound
+//! on a third party's text a halt echoes (`clipped`) among it; `finish` and
+//! `help` are the `skep` [`Program`]'s own.
 
 mod accept;
 mod bind;
@@ -70,35 +72,49 @@ use crate::shared::{
 };
 use crate::terminal::{has_terminal, talk};
 
-/// The `skep` program: its name, which every stop's block opens with, and
-/// the help a usage refusal prints beneath it.
+/// The `skep` program: its name and its help.
+///
+/// Every stop's block opens with its name, and a usage refusal prints its
+/// help beneath it.
 const SKEP: Program = Program { name: "skep", help: HELP };
 
-/// A command's outcome finished under the `skep` program (`shared::finish`):
-/// a stop's one block said on stderr, and the exit code answered — 0, or
-/// the stop's.
+/// Finishes a command's outcome under the `skep` program (`shared::finish`).
+///
+/// A stop's one block is said on stderr, and the exit code answered — 0,
+/// or the stop's.
 pub fn finish(outcome: Result<(), Stop>) -> i32 {
     shared::finish(SKEP, outcome)
 }
 
-/// `--help`: `HELP` on stdout, the DATA the run asked for.
+/// Prints `HELP` on stdout for `--help`, the data the run asked for.
+///
+/// # Errors
+///
+/// A write stdout refuses is a halt.
 pub fn help() -> Result<(), Stop> {
     shared::help(SKEP)
 }
 
-/// A person door (§2.4; `ARCHITECTURE.md` §The command lists the eight):
-/// its `form`, as a command line spells it, and the `moments` a person
-/// answers there, in §2.4's and §6's words — each named, so neither stands
-/// in the other's place.
+/// A person door: its `form` and the `moments` a person answers there.
+///
+/// The doors are §2.4's; `ARCHITECTURE.md` §The command lists the eight.
+/// The form is as a command line spells it, and the moments are in §2.4's
+/// and §6's words — each named, so neither stands in the other's place.
 #[derive(Clone, Copy, Debug)]
 struct Door {
     form: &'static str,
     moments: &'static str,
 }
 
-/// A person door's check (§2.4: the CLI's, never a walk's), made before
-/// anything is generated: a controlling terminal, or the halt naming
-/// `door`'s moments.
+/// Checks for a person door's controlling terminal (§2.4).
+///
+/// The check is the CLI's, never a walk's, made before anything is
+/// generated.
+///
+/// # Errors
+///
+/// Returns the halt naming `door`'s moments ([`no_terminal`]) where no
+/// controlling terminal stands.
 fn require_terminal(door: Door) -> Result<(), Halt> {
     if has_terminal() {
         Ok(())
@@ -107,10 +123,11 @@ fn require_terminal(door: Door) -> Result<(), Halt> {
     }
 }
 
-/// A person door reached without a controlling terminal: HALT AND SURFACE,
-/// §2.3's missing-TTY member, its face naming the moments a person answers
-/// at that door (§2.4; §6 "The terminal") — the backup moment only where it
-/// runs.
+/// Returns the halt a person door reached without a controlling terminal is.
+///
+/// It is halt and surface, §2.3's missing-TTY member, its face naming the
+/// moments a person answers at that door (§2.4; §6 "The terminal") — the
+/// backup moment only where it runs.
 fn no_terminal(door: Door) -> Halt {
     Halt::face(
         format!("`{}` is a person door and requires a controlling terminal", door.form),
@@ -123,19 +140,25 @@ fn no_terminal(door: Door) -> Halt {
     )
 }
 
-/// The most bytes a payload argument carries: one record at its cap
-/// (`MAX_RECORD_BYTES`, AUTH-1.18) and the line ending it is printed with,
-/// `\r\n` at most — a reply's three facts and the hosted reply's six lines
-/// sit far inside it. Past it the argument is no payload, and
-/// [`read_payload`] reads no further than the byte past it: no argument —
-/// a customer's payload at the sidecar, a file that never ends — sizes
-/// this run's memory, where a read to its end grows with whatever it is fed
-/// before the record's own cap is ever consulted.
+/// The most bytes a payload argument carries.
+///
+/// It is one record at its cap (`MAX_RECORD_BYTES`, AUTH-1.18) and the line
+/// ending it is printed with, `\r\n` at most — a reply's three facts and
+/// the hosted reply's six lines sit far inside it. Past it the argument is
+/// no payload, and [`read_payload`] reads no further than the byte past it:
+/// no argument — a customer's payload at the sidecar, a file that never
+/// ends — sizes this run's memory, where a read to its end grows with
+/// whatever it is fed before the record's own cap is ever consulted.
 const MAX_PAYLOAD_BYTES: usize = MAX_RECORD_BYTES + 2;
 
-/// A payload argument's bytes: a file, or `-` for stdin, read no further
-/// than one byte past [`MAX_PAYLOAD_BYTES`] — and past the cap, a halt
-/// naming it.
+/// Reads a payload argument's bytes: a file, or `-` for stdin.
+///
+/// It reads no further than one byte past [`MAX_PAYLOAD_BYTES`].
+///
+/// # Errors
+///
+/// Returns a halt where the file or stdin cannot be read, a mis-pathed file
+/// named by its path; and, past the cap, a halt naming it.
 fn read_payload(arg: &str) -> Result<Vec<u8>, Halt> {
     let limit = MAX_PAYLOAD_BYTES as u64 + 1;
     let mut bytes = Vec::new();
@@ -157,11 +180,12 @@ fn read_payload(arg: &str) -> Result<Vec<u8>, Halt> {
     Ok(bytes)
 }
 
-/// A label the enrollment record refuses (AUTH-1.25): one `Label::new`
-/// admitted and `Enrollment::new` does not — AUTH-1.24's domain spelled
-/// twice, by `skep-client` and by `skep-identity`, and the two standing
-/// apart. A halt naming the label's fault, never a panic, whose exit 101
-/// §2.3 does not have.
+/// Returns the halt a label the enrollment record refuses comes to.
+///
+/// The label is one `Label::new` admitted and `Enrollment::new` does not
+/// (AUTH-1.25) — AUTH-1.24's domain spelled twice, by `skep-client` and by
+/// `skep-identity`, and the two standing apart. The halt names the label's
+/// fault, never a panic, whose exit 101 §2.3 does not have.
 fn record_refused(e: LabelError) -> Halt {
     Halt::face(
         format!("the label is refused by the enrollment record: {e}"),
@@ -170,21 +194,24 @@ fn record_refused(e: LabelError) -> Halt {
     )
 }
 
-/// The anchor boxes' per-run default (§4.2 step 2), which becomes a
-/// permanent byline: the machine's host name and today's date, each named,
-/// so neither lands in the other's place.
+/// The anchor boxes' per-run default (§4.2 step 2): host name and date.
+///
+/// It becomes a permanent byline: the machine's host name and today's
+/// date, each named, so neither lands in the other's place.
 #[derive(Debug)]
 struct BoxDefault {
     host_name: String,
     date: String,
 }
 
-/// This run's [`BoxDefault`]: the machine's host name and today's date in
-/// UTC. The name is the first source's name ([`host_name_of`]) that is not
-/// empty, on §6's three platforms: `COMPUTERNAME` (Windows), `HOSTNAME`
-/// (where a shell exports it), `/etc/hostname` (Linux), then the `hostname`
-/// command's output (macOS) — `this-machine` where none answers. So the
-/// name is never empty, never holds a dot and is lowercase.
+/// Returns this run's [`BoxDefault`].
+///
+/// It is the machine's host name and today's date in UTC. The name is the
+/// first source's name ([`host_name_of`]) that is not empty, on §6's three
+/// platforms: `COMPUTERNAME` (Windows), `HOSTNAME` (where a shell exports
+/// it), `/etc/hostname` (Linux), then the `hostname` command's output
+/// (macOS) — `this-machine` where none answers. So the name is never empty,
+/// never holds a dot and is lowercase.
 fn host_name_and_date() -> BoxDefault {
     let host_name = std::env::var("COMPUTERNAME")
         .ok()
@@ -197,16 +224,18 @@ fn host_name_and_date() -> BoxDefault {
     BoxDefault { host_name, date: civil_date(secs) }
 }
 
-/// A host-name source's name: its first line, trimmed, cut at its first dot
-/// and lowercased — `None` where that leaves nothing, a source of `.local`
-/// as much as an empty one, so the next source is asked.
+/// Returns a host-name source's name, from its first line.
+///
+/// The line is trimmed, cut at its first dot and lowercased — `None` where
+/// that leaves nothing, a source of `.local` as much as an empty one, so
+/// the next source is asked.
 fn host_name_of(text: String) -> Option<String> {
     let line = text.lines().next().unwrap_or_default().trim();
     let name = line.split_once('.').map_or(line, |(name, _)| name).to_lowercase();
     Some(name).filter(|name| !name.is_empty())
 }
 
-/// `yyyy-mm-dd` from unix seconds (Howard Hinnant's civil-from-days).
+/// Returns `yyyy-mm-dd` from unix seconds (Howard Hinnant's civil-from-days).
 fn civil_date(secs: u64) -> String {
     let z = (secs / 86400) as i64 + 719_468;
     let era = z.div_euclid(146_097);
@@ -221,30 +250,38 @@ fn civil_date(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// The three facts, DATA on stdout — their one spelling, every command's
-/// that prints them, in the lines `bind`'s `facts_of` reads back from a
-/// reply (`account …`, `principal …`, `origin …`).
+/// Prints the three facts as data on stdout, in their one spelling.
+///
+/// Every command that prints them prints these lines, the lines `bind`'s
+/// `facts_of` reads back from a reply (`account …`, `principal …`,
+/// `origin …`).
+///
+/// # Errors
+///
+/// A write stdout refuses is a halt.
 fn print_facts(f: &Facts) -> Result<(), Halt> {
     data(format!("account {}", f.account))?;
     data(format!("principal {}", f.principal))?;
     data(format!("origin {}", f.origin))
 }
 
-/// What a binding line recorded by hand needs to read back (§3.7): a line of
-/// its own, the file ending in a newline — the bindings file's reader takes a
-/// last line without one for a torn append and ignores it, and the store's
-/// next append is written straight onto it.
+/// What a binding line recorded by hand needs to read back (§3.7).
+///
+/// It needs a line of its own, the file ending in a newline — the bindings
+/// file's reader takes a last line without one for a torn append and
+/// ignores it, and the store's next append is written straight onto it.
 const BY_HAND: &str = "on a line of its own, the file ending in a newline (a last line without one is read as a torn append and \
      ignored, and the next append is written onto it — §3.7)";
 
-/// The line a binding a command landed is said by — `bind`'s, `rotate`'s,
-/// `recover`'s (§3.5 arm 2; §3.7): `binding: <line>` where the store reads
-/// it back as the newest line for its board and principal — the line every
-/// later lookup there answers with — and otherwise that it does not, the
-/// line beside it to record by hand ([`BY_HAND`]): an append the store
-/// refused, or one written onto a torn last line, the two then reading
-/// back as one line that is no binding while the command that wrote it
-/// passed.
+/// Returns the line a binding a command landed is said by.
+///
+/// The commands are `bind`, `rotate` and `recover` (§3.5 arm 2; §3.7). The
+/// line is `binding: <line>` where the store reads it back as the newest
+/// line for its board and principal — the line every later lookup there
+/// answers with — and otherwise that it does not, the line beside it to
+/// record by hand ([`BY_HAND`]): an append the store refused, or one
+/// written onto a torn last line, the two then reading back as one line
+/// that is no binding while the command that wrote it passed.
 fn binding_said(store: &FileStore, line: &str) -> String {
     let reads_back = match line.parse::<Binding>() {
         Ok(Binding::Enrollment { origin, principal, account, fingerprint }) => {
@@ -263,20 +300,29 @@ fn binding_said(store: &FileStore, line: &str) -> String {
     }
 }
 
-/// The outstanding act of a key enrolled nowhere — AUTH-5.32's pending state
-/// named, CONDITIONED on the walk because one payload serves two (§2.2): the
-/// line `keygen --payload` prints at exit, and the one `fingerprint` carries
-/// beside every UNBOUND key, "the same conditioned outstanding-act line".
-/// Each site adds the clauses its own state makes true.
+/// The outstanding act of a key enrolled nowhere: AUTH-5.32's pending state.
+///
+/// It names the state, conditioned on the walk because one payload serves
+/// two (§2.2): the line `keygen --payload` prints at exit, and the one
+/// `fingerprint` carries beside every unbound key, "the same conditioned
+/// outstanding-act line". Each site adds the clauses its own state makes
+/// true.
 const OUTSTANDING_ACT: &str = "Where it ADDS a device: take this payload to a device already signed in, run `skep enroll` there, and bring its three \
      facts back to `skep bind` here. Where it REPLACES a machine: `skep rotate --payload` there instead, then `skep bind` here.";
 
-/// What this device HOLDS for the whole-set compare (AUTH-4.58's
-/// detection): the entries of the record `record_arg` names — the
-/// `--payload` argument, a file or `-`, naming the RECORD this device
-/// printed, `verify`'s; never `bind`'s, whose payload is the reply — and
-/// each `anchors` file's public members beside `device`, the store's key;
-/// `None` where neither is given.
+/// Returns what this device holds for the whole-set compare.
+///
+/// The compare is AUTH-4.58's detection. It answers the entries of the
+/// record `record_arg` names — the `--payload` argument, a file or `-`,
+/// naming the record this device printed, `verify`'s; never `bind`'s, whose
+/// payload is the reply — and each `anchors` file's public members beside
+/// `device`, the store's key; `None` where neither is given.
+///
+/// # Errors
+///
+/// Returns a halt where the record cannot be read ([`read_payload`]), is
+/// not UTF-8 or is not a canonical enrollment record, and where an anchor
+/// file cannot be read for its public facts.
 fn held_set(store: &FileStore, record_arg: Option<&str>, anchors: &[String], device: &KeyFacts) -> Result<Option<Vec<Held>>, Halt> {
     if record_arg.is_none() && anchors.is_empty() {
         return Ok(None);
@@ -292,7 +338,7 @@ fn held_set(store: &FileStore, record_arg: Option<&str>, anchors: &[String], dev
     }
     if !anchors.is_empty() {
         for path in anchors {
-            // The file's PUBLIC facts and nothing else — the lookup hands out
+            // The file's public facts and nothing else — the lookup hands out
             // no seed; no session, nothing written.
             let artifact = store.select(&KeySelector::Path(Path::new(path)), Purpose::Read)?;
             held.push(Held { fingerprint: artifact.fingerprint, anchor: artifact.anchor, label: artifact.label });
@@ -302,21 +348,27 @@ fn held_set(store: &FileStore, record_arg: Option<&str>, anchors: &[String], dev
     Ok(Some(held))
 }
 
-/// The store's device key as the compare holds it — the whole of what is
-/// held where another hand wrote the first set around this key alone: a
-/// handoff's DECLINE arm, which prints no papers (§2.2 `bind`), or a hosted
-/// one-key signup.
+/// Returns the store's device key as the compare holds it.
+///
+/// It is the whole of what is held where another hand wrote the first set
+/// around this key alone: a handoff's decline arm, which prints no papers
+/// (§2.2 `bind`), or a hosted one-key signup.
 fn held_device(device: &KeyFacts) -> Held {
     Held { fingerprint: device.fingerprint, anchor: false, label: device.label.clone() }
 }
 
-/// THE WHOLE-SET COMPARE, run and faced (AUTH-4.58's detection; P25) — at
-/// `verify` and at `bind`, which "halts as at `verify`" (§2.2): the genesis
-/// record of the set `walk` reached, entry for entry against `held`; each
-/// LATER act one line of TALK (P27); any difference a halt in AUTH-5.53's
-/// terms naming that set's account, its act the acts by cell (§2.2
-/// `verify`; AUTH-4.56) and then `site_clause`, the site's own last clause;
-/// a set with no genesis record a halt.
+/// Runs and faces the whole-set compare (AUTH-4.58's detection; P25).
+///
+/// It runs at `verify` and at `bind`, which "halts as at `verify`" (§2.2):
+/// the genesis record of the set `walk` reached, entry for entry against
+/// `held`; each later act is one line of talk (P27).
+///
+/// # Errors
+///
+/// Any difference is a halt in AUTH-5.53's terms naming that set's account,
+/// its act the acts by cell (§2.2 `verify`; AUTH-4.56) and then
+/// `site_clause`, the site's own last clause; a set with no genesis record
+/// is a halt, and so is the halt the credential records' read comes to.
 fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)], held: &[Held], site_clause: &str) -> Result<(), Halt> {
     let records = credential_records(board, &walk.set_account, own)?;
     let Some(whole) = compare_whole_set(&records, &walk.set, held) else {
@@ -342,8 +394,10 @@ fn compare_genesis(board: &Board, walk: &Walk, own: &[(Fingerprint, PublicKey)],
     Ok(())
 }
 
-/// The whole-set compare's differences, one line each in AUTH-5.53's terms —
-/// the cause [`compare_genesis`]'s halt gives.
+/// Returns the whole-set compare's differences, one line each.
+///
+/// Each is in AUTH-5.53's terms — the cause [`compare_genesis`]'s halt
+/// gives.
 fn difference_lines(diffs: &[Difference]) -> Vec<String> {
     diffs
         .iter()
@@ -364,8 +418,10 @@ fn difference_lines(diffs: &[Difference]) -> Vec<String> {
         .collect()
 }
 
-/// A later act the compare reads off the current set beyond the genesis
-/// record, one line of TALK [`compare_genesis`] says.
+/// Returns the line of talk [`compare_genesis`] says for a later act.
+///
+/// A later act is one the compare reads off the current set beyond the
+/// genesis record.
 fn later_line(act: &Held) -> String {
     format!("later act: {} anchor={} label={}", act.fingerprint, act.anchor, act.label.as_deref().map(render_inert).unwrap_or_else(|| "(none)".into()))
 }
@@ -390,10 +446,12 @@ mod tests {
         assert_eq!(date.len(), "yyyy-mm-dd".len(), "{date}");
     }
 
-    /// `civil_date` names every day as the Gregorian calendar counts it —
-    /// the date a permanent byline's default carries (§4.2 step 2) — checked
-    /// over 100 000 days from the epoch, to 2243 (2000's leap day, and 2100's
-    /// and 2200's skipped), at each day's first and last second, against a
+    /// Checks `civil_date` against the Gregorian calendar, day by day.
+    ///
+    /// It names every day as the Gregorian calendar counts it — the date a
+    /// permanent byline's default carries (§4.2 step 2) — checked over
+    /// 100 000 days from the epoch, to 2243 (2000's leap day, and 2100's and
+    /// 2200's skipped), at each day's first and last second, against a
     /// calendar counted day by day.
     #[test]
     fn civil_date_names_every_day_as_the_gregorian_calendar_counts_it() {
@@ -415,10 +473,11 @@ mod tests {
         assert_eq!((y, m, d), (2243, 10, 17), "the count reached past 2200: day 100 000 is 2243-10-17");
     }
 
-    /// The commands' own stops answer §2.3's code from the one renderer: a
-    /// person door without a terminal a halt of the family, 3, and a label
-    /// the record refuses a halt, 3 — beside the stops `shared.rs` holds to
-    /// their codes.
+    /// Checks that the commands' own stops answer §2.3's code.
+    ///
+    /// The code comes from the one renderer: a person door without a
+    /// terminal a halt of the family, 3, and a label the record refuses a
+    /// halt, 3 — beside the stops `shared.rs` holds to their codes.
     #[test]
     fn the_commands_own_stops_finish_with_their_exit_codes() {
         assert_eq!(finish(Ok(())), 0);
@@ -426,9 +485,11 @@ mod tests {
         assert_eq!(finish(Err(record_refused(LabelError::Newline).into())), 3);
     }
 
-    /// The person door's refusal is a halt's face — the state, its cause,
-    /// the one act — naming the moments a person answers at that door, and
-    /// the backup moment only where the door runs one.
+    /// Checks that a person door's refusal is a halt naming its own moments.
+    ///
+    /// The refusal is a halt's face — the state, its cause, the one act —
+    /// naming the moments a person answers at that door, and the backup
+    /// moment only where the door runs one.
     #[test]
     fn a_person_door_without_a_terminal_is_a_halt_naming_its_own_moments() {
         let Halt::Halt(face) = no_terminal(RETIRE) else { panic!("a HALT AND SURFACE member") };

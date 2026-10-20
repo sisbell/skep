@@ -1,29 +1,31 @@
-//! The CLI's `Person` over the terminal (`client.md` §1.2, §2.4, §5.2):
-//! prompts to stderr and answers read from stdin line by line, the sheet as a
-//! ruled box on stderr, the dismissal a clear of the screen and its
-//! scrollback. THE PERSON DOORS REQUIRE A CONTROLLING TERMINAL and refuse
-//! without one (exit 3) — the check is THIS implementation's and never the
-//! walk's, so the same walks run under the shell's native windows and the
-//! library's scripted person. The realization here is the std streams'
-//! `isatty` on BOTH stdin and stderr: a wrapper that captures the one or
-//! feeds the other — the wrapper §2.4 names as satisfying every step of the
-//! backup moment with no paper and no person — fails it. Each moment is
-//! [`moment`]'s, written once against a [`Screen`], where its lines are said
-//! and its answers read: the [`Terminal`] is the screen over the std streams,
-//! and this module's tests drive the same moments from a script. Every
-//! prompt the CLI makes is read through `answer`, those a command that is
-//! no person door asks among them, so none reaches stdout. Every line the
-//! binary says on stderr — a statement, a prompt's heading, a command's
-//! TALK, a halt — is written by `talk`, and a prompt's text and the sheet
-//! by `show`, each through `write_inert`, which renders its text INERT
-//! ([`inert`], AUTH-5.2's rendering line by line: every control character,
-//! C0, DEL and C1, and every bidi control) before stderr is handed a byte:
-//! a control a board, a reply or a file chose — an escape, 7-bit or 8-bit,
-//! that moves the cursor, erases a line, sets the title or the clipboard,
-//! or asks the terminal to type an answer into stdin — reaches the screen
-//! as its code point and never as a command. The dismissal's clear, the
-//! one escape this binary means, is `clear`'s constant, written raw. Both
-//! writers drop a write stderr refuses rather than panic.
+//! The CLI's `Person` over the terminal (`client.md` §1.2, §2.4, §5.2).
+//!
+//! It shows prompts on stderr and reads answers from stdin line by line,
+//! the sheet as a ruled box on stderr, the dismissal a clear of the screen
+//! and its scrollback. The person doors require a controlling terminal and
+//! refuse without one (exit 3) — the check is this implementation's and
+//! never the walk's, so the same walks run under the shell's native
+//! windows and the library's scripted person. The realization here is the
+//! std streams' `isatty` on both stdin and stderr: a wrapper that captures
+//! the one or feeds the other — the wrapper §2.4 names as satisfying every
+//! step of the backup moment with no paper and no person — fails it. Each
+//! moment is [`moment`]'s, written once against a [`Screen`], where its
+//! lines are said and its answers read: the [`Terminal`] is the screen over
+//! the std streams, and this module's tests drive the same moments from a
+//! script. Every prompt the CLI makes is read through `answer`, those a
+//! command that is no person door asks among them, so none reaches stdout.
+//! Every line the binary says on stderr — a statement, a prompt's heading,
+//! a command's talk, a halt — is written by `talk`, and a prompt's text and
+//! the sheet by `show`, each through `write_inert`, which renders its text
+//! inert ([`inert`], AUTH-5.2's rendering line by line: every control
+//! character, C0, DEL and C1, and every bidi control) before stderr is
+//! handed a byte: a control a board, a reply or a file chose — an escape,
+//! 7-bit or 8-bit, that moves the cursor, erases a line, sets the title or
+//! the clipboard, or asks the terminal to type an answer into stdin —
+//! reaches the screen as its code point and never as a command. The
+//! dismissal's clear, the one escape this binary means, is `clear`'s
+//! constant, written raw. Both writers drop a write stderr refuses rather
+//! than panic.
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
@@ -32,24 +34,26 @@ use std::path::PathBuf;
 use skep_client::person::{Abandoned, Confirmation, Consent, Destination, HandedPath, Import, Imported, KeptOrPlaced, LabelBox, Person, Public, Question, Retype, Retyped, Secret, Sheet, Statement};
 use skep_client::sheet::render_inert;
 
-/// The one escape sequence this binary means: the dismissal's clear of the
-/// screen and its scrollback (§5.2; §4.2 step 6) — a constant, never a
-/// foreign byte.
+/// The one escape sequence this binary means: the dismissal's clear.
+///
+/// It clears the screen and its scrollback (§5.2; §4.2 step 6) — a
+/// constant, never a foreign byte.
 const CLEAR: &str = "\x1b[2J\x1b[3J\x1b[H";
 
-/// Whether a controlling terminal stands at both ends of a prompt.
+/// Returns whether a controlling terminal stands at both ends of a prompt.
 pub fn has_terminal() -> bool {
     io::stdin().is_terminal() && io::stderr().is_terminal()
 }
 
-/// `text` as the terminal may be handed it: each line rendered INERT, every
-/// character AUTH-5.2 names — a control character (C0, DEL and C1) or a
-/// bidi control — shown as its code point: `render_inert`'s rendering, and
-/// the C1 controls its set leaves out spelled as it spells the rest. The
-/// line breaks are kept, the one thing a TALK block's own text holds that
-/// the rendering would otherwise touch. Rendered twice, the same: the
-/// rendering's output holds nothing it renders, so a label a walk rendered
-/// already passes as it stands.
+/// Returns `text` as the terminal may be handed it, each line rendered inert.
+///
+/// Every character AUTH-5.2 names — a control character (C0, DEL and C1)
+/// or a bidi control — is shown as its code point: `render_inert`'s
+/// rendering, and the C1 controls its set leaves out spelled as it spells
+/// the rest. The line breaks are kept, the one thing a talk block's own
+/// text holds that the rendering would otherwise touch. Rendered twice, the
+/// same: the rendering's output holds nothing it renders, so a label a walk
+/// rendered already passes as it stands.
 fn inert(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for (i, line) in text.split('\n').enumerate() {
@@ -68,42 +72,55 @@ fn inert(text: &str) -> String {
     out
 }
 
-/// TALK (§2.4): one line on stderr, through [`write_inert`] — a moment's
-/// statement or heading, the reason an answer is asked again, a command's
-/// talk, a halt's block — the one line writer the binary has. A line stderr
-/// refuses is dropped, never a panic, whose exit 101 §2.3 does not have:
-/// the exit code, or the answer read next, carries the outcome.
+/// Writes one line of talk (§2.4) on stderr, through [`write_inert`].
+///
+/// The line is a moment's statement or heading, the reason an answer is
+/// asked again, a command's talk, a halt's block — this is the one line
+/// writer the binary has. A line stderr refuses is dropped, never a panic,
+/// whose exit 101 §2.3 does not have: the exit code, or the answer read
+/// next, carries the outcome.
 pub fn talk(line: impl fmt::Display) {
     write_inert(&format!("{line}\n"));
 }
 
-/// `text` on stderr, through [`write_inert`] — a prompt its answer follows
-/// on the same line, the sheet's box.
+/// Writes `text` on stderr, through [`write_inert`].
+///
+/// It is a prompt its answer follows on the same line, or the sheet's box.
 fn show(text: &str) {
     write_inert(text);
 }
 
-/// `text` on stderr rendered [`inert`], flushed — the door every line and
-/// prompt passes, so no caller hands stderr a byte the rendering has not
-/// seen; dropped where stderr refuses it, never a panic.
+/// Writes `text` on stderr rendered [`inert`], flushed.
+///
+/// It is the door every line and prompt passes, so no caller hands stderr a
+/// byte the rendering has not seen; a write stderr refuses is dropped,
+/// never a panic.
 fn write_inert(text: &str) {
     let mut err = io::stderr().lock();
     let _ = err.write_all(inert(text).as_bytes()).and_then(|()| err.flush());
 }
 
-/// The dismissal's clear on stderr, flushed: [`CLEAR`], the one escape this
-/// binary writes and its one write past [`write_inert`] — dropped where
-/// stderr refuses it.
+/// Writes the dismissal's clear on stderr, flushed.
+///
+/// It is [`CLEAR`], the one escape this binary writes and its one write past
+/// [`write_inert`] — dropped where stderr refuses it.
 fn clear() {
     let mut err = io::stderr().lock();
     let _ = err.write_all(CLEAR.as_bytes()).and_then(|()| err.flush());
 }
 
-/// `prompt` on stderr, then one answer read from stdin: the line without its
-/// line ending, or `None` at the end of input. The one reader every prompt
-/// the CLI makes goes through — `Terminal`'s and `bind`'s alike — locking
-/// stdin for that one line alone, so a payload or token read with `-` before
-/// or after a prompt never waits on a lock a prompt holds.
+/// Shows `prompt` on stderr, then reads one answer from stdin.
+///
+/// The answer is the line without its line ending, or `None` at the end of
+/// input. This is the one reader every prompt the CLI makes goes through —
+/// `Terminal`'s and `bind`'s alike — locking stdin for that one line alone,
+/// so a payload or token read with `-` before or after a prompt never waits
+/// on a lock a prompt holds.
+///
+/// # Errors
+///
+/// Returns the I/O error stdin's read meets, a line that is not UTF-8 text
+/// among them.
 pub fn answer(prompt: &str) -> io::Result<Option<String>> {
     show(prompt);
     let mut line = String::new();
@@ -113,34 +130,44 @@ pub fn answer(prompt: &str) -> io::Result<Option<String>> {
     Ok(Some(line.trim_end_matches(['\n', '\r']).to_string()))
 }
 
-/// The screen a moment says its lines on and reads its answers from: the
-/// terminal's own streams at every door ([`Terminal`]), a script in this
-/// module's tests.
+/// The screen a moment says its lines on and reads its answers from.
+///
+/// It is the terminal's own streams at every door ([`Terminal`]), a script
+/// in this module's tests.
 trait Screen {
-    /// `prompt` shown, then one answer: the line without its line ending, or
-    /// the person gone — the end of input, or the input unreadable, said on
-    /// stderr where it is: an answer abandoned for a byte the terminal sent
-    /// is no person who left.
+    /// Shows `prompt`, then answers the line without its line ending.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the person is gone — the end of input, or
+    /// the input unreadable, said on stderr where it is: an answer abandoned
+    /// for a byte the terminal sent is no person who left.
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned>;
-    /// One line said.
+    /// Says one line.
     fn talk(&mut self, line: &str);
-    /// `text` shown — a prompt's or the sheet's.
+    /// Shows `text`, a prompt's or the sheet's.
     fn show(&mut self, text: &str);
-    /// The screen and its scrollback cleared (§5.2; §4.2 step 6).
+    /// Clears the screen and its scrollback (§5.2; §4.2 step 6).
     fn clear(&mut self);
 }
 
-/// The terminal person. It holds nothing: every moment is said on stderr
-/// and answered from stdin, through [`talk`], [`show`], [`clear`] and
-/// [`answer`].
+/// The terminal person.
+///
+/// It holds nothing: every moment is said on stderr and answered from
+/// stdin, through [`talk`], [`show`], [`clear`] and [`answer`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Terminal;
 
 impl Screen for Terminal {
-    /// The end of input is the person gone, said by the walk; an answer
-    /// stdin could not read — a line that is not UTF-8 text, typed at a
-    /// terminal in another encoding or pasted — abandons the moment too, and
-    /// its cause is said here, where the walk would say only "abandoned".
+    /// Shows `prompt` and reads one answer through [`answer`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] at the end of input — the person gone, said by
+    /// the walk — and where stdin could not read the answer: a line that is
+    /// not UTF-8 text, typed at a terminal in another encoding or pasted,
+    /// abandons the moment too, and its cause is said here, where the walk
+    /// would say only "abandoned".
     fn answer(&mut self, prompt: &str) -> Result<String, Abandoned> {
         match answer(prompt) {
             Ok(Some(line)) => Ok(line),
@@ -212,8 +239,13 @@ impl Person for Terminal {
     }
 }
 
-/// A path, asked again until one is given; `refusal` says why an empty
-/// line is no answer.
+/// Returns a path, asked again until one is given.
+///
+/// `refusal` says why an empty line is no answer.
+///
+/// # Errors
+///
+/// Returns [`Abandoned`] where the screen answers nothing.
 fn path_line(screen: &mut impl Screen, prompt: &str, refusal: &str) -> Result<PathBuf, Abandoned> {
     loop {
         let p = screen.answer(prompt)?;
@@ -224,21 +256,33 @@ fn path_line(screen: &mut impl Screen, prompt: &str, refusal: &str) -> Result<Pa
     }
 }
 
-/// A seed typed from the print, its whitespace removed — the R42 groups a
-/// print shows — and nothing else judged: the walk's `Seed::from_hex`
-/// decides it and asks again on a wrong one (AUTH-5.41).
+/// Returns a seed typed from the print, its whitespace removed.
+///
+/// The whitespace is the R42 groups a print shows, and nothing else is
+/// judged: the walk's `Seed::from_hex` decides the seed and asks again on a
+/// wrong one (AUTH-5.41).
+///
+/// # Errors
+///
+/// Returns [`Abandoned`] where the screen answers nothing.
 fn seed_line(screen: &mut impl Screen, prompt: &str) -> Result<String, Abandoned> {
     Ok(screen.answer(prompt)?.split_whitespace().collect())
 }
 
-/// A fingerprint prefix typed from the print, trimmed — the walk's prefix
-/// test decides it (AUTH-5.39).
+/// Returns a fingerprint prefix typed from the print, trimmed.
+///
+/// The walk's prefix test decides it (AUTH-5.39).
+///
+/// # Errors
+///
+/// Returns [`Abandoned`] where the screen answers nothing.
 fn prefix_line(screen: &mut impl Screen) -> Result<String, Abandoned> {
     Ok(screen.answer("fingerprint prefix from the print (at least the first 8 hex): ")?.trim().to_string())
 }
 
-/// The anchor import's three ARMS (`client.md` §4a.2 R1): what the person
-/// holds.
+/// The anchor import's three arms: what the person holds.
+///
+/// They are `client.md` §4a.2 R1's.
 #[derive(Debug, PartialEq, Eq)]
 enum Arm {
     File,
@@ -246,9 +290,10 @@ enum Arm {
     Neither,
 }
 
-/// The arm an answer names — `f`, `p` or `n`, or the word — else `None`,
-/// asked again: a path or a seed given here names no arm, so neither is
-/// ever routed by its look.
+/// Returns the arm an answer names — `f`, `p` or `n`, or the word.
+///
+/// It is `None` else, and asked again: a path or a seed given here names no
+/// arm, so neither is ever routed by its look.
 fn arm(text: &str) -> Option<Arm> {
     match text.trim().to_ascii_lowercase().as_str() {
         "f" | "file" => Some(Arm::File),
@@ -258,9 +303,11 @@ fn arm(text: &str) -> Option<Arm> {
     }
 }
 
-/// A ruled box around `lines` on stderr (§5.2: the TERMINAL adds the box and
-/// its width to the sheet's field list, the fields the library's), each line
-/// padded to the widest — `fmt`'s width counts chars, as the rule's does.
+/// Returns the ruled box around `lines` that stderr shows.
+///
+/// The terminal adds the box and its width to the sheet's field list, the
+/// fields the library's (§5.2). Each line is padded to the widest — `fmt`'s
+/// width counts chars, as the rule's does.
 fn boxed(lines: &[String]) -> String {
     let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0).max(20);
     let bar = "─".repeat(width + 2);
@@ -272,10 +319,11 @@ fn boxed(lines: &[String]) -> String {
     out
 }
 
-/// THE MOMENTS, each written once against any [`Screen`]: what a walk's
-/// `Person` call says, and how its answer is read — asked again where an
-/// answer names none of the moment's choices, and abandoned where the screen
-/// answers nothing.
+/// The moments, each written once against any [`Screen`].
+///
+/// A moment is what a walk's `Person` call says, and how its answer is read
+/// — asked again where an answer names none of the moment's choices, and
+/// abandoned where the screen answers nothing.
 mod moment {
     use std::path::PathBuf;
 
@@ -283,14 +331,19 @@ mod moment {
 
     use super::{arm, boxed, path_line, prefix_line, seed_line, Arm, Screen};
 
-    /// A statement, with the rule it renders.
+    /// Says a statement, with the rule it renders.
     pub fn say(screen: &mut impl Screen, s: &Statement) {
         screen.talk(&format!("[{}] {}", s.rule, s.text));
     }
 
-    /// A name box (AUTH-5.42): its title and its statements said, then the
-    /// name asked — the default offered, and taken where the answer is
-    /// empty. The walk's domain test judges the name (AUTH-1.24).
+    /// Asks a name box (AUTH-5.42), its title and its statements said first.
+    ///
+    /// The name is asked with the default offered, taken where the answer
+    /// is empty. The walk's domain test judges the name (AUTH-1.24).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn label(screen: &mut impl Screen, b: LabelBox) -> Result<String, Abandoned> {
         screen.talk(&format!("{}:", b.title));
         for s in &b.statements {
@@ -304,13 +357,22 @@ mod moment {
         Ok(if typed.is_empty() { b.default.unwrap_or_default() } else { typed })
     }
 
-    /// A question over public facts: its text the prompt, its answer as
-    /// typed.
+    /// Asks a question over public facts, its text the prompt.
+    ///
+    /// Its answer is as typed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn ask(screen: &mut impl Screen, q: &Question) -> Result<String, Abandoned> {
         screen.answer(&q.text)
     }
 
-    /// A yes or a no, asked again until the answer is one.
+    /// Asks for a yes or a no, again until the answer is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn yes_no(screen: &mut impl Screen, q: &Question) -> Result<bool, Abandoned> {
         loop {
             let a = screen.answer(&format!("{} [y/n]: ", q.text))?;
@@ -322,8 +384,13 @@ mod moment {
         }
     }
 
-    /// The sheet as a ruled box (§5.2), its field list the library's, held
-    /// until the person answers that it is printed.
+    /// Shows the sheet as a ruled box (§5.2), its field list the library's.
+    ///
+    /// It is held until the person answers that it is printed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn sheet(screen: &mut impl Screen, s: &Sheet) -> Result<(), Abandoned> {
         let mut lines = vec!["skep anchor sheet — print this; the seed below is the key".to_string(), String::new()];
         for (name, value) in s.fields.lines() {
@@ -338,15 +405,20 @@ mod moment {
         Ok(())
     }
 
-    /// The dismissal: the screen and its scrollback cleared (§5.2; §4.2
-    /// step 6).
+    /// Clears the screen and its scrollback: the dismissal (§5.2; §4.2 step 6).
     pub fn dismiss(screen: &mut impl Screen) {
         screen.clear();
     }
 
-    /// The re-type from the print (AUTH-5.41): the seed, an empty one
-    /// declining the re-type with no prefix asked (§4.2 step 9), then the
-    /// fingerprint prefix — each passed to the walk, which judges them.
+    /// Asks the re-type from the print (AUTH-5.41): the seed, then the prefix.
+    ///
+    /// An empty seed declines the re-type with no prefix asked (§4.2 step
+    /// 9); the seed and the fingerprint prefix are each passed to the walk,
+    /// which judges them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn retype(screen: &mut impl Screen, r: &Retype) -> Result<Retyped, Abandoned> {
         screen.talk(&r.prompt);
         let seed_hex = seed_line(screen, "seed (64 hex, spaces allowed; empty to decline the re-type): ")?;
@@ -356,28 +428,44 @@ mod moment {
         Ok(Retyped::Typed { seed_hex, fingerprint_prefix: prefix_line(screen)? })
     }
 
-    /// One anchor file's destination: a directory, asked again on an empty
-    /// line — no default is offered (§4.2 step 4).
+    /// Asks one anchor file's destination: a directory.
+    ///
+    /// It is asked again on an empty line — no default is offered (§4.2
+    /// step 4).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn destination(screen: &mut impl Screen, d: &Destination) -> Result<PathBuf, Abandoned> {
         screen.talk(&d.prompt);
         path_line(screen, "directory: ", "a directory is required; no default is offered")
     }
 
-    /// A typed confirmation, answered with the text typed, trimmed — never
-    /// reduced to a yes or a no, so the walk tells `no` from a wrong row
-    /// (AUTH-5.46).
+    /// Asks a typed confirmation, answered with the text typed, trimmed.
+    ///
+    /// It is never reduced to a yes or a no, so the walk tells `no` from a
+    /// wrong row (AUTH-5.46).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn confirm_typed(screen: &mut impl Screen, c: &Confirmation) -> Result<String, Abandoned> {
         screen.talk(&c.text);
         let a = screen.answer(&format!("type `{}` to confirm, or `no`: ", c.expected))?;
         Ok(a.trim().to_string())
     }
 
-    /// The import: the ARM is the person's answer, asked first — the kept
-    /// FILE, the PRINT, or NEITHER — and never a guess from the text, where
-    /// a seed with one character wrong looks like a path. The typed seed
-    /// (its whitespace removed) and prefix (trimmed) go to the walk with
-    /// nothing else judged: its `Seed::from_hex` and prefix test judge them
-    /// and ask again on a wrong one (AUTH-5.39, AUTH-5.41).
+    /// Asks the import, the arm first: the kept file, the print, or neither.
+    ///
+    /// The arm is the person's answer, never a guess from the text, where a
+    /// seed with one character wrong looks like a path. The typed seed (its
+    /// whitespace removed) and prefix (trimmed) go to the walk with nothing
+    /// else judged: its `Seed::from_hex` and prefix test judge them and ask
+    /// again on a wrong one (AUTH-5.39, AUTH-5.41).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn import(screen: &mut impl Screen, i: &Import) -> Result<Imported, Abandoned> {
         screen.talk(&i.prompt);
         loop {
@@ -393,8 +481,13 @@ mod moment {
         }
     }
 
-    /// Kept or placed (AUTH-5.54 step 3's file arm), asked again until the
-    /// answer is one.
+    /// Asks kept or placed (AUTH-5.54 step 3's file arm).
+    ///
+    /// It is asked again until the answer is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Abandoned`] where the screen answers nothing.
     pub fn kept_or_placed(screen: &mut impl Screen, h: &HandedPath) -> Result<KeptOrPlaced, Abandoned> {
         screen.talk(&h.text);
         loop {

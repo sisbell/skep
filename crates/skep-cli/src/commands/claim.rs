@@ -1,6 +1,7 @@
-//! `skep claim` (`client.md` §2.2): the notebook walk, a person door, or
-//! with `--hosted` the dark claim of a hosted customer's payload (§4.5),
-//! which takes no store, no person and generates nothing.
+//! `skep claim` (`client.md` §2.2): the notebook walk, a person door.
+//!
+//! With `--hosted` it is the dark claim of a hosted customer's payload
+//! (§4.5), which takes no store, no person and generates nothing.
 
 use std::path::PathBuf;
 
@@ -15,10 +16,10 @@ use crate::terminal::Terminal;
 pub fn claim(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     // `--principal` is the new account's id at both arms, `CLAIM_PRINCIPAL`
-    // where omitted — §2.2's recommended default, §9 item 9's ruling.
+    // where omitted — §2.2's recommended default (§9 item 9).
     let principal = c.principal()?.unwrap_or(CLAIM_PRINCIPAL);
     if let Some(payload_arg) = c.value("--hosted") {
-        // THE HOSTED ARM (§4.5): no --dir, no person, nothing generated.
+        // The hosted arm (§4.5): no --dir, no person, nothing generated.
         let payload = read_payload(payload_arg)?;
         match claim_walk::hosted(&board, &payload, principal)? {
             HostedOutcome::AlreadyClaimed { claimant } => data(format!("claimed by {claimant}"))?,
@@ -26,11 +27,11 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
                 for l in &reply.log {
                     talk(l);
                 }
-                // THE REPLY, DATA on stdout (§4.5 H6): the claimant, the
-                // three facts, the two acts and the setup act's one
-                // sentence. The reply's further strings — the anchorless
-                // sentence among them — have one carrier, the deployment
-                // template's "Your board is live" message (cs6-S2); the
+                // The reply, data on stdout (§4.5 H6): the claimant, the
+                // three facts and the two acts, the second carrying the
+                // setup act's one sentence. The reply's further strings —
+                // the anchorless sentence among them — have one carrier, the
+                // deployment template's "Your board is live" message; the
                 // operator's log above keeps the anchorless note.
                 data(format!("claimant {}", reply.claimant))?;
                 print_facts(&reply.facts)?;
@@ -45,7 +46,7 @@ pub fn claim(c: &CommandLine) -> Result<(), Stop> {
         }
         return Ok(());
     }
-    // THE NOTEBOOK ARM: a person door, the store's setting judged ahead of
+    // The notebook arm: a person door, the store's setting judged ahead of
     // it as every usage refusal is.
     let store = store_of(c)?;
     require_terminal(Door { form: "claim", moments: "the name boxes and the backup moment" })?;

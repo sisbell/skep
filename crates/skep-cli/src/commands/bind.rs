@@ -1,12 +1,13 @@
-//! `skep bind` (`client.md` §2.2): the three facts of an enroll hop, a
-//! handoff or a hosted signup landed on this device — confirmed against the
-//! board, the set compared whole where another hand wrote the account's
-//! first set, the account's first signed session run where one is owed,
-//! the binding line written and said as the store reads it back — naming a
-//! key this store holds, a key
-//! file from outside it refused before anything is. With `keygen`, one of the
-//! two commands that sequence the library's compositions themselves rather
-//! than calling a walk.
+//! `skep bind` (`client.md` §2.2): the three facts landed on this device.
+//!
+//! The facts are an enroll hop's, a handoff's or a hosted signup's —
+//! confirmed against the board, the set compared whole where another hand
+//! wrote the account's first set, the account's first signed session run
+//! where one is owed, the binding line written and said as the store reads
+//! it back — naming a key this store holds, a key file from outside it
+//! refused before anything is. With `keygen`, one of the two ceremonies
+//! that sequence the library's compositions themselves rather than calling
+//! a walk.
 
 use std::fmt;
 
@@ -23,30 +24,40 @@ use super::{binding_said, board_of, clipped, compare_genesis, data, held_device,
 use crate::args::{parse_principal, CommandLine, MAX_PRINCIPAL};
 use crate::terminal::answer;
 
-/// Who printed the reply `bind` lands, and so the one party that can print
-/// it again: the enrolling device at the hop (`skep enroll`, or `skep rotate
-/// --payload`), the giver at a handoff (§4c.2 G6), the host after a hosted
-/// signup (§4.5 H6). Nothing in the reply says which, so a face that sends
-/// the person back for the facts names all three, and the person knows
-/// theirs (P27).
+/// Who printed the reply `bind` lands.
+///
+/// It is so the one party that can print it again: the enrolling device at
+/// the hop (`skep enroll`, or `skep rotate --payload`), the giver at a
+/// handoff (§4c.2 G6), the host after a hosted signup (§4.5 H6). Nothing in
+/// the reply says which, so a face that sends the person back for the facts
+/// names all three, and the person knows theirs (P27).
 const REPLY_SENDER: &str = "whoever printed the reply — the enrolling device, the giver at a handoff, or your host after a hosted signup";
 
-/// The three facts, from `--account`/`--principal`/`--board`, or `--payload`
-/// — a reply in the lines `print_facts` writes (`account …`, `principal …`,
+/// Returns the three facts, from the flags, a reply or a pasted line.
+///
+/// They come from `--account`/`--principal`/`--board`, or `--payload` — a
+/// reply in the lines `print_facts` writes (`account …`, `principal …`,
 /// `origin …`), as `enroll`, `rotate`, `handoff` and `claim --hosted` print
 /// them — or, for an account neither names, a line pasted at the prompt;
-/// the origin the one this command dials, a reply naming another halting.
-/// The reply is recognized whole before a fact is taken from it: each line
-/// shows as it reads ([`shows_as_it_reads`]), a line naming a fact is that
-/// fact and one value ([`fact_line`]), and a fact named twice names one
-/// value ([`agree`]) — so what `bind` lands is what the person's screen
-/// showed, never a line it hid nor the last of two. `given` is
-/// `CommandLine::principal`'s answer, and a fact the reply names against it,
-/// or against `--account`, halts as a second line would; a reply's
-/// principal line that is no principal halts, never standing as one not
-/// given. A halt names a reply's line by its number and echoes no more of
-/// it, nor of a value, than [`clipped`] keeps: the reply's writer sizes its
-/// lines, and a halt is one block the person reads.
+/// the origin is the one this command dials. The reply is read line by
+/// line, each line recognized before a fact is taken from it and the first
+/// that fails halting: each line shows as it reads ([`shows_as_it_reads`]),
+/// a line naming a fact is that fact and one value ([`fact_line`]), and a
+/// fact named twice names one value ([`agree`]) — so what `bind` lands is
+/// what the person's screen showed, never a line it hid nor the last of
+/// two. `given` is `CommandLine::principal`'s answer.
+///
+/// # Errors
+///
+/// A reply naming another origin halts. A fact the reply names against
+/// `given`, or against `--account`, halts as a second line would; a
+/// reply's principal line that is no principal halts, never standing as one
+/// not given. The halts [`fact_line`] comes to name the line by its number,
+/// and no halt echoes more of a line, nor of a value, than [`clipped`]
+/// keeps: the reply's writer sizes its lines, and a halt is one block the
+/// person reads. A payload that cannot be read ([`read_payload`]), an
+/// account the prompt cannot read, no principal, and an account that is no
+/// address halt too.
 fn facts_of(c: &CommandLine, board: &Board, given: Option<u64>) -> Result<Facts, Halt> {
     let mut account = c.value("--account").map(str::to_owned);
     let mut principal = given;
@@ -102,7 +113,7 @@ enum Fact {
 }
 
 impl Fact {
-    /// The fact `word` names, if it names one.
+    /// Returns the fact `word` names, if it names one.
     fn named(word: &str) -> Option<Fact> {
         match word {
             "account" => Some(Fact::Account),
@@ -113,11 +124,16 @@ impl Fact {
     }
 }
 
-/// The fact a reply's line names, and its value: `None` for a line that
-/// names none — the hosted reply's claimant and its two acts among them —
-/// and a halt for a line that shows other than it reads, or that opens with
-/// a fact's name and is not exactly that name and one value, the halt naming
-/// the line by `number`, from 1, and its text clipped.
+/// Returns the fact a reply's line names, and its value.
+///
+/// It is `None` for a line that names none — the hosted reply's claimant
+/// and its two acts among them.
+///
+/// # Errors
+///
+/// Returns a halt for a line that shows other than it reads, or that opens
+/// with a fact's name and is not exactly that name and one value, the halt
+/// naming the line by `number`, from 1, and its text clipped.
 fn fact_line(number: usize, line: &str) -> Result<Option<(Fact, &str)>, Halt> {
     if !shows_as_it_reads(line) {
         return Err(Halt::face(
@@ -138,17 +154,24 @@ fn fact_line(number: usize, line: &str) -> Result<Option<(Fact, &str)>, Halt> {
     }
 }
 
-/// Whether `line` shows as it reads: no control character (C0, DEL, C1)
-/// and nothing AUTH-5.2's rendering disarms (a bidi control) — the screen's
-/// reading of it and `bind`'s are one.
+/// Returns whether `line` shows as it reads.
+///
+/// It holds no control character (C0, DEL, C1) and nothing AUTH-5.2's
+/// rendering disarms (a bidi control) — the screen's reading of it and
+/// `bind`'s are one.
 fn shows_as_it_reads(line: &str) -> bool {
     !line.contains(char::is_control) && render_inert(line) == line
 }
 
-/// A fact the reply names — `word`, as its line opens — beside one already
-/// named, by its flag or an earlier line: the same value stands; another
-/// halts naming both, never the last one read (the person reads one line;
-/// `bind` lands one fact).
+/// Returns a fact the reply names, beside one already named.
+///
+/// The fact is `word`, as its line opens; the one already named came by
+/// its flag or an earlier line, and the same value stands.
+///
+/// # Errors
+///
+/// Another value halts naming both, never the last one read (the person
+/// reads one line; `bind` lands one fact).
 fn agree<T: PartialEq + fmt::Display>(word: &str, named: Option<T>, read: T) -> Result<T, Halt> {
     match named {
         Some(named) if named != read => Err(Halt::face(
@@ -164,27 +187,32 @@ fn agree<T: PartialEq + fmt::Display>(word: &str, named: Option<T>, read: T) -> 
     }
 }
 
-/// Which landing this is, where no `--anchor` says (§2.2 `bind`): THE PERSON
-/// ANSWERS WHAT NO READ CAN (P27). Where another hand wrote this account's
-/// first set — a handoff's genesis, a hosted signup's — that record is the
-/// very one in question and its writer can give it any shape, so nothing on
-/// the board tells such a landing from the enroll hop; and a key `skep
-/// accept` made is a key file like `keygen`'s, recording nothing of the door
-/// that made it. The question states what each answer costs where it is
-/// wrong, and proposes none.
+/// Which landing this is, where no `--anchor` says (§2.2 `bind`).
+///
+/// The person answers what no read can (P27). Where another hand wrote this
+/// account's first set — a handoff's genesis, a hosted signup's — that
+/// record is the very one in question and its writer can give it any
+/// shape, so nothing on the board tells such a landing from the enroll
+/// hop; and a key `skep accept` made is a key file like `keygen`'s,
+/// recording nothing of the door that made it. The question states what
+/// each answer costs where it is wrong, and proposes none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Landing {
-    /// The enroll hop, or a rotation's: another of the person's devices
-    /// enrolled this key, the genesis is theirs, and nothing is compared.
+    /// The enroll hop, or a rotation's.
+    ///
+    /// Another of the person's devices enrolled this key, the genesis is
+    /// theirs, and nothing is compared.
     Hop,
-    /// Another hand wrote the first set around this key alone — a handoff's
-    /// DECLINE arm, or a hosted signup's one-key payload: the genesis is
-    /// compared against this device's key alone.
+    /// Another hand wrote the first set around this key alone.
+    ///
+    /// It is a handoff's decline arm, or a hosted signup's one-key payload:
+    /// the genesis is compared against this device's key alone.
     KeyAlone,
-    /// Another hand wrote the first set around this key and the person's
-    /// anchor pair: the genesis is compared against the pair's files and this
-    /// device's key, and the question is asked only where no `--anchor` gave
-    /// the files.
+    /// Another hand wrote the first set around this key and the anchor pair.
+    ///
+    /// The pair is the person's: the genesis is compared against the pair's
+    /// files and this device's key, and the question is asked only where no
+    /// `--anchor` gave the files.
     Pair,
 }
 
@@ -203,9 +231,15 @@ answer hop, alone or pair: ";
 /// The question again, after an answer that is none of the three.
 const LANDING_AGAIN: &str = "answer hop, alone or pair: ";
 
-/// The landing, asked through the terminal's reader — a pipe answers it as
-/// a terminal does — and asked again until the answer is one of the three;
-/// `None` where the input ends before an answer, nobody being there to ask.
+/// Asks the landing through the terminal's reader.
+///
+/// A pipe answers it as a terminal does; it is asked again until the answer
+/// is one of the three, and is `None` where the input ends before an
+/// answer, nobody being there to ask.
+///
+/// # Errors
+///
+/// Returns a halt where the answer cannot be read.
 fn landing() -> Result<Option<Landing>, Halt> {
     let mut prompt = LANDING_QUESTION;
     loop {
@@ -227,8 +261,8 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     let given = c.principal()?;
     let key_file = c.key_file()?;
     let Facts { account, principal, origin } = facts_of(c, &board, given)?;
-    // The facts CONFIRMED against the board before anything is written:
-    // the origin arm; the principal by the ADDRESS-KEYED read (AUTH-6.37);
+    // The facts confirmed against the board before anything is written:
+    // the origin arm; the principal by the address-keyed read (AUTH-6.37);
     // `principal_prefix(n)` against the pasted account; the key-set compare.
     let health = board.health()?;
     origin_arm(board.signed(), &health)?;
@@ -274,10 +308,10 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     let walk = walk_to_set(&board, &account)?;
     let own = [(key.fingerprint, key.public.clone())];
     key_face(&board, &walk, &key.fingerprint, &own, Site::Tail)?;
-    // Where another hand wrote this account's first set — a HANDOFF LANDING,
-    // a hosted signup's — the set is compared WHOLE, ahead of
+    // Where another hand wrote this account's first set — a handoff landing,
+    // a hosted signup's — the set is compared whole, ahead of
     // `first_session` and any session (AUTH-4.58's detection): against the
-    // anchor files and this device's key, or on the DECLINE arm this
+    // anchor files and this device's key, or on the decline arm this
     // device's key alone — the person asked which landing this is where no
     // `--anchor` says.
     let held = match held_set(&store, None, c.values("--anchor"), &key)? {
@@ -306,7 +340,7 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     if let Some(held) = held {
         compare_genesis(&board, &walk, &own, &held, "the extra key is one the giver's hand can act with, whatever was said at `skep accept`")?;
     }
-    // THE TWO ARMS, selected by `first_session`'s own reads (§2.2).
+    // The two arms, selected by `first_session`'s own reads (§2.2).
     let reads = FirstSessionReads::take(&board, &account, &key.fingerprint, Some(&store))?;
     let mut agent_space = None;
     if reads.anything_owed() {

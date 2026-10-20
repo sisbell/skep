@@ -1,37 +1,39 @@
-//! `skep-dev serve` — THE DEV PROVIDER (the dev provider record §2.2 (B),
-//! §3.1 (i), §3.2; ruled P-1 … P-12): the shell's core (`skep-shell`)
-//! served to a page in a browser over loopback HTTP and server-sent events.
-//! THE INPUTS: the ONE page origin admitted (`--page-origin`, required);
-//! the listen port (`--listen`); the per-run admission secret (`--secret`,
-//! of the URL-safe alphabet the page's query and header carry unchanged,
-//! else generated and printed ONCE on stdout, the one DATA line and the
-//! secret's one carrier — no TALK line names it); the session mode
-//! (`--session bare|signed`, required — both arms were ruled selectable, so
-//! a run names one: `bare` the keyless session that reads alone, every
-//! write in it refused before any dial, `signed` the session that writes);
-//! the dev key store (`--dir`, required under `signed`, a throwaway
-//! directory under the system temp dir where none is named under `bare`,
-//! removed on every way out of the verb —
-//! `~/.skep` is never consulted here, and a key file is refused: the signed
-//! arm signs with the key its store holds for the principal); the
-//! principal (`--principal`, the claimant's `DEFAULT_PRINCIPAL` where
-//! omitted); the dev arm's script (`--script`, read once, at start, and
-//! said so); and the board — `--board`, a daemon already running (the
-//! local record's recipe), or `--own` with `--data-dir` and `--port`, the
-//! daemon run IN-PROCESS with its test hooks in a `dev-hooks` build. Every
-//! usage refusal is judged before anything is made. THE CHECKS before
-//! serving, each a halt (exit 3): the board must answer `/health`; the
-//! store must hold the principal's key under `signed`; the port must bind.
-//! THE SERVE: one thread per connection over a loopback listener, the
-//! routes `serve/routes.rs` spells — each refusal the provider makes itself
-//! counted, and said on TALK the first time its kind is met — until stdin
-//! closes: the clean stop, its cause and the run's figures said (the
-//! connections accepted, the refusals by kind), every pending moment
-//! cancelled — before the connections are joined, so a call parked on a
-//! moment answers `abandoned` and its connection ends — every session
-//! closed, every consumer saved — the stop's seconds said as it completes —
-//! the own node stopped and said so, the throwaway removed — exit 0. An
-//! interrupt ends the process with none of it, which the serving line says.
+//! `skep-dev serve`: the dev provider.
+//!
+//! As the dev provider record draws it (§2.2 (B), §3.1 (i), §3.2; its calls
+//! P-1 … P-12), it is the shell's core (`skep-shell`) served to a page in a
+//! browser over loopback HTTP and server-sent events. The inputs: the one
+//! page origin admitted (`--page-origin`, required); the listen port
+//! (`--listen`); the per-run admission secret (`--secret`, of the URL-safe
+//! alphabet the page's query and header carry unchanged, else generated —
+//! either way printed once on stdout, the one data line and the secret's
+//! one carrier: no talk line names it); the session mode
+//! (`--session bare|signed`, required — both arms are selectable, so a run
+//! names one: `bare` the keyless session that reads alone, every write in
+//! it refused before any dial, `signed` the session that writes); the dev
+//! key store (`--dir`, required under `signed`, a throwaway directory under
+//! the system temp dir where none is named under `bare`, removed on every
+//! way out of the verb — `~/.skep` is never consulted here, and a key file
+//! is refused: the signed arm signs with the key its store holds for the
+//! principal); the principal (`--principal`, the claimant's
+//! `DEFAULT_PRINCIPAL` where omitted); the dev arm's script (`--script`,
+//! read once, at start, and said so); and the board — `--board`, a daemon
+//! already running (the local record's recipe), or `--own` with
+//! `--data-dir` and `--port`, the daemon run in-process with its test hooks
+//! in a `dev-hooks` build. Every usage refusal is judged before anything is
+//! made. The checks before serving, each a halt (exit 3): the board must
+//! answer `/health`; the store must hold the principal's key under
+//! `signed`; the port must bind. The serve: one thread per connection over
+//! a loopback listener, the routes `serve/routes.rs` spells — each refusal
+//! of the admission or of a request's read counted, and said on talk the
+//! first time its kind is met — until stdin closes: the clean stop, its
+//! cause and the run's figures said (the connections accepted, the refusals
+//! by kind), every pending moment cancelled — before the connections are
+//! joined, so a call parked on a moment answers `abandoned` and its
+//! connection ends — every session closed, every consumer saved — the stop's
+//! seconds said as it completes — the own node stopped and said so, the
+//! throwaway removed — exit 0. An interrupt ends the process with none of
+//! it, which the serving line says.
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read};
@@ -72,32 +74,34 @@ pub struct Provider<'d> {
     pub admission: Admission,
     /// The stop, once asked: why — stdin closed, or unreadable.
     stop: OnceLock<String>,
-    /// The script seam's canned refusals, by call: the next answer of that
-    /// call.
+    /// The script seam's canned refusals, by call.
+    ///
+    /// Each is the next answer of that call.
     pub canned: Mutex<HashMap<String, Value>>,
     /// The in-process node, where the verb runs one.
     pub node: Option<&'d node::Node>,
     /// The permits the fault route holds.
     pub doors: Mutex<node::Doors<'d>>,
-    /// The refusals this provider made itself, counted by kind.
+    /// The refusals of the admission and of a request's read, counted by kind.
     refusals: Mutex<BTreeMap<&'static str, u64>>,
 }
 
 impl Provider<'_> {
-    /// Whether the stop was asked.
+    /// Returns whether the stop was asked.
     pub fn stopped(&self) -> bool {
         self.stop.get().is_some()
     }
 
-    /// A refusal the provider makes itself — the admission's, or a request
-    /// it cannot read — counted by its `kind`, and said on TALK the first
-    /// time the kind is met in this run, never again: a page retrying a
-    /// refused stream every few seconds, or a process probing the port, says
-    /// one line, and the stop says how many each kind came to
-    /// ([`Provider::refusals_line`]). The kinds are the admission's four
-    /// checks and the reader's two refusals, so the lines are at most six; a
-    /// browser hides a refused answer from the page as a CORS failure, and
-    /// this line is where the developer reads why.
+    /// Counts a refusal the provider makes itself, by its `kind`.
+    ///
+    /// The refusal is the admission's, or a request it cannot read; it is
+    /// said on talk the first time the kind is met in this run, never again:
+    /// a page retrying a refused stream every few seconds, or a process
+    /// probing the port, says one line, and the stop says how many each kind
+    /// came to ([`Provider::refusals_line`]). The kinds are the admission's
+    /// four checks and the reader's two refusals, so the lines are at most
+    /// six; a browser hides a refused answer from the page as a CORS
+    /// failure, and this line is where the developer reads why.
     fn refused(&self, kind: &'static str, line: impl FnOnce() -> String) {
         let first = {
             let mut counts = self.refusals.lock().expect("the refusals' lock");
@@ -110,9 +114,10 @@ impl Provider<'_> {
         }
     }
 
-    /// The refusals the provider made over the run, by kind — a page refused
-    /// a thousand times read apart from one refused once — or `None` where
-    /// it made none.
+    /// Returns the refusals counted over the run, by kind.
+    ///
+    /// They are those [`Provider::refused`] counts. A page refused a thousand
+    /// times is read apart from one refused once; `None` where it made none.
     fn refusals_line(&self) -> Option<String> {
         let counts = self.refusals.lock().expect("the refusals' lock");
         let total: u64 = counts.values().sum();
@@ -127,15 +132,20 @@ impl Provider<'_> {
     }
 }
 
-/// THE THROWAWAY STORE a bare run makes where it names no `--dir`: its
-/// directory under the system temp dir, removed — and said — when the guard
-/// drops, on every way out of the verb, the clean stop and a halt before
-/// serving alike. Declared ahead of the shell that writes into it, so it
-/// drops after the shell's own stop has ended every write.
+/// The throwaway store a bare run makes where it names no `--dir`.
+///
+/// It is a directory under the system temp dir, removed — and said — when
+/// the guard drops, on every way out of the verb, the clean stop and a halt
+/// before serving alike. It is declared ahead of the shell that writes into
+/// it, so it drops after the shell's own stop has ended every write.
 struct Throwaway(PathBuf);
 
 impl Throwaway {
-    /// The directory made, named for this run.
+    /// Makes the directory, named for this run.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the directory cannot be made.
     fn make() -> Result<Throwaway, Halt> {
         let dir = std::env::temp_dir().join(format!("skep-dev-serve-{}", hex(&fresh_bytes(4))));
         std::fs::create_dir_all(&dir).map_err(|e| Halt::face(format!("the throwaway store {} could not be made", dir.display()), e.to_string(), "pass --dir"))?;
@@ -156,7 +166,7 @@ impl Drop for Throwaway {
     }
 }
 
-/// A refusal met before serving, as the halt it is (exit 3).
+/// Returns a refusal met before serving as the halt it is (exit 3).
 fn halt_of(r: Refusal) -> Halt {
     match r {
         Refusal::Halt { name, face } => Halt::face(format!("{name}: {}", face.state), face.cause, face.act),
@@ -164,22 +174,33 @@ fn halt_of(r: Refusal) -> Halt {
     }
 }
 
-/// The pause after an accept the listener refused, before the next: a
-/// refusal that persists — the descriptor table full, each event stream
+/// The pause after an accept the listener refused, before the next.
+///
+/// A refusal that persists — the descriptor table full, each event stream
 /// holding one — answers again at once, and the loop would spin a core.
 const ACCEPT_PAUSE: Duration = Duration::from_millis(10);
 
-/// Where the provider's board runs: a daemon this verb starts in-process
-/// (`--own`, its board directory and port), or one already running at the
-/// origin `--board` names.
+/// Where the provider's board runs.
+///
+/// It is a daemon this verb starts in-process (`--own`, its board directory
+/// and port), or one already running at the origin `--board` names.
 enum BoardAt {
     Own { data_dir: PathBuf, port: u16 },
     Running(Origin),
 }
 
-/// `skep-dev serve`.
+/// Runs `skep-dev serve`.
+///
+/// # Errors
+///
+/// Returns a usage refusal for a line given badly, ahead of anything made
+/// — a key file named, a script that cannot be read or parsed, no `--dir`
+/// under `signed` and `--own` beside a board among them; a halt (exit 3)
+/// for the throwaway store or the in-process daemon that cannot be made,
+/// and for each check before serving — the board's `/health`, the signed
+/// key, the port; and the halt the secret's write to stdout comes to.
 pub fn serve(c: &DevLine) -> Result<(), Stop> {
-    // THE INPUTS — every usage refusal ahead of anything made: a socket, the
+    // The inputs — every usage refusal ahead of anything made: a socket, the
     // in-process node, the throwaway store.
     let page_origin = c.page_origin()?;
     let listen = c.listen()?;
@@ -260,7 +281,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     options.arm = arm_config;
     options.own_node = own.then(|| board_origin.clone());
     let shell = Shell::open(options);
-    // THE CHECKS: the board answers; the key under `signed`; the port binds.
+    // The checks: the board answers; the key under `signed`; the port binds.
     let board = shell.board_references().into_iter().next().expect("one board");
     let health = shell.call("health", &json!({"board": board})).map_err(halt_of)?;
     // The board by its origin and by the reference the shell's own lines
@@ -286,8 +307,8 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
     let listener = TcpListener::bind(("127.0.0.1", listen)).map_err(|e| Halt::face(format!("the provider's port {listen} could not be bound"), e.to_string(), "stop what holds it, or pass --listen"))?;
     let listen = listener.local_addr().map(|a| a.port()).unwrap_or(listen);
     let admission = Admission { page_origin: page_origin.as_str().to_string(), secret: secret.clone(), host: format!("127.0.0.1:{listen}") };
-    // THE ONE DATA LINE: the secret — its one carrier, so a log that keeps
-    // the provider's TALK keeps no copy of what admits a page to its session.
+    // The one data line: the secret — its one carrier, so a log that keeps
+    // the provider's talk keeps no copy of what admits a page to its session.
     data(&secret)?;
     // What an interrupt leaves, said beside the clean stop: the process
     // handles no signal, so Ctrl-C ends it where it stands.
@@ -312,7 +333,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
             doors: Mutex::new(node::Doors::default()),
             refusals: Mutex::new(BTreeMap::new()),
         };
-        // THE SERVE: a thread per connection, the stdin watcher beside them,
+        // The serve: a thread per connection, the stdin watcher beside them,
         // every thread joined at the scope's end; the connections accepted
         // counted. An accept the listener refuses is said once per edge —
         // refused, then accepting again, with the episode's seconds and its
@@ -349,7 +370,7 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
                     }
                 }
             }
-            // THE CLEAN STOP, inside the scope and ahead of its join: a call
+            // The clean stop, inside the scope and ahead of its join: a call
             // parked on a moment the page has not answered ends only at a
             // cancel — and with the listener stopped no answer can reach it —
             // so the shell's stop, whose first act cancels every pending
@@ -374,14 +395,16 @@ pub fn serve(c: &DevLine) -> Result<(), Stop> {
         node.shutdown();
         talk(format!("the in-process daemon at {board_origin} is stopped"));
     }
-    // THE THROWAWAY STORE, removed as its guard drops, once nothing writes it.
+    // The throwaway store, removed as its guard drops, once nothing writes it.
     drop(throwaway);
     Ok(())
 }
 
-/// THE STDIN WATCHER: stdin read to its end — the parent closed it — or
-/// until it cannot be read; then the stop asked with its cause, which the
-/// stop line says, and the accept loop woken by one connect.
+/// Watches stdin: reads it to its end, then asks the stop with its cause.
+///
+/// Stdin is read to its end — the parent closed it — or until it cannot be
+/// read; the stop line says the cause, and one connect wakes the accept
+/// loop.
 fn watch_stdin(provider: &Provider<'_>, port: u16) {
     let mut sink = [0u8; 4096];
     let mut stdin = std::io::stdin().lock();

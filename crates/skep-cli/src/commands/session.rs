@@ -1,11 +1,13 @@
-//! `skep session` (`client.md` §2.2): a CONTENT-scoped signed session
-//! opened with the store's key, its token printed live and what it is
-//! joined to on the board's record said beside it — the principal, the
+//! `skep session` (`client.md` §2.2): a content-scoped signed session.
+//!
+//! The session is opened with the selected key (the file `--key` or
+//! `SKEP_KEY` names, else the store's), its token printed live and what it
+//! is joined to on the board's record said beside it — the principal, the
 //! account, the board and the key that testifies each write under it;
-//! `--close -` ends the token in `SKEP_SESSION` where it is set — stdin then
-//! unread — else the one read from stdin, never one from argv (AUTH-4.53),
-//! and names the board it asked, and the token it ended where the variable
-//! answered.
+//! `--close -` ends the token in `SKEP_SESSION` where it is set — stdin
+//! then unread — else the one read from stdin, never one from argv
+//! (AUTH-4.53), and every line it says names the board it asked, and the
+//! token it ended where the variable answered.
 
 use std::io::{self, Read};
 
@@ -19,21 +21,24 @@ use skep_client::Origin;
 use super::{board_of, data, key_named, principal_or_bound, select_key, store_of, talk, Stop};
 use crate::args::{session_env, CommandLine, Usage};
 
-/// Where `--close -` took the token it ends: `SKEP_SESSION` where it is set,
-/// else stdin.
+/// Where `--close -` took the token it ends.
+///
+/// It is `SKEP_SESSION` where it is set, else stdin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Source {
     Variable,
     Stdin,
 }
 
-/// What a close the board answered "already dead" says, naming `origin`,
-/// the board asked: the death signal rode its 204, whoever ended the token —
-/// and a board that never issued the token answers the very same 204, the
-/// unknown token resolved a guest's and its close idempotent (AUTH-4.47).
-/// The board's name is the one fact on the line that tells a close sent to
-/// the wrong board from a token ended, and the token such a close names
-/// stands LIVE at the board that issued it (AUTH-4.53).
+/// Returns what a close the board answered "already dead" says.
+///
+/// It names `origin`, the board asked: the death signal rode its 204,
+/// whoever ended the token — and a board that never issued the token
+/// answers the very same 204, the unknown token resolved a guest's and its
+/// close idempotent (AUTH-4.47). The board's name is the one fact on the
+/// line that tells a close sent to the wrong board from a token ended, and
+/// the token such a close names stands live at the board that issued it
+/// (AUTH-4.53).
 fn already_dead_at(origin: &Origin) -> String {
     format!(
         "was already dead at {origin} (the death signal rode its 204): a restart, a retirement, a block, a genesis at the account or an \
@@ -44,7 +49,7 @@ fn already_dead_at(origin: &Origin) -> String {
 pub fn session(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     if let Some(close) = c.value("--close") {
-        // THE TOKEN IS NEVER AN ARGV VALUE (§2.2; AUTH-4.53; §9 item 29).
+        // The token is never an argv value (§2.2; AUTH-4.53; §9 item 29).
         if close != "-" {
             return Err(Usage("--close takes `-` and ends the token in SKEP_SESSION where it is set — stdin then unread — else the one read from stdin; a token given as a flag value is refused — a command line is world-readable and outlives the run in shell history".into()).into());
         }
@@ -70,7 +75,7 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
         };
         let already_dead = board.session_close(&token)?.already_dead;
         // Where the variable answered, the close says so whatever came of
-        // it: a token piped beside the variable stands unread and LIVE, and
+        // it: a token piped beside the variable stands unread and live, and
         // the person who piped it reads its fate in no line of this run
         // (AUTH-4.53: a live token is the principal's content capability).
         // Read from stdin, the token ended is the one piped, and a close
@@ -84,7 +89,7 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
         }
         return Ok(());
     }
-    // The plaintext non-loopback WARNING, ahead of everything a signed
+    // The plaintext non-loopback warning, ahead of everything a signed
     // session needs (AUTH-4.53; §9 item 23: a warning, never a refusal).
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
@@ -95,14 +100,14 @@ pub fn session(c: &CommandLine) -> Result<(), Stop> {
     let principal = principal_or_bound(given, &store, &board)?;
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     let signer = store.signer(&KeySelector::Path(&key.path))?;
-    // CONTENT scope only (§9 item 45; RES-63); the token handed out LIVE,
+    // Content scope only (§9 item 45; RES-63); the token handed out live,
     // written while the session still owns its end: a token stdout refused
     // is closed by the session's drop, never left live with nobody holding
     // it. Printed, its end is the holder's — and the line beside it names
-    // what the board's record joins the token to: the principal the
-    // one-binding test chose and the account it seats, the board, and the
-    // key the store's lookup chose, whose fingerprint testifies each write
-    // under it (AUTH-4.48).
+    // what the board's record joins the token to: the principal (given, or
+    // chosen by the one-binding test) and the account it seats, the board,
+    // and the key the lookup chose (`--key`'s file, else the store's), whose
+    // fingerprint testifies each write under it (AUTH-4.48).
     let session = handshake(&board, Scope::Content, &*signer, principal, Site::Session)?;
     let account = session.account().to_string();
     data(session.token().as_str())?;

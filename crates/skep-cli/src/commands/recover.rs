@@ -1,7 +1,7 @@
-//! `skep recover` (`client.md` §2.2): the recovery ceremony, a person
-//! door — one anchor imported, this store's device key enrolled, the lost
-//! one retired; `--stolen` the thief copy, `--anchor-lost` the paper-loss
-//! arm.
+//! `skep recover` (`client.md` §2.2): the recovery ceremony, a person door.
+//!
+//! One anchor is imported, this store's device key enrolled, the lost one
+//! retired; `--stolen` the thief copy, `--anchor-lost` the paper-loss arm.
 
 use std::path::PathBuf;
 
@@ -21,8 +21,8 @@ pub fn recover(c: &CommandLine) -> Result<(), Stop> {
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
-    // `--key`/`SKEP_KEY` is NOT consulted here: the new device key is the
-    // STORE's, as at `claim` (§2.2).
+    // `--key`/`SKEP_KEY` is not consulted here: the new device key is the
+    // store's, as at `claim` (§2.2).
     let BoxDefault { host_name, date } = host_name_and_date();
     let opts = RecoverOptions {
         principal,

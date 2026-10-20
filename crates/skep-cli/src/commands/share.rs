@@ -1,25 +1,27 @@
-//! `skep share` — the fifteenth command, over `skep_client::share`: a draft
-//! or the caller's whole account shared with ONE account, a draft PRIVASHED
-//! — opened to every account on the board and never a guest (PUB-5.108,
-//! Nelson's term) — either revoked, a share made again after a revoke, and
-//! the grants issued and held listed. The board honours every record this
-//! command writes already (wire.md §The read predicate); the library
-//! composes and reads them, and this file is the talk, the confirmation and
-//! the JSON. Five forms: `--doc <D> --to <account>`, the default document
-//! grant; `--whole-account --to <account>`, the caller's own account prefix,
-//! every draft under it including those written later (PUB-5.9); `--doc <D>
-//! --privash`, the ANY-PRINCIPAL grant on one draft — privashing a whole
-//! account is refused; `--revoke <grant>`, a privash grant revoked the same
-//! way; and `--list`, which writes nothing and asks nothing. Every usage
-//! form is refused before any socket opens (§2.3's exit 2).
+//! `skep share`, the fifteenth command, over `skep_client::share`.
 //!
-//! THE SESSION is the command's own: the store's signing key, a
-//! CONTENT-scoped signed session opened as `skep session` opens its, and
-//! closed on every exit — every record carries that key's entry signature
-//! on a claimed board — so `SKEP_SESSION` is never read here: a token cannot
-//! sign.
+//! It is a draft or the caller's whole account shared with one account, a
+//! draft privashed — opened to every account on the board and never a
+//! guest (PUB-5.108, Nelson's term) — either revoked, a share made again
+//! after a revoke, and the grants issued and held listed. The board honours
+//! every record this command writes (wire.md §The read predicate);
+//! the library composes and reads them, and this file is the talk, the
+//! confirmation and the JSON. Five forms: `--doc <D> --to <account>`, the
+//! default document grant; `--whole-account --to <account>`, the caller's
+//! own account prefix, every draft under it including those written later
+//! (PUB-5.9); `--doc <D> --privash`, the any-principal grant on one draft —
+//! privashing a whole account is refused; `--revoke <grant>`, a privash
+//! grant revoked the same way; and `--list`, which writes nothing and asks
+//! nothing. Every usage form is refused before any socket opens (§2.3's
+//! exit 2).
 //!
-//! THE STATEMENT PRECEDES THE ACT (PUB-5.29; PUB-5.14 at the revoke;
+//! The session is the command's own: the selected signing key (the file
+//! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
+//! session opened as `skep session` opens its, and closed on every exit —
+//! every record carries that key's entry signature on a claimed board — so
+//! `SKEP_SESSION` is never read here: a token cannot sign.
+//!
+//! The statement precedes the act (PUB-5.29; PUB-5.14 at the revoke;
 //! PUB-5.108–5.111 at the privash): before a share the command says on
 //! stderr what the grant reaches — the document, or every draft under the
 //! account including those written later — its history (every revision,
@@ -32,25 +34,25 @@
 //! PUB-5.13, PUB-5.14); the custody note on every surface that shows a
 //! grant (PUB-5.4); and, where the key's latest record is a revocation,
 //! that this shares it again. A privash's statement is in the future tense
-//! and in the tier's own words: every account on this board including those
-//! that join later, never a guest; still a draft, changes attributed;
-//! revoking stops future reads and takes back nothing fetched, a document
-//! that links to or quotes it then showing a dead reference (R59); history
-//! "everything this board retains", never "forever". At a terminal the
-//! command then asks a typed confirmation — the address the act names, or
-//! `no` — through the terminal's `confirm_typed`, as the ceremonies do;
-//! off a terminal `--yes` stands for it and its absence is a usage
-//! refusal. The confirm holds for every write: a share, a privash and a
-//! revoke. No person door: the command runs without a terminal under
-//! `--yes`.
+//! and in the tier's own words: every account on this board including
+//! those that join later, never a guest; still a draft, changes
+//! attributed; revoking stops future reads and takes back nothing fetched,
+//! a document that links to or quotes it then showing a dead reference
+//! (R59); history "everything this board retains", never "forever". Where
+//! `--yes` does not stand for it, the command then asks a typed
+//! confirmation at the terminal — the address the act names, or `no` —
+//! through the terminal's `confirm_typed`, as the ceremonies do; off a
+//! terminal the absence of `--yes` is a usage refusal. The confirm holds
+//! for every write: a share, a privash and a revoke. No person door: the
+//! command runs without a terminal under `--yes`.
 //!
-//! AFTER: one JSON document on stdout — the grant with its address, prefix,
-//! grantee (`privashed` for the ANY-PRINCIPAL grant) and `replaces`; the
-//! revocation with the grant it revokes; or, for `--list`, `{issued, held,
-//! privashed}`, the last the board's privashed set. The grantee is echoed
-//! by address: this client holds no read of an account's display name. The
-//! board's refusal and the library's are exit 1 with the message, a halt
-//! exit 3.
+//! **After.** One JSON document goes on stdout — the grant with its
+//! address, prefix, grantee (`privashed` for the any-principal grant) and
+//! `replaces`; the revocation with the grant it revokes; or, for `--list`,
+//! `{issued, held, privashed}`, the last the board's privashed set. The
+//! grantee is echoed by address: this client holds no read of an account's
+//! display name. The board's refusal and the library's are exit 1 with the
+//! message, a halt exit 3.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -98,9 +100,10 @@ enum Act {
     List,
 }
 
-/// What the command line asks, judged whole before any socket opens (§2.3's
-/// exit 2 is the flags' shape alone): the act, and whether `--yes` stands
-/// for the typed answer.
+/// What the command line asks, judged whole before any socket opens.
+///
+/// §2.3's exit 2 is the flags' shape alone. It holds the act, and whether
+/// `--yes` stands for the typed answer.
 struct Asked {
     act: Act,
     consent: bool,
@@ -112,7 +115,7 @@ pub fn share(c: &CommandLine) -> Result<(), Stop> {
     let given = c.principal()?;
     let key_file = c.key_file()?;
     let asked = Asked::of(c)?;
-    // The plaintext non-loopback WARNING, ahead of everything a signed
+    // The plaintext non-loopback warning, ahead of everything a signed
     // session needs (AUTH-4.53; §9 item 23: a warning, never a refusal).
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
@@ -120,7 +123,7 @@ pub fn share(c: &CommandLine) -> Result<(), Stop> {
     let principal = principal_or_bound(given, &store, &board)?;
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     let signer = store.signer(&KeySelector::Path(&key.path))?;
-    // CONTENT scope, as `skep session` opens its (RES-63): a grant is a
+    // Content scope, as `skep session` opens its (RES-63): a grant is a
     // link write under this key, never a credential act.
     let session = handshake(&board, Scope::Content, &*signer, principal, Site::Session)?;
     talk(format!("acting as principal {principal} at account {} with key {}", session.account(), key_named(&key)));
@@ -137,16 +140,19 @@ pub fn share(c: &CommandLine) -> Result<(), Stop> {
 }
 
 impl Asked {
-    /// The line read whole — every address parsed, the form found, the
-    /// consent judged — before any socket opens. The grammar's forms refuse
-    /// two forms together ahead of this; what is left is which form, whether
-    /// it is whole, and whether a terminal or `--yes` will answer for it.
+    /// Reads the line whole, before any socket opens.
+    ///
+    /// Every address is parsed, the form found, the consent judged. The
+    /// grammar's forms refuse two forms together ahead of this; what is left
+    /// is which form, whether it is whole, and whether a terminal or `--yes`
+    /// will answer for it.
     ///
     /// # Errors
     ///
-    /// In this order: an address that is none; no form; a share with
-    /// neither `--to` nor `--privash`; `--privash` with `--whole-account`;
-    /// `--yes` absent off a terminal at a write.
+    /// In this order: an address that is none; `--doc` with
+    /// `--whole-account`, or no form; a share with neither `--to` nor
+    /// `--privash`, `--to` with `--privash`, or `--privash` with
+    /// `--whole-account`; `--yes` absent off a terminal at a write.
     fn of(c: &CommandLine) -> Result<Asked, Usage> {
         let doc = c.value("--doc").map(|d| address("--doc", d)).transpose()?;
         let whole = c.switch("--whole-account");
@@ -196,13 +202,27 @@ impl Asked {
     }
 }
 
-/// The address `text` spells at `flag`, else the usage refusal naming both.
+/// Returns the address `text` spells at `flag`.
+///
+/// # Errors
+///
+/// Returns the usage refusal naming both where `text` spells none.
 fn address(flag: &str, text: &str) -> Result<Address, Usage> {
     parse_address(text).ok_or_else(|| Usage(format!("{flag}: '{text}' is not an address (the wire's dotted spelling)")))
 }
 
-/// The run under the session: the key's state, the statement, the
-/// confirmation, the act, the JSON.
+/// Runs the act under the session.
+///
+/// The run is the key's state, the statement, the confirmation, the act,
+/// the JSON.
+///
+/// # Errors
+///
+/// Returns a halt where the session's account cannot be spelled; a library
+/// refusal ([`refused`]) where the key is already shared, the grant to
+/// revoke is none, another's, revoked or not standing, or the library
+/// refuses the act; the decline or the abandonment of the confirmation
+/// ([`confirm`]); and the halt a read, or a write stdout refuses, comes to.
 fn run(board: &Board, session: &Session<'_>, signer: &dyn Signer, asked: &Asked) -> Result<(), Stop> {
     let token = session.token();
     let account = parse_address(session.account()).ok_or_else(|| {
@@ -259,9 +279,15 @@ fn run(board: &Board, session: &Session<'_>, signer: &dyn Signer, asked: &Asked)
     }
 }
 
-/// `--list`: what the account shared, what is shared with it, and what any
-/// account on this board reads by privash — the three reads, one JSON
-/// document, the custody note beside it (PUB-5.4).
+/// Answers `--list`: what the account shared, and what is shared with it.
+///
+/// It also answers what any account on this board reads by privash — the
+/// three reads, one JSON document, the custody note beside it (PUB-5.4).
+///
+/// # Errors
+///
+/// Returns the halt any of the three reads comes to, and the one a write
+/// stdout refuses comes to.
 fn list(board: &Board, token: &Token, account: &Address) -> Result<(), Stop> {
     let issued = share::issued(board, Some(token), &account.to_string())?;
     let held = share::held(board, token, &account.to_string())?;
@@ -285,7 +311,7 @@ fn list(board: &Board, token: &Token, account: &Address) -> Result<(), Stop> {
     Ok(())
 }
 
-/// What a share reaches, as the talk names it.
+/// Returns what a share reaches, as the talk names it.
 fn reach_named(reach: &Reach, prefix: &Address) -> String {
     match reach {
         Reach::Document(d) => d.to_string(),
@@ -293,11 +319,12 @@ fn reach_named(reach: &Reach, prefix: &Address) -> String {
     }
 }
 
-/// THE SHARE GESTURE's statement (PUB-5.29), in plain talk, before the act:
-/// the record at its rung, the history, the revocation, the act with its
-/// repeated form, the arrival, the key-loss clause, the custody note, and
-/// the re-share where the key's latest record is a revocation. The grantee
-/// is echoed by address alone.
+/// Says the share gesture's statement (PUB-5.29) before the act.
+///
+/// It is in plain talk: the record at its rung, the history, the
+/// revocation, the act with its repeated form, the arrival, the key-loss
+/// clause, the custody note, and the re-share where the key's latest record
+/// is a revocation. The grantee is echoed by address alone.
 fn say_share(reach: &Reach, prefix: &Address, grantee: &Address, before: &KeyState) {
     let who = grantee.to_string();
     talk(format!("sharing with {who}"));
@@ -326,13 +353,14 @@ fn say_share(reach: &Reach, prefix: &Address, grantee: &Address, before: &KeySta
     }
 }
 
-/// THE PRIVASH's statement (PUB-5.108–5.111; PUB-5.29's clauses at
-/// ANY-PRINCIPAL), in the future tense, before the act: every account on
-/// this board and never a guest, still a draft with changes attributed, the
-/// record, the history as everything this board retains, revoking and the
-/// dead reference (R59), the act, the arrival, the key-loss clause, the
-/// custody note, and the re-privash where the key's latest record is a
-/// revocation.
+/// Says the privash's statement (PUB-5.108–5.111) before the act.
+///
+/// It is in the future tense, with PUB-5.29's clauses at any-principal:
+/// every account on this board and never a guest, still a draft with
+/// changes attributed, the record, the history as everything this board
+/// retains, revoking and the dead reference (R59), the act, the arrival,
+/// the key-loss clause, the custody note, and the re-privash where the
+/// key's latest record is a revocation.
 fn say_privash(document: &Address, before: &KeyState) {
     talk(format!("{document} will be privashed: every account on this board can read it, including accounts that join later — never a guest"));
     talk("it stays a draft you may keep changing, and readers see your changes as yours; to change it past recognition without that, privash a new draft and revoke this one");
@@ -350,7 +378,7 @@ fn say_privash(document: &Address, before: &KeyState) {
     }
 }
 
-/// Who a grant names, as the revoke's talk says it.
+/// Returns who a grant names, as the revoke's talk says it.
 fn reader_named(grant: &Grant) -> String {
     match &grant.grantee {
         Grantee::Account(a) => a.to_string(),
@@ -358,8 +386,10 @@ fn reader_named(grant: &Grant) -> String {
     }
 }
 
-/// THE REVOKE's statement before the act (PUB-5.14): the second permanent
-/// record, and what the reader keeps (PUB-5.110).
+/// Says the revoke's statement before the act (PUB-5.14).
+///
+/// It names the second permanent record, and what the reader keeps
+/// (PUB-5.110).
 fn say_revoke(grant: &Grant) {
     let who = reader_named(grant);
     talk(format!("revoking deposits a second permanent public record here, naming {who}: the share and its withdrawal both stay on the record, permanently"));
@@ -373,7 +403,7 @@ fn say_revoke(grant: &Grant) {
     talk(CUSTODY_NOTE);
 }
 
-/// What the reader keeps, said after the revocation landed (PUB-5.110).
+/// Returns what the reader keeps, said after the revocation landed (PUB-5.110).
 fn keep_clause(grant: &Grant) -> String {
     format!(
         "revoked: {} reads {} no further from the next read; they keep what their client already fetched, and the share and this revocation both stand on the record",
@@ -382,10 +412,18 @@ fn keep_clause(grant: &Grant) -> String {
     )
 }
 
-/// The typed confirmation at the terminal, where `--yes` did not stand for
-/// it: the address the act names, or `no` — the terminal's own
-/// `confirm_typed`, re-asked on a wrong answer as the ceremonies re-ask a
-/// wrong row (AUTH-5.46), three times, then declined.
+/// Asks the typed confirmation, where `--yes` did not stand for it.
+///
+/// It is asked at the terminal: the address the act names, or `no` — the
+/// terminal's own `confirm_typed`, re-asked on a wrong answer as the
+/// ceremonies re-ask a wrong row (AUTH-5.46), three asks in all, then
+/// declined.
+///
+/// # Errors
+///
+/// Returns the decline ([`declined`]) on `no`, `n` or an empty answer, and
+/// after the third wrong one; and a halt where the confirmation is not
+/// answered, the act abandoned.
 fn confirm(consent: bool, what: &str, expected: &str, act: &str) -> Result<(), Stop> {
     if consent {
         return Ok(());
@@ -407,15 +445,16 @@ fn confirm(consent: bool, what: &str, expected: &str, act: &str) -> Result<(), S
     Err(declined(act))
 }
 
-/// The decline, faced: nothing written.
+/// Returns the decline, faced: nothing written.
 fn declined(act: &str) -> Stop {
     Stop::Halt(Halt::face(format!("the {act} was declined: nothing was written"), "the typed answer was `no`", "run it again when ready"))
 }
 
-/// The stop a library refusal comes to (§2.3's exit 1, "the board
-/// refused"): a halt the library faced keeps its own code; every typed
-/// refusal is a verdict under a code named for it, its detail the refusal's
-/// own words, the act that would help among them.
+/// Returns the stop a library refusal comes to (§2.3's exit 1).
+///
+/// The exit is "the board refused": a halt the library faced keeps its own
+/// code; every typed refusal is a verdict under a code named for it, its
+/// detail the refusal's own words, the act that would help among them.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -438,8 +477,10 @@ fn refused(r: Refusal) -> Stop {
     }
 }
 
-/// A grant as the JSON carries it: its address, issuer, prefix, grantee
-/// (`privashed` at the ANY-PRINCIPAL grant) and `replaces`.
+/// Returns a grant as the JSON carries it.
+///
+/// It carries its address, issuer, prefix, grantee (`privashed` at the
+/// any-principal grant) and `replaces`.
 fn grant_json(g: &Grant) -> Value {
     json!({
         "kind": "grant",
@@ -451,8 +492,9 @@ fn grant_json(g: &Grant) -> Value {
     })
 }
 
-/// An issued grant with its state: `live`, `revoked` with `revoked_by`, or
-/// `inert`.
+/// Returns an issued grant with its state.
+///
+/// The state is `live`, `revoked` with `revoked_by`, or `inert`.
 fn issued_json(g: &Grant, state: &GrantState) -> Value {
     let mut v = grant_json(g);
     let (name, by) = match state {
@@ -465,7 +507,7 @@ fn issued_json(g: &Grant, state: &GrantState) -> Value {
     v
 }
 
-/// A revocation as the JSON carries it, with the grant it withdrew.
+/// Returns a revocation as the JSON carries it, with the grant it withdrew.
 fn revocation_json(r: &Revocation, g: &Grant) -> Value {
     json!({
         "kind": "revocation",
@@ -477,7 +519,7 @@ fn revocation_json(r: &Revocation, g: &Grant) -> Value {
     })
 }
 
-/// One privashed prefix with its issuers.
+/// Returns one privashed prefix with its issuers.
 fn privashed_json(p: &Privashed) -> Value {
     json!({"prefix": p.prefix.to_string(), "issuers": p.issuers.iter().map(ToString::to_string).collect::<Vec<_>>()})
 }

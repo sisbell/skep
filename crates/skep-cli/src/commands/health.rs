@@ -1,9 +1,11 @@
-//! `skep health` (`client.md` §2.2): `GET /health`'s body verbatim on
-//! stdout, and on stderr the mode derived from its pair (AUTH-5.86), named
-//! with the board that answered — the flag's, or `SKEP_BOARD`'s where no
-//! flag names one — and, where the body answers `writes.halted`, the halt
-//! beside it: a board refusing every write `poisoned` reads otherwise as a
-//! healthy one, its one sign a member of the JSON on stdout.
+//! `skep health` (`client.md` §2.2): `GET /health`'s body and the mode.
+//!
+//! The body is verbatim on stdout, and on stderr the mode derived from its
+//! pair (AUTH-5.86), named with the board that answered — the flag's, or
+//! `SKEP_BOARD`'s where no flag names one — and, where the body answers
+//! `writes.halted`, the halt beside it: a board refusing every write
+//! `poisoned` reads otherwise as a healthy one, its one sign a member of
+//! the JSON on stdout.
 
 use skep_client::derive::Mode;
 
@@ -13,7 +15,7 @@ use crate::args::CommandLine;
 pub fn health(c: &CommandLine) -> Result<(), Stop> {
     let board = board_of(c)?;
     let health = board.health()?;
-    // The body VERBATIM — one JSON document already; the CLI never adds a
+    // The body verbatim — one JSON document already; the CLI never adds a
     // `mode` field (AUTH-5.86's negative pin).
     data_verbatim(&health.raw)?;
     let mode = Mode::of(&health);
@@ -24,7 +26,7 @@ pub fn health(c: &CommandLine) -> Result<(), Stop> {
         health.claimant().unwrap_or("null"),
         health.local_trust()
     ));
-    // THE WRITE PATH's HALT (wire.md §Rejection codes, `poisoned`): the
+    // The write path's halt (wire.md §Rejection codes, `poisoned`): the
     // write path's or the kernel's, which `writes.halted` answers alike —
     // and the one act, a restart, that a full volume orders behind room
     // (RUNBOOK.md §1, steps 4 and 5).

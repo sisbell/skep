@@ -1,7 +1,8 @@
-//! `skep verify` (`client.md` §2.2): AUTH-5.65's pre-check as a command —
-//! the origin arm, the key arm, and with `--payload` or `--anchor` the
-//! whole-set compare against the genesis record (AUTH-4.58's detection).
-//! A pass is exit 0; whatever it finds is a halt, exit 3.
+//! `skep verify` (`client.md` §2.2): AUTH-5.65's pre-check as a command.
+//!
+//! It runs the origin arm, the key arm, and with `--payload` or `--anchor`
+//! the whole-set compare against the genesis record (AUTH-4.58's
+//! detection). A pass is exit 0; whatever it finds is a halt, exit 3.
 
 use skep_client::ceremony::handshake::{key_face, Site};
 use skep_client::derive::{origin_arm, precheck};
@@ -17,20 +18,20 @@ pub fn verify(c: &CommandLine) -> Result<(), Stop> {
     let key_file = c.key_file()?;
     let json = c.switch("--json");
     let mut checks: Vec<&str> = Vec::new();
-    // (1) THE ORIGIN ARM.
+    // (1) The origin arm.
     let health = board.health()?;
     origin_arm(board.signed(), &health)?;
     checks.push("origin");
-    // (2) THE KEY ARM: `principal_prefix(n)`, then `key_set` at the set the
+    // (2) The key arm: `principal_prefix(n)`, then `key_set` at the set the
     // walk reaches, against the selected key.
     let principal = principal_or_bound(given, &store, &board)?;
-    // A READ of the key's public facts: `verify` signs nothing.
+    // A read of the key's public facts: `verify` signs nothing.
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Read)?;
     let pre = precheck(&board, principal, &key.fingerprint)?;
     checks.push("key_set");
     let own = [(key.fingerprint, key.public.clone())];
     key_face(&board, &pre.walk, &key.fingerprint, &own, Site::Session)?;
-    // THE WHOLE-SET COMPARE, where the person holds what this device
+    // The whole-set compare, where the person holds what this device
     // composed (AUTH-4.58's detection; P25).
     match held_set(&store, c.value("--payload"), c.values("--anchor"), &key)? {
         Some(held) => {
@@ -41,7 +42,8 @@ pub fn verify(c: &CommandLine) -> Result<(), Stop> {
     }
     // What passed, joined to the board's record: the key the lookup chose,
     // by the fingerprint its writes are testified by (AUTH-4.48), the
-    // principal the one-binding test chose, and the board read.
+    // principal (given, or chosen by the one-binding test), and the board
+    // read.
     talk(format!(
         "key {} passed {} for principal {principal} at {}; a block is invisible to both reads: a verify that passes can still meet 403 \
          prefix_blocked at the next handshake",

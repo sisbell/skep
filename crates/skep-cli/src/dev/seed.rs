@@ -1,67 +1,70 @@
-//! THE SEED — `skep-dev seed`'s run, in order. THE INPUTS as the `skep`
-//! command finds them: the origin (`--board`), the store (`--dir`), the
-//! principal (`--principal`, else the store's one binding at the board),
-//! the key under `Purpose::Sign` (`--key`, else the store's lookup), the
-//! account off the bindings line, checked against `principal_prefix`; the
-//! corpus (`--repo` / `SKEP_SEARCH_CORPUS`, `--pin`, `--from`) and the
-//! shapes' counts. THE CHECKS before any write, each a halt (exit 3): an
-//! unclaimed board — "claim first"; `writes.halted`; a claimant that is not
-//! the account this store binds here; the handshake's own pre-check. THE
-//! CUT: `documents + drafts + 1` documents of the one rule — the editions,
-//! the drafts past the tier, the second account's one. THE MANIFEST beside
-//! the key store, then ONE content-scoped signed session for every write of
-//! the claimant's, and the shapes, serially, every write under its envelope
-//! id and recorded after its ack:
+//! The seed: `skep-dev seed`'s run, in order.
 //!
-//! 1. EDITIONS — one staging draft D for the run; per cut document the
+//! The inputs, as the `skep` command finds them: the origin (`--board`),
+//! the store (`--dir`), the principal (`--principal`, else the store's one
+//! binding at the board), the key under `Purpose::Sign` (`--key`, else the
+//! store's lookup), the account off the bindings line, checked against
+//! `principal_prefix`; the corpus (`--repo` / `SKEP_SEARCH_CORPUS`,
+//! `--pin`, `--from`) and the shapes' counts. The checks before any write,
+//! each a halt (exit 3): an unclaimed board — "claim first";
+//! `writes.halted`; a claimant that is not the account this store binds
+//! here; the handshake's own pre-check. The cut: `documents + drafts + 1`
+//! documents of the one rule — the editions, the drafts past the tier, the
+//! second account's one. The manifest beside the key store, then one
+//! content-scoped signed session for every write of the claimant's, and
+//! the shapes, serially, every write under its envelope id and recorded
+//! after its ack:
+//!
+//! 1. Editions — one staging draft D for the run; per cut document the
 //!    per-byte insert into D at D's next fresh ordinal, the attested mint of
 //!    the edition E, the `image` of the stretch, and the shot naming
 //!    `draft: D` with the stretch's run → `E.1`, which a guest reads.
-//! 2. LINKS — every backticked `.md` cite in an edition's bytes
+//! 2. Links — every backticked `.md` cite in an edition's bytes
 //!    ([`cites`]): the from-end the cite's own span as a V-spec, the home
-//!    the citing edition, the to-end the cut document holding the named
-//!    section where the cite names one, else the cited file's first cut
-//!    document, address-form, typed the citation class; a cite naming a
-//!    file outside the set — unresolved, ambiguous or not in the cut — lands
-//!    with a GHOST `to`, `<account>.0.<m>` past the account's last mint by
+//!    the citing edition, the to-end the edition holding the named section
+//!    where the cite names one, else the cited file's first edition,
+//!    address-form, typed the citation class; a cite naming a file outside
+//!    the set — unresolved, ambiguous or in no edition — lands with a ghost
+//!    `to`, `<account>.0.<m>` past the account's last mint by
 //!    [`GHOST_GAP`], one per distinct name, never minted.
-//! 3. VERSIONS — every k-th document from the first, rotated APPENDED (the
-//!    cut's next paragraph, the following document's first, as a second
-//!    value run after the edition's own), REMOVED (the last paragraph
-//!    holding a cite, else the last — a link floats), CHANGED (one sentence
-//!    replaced between two reference runs); `base` the birth version with
-//!    `base_extent` its extent, the ack `E.2`. The FIRST edition is always
-//!    among them, and its shot carries THE WINDOW: [`WINDOW_WIDTH`]
-//!    positions of the first draft W between its own run and the appended
-//!    one — W is not the frame's draft, so the run stays a window a guest
-//!    meets as `withheld` and the claimant reads; W is minted and filled
-//!    just ahead of that shot.
-//! 4. DRAFTS — the remaining drafts, the cut's documents past the tier,
+//! 3. Versions — every k-th document from the first, rotated `appended`
+//!    (the cut's next paragraph, the following document's first, as a
+//!    second value run after the edition's own), `removed` (the last
+//!    paragraph holding a cite, else the last — a link floats), `changed`
+//!    (one sentence replaced between two reference runs); `base` the birth
+//!    version with `base_extent` its extent, the ack `E.2`. The first
+//!    edition is always among them, and its shot carries the window:
+//!    [`WINDOW_WIDTH`] positions of the first draft W between its own run
+//!    and the appended one — W is not the frame's draft, so the run stays a
+//!    window a guest meets as `withheld` and the claimant reads; W is
+//!    minted and filled just ahead of that shot.
+//! 4. Drafts — the remaining drafts, the cut's documents past the tier,
 //!    minted flagless and filled from the signed session, no attest.
-//! 5. THE SECOND ACCOUNT — keyless, top-level: `next_account_prefix` under
+//! 5. The second account — keyless, top-level: `next_account_prefix` under
 //!    the node and `delegate` from a bare principal-0 session, its home from
 //!    a bare session as the new principal, one draft holding the document
 //!    past the drafts; the one place the claimant's signed session does not
-//!    reach, so on a board that refuses bare sessions (ENFORCING) it is
+//!    reach, so on a board that refuses bare sessions (enforcing) it is
 //!    skipped, said once, and the JSON says so.
 //!
 //! Then the reads for the report — the positions before and after, the
-//! reclaim floor — and ONE JSON object on stdout, always; TALK on stderr:
+//! reclaim floor — and one JSON object on stdout, always; talk on stderr:
 //! the mode line naming the board, the corpus, the manifest's line
-//! ([`manifest_line`]: a new seed, every write held, or a resume and the one
-//! write a resume cannot see), the session's line — the principal, the
+//! ([`manifest_line`]: a new seed, every write held, or a resume and the
+//! one write a resume cannot see), the session's line — the principal, the
 //! account and the key whose fingerprint the board testifies each write by
-//! (AUTH-4.48) — on a resume the first write it makes again, a progress line
-//! per hundred editions and at the last, one line per phase as it ends, each
-//! stall the writer retries through as it begins and at most once per ten
-//! seconds after, the frames sent and their retries, the floor, the commits
-//! landed since the run read its position, and the lines the manifest holds
-//! and this run recorded. A run that stops inside a write says which, and
-//! whether its frame was in flight — its answer never read, or `poisoned`,
-//! which the board's restart may land — ahead of the halt: the write the
-//! next run's resume line names again. A second run under the same key finds
-//! every write recorded, writes nothing — said as it opens the manifest —
-//! and answers the same object with `already_seeded: true`.
+//! (AUTH-4.48) — on a resume the first write it makes again, a progress
+//! line per hundred editions and at the last, one line per phase as it
+//! ends, each stall the writer retries through, at most one line per ten
+//! seconds across the run, the frames sent and their retries, the floor,
+//! the commits landed since the run read its position, and the lines the
+//! manifest holds and this run recorded. A run that stops inside a write
+//! says which, and whether its frame was in flight — its answer never read,
+//! or `poisoned`, which the board's restart may land — ahead of the halt:
+//! the write the next run's resume line names again. A second run
+//! under the same key finds every write recorded, writes nothing — said as
+//! it opens the manifest — and answers the same object with
+//! `already_seeded: true`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -89,28 +92,32 @@ pub const WINDOW_WIDTH: u64 = 240;
 /// What the changed arm puts in a sentence's place.
 pub const CHANGED_SENTENCE: &str = "This sentence stands changed in the second version.";
 
-/// How far past the account's last mint the ghosts begin, so the drafts this
-/// run lands after the links, and whatever the person mints next, occupy
-/// none of them.
+/// How far past the account's last mint the ghosts begin.
+///
+/// The drafts this run lands after the links, and whatever the person mints
+/// next, so occupy none of them.
 pub const GHOST_GAP: u64 = 1 << 20;
 
 /// The versions' arms, in rotation.
 const ARMS: [&str; 3] = ["appended", "removed", "changed"];
 
-/// The id the second account's step is recorded under — the seed's LAST
-/// record, every skip arm's included, so a manifest holding it holds every
-/// write of the seed.
+/// The id the second account's step is recorded under.
+///
+/// It is the seed's last record, every skip arm's included, so a manifest
+/// holding it holds every write of the seed.
 const LAST_STEP: &str = "account";
 
-/// What the run found in the manifest, said as it opens it, before the
-/// session: a new seed; a seed whose every write is recorded ([`LAST_STEP`]),
-/// so the run writes nothing; or a seed to RESUME — with the one write a
-/// resume cannot see: the one the run before had in flight when it stopped,
-/// which may stand on the board unrecorded and is made again under this
-/// run's session, where its envelope id holds nothing (wire.md §Correlation
-/// and idempotency: an `id` holds on its session alone). The two lines that
-/// name that write, the stopped run's and this one's, are named here, so
-/// the two runs' streams join on its envelope id.
+/// Returns what the run found in the manifest, said as it opens it.
+///
+/// It is said before the session: a new seed; a seed whose every write is
+/// recorded ([`LAST_STEP`]), so the run writes nothing; or a seed to resume
+/// — with the one write a resume cannot see: the one the run before had in
+/// flight when it stopped, which may stand on the board unrecorded and is
+/// made again under this run's session, where its envelope id holds
+/// nothing (wire.md §Correlation and idempotency: an `id` holds on its
+/// session alone). The two lines that name that write, the stopped run's
+/// and this one's, are named here, so the two runs' streams join on its
+/// envelope id.
 fn manifest_line(manifest: &Manifest) -> String {
     let path = manifest.path().display();
     if manifest.is_new() {
@@ -131,21 +138,31 @@ fn manifest_line(manifest: &Manifest) -> String {
     }
 }
 
-/// Whether a run that opens `manifest` resumes a seed: its header stands
-/// and the seed's last record does not.
+/// Returns whether a run that opens `manifest` resumes a seed.
+///
+/// It does where its header stands and the seed's last record does not.
 fn resumes(manifest: &Manifest) -> bool {
     !manifest.is_new() && manifest.recorded(LAST_STEP).is_none()
 }
 
-/// A phase's elapsed seconds, as its end line says them.
+/// Returns a phase's elapsed seconds, as its end line says them.
 fn phase_secs(seconds: &BTreeMap<&'static str, Duration>, phase: &str) -> f64 {
     seconds.get(phase).copied().unwrap_or_default().as_secs_f64()
 }
 
-/// `skep-dev seed`.
+/// Runs `skep-dev seed`.
+///
+/// # Errors
+///
+/// Returns a usage refusal for a line given badly — `--repo` naming no
+/// directory among them — ahead of any socket; a halt (exit 3) for a corpus
+/// that cannot be opened or cut, for each check the module doc names
+/// before any write, for a manifest of another seed and for a board that
+/// is not fresh; and any read's or write's halt, the board's refusal exit 1
+/// and transport exit 4.
 pub fn seed(c: &DevLine) -> Result<(), Stop> {
     let started = Instant::now();
-    // THE INPUTS — every usage refusal ahead of any socket.
+    // The inputs — every usage refusal ahead of any socket.
     let board = board_of(c)?;
     let repo = c.repo()?;
     if !repo.is_dir() {
@@ -166,13 +183,14 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
     }
-    // THE CORPUS, judged before the board is dialed.
+    // The corpus, judged before the board is dialed.
     let corpus = Corpus::open(&repo, &pin).map_err(|e| corpus_halt(e, &pin))?;
     let corpus = match &from {
         Some(subtree) => corpus.under(subtree),
         None => corpus,
     };
-    // THE CHECKS (§2.4): the mode line as `skep health` says it, then each halt.
+    // The checks (§2.4): the mode line as `skep health` says it, then each
+    // halt.
     let health = board.health()?;
     let mode = Mode::of(&health);
     talk(format!(
@@ -228,7 +246,8 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         .into());
     }
     let signer = store.signer(&KeySelector::Path(&key.path))?;
-    // THE CUT: the editions, the drafts past the tier, the second account's one.
+    // The cut: the editions, the drafts past the tier, the second account's
+    // one.
     let wanted = documents + drafts + 1;
     let cut = corpus.cut_sourced(wanted).map_err(|e| cut_halt(e, documents, drafts))?;
     let bytes: u64 =
@@ -240,7 +259,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
         corpus.rule(),
         from.as_deref().map(|f| format!(" from `{f}`")).unwrap_or_default()
     ));
-    // THE MANIFEST, keyed by H.1's chain.
+    // The manifest, keyed by H.1's chain.
     let term = board.board_term()?.ok_or_else(|| Halt::face("this board has no H.1", "the head document's first member is not readable on a claimed board: its journal is damaged below H.1", "restore the board (RUNBOOK.md §2)"))?;
     let chain: String = term.chain.iter().map(|b| format!("{b:02x}")).collect();
     let header = Header {
@@ -259,7 +278,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     talk(manifest_line(&manifest));
     let held_at_open = manifest.held();
     let before = health.log_position();
-    // THE SESSION, then the shapes — the session's line naming what the
+    // The session, then the shapes — the session's line naming what the
     // board's record joins this seed's writes to.
     let mut w = Writer::open(&board, signer, principal)?;
     talk(format!(
@@ -340,7 +359,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
             second["draft"].as_str().unwrap_or("?")
         )),
     }
-    // THE READS FOR THE REPORT, and the run's figures: the frames it sent,
+    // The reads for the report, and the run's figures: the frames it sent,
     // the commits since the position it read — its own and any other
     // writer's, so the two tell a board another hand wrote to apart — and
     // the manifest's lines, this run's among them.
@@ -416,7 +435,7 @@ pub fn seed(c: &DevLine) -> Result<(), Stop> {
     Ok(())
 }
 
-/// The halt a corpus that cannot be opened is.
+/// Returns the halt a corpus that cannot be opened is.
 fn corpus_halt(e: CorpusError, pin: &str) -> Halt {
     Halt::face(
         format!("the corpus cannot be read at {pin}"),
@@ -425,7 +444,9 @@ fn corpus_halt(e: CorpusError, pin: &str) -> Halt {
     )
 }
 
-/// The halt a corpus too short for the shapes is.
+/// Returns the halt a corpus too short for the shapes is.
+///
+/// A corpus the cut refuses otherwise is a halt naming the refusal.
 fn cut_halt(e: CorpusError, documents: usize, drafts: usize) -> Halt {
     match e {
         CorpusError::Short { cut, wanted } => Halt::face(
@@ -456,12 +477,15 @@ struct Version {
     window: Option<String>,
 }
 
-/// The run: the session, the manifest, the cut, the counts, and whether a
-/// write was made.
+/// The run: the session, the manifest, the cut and the counts.
+///
+/// It also holds whether a write was made.
 struct Seed<'b> {
     w: Writer<'b>,
-    /// Whether this run resumes a seed and has yet to meet the first write
-    /// its manifest does not hold — the one it names as it makes it again.
+    /// Whether this run resumes a seed and has yet to meet a write not held.
+    ///
+    /// The first write its manifest does not hold is the one it names as it
+    /// makes it again.
     resuming: bool,
     manifest: Manifest,
     account: String,
@@ -470,18 +494,31 @@ struct Seed<'b> {
     every: usize,
     drafts: usize,
     wrote: bool,
-    /// The staging draft's next fresh content ordinal — the plan's own
-    /// arithmetic, advanced for every stretch whether landed now or before.
+    /// The staging draft's next fresh content ordinal.
+    ///
+    /// It is the plan's own arithmetic, advanced for every stretch whether
+    /// landed now or before.
     next_ordinal: u64,
     seconds: BTreeMap<&'static str, Duration>,
 }
 
 impl Seed<'_> {
-    /// The write recorded under `id`, or made by `perform` and recorded with
-    /// `item` — the address under `addr` where the write mints one. On a
-    /// resume, the first write the manifest does not hold is named as it is
-    /// made again; a write `perform` stops inside is named ahead of its halt
-    /// ([`Seed::stopped_at`]).
+    /// Makes the write `id` by `perform` unless the manifest holds it.
+    ///
+    /// A write the manifest holds answers the address it recorded; one
+    /// `perform` makes is recorded with `item`, the address under `addr`
+    /// where the write mints one. On a resume, the first write the manifest
+    /// does not hold is named as it is made again.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt `perform` stops at, the write named ahead of it
+    /// ([`Seed::stopped_at`]), and the halt the manifest's record comes to.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `perform`'s item is neither a JSON object nor null: its
+    /// `addr` and its `id` are set by `serde_json`'s index.
     fn step(
         &mut self,
         id: &str,
@@ -511,14 +548,15 @@ impl Seed<'_> {
         Ok(addr)
     }
 
-    /// The line a run stopped inside the write `id` says ahead of its halt:
-    /// the write, and whether its frame was IN FLIGHT — sent, and its answer
-    /// never read, or answered `poisoned`, whose frames the board's restart
-    /// may land ([`Unsettled`]) — so the write may stand on the board with
-    /// no line of the manifest recording it, and the next run, whose resume
-    /// line names it again, makes it again — and the manifest holding every
-    /// write before it. The frame is named where it is not the write's
-    /// first, an insert's later chunk.
+    /// Returns the line a run stopped inside write `id` says before its halt.
+    ///
+    /// It names the write, and whether its frame was in flight — sent, and
+    /// its answer never read, or answered `poisoned`, whose frames the
+    /// board's restart may land ([`Unsettled`]) — so the write may stand on
+    /// the board with no line of the manifest recording it, and the next
+    /// run, whose resume line names it again, makes it again — and the
+    /// manifest holding every write before it. The frame is named where it
+    /// is not the write's first, an insert's later chunk.
     fn stopped_at(&mut self, id: &str) -> String {
         let path = self.manifest.path().display().to_string();
         match self.w.take_in_flight() {
@@ -543,7 +581,11 @@ impl Seed<'_> {
         }
     }
 
-    /// The address a step recorded, which a later phase leans on.
+    /// Returns the address a step recorded, which a later phase leans on.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the manifest holds no address for `id`.
     fn landed(&self, id: &str) -> Result<String, Halt> {
         self.manifest.recorded(id).and_then(|v| v["addr"].as_str()).map(str::to_string).ok_or_else(
             || {
@@ -571,7 +613,11 @@ impl Seed<'_> {
         &self.cut.documents[index]
     }
 
-    /// The staging draft D.
+    /// Returns the staging draft D.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt its mint comes to.
     fn staging(&mut self) -> Result<String, Halt> {
         let account = self.account.clone();
         let d = self.step("staging:mint", |w| {
@@ -587,7 +633,14 @@ impl Seed<'_> {
         }
     }
 
-    /// EDITIONS: the five steps per cut document.
+    /// Lands the editions: the three steps per cut document.
+    ///
+    /// The steps are the insert into the staging draft, the edition's mint,
+    /// and the shot over the stretch's `image`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the first write or read that stops comes to.
     fn editions(&mut self) -> Result<Vec<Edition>, Halt> {
         self.timed("editions", |s| {
             let staging = s.landed("staging:mint")?;
@@ -632,7 +685,11 @@ impl Seed<'_> {
         })
     }
 
-    /// LINKS from the cites, with the ghosts.
+    /// Lands the links from the cites, with the ghosts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the first write or read that stops comes to.
     fn links(&mut self, editions: &[Edition]) -> Result<Links, Halt> {
         self.timed("links", |s| {
             let resolver = Resolver::new(&s.cut.sources);
@@ -663,12 +720,12 @@ impl Seed<'_> {
                             ghosts.entry(file.clone()).or_insert(g).clone()
                         }
                     };
-                    // The from-end's SOURCE is the edition's birth member, not the
-                    // bare address: `image` on a bare published address answers
-                    // the trunk HEAD (head-float) where the store resolves a
-                    // V-spec against the address named, and the two must agree
-                    // for the signature to hold; a version address answers its
-                    // own member everywhere.
+                    // The from-end's source is the edition's birth member,
+                    // not the bare address: `image` on a bare published
+                    // address answers the trunk head (head-float) where the
+                    // store resolves a V-spec against the address named, and
+                    // the two must agree for the signature to hold; a version
+                    // address answers its own member everywhere.
                     let (home, member) = editions[i].clone();
                     let (h, t, from, width) = (home.clone(), to.clone(), cite.offset as u64 + 1, cite.len as u64);
                     let link = s.step(&id, |w| {
@@ -682,8 +739,13 @@ impl Seed<'_> {
         })
     }
 
-    /// VERSIONS: every k-th document from the first, the arms rotated, the
-    /// first edition's shot carrying the window.
+    /// Lands the versions: every k-th document from the first, arms rotated.
+    ///
+    /// The first edition's shot carries the window.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the first write or read that stops comes to.
     fn versions(&mut self, editions: &[Edition]) -> Result<Vec<Version>, Halt> {
         self.timed("versions", |s| {
             let staging = s.landed("staging:mint")?;
@@ -769,8 +831,13 @@ impl Seed<'_> {
         })
     }
 
-    /// One draft past the tier: the cut's document `index`, minted flagless
-    /// and filled from the signed session.
+    /// Lands one draft past the tier: the cut's document `index`.
+    ///
+    /// It is minted flagless and filled from the signed session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt its mint or its insert comes to.
     fn draft(&mut self, index: usize) -> Result<String, Halt> {
         let name = format!("draft-{:05}", index + 1);
         let account = self.account.clone();
@@ -788,16 +855,30 @@ impl Seed<'_> {
         Ok(addr)
     }
 
-    /// DRAFTS: the ten past the tier — the first already landed ahead of the
-    /// window's shot.
+    /// Lands the drafts past the tier: `--drafts` of them, ten by default.
+    ///
+    /// The first already landed ahead of the window's shot.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the first draft that stops comes to.
     fn drafts(&mut self) -> Result<Vec<String>, Halt> {
         self.timed("drafts", |s| (0..s.drafts).map(|j| s.draft(s.documents + j)).collect())
     }
 
-    /// THE SECOND ACCOUNT, keyless and top-level, from bare sessions on a
-    /// permissive board; skipped where the board refuses them — the phase's
-    /// line says which, recorded now or before. Recorded under [`LAST_STEP`]
-    /// whichever arm it takes, the seed's last record.
+    /// Lands the second account, keyless and top-level, from bare sessions.
+    ///
+    /// It lands on a permissive board, and is skipped where the board
+    /// refuses them — the phase's line says which, recorded now or before.
+    /// It is recorded under [`LAST_STEP`] whichever arm it takes, the seed's
+    /// last record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the node admits no further top-level account,
+    /// no principal id up to 1000 is free, `delegate` answers no address,
+    /// or the board refuses the new principal's bare session; and the halt
+    /// any write, read or record comes to.
     fn second_account(&mut self, mode: Mode) -> Result<Value, Halt> {
         self.timed("account", |s| {
             if let Some(v) = s.manifest.recorded(LAST_STEP) {
@@ -858,7 +939,12 @@ impl Seed<'_> {
         })
     }
 
-    /// A flagless mint into `account` from `token`'s bare session.
+    /// Makes a flagless mint into `account` from `token`'s bare session.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the write comes to, and one where its ack names no
+    /// address.
     fn mint_as(&mut self, token: &Token, account: &str, id: &str) -> Result<String, Halt> {
         let (t, a) = (token.clone(), account.to_string());
         let addr = self.step(id, |w| {
@@ -876,9 +962,15 @@ impl Seed<'_> {
     }
 }
 
-/// `runs` as `image` answered them over `bytes`' positions, in V-order,
-/// each placed with the bytes at its positions — the runs the commit copies
-/// in.
+/// Returns `runs` placed with the bytes at their positions, in V-order.
+///
+/// The runs are as `image` answered them over `bytes`' positions — the
+/// runs the commit copies in.
+///
+/// # Errors
+///
+/// Returns a halt where `image` answered more positions, or fewer, than the
+/// stretch holds.
 fn placed_values(runs: Vec<Run>, bytes: &[u8]) -> Result<Vec<Placed>, Halt> {
     let mut at = 0usize;
     let mut out = Vec::with_capacity(runs.len());
@@ -904,11 +996,13 @@ fn placed_values(runs: Vec<Run>, bytes: &[u8]) -> Result<Vec<Placed>, Halt> {
     Ok(out)
 }
 
-// ── THE CITES ──────────────────────────────────────────────────────────────
+// ── The cites ──────────────────────────────────────────────────────────────
 
-/// One backticked `.md` cite in a document's bytes: the token's byte range
-/// inside the ticks, the path it names, and the section after `§` where
-/// one is inside the ticks (`` `client.md §1.2` ``).
+/// One backticked `.md` cite in a document's bytes.
+///
+/// It holds the token's byte range inside the ticks, the path it names, and
+/// the section after `§` where one is inside the ticks
+/// (`` `client.md §1.2` ``).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cite {
     pub offset: usize,
@@ -917,8 +1011,10 @@ pub struct Cite {
     pub section: Option<String>,
 }
 
-/// Every cite in `bytes`, in order: a backticked token on one line whose
-/// first word ends in `.md`, alone or followed by `§` and a section.
+/// Returns every cite in `bytes`, in order.
+///
+/// A cite is a backticked token on one line whose first word ends in
+/// `.md`, alone or followed by `§` and a section.
 pub fn cites(bytes: &[u8]) -> Vec<Cite> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -941,7 +1037,7 @@ pub fn cites(bytes: &[u8]) -> Vec<Cite> {
     out
 }
 
-/// The cite a backticked token is, where it is one.
+/// Returns the cite a backticked token is, where it is one.
 fn cite_of(token: &[u8], offset: usize) -> Option<Cite> {
     let text = std::str::from_utf8(token).ok()?;
     let (path, rest) = match text.split_once(char::is_whitespace) {
@@ -960,8 +1056,10 @@ fn cite_of(token: &[u8], offset: usize) -> Option<Cite> {
     Some(Cite { offset, len: token.len(), path: path.to_string(), section })
 }
 
-/// The tier's `.md` files a cite's name is resolved against: the exact path
-/// where the name holds a directory, else the one file of that basename.
+/// The tier's `.md` files a cite's name is resolved against.
+///
+/// A name resolves to the exact path it spells, else — where it holds no
+/// directory — to the one file of that basename.
 pub struct Resolver {
     paths: Vec<String>,
     by_basename: HashMap<String, Vec<usize>>,
@@ -977,8 +1075,9 @@ impl Resolver {
         Resolver { paths: paths.to_vec(), by_basename }
     }
 
-    /// The file `name` names, or none where it names no tracked file, or
-    /// several.
+    /// Returns the file `name` names.
+    ///
+    /// It answers none where the name names no tracked file, or several.
     pub fn resolve(&self, name: &str) -> Option<&str> {
         if let Some(p) = self.paths.iter().find(|p| *p == name) {
             return Some(p);
@@ -1000,7 +1099,9 @@ enum Target {
     Ghost(String),
 }
 
-/// Whether `heading` opens `section`: the section's text, then the end or a
+/// Returns whether `heading` opens `section`.
+///
+/// It does where the heading is the section's text, then the end or a
 /// character that is no letter or digit — `1.2` opens `1.2 The second` and
 /// not `1.23 …`.
 fn opens_section(heading: &str, section: &str) -> bool {
@@ -1009,10 +1110,12 @@ fn opens_section(heading: &str, section: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || !rest.starts_with(|c: char| c.is_alphanumeric()))
 }
 
-/// The to-end of a cite: the document holding the named section's heading
-/// where the cite names one and the heading is in the cut, else the cited
-/// file's first cut document; a ghost where the name resolves to no file of
-/// the set.
+/// Returns the to-end of a cite.
+///
+/// It is the edition holding the named section's heading where the cite
+/// names one and an edition holds the heading, else the cited file's first
+/// edition; a ghost where the name resolves to no file, or to one no edition
+/// holds.
 fn target(
     cut: &Cut,
     documents: usize,
@@ -1034,11 +1137,14 @@ fn target(
     Target::Document(first)
 }
 
-// ── THE VERSIONS' CHOICES ──────────────────────────────────────────────────
+// ── The versions' choices ──────────────────────────────────────────────────
 
-/// The bytes the removed arm drops: the last paragraph holding a cite, else
-/// the last paragraph — with the blank line before it (after it, for the
-/// first) — or, where the document is one paragraph, its last sentence.
+/// Returns the bytes the removed arm drops.
+///
+/// They are the last paragraph holding a cite, else the last paragraph —
+/// with the blank line before it (after it, for the first) — or, where the
+/// document is one paragraph, its last sentence, else its last line, else
+/// its second half.
 pub fn dropped_range(sourced: &Sourced, cites: &[Cite]) -> (usize, usize) {
     let bytes = &sourced.document.bytes;
     let paragraphs = &sourced.paragraphs;
@@ -1061,9 +1167,11 @@ pub fn dropped_range(sourced: &Sourced, cites: &[Cite]) -> (usize, usize) {
     }
 }
 
-/// The sentence the changed arm replaces: the second sentence where the
-/// document has one — after the first boundary's whitespace, through the
-/// second — else the first, else the first line.
+/// Returns the sentence the changed arm replaces.
+///
+/// It is the second sentence where the document has one — after the first
+/// boundary's whitespace, through the second — else the first, else the
+/// first line.
 pub fn sentence_to_change(bytes: &[u8]) -> (usize, usize) {
     let boundaries = sentence_boundaries(bytes);
     match boundaries.as_slice() {
@@ -1079,8 +1187,9 @@ pub fn sentence_to_change(bytes: &[u8]) -> (usize, usize) {
     }
 }
 
-/// The byte indices of the periods that end a sentence: a `.` followed by a
-/// space, a line break or the end.
+/// Returns the byte indices of the periods that end a sentence.
+///
+/// Such a period is a `.` followed by a space, a line break or the end.
 fn sentence_boundaries(bytes: &[u8]) -> Vec<usize> {
     (0..bytes.len())
         .filter(|&i| {
@@ -1090,7 +1199,9 @@ fn sentence_boundaries(bytes: &[u8]) -> Vec<usize> {
         .collect()
 }
 
-/// `at` or the nearest character boundary below it, where `bytes` is UTF-8.
+/// Returns `at` or the nearest character boundary below it.
+///
+/// The boundary is sought where `bytes` is UTF-8.
 fn floor_char_boundary(bytes: &[u8], mut at: usize) -> usize {
     while at > 0 && std::str::from_utf8(bytes).is_ok_and(|t| !t.is_char_boundary(at)) {
         at -= 1;

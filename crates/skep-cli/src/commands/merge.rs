@@ -1,47 +1,50 @@
-//! `skep merge` — the fourteenth command, over `skep_client::merge` (the
-//! merge record, `_designs/CLIENT/2026-10-14-reconciling-versions-design.md`
-//! in the skep-ux-design repository, §6 "The CLI and the agent adapter";
+//! `skep merge`, the fourteenth command, over `skep_client::merge`.
+//!
+//! Its design is the merge record,
+//! `_designs/CLIENT/2026-10-14-reconciling-versions-design.md` in the
+//! skep-ux-design repository, §6 "The CLI and the agent adapter";
 //! `client.md` §2.1 lists the thirteen it stands beside, none touching
 //! content — this one does, which is why the library's `merge` feature is
-//! on for the `skep` command alone). The board, the document and one side
-//! are named — an alternative member, a draft with the member it was staged
-//! from, or a fork of one of the document's published versions, whose base
-//! is the source the board serves for it (`doc_metadata`'s `source`; a fork
-//! taken from the bare document before its first version is refused with
-//! that reason) — and the head where the feed walk should not
-//! supply it; the command composes the merge under the rules and prints the
-//! `Merged` report as ONE JSON document on stdout, exit 0. With `--publish`
-//! it lands the merge as the document's next version with its record, with
-//! `--into` it lands the merged list in a draft, and the report then carries
-//! the landing. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules left
-//! open; `--journal` names the merge journal (decision 7), `--kind` the
-//! record kind's type address (decision 9's row is interim and unpinned, so
-//! the caller names it). The board's refusal is exit 1, a halt exit 3.
+//! on for this crate alone. The board, the document and one side are named
+//! — an alternative member, a draft with the member it was staged from, or
+//! a fork of one of the document's published versions, whose base is the
+//! source the board serves for it (`doc_metadata`'s `source`; a fork taken
+//! from the bare document before its first version is refused with that
+//! reason) — and the head where the feed walk should not supply it; the
+//! command composes the merge under the rules and prints the `Merged`
+//! report as one JSON document on stdout, exit 0. With `--publish` it lands
+//! the merge as the document's next version with its record, with `--into`
+//! it lands the merged list in a draft, and the report then carries the
+//! landing. A `--resolve ⟨gap⟩=⟨choice⟩` settles a gap the rules left open;
+//! `--journal` names the merge journal (decision 7), `--kind` the record
+//! kind's type address (decision 9's row is interim and unpinned, so the
+//! caller names it). The board's refusal is exit 1, a halt exit 3.
 //!
-//! THE SESSION is the command's own: the store's signing key, a
-//! CONTENT-scoped signed session opened as `skep session` opens its, and
-//! closed on every exit — the shot and the record's link are signed by that
-//! key, so `SKEP_SESSION` is never read here: a token cannot sign.
+//! The session is the command's own: the selected signing key (the file
+//! `--key` or `SKEP_KEY` names, else the store's), a content-scoped signed
+//! session opened as `skep session` opens its, and closed on every exit —
+//! the shot and the record's link are signed by that key, so `SKEP_SESSION`
+//! is never read here: a token cannot sign.
 //!
-//! A DAUGHTER IS REPORTED, NEVER RETRIED (decision 17): where the head moved
-//! under the merge the shot lands as the head's daughter, the report says so
-//! under `landed.daughter`, the talk says to run again with `--retries` one
-//! higher, and the command runs nothing again.
+//! **A daughter is reported, never retried (decision 17).** Where the head
+//! moved under the merge the shot lands as the head's daughter, the report
+//! says so under `landed.daughter`, the talk says to run again with
+//! `--retries` one higher, and the command runs nothing again.
 //!
-//! WHO RESOLVES (decisions 1–5): a `--resolve` is the merger's, and the
+//! **Who resolves (decisions 1–5).** A `--resolve` is the merger's, and the
 //! record keeps who the merger was — `person` where stdin and stderr are
 //! both a terminal, `agent` where they are not. This is the one place the
 //! command tells the two apart; it is no person door and runs without a
 //! terminal.
 //!
-//! THE REPORT's members take the record's §4 names where they coincide
+//! The report's members take the record's §4 names where they coincide
 //! (`doc`, `base`, `sides`, `gaps`, `values`, `record`); the report adds
 //! `head`, `runs` (M as `origin`, `i_start`, `width`, `side`, `family`),
 //! `counts`, `cap`, `over_cap`, `prior`, `ignored`, `as_of`, `landed`, and
 //! to each gap a `default` — its placement as this run composed it, in
-//! `--resolve`'s own spelling, so a merger copies it and varies it. `--json`
-//! is every command's flag and changes nothing here: the report is JSON
-//! always.
+//! `--resolve`'s own spelling, so a merger copies it and varies it.
+//! `--json` is every command's flag and changes nothing here: the report
+//! is JSON always.
 
 use serde_json::{json, Value};
 use skep_address::Address;
@@ -71,8 +74,9 @@ enum Land {
     Into(Address),
 }
 
-/// What the command line asks, judged whole before any socket opens (§2.3's
-/// exit 2 is the flags' shape alone).
+/// What the command line asks, judged whole before any socket opens.
+///
+/// §2.3's exit 2 is the flags' shape alone.
 struct Asked {
     doc: Address,
     side: Side,
@@ -93,7 +97,7 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
     // at a terminal, an agent anywhere else (the module's doc).
     let by = if has_terminal() { ResolvedBy::Person } else { ResolvedBy::Agent };
     let asked = Asked::of(c, &by)?;
-    // The plaintext non-loopback WARNING, ahead of everything a signed
+    // The plaintext non-loopback warning, ahead of everything a signed
     // session needs (AUTH-4.53; §9 item 23: a warning, never a refusal).
     if let Some(w) = plaintext_non_loopback_warning(board.dialed()) {
         talk(w);
@@ -101,7 +105,7 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
     let principal = principal_or_bound(given, &store, &board)?;
     let key = select_key(key_file.as_deref(), &store, &board, principal, Purpose::Sign)?;
     let signer = store.signer(&KeySelector::Path(&key.path))?;
-    // CONTENT scope, as `skep session` opens its (RES-63): the shot and the
+    // Content scope, as `skep session` opens its (RES-63): the shot and the
     // record's link are content writes under this key.
     let session = handshake(&board, Scope::Content, &*signer, principal, Site::Session)?;
     talk(format!(
@@ -122,8 +126,16 @@ pub fn merge(c: &CommandLine) -> Result<(), Stop> {
     }
 }
 
-/// The run under the session: the head, the composition, the landing where
-/// one is asked, the report on stdout.
+/// Runs the merge under the session: the head, the composition, the landing.
+///
+/// The landing is made where one is asked, and the report goes on stdout.
+///
+/// # Errors
+///
+/// Returns a halt where no head is named and none is on the feed, and the
+/// halt the feed's read comes to; a library refusal ([`refused`]) from the
+/// composition or the landing; and the halt a write stdout refuses comes
+/// to.
 fn run(
     board: &Board,
     session: &Session<'_>,
@@ -174,16 +186,19 @@ fn run(
 }
 
 impl Asked {
-    /// The line read whole — every address parsed, every count a count,
-    /// every `--resolve` in its grammar — before any socket opens; `by` is
-    /// who each resolution is by.
+    /// Reads the line whole, before any socket opens.
+    ///
+    /// Every address is parsed, every count a count, every `--resolve` in
+    /// its grammar; `by` is who each resolution is by.
     ///
     /// # Errors
     ///
-    /// In this order: `--doc` absent or no address; no side, or a side no
-    /// address, or `--draft` without `--base`; `--head`, `--kind` (or
-    /// `SKEP_MERGE_KIND`, required), `--journal`, `--into` no address;
-    /// `--retries` no count; a `--resolve` outside its grammar.
+    /// In this order: `--doc` absent or no address; no side, two sides,
+    /// `--draft` without `--base`, a side no address, or `--base` no
+    /// address; `--head`, `--kind` (or `SKEP_MERGE_KIND`, required, a
+    /// variable that is not UTF-8 text refused too), `--journal` no address;
+    /// `--retries` no count; a `--resolve` outside its grammar; `--into` no
+    /// address.
     fn of(c: &CommandLine, by: &ResolvedBy) -> Result<Asked, Usage> {
         let doc = match c.value("--doc") {
             Some(d) => address("--doc", d)?,
@@ -196,8 +211,9 @@ impl Asked {
         let (side, base) = match (c.value("--alternative"), c.value("--draft"), c.value("--fork")) {
             (Some(a), None, None) => (Side::Member(address("--alternative", a)?), None),
             (None, Some(s), None) => {
-                // The library refuses an unbased draft (decision 15's
-                // `BaseUnknown`); the command refuses the form first.
+                // The library refuses an unbased draft (`BaseUnknown`, the
+                // merge record's decision 15); the command refuses the form
+                // first.
                 let Some(b) = c.value("--base") else {
                     return Err(Usage("--base <D.k> is required with --draft <S>: the version the draft was staged from, which no read of the board answers".into()));
                 };
@@ -243,17 +259,27 @@ impl Asked {
     }
 }
 
-/// The address `text` spells at `flag`, else the usage refusal naming both.
+/// Returns the address `text` spells at `flag`.
+///
+/// # Errors
+///
+/// Returns the usage refusal naming both where `text` spells none.
 fn address(flag: &str, text: &str) -> Result<Address, Usage> {
     parse_address(text).ok_or_else(|| {
         Usage(format!("{flag}: '{text}' is not an address (the wire's dotted spelling)"))
     })
 }
 
-/// One `--resolve ⟨gap⟩=⟨choice⟩` in its grammar: the gap's number as the
-/// report counts it, from 1; the choice `order:⟨side⟩,⟨side⟩…`,
-/// `after:⟨address⟩`, `before:⟨address⟩`, `keep:⟨side⟩`, `both` or `omit`,
-/// a side its index as the report numbers it.
+/// Parses one `--resolve ⟨gap⟩=⟨choice⟩` in its grammar.
+///
+/// The gap is its number as the report counts it, from 1; the choice is
+/// `order:⟨side⟩,⟨side⟩…`, `after:⟨address⟩`, `before:⟨address⟩`,
+/// `keep:⟨side⟩`, `both` or `omit`, a side its index as the report numbers
+/// it.
+///
+/// # Errors
+///
+/// Returns a usage refusal naming the grammar where `text` is outside it.
 fn resolution(text: &str, by: &ResolvedBy) -> Result<Resolution, Usage> {
     let malformed = || {
         Usage(format!(
@@ -287,7 +313,7 @@ fn resolution(text: &str, by: &ResolvedBy) -> Result<Resolution, Usage> {
     Ok(Resolution { gap: GapId(gap), choice, by: by.clone() })
 }
 
-/// The side as the talk names it.
+/// Returns the side as the talk names it.
 fn side_named(side: &Side, base: Option<&Address>) -> String {
     match (side, base) {
         (Side::Member(a), _) => format!("the alternative {a}"),
@@ -297,12 +323,14 @@ fn side_named(side: &Side, base: Option<&Address>) -> String {
     }
 }
 
-/// The stop a library refusal comes to (§2.3's exit 1, "the board refused"):
-/// a halt the library faced keeps its own code; every typed refusal is the
-/// board's verdict under the wire code the refusal is named for, its detail
-/// the refusal's own words — the side whose base cannot be read, the second
-/// draft, a fork's bare source and a base named for a fork, which the
-/// library refuses before any image, among them, under their own names.
+/// Returns the stop a library refusal comes to (§2.3's exit 1).
+///
+/// The exit is "the board refused": a halt the library faced keeps its own
+/// code; every typed refusal is the board's verdict under the wire code the
+/// refusal is named for, its detail the refusal's own words — the side
+/// whose base cannot be read, the second draft, a fork's bare source and a
+/// base named for a fork, which the library refuses before any image, among
+/// them, under their own names.
 fn refused(r: Refusal) -> Stop {
     let code = match &r {
         Refusal::Halt(_) => "",
@@ -329,9 +357,11 @@ fn refused(r: Refusal) -> Stop {
     }
 }
 
-/// The talk after the composition: the base and the counts, each unsettled
-/// gap in the copy's register ("⟨n⟩ places need a choice"), the resolutions
-/// not applied, and the cap where the list passes it.
+/// Says the talk after the composition.
+///
+/// It names the base and the counts, each unsettled gap in the copy's
+/// register ("⟨n⟩ places need a choice"), the resolutions not applied, and
+/// the cap where the list passes it.
 fn say_composed(merged: &Merged) {
     let counts = merged.composed.counts;
     let gaps = &merged.composed.gaps;
@@ -373,7 +403,7 @@ fn say_composed(merged: &Merged) {
     }
 }
 
-/// The talk after a landing: what landed, or the daughter and the re-run.
+/// Says the talk after a landing: what landed, or the daughter and the re-run.
 fn say_landed(merged: &Merged, landed: &Landed) {
     match landed {
         Landed::Member { address, position, claims, record, .. } => {
@@ -400,11 +430,12 @@ fn say_landed(merged: &Merged, landed: &Landed) {
     }
 }
 
-/// THE REPORT (the merge record's §7 `Merged`, as the module's doc lists
-/// its members): the record's own JSON where the names coincide, M with each
-/// run's side and family, every gap with its `default`, the counts against
-/// the cap, the prior record, the unlanded record; `landed` null until a
-/// landing fills it.
+/// Returns the report: the merge record's §7 `Merged`.
+///
+/// Its members are as the module's doc lists them: the record's own JSON
+/// where the names coincide, M with each run's side and family, every gap
+/// with its `default`, the counts against the cap, the prior record, the
+/// unlanded record; `landed` null until a landing fills it.
 fn report_of(merged: &Merged) -> Value {
     let record = merged.record.to_value();
     let runs: Vec<Value> = merged
@@ -453,8 +484,9 @@ fn report_of(merged: &Merged) -> Value {
     })
 }
 
-/// The standing record for the key, as the report carries it: its public
-/// link, its key and where it landed.
+/// Returns the standing record for the key, as the report carries it.
+///
+/// It carries its public link, its key and where it landed.
 fn prior_of(prior: &Record) -> Value {
     let key = prior.key();
     json!({
@@ -468,7 +500,7 @@ fn prior_of(prior: &Record) -> Value {
     })
 }
 
-/// The landing as the report carries it.
+/// Returns the landing as the report carries it.
 fn landed_value(merged: &Merged, landed: &Landed) -> Value {
     match landed {
         Landed::Member { address, position, claims, record, retries } => json!({
@@ -491,10 +523,12 @@ fn landed_value(merged: &Merged, landed: &Landed) -> Value {
     }
 }
 
-/// A gap's placement as this run composed it, spelled as a `--resolve`
-/// choice the core takes back: the sides' order where sides were placed,
-/// `after:`/`before:` the anchor where one stands, the one side's order
-/// where the gap lies at an end of M, `omit` where nothing was placed.
+/// Returns a gap's placement as this run composed it.
+///
+/// It is spelled as a `--resolve` choice the core takes back: the sides'
+/// order where sides were placed, `after:`/`before:` the anchor where one
+/// stands, the one side's order where the gap lies at an end of M, `omit`
+/// where nothing was placed.
 fn default_of(gap: &Gap) -> String {
     let order = |sides: &[SideIx]| {
         format!("order:{}", sides.iter().map(|s| s.0.to_string()).collect::<Vec<_>>().join(","))
@@ -516,7 +550,7 @@ fn default_of(gap: &Gap) -> String {
     }
 }
 
-/// A gap's kind as the record spells it.
+/// Returns a gap's kind as the record spells it.
 fn kind_name(kind: GapKind) -> &'static str {
     match kind {
         GapKind::Order => "order",
@@ -528,7 +562,7 @@ fn kind_name(kind: GapKind) -> &'static str {
     }
 }
 
-/// A run's family as the report spells it.
+/// Returns a run's family as the report spells it.
 fn family_name(family: Family) -> &'static str {
     match family {
         Family::Own => "own",

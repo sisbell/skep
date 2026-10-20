@@ -1,22 +1,24 @@
-//! `skep keygen` (`client.md` §2.2): one DEVICE key generated into the
-//! store, its byline fixed at the box — AUTH-5.42's statements, AUTH-1.24's
+//! `skep keygen` (`client.md` §2.2): one device key generated into the store.
+//!
+//! Its byline is fixed at the box — AUTH-5.42's statements, AUTH-1.24's
 //! domain — and the custody line written beside its path; `--payload`
 //! prints its enrollment record, and `--anchors`, a person door, runs the
 //! door-side backup moment for the hosted signup's three-key payload
-//! (AUTH-5.57 step 2). With `bind`, one of the two commands that sequence
+//! (AUTH-5.57 step 2). With `bind`, one of the two ceremonies that sequence
 //! the library's compositions themselves rather than calling a walk — the
 //! store's `generate`, its lookup, `backup_moment` at the door side,
 //! `encode_enroll` — and so the carrier of this form's own text: the box's
-//! statements by venue, the custody line, the abandonment's disposition, the
-//! one-door line, and a generation's refusal.
+//! statements by venue, the custody line, the abandonment's disposition,
+//! the one-door line, and a generation's refusal.
 //!
-//! THE ORDER: the device-name box, then at the door side the backup moment,
-//! then the device key's generation — so a moment stopped short leaves no
-//! unbound device key in the store for the next run's to stand beside, where
-//! §3.5 arm 3's "exactly one device key" would select none; and a generation
-//! the store could not write names the volume's room and the file its failed
-//! write left behind ([`generation_refused`]), which every later listing of
-//! the store would otherwise halt on, or select beside the next run's.
+//! **The order.** The device-name box, then at the door side the backup
+//! moment, then the device key's generation — so a moment stopped short
+//! leaves no unbound device key in the store for the next run's to stand
+//! beside, where §3.5 arm 3's "exactly one device key" would select none;
+//! and a generation the store could not write names the volume's room and
+//! the file its failed write left behind ([`generation_refused`]), which
+//! every later listing of the store would otherwise halt on, or select
+//! beside the next run's.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -32,10 +34,12 @@ use super::{data, host_name_and_date, record_refused, require_terminal, store_of
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
-/// AUTH-5.42's statements, rendered whenever a label is fixed — prompt or
-/// flag alike (§2.2 `keygen`) — the last of them the CONSEQUENCE AT THIS
-/// VENUE, keyed off the form: at the notebook its reader class, at the
-/// door-side form the public thread the byline rides onto.
+/// Returns AUTH-5.42's statements, rendered whenever a label is fixed.
+///
+/// They are rendered at the prompt or the flag alike (§2.2 `keygen`), the
+/// last of them the consequence at this venue, keyed off the form: at the
+/// notebook its reader class, at the door-side form the public thread the
+/// byline rides onto.
 fn device_box_statements(door_side: bool) -> Vec<String> {
     let consequence = if door_side {
         "it rides onto a public thread, approved or denied; and not every write under this byline is yours — the party that operates the board you join can write as you there, visibly and permanently, which every copy that checks signatures will show was not you"
@@ -50,8 +54,10 @@ fn device_box_statements(door_side: bool) -> Vec<String> {
     ]
 }
 
-/// The key file's custody line beside its path (§3a, RULED; §9 items 4, 5,
-/// 38: the ladder alone until the store-location spike answers).
+/// Returns the key file's custody line beside its path.
+///
+/// The custody is §3a's (§9 items 4, 5, 38: the ladder alone until the
+/// store-location spike answers).
 fn custody_line(path: &Path) -> String {
     format!(
         "key file written: {} — the seed rests in this file and the filesystem's modes are its whole protection (0600 under 0700): a \
@@ -62,31 +68,36 @@ fn custody_line(path: &Path) -> String {
     )
 }
 
-/// What a door-side form stopped short of its payload's print leaves behind
-/// (AUTH-5.57 step 2): no board state — the form delegates nothing — and
-/// anchor files that name no account and open nothing. Said ahead of each
-/// halt that stops the form between the moment's start and the device key
-/// standing in the store: the moment's own, an anchor's label the record
-/// refuses, the generation's.
+/// What a door-side form stopped short of its payload's print leaves behind.
+///
+/// It leaves no board state (AUTH-5.57 step 2) — the form delegates nothing
+/// — and anchor files that name no account and open nothing. It is said
+/// ahead of each halt that stops the form between the moment's start and
+/// the device key standing in the store: the moment's own, an anchor's
+/// label the record refuses, the generation's.
 const ABANDONED: &str = "this form delegates nothing and leaves no board state behind: any anchor file written names no account and \
      opens nothing, ever — destroy it, or keep it plainly marked dead and never beside a live pair";
 
-/// [`ABANDONED`]'s key-store clause, true of a stop BEFORE the device key's
-/// generation, which follows the moment (the module's ORDER).
+/// [`ABANDONED`]'s key-store clause, true of a stop before the generation.
+///
+/// The generation is the device key's, which follows the moment (the
+/// module's order).
 const NOTHING_STORED: &str = "and nothing of this form is in the key store: its device key is generated after the moment";
 
-/// The halt a generation the store could not write comes to: the write's
-/// own cause beside the volume's room, never the "missing, unreadable or
-/// mis-pathed" face a lookup's read meets (`StoreError::Io`'s conversion).
-/// Where the file this run created stands — its write cut short at a full
-/// volume or a file-size limit, or written whole and its sync refused, as a
-/// filesystem that allocates late answers at a full volume — it is named as
-/// the one to remove, since no line printed its key and no board knows it:
-/// a partial file stops every later `skep` command that lists the store
-/// (`FileStore::list` refuses a store holding a file that does not parse),
-/// and a whole one stands beside the next run's as a second device key,
-/// where §3.5 arm 3's "exactly one" selects none. A file an `O_EXCL` open
-/// met standing is no file of this run's, and is never named.
+/// Returns the halt a generation the store could not write comes to.
+///
+/// It names the write's own cause beside the volume's room, never the
+/// "missing, unreadable or mis-pathed" face a lookup's read meets
+/// (`StoreError::Io`'s conversion). Where the file this run created stands
+/// — its write cut short at a full volume or a file-size limit, or written
+/// whole and its sync refused, as a filesystem that allocates late answers
+/// at a full volume — it is named as the one to remove, since no line
+/// printed its key and no board knows it: a partial file stops every later
+/// `skep` command that lists the store (`FileStore::list` refuses a store
+/// holding a file that does not parse), and a whole one stands beside the
+/// next run's as a second device key, where §3.5 arm 3's "exactly one"
+/// selects none. A file an `O_EXCL` open met standing is no file of this
+/// run's, and is never named.
 fn generation_refused(e: StoreError, store: &FileStore) -> Halt {
     match e {
         StoreError::Io { path, error } => {
@@ -116,7 +127,7 @@ fn generation_refused(e: StoreError, store: &FileStore) -> Halt {
 
 pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
-    // `--anchors`: the DOOR-SIDE form (§2.2), a person door.
+    // `--anchors`: the door-side form (§2.2), a person door.
     let door_side = c.switch("--anchors");
     if door_side {
         require_terminal(Door { form: "keygen --anchors", moments: "the door-side backup moment" })?;
@@ -153,10 +164,10 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     };
     let mut entries = Vec::new();
     if door_side {
-        // THE DOOR-SIDE FORM (AUTH-5.57 step 2): the backup moment for an
+        // The door-side form (AUTH-5.57 step 2): the backup moment for an
         // anchor pair with no board, statement (a) carrying the operator
         // sentence unconditionally — ahead of the device key's generation
-        // (the module's ORDER); then the three-key payload for the hosted
+        // (the module's order); then the three-key payload for the hosted
         // signup.
         let BoxDefault { host_name, date } = host_name_and_date();
         let opts = BackupOptions {
@@ -186,7 +197,7 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     talk(custody_line(&path));
     entries.push(Enrollment::new(key.public.clone(), false, Some(label.as_str().to_string())).map_err(record_refused)?);
     if c.switch("--payload") || door_side {
-        // The record FIRST (§2.2): one canonical JSON object.
+        // The record first (§2.2): one canonical JSON object.
         data(encode_enroll(&entries))?;
         if door_side {
             talk("this three-key payload serves ONE door, the hosted signup — never the enroll hop, whose `skep enroll` refuses every anchor-flagged entry at the paste");
@@ -196,8 +207,8 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             talk(format!("this key is not enrolled anywhere yet. {OUTSTANDING_ACT} Where no board has been claimed from this store at all: `skep claim`."));
         }
     }
-    // The fingerprint LAST, flat and grouped — never the bare public key —
-    // each line its own DATA line.
+    // The fingerprint last, flat and grouped — never the bare public key —
+    // each line its own data line.
     data(key.fingerprint.to_hex())?;
     for line in group_hex(&key.fingerprint.to_hex()).lines() {
         data(line)?;

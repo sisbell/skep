@@ -1,9 +1,11 @@
-//! `skep accept` (`client.md` §2.2): the recipient's beat at a handed-off
-//! address — the device key and the anchor pair made, the record printed
-//! for the giver; a person door. `--reprint` re-composes the record from
-//! the artifacts' public members and writes nothing. The beat opens no
-//! session: the recipient's first signed session is `bind`'s, which owes the
-//! plaintext warning where it runs (AUTH-4.53).
+//! `skep accept` (`client.md` §2.2): the beat at a handed-off address.
+//!
+//! It is the recipient's beat — the device key and the anchor pair made,
+//! the record printed for the giver; a person door. `--reprint`
+//! re-composes the record from the artifacts' public members and writes
+//! nothing. The beat opens no session: the recipient's first signed
+//! session is `bind`'s, which owes the plaintext warning where it runs
+//! (AUTH-4.53).
 
 use std::path::PathBuf;
 
@@ -18,10 +20,15 @@ use super::{data, host_name_and_date, require_terminal, store_of, BoxDefault, Do
 use crate::args::CommandLine;
 use crate::terminal::Terminal;
 
-/// The board answered at the beat's prompt, as a canonical origin — the
-/// answer trimmed. An answer is no flag: one that is no canonical origin is
-/// a state the beat came to, a halt (exit 3), never a usage refusal, which
-/// is the command line's shape alone (§2.3; §1.1's `halt` row).
+/// Returns the board answered at the beat's prompt, as a canonical origin.
+///
+/// The answer is trimmed.
+///
+/// # Errors
+///
+/// An answer is no flag: one that is no canonical origin is a state the
+/// beat came to, a halt (exit 3), never a usage refusal, which is the
+/// command line's shape alone (§2.3; §1.1's `halt` row).
 fn answered_origin(text: &str) -> Result<Origin, Halt> {
     let text = text.trim();
     text.parse::<Origin>().map_err(|e| {
@@ -35,8 +42,8 @@ fn answered_origin(text: &str) -> Result<Origin, Halt> {
 
 pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
-    // `--board` judged before anything: an origin given badly is a usage
-    // refusal, never a board asked for again nor one dropped.
+    // `--board` judged before anything but the store: an origin given badly
+    // is a usage refusal, never a board asked for again nor one dropped.
     let given_origin = c.origin_given()?;
     // `--reprint`: the record from the artifacts' public members — not a
     // person door.
@@ -48,8 +55,8 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
     }
     require_terminal(Door { form: "accept", moments: "the name boxes and the backup moment, or on the decline arm its typed confirmation" })?;
     let mut person = Terminal;
-    // `--board` and `--account` REQUIRED: a run missing either ASKS and
-    // generates nothing (AUTH RES-162).
+    // `--board` and `--account` required: a run missing either asks for it,
+    // and generates nothing until it holds both (AUTH RES-162).
     let board = match given_origin {
         Some(o) => Board::new(o, PlainHttp::new()),
         None => {
@@ -85,7 +92,7 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
         date,
     };
     let accepted = accept_walk::accept(&board, &store, &mut person, &opts)?;
-    // The record FIRST (DATA for the giver), then the device key's
+    // The record first (data for the giver), then the device key's
     // fingerprint.
     data(accepted.record)?;
     data(accepted.device.to_hex())?;
@@ -96,9 +103,11 @@ pub fn accept(c: &CommandLine) -> Result<(), Stop> {
 mod tests {
     use super::*;
 
-    /// A board answered at the prompt is taken trimmed; an answer that is no
-    /// canonical origin is a halt of the family (exit 3) naming it — the
-    /// prompt's, never `--board`'s, which the person did not give.
+    /// Checks that a prompt's board answer is taken, or halts naming it.
+    ///
+    /// The answer is taken trimmed; an answer that is no canonical origin is
+    /// a halt of the family (exit 3) naming it — the prompt's, never
+    /// `--board`'s, which the person did not give.
     #[test]
     fn a_board_answered_at_the_prompt_is_taken_or_halts_naming_the_answer() {
         assert_eq!(answered_origin(" http://127.0.0.1:8642 \n").unwrap().as_str(), "http://127.0.0.1:8642");

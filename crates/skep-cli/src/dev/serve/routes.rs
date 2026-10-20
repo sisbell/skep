@@ -1,21 +1,23 @@
-//! THE ROUTES (the dev provider record §3.1 (i), §3.3, §3.4, §3.5): one
-//! connection, one request, one reply. `OPTIONS` is the preflight, answered
-//! for the one origin; every other request passes the admission first and
-//! is refused 403 naming the failed check with no dial made. Then:
-//! `POST /bridge/<call>` with the call's arguments as a JSON object answers
-//! `{"result": …}` or `{"refused": …}` — HTTP 200 either way, a refusal
-//! being an answer; a 4xx is the PROVIDER's own refusal (the admission, a
-//! malformed body, an unknown call or route). `POST /bridge/answer` and
-//! `/bridge/cancel` are the page's two answers to a moment. `GET
-//! /bridge/events` is the event stream, held open until the page closes it
-//! or the provider stops. `GET /bridge/log` is the call and dial log. `GET
-//! /bridge/shapes` is the declarations. `POST /bridge/script` is the
-//! SCRIPT SEAM (`client.md` §4b.5): `{call, refusal}` arms the next answer
-//! of that call as the named refusal, `{event, data}` fires an event by
-//! hand — a dev seam, said as such on TALK when used. `POST
-//! /bridge/fault/<door>` reaches the in-process daemon's doors under
-//! `dev-hooks` with `--own`, and answers `not_built_in` otherwise. `POST
-//! /bridge/fetch` streams the blob's bytes as the response body.
+//! The routes (the dev provider record §3.1 (i), §3.3, §3.4, §3.5).
+//!
+//! One connection, one request, one reply. `OPTIONS` is the preflight,
+//! answered for the one origin; every other request passes the admission
+//! first and is refused 403 naming the failed check with no dial made.
+//! Then: `POST /bridge/<call>` with the call's arguments as a JSON object
+//! answers `{"result": …}` or `{"refused": …}` — HTTP 200 either way, a
+//! refusal being an answer; a 4xx is the provider's own refusal (the
+//! admission, a malformed body, an unknown call or route).
+//! `POST /bridge/answer` and `/bridge/cancel` are the page's two answers to
+//! a moment. `GET /bridge/events` is the event stream, held open until the
+//! page closes it or the provider stops. `GET /bridge/log` is the call and
+//! dial log. `GET /bridge/shapes` is the declarations.
+//! `POST /bridge/script` is the script seam (`client.md` §4b.5):
+//! `{call, refusal}` arms the next answer of that call as the named
+//! refusal, `{event, data}` fires an event by hand — a dev seam, said as
+//! such on talk when used. `POST /bridge/fault/<door>` reaches the
+//! in-process daemon's doors under `dev-hooks` with `--own`, and answers
+//! `not_built_in` otherwise. `POST /bridge/fetch` streams the blob's bytes
+//! as the response body.
 
 use std::io::{self, Write};
 use std::net::TcpStream;
@@ -31,9 +33,12 @@ use super::{node, Provider};
 use crate::shared::clipped;
 use crate::terminal::talk;
 
-/// THE CONNECTION: the timeouts, the read, the preflight or the admission,
-/// the route. Every refusal the provider makes itself is counted, and said
-/// on TALK the first time its kind is met in the run, ahead of its answer.
+/// Serves one connection, from its timeouts to its route.
+///
+/// It sets the timeouts, then takes the read, the preflight or the
+/// admission, the route. Every refusal of the read, the preflight or the
+/// admission is counted, and said on talk the first time its kind is met
+/// in the run, ahead of its answer.
 pub fn connection(provider: &Provider<'_>, mut stream: TcpStream) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
@@ -75,13 +80,23 @@ pub fn connection(provider: &Provider<'_>, mut stream: TcpStream) {
     let _ = route(provider, &req, &mut stream, &cors);
 }
 
-/// A JSON reply.
+/// Writes a JSON reply.
+///
+/// # Errors
+///
+/// Returns the I/O error the write meets.
 fn json(stream: &mut TcpStream, status: u16, cors: &[(String, String)], body: &Value) -> io::Result<()> {
     write_response(stream, status, cors, Some("application/json"), body.to_string().as_bytes())
 }
 
-/// The request's body as the call's argument object: an empty body is
-/// `{}`; anything but an object is the provider's own 400.
+/// Returns the request's body as the call's argument object.
+///
+/// An empty body is `{}`.
+///
+/// # Errors
+///
+/// Anything but an object is refused, the error saying why: the provider's
+/// own 400 at every route but the fault doors', which take `{}` instead.
 fn args_of(req: &Request) -> Result<Value, String> {
     if req.body.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(json!({}));
@@ -93,7 +108,16 @@ fn args_of(req: &Request) -> Result<Value, String> {
     }
 }
 
-/// THE ROUTE.
+/// Answers the request on its route.
+///
+/// # Errors
+///
+/// Returns the I/O error the answer's write meets.
+///
+/// # Panics
+///
+/// Panics if the doors' lock is poisoned: a fault door that panicked held
+/// it.
 fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     let shell = &provider.shell;
     match (req.method.as_str(), req.path.as_str()) {
@@ -189,8 +213,13 @@ fn route(provider: &Provider<'_>, req: &Request, stream: &mut TcpStream, cors: &
     }
 }
 
-/// THE SCRIPT SEAM: `{call, refusal}` arms the next answer, `{event,
-/// data}` fires an event by hand.
+/// Serves the script seam: `{call, refusal}` arms the next answer.
+///
+/// `{event, data}` fires an event by hand.
+///
+/// # Errors
+///
+/// Returns the I/O error the answer's write meets.
 fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     if let Some(call) = args["call"].as_str() {
         if !skep_shell::CALLS.contains(&call) {
@@ -223,9 +252,14 @@ fn script(provider: &Provider<'_>, args: &Value, stream: &mut TcpStream, cors: &
     json(stream, 400, cors, &json!({"refused": {"kind": "shell", "name": "malformed_args", "what": "call or event"}}))
 }
 
-/// THE EVENT STREAM: every event as `event:` and `data:` lines, a comment
-/// every [`KEEPALIVE`] of silence, until the page closes the connection or
-/// the provider stops.
+/// Serves the event stream: every event as `event:` and `data:` lines.
+///
+/// A comment goes every [`KEEPALIVE`] of silence, until the page closes the
+/// connection or the provider stops.
+///
+/// # Errors
+///
+/// Returns the I/O error a write meets, the page's closing among them.
 fn events(provider: &Provider<'_>, stream: &mut TcpStream, cors: &[(String, String)]) -> io::Result<()> {
     let rx = provider.shell.subscribe();
     write_sse_head(stream, cors)?;

@@ -1,6 +1,8 @@
-//! `skep enroll` (`client.md` §2.2): the hop's signed-in half — another
-//! device's payload enrolled from a session this command opens, a person
-//! door; `--reply` re-derives the three facts with no write (AUTH-5.32).
+//! `skep enroll` (`client.md` §2.2): the hop's signed-in half.
+//!
+//! Another device's payload is enrolled from a session this command opens,
+//! a person door; `--reply` re-derives the three facts with no write
+//! (AUTH-5.32).
 
 use skep_client::ceremony::enroll::{self as enroll_walk, EnrollOptions, Enrolled};
 use skep_client::dial::plaintext_non_loopback_warning;
@@ -44,11 +46,12 @@ pub fn enroll(c: &CommandLine) -> Result<(), Stop> {
     Ok(())
 }
 
-/// The line the hop's landing says on stderr beside the three facts it
-/// prints: the account, and every key the act enrolled there by its
-/// fingerprint — what joins this run to the enrollment record the board now
-/// holds, and to the device whose payload it carried, which `skep bind`
-/// then lands.
+/// Returns the line the hop's landing says beside the three facts it prints.
+///
+/// The line goes on stderr. It names the account, and every key the act
+/// enrolled there by its fingerprint — what joins this run to the
+/// enrollment record the board now holds, and to the device whose payload
+/// it carried, which `skep bind` then lands.
 fn enrolled_line(enrolled: &Enrolled) -> String {
     let fingerprints: Vec<String> = enrolled.fingerprints.iter().map(ToString::to_string).collect();
     format!("enrolled at {}: {}", enrolled.facts.account, fingerprints.join(", "))
@@ -62,8 +65,10 @@ mod tests {
 
     use super::*;
 
-    /// The landing names the account and every key the act enrolled there,
-    /// each by its fingerprint, in the payload's order.
+    /// Checks that the landing names its account and every key enrolled.
+    ///
+    /// Each key the act enrolled there is named by its fingerprint, in the
+    /// payload's order.
     #[test]
     fn the_landing_names_the_account_and_every_key_enrolled_there() {
         let (a, b) = ("ab".repeat(32), "cd".repeat(32));

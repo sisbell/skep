@@ -1,7 +1,8 @@
-//! `skep handoff` (`client.md` §2.2): the giver's walk — `--account`
-//! delegates the subdivision and prints its address (beat (a), no person
-//! door); with `--payload` the recipient's record is compared and the
-//! genesis written, a person door.
+//! `skep handoff` (`client.md` §2.2): the giver's walk.
+//!
+//! `--account` delegates the subdivision and prints its address (beat (a),
+//! no person door); with `--payload` the recipient's record is compared and
+//! the genesis written, a person door.
 
 use std::path::PathBuf;
 

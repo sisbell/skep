@@ -1,55 +1,60 @@
-//! THE FRAMES over the claimant's ONE content-scoped signed session
-//! (wire.md §Sessions: a content-scoped session "reads, holds its draft
-//! visibility, writes content, publishes, grants and closes exactly as a
-//! full session does" — the tool deposits no credential, so Content is its
-//! scope, and it works on an ENFORCING board too). Every write the tool
-//! makes, each as a suite of the workspace already spells it, with the
-//! envelope's `id` on every write (§Correlation and idempotency) and the
-//! `attest` member on every publish-class one:
+//! The frames over the claimant's one content-scoped signed session.
+//!
+//! As wire.md §Sessions has it, a content-scoped session "reads, holds its
+//! draft visibility, writes content, publishes, grants and closes exactly
+//! as a full session does": the tool deposits no credential, so `Content` is
+//! its scope, and it works on an enforcing board too. Every write the tool
+//! makes, each as a suite of the workspace spells it, with the envelope's
+//! `id` on every write (§Correlation and idempotency) and the `attest`
+//! member on every publish-class one:
 //!
 //! * the staging draft's mint — `create_new_document` flagless, no attest
 //!   (a draft's mint is outside the publish-class gate);
 //! * the per-byte `insert` — the string form, one value per byte — in
 //!   frames of at most [`INSERT_CHUNK`] bytes at consecutive ordinals (the
-//!   search budgets' `try_insert`), `{"hex"}` where a stretch is not UTF-8;
+//!   search budgets' `try_insert`), `{"hex"}` in every frame where the whole
+//!   insert is not UTF-8;
 //! * the edition's mint — `create_new_document` with `published: true`, the
 //!   attest over `entry_body_empty(CreateNewDocument)`, `doc` the account;
-//! * THE SHOT — `publish` naming the staging `draft`, so its runs are
-//!   "re-inserted as fresh identity under `doc`'s own I-space" and a GUEST
+//! * the shot — `publish` naming the staging `draft`, so its runs are
+//!   "re-inserted as fresh identity under `doc`'s own I-space" and a guest
 //!   reads them (the search suite's `published()` form — never the budgets
 //!   harness's `publish_windows`, whose runs stay windows a guest meets as
 //!   `withheld`); attested over `entry_body_publish`: one value per byte for
 //!   every run the commit copies in — the document's own I-space placed by
-//!   reference and the draft's re-inserted — a WINDOW for a run onto any
+//!   reference and the draft's re-inserted — a window for a run onto any
 //!   other document, signed by where it quotes from, and the base group
 //!   where `base` and `base_extent` are named ("either both or neither");
-//! * the attested `make_link` — the from-end a V-SPEC the tool resolves
+//! * the attested `make_link` — the from-end a V-spec the tool resolves
 //!   through `image` "against the base the transaction will take" into the
 //!   I-extent spans the daemon stores (the daemon suite's `extent_span`:
 //!   the run's start, a width of zeros but the last component), the to-end
 //!   and the type address-form, their unit spans; the body
 //!   `entry_body_make_link` over the three slot rows, the `replaces` row
 //!   empty; `doc` the home;
-//! * the reads: `image`, `retrieve_doc_v_span_set`, `doc_metadata` as a
-//!   guest, `principal_prefix`, `/chain?at=0`'s reclaim floor; and the bare
+//! * the reads: `image`, `doc_metadata` as a guest, `next_account_prefix`,
+//!   `principal_prefix`, `/chain?at=0`'s reclaim floor; and the bare
 //!   sessions the second account takes on a permissive board.
 //!
-//! THE RETRY, as L14b's harness retries (`skepd/tests/it/resolve.rs`
-//! `op_as_written_retrying_write_busy`): `503 write_busy`, `durability` and
+//! **The retry.** As the daemon suite's harness retries `503 write_busy`
+//! (`skepd/tests/it/resolve.rs` `op_as_written_retrying_write_busy`), a
+//! write answered `503 write_busy`, `durability` or
 //! `attestation_invalid:board_unavailable` — the three transient tokens —
-//! are sent again after [`WRITE_BUSY_BACKOFF_FIRST`], doubling to
+//! is sent again after [`WRITE_BUSY_BACKOFF_FIRST`], doubling to
 //! [`WRITE_BUSY_BACKOFF_CAP`], until answered otherwise or
-//! [`WRITE_BUSY_PATIENCE`] runs out, each counted ([`Retries`]); a stall is
-//! said as it begins and at most once per [`STALL_SAID_EVERY`] after, each
-//! line naming the token, the write's op and envelope id, its refusals so
-//! far and the run's; a write the patience ran out on halts naming its op,
-//! its envelope id, the token as the board spells it and why the board kept
-//! answering it. Every other rejection stops the run as the board's own
-//! refusal (exit 1, its `code:detail` verbatim) — a `poisoned` one holding
-//! its write as IN FLIGHT, since a restart may land it — transport as exit
-//! 4, the write whose request it may have carried held so too
-//! ([`Writer::take_in_flight`]), and the death signal as a halt. A halt
-//! that echoes a board's answer echoes no more of it than [`clipped`] keeps.
+//! [`WRITE_BUSY_PATIENCE`] runs out, each retry counted ([`Retries`]); a
+//! stall's line is said at most once per [`STALL_SAID_EVERY`] across the
+//! run — at the run's first transient refusal, then at the first met that
+//! long after the last line — each line naming the token, the write's op
+//! and envelope id, its refusals so far and the run's; a write the patience
+//! ran out on halts naming its op, its envelope id, the token as the board
+//! spells it and why the board kept answering it. Every other rejection
+//! stops the run as the board's own refusal (exit 1, its `code:detail`
+//! verbatim) — a `poisoned` one holding its write as in flight, since a
+//! restart may land it — transport as exit 4, the write whose request it
+//! may have carried held so too ([`Writer::take_in_flight`]), and the death
+//! signal as a halt. A halt that echoes a board's answer echoes no more of
+//! it than [`clipped`] keeps.
 
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -72,15 +77,16 @@ use skep_identity::{
 use crate::shared::clipped;
 use crate::terminal::talk;
 
-/// The most bytes one `insert` frame carries: 128 KiB, the search budgets'
-/// chunk — one transaction is bounded by the kernel's `MAX_TXN_BYTES`, and
-/// the codec's `MAX_INSERT_VALUES` caps a frame at 2¹⁸ values; a run of
-/// single-byte values costs the journal its bytes and two records, so the
-/// chunk sits well inside both, and the per-value cap is the one it meets
-/// first.
+/// The most bytes one `insert` frame carries: 128 KiB.
+///
+/// It is the search budgets' chunk. One transaction is bounded by the
+/// kernel's `MAX_TXN_BYTES`, and the codec's `MAX_INSERT_VALUES` caps a
+/// frame at 2¹⁸ values; a run of single-byte values costs the journal its
+/// bytes and two records, so the chunk sits well inside both, and the
+/// per-value cap is the one it meets first.
 pub const INSERT_CHUNK: usize = 1 << 17;
 
-/// The first pause before a transient refusal is sent again.
+/// The first pause before a write refused transiently is sent again.
 pub const WRITE_BUSY_BACKOFF_FIRST: Duration = Duration::from_millis(1);
 
 /// The pause's cap, the backoff doubling up to it.
@@ -89,15 +95,20 @@ pub const WRITE_BUSY_BACKOFF_CAP: Duration = Duration::from_millis(64);
 /// How long one write is retried before the run stops.
 pub const WRITE_BUSY_PATIENCE: Duration = Duration::from_secs(60);
 
-/// The least time between two lines a stall says: a stall is said as it
-/// begins, then at most once per this span while refusals keep coming — a
-/// storm says one line per ten seconds, never one per write, and a stall
-/// met again later in the run is said again.
+/// The least time between two lines a stall says.
+///
+/// The span is the run's, not a stall's: a line is said at the run's first
+/// transient refusal, then at the first refusal met this long after the
+/// last line — a storm says one line per ten seconds, never one per write,
+/// and a stall met again later in the run is said again once the span has
+/// passed.
 pub const STALL_SAID_EVERY: Duration = Duration::from_secs(10);
 
-/// THE CITATION TYPE: the commons' `3.13 citation` under the registry
-/// document's subspace 3, as the wire spells its pinned classes
-/// (`1.1.0.1.0.1.0.3.<n>`) — every link the tool writes is typed it.
+/// The citation type: every link the tool writes is typed it.
+///
+/// It is the commons' `3.13 citation` under the registry document's
+/// subspace 3, as the wire spells its pinned classes
+/// (`1.1.0.1.0.1.0.3.<n>`).
 pub const CITATION_TYPE: &str = "1.1.0.1.0.1.0.3.13";
 
 /// The retries made, by token.
@@ -108,8 +119,10 @@ pub struct Retries {
     pub board_unavailable: u64,
 }
 
-/// One run of an arrangement as the wire carries it: its origin — the
-/// document that minted its addresses — its first I-address and its width.
+/// One run of an arrangement as the wire carries it.
+///
+/// It holds its origin — the document that minted its addresses — its
+/// first I-address and its width.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
     pub origin: String,
@@ -117,9 +130,11 @@ pub struct Run {
     pub width: u64,
 }
 
-/// One run PLACED in a shot, in V-order: the run, and the bytes at its
-/// positions where the commit copies them in — the document's own run and
-/// the staging draft's — or none for a window onto another document.
+/// One run placed in a shot, in V-order.
+///
+/// It holds the run, and the bytes at its positions where the commit
+/// copies them in — the document's own run and the staging draft's — or
+/// none for a window onto another document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
     pub run: Run,
@@ -143,8 +158,10 @@ enum Transient {
 }
 
 impl Transient {
-    /// The token as the board answers it (wire.md §HTTP status codes,
-    /// §Rejection codes), as the board's own operator stream names it.
+    /// Returns the token as the board answers it.
+    ///
+    /// The board answers it so (wire.md §HTTP status codes, §Rejection
+    /// codes), and its own operator stream names it so.
     fn token(self) -> &'static str {
         match self {
             Transient::WriteBusy => "write_busy",
@@ -153,7 +170,7 @@ impl Transient {
         }
     }
 
-    /// Why the board kept answering it, in the wire's terms.
+    /// Returns why the board kept answering it, in the wire's terms.
     fn cause(self) -> &'static str {
         match self {
             Transient::WriteBusy => "the board's write permit pool stayed full: other writers held every permit, and the write was refused before any lock, nothing committed",
@@ -168,7 +185,7 @@ impl Transient {
 }
 
 impl Retries {
-    /// One retry of `transient` counted.
+    /// Counts one retry of `transient`.
     fn tally(&mut self, transient: Transient) {
         match transient {
             Transient::WriteBusy => self.write_busy += 1,
@@ -177,23 +194,27 @@ impl Retries {
         }
     }
 
-    /// The retries of every token.
+    /// Returns the retries of every token.
     pub fn total(&self) -> u64 {
         self.write_busy + self.durability + self.board_unavailable
     }
 }
 
-/// Whether a transport halt's exchange may have carried its request to the
-/// board: every phase but the four that end before a byte of it is written —
-/// a scheme no transport holds, a host unresolved, a connection refused, a
-/// request this client refuses to write.
+/// Returns whether a transport halt's exchange may have carried its request.
+///
+/// It may have carried it to the board at every phase but the four that end
+/// before a byte of it is written — a scheme no transport holds, a host
+/// unresolved, a connection refused, a request this client refuses to
+/// write.
 fn may_have_sent(d: &DialError) -> bool {
     !matches!(d, DialError::NotHeld(_) | DialError::Resolve(_) | DialError::Connect(_) | DialError::Request(_))
 }
 
-/// A write frame IN FLIGHT: sent, and its fate one the run cannot read off
-/// its answer — the one write a run stopped there may have landed with no
-/// line of the manifest recording it.
+/// A write frame in flight: sent, and its fate unread.
+///
+/// Its fate is one the run cannot read off its answer — the one write a
+/// run stopped there may have landed with no line of the manifest
+/// recording it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InFlight {
     /// The frame's envelope id.
@@ -205,19 +226,24 @@ pub struct InFlight {
 /// Why an [`InFlight`] frame's fate is unread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unsettled {
-    /// Its answer was never read: a transport halt broke the exchange after
-    /// the request may have been written ([`may_have_sent`]).
+    /// Its answer was never read.
+    ///
+    /// A transport halt broke the exchange after the request may have been
+    /// written ([`may_have_sent`]).
     Unanswered,
-    /// Answered `poisoned`: the write that halted the kernel inside its
-    /// commit may leave its frames in the journal, which the restart's open
-    /// then lands (wire.md §Rejection codes; the shell's held burst `sent:
-    /// true`, `client.md` §3c.2) — and the run cannot tell that write from
-    /// one refused at a kernel already halted.
+    /// Answered `poisoned`.
+    ///
+    /// The write that halted the kernel inside its commit may leave its
+    /// frames in the journal, which the restart's open then lands (wire.md
+    /// §Rejection codes; the shell's held burst `sent: true`, `client.md`
+    /// §3c.2) — and the run cannot tell that write from one refused at a
+    /// kernel already halted.
     Poisoned,
 }
 
-/// The claimant's one content-scoped signed session over the board, the
-/// device key that signs its attested writes, and the counts.
+/// The claimant's one content-scoped signed session over the board.
+///
+/// It holds the device key that signs its attested writes, and the counts.
 pub struct Writer<'b> {
     board: &'b Board,
     session: Session<'b>,
@@ -227,22 +253,32 @@ pub struct Writer<'b> {
     pub retries: Retries,
     /// The write frames sent, retries included.
     pub writes: u64,
-    /// The read frames sent, under the session or as a guest.
+    /// The reads sent, under the session or as a guest.
+    ///
+    /// `/chain?at=0`, the reclaim floor's read, is among them.
     pub reads: u64,
     /// When a stall was last said ([`STALL_SAID_EVERY`]).
     stall_said: Option<Instant>,
-    /// The write frame sent whose fate is unread: set as each write frame
-    /// goes out, cleared as its answer — an ack, a rejection, a refusal, the
-    /// death signal — comes back, and held where a transport halt broke the
-    /// exchange after the request may have been written ([`may_have_sent`])
-    /// or the answer was `poisoned` ([`Unsettled`]).
+    /// The write frame sent whose fate is unread.
+    ///
+    /// It is set as each write frame goes out, cleared as its answer — an
+    /// ack, a rejection, a refusal, the death signal — comes back, and held
+    /// where a transport halt broke the exchange after the request may have
+    /// been written ([`may_have_sent`]) or the answer was `poisoned`
+    /// ([`Unsettled`]).
     in_flight: Option<InFlight>,
 }
 
 impl<'b> Writer<'b> {
-    /// The session opened: `H.1`'s term read (a board without one has no
-    /// term for an attest to name), then the handshake at CONTENT scope —
-    /// the pre-check's halts as the library renders them.
+    /// Opens the session: `H.1`'s term read, then the handshake.
+    ///
+    /// The handshake is at content scope; a board without `H.1` has no term
+    /// for an attest to name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the board has no `H.1`, the halt the term's read
+    /// comes to, and the pre-check's halts as the library renders them.
     pub fn open(
         board: &'b Board,
         signer: Box<dyn Signer>,
@@ -271,36 +307,58 @@ impl<'b> Writer<'b> {
         })
     }
 
-    /// The write frame IN FLIGHT, taken: where a transport halt broke its
-    /// exchange after the request may have been written, or its answer was
-    /// `poisoned` — the one write a run stopped there may have landed, or
-    /// may land at the board's restart, with no line of the manifest
-    /// recording it.
+    /// Takes the write frame in flight, where one is held.
+    ///
+    /// One is held where a transport halt broke its exchange after the
+    /// request may have been written, or its answer was `poisoned` — the
+    /// one write a run stopped there may have landed, or may land at the
+    /// board's restart, with no line of the manifest recording it.
     pub fn take_in_flight(&mut self) -> Option<InFlight> {
         self.in_flight.take()
     }
 
-    /// `next_account_prefix(parent)`, the library's namespace read, counted.
+    /// Reads `next_account_prefix(parent)`, the library's namespace read.
+    ///
+    /// The read is counted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the read comes to.
     pub fn next_account_prefix(&mut self, parent: &str) -> Result<Option<String>, Halt> {
         self.reads += 1;
         self.board.next_account_prefix(parent)
     }
 
-    /// `principal_prefix(principal)`, the library's namespace read, counted.
+    /// Reads `principal_prefix(principal)`, the library's namespace read.
+    ///
+    /// The read is counted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the read comes to.
     pub fn principal_prefix(&mut self, principal: u64) -> Result<Option<String>, Halt> {
         self.reads += 1;
         self.board.principal_prefix(principal)
     }
 
-    /// The session's ordinary end.
+    /// Closes the session: its ordinary end.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the close comes to.
     pub fn close(self) -> Result<(), Halt> {
         self.session.close()?;
         Ok(())
     }
 
-    /// The `attest` member over `body` for a write whose `doc` row is `doc`:
-    /// the entry frame under `H.1`'s pair, the account and the row, signed
-    /// by the device key.
+    /// Returns the `attest` member over `body` for a write.
+    ///
+    /// The write's `doc` row is `doc`; the member is the entry frame under
+    /// `H.1`'s pair, the account and the row, signed by the device key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt where the account or `doc` is no address.
     fn attest(&self, doc: &str, body: &EntryBody) -> Result<Value, Halt> {
         let account = address(&self.account)?;
         let doc = address(doc)?;
@@ -309,21 +367,47 @@ impl<'b> Writer<'b> {
         Ok(json!({"alg": alg, "sig": sig_hex(&self.signer.sign(&frame))}))
     }
 
-    /// ONE WRITE under the session — `id` its envelope key — the three
-    /// transient tokens retried: the ack, or the halt.
+    /// Makes one write under the session, `id` its envelope key: the ack.
+    ///
+    /// The three transient tokens are retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt [`Writer::write_as`] comes to.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`Writer::write_as`] does.
     pub fn write(&mut self, frame: Value, id: &str) -> Result<Value, Halt> {
         let token = self.session.token().clone();
         self.write_as(&token, frame, id)
     }
 
-    /// [`Writer::write`] under `token`'s session — the bare sessions the
-    /// second account takes. Each frame is held IN FLIGHT from its sending
-    /// to its answer ([`Writer::take_in_flight`]). A stall is said as its
-    /// first refusal is met and at most once per [`STALL_SAID_EVERY`] while
-    /// it lasts, a recurrence later in the run said again — naming the
-    /// token, the write's op and envelope id, its refusals and seconds so
+    /// Makes [`Writer::write`]'s write under `token`'s session.
+    ///
+    /// The session is the claimant's — every [`Writer::write`], and an
+    /// insert given no token — or a bare one the second account takes. Each
+    /// frame is held in flight from its sending to its answer
+    /// ([`Writer::take_in_flight`]). A stall's line is said at most once per
+    /// [`STALL_SAID_EVERY`] across the run — at the run's first transient
+    /// refusal, then at the first met that long after the last line — naming
+    /// the token, the write's op and envelope id, its refusals and seconds so
     /// far, and the run's retries by token: a storm is otherwise a minute of
     /// silence per write, its count said only at the end.
+    ///
+    /// # Errors
+    ///
+    /// Returns the board's own refusal for every rejection but the three
+    /// transient tokens, a `poisoned` one holding its write in flight; a
+    /// halt naming the op, the envelope id and the token where a transient
+    /// one outlasts [`WRITE_BUSY_PATIENCE`]; a transport halt, or a refusal
+    /// the board answers by HTTP status other than `503 write_busy`, as it
+    /// is; and a halt at the death signal.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `frame` is neither a JSON object nor null: its `id` is set
+    /// by `serde_json`'s index, which panics on any other value.
     pub fn write_as(&mut self, token: &Token, mut frame: Value, id: &str) -> Result<Value, Halt> {
         frame["id"] = Value::String(id.to_string());
         let began = Instant::now();
@@ -395,8 +479,13 @@ impl<'b> Writer<'b> {
         }
     }
 
-    /// One READ under the session: the answer, a rejection the board's
-    /// refusal.
+    /// Makes one read under the session, answering its document.
+    ///
+    /// # Errors
+    ///
+    /// A rejection is the board's refusal, the death signal a halt, and a
+    /// transport halt, or a refusal the board answers by HTTP status, stands
+    /// as it is.
     pub fn read(&mut self, frame: &Value) -> Result<Value, Halt> {
         self.reads += 1;
         match self.session.op(frame)? {
@@ -408,20 +497,36 @@ impl<'b> Writer<'b> {
         }
     }
 
-    /// One token-free read: the answer, a rejection included.
+    /// Makes one token-free read: the answer, a rejection included.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the read comes to.
     pub fn guest(&mut self, frame: &Value) -> Result<Value, Halt> {
         self.reads += 1;
         self.board.guest(frame)
     }
 
-    /// A private draft minted into `account`: flagless, no attest.
+    /// Mints a private draft into `account`: flagless, no attest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the write comes to, and one where its ack names no
+    /// address.
     pub fn mint_draft(&mut self, account: &str, id: &str) -> Result<String, Halt> {
         let v = self.write(json!({"op": "create_new_document", "account": account}), id)?;
         minted(&v)
     }
 
-    /// An EDITION minted into the claimant's account: `published: true`,
-    /// attested over the empty body, `doc` the account.
+    /// Mints an edition into the claimant's account.
+    ///
+    /// It is `published: true`, attested over the empty body, `doc` the
+    /// account.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the attest or the write comes to, and one where its
+    /// ack names no address.
     pub fn mint_edition(&mut self, id: &str) -> Result<String, Halt> {
         let account = self.account.clone();
         let mut frame = json!({"op": "create_new_document", "account": account, "published": true});
@@ -431,11 +536,17 @@ impl<'b> Writer<'b> {
         minted(&v)
     }
 
-    /// `bytes` inserted PER-BYTE into `doc` from content ordinal `ordinal`,
-    /// in frames of at most [`INSERT_CHUNK`] bytes at consecutive ordinals
-    /// — the envelope id `id` on the first frame, `id:2`, `id:3`, … on the
-    /// rest; under `token` where one is given, else the session. The next
-    /// fresh ordinal.
+    /// Inserts `bytes` per byte into `doc` from content ordinal `ordinal`.
+    ///
+    /// The frames hold at most [`INSERT_CHUNK`] bytes at consecutive
+    /// ordinals — the envelope id `id` on the first frame, `id:2`, `id:3`,
+    /// … on the rest; under `token` where one is given, else the session.
+    /// It answers the next fresh ordinal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the first frame that does not land comes to, as
+    /// [`Writer::write_as`] answers it.
     pub fn insert(
         &mut self,
         token: Option<&Token>,
@@ -474,8 +585,15 @@ impl<'b> Writer<'b> {
         Ok(at)
     }
 
-    /// `image` over content ordinals `from ..` of `doc`, `width` of them:
-    /// the V→I runs, each with its origin.
+    /// Reads `image` over content ordinals of `doc`.
+    ///
+    /// The ordinals run `from ..`, `width` of them; it answers the V→I runs,
+    /// each with its origin.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the read comes to, and one where the answer holds no
+    /// runs this tool can read.
     pub fn image(&mut self, doc: &str, from: u64, width: u64) -> Result<Vec<Run>, Halt> {
         let v = self.read(&frames::image(doc, from, width))?;
         let runs = v["runs"].as_array().ok_or_else(|| unexpected("image", &v))?;
@@ -493,11 +611,19 @@ impl<'b> Writer<'b> {
             .collect()
     }
 
-    /// THE SHOT: the next member of `doc`'s chain, its arrangement `placed`
-    /// in V-order, `draft` the staging draft whose runs are re-inserted,
-    /// `base` the member staged from with its extent or none for the birth
-    /// version — attested over the body the module doc states. The member's
-    /// address.
+    /// Publishes the shot, the next member of `doc`'s chain.
+    ///
+    /// Its arrangement is `placed` in V-order, `draft` the staging draft
+    /// whose runs are re-inserted, `base` the member staged from with its
+    /// extent or none for the birth version — attested over the body the
+    /// module doc states. It answers the member's address.
+    ///
+    /// # Errors
+    ///
+    /// Returns a halt for a window of width 0 or one whose I-start is no
+    /// address — the tool's fault, nothing written — and for a `base` member
+    /// that is no address; the halt the attest or the write comes to; and
+    /// one where its ack names no address.
     pub fn shot(
         &mut self,
         doc: &str,
@@ -549,11 +675,19 @@ impl<'b> Writer<'b> {
         minted(&v)
     }
 
-    /// An attested citation link homed in `home`: `from` a V-spec, resolved
-    /// through `image` into the spans the daemon stores — its source a
-    /// VERSION address, which `image` and the store's own resolution read
-    /// alike, where a bare published address would float to the head under
-    /// `image` alone; `to` and the type address-form. The link's address.
+    /// Makes an attested citation link homed in `home`.
+    ///
+    /// `from` is a V-spec, resolved through `image` into the spans the
+    /// daemon stores — its source a version address, which `image` and the
+    /// store's own resolution read alike, where a bare published address
+    /// would float to the head under `image` alone; `to` and the type are
+    /// address-form. It answers the link's address.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt `image`, the attest or the write comes to; a halt
+    /// where a run `image` answered is no content extent; one where `to` is
+    /// no address; and one where the write's ack names no address.
     pub fn link(
         &mut self,
         home: &str,
@@ -592,8 +726,14 @@ impl<'b> Writer<'b> {
         minted(&v)
     }
 
-    /// Whether `doc` is registered: `doc_metadata` as a guest answers its
-    /// state, or `doc_not_registered`.
+    /// Returns whether `doc` is registered.
+    ///
+    /// `doc_metadata` as a guest answers its state, or `doc_not_registered`.
+    ///
+    /// # Errors
+    ///
+    /// Any other rejection is the board's refusal, and the read's own halt
+    /// stands as it is.
     pub fn registered(&mut self, doc: &str) -> Result<bool, Halt> {
         let v = self.guest(&frames::doc_metadata(doc))?;
         match Rejection::of(&v) {
@@ -603,8 +743,14 @@ impl<'b> Writer<'b> {
         }
     }
 
-    /// A BARE session as `principal` — honoured on a CLAIMED-PERMISSIVE
-    /// board, refused on an ENFORCING one: `None` then.
+    /// Opens a bare session as `principal`, or `None` where it is refused.
+    ///
+    /// It is honoured on a claimed-permissive board, refused on an
+    /// enforcing one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the halt the open comes to.
     pub fn bare(&self, principal: u64) -> Result<Option<Token>, Halt> {
         match self.board.session_open(SessionBody::Bare { principal })? {
             Opened::Token(t) => Ok(Some(t)),
@@ -612,13 +758,19 @@ impl<'b> Writer<'b> {
         }
     }
 
-    /// The journal's RECLAIM FLOOR — the oldest position `/chain?at` still
-    /// answers — read off `/chain?at=0`'s `410 history_reclaimed` answer
-    /// (the library's `Board::chain_at`); `0` where genesis is retained. The
-    /// one retry-class answer, `503 history_busy` (every reconstruction
+    /// Reads the journal's reclaim floor.
+    ///
+    /// The floor is the oldest position `/chain?at` still answers, read off
+    /// `/chain?at=0`'s `410 history_reclaimed` answer (the library's
+    /// `Board::chain_at`); `0` where genesis is retained.
+    ///
+    /// # Errors
+    ///
+    /// The one retry-class answer, `503 history_busy` (every reconstruction
     /// permit in use; wire.md §Reading history), is a halt saying so: it
     /// comes after every write is recorded, so the run after it writes
-    /// nothing and reads the floor again.
+    /// nothing and reads the floor again. Any other answer is a halt naming
+    /// it, and the read's own halt stands as it is.
     pub fn reclaim_floor(&mut self) -> Result<u64, Halt> {
         self.reads += 1;
         match self.board.chain_at(0)? {
@@ -639,8 +791,9 @@ impl<'b> Writer<'b> {
     }
 }
 
-/// The halt the death signal comes to: the session is dead, and the run
-/// stops where it stands.
+/// Returns the halt the death signal comes to.
+///
+/// The session is dead, and the run stops where it stands.
 fn session_closed() -> Halt {
     Halt::face(
         "the board closed this session",
@@ -649,7 +802,9 @@ fn session_closed() -> Halt {
     )
 }
 
-/// An answer without the member the frame's `resp` promises, its opening
+/// Returns the halt an answer this tool cannot read comes to.
+///
+/// The answer lacks the member the frame's `resp` promises; its opening is
 /// echoed.
 fn unexpected(op: &str, v: &Value) -> Halt {
     Halt::face(
@@ -659,12 +814,20 @@ fn unexpected(op: &str, v: &Value) -> Halt {
     )
 }
 
-/// An `ack_addr`'s minted address, or the halt an ack without one is.
+/// Returns an `ack_addr`'s minted address.
+///
+/// # Errors
+///
+/// Returns the halt an ack without one is ([`unexpected`]).
 fn minted(v: &Value) -> Result<String, Halt> {
     acked_addr(v).map(str::to_string).ok_or_else(|| unexpected("the write", v))
 }
 
-/// `text` as an address, or the halt a board answering no address is.
+/// Returns `text` as an address.
+///
+/// # Errors
+///
+/// Returns the halt a board answering no address is.
 fn address(text: &str) -> Result<Address, Halt> {
     parse_address(text).ok_or_else(|| {
         Halt::face(
@@ -675,23 +838,25 @@ fn address(text: &str) -> Result<Address, Halt> {
     })
 }
 
-/// The document a content I-address was minted under: the prefix before
-/// its last `.0.1.`.
+/// Returns the document a content I-address was minted under.
+///
+/// It is the prefix before its last `.0.1.`.
 pub fn origin_of(i_addr: &str) -> Option<String> {
     i_addr.rfind(".0.1.").map(|at| i_addr[..at].to_string())
 }
 
-/// A tumbler from its dotted decimal.
+/// Returns a tumbler from its dotted decimal.
 fn tumbler(text: &str) -> Option<Tumbler> {
     let comps: Option<Vec<Nat>> =
         text.split('.').map(|c| c.parse::<u64>().ok().map(Nat::from)).collect();
     Tumbler::new(comps?).ok()
 }
 
-/// A stored content extent from a run as `image` answers it — its I-start
-/// and its width in positions: the start's own tumbler, and a width of
-/// zeros at every component but the last, which holds the count (the
-/// daemon suite's `extent_span`).
+/// Returns a stored content extent from a run as `image` answers it.
+///
+/// The run is its I-start and its width in positions; the extent is the
+/// start's own tumbler, and a width of zeros at every component but the
+/// last, which holds the count (the daemon suite's `extent_span`).
 fn extent_span(i_start: &str, width: u64) -> Option<Span> {
     let start = tumbler(i_start)?;
     let mut comps = vec![Nat::from(0u64); start.len()];
@@ -699,7 +864,7 @@ fn extent_span(i_start: &str, width: u64) -> Option<Span> {
     Span::new(start, Tumbler::new(comps).ok()?).ok()
 }
 
-/// Lowercase hex of `bytes`.
+/// Returns lowercase hex of `bytes`.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -1,8 +1,10 @@
-//! `skep fingerprint` (`client.md` §2.2): the store's keys — every key in
-//! the store, or the one `--select` names in it, or the one file `--key`
-//! (or `SKEP_KEY`) names, never two — each with the bindings that name it,
-//! or the pending state where none does (AUTH-5.32); `--payload` re-prints
-//! a key's enrollment record, `--json` answers one document.
+//! `skep fingerprint` (`client.md` §2.2): the store's keys and their bindings.
+//!
+//! The keys are every key in the store, or the one `--select` names in it,
+//! or the one file `--key` (or `SKEP_KEY`) names, never two — each with the
+//! bindings that name it, or the pending state where none does
+//! (AUTH-5.32); `--payload` re-prints a key's enrollment record, `--json`
+//! answers one document.
 
 use skep_client::halt::Halt;
 use skep_client::sheet::{group_hex, render_inert};
@@ -12,8 +14,9 @@ use skep_identity::{encode_enroll, Enrollment};
 use super::{data, record_refused, store_of, talk, Stop, OUTSTANDING_ACT};
 use crate::args::{CommandLine, Usage};
 
-/// The handoff recipient's clause of the outstanding-act line, its fourth
-/// (§2.2): the payload went to a GIVER who seeds an account with it, and the
+/// The handoff recipient's clause, the outstanding-act line's fourth (§2.2).
+///
+/// The payload went to a giver who seeds an account with it, and the
 /// three-key record needs the anchor files, which never enter the store
 /// (§3.4) — so its re-offer is `accept --reprint`, never `--payload` here.
 const ACCEPT_CLAUSE: &str = "Where this key was made at `skep accept`: the outstanding act is the giver's genesis and their reply, then `skep \
@@ -50,7 +53,7 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
         (None, None) => store.list()?,
     };
     // An unreadable bindings file halts naming it: read as an empty one, it
-    // would list every key UNBOUND and name the wrong act.
+    // would list every key unbound and name the wrong act.
     let bindings = store.all_bindings()?;
     let any_enrollment_binding = bindings.iter().any(|b| matches!(b, Binding::Enrollment { .. }));
     let mut json_rows = Vec::new();
@@ -93,9 +96,9 @@ pub fn fingerprint(c: &CommandLine) -> Result<(), Stop> {
             data(format!("bound {b}"))?;
         }
         if unbound {
-            // THE PENDING STATE (AUTH-5.32), the durable half of `keygen
-            // --payload`'s line: the state, the re-print, the hop's and the
-            // rotation's acts, `skep claim` where this store holds no
+            // The pending state (AUTH-5.32), the durable half of
+            // `keygen --payload`'s line: the state, the re-print, the hop's
+            // and the rotation's acts, `skep claim` where this store holds no
             // enrollment binding (§3.5 arm 4's fork), and the handoff
             // recipient's clause.
             let (state, claim_clause) = if any_enrollment_binding {

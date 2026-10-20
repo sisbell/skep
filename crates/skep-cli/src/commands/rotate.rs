@@ -1,6 +1,7 @@
-//! `skep rotate` (`client.md` §2.2): this device's key replaced in one
-//! gesture — the new key enrolled, the supersession trail written, the old
-//! key retired; a person door.
+//! `skep rotate` (`client.md` §2.2): this device's key replaced in one gesture.
+//!
+//! The new key is enrolled, the supersession trail written, the old key
+//! retired; a person door.
 
 use skep_client::ceremony::rotate::{self as rotate_walk, RotateOptions};
 use skep_client::dial::plaintext_non_loopback_warning;

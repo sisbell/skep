@@ -1,8 +1,9 @@
-//! `skep retire` (`client.md` §2.2): a device key retired from a full
-//! session this command opens, after the preview and a typed answer — a
-//! person door, and no flag stands for the answer (AUTH-5.46). The walk says
-//! the next act where the retirement ended its own session (AUTH-5.28); the
-//! command prints what was retired.
+//! `skep retire` (`client.md` §2.2): a device key retired from a full session.
+//!
+//! The session is one this command opens, and the retirement follows the
+//! preview and a typed answer — a person door, and no flag stands for the
+//! answer (AUTH-5.46). The walk says the next act where the retirement
+//! ended its own session (AUTH-5.28); the command prints what was retired.
 
 use skep_client::ceremony::retire::{self as retire_walk, RetireOptions};
 use skep_client::dial::plaintext_non_loopback_warning;

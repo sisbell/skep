@@ -1,25 +1,27 @@
-//! THE DAEMON's TWO MODES. Without `--own` the provider dials a daemon that
-//! is already running — the local record's recipe — and the fault route
-//! answers that it is not built in. With `--own`, in a build with the
-//! `dev-hooks` feature, the daemon runs IN-PROCESS with its `test-hooks`
-//! doors (started as `tests/it/common.rs`'s spawn starts it and an embedding
-//! app would: `skepd::embed`, then the wait for its cell index), and
-//! `POST /bridge/fault/<door>` reaches them: the three
-//! permit pools held full (`write_busy`, `scan_busy`, `fetch_busy`), the
-//! held permits released, the head writer's next refusal, the feed walk's
-//! hold and release, the media floor's free space, the checkpoint thread's
-//! next panic, `halt_writes` — the attest store's next write failed, so a
-//! signed commit below the reclaim floor halts the write path and every write
+//! The daemon's two modes: a running board dialed, or the daemon in-process.
+//!
+//! Without `--own` the provider dials a daemon that is already running —
+//! the local record's recipe — and the fault route answers that it is not
+//! built in. With `--own`, in a build with the `dev-hooks` feature, the
+//! daemon runs in-process with its `test-hooks` doors (started as
+//! `tests/it/common.rs`'s spawn starts it and an embedding app would:
+//! `skepd::embed`, then the wait for its cell index), and
+//! `POST /bridge/fault/<door>` reaches them: the three permit pools held
+//! full (`write_busy`, `scan_busy`, `fetch_busy`), the held permits
+//! released, the head writer's next refusal, the feed walk's hold and
+//! release, the media floor's free space, the checkpoint thread's next
+//! panic, `halt_writes` — the attest store's next write failed, so a signed
+//! commit below the reclaim floor halts the write path and every write
 //! after answers `poisoned` (the shell then holds the burst; §3c.4) — and
 //! `poison`, the kernel's own halt: the next commit's barrier fails and so
-//! does the truncation that would repair it, so the kernel is POISONED and
+//! does the truncation that would repair it, so the kernel is poisoned and
 //! that write answers `poisoned` — the burst held `sent: true`, since its
-//! frames stay in the journal and land at the restart (§3c.2). The door arms
-//! the daemon's `fail_the_next_checkpoint_step` at `JournalBarrier` and
-//! `JournalRepair`, naming the steps by `skep_kernel::Step` as `skepd`
-//! re-exports it under `test-hooks`; eleven doors in all. Without the feature
-//! every door of this module is the one refusal, `not_built_in`, and `--own`
-//! halts before serving.
+//! frames stay in the journal and land at the restart (§3c.2). The door
+//! arms the daemon's `fail_the_next_checkpoint_step` at `JournalBarrier`
+//! and `JournalRepair`, naming the steps by `skep_kernel::Step` as `skepd`
+//! re-exports it under `test-hooks`; eleven doors in all. Without the
+//! feature every door of this module is the one refusal, `not_built_in`,
+//! and `--own` halts before serving.
 
 use std::path::Path;
 
@@ -50,17 +52,27 @@ mod built {
     const INDEX_WAIT: Duration = Duration::from_secs(60);
 
     impl Node {
-        /// THE START, the daemon's own (`skepd::embed`): the port bound
-        /// first (a held port is refused before the journal is read), the
-        /// daemon opened over `data_dir` with `local_trust` and its own
-        /// origin configured, served — each step's refusal its own halt —
-        /// and the cell index's walk waited for [`INDEX_WAIT`]. A walk that
-        /// DIED never completes, so the wait runs out over it as over one
-        /// still walking (`skepd::Skepd::wait_for_the_index`): the two are
-        /// told apart by the walk's FAILED state, each halt with its own
-        /// cause and act: a dead walk stays failed until the daemon
-        /// restarts, while a board started apart and named by `--board` is
-        /// waited on by no walk at all.
+        /// Starts the daemon in-process: its own start, `skepd::embed`.
+        ///
+        /// The port is bound first (a held port is refused before the
+        /// journal is read), the daemon opened over `data_dir` with
+        /// `local_trust` and its own origin configured, and served; then the
+        /// cell index's walk is waited for [`INDEX_WAIT`].
+        ///
+        /// # Errors
+        ///
+        /// Each step's refusal is its own halt. A walk that died never
+        /// completes, so the wait runs out over it as over one still
+        /// walking (`skepd::Skepd::wait_for_the_index`): the two are told
+        /// apart by the walk's failed state, each halt with its own cause
+        /// and act: a dead walk stays failed until the daemon restarts,
+        /// while a board started apart and named by `--board` is waited on
+        /// by no walk at all.
+        ///
+        /// # Panics
+        ///
+        /// Panics where the port bound is 80: `http://127.0.0.1:80` names
+        /// the scheme's default port, so no canonical origin is that text.
         pub fn start(data_dir: &Path, port: u16, local_trust: bool) -> Result<Node, Halt> {
             let own = |port: u16| {
                 let mut opts = AuthOptions::default();
@@ -98,12 +110,12 @@ mod built {
             Ok(Node { skepd, origin })
         }
 
-        /// The served daemon.
+        /// Returns the served daemon.
         pub fn daemon(&self) -> &Daemon {
             self.skepd.daemon()
         }
 
-        /// The orderly stop.
+        /// Stops the daemon: the orderly stop.
         pub fn shutdown(self) {
             self.skepd.shutdown();
         }
@@ -117,7 +129,11 @@ mod built {
         fetch: Vec<Permit<'d>>,
     }
 
-    /// ONE DOOR by name: what it did, or why the door is not one.
+    /// Opens one door by name, answering what it did.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the door is not one, where no door is named `door`.
     pub fn fault<'d>(node: &'d Node, doors: &mut Doors<'d>, door: &str, args: &Value) -> Result<Value, String> {
         let daemon = node.daemon();
         let answer = match door {
@@ -168,16 +184,16 @@ mod built {
                 json!({"door": door})
             }
             "halt_writes" => {
-                // The attest store's next write fails: a signed commit below the
-                // reclaim floor halts the write path, and every write after it
-                // answers `poisoned` (§3c.4; the shell holds the burst).
+                // The attest store's next write fails: a signed commit below
+                // the reclaim floor halts the write path, and every write after
+                // it answers `poisoned` (§3c.4; the shell holds the burst).
                 daemon.fail_the_attest_stores_next_write();
                 json!({"door": door})
             }
             "poison" => {
                 // The kernel's halt (§3c.2's `poisoned`): the next commit's
                 // barrier fails, then the truncation that would repair it, so
-                // the kernel is POISONED — the write answers `poisoned`, the
+                // the kernel is poisoned — the write answers `poisoned`, the
                 // burst's frames stay in the journal, and a restart lands
                 // them. Each arm fires once; both are armed before the write,
                 // the barrier's first, as the shell's own suite arms them.
@@ -191,8 +207,10 @@ mod built {
         Ok(answer)
     }
 
-    /// The I/O kind the `poison` door's arms fail with, as the route's
-    /// `kind` spells it; `Other` where absent or unknown.
+    /// Returns the I/O kind the `poison` door's arms fail with.
+    ///
+    /// It is as the route's `kind` spells it; `Other` where absent or
+    /// unknown.
     fn io_kind(name: Option<&str>) -> std::io::ErrorKind {
         use std::io::ErrorKind;
         match name {
@@ -221,7 +239,11 @@ mod built {
     }
 
     impl Node {
-        /// `--own` in a build without `dev-hooks`: the halt names the build.
+        /// Refuses `--own` in a build without `dev-hooks`.
+        ///
+        /// # Errors
+        ///
+        /// Always returns the halt, which names the build.
         pub fn start(_data_dir: &Path, _port: u16, _local_trust: bool) -> Result<Node, Halt> {
             Err(Halt::face(
                 "--own needs the dev-hooks build",
@@ -237,7 +259,11 @@ mod built {
     #[derive(Default)]
     pub struct Doors<'d>(PhantomData<&'d ()>);
 
-    /// Every door: not built in.
+    /// Refuses every door: not built in.
+    ///
+    /// # Errors
+    ///
+    /// Always returns why: this build links no daemon.
     pub fn fault<'d>(_node: &'d Node, _doors: &mut Doors<'d>, door: &str, _args: &Value) -> Result<Value, String> {
         Err(format!("the fault door `{door}` is not built in: this skep-dev links no daemon (the `dev-hooks` feature is off); the doors a dev-hooks build offers are {}", super::DOORS.join(", ")))
     }
@@ -245,19 +271,29 @@ mod built {
 
 pub use built::{fault, Doors, Node};
 
-/// The node started under `--own`, or the halt: a build without the
-/// feature halts before serving.
+/// Starts the node under `--own`.
+///
+/// # Errors
+///
+/// Returns the halt the start comes to: a build without the feature halts
+/// before serving.
+///
+/// # Panics
+///
+/// Panics where `Node::start` does: in a `dev-hooks` build, at a bound
+/// port of 80.
 pub fn start(data_dir: &Path, port: u16, local_trust: bool) -> Result<Node, Halt> {
     Node::start(data_dir, port, local_trust)
 }
 
-/// The origin a started node answers at.
+/// Returns the origin a started node answers at.
 pub fn origin_of(node: &Node) -> &Origin {
     &node.origin
 }
 
-/// The refusal every door answers where none is built in or the door is
-/// no door.
+/// Returns the refusal every door answers where none is built in.
+///
+/// It is answered too where the door is no door.
 pub fn not_a_door(detail: String) -> Value {
     serde_json::json!({"kind": "shell", "name": "not_built_in", "detail": detail})
 }

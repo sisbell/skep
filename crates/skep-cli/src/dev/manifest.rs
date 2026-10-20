@@ -1,28 +1,30 @@
-//! THE MANIFEST — how a second run knows the board is seeded, and a killed
-//! run where to resume: one file beside the key store, keyed by the board
-//! (`H.1`'s chain, 64 lowercase hex — the term every attested write names,
-//! fixed from the claim for the life of the board), holding what a seed
-//! landed as one JSON line per write, by the write's own envelope `id`
-//! (`cut-00042:draft`, `:edition`, `:shot`, `:link:3`), appended AFTER the
-//! board's ack and never before — `client.md` §3.5's discipline, "lands
-//! AFTER the board answered". Its first line is the HEADER, the seed's
-//! key: the board, the account and principal, the pin, the cut rule and
-//! subtree, the counts. A second run under the same key skips every write
-//! the manifest holds — all of them, and it adds nothing and says so — and
-//! a killed run resumes at the first write not held, the staging draft and
-//! every address re-read from the lines. What the lines cannot hold is the
-//! write the killed run had IN FLIGHT — sent, perhaps landed, its ack never
-//! read: the resume makes it again under a session of its own, where its
-//! envelope `id` is no key (wire.md §Correlation and idempotency: an `id`
-//! holds on its session alone), so a mint or a shot that had landed lands
-//! twice; the run says so as it opens a manifest it resumes. A manifest
-//! whose header is another seed's is a HALT naming the difference, never a
-//! guess at what another run landed (the record's §5.1 arm (a); the probe
-//! of the board alone, arm (c), is taken only where NO manifest line
-//! stands: a board holding documents past doc 1 then is not fresh, and is
-//! refused — a run stopped inside its first write leaves a board so).
+//! The manifest: how a second run knows the board is seeded.
 //!
-//! THE PATH follows the search index's precedent — "the index directory
+//! It also tells a killed run where to resume. It is one file beside the
+//! key store, keyed by the board (`H.1`'s chain, 64 lowercase hex — the
+//! term every attested write names, fixed from the claim for the life of
+//! the board), holding what a seed landed as one JSON line per write, by
+//! the write's own envelope `id` (`cut-00042:draft`, `:edition`, `:shot`,
+//! `:link:3`), appended after the board's ack and never before —
+//! `client.md` §3.5's discipline, "lands after the board answered". Its
+//! first line is the header, the seed's key: the board, the account and
+//! principal, the pin, the cut rule and subtree, the counts. A second run
+//! under the same key skips every write the manifest holds — all of them,
+//! and it adds nothing and says so — and a killed run resumes at the first
+//! write not held, the staging draft and every address re-read from the
+//! lines. What the lines cannot hold is the write the killed run had in
+//! flight — sent, perhaps landed, its ack never read: the resume makes it
+//! again under a session of its own, where its envelope `id` is no key
+//! (wire.md §Correlation and idempotency: an `id` holds on its session
+//! alone), so a mint or a shot that had landed lands twice; the run says so
+//! as it opens a manifest it resumes. A manifest whose header is another
+//! seed's is a halt naming the difference, never a guess at what another
+//! run landed (the record's §5.1 arm (a); the probe of the board alone, arm
+//! (c), is taken only where no manifest line stands: a board holding
+//! documents past doc 1 then is not fresh, and is refused — a run stopped
+//! inside its first write leaves a board so).
+//!
+//! The path follows the search index's precedent — "the index directory
 //! beside the key store, never inside it", `<data>/index/<chain>/` — as
 //! `<store's parent>/<store's name>-seed/<chain>.jsonl`: `~/.skep-seed/…`
 //! for the default store. A line is one `write` of the whole line with its
@@ -30,9 +32,9 @@
 //! cut short at a full volume — is no line and is ignored, as the bindings
 //! file's reader ignores one (§3.7), so the write it would have recorded is
 //! made again on the resume — whose first record cuts the fragment away
-//! before it appends ([`Manifest::record`]), so no line is ever written onto
-//! a torn one, where the two would read back as one line that is no JSON
-//! and refuse every later run.
+//! before it appends ([`Manifest::record`]), so no line is ever written
+//! onto a torn one, where the two would read back as one line that is no
+//! JSON and refuse every later run.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -42,8 +44,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use skep_client::Halt;
 
-/// The manifest directory's name beside the store: the store's own name and
-/// this suffix.
+/// The suffix of the manifest directory's name beside the store.
+///
+/// The name is the store's own name and this suffix.
 pub const DIR_SUFFIX: &str = "-seed";
 
 /// The header line's `kind`, so a reader knows the file as this tool's.
@@ -52,7 +55,7 @@ pub const KIND: &str = "seed";
 /// The tool's name, as the header and the JSON object carry it.
 pub const TOOL: &str = "skep-dev seed";
 
-/// The manifest's path for `store` and the board's `chain`.
+/// Returns the manifest's path for `store` and the board's `chain`.
 pub fn path_for(store: &Path, chain: &str) -> PathBuf {
     let name = store
         .file_name()
@@ -62,8 +65,9 @@ pub fn path_for(store: &Path, chain: &str) -> PathBuf {
     parent.join(format!("{name}{DIR_SUFFIX}")).join(format!("{chain}.jsonl"))
 }
 
-/// THE SEED's KEY — the header line: what one seed of one board is, so a
-/// run under any other settings is another seed and refused.
+/// The seed's key, the header line: what one seed of one board is.
+///
+/// So a run under any other settings is another seed, and refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     /// `H.1`'s chain, lowercase hex.
@@ -101,8 +105,9 @@ impl Header {
         })
     }
 
-    /// The members that differ between this key and `other`'s line, each as
-    /// `name: recorded → asked`.
+    /// Returns the members that differ between this key and `other`'s line.
+    ///
+    /// Each is spelled `name: <recorded> recorded, <asked> asked`.
     fn differences(&self, other: &Value) -> Vec<String> {
         let mine = self.to_value();
         let mut out = Vec::new();
@@ -134,21 +139,32 @@ pub struct Manifest {
     items: BTreeMap<String, Value>,
     /// Whether the file stands on disk with its header written.
     on_disk: bool,
-    /// Whether a file stood at the path when the run opened it — its header
-    /// line complete or not.
+    /// Whether a file stood at the path when the run opened it.
+    ///
+    /// It counts whether its header line was complete or not.
     found: bool,
-    /// The length of the file's complete lines, where a torn final line
-    /// followed them when the run opened it: what the next record cuts the
-    /// file back to before it appends.
+    /// The length of the file's complete lines, where a torn line followed.
+    ///
+    /// The torn line is the final one, found when the run opened the file;
+    /// the length is what the next record cuts the file back to before it
+    /// appends.
     torn_at: Option<u64>,
 }
 
 impl Manifest {
-    /// The manifest at `path` for `header`'s seed: read where the file
-    /// stands — its header judged against `header`, any difference a halt
-    /// naming it, each complete line an item by its id, a torn final line
+    /// Opens the manifest at `path` for `header`'s seed.
+    ///
+    /// It is read where the file stands — its header judged against
+    /// `header`, each complete line an item by its id, a torn final line
     /// marked for the next record to cut away — else empty, its header
     /// written at the first record.
+    ///
+    /// # Errors
+    ///
+    /// Any difference between its header and `header` is a halt naming it;
+    /// a file that cannot be read as this tool's is a halt naming why —
+    /// unreadable, a first line that is no JSON or no seed's header, or a
+    /// later line that is no JSON or names no `id`.
     pub fn open(path: PathBuf, header: Header) -> Result<Manifest, Halt> {
         let text = match fs::read_to_string(&path) {
             Ok(text) => text,
@@ -209,41 +225,57 @@ impl Manifest {
         Ok(Manifest { path, header, items, on_disk: true, found: true, torn_at })
     }
 
-    /// Where the manifest is written.
+    /// Returns where the manifest is written.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Whether no header line stands yet — no write of this seed is
-    /// recorded: no file, or one holding no complete line ([`Manifest::is_torn`]).
+    /// Returns whether no header line stands yet.
+    ///
+    /// No write of this seed is recorded: no file, or one holding no
+    /// complete line ([`Manifest::is_torn`]).
     pub fn is_new(&self) -> bool {
         !self.on_disk
     }
 
-    /// Whether a file stood holding no complete line — what a run stopped
-    /// inside its first record leaves, its write landed and its line torn.
+    /// Returns whether a file stood holding no complete line.
+    ///
+    /// It is what a run stopped inside its first record leaves, its write
+    /// landed and its line torn.
     pub fn is_torn(&self) -> bool {
         self.found && !self.on_disk
     }
 
-    /// The lines the manifest holds past its header: one per write recorded,
-    /// and one per ghost the links name.
+    /// Returns the lines the manifest holds past its header.
+    ///
+    /// There is one per write recorded, one per ghost the links name, and
+    /// the second account's step, the seed's last record.
     pub fn held(&self) -> usize {
         self.items.len()
     }
 
-    /// The item recorded under `id`, where one is.
+    /// Returns the item recorded under `id`, where one is.
     pub fn recorded(&self, id: &str) -> Option<&Value> {
         self.items.get(id)
     }
 
-    /// One write RECORDED, after its ack: `item`'s members under `id`,
-    /// appended as one line — the header line first where the file is new,
-    /// and a torn final line the run found cut away first, so the record
-    /// lands on a line of its own. A write that cannot be made is a halt
-    /// saying what it means: the board holds the write and the manifest does
-    /// not — the lines it would have appended shown whole, for a person who
-    /// keeps the board's shape exact to add by hand.
+    /// Records one write, after its ack: `item`'s members under `id`.
+    ///
+    /// They are appended as one line — the header line first where the file
+    /// is new, and a torn final line the run found cut away first, so the
+    /// record lands on a line of its own.
+    ///
+    /// # Errors
+    ///
+    /// A write that cannot be made is a halt saying what it means: the board
+    /// holds the write and the manifest does not — the lines it would have
+    /// appended shown whole, for a person who keeps the board's shape exact
+    /// to add by hand.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `item` is neither a JSON object nor null: its `id` is set
+    /// by `serde_json`'s index, which panics on any other value.
     pub fn record(&mut self, id: &str, mut item: Value) -> Result<(), Halt> {
         item["id"] = Value::String(id.to_string());
         let mut text = String::new();
@@ -286,7 +318,9 @@ impl Manifest {
     }
 }
 
-/// A manifest that cannot be read as this tool's: a halt, never a guess.
+/// Returns the halt a manifest that cannot be read as this tool's is.
+///
+/// It is a halt, never a guess.
 fn unreadable(path: &Path, why: String) -> Halt {
     Halt::face(
         format!("the manifest at {} cannot be read as this tool's", path.display()),

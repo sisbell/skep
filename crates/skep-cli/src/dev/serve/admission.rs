@@ -1,23 +1,26 @@
-//! THE ADMISSION (the dev provider record §3.2; ruled P-4): the provider's
-//! session is AMBIENT to any page in the person's browser that can reach
+//! The admission: the checks a request passes before any dial.
+//!
+//! As the dev provider record has it (§3.2; its call P-4), the provider's
+//! session is ambient to any page in the person's browser that can reach
 //! its port — "a page on any site the developer has open can POST to
-//! `127.0.0.1:8742`" — so EVERY request is checked before any dial: the
+//! `127.0.0.1:8742`" — so every request is checked before any dial: the
 //! peer is loopback (the socket's address); `Host` names the listen
-//! address; `Origin` equals the ONE page origin the provider was started
+//! address; `Origin` equals the one page origin the provider was started
 //! for, exactly (a missing `Origin` on a non-preflight request is refused —
 //! the page always sends one, and a `curl` from the gate passes the
-//! header); and THE PER-RUN SECRET — the page carries it from its URL's
+//! header); and the per-run secret — the page carries it from its URL's
 //! `?provider=` query and echoes it in the [`SECRET_HEADER`] on every call;
 //! on the event stream alone it rides the URL's [`SECRET_QUERY`], since an
-//! `EventSource` can send no custom header (unverified here). The secret
-//! is named apart from a token: it admits a page to the provider and
-//! grants nothing at the board. A refusal names the failed check and no
-//! dial was made — on its answer, which a browser hides from the page, and
-//! the first time its check fails in a run on the provider's TALK
+//! `EventSource` can send no custom header (unverified here). The secret is
+//! named apart from a token: it admits a page to the provider and grants
+//! nothing at the board. A refusal names the failed check and no dial was
+//! made — on its answer, which a browser hides from the page, and the first
+//! time its check fails in a run on the provider's talk
 //! ([`Admission::refusal_line`]), naming what was presented, what is
 //! admitted and the route it was first met at; every refusal is counted,
 //! and the stop says the counts. The preflight (`OPTIONS`) is answered for
-//! the one origin alone and carries no secret: a browser sends none on it.
+//! the one origin alone, its peer checked but not its `Host`, and carries no
+//! secret: a browser sends none on it.
 
 use std::net::SocketAddr;
 
@@ -28,8 +31,9 @@ use crate::shared::clipped;
 /// The header the page echoes the secret in.
 pub const SECRET_HEADER: &str = "Skep-Provider";
 
-/// The query key the page's URL carries the secret under, and the event
-/// stream's URL repeats.
+/// The query key the page's URL carries the secret under.
+///
+/// The event stream's URL repeats it.
 pub const SECRET_QUERY: &str = "provider";
 
 /// The one page origin, the secret, and the listen authority.
@@ -51,7 +55,7 @@ pub enum Check {
 }
 
 impl Check {
-    /// The check's name, as the refusal's body names it.
+    /// Returns the check's name, as the refusal's body names it.
     pub fn name(self) -> &'static str {
         match self {
             Check::Peer => "peer",
@@ -62,26 +66,31 @@ impl Check {
     }
 }
 
-/// A header's value as a refusal's line names it — clipped ([`clipped`]),
-/// `(none)` where the request carried none; TALK renders it inert.
+/// Returns a header's value as a refusal's line names it.
+///
+/// It is clipped ([`clipped`]), `(none)` where the request carried none;
+/// talk renders it inert.
 fn presented(value: Option<&str>) -> String {
     value.map_or_else(|| "(none)".to_string(), clipped)
 }
 
-/// The route a refusal was first met at, and that the line is said once and
-/// the refusal counted — the request's method and its path, which ends ahead
-/// of the query, so the event stream's query and the secret riding it are
-/// never echoed.
+/// Returns the clause naming the route a refusal was first met at.
+///
+/// It also says that the line is said once and the refusal counted. The
+/// route is the request's method and its path, which ends ahead of the
+/// query, so the event stream's query and the secret riding it are never
+/// echoed.
 fn first_met(req: &Request) -> String {
     format!("first met at {} {}; said once, every one counted at the stop", req.method, clipped(&req.path))
 }
 
 impl Admission {
-    /// The line TALK says the first time a request fails `check` in a run:
-    /// the check, what the request presented, what this provider admits
-    /// instead, and the route it was first met at ([`first_met`]) — the
-    /// secret never, whether presented or this run's: stdout's one line is
-    /// its one carrier.
+    /// Returns the line talk says the first time a request fails `check`.
+    ///
+    /// The time is the first in a run; the line names the check, what the
+    /// request presented, what this provider admits instead, and the route
+    /// it was first met at ([`first_met`]) — the secret never, whether
+    /// presented or this run's: stdout's one line is its one carrier.
     pub fn refusal_line(&self, check: Check, req: &Request, peer: Option<SocketAddr>) -> String {
         match check {
             Check::Origin => format!(
@@ -109,14 +118,24 @@ impl Admission {
         }
     }
 
-    /// The preflight: the peer and the one origin.
+    /// Checks the preflight: the peer and the one origin.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Check`] the request fails, the peer's first.
     pub fn preflight(&self, req: &Request, peer: Option<SocketAddr>) -> Result<(), Check> {
         self.peer(peer)?;
         self.origin(req)
     }
 
-    /// EVERY OTHER REQUEST: the peer, the host, the origin, the secret — in
-    /// the header, or on the event stream's route in the query.
+    /// Checks every other request: the peer, the host, the origin, the secret.
+    ///
+    /// The secret is in the header, or on the event stream's route in the
+    /// query.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`Check`] the request fails, in that order.
     pub fn admit(&self, req: &Request, peer: Option<SocketAddr>, secret_in_query: bool) -> Result<(), Check> {
         self.peer(peer)?;
         match req.header("Host") {

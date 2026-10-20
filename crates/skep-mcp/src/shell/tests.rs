@@ -38,7 +38,7 @@ fn backend_at(dir: &Path, origin: Origin, mode: SessionMode) -> Backend {
     let talk: Talk = Arc::new(|_: &str| {});
     let shell = Shell::open(ShellOptions::new(vec![origin.clone()], dir.to_path_buf(), mode, Arc::clone(&talk)));
     let board = shell.board_references().into_iter().next().expect("the shell's one board");
-    let on_stop: OnStop = Arc::new(|_: String| {});
+    let on_stop = OnStop::new(std::sync::mpsc::channel::<String>().0, |line| line);
     Backend { shell, board, origin, principal: mode.principal(), account: None, writes: true, key, session: Arc::new(SessionWatch::new("s-1".into())), on_stop, talk }
 }
 
@@ -55,6 +55,24 @@ fn read_request(conn: &mut TcpStream) -> String {
     let length = head.lines().find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length:").and_then(|n| n.trim().parse::<usize>().ok())).unwrap_or(0);
     let _ = conn.read_exact(&mut vec![0u8; length]);
     head
+}
+
+/// Returns the origin of a stand-in board answering each request by `answer`.
+///
+/// `answer` is handed the request's head; where it gives none, the board
+/// answers its `/health` reading, an unclaimed board with local trust on.
+fn stand_in(answer: impl Fn(&str) -> Option<String> + Send + 'static) -> Origin {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a stand-in board");
+    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().expect("its port").port())).expect("a canonical origin");
+    thread::spawn(move || {
+        for mut conn in listener.incoming().flatten() {
+            let head = read_request(&mut conn);
+            let health = r#"{"ok":true,"log_position":0,"auth":{"claimant":null,"local_trust":true}}"#;
+            let reply = answer(&head).unwrap_or_else(|| format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{health}", health.len()));
+            let _ = conn.write_all(reply.as_bytes());
+        }
+    });
+    origin
 }
 
 /// A startup stop names what did not hold, then the refusal once.
@@ -162,20 +180,12 @@ fn a_call_is_reissued_once_and_only_after_a_death_settled_into_a_session() {
 #[test]
 fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
     const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a stand-in board");
-    let origin = Origin::parse(&format!("http://127.0.0.1:{}", listener.local_addr().expect("its port").port())).expect("a canonical origin");
     let (opened, opens) = std::sync::mpsc::channel::<()>();
-    thread::spawn(move || {
-        for mut conn in listener.incoming().flatten() {
-            let answer = if read_request(&mut conn).starts_with("POST /session ") {
-                let _ = opened.send(());
-                format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"principal\":1,\"session\":\"{TOKEN}\"")
-            } else {
-                let health = r#"{"ok":true,"log_position":0,"auth":{"claimant":null,"local_trust":true}}"#;
-                format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{health}", health.len())
-            };
-            let _ = conn.write_all(answer.as_bytes());
-        }
+    let origin = stand_in(move |head| {
+        head.starts_with("POST /session ").then(|| {
+            let _ = opened.send(());
+            format!("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{{\"principal\":1,\"session\":\"{TOKEN}\"")
+        })
     });
     let scratch = Scratch::new("open-afresh");
     let backend = backend_at(&scratch.0, origin, SessionMode::Bare { principal: 1 });
@@ -190,6 +200,35 @@ fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
     assert_eq!(unquoted(refused.clone()), refused, "a fault that names no answer's bytes stands whole");
     let retired = Refusal::named(Name::RETIRED, Face { state: "s".into(), cause: "c".into(), act: "a".into() });
     assert_eq!(unquoted(retired.clone()), retired, "a refusal of another kind is untouched");
+}
+
+/// A refused open of the adapter's own stops it, on the calling thread.
+///
+/// A stand-in board refuses the `POST /session` a call opens after a lapse
+/// (401): the refusal is the call's, no attempt runs, the session's state
+/// stops, and the stop's line, naming the open this adapter made, is handed
+/// on once, by the thread that made the call — in the adapter, the loop
+/// itself, which is why the stop is built on an unbounded channel alone.
+#[test]
+fn a_refused_open_of_the_adapters_own_stops_it_on_the_calling_thread() {
+    let origin = stand_in(|head| {
+        head.starts_with("POST /session ").then(|| {
+            let body = r#"{"error":"session_rejected"}"#;
+            format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+        })
+    });
+    let scratch = Scratch::new("open-refused");
+    let mut backend = backend_at(&scratch.0, origin, SessionMode::Bare { principal: 1 });
+    let (stops, stopped) = std::sync::mpsc::channel::<(thread::ThreadId, String)>();
+    backend.on_stop = OnStop::new(stops, |line| (thread::current().id(), line));
+    backend.session.settle("s-1", Death::ServeOn, &|_: String| {});
+    let refusal = backend.under_session(|_: &str| -> Result<(), Refusal> { panic!("no attempt runs where the open was refused") }).expect_err("the board refused the open");
+    assert_eq!(refusal.name(), "session_rejected", "{refusal}");
+    assert_eq!(backend.session.current(), SessionState::Stopped("s-1".into()), "the session's state stops");
+    let stops: Vec<_> = stopped.try_iter().collect();
+    assert_eq!(stops.len(), 1, "the stop is handed on once: {stops:?}");
+    assert_eq!(stops[0].0, thread::current().id(), "by the thread that made the call");
+    assert!(stops[0].1.contains("opened afresh (session_rejected)"), "the line names the adapter's own open: {}", stops[0].1);
 }
 
 /// A blob's URI is the fetch's route at the board's origin, `i` as written.

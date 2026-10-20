@@ -23,58 +23,26 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `skep-mcp: `: a C0 control, DEL or bidi control a board's text carries
   there is shown as its code point, and a line break in it continues the
   line indented.
-- **Every tool is one call of the shell.** The WIRE OPERATIONS of
+- **Every tool is one call of the shell.** The wire operations of
   `docs/wire.md` §Operations are tools of their own names — the name is the
-  frame's `op`, the arguments are the frame — sent as `op(session, frame)`:
-  attested where the session's key attests the kind, held where the board
-  cannot take a burst or rejects one (the `held` answer comes back as data;
-  a refused run's line, and the bursts behind it on its document, wait on
-  the agent's `resolve`), a `write_busy` reissued once and a `durability`
-  twice within the call, as the shell does. No general `op` tool ships:
-  every op has a name, and the one argument shape the shell's `op` row
-  reads as its `/op-at` form — a numeric `at` beside an object `frame`,
-  which no wire op takes — is refused. The shell's own calls are tools of
-  their names — `boards`, `health`, `probe`, `search`, `places`, `held`,
-  `resolve` — their arguments the bridge's row minus the session and the
-  board, the adapter supplying each where the row requires it. Three are
-  the adapter's apparatus: `session_info` (the principal, the account, the
-  key's fingerprint and label, the board, `writes`, the board's health with
-  its mode), `changes_since(since, limit?)` (the shell's `changes`: a pull
-  of what changed, the agent keeping `next`) and `fetch(i)` (a picture's
-  bytes as an image block — the type sniffed off the bytes' magic for PNG,
-  JPEG, GIF and WebP, never attested — else an embedded resource blob,
-  under a cap of 8 MiB checked before a byte is read, and a deadline of ten
-  and a half minutes on its body, an honest board's own bound on the
-  stream). The catalog is `tools.json` beside `Cargo.toml`, checked against
-  the dispatch's two kinds at startup in both directions, and a schema's
-  `from_` argument against the ops the adapter maps it back to `from` on.
-- **A refusal as a result.** The board's verdict on a frame — a `refused`
-  refusal — is DATA: `isError: false`, the verdict's body verbatim under
-  `body`, the refusal's own `name`, `status`, `code`, `detail` and `op`
-  beside it. Every other kind — `unreachable`, `halt`, `blocked`, the
-  shell's own names — is `isError: true` with the refusal's value as the
-  text: the shell could not get the board's verdict. `fetch` adds two of
-  the adapter's own, each `isError` with a plain sentence: a file past its
-  cap, and a stream cut short. A write refused `unreachable` may still have
-  committed — its frame may have reached the board before its answer was
-  lost — and the adapter never reissues it. So may a write the board
-  refused `poisoned`, whose frames its restart replays from the journal, or
-  answered `500 internal_panic` past its commit — each the board's verdict,
-  and so data.
+  frame's `op`, the arguments are the frame — the shell's own calls
+  (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`) are
+  tools of theirs, and three are the adapter's apparatus: `session_info`,
+  `changes_since` and `fetch`. The catalog an agent reads, `tools.json`
+  beside `Cargo.toml`, is embedded and checked against that dispatch at
+  startup.
+- **A refusal as a result.** The board's verdict on a frame comes back as
+  data, `isError: false`; `isError` means the shell could not get the
+  board's verdict, or `fetch` declined a file.
 - **The session's life.** A board restart is met by the shell's silent
-  re-open under a fresh reference, which the adapter takes from the
-  `session-died` event it drains for the process's life, subscribed before
-  its session opens: a call that met the death, or found its session
-  already ended, waits for that event and is reissued once under the
-  re-opened session, never opening a second session early. The agent sees
-  nothing. A death the shell does not re-open — the key retired, the
-  prefix blocked, the account seeded, a restart whose re-open the board
-  refused — stops the process with one plain line naming the arm, and so
-  does the board's refusal of a session the adapter opens itself where the
-  shell's end left none: the person stops an agent by retiring its key,
-  and the adapter's end is what the agent's client sees. A board that is
-  not answering refuses each call `unreachable` and the adapter stays up,
-  opening a session once the board answers again.
+  re-open, and the agent sees nothing. A death the shell does not re-open —
+  the key retired, the prefix blocked, the account seeded, a re-open the
+  board refused — stops the process with one plain line on stderr, as does
+  the board's refusal of the session the adapter opens once a board that
+  stopped answering answers again: the person stops an agent by retiring
+  its key, and the adapter's end is what the agent's client sees. A board
+  that is not answering refuses each call `unreachable`, and the adapter
+  stays up.
 - **No person at the seam.** The shell is opened with the refusing arm:
   every SECRET and CONSENT moment would be refused `person_required`, and
   no ceremony tool is offered (no `keygen`, `fingerprint`, `claim`,
@@ -91,6 +59,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the types the shell's surface names and the inert rendering a key's
   label and every log line take, and `serde_json`; the stdio framing, the
   type sniff and the base64 are this crate's own.
+
+Each rule above is stated in full where its reader looks: what an agent is
+told — every tool's arguments and answers, the held bursts, which refused
+writes may still have committed, the fetch's cap — in the catalog's
+instructions and tool descriptions (`tools.json`); the rules the code keeps,
+in the crate doc (`src/main.rs`).
 
 ## Settings
 

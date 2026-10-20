@@ -52,9 +52,7 @@ enum IsError {
 
 /// What reaches the loop: a stdin line, stdin's end, or the backend's stop.
 ///
-/// The stop comes where a death of the session no one may re-open, or the
-/// board's refusal of a session the adapter opened itself, ends the adapter,
-/// with the plain line it says.
+/// All three ride the one channel `main` makes; the stop is `OnStop`'s line.
 #[derive(Debug)]
 pub enum Inbound {
     /// One line of stdin, as raw bytes.
@@ -104,16 +102,19 @@ pub struct Server {
 }
 
 impl Server {
-    /// Serves the loop: one JSON-RPC message per line in, one per line out.
+    /// Serves the loop to its end, then runs the backend's clean stop.
     ///
-    /// Nothing else is ever written on stdout, and the calls are served one at
-    /// a time in arrival order. Each line goes to `handle_line` as raw bytes:
-    /// what a line is, its encoding included, is that method's call. It
-    /// returns the exit code the caller exits with once it has run the shell's
-    /// stop: success at stdin's end and at a closed stdout (the harness hung
-    /// up), and 1 where the backend asked a stop, its line said first.
-    pub fn run(&self, inbox: &Receiver<Inbound>) -> ExitCode {
+    /// One JSON-RPC message per line in, one per line out: nothing else is
+    /// ever written on stdout, and the calls are served one at a time in
+    /// arrival order. Each line goes to `handle_line` as raw bytes: what a
+    /// line is, its encoding included, is that method's call. The loop ends
+    /// at stdin's end and at a closed stdout (the harness hung up), each a
+    /// success, and at the backend's stop, its line said first, exit 1; the
+    /// clean stop (`Backend::shutdown`) runs after any of the three, and the
+    /// exit code is returned for `main` to exit with.
+    pub fn run(self, inbox: &Receiver<Inbound>) -> ExitCode {
         let mut out = std::io::stdout();
+        let mut code = ExitCode::SUCCESS;
         for message in inbox {
             match message {
                 Inbound::Line(line) => {
@@ -126,12 +127,14 @@ impl Server {
                 }
                 Inbound::Stop(line) => {
                     crate::log(format_args!("stopped: {line}"));
-                    return ExitCode::from(1);
+                    code = ExitCode::from(1);
+                    break;
                 }
                 Inbound::Eof => break,
             }
         }
-        ExitCode::SUCCESS
+        self.backend.shutdown();
+        code
     }
 
     /// One inbound line, as raw bytes → at most one outbound message,

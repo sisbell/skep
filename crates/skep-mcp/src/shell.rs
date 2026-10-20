@@ -48,7 +48,7 @@ mod watch;
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -75,10 +75,38 @@ use self::watch::{classify, refused_afresh, Death, SessionState, SessionWatch};
 /// session itself.
 const SETTLE_WAIT: Duration = Duration::from_secs(60);
 
-/// The process's stop: it takes the plain line the adapter stops with.
+/// The process's stop: it hands on the plain line the adapter stops with.
 ///
-/// `main` holds the other end, and its loop says the line and exits.
-pub type OnStop = Arc<dyn Fn(String) + Send + Sync>;
+/// The backend stops the adapter at most once in its life, since the
+/// session's state never moves off a stop, and with no lock held: from the
+/// drain's thread, where a death's reason asks the stop (`classify`), or from
+/// the thread making a call, where the board refused the fresh session that
+/// call needed (`Backend::open_afresh`). That thread may be the very loop
+/// that takes the line, so the stop must never wait, and an unbounded
+/// channel's sender alone builds one (`OnStop::new`): its send returns at
+/// once, where a send into a bounded channel full of stdin's lines would hold
+/// the one thread that empties it.
+#[derive(Clone)]
+pub struct OnStop(Arc<dyn Fn(String) + Send + Sync>);
+
+impl OnStop {
+    /// Returns the stop that sends its line on `sender`, as `wrap` makes it.
+    ///
+    /// `sender` is an unbounded channel's (`mpsc::channel`; a bounded one's
+    /// `SyncSender` is refused by its type), so the send never waits; a line
+    /// sent once the receiver has gone is dropped, no one being left to say
+    /// it.
+    pub fn new<T: Send + 'static>(sender: Sender<T>, wrap: fn(String) -> T) -> OnStop {
+        OnStop(Arc::new(move |line| {
+            let _ = sender.send(wrap(line));
+        }))
+    }
+
+    /// Hands `line` on, for the receiver's holder to say and stop with.
+    fn stop(&self, line: String) {
+        (self.0)(line);
+    }
+}
 
 /// Returns whether `refusal` is the shell's own, named `named`.
 fn is_shell(refusal: &Refusal, named: Name) -> bool {
@@ -171,7 +199,7 @@ const UNQUOTED: &str = "the session's open met an answer this client could not r
 ///
 /// It holds the shell, the one board's reference, the one session's state, the
 /// process's stop, and the facts `session_info` reports; its `Debug` shows all
-/// but the stop and the TALK sink, which are closures.
+/// but the stop and the TALK sink, which hold closures.
 pub struct Backend {
     shell: Shell,
     /// The board's opaque reference, fixed at the open.
@@ -300,7 +328,7 @@ impl Backend {
     /// stop on every other arm, its plain line handed to the stop. Every other
     /// event is read and dropped.
     fn drain(&self, events: Receiver<Event>) {
-        let (session, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), Arc::clone(&self.on_stop));
+        let (session, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), self.on_stop.clone());
         thread::spawn(move || {
             for event in events {
                 if event.name != EventName::SessionDied {
@@ -315,7 +343,7 @@ impl Backend {
                     }
                     Death::Stop(_) => None,
                 };
-                if session.settle(died, death, &*on_stop) {
+                if session.settle(died, death, &|line| on_stop.stop(line)) {
                     if let Some(line) = said {
                         talk(line);
                     }
@@ -329,9 +357,10 @@ impl Backend {
     /// The calls run under it once it opens. A refusal of it is judged as a
     /// refused re-open is (`refused_afresh`, by way of `refused_open`): a board
     /// that does not answer leaves the session's state lapsed, and any other
-    /// refusal stops the adapter, its line naming this open handed to the stop.
-    /// Where the drain settled the session's state while the session opened,
-    /// the session is closed, so none stands that no call names.
+    /// refusal stops the adapter, its line naming this open handed to the stop
+    /// from the calling thread (`OnStop`). Where the drain settled the
+    /// session's state while the session opened, the session is closed, so
+    /// none stands that no call names.
     ///
     /// # Errors
     ///
@@ -346,7 +375,7 @@ impl Backend {
         let fresh = match open_session(&self.shell, &self.board) {
             Ok(opened) => opened.reference,
             Err(refusal) => {
-                self.session.settle(died, refused_afresh(refusal.name()), &*self.on_stop);
+                self.session.settle(died, refused_afresh(refusal.name()), &|line| self.on_stop.stop(line));
                 return Err(refusal);
             }
         };
@@ -367,9 +396,12 @@ impl Backend {
     /// `session_ended` met an end the shell ran, which the drain settles: the
     /// call waits for that (`SessionWatch::settled_within`), opens a session
     /// itself where it never comes, and is reissued once under what stands
-    /// then — save that a death the shell did not re-open is the call's
-    /// answer. Every other answer is the attempt's own, and a second death is
-    /// answered as it stands.
+    /// then — a session opened afresh where the death lapsed the last, the
+    /// reference that died where it stopped the adapter. One answer stands
+    /// instead: a `session_died` whose death was not re-opened, which carries
+    /// the death's reason; a `session_ended` carries none, so the call that met
+    /// it takes what stands. Every other answer is the attempt's own, and a
+    /// second death is answered as it stands.
     ///
     /// `attempt` runs once, and once more on a reissue, one run after the
     /// other: an `FnMut`, so a caller sets its arguments in place for each run
@@ -404,7 +436,10 @@ impl Backend {
             if !self.session.settled_within(&reference, SETTLE_WAIT) {
                 self.open_afresh(&reference)?;
             }
-            // A death the shell did not re-open is the call's answer.
+            // A death the call met itself and the shell did not re-open is the
+            // call's answer: its refusal carries the reason. A session found
+            // already ended (`session_ended`) carries none, and the call takes
+            // what stands.
             if met_death && !matches!(self.session.current(), SessionState::Open(_)) {
                 return outcome;
             }

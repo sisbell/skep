@@ -279,3 +279,50 @@ fn the_opts_the_door_admits_are_the_ones_skep_shell_declares() {
         assert_eq!(taken, declared, "{interface}: the door's options are the shell's");
     }
 }
+
+/// Each adapter tool takes its shell row's members, bar the session and board.
+///
+/// The door's members, and each schema's `required`, copy skep-shell's call
+/// rows, which the shell renders in its declarations (`shapes::declarations`,
+/// the `Bridge` interface): a tool that makes a shell call takes exactly the
+/// members of its row's session form, the first, save `session` and `board`,
+/// which the adapter supplies or does not offer, and requires exactly the
+/// ones the row requires. Unchecked, a member the shell renamed or dropped
+/// would stay admitted here and advertised to every agent, while the shell,
+/// which reads no member it does not name, answered the call as though the
+/// member had never been sent.
+#[test]
+fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
+    let declarations = skep_shell::shapes::declarations();
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    for (name, tool, members) in ADAPTER_TOOLS {
+        // The row `Server::call` sends the tool as; `session_info` takes no
+        // argument, and copies no row.
+        let row = match tool {
+            Tool::SessionInfo => continue,
+            Tool::ChangesSince => "changes",
+            _ => *name,
+        };
+        let head = format!("  {row}(args: {{");
+        let form = declarations
+            .lines()
+            .find_map(|line| line.strip_prefix(head.as_str()))
+            .and_then(|rest| rest.split_once('}'))
+            .map(|(form, _)| form)
+            .unwrap_or_else(|| panic!("skep-shell declares the row {row}"));
+        let (mut declared, mut required) = (BTreeSet::new(), BTreeSet::new());
+        for member in form.split(';').filter_map(|member| member.split(':').next()).map(str::trim).filter(|member| !member.is_empty()) {
+            let (member, optional) = member.strip_suffix('?').map_or((member, false), |member| (member, true));
+            if member != "session" && member != "board" {
+                declared.insert(member);
+                if !optional {
+                    required.insert(member);
+                }
+            }
+        }
+        assert_eq!(members.iter().copied().collect::<BTreeSet<&str>>(), declared, "{name}: the door takes the {row} row's members");
+        let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
+        let requires: BTreeSet<&str> = entry["inputSchema"]["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        assert_eq!(requires, required, "{name}: the schema requires what the {row} row requires");
+    }
+}

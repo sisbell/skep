@@ -116,9 +116,12 @@ pub enum Tool {
     Fetch,
 }
 
-/// The adapter tools: each name, its tool, and the argument members
-/// its row takes — the ones the adapter reads; a member outside them is
-/// refused before any call.
+/// The adapter tools: each name, its tool, and the members its row takes.
+///
+/// The members are skep-shell's row's, bar the session and the board, which
+/// the adapter supplies or does not offer — the suite holds the two equal —
+/// and the only ones the adapter reads: a member outside them is refused
+/// before any call.
 const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
     ("boards", Tool::Boards, &[]),
     ("health", Tool::Health, &[]),

@@ -286,15 +286,9 @@ fn main() -> ExitCode {
     }
     // The loop's two inputs, on one channel: stdin's lines and its end, which
     // `read_stdin` sends from a thread of its own, and the backend's stop,
-    // which the drain sends on a death no one may re-open and a call sends
-    // where the board refused a session the adapter opened itself.
+    // which `OnStop` sends on this unbounded channel and never waits on.
     let (inbound, inbox) = mpsc::channel::<Inbound>();
-    let on_stop: OnStop = {
-        let inbound = inbound.clone();
-        Arc::new(move |line: String| {
-            let _ = inbound.send(Inbound::Stop(line));
-        })
-    };
+    let on_stop = OnStop::new(inbound.clone(), Inbound::Stop);
     // THE SHELL: opened, checked and its one session opened before any tool
     // is served; a stop here returns, so the shell's own stop has run.
     let talk: skep_shell::Talk = Arc::new(|line: &str| log(line));
@@ -311,10 +305,7 @@ fn main() -> ExitCode {
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     ));
     read_stdin(inbound);
-    let server = Server { backend, catalog };
-    let code = server.run(&inbox);
-    server.backend.shutdown();
-    code
+    Server { backend, catalog }.run(&inbox)
 }
 
 /// Writes one line on the operator's stream, stderr, as `logged` renders it.

@@ -41,13 +41,15 @@
 //! The bus is subscribed in `Backend::open` before the session opens, so no
 //! death of it is emitted unheard, and drained on a thread of its own for the
 //! process's life: an undrained subscriber's channel grows without bound
-//! (`EventBus::emit` clones every event to every subscriber), and the one event
-//! this adapter acts on is `session-died`; every other is read and dropped.
+//! (`EventBus::emit` clones every event to every subscriber). The events this
+//! adapter acts on are `session-died`, and an `index` event whose state asks
+//! an act of whoever runs the adapter, said once in the log; every other is
+//! read and dropped.
 
 mod watch;
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -125,6 +127,84 @@ fn is_shell(refusal: &Refusal, named: Name) -> bool {
 /// words (`Refusal`'s `Display`), said once.
 fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
     format!("stopped before serving: {what}: {refusal}")
+}
+
+/// Returns the line that says the held bursts an earlier run left, if any.
+///
+/// `lines` is the `held` row's answer at the session's open (skep-shell's
+/// `HeldRow[]`): the principal's held file, read whole there (client.md
+/// §3c.7). The line counts the bursts, those `sent` — perhaps landed, their
+/// answer lost (§3c.2) — and those waiting on the agent's `resolve`: a refused
+/// run's, which carries its `refusal`, and a moved document's (§3c.4, §3c.5),
+/// which the shell never resends, nor any burst behind them on their
+/// documents. `None` where no burst stands.
+fn carried_line(lines: &Value) -> Option<String> {
+    let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
+    let sent = lines.iter().filter(|line| line["sent"] == true).count();
+    let waiting = lines.iter().filter(|line| !line["refusal"].is_null() || line["cause"] == "moved").count();
+    let bursts = if lines.len() == 1 { "1 burst".to_string() } else { format!("{} bursts", lines.len()) };
+    Some(format!(
+        "held: an earlier run left {bursts} held at this board ({sent} sent and so perhaps landed, {waiting} waiting on the agent's `resolve`, refused or moved): the shell resends held bursts in order as the board takes writes, save a waiting one and every burst behind it on its document"
+    ))
+}
+
+/// Returns the line that says a held file the shell halted (client.md §3c.3).
+///
+/// `path` and `why` are the `store_halted` refusal's: the file, left as found,
+/// and why the shell reads it no further. Every burst at the board is refused
+/// so, at this run and every later one, until the file is set aside, which
+/// loses its lines.
+fn halted_line(path: &str, why: &str) -> String {
+    let why = match why {
+        "newer" => "written by a newer skep",
+        "unknown_member" => "its header is not one this skep reads",
+        "damaged" => "damaged: a line of it is not one this skep reads whole",
+        other => other,
+    };
+    format!(
+        "held: the held file {path} is halted ({why}): every burst the agent makes at this board — insert, delete, copy, reinstate, rearrange — is refused `store_halted`, at this run and every later one, and the file is left as found: run the skep that wrote it, or, with the adapter stopped, set the file aside — its lines are bursts not known to have landed"
+    )
+}
+
+/// Returns the line an `index` event's state asks of the log, with its arm.
+///
+/// The state is skep-shell's `IndexState`, three of whose arms ask an act of
+/// whoever runs the adapter (search.md §5.1, §5.6, §7.4): `busy`, another
+/// process holding the index's directory, as a second adapter or a dev
+/// provider over the same `--dir` does; `newer_skep`, the file a newer skep's,
+/// faced and searched not; and `past_the_ceiling`, units left out past the
+/// index's ceiling. `index_dir` is the directory the line names. `None` for
+/// every other arm.
+fn index_line(state: &Value, index_dir: &str) -> Option<(&'static str, String)> {
+    match state["arm"].as_str()? {
+        "busy" => Some((
+            "busy",
+            format!(
+                "the search index at {index_dir} answers busy: another process holds this directory — two adapters on one --dir, or an adapter beside a dev provider — so search and places answer no hit for this process's life, and where the other holds the held store too, a burst this process holds is kept in memory alone and lost at its end: stop one of the two and start this one again (a busy the next commit clears was the board's history, busy at the index's resume)"
+            ),
+        )),
+        "newer_skep" => {
+            let which = match (state["v"]["version"].as_u64(), state["v"]["tokenizer"].as_str()) {
+                (Some(v), _) => format!("index version {v}"),
+                (None, Some(revision)) => format!("tokenizer revision {revision}"),
+                (None, None) => "a version this skep does not read".to_string(),
+            };
+            Some((
+                "newer_skep",
+                format!(
+                    "the search index at {index_dir} was written by a newer skep ({which}): it is left as found and searched not, so search and places answer no hit — run the adapter that wrote it, or, with this one stopped, move {index_dir} aside to have it rebuilt from the board"
+                ),
+            ))
+        }
+        "past_the_ceiling" => Some((
+            "past_the_ceiling",
+            format!(
+                "the search index at {index_dir} is past its ceiling of {} bytes of text: {} units offered past it are left out, and search and places answer without them",
+                state["limit"], state["seen"]
+            ),
+        )),
+        _ => None,
+    }
 }
 
 /// A session the shell opened, as its `session` row answers it.
@@ -251,10 +331,13 @@ impl Backend {
     /// The shell runs over `origin` in the signed mode with the refusing arm;
     /// the board's `/health` is read and said, the store's key for `principal`
     /// checked and said, and one signed session opened — before any tool is
-    /// served — and said. The bus is subscribed before that session opens and
-    /// drained from the open's end (`Backend::drain`), so no death of it goes
-    /// unheard. Each line goes to `talk`, and `on_stop` is the process's stop,
-    /// kept for the backend's life.
+    /// served — and said, with the principal's held bursts that open read:
+    /// those an earlier run left standing, or the shell's halt of their file.
+    /// The bus is subscribed before that session opens and drained from the
+    /// open's end (`Backend::drain`), so no death of it goes unheard, and the
+    /// search index under `store_dir` is named in the states it says. Each
+    /// line goes to `talk`, and `on_stop` is the process's stop, kept for the
+    /// backend's life.
     ///
     /// # Errors
     ///
@@ -315,9 +398,24 @@ impl Backend {
             store_dir.display()
         ));
         talk(&format!("person seam: {person_seam} — no secret or consent moment is answered here: no key or claim ceremony runs through this adapter"));
+        // The principal's held file was read whole at the session's open
+        // (client.md §3c.7): what an earlier run left standing there, or a
+        // file the shell halted, is said once here, since every burst after
+        // depends on it.
+        match shell.call("held", &json!({"session": reference})) {
+            Ok(lines) => {
+                if let Some(line) = carried_line(&lines) {
+                    talk(&line);
+                }
+            }
+            Err(Refusal::Shell { name, detail }) if name == Name::STORE_HALTED => {
+                talk(&halted_line(detail["path"].as_str().unwrap_or("named by the shell"), detail["why"].as_str().unwrap_or("halted")));
+            }
+            Err(_) => {}
+        }
         let session = Arc::new(SessionWatch::new(reference));
         let backend = Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk };
-        backend.drain(events);
+        backend.drain(events, &store_dir.join("index"));
         Ok(backend)
     }
 
@@ -333,31 +431,51 @@ impl Backend {
     /// on — and the drain settles the session's state by it
     /// (`SessionWatch::settle`): to the fresh session on the restart arm's
     /// re-open, to a lapse where the adapter serves on — each said — and to the
-    /// stop on every other arm, its plain line handed to the stop. Every other
-    /// event is read and dropped.
-    fn drain(&self, events: Receiver<Event>) {
+    /// stop on every other arm, its plain line handed to the stop. An `index`
+    /// event whose state asks an act of whoever runs the adapter — busy, a
+    /// newer skep's file, past the ceiling (`index_line`) — is said once for
+    /// the process's life, naming `index_dir`. Every other event is read and
+    /// dropped.
+    ///
+    /// # Panics
+    ///
+    /// Where the OS refuses the thread, `skep-mcp-drain`, as `thread::spawn`
+    /// panics.
+    fn drain(&self, events: Receiver<Event>, index_dir: &Path) {
         let (watch, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), self.on_stop.clone());
-        thread::spawn(move || {
+        let index_dir = index_dir.display().to_string();
+        let drain = move || {
+            let mut said_states: Vec<&'static str> = Vec::new();
             for event in events {
-                if event.name != EventName::SessionDied {
-                    continue;
-                }
-                let Some(died) = event.data["session"].as_str() else { continue };
-                let death = classify(&event.data["reason"]);
-                let said = match &death {
-                    Death::Reopened(_) => Some("the board restarted: the session was re-opened under a fresh reference, and every call is served under it"),
-                    Death::ServeOn => {
-                        Some("the session ended and was not re-opened (the board did not answer): every call answers its refusal, and the next call opens a session once the board answers again")
+                match event.name {
+                    EventName::SessionDied => {
+                        let Some(died) = event.data["session"].as_str() else { continue };
+                        let death = classify(&event.data["reason"]);
+                        let said = match &death {
+                            Death::Reopened(_) => Some("the board restarted: the session was re-opened under a fresh reference, and every call is served under it"),
+                            Death::ServeOn => Some(
+                                "the session ended and was not re-opened (the board did not answer): every call answers its refusal, and the next call opens a session once the board answers again",
+                            ),
+                            Death::Stop(_) => None,
+                        };
+                        if watch.settle(died, death, &|line| on_stop.stop(line)) {
+                            if let Some(line) = said {
+                                talk(line);
+                            }
+                        }
                     }
-                    Death::Stop(_) => None,
-                };
-                if watch.settle(died, death, &|line| on_stop.stop(line)) {
-                    if let Some(line) = said {
-                        talk(line);
+                    EventName::Index => {
+                        let Some((arm, line)) = index_line(&event.data["state"], &index_dir) else { continue };
+                        if !said_states.contains(&arm) {
+                            said_states.push(arm);
+                            talk(&line);
+                        }
                     }
+                    _ => {}
                 }
             }
-        });
+        };
+        thread::Builder::new().name("skep-mcp-drain".into()).spawn(drain).expect("the OS starts the adapter's drain thread");
     }
 
     /// Opens a session afresh where the session `died` left none.

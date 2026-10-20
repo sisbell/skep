@@ -74,13 +74,14 @@ pub(super) fn classify(reason: &Value) -> Death {
                 _ => String::new(),
             };
             Death::Stop(format!(
-                "the key {} was retired at the board{hand}: your person stops you by retiring your key, and this adapter stops with it; no call is served",
+                "the key {} was retired at the board{hand}: the person who enrolled it stops this agent so, and the adapter stops with it — a relaunch over this store is refused `retired` until the person gives the agent a key enrolled anew (`skep keygen`, `skep enroll`, `skep bind`)",
                 reason["fingerprint"].as_str().unwrap_or("this adapter signs with")
             ))
         }
-        "blocked" => {
-            Death::Stop(format!("the board's operator blocked this account's prefix (record {}): the session is gone and no call is served", reason["record"].as_str().unwrap_or("named by the board")))
-        }
+        "blocked" => Death::Stop(format!(
+            "the board's operator blocked this account's prefix (record {}): the session is gone and no call is served — the block stands until the board's operator lifts it, and a relaunch is refused until then",
+            reason["record"].as_str().unwrap_or("named by the board")
+        )),
         "seeded" => Death::Stop(format!(
             "the account {} now holds a key set of its own, so the key enrolled above it opens it by reference no longer: start the adapter again with a key enrolled at that account",
             reason["account"].as_str().unwrap_or("this adapter acts as")
@@ -229,7 +230,7 @@ mod tests {
         assert_eq!(classify(&json!({"arm": "restart", "reopened": true, "session": "s-fresh"})), Death::Reopened("s-fresh".into()));
         let stops = [
             (json!({"arm": "restart", "reopened": false, "refused": "origin_state"}), "origin_state"),
-            (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second", "position": 9, "own": false}), "retiring your key"),
+            (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second", "position": 9, "own": false}), "enrolled it stops this agent"),
             (json!({"arm": "blocked", "record": "1.0.1.0.7.1", "ground": null}), "1.0.1.0.7.1"),
             (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": null}), "1.0.1.1"),
             (json!({"arm": "mode", "mode": "ENFORCING"}), "ENFORCING"),
@@ -243,6 +244,9 @@ mod tests {
         let retired = json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second"});
         let Death::Stop(line) = classify(&retired) else { panic!() };
         assert!(line.contains("ab12") && line.contains("cd34 (second)"), "the key and the hand: {line}");
+        assert!(line.contains("a relaunch over this store is refused `retired`"), "the act that clears it: {line}");
+        let Death::Stop(line) = classify(&json!({"arm": "blocked", "record": "1.0.1.0.7.1"})) else { panic!() };
+        assert!(line.contains("until the board's operator lifts it"), "the act that clears it: {line}");
         let serve_on = [
             json!({"arm": "unreachable", "text": "connect refused"}),
             json!({"arm": "restart", "reopened": false, "refused": "unreachable"}),

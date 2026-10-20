@@ -75,17 +75,20 @@
 //! with its commons sentence, the dispatch's two kinds the catalog is checked
 //! against when loaded, the dispatch's door (`Tool::admit`, which admits a call
 //! or refuses it -32602), and a wire op's call mapped onto its frame (*every
-//! tool is one call of the shell*). This file is startup — flags, environment,
-//! the `SKEP_COMMONS` check, the shell's open — the loop's two inputs (stdin's
-//! reader, the backend's stop) wired onto one channel, and `log`, the adapter's
-//! log on stderr, which every module and the shell's TALK write through.
+//! tool is one call of the shell*). `log.rs` is the adapter's log on stderr,
+//! which every module and the shell's TALK write through, and which never
+//! waits on its reader, with the panic hook that makes a panic one line of it.
+//! This file is startup — flags, environment, the `SKEP_COMMONS` check, the
+//! shell's open — and the loop's two inputs (stdin's reader, the backend's
+//! stop) wired onto one channel.
 //!
-//! stdout is protocol-only; all logging goes to stderr, through `log`,
-//! whose failure fails nothing. Stdin EOF is the clean exit: the shell's
-//! stop closes the session at the board and saves the index.
+//! stdout is protocol-only; all logging goes to stderr, through `log`, which
+//! fails nothing and waits on nothing. Stdin EOF is the clean exit: the
+//! shell's stop closes the session at the board and saves the index.
 
 #![forbid(unsafe_code)]
 
+mod log;
 mod media;
 mod server;
 mod shell;
@@ -94,16 +97,16 @@ mod tools;
 use std::borrow::Cow;
 use std::env::{self, VarError};
 use std::ffi::OsString;
-use std::fmt::{self, Display};
-use std::io::Write;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use skep_client::sheet::render_inert;
+use skep_client::dial::plaintext_non_loopback_warning;
 use skep_client::Origin;
 
+use crate::log::{install_the_panic_hook, log};
 use crate::server::{read_stdin, Inbound, Server};
 use crate::shell::{Backend, OnStop};
 use crate::tools::Catalog;
@@ -111,13 +114,17 @@ use crate::tools::Catalog;
 const USAGE: &str = "\
 usage: skep-mcp [--board <ORIGIN>] [--dir <PATH>] [--principal <N>] [--tools-file <PATH>]
 
-  --board <ORIGIN>     the board, a canonical origin such as
-                       http://127.0.0.1:8642 (env SKEP_BOARD; required)
+  --board <ORIGIN>     the board, a canonical http:// origin such as
+                       http://127.0.0.1:8642 (env SKEP_BOARD; required): an
+                       https:// one is refused, this adapter dialing plain
+                       http:// alone, and one off this machine's loopback
+                       carries the session's token in the clear unless a
+                       tunnel carries it
   --dir <PATH>         the key store this adapter signs from (env
-                       SKEP_KEYSTORE; required: ~/.skep is never consulted),
-                       and where its search index and held bursts sit —
-                       ONE directory per adapter process, never a running
-                       dev provider's
+                       SKEP_KEYSTORE; required, a directory that stands:
+                       ~/.skep is never consulted), and where its search
+                       index and held bursts sit — ONE directory per
+                       adapter process, never a running dev provider's
   --principal <N>      the principal this adapter acts as (env
                        SKEP_PRINCIPAL; required: an integer, 0 to
                        9007199254740991, the largest a board registers)
@@ -137,12 +144,18 @@ environment:
                   SKEP_BOARD, as the skep command names it
 
 exit status:
-  0  stdin's end, or a read of it that failed, or a closed stdout: the
-     session closed at the board; --help and --version
-  1  a refusal before serving (the catalog, a setting, the board, the
-     key, the session's open), or a stop while serving (the key retired,
-     the prefix blocked, the account seeded, an open the board refused)
-  2  a usage error
+    0  stdin's end, or a read of it that failed, or a closed stdout: the
+       session closed at the board; --help and --version
+    1  a refusal before serving (the catalog, a setting, the board, the
+       key, the session's open), or a stop while serving (the key retired,
+       the prefix blocked, the account seeded, an open the board refused)
+    2  a usage error
+  101  a panic: a bug, said in one line of the log
+
+log:
+  stderr, every line opening 'skep-mcp: ', the first naming the version.
+  A reader that stops reading never holds the adapter up: the lines it
+  leaves are dropped, and the next line it takes says how many went
 
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio, and serves every
 tool through the shell's core (skep-shell) under one signed session it
@@ -157,14 +170,21 @@ opens at startup for the principal, with the store's key for it.";
 /// bound.
 const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
 
-/// THE VERSION LINE (`--version`): `skep-mcp <crate version> (<commit>)`
-/// — the version Cargo compiled in, and the commit the build named through
-/// `SKEP_GIT_SHA`, `unknown` where it named none, which a developer's own
-/// build never does. Both are read at compile time, so the run consults no
-/// file and no variable; the release scripts set the variable and hold the
-/// four shipped binaries to one version and one commit.
+/// Returns this binary's build: `<crate version> (<commit>)`.
+///
+/// The version is the one Cargo compiled in, and the commit the one the build
+/// named through `SKEP_GIT_SHA`, `unknown` where it named none, which a
+/// developer's own build never does. Both are read at compile time, so the run
+/// consults no file and no variable; the release scripts set the variable and
+/// hold the four shipped binaries to one version and one commit. The log's
+/// first line names it (`version <build>`), and the version line answers it.
+fn build() -> String {
+    format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
+}
+
+/// Returns the version line `--version` answers: `skep-mcp <build>`.
 fn version_line() -> String {
-    format!("skep-mcp {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
+    format!("skep-mcp {}", build())
 }
 
 /// A setting a flag supplies, or the variable that stands in for it.
@@ -218,6 +238,14 @@ impl Setting {
 }
 
 fn main() -> ExitCode {
+    install_the_panic_hook();
+    let code = serve();
+    log::drain();
+    code
+}
+
+/// Starts the adapter and serves it to its end: the code to exit with.
+fn serve() -> ExitCode {
     let mut board = Setting::new("--board", Some("SKEP_BOARD"));
     let mut dir = Setting::new("--dir", Some("SKEP_KEYSTORE"));
     let mut principal = Setting::new("--principal", Some("SKEP_PRINCIPAL"));
@@ -245,8 +273,15 @@ fn main() -> ExitCode {
             _ => die_usage(format_args!("unknown argument '{}'", arg.to_string_lossy())),
         }
     }
-    // The catalog first: a drifted tools file is a startup error before any
-    // environment or network is consulted.
+    // The build first, so every line after it is read as this binary's.
+    log(format_args!("version {}", build()));
+    // The catalog next: a drifted tools file is a startup error before any
+    // environment or network is consulted. Its source is named where it is
+    // refused and where the serving line counts its tools.
+    let source = match &tools_file.given {
+        None => "the embedded catalog".to_string(),
+        Some(path) => format!("the tools file {}", Path::new(path).display()),
+    };
     let text = match &tools_file.given {
         None => Cow::Borrowed(tools::EMBEDDED),
         Some(path) => match std::fs::read_to_string(path) {
@@ -256,7 +291,12 @@ fn main() -> ExitCode {
     };
     let mut catalog = match Catalog::load(&text) {
         Ok(c) => c,
-        Err(e) => die(format_args!("tools file: {e}")),
+        // A tools file is held to this binary's dispatch at every start, so
+        // the likeliest drift is one written for another release.
+        Err(e) if tools_file.given.is_some() => die(format_args!(
+            "{source}: {e} — a tools file replaces the embedded catalog whole and is held to this binary's dispatch at every start: write it afresh from this release's tools.json (crates/skep-mcp/tools.json at its tag), or drop --tools-file"
+        )),
+        Err(e) => die(format_args!("{source}: {e}")),
     };
     // Then the settings, each refused by name and the first refusal ending
     // startup: the principal, the board, the store, the commons.
@@ -279,10 +319,40 @@ fn main() -> ExitCode {
             die(format_args!("{} is required: the board this adapter serves{retired}", board.named()))
         }
     };
+    // This adapter dials plain http:// alone — the release builds its
+    // skep-client without `tls` — so an https:// board is refused here, where
+    // the setting is read, in the words of whoever set it, and never meets a
+    // dialer that holds no transport for it.
+    if origin.is_https() {
+        die(format_args!(
+            "{}: '{origin}' is an https:// origin, and this adapter dials plain http:// alone: give it the board's loopback origin on the board's own machine, or the http:// origin of a tunnel to the board",
+            board.named()
+        ));
+    }
+    // AUTH-4.53: an http:// origin off this machine's loopback carries the
+    // session's token in the clear on every exchange unless a tunnel carries
+    // it — said where the setting is read, as the `skep` command says it ahead
+    // of every signed session: a warning, never a refusal (client.md §9 item
+    // 23).
+    if let Some(warning) = plaintext_non_loopback_warning(&origin) {
+        log(warning);
+    }
     let store_dir = match dir.text() {
         Some(path) if !path.is_empty() => PathBuf::from(path),
         _ => die(format_args!("{} is required: the key store this adapter signs from, one directory per adapter process (~/.skep is never consulted)", dir.named())),
     };
+    // The store stands before the shell opens over it: the shell's feed thread
+    // makes the search index under it at its open, so a path that names
+    // nothing is refused here, before anything is made at it.
+    match std::fs::metadata(&store_dir) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => die(format_args!("{}: '{}' is no directory: the key store this adapter signs from is the directory the agent's key was made in", dir.named(), store_dir.display())),
+        Err(e) => die(format_args!(
+            "{}: '{}' cannot be read ({e}): the key store this adapter signs from — the directory the agent's key was made in — must stand before it starts",
+            dir.named(),
+            store_dir.display()
+        )),
+    }
     // The commons pointer: an address the instructions hand to agents,
     // never dereferenced here — T4 well-formedness is the whole startup
     // check, the same class of refusal as a bad board.
@@ -310,7 +380,7 @@ fn main() -> ExitCode {
         }
     };
     log(format_args!(
-        "serving {} tools on stdio, one call at a time{}; stdin's end closes the session at the board and saves the index — a signal ends the process with neither, and the session then lives on at the board until it restarts",
+        "serving {} tools of {source} on stdio, one call at a time{}; stdin's end closes the session at the board and saves the index — a signal ends the process with neither, and the session then lives on at the board until it restarts",
         catalog.tools().len(),
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     ));
@@ -318,62 +388,24 @@ fn main() -> ExitCode {
     Server { backend, catalog }.run(&inbox)
 }
 
-/// Writes one line of the log, stderr, as `logged` renders it.
-///
-/// It is written by `writeln!` with the result discarded — never
-/// `eprintln!`, which panics when the write fails. MCP's stdio transport
-/// lets a client ignore the server's stderr, and an unread log fails its
-/// writes (a pipe whose reader has gone answers EPIPE, a full volume
-/// ENOSPC): a line is never worth the work it reports on, the rule
-/// skep-util's `notice` keeps for the daemon. So a log line never fails and
-/// never reports. The shell's `Talk` lines come through here too, so stdout
-/// stays the JSON-RPC stream alone, and every line on stderr is rendered.
-fn log(line: impl Display) {
-    let _ = writeln!(std::io::stderr(), "{}", logged(line));
-}
-
-/// Returns `line` as the log carries it.
-///
-/// It is prefixed `skep-mcp: `; every control `render_inert` disarms — the
-/// C0 controls, DEL and the bidi controls (AUTH-5.2) — is shown as its code
-/// point; and every line it breaks onto is indented two spaces, an empty one
-/// left empty. A board's text rides many lines here — a refusal's code and
-/// detail, the `/health` claimant, a block's record and ground, the shell's
-/// `Talk` of its feed and held threads — and the log is read on a terminal,
-/// or kept and shown on one later, where a control acts: ESC opens a
-/// sequence that retitles the window, moves the cursor or writes the
-/// clipboard, CR overwrites the line. So no C0 control, DEL or bidi control
-/// a board chose acts there, and no text it chose opens a line of the log as
-/// `skep-mcp: `. A C1 control passes as it came, as `render_inert` passes
-/// it.
-fn logged(line: impl Display) -> String {
-    let text = line.to_string();
-    let mut out = String::from("skep-mcp: ");
-    for (k, piece) in text.split('\n').enumerate() {
-        if k > 0 {
-            out.push('\n');
-            if !piece.is_empty() {
-                out.push_str("  ");
-            }
-        }
-        out.push_str(&render_inert(piece));
-    }
-    out
-}
-
 /// Says a refusal before the shell is open, and exits 1.
 ///
 /// `msg` is the refusal's line as `format_args!` makes it, so no caller
-/// builds a `String` to lend. It is never called past `Backend::open`, whose
-/// stop returns from `main` so the shell drops.
+/// builds a `String` to lend; the log is drained before the exit, so the line
+/// reaches stderr. It is never called past `Backend::open`, whose stop
+/// returns from `serve` so the shell drops.
 fn die(msg: fmt::Arguments<'_>) -> ! {
     log(msg);
+    log::drain();
     std::process::exit(1);
 }
 
 /// Says a usage error and the usage after it, and exits 2.
+///
+/// The log is drained before the exit, as `die` drains it.
 fn die_usage(msg: fmt::Arguments<'_>) -> ! {
     log(format_args!("{msg}\n\n{USAGE}"));
+    log::drain();
     std::process::exit(2);
 }
 
@@ -466,32 +498,17 @@ mod tests {
         assert!(disagreements.is_empty(), "{} strings judged unlike is_t4_valid, first: {:?}", disagreements.len(), &disagreements[..disagreements.len().min(5)]);
     }
 
-    /// THE VERSION LINE: `skep-mcp <crate version> (<commit>)`, the version
-    /// `CARGO_PKG_VERSION`'s and the commit `SKEP_GIT_SHA`'s at build time,
-    /// `unknown` where the build set none, which this suite's build never
-    /// does; and the usage names the flag.
+    /// The build is the crate's version and the build's commit, and names both.
+    ///
+    /// It is `<crate version> (<commit>)`, the version `CARGO_PKG_VERSION`'s
+    /// and the commit `SKEP_GIT_SHA`'s at build time, `unknown` where the
+    /// build set none, which this suite's build never does; the version line is
+    /// `skep-mcp <build>`; and the usage names the flag.
     #[test]
     fn the_version_line_names_the_binary_its_version_and_the_build_commit() {
-        assert_eq!(version_line(), format!("skep-mcp {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")));
+        assert_eq!(build(), format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")));
+        assert_eq!(version_line(), format!("skep-mcp {}", build()));
         assert!(USAGE.contains("\n  --version            this binary's version"), "{USAGE}");
-    }
-
-    /// A log line is inert, and only its first line opens as the adapter's.
-    ///
-    /// A control a board's text carries — ESC opening a terminal sequence,
-    /// BEL, CR, a bidi override — is shown as its code point, on any line; a
-    /// line break it carries continues the line indented, so a forged
-    /// `skep-mcp: ` opens no line; a face's own lines keep their order, each
-    /// indented; an empty line stays empty; printable text passes as written.
-    #[test]
-    fn a_log_line_is_inert_and_opens_as_the_adapters_once() {
-        assert_eq!(logged("claimant \u{1b}]0;owned\u{7}"), "skep-mcp: claimant <U+001B>]0;owned<U+0007>");
-        assert_eq!(logged("x\r\u{202e}y"), "skep-mcp: x<U+000D><U+202E>y");
-        assert_eq!(logged("a\nb\u{1b}c"), "skep-mcp: a\n  b<U+001B>c");
-        assert_eq!(logged("the board refused: x\nskep-mcp: signed as principal 0"), "skep-mcp: the board refused: x\n  skep-mcp: signed as principal 0");
-        assert_eq!(logged("no_key: s\n  cause: c\n  act: a"), "skep-mcp: no_key: s\n    cause: c\n    act: a");
-        assert_eq!(logged("unknown argument 'x'\n\nusage: skep-mcp"), "skep-mcp: unknown argument 'x'\n\n  usage: skep-mcp");
-        assert_eq!(logged("person seam: refuse — é"), "skep-mcp: person seam: refuse — é");
     }
 
     /// A setting names its flag and variable, and holds the flag's value.
@@ -517,11 +534,19 @@ mod tests {
     /// The usage states the exit statuses the suites pin.
     ///
     /// 0 at stdin's end or a closed stdout, 1 a refusal before serving or a
-    /// stop while serving, 2 a usage error.
+    /// stop while serving, 2 a usage error, 101 a panic.
     #[test]
     fn the_usage_states_the_exit_statuses() {
-        for status in ["\nexit status:\n  0  stdin's end", "\n  1  a refusal before serving", "\n  2  a usage error"] {
+        for status in ["\nexit status:\n    0  stdin's end", "\n    1  a refusal before serving", "\n    2  a usage error", "\n  101  a panic"] {
             assert!(USAGE.contains(status), "the usage states {status:?}: {USAGE}");
+        }
+    }
+
+    /// The usage says where the log is, and that its reader holds nothing up.
+    #[test]
+    fn the_usage_says_where_the_log_is() {
+        for said in ["\nlog:\n  stderr, every line opening 'skep-mcp: ', the first naming the version", "never holds the adapter up"] {
+            assert!(USAGE.contains(said), "the usage says {said:?}: {USAGE}");
         }
     }
 }

@@ -500,9 +500,9 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
 /// A harness that hangs up stdout ends the adapter, cleanly.
 ///
 /// The first answer it cannot write is its exit, stdin still open — no
-/// orphan goes on taking requests whose answers nobody reads — and the exit
-/// is the clean one: the clean stop runs, the session closed at the board, as
-/// at stdin's end.
+/// orphan goes on taking requests whose answers nobody reads — said in the log
+/// with the write's own error, and the exit is the clean one: the clean stop
+/// runs after that line, the session closed at the board, as at stdin's end.
 #[test]
 fn a_closed_stdout_ends_the_adapter() {
     let fixture = Fixture::new("hangup");
@@ -535,5 +535,8 @@ fn a_closed_stdout_ends_the_adapter() {
     let status = exited.unwrap_or_else(|| panic!("the adapter outlived its closed stdout by 30 s, stdin open"));
     let log = log.join().expect("the log's reader");
     assert!(status.success(), "a harness that hung up is the clean exit: {status:?}");
-    assert!(log.contains("stopping: closing the session at the board, saving the index"), "the clean stop ran, its session closed at the board:\n{log}");
+    let said = log.find("skep-mcp: stdout: ").unwrap_or_else(|| panic!("the hang-up said, with its cause:\n{log}"));
+    assert!(log[said..].contains(": the harness reads no more answers"), "{log}");
+    let stopping = log.find("stopping: closing the session at the board, saving the index").unwrap_or_else(|| panic!("the clean stop ran, its session closed at the board:\n{log}"));
+    assert!(said < stopping, "the end's cause before the stop's line:\n{log}");
 }

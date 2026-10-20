@@ -70,11 +70,15 @@ pub enum Inbound {
 /// The stdio framing is one message per line: each line split off at `\n`
 /// goes to `inbound` as raw bytes, for `handle_line` to judge, and stdin's
 /// end follows the last; a read that fails is said in the log and ends the
-/// reading as the end does. The reading has a thread of its own so that the
-/// loop hears the backend's stop, which rides the same channel, between
-/// lines.
+/// reading as the end does. The reading has a thread of its own,
+/// `skep-mcp-stdin`, so that the loop hears the backend's stop, which rides
+/// the same channel, between lines.
+///
+/// # Panics
+///
+/// Where the OS refuses the thread, as `thread::spawn` panics.
 pub fn read_stdin(inbound: Sender<Inbound>) {
-    thread::spawn(move || {
+    let reader = move || {
         let stdin = std::io::stdin();
         for line in stdin.lock().split(b'\n') {
             match line {
@@ -90,7 +94,8 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
             }
         }
         let _ = inbound.send(Inbound::Eof);
-    });
+    };
+    thread::Builder::new().name("skep-mcp-stdin".into()).spawn(reader).expect("the OS starts the adapter's stdin thread");
 }
 
 /// The MCP side's state: the backend every tool calls and the catalog
@@ -111,9 +116,10 @@ impl Server {
     /// arrival order. Each line goes to `handle_line` as raw bytes: what a
     /// line is, its encoding included, is that method's call. The loop ends
     /// at stdin's end and at a closed stdout (the harness hung up), each a
-    /// success, and at the backend's stop, its line said first, exit 1; the
-    /// clean stop (`Backend::shutdown`) runs after any of the three, and the
-    /// exit code is returned for `main` to exit with.
+    /// success, and at the backend's stop, exit 1, each end said in the log,
+    /// its cause before the stop's line; the clean stop (`Backend::shutdown`)
+    /// runs after any of the three, and the exit code is returned for `main`
+    /// to exit with.
     pub fn run(self, inbox: &Receiver<Inbound>) -> ExitCode {
         let mut out = std::io::stdout();
         let mut code = ExitCode::SUCCESS;
@@ -123,7 +129,8 @@ impl Server {
                     let Some(reply) = self.handle_line(&line) else { continue };
                     let mut bytes = serde_json::to_vec(&reply).expect("serializing a serde_json::Value cannot fail");
                     bytes.push(b'\n');
-                    if out.write_all(&bytes).and_then(|()| out.flush()).is_err() {
+                    if let Err(e) = out.write_all(&bytes).and_then(|()| out.flush()) {
+                        crate::log(format_args!("stdout: {e}: the harness reads no more answers"));
                         break;
                     }
                 }
@@ -132,7 +139,10 @@ impl Server {
                     code = ExitCode::from(1);
                     break;
                 }
-                Inbound::Eof => break,
+                Inbound::Eof => {
+                    crate::log("stdin's end: no request follows");
+                    break;
+                }
             }
         }
         self.backend.shutdown();

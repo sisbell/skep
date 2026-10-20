@@ -1,26 +1,31 @@
 //! Startup: what the adapter reads before it serves, and what it refuses.
 //!
 //! The flags answered before anything else is read (`--version`, `--help`), and
-//! a usage error; each setting refused by name where it is missing or
-//! malformed — the principal, the board, the key store, the commons, a value
-//! that is not UTF-8 — and served where it is given: a flag beating its
-//! variable, the commons sentence, a tools file in the embedded catalog's place
-//! and a drifted one refused; and the board's refusals of the open, a board
-//! said halted exactly where its writes are, the log inert and no token in it.
-//! Most run the built binary with no board, or a stand-in one answering what a
-//! real board never does; the rest over a claimed board (`common`'s
+//! a usage error; the log opening on the version it runs; each setting refused
+//! by name where it is missing or malformed — the principal, the board (an
+//! `https://` one among them), the key store (one that does not stand among
+//! them), the commons, a value that is not UTF-8 — and served where it is
+//! given: a flag beating its variable, a board off the loopback warned of, the
+//! commons sentence, a tools file in the embedded catalog's place, named where
+//! it is served, and a drifted one refused naming it; the board's refusals of
+//! the open, a board said halted exactly where its writes are, the log inert
+//! and no token in it; and what the start finds under the store: an earlier
+//! run's held bursts, a halted held file, a search index another adapter
+//! holds. Most run the built binary with no board, or a stand-in one answering
+//! what a real board never does; the rest over a claimed board (`common`'s
 //! `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`, a retired
 //! key's relaunch — are `agent.rs`'s.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::json;
 use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose};
 
-use crate::common::{embedded_catalog, Fixture, Launch, TempDir, CLAIMANT_ACCOUNT, VARIABLES};
+use crate::common::{draft_of, embedded_catalog, Fixture, Launch, TempDir, CLAIMANT_ACCOUNT, VARIABLES};
 
 /// `--version` is answered before the catalog, the environment or stdin is
 /// consulted: ONE line on stdout — `skep-mcp <crate version> (<commit>)`,
@@ -182,8 +187,9 @@ fn a_token_in_a_session_answer_the_client_cannot_read_reaches_no_log_line() {
 /// A board the adapter cannot reach stops startup, and nothing is served.
 ///
 /// The session cannot open: exit 1, the plain line naming the stop, the
-/// refusal's kind and the board, nothing on stdout. Port 1 sits below 1024,
-/// where no unprivileged process can listen, so the connect is refused.
+/// refusal's kind and the board, nothing on stdout; a loopback board is warned
+/// of not at all. Port 1 sits below 1024, where no unprivileged process can
+/// listen, so the connect is refused.
 #[test]
 fn a_board_that_does_not_answer_stops_startup() {
     let dir = TempDir::new("noboard");
@@ -192,7 +198,54 @@ fn a_board_that_does_not_answer_stops_startup() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("stopped before serving: the board's health was not read: unreachable"), "{err}");
     assert!(err.contains("http://127.0.0.1:1"), "the board named: {err}");
+    assert!(!err.contains("plaintext non-loopback"), "a loopback board is warned of not at all: {err}");
     assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
+}
+
+/// The log opens on the build it runs, before anything else is said.
+///
+/// Its first line is `skep-mcp: version <crate version> (<commit>)`, the
+/// version line's build, so every line after it is read as that binary's.
+#[test]
+fn the_log_opens_on_the_version_it_runs() {
+    let dir = TempDir::new("version-first");
+    let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
+    assert_eq!(code, Some(1), "{err}");
+    let version = format!("skep-mcp: version {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"));
+    assert_eq!(err.lines().next(), Some(version.as_str()), "the first line names the build: {err}");
+}
+
+/// A board off this machine's loopback is warned of where the setting is read.
+///
+/// An `http://` origin whose host is no loopback carries the session's token in
+/// the clear unless a tunnel carries it (AUTH-4.53): the start says so ahead of
+/// everything the session needs — a warning, never a refusal: the stop that
+/// follows here is the unanswering board's.
+#[test]
+fn a_board_off_the_loopback_is_warned_of_where_the_setting_is_read() {
+    let dir = TempDir::new("plaintext");
+    let (code, err) = Launch::new().env("SKEP_BOARD", "http://0.0.0.0:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
+    assert_eq!(code, Some(1), "{err}");
+    let warned = err.find("warning: http://0.0.0.0:1 is a plaintext non-loopback origin").unwrap_or_else(|| panic!("the warning: {err}"));
+    let stopped = err.find("stopped before serving: the board's health was not read").unwrap_or_else(|| panic!("the board's own stop: {err}"));
+    assert!(warned < stopped, "the warning ahead of what the session needs: {err}");
+}
+
+/// An `https://` board is refused where the setting is read.
+///
+/// The adapter dials plain `http://` alone, so the refusal names the setting,
+/// the origin and what serves instead — by variable and by flag alike — before
+/// any dial: no health read is tried, and no line names a transport feature.
+#[test]
+fn an_https_board_is_refused_where_the_setting_is_read() {
+    let dir = TempDir::new("https");
+    for launch in [Launch::new().env("SKEP_BOARD", "https://127.0.0.1:1"), Launch::new().args(["--board", "https://127.0.0.1:1"])] {
+        let (code, err) = launch.env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
+        assert_eq!(code, Some(1), "{err}");
+        assert!(err.contains("--board (or SKEP_BOARD): 'https://127.0.0.1:1' is an https:// origin, and this adapter dials plain http:// alone"), "{err}");
+        assert!(err.contains("the http:// origin of a tunnel to the board"), "what serves instead: {err}");
+        assert!(!err.contains("health was not read") && !err.contains("`tls`"), "refused before any dial: {err}");
+    }
 }
 
 /// The principal is required, an integer from 0 to 2^53 − 1 the board seats.
@@ -227,11 +280,13 @@ fn the_principal_is_required_and_one_the_board_seats() {
     assert!(mcp.finish().success());
 }
 
-/// The key store is required, and never the person's own.
+/// The key store is required, a directory that stands, and never the person's.
 ///
 /// Unset, set empty, or given empty by its flag, startup refuses naming the
 /// setting — ~/.skep is never consulted — before any dial: an agent never
 /// signs with its person's store, nor keeps its index where it was launched.
+/// Set to a path that names nothing, or to a file, it is refused naming the
+/// path, before any dial, and nothing is made at the path.
 #[test]
 fn the_key_store_is_required_and_never_the_persons_own() {
     let cases: [(&[&str], Option<&str>); 3] = [(&[], None), (&[], Some("")), (&["--dir", ""], None)];
@@ -245,6 +300,17 @@ fn the_key_store_is_required_and_never_the_persons_own() {
         assert!(err.contains("--dir (or SKEP_KEYSTORE) is required") && err.contains("~/.skep is never consulted"), "{args:?} {store:?}: {err}");
         assert!(!err.contains("health was not read"), "refused before any dial: {err}");
     }
+    let dir = TempDir::new("store-absent");
+    let absent = dir.path().join("mistyped").join("store");
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, b"").expect("a file in the store's place");
+    for (store, says) in [(&absent, "cannot be read"), (&file, "is no directory")] {
+        let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_PRINCIPAL", "1").env("SKEP_KEYSTORE", store).refusal();
+        assert_eq!(code, Some(1), "{}: {err}", store.display());
+        assert!(err.contains(&format!("--dir (or SKEP_KEYSTORE): '{}' {says}", store.display())), "{err}");
+        assert!(!err.contains("health was not read"), "refused before any dial: {err}");
+    }
+    assert!(!dir.path().join("mistyped").exists(), "nothing is made at a path that names nothing");
 }
 
 /// A word the usage does not name, a flag without its value, or a flag
@@ -408,6 +474,9 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
 }
 
 /// A tools file is the catalog served, in place of the embedded one.
+///
+/// Its instructions and its tools are what `initialize` and `tools/list`
+/// answer, and the serving line names the file it counts the tools of.
 #[test]
 fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
     let fixture = Fixture::new("tools-file");
@@ -417,17 +486,77 @@ fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
     fork["description"] = json!("The tools file's own description of fork.");
     let path = fixture.dir.path().join("own.json");
     std::fs::write(&path, catalog.to_string()).expect("write the tools file");
-    let mut mcp = Launch::over(&fixture, 1).args(["--tools-file", path.to_str().expect("a UTF-8 path")]).spawn();
+    let mut mcp = Launch::over(&fixture, 1).args(["--tools-file", path.to_str().expect("a UTF-8 path")]).logged().spawn();
     assert_eq!(mcp.initialize()["instructions"], catalog["instructions"], "the file's instructions are served");
     assert_eq!(mcp.request("tools/list", json!({}))["result"]["tools"], catalog["tools"], "the file's tools are listed");
-    assert!(mcp.finish().success());
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(log.contains(&format!("tools of the tools file {} on stdio", path.display())), "the serving line names the file:\n{log}");
 }
 
 /// The adapter run to completion on `tools_file`, which startup must
 /// refuse before any setting is read: its stderr, the refusal.
+///
+/// The refusal names the file, and the act a drifted one asks: written afresh
+/// from this release's catalog, or the override dropped.
 fn tools_file_refusal(tools_file: &Path) -> String {
     let (code, err) = Launch::new().args(["--tools-file", tools_file.to_str().expect("utf-8 path")]).refusal();
     assert_eq!(code, Some(1), "a drifted tools file must refuse startup: {err}");
-    assert!(err.contains("tools file:"), "{err}");
+    assert!(err.contains(&format!("the tools file {}: ", tools_file.display())), "the file named: {err}");
+    assert!(err.contains("write it afresh from this release's tools.json") && err.contains("or drop --tools-file"), "the act: {err}");
     err
+}
+
+/// What an earlier run's held bursts left, and a halted held file, are said.
+///
+/// A burst the board refuses is held as a refused run, and stands in the
+/// principal's held file once the adapter that held it has stopped: the next
+/// start says one burst is left, waiting on the agent's `resolve`. A held file
+/// a newer skep wrote halts the principal's bursts at the board: the start
+/// says the file is halted and why, and a burst is refused `store_halted`.
+#[test]
+fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
+    let fixture = Fixture::new("held-at-start");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let refused = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+    assert_eq!(refused["resp"], "held", "premise: a refused run is held: {refused}");
+    assert!(mcp.finish().success());
+    let mut again = Launch::over(&fixture, 1).logged().spawn();
+    again.initialize();
+    again.log_holding(&["held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 1 waiting on the agent's `resolve`"], Duration::from_secs(10));
+    assert!(again.finish().success());
+    let chains: Vec<PathBuf> = std::fs::read_dir(fixture.store.join("held")).expect("the held store").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
+    let file = chain.join("principal-1.held");
+    std::fs::write(&file, "{\"type\":\"skep-held-bursts\",\"v\":2}\n").expect("a newer skep's held file");
+    let mut halted = Launch::over(&fixture, 1).logged().spawn();
+    halted.initialize();
+    halted.log_holding(&[&format!("held: the held file {} is halted (written by a newer skep)", file.display())], Duration::from_secs(10));
+    let refusal = halted.call_error("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
+    assert_eq!(refusal["name"], "store_halted", "{refusal}");
+    assert!(halted.finish().success());
+}
+
+/// A second adapter over one store is told its search index answers busy.
+///
+/// The key store is one directory per adapter process: a second adapter
+/// started over a running one's store finds the search index's lock held, and
+/// its log says so — the index's directory, the cause, and the act.
+#[test]
+fn a_second_adapter_over_one_store_is_told_its_index_answers_busy() {
+    let fixture = Fixture::new("busy-index");
+    let mut first = Launch::over(&fixture, 1).spawn();
+    first.initialize();
+    // Answered on the board's feed thread, which mounts the index first.
+    let listed = first.call_json("places", json!({}));
+    assert_ne!(listed["state"]["arm"], "busy", "premise: the first adapter holds the index: {listed}");
+    let mut second = Launch::over(&fixture, 1).logged().spawn();
+    second.initialize();
+    let index = fixture.store.join("index");
+    let log = second.log_holding(&[&format!("the search index at {} answers busy: another process holds this directory", index.display())], Duration::from_secs(10));
+    assert!(log.contains("stop one of the two and start this one again"), "the act:\n{log}");
+    assert!(second.finish().success());
+    assert!(first.finish().success());
 }

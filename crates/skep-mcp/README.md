@@ -19,10 +19,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   key in the store, or a key the board refuses, stops the adapter before
   it serves, with the shell's face in plain words; no bare mode exists.
   The startup lines on stderr name the board and its mode, the key and
-  the account, and the person seam. Every line on stderr opens
-  `skep-mcp: `: a C0 control, DEL or bidi control a board's text carries
-  there is shown as its code point, and a line break in it continues the
-  line indented.
+  the account, and the person seam — and, for a board off this machine's
+  loopback, the warning that its session's token rides in the clear
+  unless a tunnel carries it, and the principal's held bursts an earlier
+  run left at the board, or a held file the shell halted. Every line on
+  stderr opens `skep-mcp: `: a C0 control, DEL or bidi control a board's
+  text carries there is shown as its code point, and a line break in it
+  continues the line indented.
 - **Every tool is one call of the shell.** The wire operations of
   `docs/wire.md` §Operations are tools of their own names — the name is the
   frame's `op`, the arguments are the frame — the shell's own calls
@@ -59,9 +62,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   index. A signal ends the process with neither — the session then lives
   on at the board until it restarts.
 - **Deliberately dependency-light** — the shell's core, `skep-client` for
-  the types the shell's surface names and the inert rendering a key's
-  label and every log line take, and `serde_json`; the stdio framing, the
-  type sniff and the base64 are this crate's own.
+  the types the shell's surface names, the inert rendering a key's label
+  and every log line take, and the plaintext warning the start says, and
+  `serde_json`; the stdio framing, the log's writer, the type sniff and the
+  base64 are this crate's own.
 
 Each rule above is stated in full where its reader looks: what an agent is
 told — every tool's arguments and answers, the held bursts, which refused
@@ -73,8 +77,8 @@ in the crate doc (`src/main.rs`).
 
 | flag | variable | what |
 |---|---|---|
-| `--board <origin>` | `SKEP_BOARD` | the board, a canonical origin such as `http://127.0.0.1:8642`; required. `SKEPD_URL` is no longer read. |
-| `--dir <path>` | `SKEP_KEYSTORE` | the key store the adapter signs from; required, `~/.skep` never consulted. The shell's search index and its held bursts sit there too, so it is ONE DIRECTORY PER ADAPTER PROCESS, never a running `skep-dev serve`'s: the index's and the held store's locks are per process, and a second process on the same directory gets a `busy` index and holds its bursts in memory alone. The index persists there across runs and is built from scratch in a fresh directory — `search` and `places` answer `state.arm` `building` meanwhile. |
+| `--board <origin>` | `SKEP_BOARD` | the board, a canonical `http://` origin such as `http://127.0.0.1:8642`; required. An `https://` origin is refused: the adapter dials plain `http://` alone, so a hosted board is reached at the `http://` origin of a tunnel to it, and a board on another machine without one carries its session's token in the clear, as the start's warning says. `SKEPD_URL` is no longer read. |
+| `--dir <path>` | `SKEP_KEYSTORE` | the key store the adapter signs from, a directory that stands; required, `~/.skep` never consulted. The shell's search index and its held bursts sit there too, so it is ONE DIRECTORY PER ADAPTER PROCESS, never a running `skep-dev serve`'s: the index's and the held store's locks are per process, and a second process on the same directory gets a `busy` index, said in its log, and holds its bursts in memory alone. The index persists there across runs and is built from scratch in a fresh directory — `search` and `places` answer `state.arm` `building` meanwhile. |
 | `--principal <n>` | `SKEP_PRINCIPAL` | the principal the adapter acts as; required, an integer from 0 to 2^53 − 1 |
 | — | `SKEP_COMMONS` | optional: the commons' address, which the server instructions then point agents at |
 | `--tools-file <path>` | — | override the embedded catalog |
@@ -82,7 +86,13 @@ in the crate doc (`src/main.rs`).
 A flag beats its variable. `--version` and `--help` answer before any
 setting or stdin is read. The process exits 0 at stdin's end or a closed
 stdout, the session closed at the board; 1 at a refusal before serving or
-a stop while serving; 2 at a usage error.
+a stop while serving; 2 at a usage error; 101 at a panic, a bug said in
+one line of the log.
+
+The log is stderr: every line opens `skep-mcp: `, and the first names the
+version the run began with. A harness may read it or leave it: a reader
+that stops reading never holds the adapter up — the lines it leaves are
+dropped, and the next line it takes says how many went.
 
 ## Starting it from an agent app
 

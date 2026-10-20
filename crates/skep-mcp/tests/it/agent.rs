@@ -386,7 +386,11 @@ fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.log()));
     assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.log());
     let log = mcp.log_holding(&["stopped: the key ", "stopping: the session already ended at the board"], Duration::from_secs(5));
-    assert!(log.contains(&format!("stopped: the key {} was retired at the board by the key {k2} (second): your person stops you by retiring your key", fixture.fingerprint)), "the plain line:\n{log}");
+    assert!(
+        log.contains(&format!("stopped: the key {} was retired at the board by the key {k2} (second): the person who enrolled it stops this agent so", fixture.fingerprint)),
+        "the plain line:\n{log}"
+    );
+    assert!(log.contains("a relaunch over this store is refused `retired` until the person gives the agent a key enrolled anew"), "the act that clears it:\n{log}");
     assert!(mcp.stdout_closed(), "nothing is served after the stop");
     let out = Launch::over(&fixture, 1).output();
     assert_eq!(out.status.code(), Some(1), "a relaunch with the retired key refuses: {out:?}");
@@ -585,7 +589,8 @@ fn a7_a_burst_the_board_refuses_is_held_and_the_bursts_behind_it_wait() {
 /// Every line on stdout is JSON-RPC, while the shell's talk — the feed thread's
 /// lines at a restart, and the adapter's own re-open line, the drain's — goes
 /// to stderr under the adapter's prefix; and stdin's end closes the session at
-/// the board: the stop line is said, the shell's close met no silence, exit 0.
+/// the board: the end is said, then the stop line, the shell's close met no
+/// silence, exit 0.
 #[test]
 fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     let mut fixture = Fixture::new("a8");
@@ -604,6 +609,8 @@ fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     assert!(status.success(), "{status:?}\n{log}");
     assert!(log.contains("re-opened under a fresh reference"), "the drain's re-open line, on stderr:\n{log}");
     assert!(log.lines().filter(|l| !l.is_empty()).all(|l| l.starts_with("skep-mcp: ") || l.starts_with("  ")), "every stderr line is the adapter's stream:\n{log}");
-    assert!(log.contains("stopping: closing the session at the board, saving the index"), "{log}");
+    let ended = log.find("skep-mcp: stdin's end: no request follows").unwrap_or_else(|| panic!("the end said:\n{log}"));
+    let stopping = log.find("stopping: closing the session at the board, saving the index").unwrap_or_else(|| panic!("the stop said:\n{log}"));
+    assert!(ended < stopping, "the end's cause before the stop's line:\n{log}");
     assert!(!log.contains("did not close"), "the board closed the session:\n{log}");
 }

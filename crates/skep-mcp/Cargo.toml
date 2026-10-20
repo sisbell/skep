@@ -22,8 +22,9 @@ skep-shell = { path = "../skep-shell" }
 # a refusal of the session's open keeps or replaces; a fetch's head
 # (`dial::Headers`), whose declared length `media::read_whole` holds to the
 # cap; the address spelling (`address::is_address_text`) `blob_uri` asserts,
-# the one the shell's `fetch` row admits; and `render_inert`, the rendering
-# every log line takes (AUTH-5.2).
+# the one the shell's `fetch` row admits; `render_inert`, the rendering
+# every log line takes (AUTH-5.2); and the plaintext non-loopback warning
+# (`dial::plaintext_non_loopback_warning`, AUTH-4.53) the start says.
 skep-client = { path = "../skep-client" }
 # The bridge's values: every call's input and output is a
 # `serde_json::Value`; JSON-RPC's framing is this crate's own.

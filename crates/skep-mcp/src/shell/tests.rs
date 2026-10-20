@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use skep_client::halt::{Face, Refused};
 use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose};
@@ -365,7 +367,7 @@ fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event(
     let (stops, stopped) = std::sync::mpsc::channel::<String>();
     backend.on_stop = OnStop::new(stops, |line| line);
     let (bus, events) = std::sync::mpsc::channel::<Event>();
-    backend.drain(events);
+    backend.drain(events, Path::new("/store/index"));
     let died = |session: &str, reason: Value| Event { name: EventName::SessionDied, data: json!({"session": session, "reason": reason}) };
     for event in [
         Event { name: EventName::Held, data: json!({"board": "b-1", "session": "s-1", "doc": "1.0.1.0.2", "held": 1, "state": "holding"}) },
@@ -388,6 +390,80 @@ fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event(
     assert_eq!(said.len(), 2, "the re-open and the lapse said once each, and nothing else: {said:?}");
     assert!(said[0].starts_with("the board restarted: the session was re-opened"), "{said:?}");
     assert!(said[1].starts_with("the session ended and was not re-opened"), "{said:?}");
+}
+
+/// The index's states that ask an act are said once, naming the index.
+///
+/// Fed by hand in the bus's place: `busy`, from the guest face and then a
+/// session's, is said once; a newer skep's file and an index past its ceiling
+/// once each, with what each names; a `building` index nothing. The arms read
+/// are ones skep-shell declares for the index's state (`IndexState`).
+#[test]
+fn the_index_states_that_ask_an_act_are_said_once() {
+    let scratch = Scratch::new("drain-index");
+    let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+    let lines = said_by(&mut backend);
+    let (bus, events) = std::sync::mpsc::channel::<Event>();
+    backend.drain(events, Path::new("/store/index"));
+    let index = |session: Value, state: Value| Event { name: EventName::Index, data: json!({"board": "b-1", "session": session, "state": state}) };
+    for event in [
+        index(Value::Null, json!({"arm": "busy"})),
+        index(json!("s-1"), json!({"arm": "busy"})),
+        index(Value::Null, json!({"arm": "newer_skep", "v": {"version": 3}})),
+        index(Value::Null, json!({"arm": "past_the_ceiling", "held": 9, "seen": 4, "limit": 93075924})),
+        index(Value::Null, json!({"arm": "building", "position": 0, "units": 0, "lost": null, "aside": false})),
+    ] {
+        bus.send(event).expect("the drain listens");
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while lines.lock().expect("the lines' lock").len() < 3 {
+        assert!(Instant::now() < deadline, "the three states never said: {:?}", lines.lock().expect("the lines' lock"));
+        thread::sleep(Duration::from_millis(20));
+    }
+    // A line said after the third would land within this beat.
+    thread::sleep(Duration::from_millis(200));
+    let said = lines.lock().expect("the lines' lock").clone();
+    assert_eq!(said.len(), 3, "busy once, the two others once each, building nothing: {said:?}");
+    assert!(said[0].starts_with("the search index at /store/index answers busy: another process holds this directory"), "{said:?}");
+    assert!(said[1].starts_with("the search index at /store/index was written by a newer skep (index version 3)"), "{said:?}");
+    assert!(said[2].starts_with("the search index at /store/index is past its ceiling of 93075924 bytes of text: 4 units"), "{said:?}");
+    let declared = skep_shell::shapes::shape("IndexState").and_then(|shape| shape.fields.iter().find(|field| field.name == "arm")).expect("skep-shell declares the index's arm").ty;
+    for arm in ["busy", "newer_skep", "past_the_ceiling"] {
+        assert!(declared.contains(&format!("'{arm}'")), "`{arm}` is an arm skep-shell declares: {declared}");
+    }
+}
+
+/// What an earlier run's held bursts left is said as it stands.
+///
+/// No line where none stands; else the bursts counted, those sent and so
+/// perhaps landed, and those waiting on the agent's `resolve` — a refused
+/// run's, which carries its refusal, and a moved document's. The members read
+/// are ones skep-shell declares for a held line (`HeldRow`).
+#[test]
+fn an_earlier_runs_held_bursts_are_counted_as_they_stand() {
+    assert_eq!(carried_line(&json!([])), None, "no line where no burst stands");
+    let line = |k: u64, cause: &str, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": cause, "sent": sent, "time": k});
+    let mut refused = line(2, "out_of_bounds", false);
+    refused["refusal"] = json!({"code": "out_of_bounds"});
+    let four = json!([line(1, "unreachable", true), refused, line(3, "moved", false), line(4, "behind", false)]);
+    let said = carried_line(&four).expect("four stand");
+    assert!(said.starts_with("held: an earlier run left 4 bursts held at this board (1 sent and so perhaps landed, 2 waiting on the agent's `resolve`, refused or moved): "), "{said}");
+    let said = carried_line(&json!([line(1, "unreachable", false)])).expect("one stands");
+    assert!(said.starts_with("held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 0 waiting"), "{said}");
+    let declared: BTreeSet<&str> = skep_shell::shapes::shape("HeldRow").expect("skep-shell declares a held line").fields.iter().map(|field| field.name).collect();
+    for read in ["sent", "refusal", "cause"] {
+        assert!(declared.contains(read), "`{read}` is a member skep-shell declares for a held line: {declared:?}");
+    }
+}
+
+/// A halted held file is said with its path, why in words, and the act.
+#[test]
+fn a_halted_held_file_is_said_with_its_path_why_and_the_act() {
+    for (why, words) in [("newer", "written by a newer skep"), ("unknown_member", "its header is not one this skep reads"), ("damaged", "damaged: a line of it is not one this skep reads whole")] {
+        let said = halted_line("/store/held/c/principal-1.held", why);
+        assert!(said.starts_with(&format!("held: the held file /store/held/c/principal-1.held is halted ({words}): ")), "{said}");
+        assert!(said.contains("refused `store_halted`") && said.contains("set the file aside"), "the refusal it meets and the act: {said}");
+    }
 }
 
 /// A blob's URI is the fetch's route at the board's origin, `i` as written.

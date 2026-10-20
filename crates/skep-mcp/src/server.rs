@@ -5,22 +5,12 @@
 //! the protocol is written; the dispatch takes `tools/call` onto the
 //! backend's calls.
 //!
-//! **A refusal as a result.** Every tool's answer is the shell's — a value,
-//! or a [`Refusal`] of one of five kinds — and the tool result says which. A
-//! `refused` refusal is the board's verdict on the frame: it rides as data,
-//! `isError: false`, the verdict's body verbatim under `body` with the
-//! shell's envelope (`name`, `status`, `code`, `detail`, `op`) beside it — a
-//! client that cannot read a rejection has been silently failed. Every other
-//! kind — `halt`, `blocked`, `unreachable`, and `shell`, the shell's own
-//! names among them — is `isError: true` with the refusal's value as the
-//! text: the shell could not get the board's verdict. `Server::fetch`
-//! answers two more `isError` of the adapter's own, each a plain sentence: a
-//! file past its cap, and a stream cut short. A write refused `unreachable`
-//! may have committed — the shell faces a lost answer to any write but a
-//! burst — and nothing here reissues it. A call the adapter will not run — a
-//! tool outside the catalog, a member an adapter tool's row does not name —
-//! is no tool result at all: it is refused -32602, as malformed `tools/call`
-//! params are; a member of the wrong form is the shell's `malformed_args`.
+//! **A refusal as a result** — the crate's second rule — is kept here:
+//! `tool_result` renders every answer the shell gives by it, the board's
+//! verdict as data and any other refusal `isError`; `Server::fetch` adds its
+//! own two `isError`, a file past the cap and a stream cut short; and `respond`
+//! answers -32602 a call `call_params` or `Tool::admit` refuses, which is no
+//! tool result at all.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{Receiver, Sender};
@@ -305,7 +295,7 @@ fn text_result(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
-/// Renders the shell's answer as a tool result, by the module doc's rule.
+/// Renders the shell's answer as a tool result, by the crate's second rule.
 ///
 /// An answer is the result's text, `isError` false; the board's verdict
 /// (`Refusal::Board`) is data, its value — the shell's envelope with the

@@ -11,34 +11,36 @@
 //!
 //! **The session's life.** The calls stand on one session, its standing held
 //! here (`Standing`): the session every call names, or the one that died and
-//! what its end left. A death signal the shell meets — at one of this
-//! adapter's calls, or at the board's feed thread first — ends the session by
-//! the shell's one sequence (`Sessions::end`), and on the restart arm the
-//! shell re-opens a signed session silently under a fresh reference
-//! (AUTH-5.31), named in the death's reason. That reason is the death's
-//! verdict, and whichever thread learns it first moves the standing by it: the
-//! call that met the death, from its `session_died` refusal, reissuing the
-//! call once under the fresh reference (the death executed nothing: the board
-//! refuses a dead token before it runs the frame), or [`Backend::drain`], from
-//! the `session-died` event on the bus. A call that finds its session already
-//! ended waits for that verdict (within `VERDICT_WAIT`) rather than open a
+//! what its end left. A death signal the shell meets — at one of this adapter's
+//! calls, or at the board's feed thread first — ends the session by the shell's
+//! one sequence (`Sessions::end`), and on the restart arm the shell re-opens a
+//! signed session silently under a fresh reference (AUTH-5.31), named in the
+//! death's reason. That reason is the death's verdict, emitted once as
+//! `session-died`, and [`Backend::drain`] alone carries it into the standing. A
+//! call the shell answers `session_died` or `session_ended` waits for that
+//! verdict (within `VERDICT_WAIT`), reading no reason itself and opening no
 //! second session early, which would leave the shell's re-open adopted by
-//! nothing. A death the shell does not re-open — the key retired (AUTH-5.28,
-//! AUTH-5.77), the account seeded, the prefix blocked, or a restart whose
-//! re-open the board refused — stops the adapter: one plain line naming the
-//! arm goes to the process's stop, and nothing more is served; the person
-//! stops an agent by retiring its key, and the adapter's end is what the
-//! agent's client sees. A board that does not answer is served through: no
-//! session stands, every call answers its refusal, and the next call opens one
-//! once the board answers again, the board's refusal of it judged as a refused
-//! re-open is.
+//! nothing. It is then reissued once under the session that stands, one it
+//! opens itself where none does — the death executed nothing: the board refuses
+//! a dead token before it runs the frame — save that a death the shell did not
+//! re-open is the answer to the call that met it. A death the shell does not
+//! re-open — the key retired (AUTH-5.28, AUTH-5.77), the account seeded, the
+//! prefix blocked, or a restart whose re-open the board refused — stops the
+//! adapter: one plain line naming the arm goes to the process's stop, and
+//! nothing more is served; the person stops an agent by retiring its key, and
+//! the adapter's end is what the agent's client sees. A board that does not
+//! answer is served through: no session stands, every call answers its refusal,
+//! and the next call opens one once the board answers again, the board's
+//! refusal of it judged as a refused re-open is.
 //!
-//! THE BUS is drained on a thread of its own for the process's life: an
-//! undrained subscriber's channel grows without bound (`EventBus::emit`
-//! clones every event to every subscriber), and the one event this adapter
-//! acts on is `session-died`; every other is read and dropped.
+//! The bus is subscribed in `Backend::open` before the session opens, so no
+//! death of it is emitted unheard, and drained on a thread of its own for the
+//! process's life: an undrained subscriber's channel grows without bound
+//! (`EventBus::emit` clones every event to every subscriber), and the one event
+//! this adapter acts on is `session-died`; every other is read and dropped.
 
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,9 +49,9 @@ use serde_json::{json, Value};
 use skep_client::sheet::render_inert;
 use skep_client::store::KeyFacts;
 use skep_client::Origin;
-use skep_shell::{ArmConfig, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
+use skep_shell::{ArmConfig, Event, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
 
-/// The longest a call waits for the verdict on a session already ended.
+/// The longest a call waits for the verdict on a session the shell ended.
 ///
 /// The verdict is the `session-died` the drain moves the standing by. The
 /// shell's end derives its reason from the board and, on the restart arm,
@@ -130,6 +132,10 @@ fn classify(reason: &Value) -> Death {
             reason["account"].as_str().unwrap_or("this adapter acts as")
         )),
         "mode" => Death::Stop(format!("the board's mode moved to {} and ended the session; start the adapter again", reason["mode"].as_str().unwrap_or("another mode"))),
+        "unreachable" | "closed" => Death::ServeOn,
+        // A spelling skep-shell does not declare — the test below holds the
+        // arms read here to its declaration — is served through, as the
+        // unreachable board is.
         _ => Death::ServeOn,
     }
 }
@@ -149,26 +155,17 @@ fn refused_reopen(refused: &str) -> Death {
     }
 }
 
-/// A refusal of the shell's own, by name: the detail where it is one.
-fn shell_refusal(refusal: &Refusal, named: Name) -> Option<&Value> {
-    match refusal {
-        Refusal::Shell { name, detail } if *name == named => Some(detail),
-        _ => None,
-    }
+/// Returns whether `refusal` is the shell's own, named `named`.
+fn is_shell(refusal: &Refusal, named: Name) -> bool {
+    matches!(refusal, Refusal::Shell { name, .. } if *name == named)
 }
 
-/// A refusal in plain words, for the operator's stream: a halt's face
-/// under its armed name, state, cause and act on their lines; the board's
-/// verdict, the block and the unreachable board as the library spells them;
-/// the shell's own by name with its detail.
-fn plain(refusal: &Refusal) -> String {
-    match refusal {
-        Refusal::Halt { name, face } => format!("{name}: {}\n  cause: {}\n  act: {}", face.state, face.cause, face.act),
-        Refusal::Board(r) => format!("the board refused: {r}"),
-        Refusal::Blocked(b) => format!("blocked: {b}"),
-        Refusal::Unreachable(d) => format!("the board is not answering: {d}"),
-        Refusal::Shell { name, detail } => format!("{name}: {detail}"),
-    }
+/// Returns the line a refused startup check stops the adapter with.
+///
+/// It names what did not hold, then the shell's refusal in the library's own
+/// words (`Refusal`'s `Display`), said once.
+fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
+    format!("stopped before serving: {what}: {refusal}")
 }
 
 /// The backend: the seam onto the shell, and what it holds for the calls.
@@ -189,8 +186,8 @@ pub struct Backend {
     key: KeyFacts,
     /// The session the calls stand on.
     ///
-    /// Whichever thread learns a death's verdict first moves it, and so does
-    /// the call that opens a session itself.
+    /// The drain moves it by a death's verdict, and the call that opens a
+    /// session itself moves it too.
     session: Arc<Mutex<Standing>>,
     /// The process's stop, which a stopping verdict's line goes to.
     on_stop: OnStop,
@@ -201,10 +198,12 @@ impl Backend {
     /// Opens the shell over the one board, checks it, and opens the session.
     ///
     /// The shell runs over `origin` in the signed mode with the refusing arm;
-    /// the board's `/health` is read and said, the store's key for
-    /// `principal` checked and said, and one signed session opened — before
-    /// any tool is served — and said. Each line goes to `talk`, and `on_stop`
-    /// is the process's stop, kept for the backend's life.
+    /// the board's `/health` is read and said, the store's key for `principal`
+    /// checked and said, and one signed session opened — before any tool is
+    /// served — and said. The bus is subscribed before that session opens and
+    /// drained from the open's end (`Backend::drain`), so no death of it goes
+    /// unheard. Each line goes to `talk`, and `on_stop` is the process's stop,
+    /// kept for the backend's life.
     ///
     /// # Errors
     ///
@@ -224,11 +223,13 @@ impl Backend {
             _ => "script",
         };
         let shell = Shell::open(options);
+        // Subscribed before the session opens, so the drain hears every
+        // death of it: the bus keeps nothing for a later subscriber.
+        let events = shell.subscribe();
         let Some(board) = shell.board_references().into_iter().next() else {
             return Err("the shell opened no board".into());
         };
-        let stop = |what: &str, r: Refusal| format!("stopped before serving: {what}: {}", plain(&r));
-        let health = shell.call("health", &json!({"board": board})).map_err(|r| stop("the board did not answer", r))?;
+        let health = shell.call("health", &json!({"board": board})).map_err(|r| stopped_before_serving("the board did not answer", &r))?;
         let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) { "; writes HALTED: every write is refused `poisoned` until the board restarts" } else { "" };
         talk(&format!(
             "board {origin} (reference {board}): mode {} (claimant {}, local_trust {}){halted}",
@@ -236,11 +237,11 @@ impl Backend {
             health["health"]["auth"]["claimant"].as_str().unwrap_or("null"),
             health["health"]["auth"]["local_trust"]
         ));
-        let keys = shell.check_signed_key().map_err(|r| stop("no key to sign with", r))?;
+        let keys = shell.check_signed_key().map_err(|r| stopped_before_serving("no key to sign with", &r))?;
         let Some(key) = keys.into_iter().next() else {
             return Err("stopped before serving: the store selected no key".into());
         };
-        let opened = shell.call("session", &json!({"board": board})).map_err(|r| stop("the signed session did not open", r))?;
+        let opened = shell.call("session", &json!({"board": board})).map_err(|r| stopped_before_serving("the signed session did not open", &r))?;
         let Some(reference) = opened["session"].as_str() else {
             return Err("stopped before serving: the session answer names no session".into());
         };
@@ -255,7 +256,9 @@ impl Backend {
         ));
         talk(&format!("person seam: {seam} — no secret or consent moment is answered here: no key or claim ceremony runs through this adapter"));
         let session = Arc::new(Mutex::new(Standing::Open(reference.to_string())));
-        Ok(Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk })
+        let backend = Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk };
+        backend.drain(events);
+        Ok(backend)
     }
 
     fn say(&self, line: &str) {
@@ -264,13 +267,14 @@ impl Backend {
 
     /// Reads the bus on a thread of its own for the process's life.
     ///
-    /// A `session-died` of the session the calls stand on is that death's
-    /// verdict, and moves the standing (`settle`): to the fresh session on
-    /// the restart arm's re-open, to a lapse where the adapter serves on —
-    /// each said — and to the stop on every other arm, its plain line handed
-    /// to the stop. Every other event is read and dropped.
-    pub fn drain(&self) {
-        let events = self.shell.subscribe();
+    /// `events` is the subscription `open` took before the session opened. A
+    /// `session-died` of the session the calls stand on is that death's verdict
+    /// — the drain its one carrier, which a call that met the death waits on —
+    /// and moves the standing (`settle`): to the fresh session on the restart
+    /// arm's re-open, to a lapse where the adapter serves on — each said — and
+    /// to the stop on every other arm, its plain line handed to the stop. Every
+    /// other event is read and dropped.
+    fn drain(&self, events: Receiver<Event>) {
         let (session, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), Arc::clone(&self.on_stop));
         thread::spawn(move || {
             for event in events {
@@ -332,13 +336,13 @@ impl Backend {
     /// The session is the one the calls stand on. Where the last session
     /// lapsed, one is opened first (`open_afresh`); where the adapter has
     /// stopped, the attempt runs under the reference that died, and the shell
-    /// answers it. A `session_died` carries its verdict into the standing
-    /// (`settle`), and where it names the re-opened session the attempt is
-    /// reissued once under it. A `session_ended` — the feed thread ended the
-    /// session first — waits for that end's verdict (`verdict_within`), opens
-    /// a session itself where none comes, and reissues once under what stands
-    /// then. Every other answer is the attempt's own, and a second death is
-    /// answered as it stands.
+    /// answers it. An attempt the shell answers `session_died` or
+    /// `session_ended` met an end the shell ran, whose verdict the drain
+    /// carries: the call waits for it (`verdict_within`), opens a session
+    /// itself where none comes, and is reissued once under what stands then —
+    /// save that a death the shell did not re-open is the call's answer. Every
+    /// other answer is the attempt's own, and a second death is answered as it
+    /// stands.
     ///
     /// # Errors
     ///
@@ -358,29 +362,22 @@ impl Backend {
             };
             let outcome = attempt(&reference);
             let Err(refusal) = &outcome else { return outcome };
-            if reissued {
+            let met_death = is_shell(refusal, Name::SESSION_DIED);
+            let met_end = is_shell(refusal, Name::SESSION_ENDED);
+            if reissued || !(met_death || met_end) {
                 return outcome;
             }
-            if let Some(detail) = shell_refusal(refusal, Name::SESSION_DIED) {
-                let death = classify(&detail["reason"]);
-                let reopened = matches!(death, Death::Reopened(_));
-                if settle(&self.session, &reference, death, &self.on_stop) && reopened {
-                    self.say("the board restarted: the session was re-opened under a fresh reference, and the call is reissued under it");
-                }
-                if !reopened {
-                    return outcome;
-                }
-                reissued = true;
-                continue;
+            // The shell ran the session's end, and its `session-died` is the
+            // verdict the drain carries: wait for it, opening a session where
+            // none comes.
+            if !verdict_within(&self.session, &reference, VERDICT_WAIT) {
+                self.open_afresh(&reference)?;
             }
-            if shell_refusal(refusal, Name::SESSION_ENDED).is_some() {
-                if !verdict_within(&self.session, &reference, VERDICT_WAIT) {
-                    self.open_afresh(&reference)?;
-                }
-                reissued = true;
-                continue;
+            // A death the shell did not re-open is the call's answer.
+            if met_death && !matches!(&*self.session.lock().expect("the standing's lock"), Standing::Open(_)) {
+                return outcome;
             }
-            return outcome;
+            reissued = true;
         }
     }
 
@@ -497,13 +494,13 @@ impl Backend {
     }
 }
 
-/// Carries a death's verdict into the standing, and its stop where it asks.
+/// Carries a verdict into the standing, and its stop where it asks.
 ///
 /// The standing moves where it may (`swap`): to the fresh session on the
 /// restart arm's re-open, to a lapse where the adapter serves on, and to the
-/// stop on every other arm, whose line then goes to `on_stop`. Returns
-/// whether this caller moved it: the drain and the call that met the death
-/// learn the one verdict, and only the first carries it.
+/// stop on every other arm, whose line then goes to `on_stop`. Returns whether
+/// this caller moved it; a verdict on a session the standing has left, or
+/// carried a second time, moves nothing, so a stop's line is said once.
 fn settle(standing: &Mutex<Standing>, died: &str, death: Death, on_stop: &OnStop) -> bool {
     let next = match &death {
         Death::Reopened(fresh) => Standing::Open(fresh.clone()),
@@ -554,6 +551,8 @@ fn swap(standing: &Mutex<Standing>, died: &str, next: Standing) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     /// Each arm of a death's reason asks one thing.
@@ -562,7 +561,10 @@ mod tests {
     /// refused, a retirement, a block, a seeding and a mode flip each stop
     /// with a line naming the arm's fact; the unreachable board, a re-open
     /// that met a board that did not answer, the adapter's own close, and a
-    /// spelling no arm has serve on.
+    /// spelling no arm has serve on. The arms the cases name are exactly the
+    /// ones skep-shell declares for a death's reason (`shapes::shape`), so an
+    /// arm the shell adds or renames fails here before `classify`'s wildcard
+    /// serves a death of it through.
     #[test]
     fn every_arm_of_a_death_asks_one_thing() {
         assert_eq!(classify(&json!({"arm": "restart", "reopened": true, "session": "s-fresh"})), Death::Reopened("s-fresh".into()));
@@ -573,8 +575,8 @@ mod tests {
             (json!({"arm": "seeded", "account": "1.0.1.1", "as_of": 9, "writer": null}), "1.0.1.1"),
             (json!({"arm": "mode", "mode": "ENFORCING"}), "ENFORCING"),
         ];
-        for (reason, names) in stops {
-            match classify(&reason) {
+        for (reason, names) in &stops {
+            match classify(reason) {
                 Death::Stop(line) => assert!(line.contains(names), "{reason}: {line}"),
                 other => panic!("{reason}: {other:?}"),
             }
@@ -582,15 +584,25 @@ mod tests {
         let retired = json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second"});
         let Death::Stop(line) = classify(&retired) else { panic!() };
         assert!(line.contains("ab12") && line.contains("cd34 (second)"), "the key and the hand: {line}");
-        for serve_on in [
+        let serve_on = [
             json!({"arm": "unreachable", "text": "connect refused"}),
             json!({"arm": "restart", "reopened": false, "refused": "unreachable"}),
             json!({"arm": "closed"}),
             json!({"arm": "restart", "reopened": true}),
             json!({}),
-        ] {
-            assert_eq!(classify(&serve_on), Death::ServeOn, "{serve_on}");
+        ];
+        for reason in &serve_on {
+            assert_eq!(classify(reason), Death::ServeOn, "{reason}");
         }
+        let read: BTreeSet<&str> = stops.iter().map(|(reason, _)| reason).chain(&serve_on).filter_map(|reason| reason["arm"].as_str()).collect();
+        let declared: BTreeSet<&str> = skep_shell::shapes::shape("DeathReason")
+            .and_then(|shape| shape.fields.iter().find(|field| field.name == "arm"))
+            .expect("skep-shell declares a death reason's arm")
+            .ty
+            .split('|')
+            .map(|spelling| spelling.trim().trim_matches('\''))
+            .collect();
+        assert_eq!(read, declared, "the arms read are the ones skep-shell declares");
     }
 
     /// The standing moves off a session once, and never off a stop.
@@ -617,10 +629,10 @@ mod tests {
 
     /// A verdict is carried once, and a stop's line goes to the stop once.
     ///
-    /// The drain and the call that met a death carry its one verdict: the
-    /// first moves the standing and the second moves nothing. A refused open
-    /// stops a lapsed standing as a stopping death stops a live one, and the
-    /// line is handed on by the carrier that moved it alone.
+    /// A verdict carried a second time — a `session-died` heard twice, a
+    /// refused open judged twice — moves nothing: the first carrier moves the
+    /// standing and hands the stop its line, alone. A refused open stops a
+    /// lapsed standing as a stopping death stops a live one.
     #[test]
     fn a_verdict_is_carried_once_and_its_stop_said_once() {
         let said = Arc::new(Mutex::new(Vec::new()));
@@ -666,15 +678,22 @@ mod tests {
         assert!(!verdict_within(&standing, "s-1", Duration::from_millis(100)), "with no verdict the wait lapses");
     }
 
-    /// A refusal in plain words names what it is: a halt's armed name with
-    /// its face's three lines, the shell's own by name, the unreachable
-    /// board as such.
+    /// A startup stop names what did not hold, then the refusal once.
+    ///
+    /// The refusal is said in the library's own words: a halt under its armed
+    /// name with its face's three lines, the board's verdict with "the board
+    /// refused" said once, the unreachable board, and the shell's own by name
+    /// with its detail.
     #[test]
-    fn a_refusal_in_plain_words_names_what_it_is() {
+    fn a_startup_stop_names_what_did_not_hold_then_the_refusal_once() {
         let face = skep_client::halt::Face { state: "no key here".into(), cause: "the store is keyless".into(), act: "run keygen".into() };
-        let text = plain(&Refusal::named(Name::NO_KEY, face));
-        assert_eq!(text, "no_key: no key here\n  cause: the store is keyless\n  act: run keygen");
-        assert_eq!(plain(&Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}))), "session_ended: {\"session\":\"s-1\"}");
-        assert!(plain(&Refusal::Unreachable(skep_client::DialError::Connect("refused".into()))).starts_with("the board is not answering: "));
+        for (refusal, said) in [
+            (Refusal::named(Name::NO_KEY, face), "no_key: no key here\n  cause: the store is keyless\n  act: run keygen"),
+            (Refusal::board(401, json!({"error": "session_rejected"})), "the board refused: session_rejected (HTTP 401)"),
+            (Refusal::Unreachable(skep_client::DialError::Connect("refused".into())), "unreachable: connect: refused"),
+            (Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"})), "session_ended: {\"session\":\"s-1\"}"),
+        ] {
+            assert_eq!(stopped_before_serving("the check", &refusal), format!("stopped before serving: the check: {said}"));
+        }
     }
 }

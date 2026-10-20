@@ -20,9 +20,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   it serves, with the shell's face in plain words; no bare mode exists.
   The startup lines on stderr name the board and its mode, the key and
   the account, and the person seam.
-- **Every tool is one call of the shell.** The forty-seven WIRE OPERATIONS
-  of `docs/wire.md` §Operations are tools of their own names — the name
-  is the frame's `op`, the arguments are the frame — sent as `op(session,
+- **Every tool is one call of the shell.** The WIRE OPERATIONS of
+  `docs/wire.md` §Operations are tools of their own names — the name is
+  the frame's `op`, the arguments are the frame — sent as `op(session,
   frame)`: attested where the session's key attests the kind, held where
   the board cannot take a burst (the `held` answer comes back as data), a
   `write_busy` reissued once and a `durability` twice within the call, as
@@ -51,19 +51,19 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   committed — its frame may have reached the board before its answer was
   lost — and the adapter never reissues it.
 - **The session's life.** A board restart is met by the shell's silent
-  re-open under a fresh reference, which the adapter takes from the call
-  that met the death (reissuing it once) or from the `session-died` event
-  it drains for the process's life, whichever comes first; a call that
-  finds its session already ended waits for that event rather than open a
-  second session early. The agent sees nothing. A death the shell does not
-  re-open — the key retired, the prefix blocked, the account seeded, a
-  restart whose re-open the board refused — stops the process with one
-  plain line naming the arm, and so does the board's refusal of a session
-  the adapter opens itself where the shell's end left none: the person
-  stops an agent by retiring its key, and the adapter's end is what the
-  agent's client sees. A board that is not answering refuses each call
-  `unreachable` and the adapter stays up, opening a session once the board
-  answers again.
+  re-open under a fresh reference, which the adapter takes from the
+  `session-died` event it drains for the process's life, subscribed before
+  its session opens: a call that met the death, or found its session
+  already ended, waits for that event and is reissued once under the
+  re-opened session, never opening a second session early. The agent sees
+  nothing. A death the shell does not re-open — the key retired, the
+  prefix blocked, the account seeded, a restart whose re-open the board
+  refused — stops the process with one plain line naming the arm, and so
+  does the board's refusal of a session the adapter opens itself where the
+  shell's end left none: the person stops an agent by retiring its key,
+  and the adapter's end is what the agent's client sees. A board that is
+  not answering refuses each call `unreachable` and the adapter stays up,
+  opening a session once the board answers again.
 - **No person at the seam.** The shell is opened with the refusing arm:
   every SECRET and CONSENT moment would be refused `person_required`, and
   no ceremony tool is offered (no `keygen`, `fingerprint`, `claim`,

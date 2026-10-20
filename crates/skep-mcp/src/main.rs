@@ -20,18 +20,19 @@
 //!   type sniffed off the bytes, the size capped). Arguments pass through
 //!   unvalidated on a wire op — the daemon's strict parse is the validator,
 //!   and its rejection comes back as data.
-//! * The board's verdict is data: a `refused` refusal is a normal tool
-//!   result, the verdict's body verbatim with the shell's envelope beside
-//!   it. `isError` is every other refusal — the shell could not get the
-//!   board's verdict: the board unreachable, a halt, the block, the shell's
+//! * The board's verdict is data: a `refused` refusal is a normal tool result,
+//!   the verdict's body verbatim with the shell's envelope beside it, since a
+//!   client that cannot decode a rejection has been silently failed (wire.md
+//!   §Rejections). `isError` is every other refusal — the shell could not get
+//!   the board's verdict: the board unreachable, a halt, the block, the shell's
 //!   own names — and `fetch`'s two answers of the adapter's own, a file past
 //!   its cap and a stream cut short, each a plain sentence. A write refused
 //!   `unreachable` may have committed: the shell faces a lost answer to any
 //!   write but a burst (whose line it holds, `sent`), and the adapter never
-//!   reissues it. A call the adapter will not run — a tool outside the
-//!   catalog, a member an adapter tool's row does not name — is no tool
-//!   result at all: it is refused -32602, as malformed `tools/call` params
-//!   are; a member of the wrong form is the shell's `malformed_args`.
+//!   reissues it. A call the adapter will not run — a tool outside the catalog,
+//!   a member an adapter tool's row does not name — is no tool result at all:
+//!   it is refused -32602, as malformed `tools/call` params are; a member of
+//!   the wrong form is the shell's `malformed_args`.
 //! * SIGNED ONLY: the session is opened at startup, before the first tool
 //!   call, for the configured principal with the store's key for it —
 //!   enrolled in its account's set or the nearest set above it — and no
@@ -76,7 +77,7 @@ use std::env::{self, VarError};
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -138,51 +139,70 @@ fn version_line() -> String {
     format!("skep-mcp {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown"))
 }
 
-/// A setting a flag or its variable supplies: the flag's value where the
-/// flag was given, else the variable's text, else none; a flag given twice
-/// is a usage error at the parse.
-#[derive(Debug, Default)]
+/// A setting a flag supplies, or the variable that stands in for it.
+///
+/// It holds its flag, its variable — none for `--tools-file` — and the
+/// value the flag was given, at most once.
+#[derive(Debug)]
 struct Setting {
-    flag: Option<OsString>,
+    flag: &'static str,
+    var: Option<&'static str>,
+    given: Option<OsString>,
 }
 
 impl Setting {
-    /// The value, the flag over the variable `var`.
-    fn value(&self, flag: &str, var: &str) -> Option<String> {
-        match &self.flag {
-            Some(text) => match text.to_str() {
+    /// Returns the setting of `flag`, read from `var` where it is not given.
+    fn new(flag: &'static str, var: Option<&'static str>) -> Setting {
+        Setting { flag, var, given: None }
+    }
+
+    /// Takes the flag's value off `args`.
+    ///
+    /// A flag with no value after it, or given before, is a usage error.
+    fn take(&mut self, args: &mut impl Iterator<Item = OsString>) {
+        match args.next() {
+            Some(_) if self.given.is_some() => die_usage(&format!("{} is given at most once", self.flag)),
+            Some(value) => self.given = Some(value),
+            None => die_usage(&format!("{} needs a value", self.flag)),
+        }
+    }
+
+    /// Returns the setting's text: the flag's value, else its variable's.
+    ///
+    /// A value that is not UTF-8 is refused by name.
+    fn text(&self) -> Option<String> {
+        match &self.given {
+            Some(value) => match value.to_str() {
                 Some(text) => Some(text.to_string()),
-                None => die(&format!("{flag}: the value is not UTF-8 text")),
+                None => die(&format!("{}: the value is not UTF-8 text", self.flag)),
             },
-            None => env_text(var),
+            None => self.var.and_then(env_text),
+        }
+    }
+
+    /// Returns the setting as a refusal names it: `--board (or SKEP_BOARD)`.
+    fn named(&self) -> String {
+        match self.var {
+            Some(var) => format!("{} (or {var})", self.flag),
+            None => self.flag.to_string(),
         }
     }
 }
 
 fn main() -> ExitCode {
-    let mut tools_file: Option<PathBuf> = None;
-    let (mut board, mut dir, mut principal) = (Setting::default(), Setting::default(), Setting::default());
+    let mut board = Setting::new("--board", Some("SKEP_BOARD"));
+    let mut dir = Setting::new("--dir", Some("SKEP_KEYSTORE"));
+    let mut principal = Setting::new("--principal", Some("SKEP_PRINCIPAL"));
+    let mut tools_file = Setting::new("--tools-file", None);
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        let flag = arg.to_str();
-        match flag {
-            Some("--tools-file") => match args.next() {
-                Some(_) if tools_file.is_some() => die_usage("--tools-file is given at most once"),
-                Some(p) => tools_file = Some(p.into()),
-                None => die_usage("--tools-file needs a value"),
-            },
-            Some(name @ ("--board" | "--dir" | "--principal")) => {
-                let setting = match name {
-                    "--board" => &mut board,
-                    "--dir" => &mut dir,
-                    _ => &mut principal,
-                };
-                match args.next() {
-                    Some(_) if setting.flag.is_some() => die_usage(&format!("{name} is given at most once")),
-                    Some(value) => setting.flag = Some(value),
-                    None => die_usage(&format!("{name} needs a value")),
-                }
-            }
+        // A flag is looked up by the spelling its own setting holds, so no
+        // flag fills another's setting.
+        if let Some(setting) = [&mut board, &mut dir, &mut principal, &mut tools_file].into_iter().find(|setting| arg.to_str() == Some(setting.flag)) {
+            setting.take(&mut args);
+            continue;
+        }
+        match arg.to_str() {
             Some("--help" | "-h") => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -199,11 +219,11 @@ fn main() -> ExitCode {
     }
     // The catalog first: a drifted tools file is a startup error before any
     // environment or network is consulted.
-    let text = match &tools_file {
+    let text = match &tools_file.given {
         None => Cow::Borrowed(tools::EMBEDDED),
-        Some(p) => match std::fs::read_to_string(p) {
+        Some(path) => match std::fs::read_to_string(path) {
             Ok(t) => Cow::Owned(t),
-            Err(e) => die(&format!("--tools-file {}: {e}", p.display())),
+            Err(e) => die(&format!("{} {}: {e}", tools_file.flag, Path::new(path).display())),
         },
     };
     let mut catalog = match Catalog::load(&text) {
@@ -212,26 +232,26 @@ fn main() -> ExitCode {
     };
     // Then the settings, each refused by name and the first refusal ending
     // startup: the principal, the board, the store, the commons.
-    let principal = match principal.value("--principal", "SKEP_PRINCIPAL") {
+    let principal = match principal.text() {
         Some(v) => match v.parse::<u64>().ok().filter(|p| *p <= MAX_PRINCIPAL) {
             Some(p) => p,
-            None => die(&format!("--principal (or SKEP_PRINCIPAL): '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})")),
+            None => die(&format!("{}: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})", principal.named())),
         },
-        None => die("--principal (or SKEP_PRINCIPAL) is required: the principal this adapter acts as"),
+        None => die(&format!("{} is required: the principal this adapter acts as", principal.named())),
     };
-    let origin = match board.value("--board", "SKEP_BOARD") {
+    let origin = match board.text() {
         Some(text) => match Origin::parse(&text) {
             Some(origin) => origin,
-            None => die(&format!("--board (or SKEP_BOARD): '{text}' is not a canonical origin (http://host[:port], lowercase, no path, no trailing slash)")),
+            None => die(&format!("{}: '{text}' is not a canonical origin (http://host[:port], lowercase, no path, no trailing slash)", board.named())),
         },
         None => {
-            let retired = if env_text("SKEPD_URL").is_some() { " — SKEPD_URL is set and no longer read: the board is named by --board or SKEP_BOARD alone" } else { "" };
-            die(&format!("--board (or SKEP_BOARD) is required: the board this adapter serves{retired}"))
+            let retired = if env_text("SKEPD_URL").is_some() { format!(" — SKEPD_URL is set and no longer read: the board is named by {} alone", board.named()) } else { String::new() };
+            die(&format!("{} is required: the board this adapter serves{retired}", board.named()))
         }
     };
-    let store_dir = match dir.value("--dir", "SKEP_KEYSTORE") {
+    let store_dir = match dir.text() {
         Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => die("--dir (or SKEP_KEYSTORE) is required: the key store this adapter signs from, one directory per adapter process (~/.skep is never consulted)"),
+        _ => die(&format!("{} is required: the key store this adapter signs from, one directory per adapter process (~/.skep is never consulted)", dir.named())),
     };
     // The commons pointer: an address the instructions hand to agents,
     // never dereferenced here — T4 well-formedness is the whole startup
@@ -271,7 +291,6 @@ fn main() -> ExitCode {
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     ));
     read_stdin(inbound);
-    backend.drain();
     let server = Server { backend, catalog };
     let code = server.run(&lines);
     log("stopping: closing the session at the board, saving the index");
@@ -401,6 +420,16 @@ mod tests {
     fn the_version_line_names_the_binary_its_version_and_the_build_commit() {
         assert_eq!(version_line(), format!("skep-mcp {} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")));
         assert!(USAGE.contains("\n  --version            this binary's version"), "{USAGE}");
+    }
+
+    /// A setting names its flag and variable, and holds the flag's value.
+    #[test]
+    fn a_setting_names_its_flag_and_variable_and_holds_the_flags_value() {
+        let mut board = Setting::new("--board", Some("SKEP_BOARD"));
+        assert_eq!(board.named(), "--board (or SKEP_BOARD)");
+        assert_eq!(Setting::new("--tools-file", None).named(), "--tools-file");
+        board.take(&mut [OsString::from("http://127.0.0.1:8642")].into_iter());
+        assert_eq!(board.text().as_deref(), Some("http://127.0.0.1:8642"), "the flag's value, its variable unread");
     }
 
     /// The usage names the three settings by flag and variable, and says

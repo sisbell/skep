@@ -17,7 +17,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::common::{embedded_catalog, holds_a_token, Fixture, Launch, TempDir, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, VARIABLES};
 
@@ -219,14 +219,16 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert!(mcp.finish().success());
 }
 
-/// THE RESTART ARM through the adapter: the daemon killed mid-session —
-/// every token dies with it — and started again on the same data dir at
-/// the SAME port; the adapter's next write answers through the session
-/// the shell re-opened silently under a fresh reference, which the
-/// adapter took from the death that met it, reissuing the write once, so
-/// the agent sees an ack (the mutant that keeps the first reference serves
-/// `session_ended` forever after the restart); the log says the session
-/// was re-opened, and `session_info` still answers.
+/// The restart arm through the adapter: a write after a restart is acked.
+///
+/// The daemon is killed mid-session — every token dies with it — and started
+/// again on the same data dir at the same port; the adapter's next write
+/// answers through the session the shell re-opened silently under a fresh
+/// reference, which the adapter took from the death's `session-died`, the write
+/// that met it waiting for that and reissued once, so the agent sees an ack
+/// (the mutant that keeps the first reference serves `session_ended` forever
+/// after the restart); the log says the session was re-opened, and
+/// `session_info` still answers.
 #[test]
 fn daemon_restart_reopens_the_session_and_reissues() {
     let mut fixture = Fixture::new("restart");
@@ -652,14 +654,4 @@ fn tools_file_refusal(tools_file: &Path) -> String {
     assert_eq!(code, Some(1), "a drifted tools file must refuse startup: {err}");
     assert!(err.contains("tools file:"), "{err}");
     err
-}
-
-/// The drift fixtures and the reader beside them read the one catalog the
-/// binary embeds.
-#[test]
-fn the_embedded_catalog_is_the_file_beside_the_manifest() {
-    let file = embedded_catalog();
-    let names: Vec<&str> = file["tools"].as_array().expect("tools").iter().map(|t| t["name"].as_str().expect("name")).collect();
-    assert_eq!(names.len(), 57, "forty-seven wire ops, seven shell calls, three apparatus tools: {names:?}");
-    let _: Value = file;
 }

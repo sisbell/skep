@@ -62,7 +62,7 @@ impl Drop for TempDir {
 
 // ── the daemon ──────────────────────────────────────────────────────────
 
-pub fn origin(port: u16) -> String {
+fn origin(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
@@ -70,14 +70,14 @@ pub fn origin(port: u16) -> String {
 /// trust on and its own loopback origin configured, so a signed session
 /// opens at the origin the adapter dials: the daemon's own start
 /// (`skepd::embed`), then the wait for its cell index.
-pub fn spawn_daemon(dir: &Path, port: u16) -> Skepd {
+fn spawn_daemon(dir: &Path, port: u16) -> Skepd {
     spawn_signing_at(dir, port, origin)
 }
 
 /// [`spawn_daemon`], the daemon's configured signed origin `signed(port)`
 /// in place of the one it is dialed at — a board moved to another name,
 /// whose signed arm then refuses every session at the dialed one.
-pub fn spawn_signing_at(dir: &Path, port: u16, signed: impl Fn(u16) -> String) -> Skepd {
+fn spawn_signing_at(dir: &Path, port: u16, signed: impl Fn(u16) -> String) -> Skepd {
     let configured = |port: u16| {
         let mut opts = AuthOptions::default();
         opts.local_trust = true;
@@ -143,12 +143,12 @@ impl Fixture {
     }
 
     /// The library's board, dialed plainly.
-    pub fn board(&self) -> Board {
+    fn board(&self) -> Board {
         Board::new(Origin::parse(&self.origin()).expect("a canonical origin"), PlainHttp::new())
     }
 
     /// The board's data directory.
-    pub fn board_dir(&self) -> PathBuf {
+    fn board_dir(&self) -> PathBuf {
         self.dir.path().join("board")
     }
 
@@ -192,7 +192,7 @@ impl Fixture {
     }
 
     /// One frame under `token`, answered by the board: its response document.
-    pub fn op(&self, token: &Token, frame: Value) -> Value {
+    fn op(&self, token: &Token, frame: Value) -> Value {
         match self.board().op(Some(token), &frame).expect("the op's transport") {
             Answer::Document(v) => v,
             other => panic!("{frame}: {other:?}"),
@@ -384,7 +384,7 @@ impl Drop for FetchStreamHeld<'_> {
 /// a scripted person (the two anchor boxes answered with their defaults),
 /// the anchors placed under `anchors`; the store then holds the key and
 /// the account's binding line. The key's fingerprint, in hex.
-pub fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> String {
+fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> String {
     let store = FileStore::open(store);
     let id = store.generate(Some(Label::new("notebook").expect("a legal label"))).expect("keygen");
     let board = Board::new(Origin::parse(board_origin).expect("a canonical origin"), PlainHttp::new());
@@ -405,7 +405,7 @@ pub fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> String {
 
 /// One exchange with the daemon: the request written whole, the answer
 /// read to its close — the status, the headers, the body.
-pub fn http(port: u16, method: &str, path: &str, token: Option<&str>, body: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
+fn http(port: u16, method: &str, path: &str, token: Option<&str>, body: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
     stream.set_read_timeout(Some(Duration::from_secs(120))).expect("read timeout");
     stream.set_write_timeout(Some(Duration::from_secs(120))).expect("write timeout");
@@ -430,20 +430,20 @@ pub fn http(port: u16, method: &str, path: &str, token: Option<&str>, body: &[u8
 }
 
 /// One frame on `/op` under `token`: its response document.
-pub fn op(port: u16, token: Option<&str>, frame: &Value) -> Value {
+fn op(port: u16, token: Option<&str>, frame: &Value) -> Value {
     let (st, _, body) = http(port, "POST", "/op", token, frame.to_string().as_bytes());
     assert_eq!(st, 200, "op transport: {}", String::from_utf8_lossy(&body));
     serde_json::from_slice(&body).expect("op response is JSON")
 }
 
 /// The picture's cell kind, INTERIM (wire.md §Media).
-pub const CELL_KIND: &str = "1.1.0.1.0.1.0.3.89";
+const CELL_KIND: &str = "1.1.0.1.0.1.0.3.89";
 
 /// THE UPLOAD: `bytes` deposited whole under `token` by the resumable
 /// upload's creation-with-upload (`POST /blob/upload?length=<n>` with the
 /// body), the rebuild window's `index_rebuilding` retried; the finish's
 /// `hash` and `size`, the daemon's own.
-pub fn upload(port: u16, token: &str, bytes: &[u8]) -> (String, u64) {
+fn upload(port: u16, token: &str, bytes: &[u8]) -> (String, u64) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let (st, _, body) = http(port, "POST", &format!("/blob/upload?length={}", bytes.len()), Some(token), bytes);
@@ -462,13 +462,13 @@ pub fn upload(port: u16, token: &str, bytes: &[u8]) -> (String, u64) {
 
 /// The canonical cell over `hash` at `size` — the form the daemon's parser
 /// admits (wire.md §Media).
-pub fn cell_of(hash: &str, size: u64) -> String {
+fn cell_of(hash: &str, size: u64) -> String {
     format!(r#"{{"type":"{CELL_KIND}","hash":"{hash}","size":{size}}}"#)
 }
 
 /// The cell inserted into `draft` at ordinal 1 under `token`, as ONE
 /// composite value: the I-address it sits at.
-pub fn insert_cell(port: u16, token: &str, draft: &str, cell: &str) -> String {
+fn insert_cell(port: u16, token: &str, draft: &str, cell: &str) -> String {
     let v = op(port, Some(token), &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [{"atom": cell}]}));
     assert_eq!(v["resp"], "ack_addr", "the cell's insert: {v}");
     v["addr"].as_str().expect("the cell's address").to_string()
@@ -693,7 +693,7 @@ impl Mcp {
         v
     }
 
-    pub fn notify(&mut self, method: &str) {
+    fn notify(&mut self, method: &str) {
         self.send_line(&json!({"jsonrpc": "2.0", "method": method}).to_string());
     }
 
@@ -820,6 +820,11 @@ impl Drop for Mcp {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Returns a fresh draft of `account`, minted through the adapter.
+pub fn draft_of(mcp: &mut Mcp, account: &str) -> String {
+    mcp.acked("create_new_document", json!({"account": account}))["addr"].as_str().expect("doc addr").to_string()
 }
 
 /// The catalog the binary embeds — the expected tools/list and the base

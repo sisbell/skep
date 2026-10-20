@@ -19,8 +19,11 @@ skep-shell = { path = "../skep-shell" }
 # The board's canonical origin, which `ShellOptions` takes and the shell
 # does not re-export; the key's public facts (`KeyFacts`) the startup line
 # and `session_info` name the signing key by; the dial faults (`DialError`)
-# a refusal of the session's open keeps or replaces; and `render_inert`,
-# the rendering every log line takes (AUTH-5.2).
+# a refusal of the session's open keeps or replaces; a fetch's head
+# (`dial::Headers`), whose declared length `media::read_whole` holds to the
+# cap; the address spelling (`address::is_address_text`) `blob_uri` asserts,
+# the one the shell's `fetch` row admits; and `render_inert`, the rendering
+# every log line takes (AUTH-5.2).
 skep-client = { path = "../skep-client" }
 # The bridge's values: every call's input and output is a
 # `serde_json::Value`; JSON-RPC's framing is this crate's own.
@@ -30,8 +33,11 @@ serde_json.workspace = true
 # The real daemon in-process on an ephemeral port over a temp data dir,
 # restarted at the same port where a suite needs the restart arm; the
 # suites claim its board through the library and drive the built skep-mcp
-# binary through its stdin/stdout. `test-hooks` compiles in
-# `skepd::fuzz_support`, which tests/it/fuzz_mcp.rs drives.
+# binary through its stdin/stdout. `test-hooks` compiles in what the suites
+# reach past the wire: `skepd::fuzz_support`, which tests/it/fuzz_mcp.rs
+# drives, and the daemon's seams tests/it/common.rs arms — the write guard
+# and the fetch stream held, the write pool's free permits counted, the
+# kernel's next commit poisoned.
 skepd = { path = "../skepd", features = ["test-hooks"] }
 # The library with its scripted person on: the fixture claims each board
 # through `ceremony::claim::notebook` over a `FileStore` — the claimant's
@@ -39,7 +45,9 @@ skepd = { path = "../skepd", features = ["test-hooks"] }
 # enrolls and retires keys through the walks for the session's death arms.
 skep-client = { path = "../skep-client", features = ["test-hooks"] }
 # The enrollment record a second key is enrolled by (`encode_enroll`), which
-# the fixture composes for the library's `enroll` walk as `keygen` prints it.
+# the fixture composes for the library's `enroll` walk as `keygen` prints it;
+# and `Fingerprint`, which finds the claimant's key file for the seed no
+# answer or log line may carry.
 skep-identity = { path = "../skep-identity" }
 # The SKEP_COMMONS gate's reference: the gate reproduces skep-address's T4
 # validator rather than importing it, and a unit test holds the two equal

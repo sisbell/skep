@@ -56,15 +56,17 @@
 //! `server.rs` is the MCP side: the stdio transport — stdin's reader, and the
 //! loop that answers each line on stdout — the JSON-RPC dispatch, and `call`,
 //! which keeps *a refusal as a result*. `shell.rs` is the backend, the one
-//! module that calls `skep-shell`: the open and its checks, the one session's
-//! state and its life, the bus drained. `media.rs` is the fetched file: its
-//! bytes read whole under the adapter's cap, its type sniffed, its base64.
-//! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
-//! sentence, the dispatch's two kinds the catalog is checked against when
-//! loaded, the dispatch's door (`Tool::admit`, which admits a call or refuses
-//! it -32602), and a wire op's call mapped onto its frame (*every tool is one
-//! call of the shell*). This file is startup — flags, environment, the
-//! `SKEP_COMMONS` check, the shell's open — the loop's two inputs (stdin's
+//! module that calls `skep-shell`: the open and its checks, every call under
+//! the one session and the life around it, the bus drained; its child
+//! `shell/watch.rs` is the session's state, which one door moves
+//! (`SessionWatch::move_off`), and what a death asks of it. `media.rs` is the
+//! fetched file: its bytes read whole under the adapter's cap, its type
+//! sniffed, its base64. `tools.rs` holds the catalog (`tools.json`, embedded)
+//! with its commons sentence, the dispatch's two kinds the catalog is checked
+//! against when loaded, the dispatch's door (`Tool::admit`, which admits a call
+//! or refuses it -32602), and a wire op's call mapped onto its frame (*every
+//! tool is one call of the shell*). This file is startup — flags, environment,
+//! the `SKEP_COMMONS` check, the shell's open — the loop's two inputs (stdin's
 //! reader, the backend's stop) wired onto one channel, and `log`, the
 //! operator's stream every module and the shell's TALK write through.
 //!

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{base64_decode, seeded_bytes, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
+use crate::common::{base64_decode, draft_of, seeded_bytes, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
 /// The ten ceremonial rows, the two media rows the shell does not reach,
 /// and the three calls the adapter makes of the shell itself (`op`,
@@ -37,11 +37,6 @@ const ADAPTER_TOOLS: [&str; 10] = ["boards", "health", "probe", "search", "place
 
 /// The adapter's cap on one fetch, as `media.rs` states it.
 const MAX_FETCH_BYTES: usize = 8 * 1024 * 1024;
-
-/// A fresh draft of `account`, through the adapter.
-fn draft_of(mcp: &mut Mcp, account: &str) -> String {
-    mcp.acked("create_new_document", json!({"account": account}))["addr"].as_str().expect("doc addr").to_string()
-}
 
 /// The `changes_since` entry at `at`, read from `since`, waited for: the
 /// board's feed may trail the ack by a moment.

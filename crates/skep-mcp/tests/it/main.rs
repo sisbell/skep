@@ -11,6 +11,9 @@ mod agent;
 // The line protocol under hostile lines: each documented shape, then a
 // seeded storm (H2 tier 1).
 mod fuzz_mcp;
-// The rest, end to end: the protocol, the board's verdict as data, the
-// restart's re-open, the token in no answer or log line, startup's refusals.
+// The protocol and the tools end to end: the board's verdict as data, the
+// restart's re-open, the token in no answer or log line.
 mod mcp;
+// Startup: the flags answered up front, each setting read or refused, the
+// catalog file, and the board's refusals of the open.
+mod startup;

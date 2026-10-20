@@ -575,9 +575,11 @@ fn serve() -> ExitCode {
     let _store_hold = hold_the_store(&store_dir, &dir.named(), STORE_WAIT).unwrap_or_else(|line| die(format_args!("{line}")));
     // The loop's two inputs, on one channel: stdin's lines and its end, which
     // `read_stdin` sends from a thread of its own, and the backend's stop,
-    // which `OnStop` sends on this unbounded channel and never waits on.
+    // which `OnStop` sends on this unbounded channel and never waits on, each
+    // line and the stop stamped with the moment it was sent, the loop's start
+    // for its wait.
     let (inbound, inbox) = mpsc::channel::<Inbound>();
-    let on_stop = OnStop::new(inbound.clone(), Inbound::Stop);
+    let on_stop = OnStop::new(inbound.clone(), |line| Inbound::Stop(line, Instant::now()));
     // THE SHELL: opened, checked and its one session opened before any tool
     // is served; a stop here returns, so the shell's own stop has run.
     let talk: skep_shell::Talk = Arc::new(|line: &str| log(line));

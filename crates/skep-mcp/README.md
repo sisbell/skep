@@ -62,10 +62,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the call waits; the index follows the board's commits without it.
 - **One call at a time.** Calls are served in arrival order, one at a time;
   a `fetch` of a large file, up to its body's deadline, or a `search` while
-  the index is building holds the calls behind it. Stdin's end is the clean
-  exit: the shell's stop closes the session at the board and saves the
-  index. A signal ends the process with neither — the session then lives
-  on at the board until it restarts.
+  the index is building holds the calls behind it, and the log says their
+  wait. Stdin's end is the clean exit: the shell's stop closes the session
+  at the board and saves the index, and the log says how long it took. A
+  signal ends the process with neither — the session then lives on at the
+  board until it restarts.
 - **Deliberately dependency-light** — the shell's core, `skep-client` for
   the types the shell's surface names, the inert rendering a key's label
   and every log line take, and the plaintext warning the start says, and
@@ -126,14 +127,19 @@ The log is stderr: every line opens `skep-mcp: ` and the moment it was said,
 RFC 3339 UTC to the millisecond, as the daemon's own lines do, and the first
 names the version the run began with and its process id. The lines of the
 session's life name the session by its reference, as the shell's own lines
-and the refusals an agent is answered name it; a call that holds the loop
-past a dial's read bound is said with its tool, its request's id and how
-long it held; and the clean stop's line says what the loop answered. No line
-quotes an answer's text — the client's refusal of an answer it cannot parse
-is cut at its parse error — and none runs past four kilobytes. A harness
-may read the log or leave it: a reader that stops reading never holds the
-adapter up — the lines it leaves are dropped, and the next line it takes
-says how many went, at the moment the first of them was said.
+and the refusals an agent is answered name it. A call whose wait behind the
+calls read before it and its own hold of the loop together pass a dial's
+read bound is said with its tool, its request's id, its wait and its hold —
+a harness's timeout counts both, from the moment it sent the request — and
+a stop with its own wait; the clean stop's line says what the loop answered,
+how much of the run it was busy and the longest a request waited, and the
+next line how long the shell's stop took, its save of the index growing
+with the index. No line quotes an answer's text — the client's refusal of
+an answer it cannot parse is cut at its parse error — and none runs past
+four kilobytes. A harness may read the log or leave it: a reader that stops
+reading never holds the adapter up — the lines it leaves are dropped, and
+the next line it takes says how many went, at the moment the first of them
+was said.
 
 ## Starting it from an agent app
 
@@ -179,13 +185,15 @@ start the adapter again once the board answers.
 closes the session at the board and saves the index: seconds where the
 board answers or is gone, up to about a minute and a half where it accepts
 the connection and then stops answering — the close and the feed's last
-read each held to skep-client's exchange deadline. A signal ends the
-process at once: its held bursts are already on disk — save one the shell
-answered `unwritable` or `other_window`, kept in memory alone and lost with
-the process — the session lives on at the board until the board restarts,
-and the index resumes from its last save. The person stops an agent for
-good by retiring its key (`skep retire`); every start over that store is
-then refused `retired`.
+read each held to skep-client's exchange deadline — and longer as the index
+grows, its save rewriting the index whole. The log says how long each stop
+took: the figure to set the harness's grace before a signal by. A signal
+ends the process at once: its held bursts are already on disk — save one
+the shell answered `unwritable` or `other_window`, kept in memory alone and
+lost with the process — the session lives on at the board until the board
+restarts, and the index resumes from its last save. The person stops an
+agent for good by retiring its key (`skep retire`); every start over that
+store is then refused `retired`.
 
 **Restart.** Stop it, then start it over the same `--dir`: the held bursts,
 counted at the start, and the index carry over. A start over a store

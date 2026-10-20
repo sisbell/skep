@@ -376,10 +376,11 @@ fn a5_skep_board_is_read_and_skepd_url_alone_is_refused_naming_skep_board() {
 /// the retirement of a set's last key being refused, "it would empty the
 /// set" — and the adapter's session dies on the `retired` arm, which the
 /// shell does not re-open (ruling 4 (c)): the process stops, exit 1, with one
-/// plain line naming the retirement and the hand, its clean stop saying the
-/// session already ended at the board, and serves nothing after. Started
-/// again over the same store, it stays stopped: the open is refused `retired`
-/// before anything is served, and no bare session stands in.
+/// plain line naming the retirement and the hand, and how long the stop
+/// waited behind earlier calls, its clean stop saying the session already
+/// ended at the board, and serves nothing after. Started again over the same
+/// store, it stays stopped: the open is refused `retired` before anything is
+/// served, and no bare session stands in.
 #[test]
 fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     let fixture = Fixture::new("a6-retired");
@@ -391,7 +392,7 @@ fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     fixture.retire_from(&second, &fixture.fingerprint);
     let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.log()));
     assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.log());
-    let log = mcp.log_holding(&["stopped: the key ", "stopping: the session already ended at the board"], Duration::from_secs(5));
+    let log = mcp.log_holding(&["stopped: the key ", "; the stop waited ", "stopping: the session already ended at the board"], Duration::from_secs(5));
     assert!(
         log.contains(&format!("stopped: the key {} was retired at the board by the key {k2} (second): the person who enrolled it stops this agent so", fixture.fingerprint)),
         "the plain line:\n{log}"
@@ -507,7 +508,9 @@ fn a7_a_board_rejection_is_data_and_an_unreachable_board_is_an_error() {
 /// Released, the write commits, as the catalog warns it may — its document
 /// reads back — and once: the next mint is the one after it. The call held
 /// the loop past a dial's read bound, and the log says so, by its tool and
-/// its answer.
+/// its answer. A call read behind the parked write waits out its read bound,
+/// the loop serving one call at a time, and the log says that call too, for
+/// its wait: its own time is no part of it.
 #[test]
 fn a7_a_write_whose_answer_is_lost_is_unreachable_and_lands_once() {
     let fixture = Fixture::alone("a7-lost");
@@ -516,9 +519,22 @@ fn a7_a_write_whose_answer_is_lost_is_unreachable_and_lands_once() {
     let before = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
     let pool = fixture.free_write_permits();
     let hold = WriteGuardHeld::arm(&fixture);
-    let lost = mcp.call_error("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
+    // `boards` dials nothing: its own time is the loop's alone.
+    mcp.send_line(&json!({"jsonrpc": "2.0", "id": "lost", "method": "tools/call", "params": {"name": "create_new_document", "arguments": {"account": CLAIMANT_ACCOUNT}}}).to_string());
+    mcp.send_line(&json!({"jsonrpc": "2.0", "id": "behind", "method": "tools/call", "params": {"name": "boards", "arguments": {}}}).to_string());
+    let answered = mcp.read_message();
+    assert_eq!((&answered["id"], &answered["result"]["isError"]), (&json!("lost"), &json!(true)), "the lost write is answered first: {answered}");
+    let lost: Value = serde_json::from_str(answered["result"]["content"][0]["text"].as_str().expect("a text block")).expect("JSON text");
     assert_eq!(lost["kind"], "unreachable", "a lost answer is faced unreachable: {lost}");
-    mcp.log_holding(&["the `create_new_document` call of request ", " held the loop ", " s: answered isError"], Duration::from_secs(10));
+    let behind = mcp.read_message();
+    assert_eq!((&behind["id"], &behind["result"]["isError"]), (&json!("behind"), &json!(false)), "the call behind it is served next: {behind}");
+    mcp.log_holding(&["the `create_new_document` call of request \"lost\" waited ", " held the loop ", " s: answered isError"], Duration::from_secs(10));
+    let behind = "the `boards` call of request \"behind\" waited ";
+    let log = mcp.log_holding(&[behind], Duration::from_secs(10));
+    let line = log.lines().find(|line| line.contains(behind)).expect("the line behind");
+    let figure = |after: &str| -> f64 { line.split(after).nth(1).and_then(|rest| rest.split(' ').next()).and_then(|n| n.parse().ok()).unwrap_or_else(|| panic!("the figure after {after:?}: {line}")) };
+    assert!(line.contains(" s behind earlier calls and held the loop ") && line.ends_with(" s: answered"), "{line}");
+    assert!(figure(" held the loop ") < 1.0, "said for its wait behind the parked write, not its own time: {line}");
     assert_eq!(fixture.free_write_permits(), pool - 1, "exactly one attempt reached the board, parked there");
     drop(hold);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -599,8 +615,9 @@ fn a7_a_burst_the_board_refuses_is_held_and_the_bursts_behind_it_wait() {
 /// lines at a restart, and the adapter's own re-open line, the drain's — goes
 /// to stderr under the adapter's prefix, each line opening on the moment it
 /// was said; and stdin's end closes the session at the board: the end is
-/// said, then the stop line with what the loop answered, the shell's close met
-/// no silence, exit 0.
+/// said, then the stop line with what the loop answered, how busy it was and
+/// the longest a request waited, then the shell's stop's time, the shell's
+/// close met no silence, exit 0.
 #[test]
 fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     let mut fixture = Fixture::new("a8");
@@ -627,6 +644,12 @@ fn a8_talk_lines_go_to_stderr_never_stdout_and_eof_closes_the_session() {
     assert!(ended < stopping, "the end's cause before the stop's line:\n{log}");
     // The initialize, the draft's mint, the insert and the three pings.
     let stop = log[stopping..].lines().next().unwrap_or_default();
-    assert!(stop.contains(" — 6 answers written in ") && stop.ends_with(" s of serving: 2 tool results, 0 of them isError, and 0 JSON-RPC errors"), "the stop says what the loop answered: {stop}");
+    assert!(
+        stop.contains(" — 6 answers written in ") && stop.contains(" s of it: 2 tool results, 0 of them isError, and 0 JSON-RPC errors; no request waited longer than "),
+        "the stop says what the loop answered: {stop}"
+    );
+    assert!(stop.contains(" s of serving, the loop busy ") && stop.ends_with(" s behind earlier calls"), "and how busy the loop was, and its longest wait: {stop}");
+    let took = log[stopping..].lines().skip(1).filter_map(stamped).any(|(_, text)| text.starts_with("the shell's stop took "));
+    assert!(took, "the stop's time, said once it returned, after the stop's line:\n{log}");
     assert!(!log.contains("did not close"), "the board closed the session:\n{log}");
 }

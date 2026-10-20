@@ -870,6 +870,12 @@ impl Backend {
     /// lines under, so none is counted. Either way the line names the session,
     /// and carries `served`, what the loop answered over the run.
     ///
+    /// The stop's time is said once it returns. Its closing save rewrites
+    /// every face of the index whole, clean or not, and each session's close
+    /// waits on the board up to one exchange's bound, so the stop's cost grows
+    /// with the index, and the harness bounds it with the grace it gives
+    /// before a signal.
+    ///
     /// It takes the backend, since nothing is served after it: a call made
     /// through it then would find its session closed, wait out `SETTLE_WAIT`
     /// for a death the stop never announces, and meet a dialer that dials no
@@ -885,7 +891,9 @@ impl Backend {
             ),
         };
         self.say(&said);
+        let stopping = Instant::now();
         self.shell.shutdown();
+        self.say(&format!("the shell's stop took {:.1} s: the close of its sessions at the board, the save of the index and the end of its feed threads", stopping.elapsed().as_secs_f64()));
     }
 }
 

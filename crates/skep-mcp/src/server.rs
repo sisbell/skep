@@ -31,13 +31,17 @@ use crate::tools::{wire_frame, Catalog, Tool};
 /// names one, as it always should, is answered that one (`Server::respond`).
 const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// The longest a call holds the loop before the log says it held it.
+/// The longest a call takes, read to answer, before the log says it.
 ///
 /// It is one dial's read bound (skep-client's `IO_TIMEOUT`), longer than any
 /// exchange with a board that answers. The calls are served one at a time, so
-/// every request behind a call this long — `ping` among them — waited on it,
-/// and a harness that timed it out holds no answer to join its own record to:
-/// the line is that join (`slow_call_line`).
+/// a call's time is its wait behind the calls read before it and its own hold
+/// of the loop, and a harness's timeout counts both, from the moment it sent
+/// the request: one that timed the call out holds no answer to join its own
+/// record to, and the line is that join (`slow_call_line`). A request of
+/// another method takes no time of its own: one that waited this long was
+/// taken when the last call read before it ended, so that call's wait and
+/// hold together were at least as long, and its line says them.
 const SLOW_CALL: Duration = skep_client::dial::IO_TIMEOUT;
 
 /// The JSON-RPC 2.0 error codes this server answers (the spec's §5.1),
@@ -65,24 +69,27 @@ enum IsError {
 /// What reaches the loop: a stdin line, stdin's end, or the backend's stop.
 ///
 /// All three ride the one channel `main` makes; the stop is `OnStop`'s line.
+/// A line and the stop carry the moment they were sent, from which the loop
+/// counts their wait behind the calls it served first.
 #[derive(Debug)]
 pub enum Inbound {
-    /// One line of stdin, as raw bytes.
-    Line(Vec<u8>),
+    /// One line of stdin, as raw bytes, and the moment its reader read it.
+    Line(Vec<u8>, Instant),
     /// Stdin's end, or a read of it that failed.
     Eof,
-    /// The backend's stop: the plain line the loop says before it exits.
-    Stop(String),
+    /// The backend's stop: the plain line the loop says before it exits, and
+    /// the moment the backend sent it.
+    Stop(String, Instant),
 }
 
 /// Reads stdin on a thread of its own, sending each line to the loop.
 ///
 /// The stdio framing is one message per line: each line split off at `\n`
-/// goes to `inbound` as raw bytes, for `handle_line` to judge, and stdin's
-/// end follows the last; a read that fails is said in the log and ends the
-/// reading as the end does. The reading has a thread of its own,
-/// `skep-mcp-stdin`, so that the loop hears the backend's stop, which rides
-/// the same channel, between lines.
+/// goes to `inbound` as raw bytes, stamped with the moment it was read, for
+/// `handle_line` to judge, and stdin's end follows the last; a read that
+/// fails is said in the log and ends the reading as the end does. The
+/// reading has a thread of its own, `skep-mcp-stdin`, so that the loop hears
+/// the backend's stop, which rides the same channel, between lines.
 ///
 /// # Panics
 ///
@@ -93,7 +100,7 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
         for line in stdin.lock().split(b'\n') {
             match line {
                 Ok(l) => {
-                    if inbound.send(Inbound::Line(l)).is_err() {
+                    if inbound.send(Inbound::Line(l, Instant::now())).is_err() {
                         return;
                     }
                 }
@@ -112,6 +119,9 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
 ///
 /// Each answer written on stdout is counted once it is written: a tool
 /// result, `isError` or not, a JSON-RPC error, or any other method's result.
+/// Beside the counts it keeps the two figures of the loop's one call at a
+/// time: how much of the run the loop was busy, and the longest a line
+/// waited behind the calls read before it.
 #[derive(Debug, Default)]
 struct Served {
     /// The answers written.
@@ -121,23 +131,38 @@ struct Served {
     is_error: u64,
     /// The JSON-RPC errors among them.
     rpc_errors: u64,
+    /// The loop's time on the lines it answered, each from the moment it took
+    /// the line to its answer written.
+    busy: Duration,
+    /// The longest a line waited between its read and the loop taking it.
+    longest_wait: Duration,
 }
 
 impl Served {
     /// Counts one answer written.
-    fn count(&mut self, reply: &Value) {
+    ///
+    /// Its line waited `waited` before the loop took it, and the loop spent
+    /// `busy` on it.
+    fn count(&mut self, reply: &Value, waited: Duration, busy: Duration) {
         self.answers += 1;
         if let Some(is_error) = reply["result"]["isError"].as_bool() {
             self.tool_results += 1;
             self.is_error += u64::from(is_error);
         }
         self.rpc_errors += u64::from(reply.get("error").is_some());
+        self.busy += busy;
+        self.longest_wait = self.longest_wait.max(waited);
     }
 
     /// Returns the figures as the clean stop says them, over `serving`.
     fn said(&self, serving: Duration) -> String {
-        let Served { answers, tool_results, is_error, rpc_errors } = self;
-        format!("{answers} answers written in {:.1} s of serving: {tool_results} tool results, {is_error} of them isError, and {rpc_errors} JSON-RPC errors", serving.as_secs_f64())
+        let Served { answers, tool_results, is_error, rpc_errors, busy, longest_wait } = self;
+        format!(
+            "{answers} answers written in {:.1} s of serving, the loop busy {:.1} s of it: {tool_results} tool results, {is_error} of them isError, and {rpc_errors} JSON-RPC errors; no request waited longer than {:.1} s behind earlier calls",
+            serving.as_secs_f64(),
+            busy.as_secs_f64(),
+            longest_wait.as_secs_f64()
+        )
     }
 }
 
@@ -156,31 +181,36 @@ impl Server {
     ///
     /// One JSON-RPC message per line in, one per line out: nothing else is
     /// ever written on stdout, and the calls are served one at a time in
-    /// arrival order. Each line goes to `handle_line` as raw bytes: what a
-    /// line is, its encoding included, is that method's call. The loop ends
-    /// at stdin's end and at a closed stdout (the harness hung up), each a
-    /// success, and at the backend's stop, exit 1, each end said in the log,
-    /// its cause before the stop's line; the clean stop (`Backend::shutdown`)
-    /// runs after any of the three, its line carrying what the loop served
-    /// (`Served`), and the exit code is returned for `main` to exit with.
+    /// arrival order. Each line goes to `handle_line` as raw bytes — what a
+    /// line is, its encoding included, is that method's call — with its wait
+    /// behind the calls read before it, from its read to the loop's taking it.
+    /// The loop ends at stdin's end and at a closed stdout (the harness hung
+    /// up), each a success, and at the backend's stop, exit 1, said with its
+    /// own wait behind the calls before it; each end is said in the log, its
+    /// cause before the stop's line. The clean stop (`Backend::shutdown`) runs
+    /// after any of the three, its line carrying what the loop served
+    /// (`Served`) — how busy the loop was, and the longest a request waited —
+    /// and the exit code is returned for `main` to exit with.
     pub fn run(self, inbox: &Receiver<Inbound>) -> ExitCode {
         let mut out = std::io::stdout();
         let mut code = ExitCode::SUCCESS;
         let (serving, mut served) = (Instant::now(), Served::default());
         for message in inbox {
             match message {
-                Inbound::Line(line) => {
-                    let Some(reply) = self.handle_line(&line) else { continue };
+                Inbound::Line(line, read_at) => {
+                    let started = Instant::now();
+                    let waited = started.saturating_duration_since(read_at);
+                    let Some(reply) = self.handle_line(line, waited) else { continue };
                     let mut bytes = serde_json::to_vec(&reply).expect("serializing a serde_json::Value cannot fail");
                     bytes.push(b'\n');
                     if let Err(e) = out.write_all(&bytes).and_then(|()| out.flush()) {
                         crate::log(format_args!("stdout: {e}: the harness reads no more answers"));
                         break;
                     }
-                    served.count(&reply);
+                    served.count(&reply, waited, started.elapsed());
                 }
-                Inbound::Stop(line) => {
-                    crate::log(format_args!("stopped: {line}"));
+                Inbound::Stop(line, sent_at) => {
+                    crate::log(format_args!("stopped: {line}; the stop waited {:.1} s behind earlier calls", sent_at.elapsed().as_secs_f64()));
                     code = ExitCode::from(1);
                     break;
                 }
@@ -196,24 +226,30 @@ impl Server {
 
     /// Returns the one message, if any, that answers one inbound line.
     ///
-    /// The line, as raw bytes, is classified by two members alone: `method`
-    /// (a string) and `id` (any JSON value, echoed as given; `jsonrpc` is not
-    /// read). A request — a method and an id — gets its response under that
-    /// id. `None` for a blank line, a notification (a method, no id: all
-    /// consumed silently), a stray response (an id, no method, a `result` or
-    /// an `error`) or an id-less non-request: there is nothing to answer
-    /// under. A line is blank where it is UTF-8 that is empty or whitespace
-    /// alone as `str::trim` reads it — Unicode's White_Space, wider than
-    /// JSON's four whitespace characters, so a line of U+3000 alone is blank,
-    /// never the -32700. A line that does not parse as JSON — bytes that are
-    /// not UTF-8 included — is the -32700 parse error and JSON that is no
-    /// object the -32600, both id null; an id with no method, no `result` and
-    /// no `error` is the -32600 under that id.
-    fn handle_line(&self, line: &[u8]) -> Option<Value> {
-        if std::str::from_utf8(line).is_ok_and(|s| s.trim().is_empty()) {
+    /// The line, its raw bytes owned and dropped once parsed, is classified
+    /// by two members alone: `method` (a string) and `id` (any JSON value,
+    /// echoed as given; `jsonrpc` is not read). A request — a method and an
+    /// id — gets its response under that id, `waited` its wait behind the
+    /// calls read before it (`Server::respond`). `None` for a blank line, a
+    /// notification (a method, no id: all consumed silently), a stray
+    /// response (an id, no method, a `result` or an `error`) or an id-less
+    /// non-request: there is nothing to answer under. A line is blank where it
+    /// is UTF-8 that is empty or whitespace alone as `str::trim` reads it —
+    /// Unicode's White_Space, wider than JSON's four whitespace characters, so
+    /// a line of U+3000 alone is blank, never the -32700. A line that does not
+    /// parse as JSON — bytes that are not UTF-8 included — is the -32700 parse
+    /// error and JSON that is no object the -32600, both id null; an id with
+    /// no method, no `result` and no `error` is the -32600 under that id.
+    fn handle_line(&self, line: Vec<u8>, waited: Duration) -> Option<Value> {
+        if std::str::from_utf8(&line).is_ok_and(|s| s.trim().is_empty()) {
             return None;
         }
-        let msg: Value = match serde_json::from_slice(line) {
+        // Parsed, then dropped: the call that follows — a board's round trip,
+        // a fetch up to its deadline — holds the parse alone, never the line's
+        // buffer too, which grew by doubling as it was read.
+        let parsed = serde_json::from_slice::<Value>(&line);
+        drop(line);
+        let msg: Value = match parsed {
             Ok(v) => v,
             Err(e) => {
                 let message = format!("parse error: {e}");
@@ -239,7 +275,7 @@ impl Server {
             }
             // Notifications — `notifications/initialized` and all others.
             (Some(_), None) => None,
-            (Some(m), Some(id)) => Some(self.respond(m, params, id)),
+            (Some(m), Some(id)) => Some(self.respond(m, params, id, waited)),
         }
     }
 
@@ -252,10 +288,11 @@ impl Server {
     /// named none, beside the server's name and version, the catalog's
     /// instructions and the tools capability. `ping` answers `{}`,
     /// `tools/list` the catalog's tools, `tools/call` its tool result or
-    /// -32602 (`Server::call`) — a call that held the loop `SLOW_CALL` or
-    /// longer said in the log (`slow_call_line`) — and any other method
+    /// -32602 (`Server::call`) — a call whose wait behind the calls read
+    /// before it, `waited`, and its own hold of the loop together reach
+    /// `SLOW_CALL` said in the log (`slow_call_line`) — and any other method
     /// -32601.
-    fn respond(&self, method: &str, params: Option<Value>, id: Value) -> Value {
+    fn respond(&self, method: &str, params: Option<Value>, id: Value, waited: Duration) -> Value {
         match method {
             "initialize" => {
                 let version = params.as_ref().and_then(|p| p.get("protocolVersion")).and_then(Value::as_str).unwrap_or(FALLBACK_PROTOCOL_VERSION);
@@ -277,8 +314,8 @@ impl Server {
                     let started = Instant::now();
                     let outcome = self.call(&name, args);
                     let held = started.elapsed();
-                    if held >= SLOW_CALL {
-                        crate::log(slow_call_line(&name, &id, held, &outcome));
+                    if waited + held >= SLOW_CALL {
+                        crate::log(slow_call_line(&name, &id, waited, held, &outcome));
                     }
                     match outcome {
                         Ok(result) => rpc_result(id, result),
@@ -393,14 +430,16 @@ fn call_params(params: Option<Value>) -> Result<(String, Map<String, Value>), St
     Ok((name, args))
 }
 
-/// Returns the line a call that held the loop `held` says, with its answer.
+/// Returns the line a slow call says: its wait, its hold, and its answer.
 ///
 /// It names the tool, the request by its id — the harness's own record of the
 /// call joins it there, the id as JSON spells it, its first 64 characters —
-/// how long the call held the loop, and how it was answered: a tool result,
-/// one `isError`, or the -32602 of a call the adapter will not run. No
-/// argument rides it.
-fn slow_call_line(name: &str, id: &Value, held: Duration, outcome: &Result<Value, String>) -> String {
+/// how long the request waited behind the calls read before it, the queue
+/// the one call at a time makes, which a harness's timeout counts from the
+/// moment it sent the request; how long the call then held the loop; and how
+/// it was answered: a tool result, one `isError`, or the -32602 of a call the
+/// adapter will not run. No argument rides it.
+fn slow_call_line(name: &str, id: &Value, waited: Duration, held: Duration, outcome: &Result<Value, String>) -> String {
     let id = id.to_string();
     let id = match id.char_indices().nth(64) {
         Some((cut, _)) => format!("{}…", &id[..cut]),
@@ -411,7 +450,7 @@ fn slow_call_line(name: &str, id: &Value, held: Duration, outcome: &Result<Value
         Ok(_) => "answered",
         Err(_) => "refused -32602",
     };
-    format!("the `{name}` call of request {id} held the loop {:.1} s: {answered}", held.as_secs_f64())
+    format!("the `{name}` call of request {id} waited {:.1} s behind earlier calls and held the loop {:.1} s: {answered}", waited.as_secs_f64(), held.as_secs_f64())
 }
 
 /// Returns a JSON-RPC response carrying `result` under `id`, both moved in.
@@ -551,39 +590,52 @@ mod tests {
         assert_eq!(text_result("t".into(), IsError::No), json!({"content": [{"type": "text", "text": "t"}], "isError": false}));
     }
 
-    /// A call that held the loop is said by its tool, request and answer.
+    /// A slow call is said by its tool, request, wait, hold and answer.
     ///
     /// The line names the tool, the request's id as given — a long one cut at
-    /// 64 characters — the time held, and the answer: a tool result, one
-    /// `isError`, or the -32602; no argument rides it.
+    /// 64 characters — how long the request waited behind earlier calls, how
+    /// long the call held the loop, and the answer: a tool result, one
+    /// `isError`, or the -32602; no argument rides it. A call that waited and
+    /// was quick is said with its wait as surely as one that held the loop.
     #[test]
-    fn a_call_that_held_the_loop_is_said_by_its_tool_request_and_answer() {
+    fn a_slow_call_is_said_by_its_tool_request_wait_hold_and_answer() {
         let held = Duration::from_millis(10_240);
-        let answered = slow_call_line("fetch", &json!(7), held, &Ok(text_result("x".into(), IsError::No)));
-        assert_eq!(answered, "the `fetch` call of request 7 held the loop 10.2 s: answered");
-        let is_error = slow_call_line("create_new_document", &json!("call-1"), held, &Ok(text_result("x".into(), IsError::Yes)));
-        assert_eq!(is_error, "the `create_new_document` call of request \"call-1\" held the loop 10.2 s: answered isError");
+        let answered = slow_call_line("fetch", &json!(7), Duration::ZERO, held, &Ok(text_result("x".into(), IsError::No)));
+        assert_eq!(answered, "the `fetch` call of request 7 waited 0.0 s behind earlier calls and held the loop 10.2 s: answered");
+        let is_error = slow_call_line("create_new_document", &json!("call-1"), Duration::ZERO, held, &Ok(text_result("x".into(), IsError::Yes)));
+        assert_eq!(is_error, "the `create_new_document` call of request \"call-1\" waited 0.0 s behind earlier calls and held the loop 10.2 s: answered isError");
         let long = json!("x".repeat(100));
-        let refused = slow_call_line("search", &long, held, &Err("search's opts take 'limit', 'offset'; got 'reindex'".into()));
-        assert_eq!(refused, format!("the `search` call of request \"{}… held the loop 10.2 s: refused -32602", "x".repeat(63)));
+        let refused = slow_call_line("search", &long, Duration::ZERO, held, &Err("search's opts take 'limit', 'offset'; got 'reindex'".into()));
+        assert_eq!(refused, format!("the `search` call of request \"{}… waited 0.0 s behind earlier calls and held the loop 10.2 s: refused -32602", "x".repeat(63)));
+        let queued = slow_call_line("boards", &json!(9), Duration::from_millis(58_300), Duration::from_micros(40), &Ok(text_result("x".into(), IsError::No)));
+        assert_eq!(queued, "the `boards` call of request 9 waited 58.3 s behind earlier calls and held the loop 0.0 s: answered");
     }
 
     /// What the loop served is counted by the answers written.
     ///
     /// Every answer counts; a tool result counts as one, `isError` or not, and
-    /// a JSON-RPC error as one; the figures are said over the time served.
+    /// a JSON-RPC error as one; the loop's time on each adds up as its busy
+    /// time, and the longest a line waited before the loop took it is kept,
+    /// whichever line it was; the figures are said over the time served.
     #[test]
     fn what_the_loop_served_is_counted_by_the_answers_written() {
         let mut served = Served::default();
-        for reply in [
+        let replies = [
             rpc_result(json!(1), json!({"protocolVersion": "2025-06-18"})),
             rpc_result(json!(2), text_result("x".into(), IsError::No)),
             rpc_result(json!(3), text_result("x".into(), IsError::Yes)),
             rpc_error(json!(4), ErrorCode::InvalidParams, "no"),
             rpc_error(Value::Null, ErrorCode::ParseError, "parse error"),
-        ] {
-            served.count(&reply);
+        ];
+        // Waits and times that neither rise nor fall, so the longest wait is
+        // neither the last nor a sum, and the busy time no single line's.
+        let (waits, busy) = ([100, 400, 0, 300, 200], [300, 200, 500, 100, 400]);
+        for ((reply, waited), busy) in replies.iter().zip(waits).zip(busy) {
+            served.count(reply, Duration::from_millis(waited), Duration::from_millis(busy));
         }
-        assert_eq!(served.said(Duration::from_millis(1_500)), "5 answers written in 1.5 s of serving: 2 tool results, 1 of them isError, and 2 JSON-RPC errors");
+        assert_eq!(
+            served.said(Duration::from_millis(2_000)),
+            "5 answers written in 2.0 s of serving, the loop busy 1.5 s of it: 2 tool results, 1 of them isError, and 2 JSON-RPC errors; no request waited longer than 0.4 s behind earlier calls"
+        );
     }
 }

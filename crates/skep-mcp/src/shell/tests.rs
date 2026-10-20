@@ -608,8 +608,9 @@ fn the_backends_debug_names_its_stop_and_shows_no_closure() {
 /// A session the calls run under is said closed at the board; a lapsed one
 /// and a stopped one ended there already, and the line says so, and that a
 /// burst still held stays in its file save one kept in memory alone: the
-/// backend's one line, said before the shell's stop runs, naming the session
-/// and carrying what the loop served, as the loop words it.
+/// backend's line, said before the shell's stop runs, naming the session and
+/// carrying what the loop served, as the loop words it; then, the stop
+/// returned, its time.
 #[test]
 fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
     let closing = "stopping: closing the session at the board, saving the index (session s-1) — what the loop served";
@@ -623,7 +624,10 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
         let lines = said_by(&mut backend);
         let state = backend.session.current();
         backend.shutdown("what the loop served");
-        assert_eq!(*lines.lock().expect("the lines' lock"), [said], "{state:?}");
+        let said_lines = lines.lock().expect("the lines' lock").clone();
+        let [stopping, took] = &said_lines[..] else { panic!("the stop's line, then its time: {said_lines:?}") };
+        assert_eq!(stopping.as_str(), said, "{state:?}");
+        assert!(took.starts_with("the shell's stop took ") && took.ends_with(" s: the close of its sessions at the board, the save of the index and the end of its feed threads"), "{took}");
     }
 }
 

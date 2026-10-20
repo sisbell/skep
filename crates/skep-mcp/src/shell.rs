@@ -30,13 +30,14 @@
 //! before it runs the frame — save that a death the shell did not re-open is
 //! the answer to the call that met it. A death the shell does not re-open — the
 //! key retired (AUTH-5.28, AUTH-5.77), the account seeded, the prefix blocked,
-//! or a restart whose re-open the board refused — stops the adapter: one plain
-//! line naming the arm goes to the process's stop, and nothing more is served;
-//! the person stops an agent by retiring its key, and the adapter's end is what
-//! the agent's client sees. A board that does not answer is served through: no
-//! session stands, every call answers its refusal, and the next call opens one
-//! afresh once the board answers again, the board's refusal of it judged as a
-//! refused re-open is.
+//! or a restart whose re-open the board refused for any cause but `busy` —
+//! stops the adapter: one plain line naming the arm goes to the process's stop,
+//! and nothing more is served; the person stops an agent by retiring its key,
+//! and the adapter's end is what the agent's client sees. A board that does not
+//! answer, or does not accept the sign-in twice in a row (`busy`, transient by
+//! skep-client's own face, AUTH-5.25), is served through: no session stands,
+//! every call answers its refusal, and each call opens one afresh until the
+//! board takes it, the board's refusal of it judged as a refused re-open is.
 //!
 //! The bus is subscribed in `Backend::open` before the session opens, so no
 //! death of it is emitted unheard, and drained on a thread of its own for the
@@ -137,9 +138,16 @@ fn is_shell(refusal: &Refusal, named: Name) -> bool {
 /// Returns the line a refused startup check stops the adapter with.
 ///
 /// It names what did not hold, then the shell's refusal in the library's own
-/// words (`Refusal`'s `Display`), said once.
+/// words (`Refusal`'s `Display`), said once. Where the board did not answer,
+/// it says the act too: a start dials the board once and does not wait for it,
+/// though an adapter that serves serves through an outage, so the adapter is
+/// started again once the board answers.
 fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
-    format!("stopped before serving: {what}: {refusal}")
+    let act = match refusal {
+        Refusal::Unreachable(_) => " — a start does not wait for a board that is not answering, though one met while serving is served through: start the adapter again once the board answers",
+        _ => "",
+    };
+    format!("stopped before serving: {what}: {refusal}{act}")
 }
 
 /// Returns the line that says the held bursts an earlier run left, if any.
@@ -164,14 +172,20 @@ fn carried_line(lines: &Value) -> Option<String> {
 /// Returns what the clean stop says of the bursts it leaves held, if any.
 ///
 /// `lines` is the `held` row's answer as the session stands at the stop: the
-/// principal's held file, which the next start reads whole and counts
-/// (`carried_line`). It counts the bursts, and those `sent` and so perhaps
-/// landed (client.md §3c.2). `None` where none stands.
+/// principal's queue. A line its held file holds is read whole and counted at
+/// the next start (`carried_line`); a line the shell kept in memory alone —
+/// answered `unwritable` or `other_window` when it was held, its copy refused
+/// or its file out of reach (client.md §3c.3) — goes with the process. The row
+/// does not tell the two apart, so the line says both. It counts the bursts,
+/// and those `sent` and so perhaps landed (client.md §3c.2). `None` where none
+/// stands.
 fn left_held(lines: &Value) -> Option<String> {
     let lines = lines.as_array().filter(|lines| !lines.is_empty())?;
     let sent = lines.iter().filter(|line| line["sent"] == true).count();
     let bursts = if lines.len() == 1 { "1 burst".to_string() } else { format!("{} bursts", lines.len()) };
-    Some(format!("; it leaves {bursts} held at this board ({sent} sent and so perhaps landed), which the next start counts"))
+    Some(format!(
+        "; it leaves {bursts} held at this board ({sent} sent and so perhaps landed): the next start counts those the held file holds, and any the shell answered `unwritable` or `other_window` was kept in memory alone and goes with this process"
+    ))
 }
 
 /// Returns the line that says a held file the shell halted (client.md §3c.3).
@@ -179,16 +193,24 @@ fn left_held(lines: &Value) -> Option<String> {
 /// `path` and `why` are the `store_halted` refusal's: the file, left as found,
 /// and why the shell reads it no further. Every burst at the board is refused
 /// so, at this run and every later one, until the file is set aside, which
-/// loses its lines.
+/// loses its lines. The act follows the why: a file a newer skep wrote, or one
+/// whose header this skep does not read, is read by the skep that wrote it; a
+/// damaged one — what a crash before its header's sync leaves, or a copy a
+/// full disk cut short with another written after it — is read whole by none,
+/// and set aside, the next start beginning a fresh one.
 fn halted_line(path: &str, why: &str) -> String {
-    let why = match why {
-        "newer" => "written by a newer skep",
-        "unknown_member" => "its header is not one this skep reads",
-        "damaged" => "damaged: a line of it is not one this skep reads whole",
-        other => other,
+    let run_the_writer = "run the skep that wrote it, or, with the adapter stopped, set the file aside";
+    let (why, act) = match why {
+        "newer" => ("written by a newer skep", run_the_writer),
+        "unknown_member" => ("its header is not one this skep reads", run_the_writer),
+        "damaged" => (
+            "damaged: a line of it is not one this skep reads whole — what a crash before its header's sync leaves, or a copy a full disk cut short with another written after it",
+            "no skep reads it whole: with the adapter stopped, set the file aside, and the next start begins a fresh one",
+        ),
+        other => (other, run_the_writer),
     };
     format!(
-        "held: the held file {path} is halted ({why}): every burst the agent makes at this board — insert, delete, copy, reinstate, rearrange — is refused `store_halted`, at this run and every later one, and the file is left as found: run the skep that wrote it, or, with the adapter stopped, set the file aside — its lines are bursts not known to have landed"
+        "held: the held file {path} is halted ({why}): every burst the agent makes at this board — insert, delete, copy, reinstate, rearrange — is refused `store_halted`, at this run and every later one, and the file is left as found: {act} — its whole lines are bursts not known to have landed"
     )
 }
 
@@ -562,7 +584,7 @@ impl Backend {
                                 Some(format!("the board restarted: the session was re-opened under a fresh reference, {fresh} in {died}'s place, and every call is served under it"))
                             }
                             Death::ServeOn => Some(format!(
-                                "the session {died} ended and was not re-opened ({}): every call answers its refusal, and the next call opens a session once the board answers again",
+                                "the session {died} ended and was not re-opened ({}): every call answers its refusal until one opens a session afresh, which each call tries, and the held bursts, which the shell resends under a session alone, wait for it",
                                 lapse_cause(reason)
                             )),
                             Death::Stop(_) => None,
@@ -607,12 +629,13 @@ impl Backend {
     /// The calls run under it once it opens, and the log says so, naming the
     /// session that died and the one opened. A refusal of it is judged as a
     /// refused re-open is (`refused_afresh`, by way of `refused_open`): a board
-    /// that does not answer leaves the session's state lapsed, and any other
-    /// refusal stops the adapter, its line naming this open handed to the stop
-    /// from the calling thread (`OnStop`). Where the drain settled the
-    /// session's state while the session opened, the session is closed, so
-    /// none stands that no call names — said first, with what stands instead,
-    /// since the shell's stop names any it could not close.
+    /// that does not answer, or does not accept the sign-in, leaves the
+    /// session's state lapsed, and any other refusal stops the adapter, its
+    /// line naming this open handed to the stop from the calling thread
+    /// (`OnStop`). Where the drain settled the session's state while the
+    /// session opened, the session is closed, so none stands that no call
+    /// names — said first, with what stands instead, since the shell's stop
+    /// names any it could not close.
     ///
     /// # Errors
     ///
@@ -841,9 +864,11 @@ impl Backend {
     /// run under is said closed at the board, with the bursts it leaves held
     /// (`left_held`); where none stands — a death or a refused open stopped
     /// the adapter, or the board did not answer — the session already ended
-    /// there, its end having left the shell's table, and the line says so.
-    /// Either way the line names the session, and carries `served`, what the
-    /// loop answered over the run.
+    /// there, its end having left the shell's table, and the line says so, and
+    /// that a burst still held stays in its held file for the next start, save
+    /// one the shell kept in memory alone: no session stands to read the held
+    /// lines under, so none is counted. Either way the line names the session,
+    /// and carries `served`, what the loop answered over the run.
     ///
     /// It takes the backend, since nothing is served after it: a call made
     /// through it then would find its session closed, wait out `SETTLE_WAIT`
@@ -855,9 +880,9 @@ impl Backend {
                 let left = self.shell.call("held", &json!({"session": reference})).ok().and_then(|lines| left_held(&lines)).unwrap_or_default();
                 format!("stopping: closing the session at the board, saving the index (session {reference}) — {served}{left}")
             }
-            SessionState::Lapsed(reference) | SessionState::Stopped(reference) => {
-                format!("stopping: the session already ended at the board; saving the index (session {reference}) — {served}")
-            }
+            SessionState::Lapsed(reference) | SessionState::Stopped(reference) => format!(
+                "stopping: the session already ended at the board; saving the index (session {reference}) — {served}; any burst held at this board stays in its held file for the next start to count, save one the shell kept in memory alone, which goes with this process"
+            ),
         };
         self.say(&said);
         self.shell.shutdown();

@@ -295,14 +295,20 @@ fn without_its_writer_a_line_is_written_where_it_is_said() {
 ///
 /// A thread is named by its name, `an unnamed thread` where it has none; a
 /// `&'static str` payload rides the line, any other is left off; the line
-/// names the build it ran, and ends on the act.
+/// names the build it ran, and ends on the act: a report where the panic ends
+/// the process — `main`'s — and where it leaves the process running without
+/// the thread — any other's, the adapter's own named ones among them — the
+/// restart too, with what stays undone until it.
 #[test]
 fn a_panics_line_names_the_thread_and_the_site_and_a_literal_payload_alone() {
     let at = Location::caller();
     let named = panic_line(Some("main"), Some(at), Some("the shell broke a promise"));
     assert!(named.starts_with(&format!("the main thread panicked at {at}: the shell broke a promise — ")), "{named}");
+    assert!(named.ends_with("report this line"), "main's panic ends the process, its act the report: {named}");
     let unnamed = panic_line(None, None, None);
     assert!(unnamed.starts_with("an unnamed thread panicked at an unknown location — "), "{unnamed}");
-    assert!(unnamed.contains(&format!(", in skep-mcp {}: ", crate::build())), "the build it ran: {unnamed}");
-    assert!(unnamed.ends_with("report this line"), "{unnamed}");
+    assert!(unnamed.contains(&format!(", in skep-mcp {}: report this line, and restart the adapter — ", crate::build())), "the build it ran, and the restart: {unnamed}");
+    assert!(unnamed.ends_with("its feed, search, places and held-burst resend among them"), "what stays undone until the restart: {unnamed}");
+    let drain = panic_line(Some("skep-mcp-drain"), None, None);
+    assert!(drain.starts_with("the skep-mcp-drain thread panicked at ") && drain.contains("restart the adapter"), "{drain}");
 }

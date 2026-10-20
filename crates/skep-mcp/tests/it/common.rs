@@ -818,6 +818,15 @@ impl Mcp {
         self.child.wait().expect("wait for adapter")
     }
 
+    /// Ends the adapter at once, SIGKILL on unix, and reaps it.
+    ///
+    /// No clean stop runs: what the process left on disk is all a later start
+    /// finds.
+    pub fn kill(mut self) -> ExitStatus {
+        let _ = self.child.kill();
+        self.child.wait().expect("wait for adapter")
+    }
+
     /// Close stdin (EOF), reap, and read the adapter's log to its end.
     pub fn finish_logged(mut self) -> (ExitStatus, String) {
         drop(self.stdin.take());

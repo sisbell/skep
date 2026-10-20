@@ -11,10 +11,14 @@
 //! line naming each setting and its source, the commons sentence, a tools
 //! file in the embedded catalog's place, named where it is served and said
 //! where its text differs, and a drifted one refused naming it; the board's
-//! refusals of the open, a board said halted exactly where its writes are, the
-//! log inert and no token in it, nor a document's text an answer the client
-//! cannot parse quoted; and what the start finds under the store: an earlier
-//! run's held bursts, a halted held file, another adapter still holding it.
+//! refusals of the open — one not answering, with the act it asks — and of a
+//! re-open, a sign-in it does not accept lapsing the session until a later
+//! call opens one; a board said halted exactly where its writes are, the log
+//! inert and no token in it, nor a document's text an answer the client cannot
+//! parse quoted; and what the start finds under the store: an earlier run's
+//! held bursts — a signal's among them, and none the shell kept in memory
+//! alone — a halted held file, a newer skep's or one a crash left damaged, and
+//! another adapter still holding the store.
 //! Most run the built binary with no board, or a stand-in one answering what a
 //! real board never does; the rest over a claimed board (`common`'s
 //! `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`, a retired
@@ -24,6 +28,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -251,12 +256,60 @@ fn a_documents_text_in_an_answer_the_client_cannot_parse_reaches_no_log_line() {
     assert!(!log.contains(SENTENCE), "the document's text reaches the log:\n{log}");
 }
 
+/// A sign-in the board does not accept at a re-open lapses the session.
+///
+/// A stand-in board opens the adapter's signed session, then answers a call
+/// with the death signal (`Skepd-Session: closed`): the shell's end finds the
+/// key enrolled and re-opens, and the board answers that re-open's `POST
+/// /session`, and the next call's own open, `401 session_rejected` twice each
+/// — skep-client's terminal busy arm, transient by its own face (AUTH-5.25,
+/// AUTH-5.26). The adapter stays up: the call that met the death answers
+/// `session_died`, the log says the session lapsed and why, the next call
+/// answers the `busy` halt and its act, and the call after it, the board
+/// taking the open, is served.
+#[test]
+fn a_sign_in_the_board_does_not_accept_at_a_reopen_lapses_the_session() {
+    let (dir, key) = keyed_store("busy-reopen");
+    let opens = AtomicUsize::new(0);
+    let session = move || match opens.fetch_add(1, Ordering::SeqCst) {
+        1..=4 => {
+            let body = r#"{"error":"session_rejected"}"#;
+            format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+        }
+        _ => answered(r#"{"principal":1,"session":"0123456789abcdef0123456789abcdef"}"#),
+    };
+    let died = AtomicBool::new(false);
+    let other = move |frame: &str| {
+        if !frame.contains("\"doc_metadata\"") {
+            not_found()
+        } else if !died.swap(true, Ordering::SeqCst) {
+            "HTTP/1.1 200 OK\r\nSkepd-Session: closed\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_string()
+        } else {
+            answered(r#"{"resp":"doc_metadata","doc":"1.0.1.0.1"}"#)
+        }
+    };
+    let port = signing_stand_in(&key, session, other);
+    let mut mcp = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").logged().spawn();
+    mcp.initialize();
+    let meta = json!({"doc": "1.0.1.0.1"});
+    let met = mcp.call_error("doc_metadata", meta.clone());
+    assert_eq!((met["name"].as_str(), met["reason"]["refused"].as_str()), (Some("session_died"), Some("busy")), "{met}");
+    mcp.log_holding(&["ended and was not re-opened (the board restarted, and did not accept the re-open's sign-in twice in a row (busy)"], Duration::from_secs(10));
+    let again = mcp.call_error("doc_metadata", meta.clone());
+    assert_eq!((again["name"].as_str(), again["act"].as_str()), (Some("busy"), Some("try again")), "{again}");
+    assert_eq!(mcp.call_json("doc_metadata", meta)["resp"], "doc_metadata", "the board taking the open, the call is served");
+    let (status, log) = mcp.finish_logged();
+    assert!(status.success(), "the adapter never stopped: {status:?}\n{log}");
+    assert!(!log.lines().filter_map(stamped).any(|(_, text)| text.starts_with("stopped")), "no stop is said:\n{log}");
+}
+
 /// A board the adapter cannot reach stops startup, and nothing is served.
 ///
 /// The session cannot open: exit 1, the plain line naming the stop, the
-/// refusal's kind and the board, nothing on stdout; a loopback board is warned
-/// of not at all. Port 1 sits below 1024, where no unprivileged process can
-/// listen, so the connect is refused.
+/// refusal's kind and the board, and the act — a start waits for no board, so
+/// it is made again once the board answers — nothing on stdout; a loopback
+/// board is warned of not at all. Port 1 sits below 1024, where no
+/// unprivileged process can listen, so the connect is refused.
 #[test]
 fn a_board_that_does_not_answer_stops_startup() {
     let dir = TempDir::new("noboard");
@@ -264,6 +317,7 @@ fn a_board_that_does_not_answer_stops_startup() {
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("stopped before serving: the board's health was not read: unreachable"), "{err}");
+    assert!(err.contains("start the adapter again once the board answers"), "the act an unanswering board at the start asks: {err}");
     assert!(err.contains("http://127.0.0.1:1"), "the board named: {err}");
     assert!(!err.contains("plaintext non-loopback"), "a loopback board is warned of not at all: {err}");
     assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
@@ -612,7 +666,9 @@ fn tools_file_refusal(tools_file: &Path) -> String {
 /// says it leaves one burst held, and the next start says one burst is left,
 /// waiting on the agent's `resolve`. A held file a newer skep wrote halts the
 /// principal's bursts at the board: the start says the file is halted and
-/// why, and a burst is refused `store_halted`.
+/// why, and a burst is refused `store_halted`. An empty one, a crash's
+/// leftover, halts as damaged, and its act is to set it aside, never to run a
+/// skep that wrote it.
 #[test]
 fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let fixture = Fixture::new("held-at-start");
@@ -623,7 +679,7 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     assert_eq!(refused["resp"], "held", "premise: a refused run is held: {refused}");
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}\n{log}");
-    assert!(log.contains("; it leaves 1 burst held at this board (0 sent and so perhaps landed), which the next start counts"), "the stop says what it leaves held:\n{log}");
+    assert!(log.contains("; it leaves 1 burst held at this board (0 sent and so perhaps landed): the next start counts those the held file holds"), "the stop says what it leaves held:\n{log}");
     let mut again = Launch::over(&fixture, 1).logged().spawn();
     again.initialize();
     again.log_holding(&["held: an earlier run left 1 burst held at this board (0 sent and so perhaps landed, 1 waiting on the agent's `resolve`"], Duration::from_secs(10));
@@ -638,6 +694,73 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     let refusal = halted.call_error("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["s"]}));
     assert_eq!(refusal["name"], "store_halted", "{refusal}");
     assert!(halted.finish().success());
+    std::fs::write(&file, b"").expect("a held file a crash left headless");
+    let mut damaged = Launch::over(&fixture, 1).logged().spawn();
+    damaged.initialize();
+    let log = damaged.log_holding(&[&format!("held: the held file {} is halted (damaged", file.display())], Duration::from_secs(10));
+    assert!(log.contains("no skep reads it whole") && !log.contains("run the skep that wrote it"), "the act a damaged file asks:\n{log}");
+    let refusal = damaged.call_error("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": ["t"]}));
+    assert_eq!(refusal["name"], "store_halted", "{refusal}");
+    assert!(damaged.finish().success());
+}
+
+/// A signal leaves the held bursts on disk, and the next start counts them.
+///
+/// A burst the board refuses is held, its line synced before the answer; the
+/// adapter is then ended by a signal, no clean stop run: the next start says
+/// an earlier run left one burst, as the usage says of a signal.
+#[test]
+fn a_signal_leaves_the_held_bursts_on_disk_for_the_next_start() {
+    let fixture = Fixture::new("held-signal");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let held = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+    assert_eq!(held["resp"], "held", "premise: a refused run is held: {held}");
+    assert!(!mcp.kill().success(), "ended by the signal");
+    let mut again = Launch::over(&fixture, 1).logged().spawn();
+    again.initialize();
+    again.log_holding(&["held: an earlier run left 1 burst held at this board"], Duration::from_secs(10));
+    assert!(again.finish().success());
+}
+
+/// A burst kept in memory alone is said to go with the process.
+///
+/// The board's held directory, standing from a first run, is made one this
+/// process cannot write, so a burst the board refuses is held in memory alone,
+/// answered `unwritable`: the clean stop says such a burst goes with the
+/// process, never that the next start counts it, and the next start, the
+/// directory writable again, finds none. A process every mode lets write — one
+/// run as root — proves nothing here, and the case passes.
+#[cfg(unix)]
+#[test]
+fn a_burst_kept_in_memory_alone_is_said_to_go_with_the_process() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("held-in-memory");
+    let mut first = Launch::over(&fixture, 1).spawn();
+    first.initialize();
+    assert!(first.finish().success());
+    let chains: Vec<PathBuf> = std::fs::read_dir(fixture.store.join("held")).expect("the held store").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    let [chain] = &chains[..] else { panic!("one board's held directory: {chains:?}") };
+    std::fs::set_permissions(chain, std::fs::Permissions::from_mode(0o500)).expect("the held directory made read-only");
+    let writes_anyway = std::fs::write(chain.join("probe"), b"").is_ok();
+    let stopped = (!writes_anyway).then(|| {
+        let mut mcp = Launch::over(&fixture, 1).logged().spawn();
+        mcp.initialize();
+        let draft = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+        let held = mcp.call_json("insert", json!({"doc": draft, "at": {"subspace": "1", "ordinal": "900000"}, "values": ["r"]}));
+        (held, mcp.finish_logged())
+    });
+    std::fs::set_permissions(chain, std::fs::Permissions::from_mode(0o700)).expect("the held directory's mode restored");
+    let Some((held, (status, log))) = stopped else { return };
+    assert!(held["resp"] == "held" && held["unwritable"].is_string(), "premise: the burst is held in memory alone: {held}");
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(log.contains("was kept in memory alone and goes with this process") && !log.contains("which the next start counts"), "the stop says where the burst goes:\n{log}");
+    let mut again = Launch::over(&fixture, 1).logged().spawn();
+    again.initialize();
+    let log = again.log_holding(&["serving "], Duration::from_secs(10));
+    assert!(!log.contains("an earlier run left"), "the burst kept in memory alone is gone:\n{log}");
+    assert!(again.finish().success());
 }
 
 /// A second start over one store waits for the first adapter to end.

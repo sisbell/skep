@@ -97,15 +97,18 @@ fn said_by(backend: &mut Backend) -> Arc<Mutex<Vec<String>>> {
 ///
 /// The refusal is said in the library's own words: a halt under its armed
 /// name with its face's three lines, the board's verdict with "the board
-/// refused" said once, the unreachable board, and the shell's own by name
-/// with its detail.
+/// refused" said once, the unreachable board with the act a start that met
+/// it asks — a start waits for no board, so it is made again once the board
+/// answers — and the shell's own by name with its detail.
 #[test]
 fn a_startup_stop_names_what_did_not_hold_then_the_refusal_once() {
     let face = skep_client::halt::Face { state: "no key here".into(), cause: "the store is keyless".into(), act: "run keygen".into() };
+    let unanswered =
+        "unreachable: connect: refused — a start does not wait for a board that is not answering, though one met while serving is served through: start the adapter again once the board answers";
     for (refusal, said) in [
         (Refusal::named(Name::NO_KEY, face), "no_key: no key here\n  cause: the store is keyless\n  act: run keygen"),
         (Refusal::board(401, json!({"error": "session_rejected"})), "the board refused: session_rejected (HTTP 401)"),
-        (Refusal::Unreachable(skep_client::DialError::Connect("refused".into())), "unreachable: connect: refused"),
+        (Refusal::Unreachable(skep_client::DialError::Connect("refused".into())), unanswered),
         (Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"})), "session_ended: {\"session\":\"s-1\"}"),
     ] {
         assert_eq!(stopped_before_serving("the check", &refusal), format!("stopped before serving: the check: {said}"));
@@ -553,12 +556,23 @@ fn an_earlier_runs_held_bursts_are_counted_as_they_stand() {
 }
 
 /// A halted held file is said with its path, why in words, and the act.
+///
+/// The act follows the why: a newer skep's file, or one whose header this
+/// skep does not read, is the skep that wrote it to run; a damaged one —
+/// a crash's or a full disk's leftover — no skep reads whole, so it is set
+/// aside, never sent to a writer that does not exist.
 #[test]
 fn a_halted_held_file_is_said_with_its_path_why_and_the_act() {
-    for (why, words) in [("newer", "written by a newer skep"), ("unknown_member", "its header is not one this skep reads"), ("damaged", "damaged: a line of it is not one this skep reads whole")] {
+    for (why, words, runs_the_writer) in [
+        ("newer", "written by a newer skep", true),
+        ("unknown_member", "its header is not one this skep reads", true),
+        ("damaged", "damaged: a line of it is not one this skep reads whole — what a crash before its header's sync leaves", false),
+    ] {
         let said = halted_line("/store/held/c/principal-1.held", why);
-        assert!(said.starts_with(&format!("held: the held file /store/held/c/principal-1.held is halted ({words}): ")), "{said}");
+        assert!(said.starts_with(&format!("held: the held file /store/held/c/principal-1.held is halted ({words}")), "{said}");
         assert!(said.contains("refused `store_halted`") && said.contains("set the file aside"), "the refusal it meets and the act: {said}");
+        assert_eq!(said.contains("run the skep that wrote it"), runs_the_writer, "{why}: the act its why asks: {said}");
+        assert_eq!(said.contains("no skep reads it whole"), !runs_the_writer, "{why}: {said}");
     }
 }
 
@@ -592,13 +606,14 @@ fn the_backends_debug_names_its_stop_and_shows_no_closure() {
 /// The clean stop says first what it closes, as the session's state has it.
 ///
 /// A session the calls run under is said closed at the board; a lapsed one
-/// and a stopped one ended there already, and the line says so: the
+/// and a stopped one ended there already, and the line says so, and that a
+/// burst still held stays in its file save one kept in memory alone: the
 /// backend's one line, said before the shell's stop runs, naming the session
 /// and carrying what the loop served, as the loop words it.
 #[test]
 fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
     let closing = "stopping: closing the session at the board, saving the index (session s-1) — what the loop served";
-    let ended = "stopping: the session already ended at the board; saving the index (session s-1) — what the loop served";
+    let ended = "stopping: the session already ended at the board; saving the index (session s-1) — what the loop served; any burst held at this board stays in its held file for the next start to count, save one the shell kept in memory alone, which goes with this process";
     for (k, death, said) in [(0, None, closing), (1, Some(Death::ServeOn), ended), (2, Some(Death::Stop("stopped".into())), ended)] {
         let scratch = Scratch::new(&format!("clean-stop-{k}"));
         let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
@@ -615,11 +630,13 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
 /// What the clean stop leaves held is counted as it stands.
 ///
 /// No tail where no burst stands; else the bursts counted, and those sent and
-/// so perhaps landed, which the next start counts again.
+/// so perhaps landed, and what becomes of them: the held file's the next start
+/// counts again, and one kept in memory alone goes with the process.
 #[test]
 fn what_the_clean_stop_leaves_held_is_counted_as_it_stands() {
     assert_eq!(left_held(&json!([])), None, "no tail where no burst stands");
     let line = |k: u64, sent: bool| json!({"held": k, "doc": "1.0.1.0.2", "base": 0, "frame": {}, "cause": "unreachable", "sent": sent, "time": k});
-    assert_eq!(left_held(&json!([line(1, true), line(2, false)])).as_deref(), Some("; it leaves 2 bursts held at this board (1 sent and so perhaps landed), which the next start counts"));
-    assert_eq!(left_held(&json!([line(1, false)])).as_deref(), Some("; it leaves 1 burst held at this board (0 sent and so perhaps landed), which the next start counts"));
+    let fate = "the next start counts those the held file holds, and any the shell answered `unwritable` or `other_window` was kept in memory alone and goes with this process";
+    assert_eq!(left_held(&json!([line(1, true), line(2, false)])), Some(format!("; it leaves 2 bursts held at this board (1 sent and so perhaps landed): {fate}")));
+    assert_eq!(left_held(&json!([line(1, false)])), Some(format!("; it leaves 1 burst held at this board (0 sent and so perhaps landed): {fate}")));
 }

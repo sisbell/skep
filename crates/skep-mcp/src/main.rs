@@ -52,16 +52,20 @@
 //! * **A signed session, opened at startup**, before the first tool call, for
 //!   the configured principal with the store's key for it — enrolled in its
 //!   account's set or the nearest set above it — and no bare mode exists. No
-//!   key, or a key the board refuses, stops the adapter before it serves. A
-//!   board restart is met by the shell's silent re-open; a death the shell does
-//!   not re-open — the key retired, the prefix blocked, the account seeded, a
-//!   re-open the board refused — stops the process with one plain line naming
-//!   the arm, and so does the board's refusal of a session the adapter opens
-//!   itself where the shell's end left none. No person is at the seam
-//!   (`ArmConfig::Refuse`): no ceremony tool is offered, every SECRET or
-//!   CONSENT moment would be refused `person_required`, and `search` takes no
-//!   `opts.reindex`, the person's refresh of the index (`search.md` §5.5),
-//!   which re-reads every document the index holds while the call waits.
+//!   key, a key the board refuses, or a board that does not answer stops the
+//!   adapter before it serves: a start waits for no board, and is made again
+//!   once the board answers. A board restart is met by the shell's silent
+//!   re-open; a death the shell does not re-open — the key retired, the prefix
+//!   blocked, the account seeded, a re-open the board refused — stops the
+//!   process with one plain line naming the arm, and so does the board's
+//!   refusal of a session the adapter opens itself where the shell's end left
+//!   none; a sign-in the board did not accept at either open (`busy`) lapses
+//!   the session instead, as a board that does not answer does, and a later
+//!   call opens one. No person is at the seam (`ArmConfig::Refuse`): no
+//!   ceremony tool is offered, every SECRET or CONSENT moment would be refused
+//!   `person_required`, and `search` takes no `opts.reindex`, the person's
+//!   refresh of the index (`search.md` §5.5), which re-reads every document
+//!   the index holds while the call waits.
 //!
 //! `server.rs` is the MCP side: the stdio transport — stdin's reader, and the
 //! loop that answers each line on stdout — the JSON-RPC dispatch, and `call`,
@@ -117,6 +121,7 @@ use skep_client::store::default_store_dir;
 use skep_client::Origin;
 
 use crate::log::{install_the_panic_hook, log};
+use crate::media::FETCH_DEADLINE;
 use crate::server::{read_stdin, Inbound, Server};
 use crate::shell::{Backend, OnStop};
 use crate::tools::Catalog;
@@ -173,9 +178,10 @@ exit status:
 stop:
   stdin's end closes the session at the board and saves the index,
   seconds where the board answers. A signal ends the process at once,
-  its held bursts already on disk, its session left at the board until
-  the board restarts. The person stops an agent for good by retiring
-  its key (skep retire)
+  its held bursts already on disk, save one the shell kept in memory
+  alone (answered unwritable or other_window), its session left at the
+  board until the board restarts. The person stops an agent for good by
+  retiring its key (skep retire)
 
 log:
   stderr, every line opening 'skep-mcp: ' and the moment it was said,
@@ -637,8 +643,12 @@ fn is_the_persons_store(store_dir: &Path) -> bool {
 /// process however that ends. Where another adapter holds it — a restart's
 /// predecessor still stopping, or a second adapter over one store — the wait
 /// is said once, naming that process by the pid it wrote, and the lock is
-/// tried each tenth of a second until `wait` runs out. Once taken, this
-/// process's pid is written in the file for the next start to name.
+/// tried each tenth of a second until `wait` runs out. The refusal past it
+/// names both: how long a predecessor's call in flight or its clean stop can
+/// hold the store, and the store a second adapter takes in this one's place,
+/// a store and a key of its own and never a copy of this one, whose key is
+/// the agent's. Once taken, this process's pid is written in the file for the
+/// next start to name.
 ///
 /// # Errors
 ///
@@ -666,8 +676,9 @@ fn hold_the_store(store_dir: &Path, named: &str, wait: Duration) -> Result<File,
                 let holder = holder_of(&mut file);
                 if Instant::now() >= deadline {
                     return Err(format!(
-                        "{named}: '{}' is held by another skep-mcp process ({holder}): one directory per adapter process — stop that one, or give this one a store of its own",
-                        store_dir.display()
+                        "{named}: '{}' is held by another skep-mcp process ({holder}): a predecessor still finishing a call or its clean stop — a fetch runs up to {:.1} minutes, a clean stop up to about a minute and a half where the board accepts the connection and does not answer — or a second adapter over this store: wait for it or end it (a signal ends it at once), or give this one a store and a key of its own (`skep keygen`, `skep enroll`, `skep bind`), never a copy of this one",
+                        store_dir.display(),
+                        FETCH_DEADLINE.as_secs_f64() / 60.0
                     ));
                 }
                 if !said {

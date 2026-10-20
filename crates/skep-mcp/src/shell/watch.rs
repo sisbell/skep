@@ -30,9 +30,10 @@ use serde_json::Value;
 pub(super) enum SessionState {
     /// The session every call runs under.
     Open(String),
-    /// The session that died with no re-open, the board not answering.
+    /// The session that died with no re-open, the adapter serving on.
     ///
-    /// The next call opens one.
+    /// Its end met a board that did not answer, or one that did not accept the
+    /// re-open's sign-in (`busy`). The next call opens one.
     Lapsed(String),
     /// The session whose end stops the adapter.
     ///
@@ -51,9 +52,9 @@ pub(super) enum Death {
     /// No session stands, and the adapter serves on.
     ///
     /// The `unreachable` arm, and a re-open or an open of the adapter's own
-    /// that met a board that did not answer: no session stands until the board
-    /// answers and the next call opens one afresh. The adapter's own `closed`
-    /// too.
+    /// that met a board that did not answer, or did not accept the sign-in
+    /// (`busy`): no session stands until a call opens one afresh. The
+    /// adapter's own `closed` too.
     ServeOn,
     /// A death not re-opened, or a refused open: the plain line the stop says.
     Stop(String),
@@ -110,8 +111,8 @@ pub(super) fn classify(reason: &Value) -> Death {
 ///
 /// It is read off the death's reason, as `classify` reads the arm: the board
 /// did not answer the end's read, its text the client's own; the board
-/// restarted and did not answer the re-open; or the arm itself, where another
-/// served on.
+/// restarted and did not answer the re-open, or did not accept its sign-in;
+/// or the arm itself, where another served on.
 pub(super) fn lapse_cause(reason: &Value) -> String {
     match (reason["arm"].as_str(), reason["refused"].as_str()) {
         (Some("unreachable"), _) => match reason["text"].as_str() {
@@ -119,31 +120,72 @@ pub(super) fn lapse_cause(reason: &Value) -> String {
             None => "the board did not answer".to_string(),
         },
         (Some("restart"), Some("unreachable")) => "the board restarted, and did not answer the re-open".to_string(),
+        (Some("restart"), Some("busy")) => {
+            "the board restarted, and did not accept the re-open's sign-in twice in a row (busy): it may be busy, or a third party is evicting nonces (AUTH-5.26)".to_string()
+        }
         (Some(arm), _) => format!("its end's arm was {arm}"),
         (None, _) => "its end named no arm".to_string(),
     }
 }
 
+/// Which open of a session was refused, as a stop's line names it.
+#[derive(Debug, Clone, Copy)]
+enum Opening {
+    /// The shell's re-open at a board's restart (AUTH-5.31).
+    Reopen,
+    /// A session the adapter opened afresh, where a death left none.
+    Afresh,
+}
+
+impl Opening {
+    /// Returns the open, refused by the board, as a stop's line names it.
+    fn refused_by_the_board(self) -> &'static str {
+        match self {
+            Opening::Reopen => "the board restarted and refused this key at the re-open",
+            Opening::Afresh => "the board refused this key the session this adapter opened afresh",
+        }
+    }
+
+    /// Returns the open, as a stop's line places a store's fault in it.
+    fn at(self) -> &'static str {
+        match self {
+            Opening::Reopen => "at the re-open after the board restarted",
+            Opening::Afresh => "at the session this adapter opened afresh",
+        }
+    }
+}
+
 /// Returns what the restart arm's re-open, refused, asks of the adapter.
 fn refused_reopen(refused: &str) -> Death {
-    refused_open(refused, "the board restarted and refused this key at the re-open")
+    refused_open(refused, Opening::Reopen)
 }
 
 /// Returns what an open of the adapter's own, refused, asks of it.
 pub(super) fn refused_afresh(refused: &str) -> Death {
-    refused_open(refused, "the board refused this key the session this adapter opened afresh")
+    refused_open(refused, Opening::Afresh)
 }
 
 /// Returns what a refused open asks of the adapter.
 ///
 /// The shell's re-open at a restart and a session the adapter opens afresh are
-/// judged alike, by the refusal's name: a board that did not answer serves on,
-/// as a death's `unreachable` arm does, and any other refusal stops the adapter
-/// with `what`, naming the refusal.
-fn refused_open(refused: &str, what: &str) -> Death {
+/// judged alike, by the refusal's name. A board that did not answer, or did
+/// not accept the sign-in twice in a row (`busy`, skep-client's terminal busy
+/// arm, transient by its own face: AUTH-5.25, AUTH-5.26), serves on, as a
+/// death's `unreachable` arm does. A key store that could not give the open
+/// its key (`no_key`, `store_unreadable`) stops the adapter naming the store
+/// under `--dir`, never the board; any other refusal stops it naming the
+/// refusal as the board's.
+fn refused_open(refused: &str, opening: Opening) -> Death {
     match refused {
-        "unreachable" => Death::ServeOn,
-        _ => Death::Stop(format!("{what} ({refused}): the session is gone and no call is served; fix what the refusal names and start the adapter again")),
+        "unreachable" | "busy" => Death::ServeOn,
+        "no_key" | "store_unreadable" => Death::Stop(format!(
+            "{}, this adapter's key store could not give the session its key ({refused}) — the store under --dir, not the board: the session is gone and no call is served; fix the store and start the adapter again",
+            opening.at()
+        )),
+        _ => Death::Stop(format!(
+            "{} ({refused}): the session is gone and no call is served; fix what the refusal names and start the adapter again",
+            opening.refused_by_the_board()
+        )),
     }
 }
 
@@ -250,17 +292,22 @@ mod tests {
     /// refused, a retirement, a block, a seeding and a mode flip each stop
     /// with a line naming the arm's fact — a retirement its hand, a bare
     /// session's or a key's, and the position it landed at, a seeding its
-    /// first key and position; the unreachable board, a re-open that met a
-    /// board that did not answer, the adapter's own close, and a spelling no
-    /// arm has serve on, each lapse said with its cause. The arms the cases
-    /// name are exactly the ones skep-shell declares for a death's reason
-    /// (`shapes::shape`), so an arm the shell adds or renames fails here
-    /// before `classify`'s wildcard serves a death of it through.
+    /// first key and position, a re-open the key store failed the store, not
+    /// the board; the unreachable board, a re-open that met a board that did
+    /// not answer or did not accept its sign-in, the adapter's own close, and
+    /// a spelling no arm has serve on, each lapse said with its cause. The arms
+    /// the cases name are exactly the ones skep-shell declares for a death's
+    /// reason (`shapes::shape`), so an arm the shell adds or renames fails
+    /// here before `classify`'s wildcard serves a death of it through.
     #[test]
     fn every_arm_of_a_death_asks_one_thing() {
         assert_eq!(classify(&json!({"arm": "restart", "reopened": true, "session": "s-fresh"})), Death::Reopened("s-fresh".into()));
         let stops = [
             (json!({"arm": "restart", "reopened": false, "refused": "origin_state"}), "origin_state"),
+            (
+                json!({"arm": "restart", "reopened": false, "refused": "store_unreadable"}),
+                "at the re-open after the board restarted, this adapter's key store could not give the session its key (store_unreadable) — the store under --dir, not the board",
+            ),
             (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34", "label": "second", "position": 9, "own": false}), "stops this agent so (its retirement landed at position 9)"),
             (json!({"arm": "retired", "fingerprint": "ab12", "hand": "bare", "position": 9}), "retired at the board by a bare session"),
             (json!({"arm": "retired", "fingerprint": "ab12", "hand": "cd34"}), "retired at the board by the key cd34: "),
@@ -282,6 +329,10 @@ mod tests {
         for (reason, cause) in [
             (json!({"arm": "unreachable", "text": "connect refused"}), "the board did not answer: connect refused"),
             (json!({"arm": "restart", "reopened": false, "refused": "unreachable"}), "the board restarted, and did not answer the re-open"),
+            (
+                json!({"arm": "restart", "reopened": false, "refused": "busy"}),
+                "the board restarted, and did not accept the re-open's sign-in twice in a row (busy): it may be busy, or a third party is evicting nonces (AUTH-5.26)",
+            ),
             (json!({"arm": "closed"}), "its end's arm was closed"),
         ] {
             assert_eq!(lapse_cause(&reason), cause, "{reason}");
@@ -291,6 +342,7 @@ mod tests {
         let serve_on = [
             json!({"arm": "unreachable", "text": "connect refused"}),
             json!({"arm": "restart", "reopened": false, "refused": "unreachable"}),
+            json!({"arm": "restart", "reopened": false, "refused": "busy"}),
             json!({"arm": "closed"}),
             json!({"arm": "restart", "reopened": true}),
             json!({}),
@@ -338,7 +390,9 @@ mod tests {
     /// session's state and hands the stop its line, alone. A refused open stops
     /// a lapsed state as a stopping death stops an open one, and the two
     /// refused opens — the shell's re-open, the adapter's own — each name the
-    /// open refused and agree that a board that does not answer serves on.
+    /// open refused, name a key store that failed it as the store, and agree
+    /// that a board that does not answer, or does not accept the sign-in,
+    /// serves on.
     #[test]
     fn a_death_is_settled_once_and_its_stop_said_once() {
         let said = Mutex::new(Vec::new());
@@ -355,8 +409,12 @@ mod tests {
         assert!(said[0].contains("the board refused this key the session this adapter opened afresh (retired)"), "{said:?}");
         let Death::Stop(line) = refused_reopen("origin_state") else { panic!("a refused re-open stops") };
         assert!(line.contains("the board restarted and refused this key at the re-open (origin_state)"), "{line}");
+        let Death::Stop(line) = refused_afresh("no_key") else { panic!("an open the key store failed stops") };
+        assert!(line.starts_with("at the session this adapter opened afresh, this adapter's key store could not give the session its key (no_key)"), "{line}");
         assert_eq!(refused_reopen("unreachable"), Death::ServeOn, "a board that does not answer serves on");
         assert_eq!(refused_afresh("unreachable"), Death::ServeOn, "a board that does not answer serves on, whoever opened");
+        assert_eq!(refused_reopen("busy"), Death::ServeOn, "a sign-in the board did not accept serves on");
+        assert_eq!(refused_afresh("busy"), Death::ServeOn, "a sign-in the board did not accept serves on, whoever opened");
     }
 
     /// The wait ends as the drain settles the session.

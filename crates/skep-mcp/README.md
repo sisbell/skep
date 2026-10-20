@@ -45,9 +45,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   board refused — stops the process with one plain line on stderr, as does
   the board's refusal of the session the adapter opens once a board that
   stopped answering answers again: the person stops an agent by retiring
-  its key, and the adapter's end is what the agent's client sees. A board
-  that is not answering refuses each call `unreachable`, and the adapter
-  stays up.
+  its key, and the adapter's end is what the agent's client sees. A sign-in
+  the board did not accept at either open (`busy`: the board busy, or a
+  third party evicting its nonces, transient either way) lapses the session
+  instead, and a later call opens one. A board that stops answering once
+  the adapter serves refuses each call `unreachable`, and the adapter stays
+  up; one not answering at its start stops it, exit 1: start it again once
+  the board answers.
 - **No person at the seam.** The shell is opened with the refusing arm:
   every SECRET and CONSENT moment would be refused `person_required`, and
   no ceremony tool is offered (no `keygen`, `fingerprint`, `claim`,
@@ -167,22 +171,28 @@ enroll` of the record from the person's own device, and `skep bind --dir
 <store> --board <origin>` with the reply); and the harness runs `skep-mcp
 --board <origin> --dir <store> --principal <n>`. The start is done when the
 log says `signed as principal …` and `serving … tools`; a refusal before
-then is one line naming the check that did not hold, and exit 1.
+then is one line naming the check that did not hold, and exit 1 — a board
+that does not answer then among them, which a start does not wait out:
+start the adapter again once the board answers.
 
 **Stop.** The harness closes stdin and waits for the exit. The clean stop
 closes the session at the board and saves the index: seconds where the
 board answers or is gone, up to about a minute and a half where it accepts
 the connection and then stops answering — the close and the feed's last
 read each held to skep-client's exchange deadline. A signal ends the
-process at once: its held bursts are already on disk, the session lives on
-at the board until the board restarts, and the index resumes from its last
-save. The person stops an agent for good by retiring its key (`skep
-retire`); every start over that store is then refused `retired`.
+process at once: its held bursts are already on disk — save one the shell
+answered `unwritable` or `other_window`, kept in memory alone and lost with
+the process — the session lives on at the board until the board restarts,
+and the index resumes from its last save. The person stops an agent for
+good by retiring its key (`skep retire`); every start over that store is
+then refused `retired`.
 
 **Restart.** Stop it, then start it over the same `--dir`: the held bursts,
 counted at the start, and the index carry over. A start over a store
 another adapter still holds — a predecessor still stopping — waits up to
-30 s for it to end, and is refused after that.
+30 s for it to end, and is refused after that: a predecessor finishing a
+fetch, or stopping at a board that accepts the connection and does not
+answer, can take longer — end it by a signal, and start this one again.
 
 **Upgrade.** Stop it, replace the binary, start it. Write any `--tools-file`
 afresh from the new release's `tools.json`: the start refuses one whose

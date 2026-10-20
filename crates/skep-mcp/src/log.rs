@@ -121,7 +121,8 @@ pub fn drain() {
 /// never reaches stderr. A panic on `main`'s thread unwinds to the process's
 /// end at exit 101, the shell's stop, where it is open, running in the unwind
 /// (its `Drop`), so the hook drains the log there first and the panic's line
-/// reaches stderr; a panic on another thread leaves the process serving.
+/// reaches stderr; a panic on another thread leaves the process running
+/// without that thread, its line saying so, with the act: a restart.
 pub fn install_the_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let current = thread::current();
@@ -141,12 +142,24 @@ pub fn install_the_panic_hook() {
 /// formatted — so a formatted panic (`expect`, an index, an `assert_eq!`)
 /// shows its location alone, and no token or board's text rides the line, as
 /// skepd's and skep-provision's hooks keep it; then the build it ran, so the
-/// line is reported whole wherever the log was cut, and the act.
+/// line is reported whole wherever the log was cut, and the act. A panic on
+/// `main`'s thread ends the process; one on any other leaves it running
+/// without that thread, so its act adds the restart, and what the thread's
+/// loss leaves undone until then: stdin's reader reading no request, the
+/// drain settling no death of the session, or the shell's own threads — its
+/// feed, which `search`, `places`, the drafts' reads and the held bursts'
+/// resend run on.
 fn panic_line(thread: Option<&str>, location: Option<&Location<'_>>, payload: Option<&str>) -> String {
+    let restart = match thread {
+        Some("main") => "",
+        _ => {
+            ", and restart the adapter — it runs on without that thread, and what the thread did stays undone until a restart: stdin's reader reads no request, the drain settles no death of the session, and an unnamed thread is the shell's, its feed, search, places and held-burst resend among them"
+        }
+    };
     let thread = thread.map_or_else(|| "an unnamed thread".to_string(), |name| format!("the {name} thread"));
     let at = location.map_or_else(|| "an unknown location".to_string(), ToString::to_string);
     let payload = payload.map(|p| format!(": {p}")).unwrap_or_default();
-    format!("{thread} panicked at {at}{payload} — a bug of skep-mcp's or its shell's, in skep-mcp {}: report this line", crate::build())
+    format!("{thread} panicked at {at}{payload} — a bug of skep-mcp's or its shell's, in skep-mcp {}: report this line{restart}", crate::build())
 }
 
 /// Returns `line` as the log carries it, said at `at`.

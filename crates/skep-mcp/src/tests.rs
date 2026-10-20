@@ -147,15 +147,15 @@ fn the_usage_states_the_exit_statuses() {
 /// The usage says how the adapter stops, and what a signal leaves.
 ///
 /// Stdin's end is the clean stop; a signal ends the process with its held
-/// bursts on disk and its session left at the board; retiring the agent's
-/// key stops it for good.
+/// bursts on disk, save one the shell kept in memory alone, and its session
+/// left at the board; retiring the agent's key stops it for good.
 #[test]
 fn the_usage_says_how_it_stops_and_what_a_signal_leaves() {
     for said in [
         "\nstop:\n  stdin's end closes the session at the board and saves the index,",
         "A signal ends the process at once,",
-        "\n  its held bursts already on disk, its session left at the board until",
-        "\n  its key (skep retire)\n",
+        "\n  its held bursts already on disk, save one the shell kept in memory\n  alone (answered unwritable or other_window), its session left at the",
+        "\n  retiring its key (skep retire)\n",
     ] {
         assert!(USAGE.contains(said), "the usage says {said:?}: {USAGE}");
     }
@@ -202,8 +202,11 @@ fn the_readmes_settings_table_is_the_parses() {
 /// A store held by one adapter process is refused to a second, naming it.
 ///
 /// The first take holds the store and writes this process's pid; a second,
-/// whose wait has run out, is refused naming the store and that pid; once the
-/// first lets go, the store is free again.
+/// whose wait has run out, is refused naming the store and that pid, and the
+/// holder it may be — a predecessor still finishing a call or its clean stop,
+/// for as long as the fetch's deadline says, or a second adapter, whose store
+/// is its own and never a copy of this one; once the first lets go, the store
+/// is free again.
 #[test]
 fn a_store_held_by_one_adapter_is_refused_to_a_second_naming_it() {
     let scratch = Scratch::new("store-hold");
@@ -212,6 +215,8 @@ fn a_store_held_by_one_adapter_is_refused_to_a_second_naming_it() {
     let refused = hold_the_store(&scratch.0, &named, Duration::ZERO).expect_err("a held store is refused");
     let holder = format!("--dir (or SKEP_KEYSTORE): '{}' is held by another skep-mcp process (pid {})", scratch.0.display(), std::process::id());
     assert!(refused.starts_with(&holder), "{refused}");
+    assert!(refused.contains("a predecessor still finishing a call or its clean stop — a fetch runs up to 10.5 minutes"), "the predecessor it may be: {refused}");
+    assert!(refused.contains("never a copy of this one"), "the store a second adapter takes: {refused}");
     drop(held);
     hold_the_store(&scratch.0, &named, Duration::ZERO).expect("the store is free once its holder lets go");
 }

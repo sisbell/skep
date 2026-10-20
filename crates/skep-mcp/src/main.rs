@@ -4,7 +4,7 @@
 //! provider and the desktop shell run on. One process per agent, one
 //! board, ONE SIGNED SESSION for the adapter's life:
 //!
-//! * Every tool is one call of the shell under that session. A WIRE OP's
+//! * **Every tool is one call of the shell** under that session. A WIRE OP's
 //!   tool name IS the frame's `op` and its arguments ARE the frame (the one
 //!   mapping is `from_` → `from` on make_link/emit, when the arguments carry
 //!   no `from` of their own), sent as `op(session, frame)`: attested where
@@ -14,49 +14,49 @@
 //!   shell's own calls — `boards`, `health`, `probe`, `search`, `places`,
 //!   `held`, `resolve` — are tools of those names, their arguments the
 //!   bridge's row minus the session and the board, the adapter supplying
-//!   each where the row requires it; and three are the adapter's own:
+//!   each where the row requires it; and three are the adapter's apparatus:
 //!   `session_info`, `changes_since` (the shell's `changes`, a pull), and
 //!   `fetch` (the shell's streamed fetch as an image or resource block, the
 //!   type sniffed off the bytes, the size capped). Arguments pass through
 //!   unvalidated on a wire op — the daemon's strict parse is the validator,
 //!   and its rejection comes back as data.
-//! * The board's verdict is data: a `refused` refusal is a normal tool result,
-//!   the verdict's body verbatim with the shell's envelope beside it, since a
-//!   client that cannot decode a rejection has been silently failed (wire.md
-//!   §Rejections). `isError` is every other refusal — the shell could not get
-//!   the board's verdict: the board unreachable, a halt, the block, the shell's
-//!   own names — and `fetch`'s two answers of the adapter's own, a file past
-//!   its cap and a stream cut short, each a plain sentence. A write refused
-//!   `unreachable` may have committed: the shell faces a lost answer to any
-//!   write but a burst (whose line it holds, `sent`), and the adapter never
+//! * **A refusal as a result.** The board's verdict is data: a `refused`
+//!   refusal is a normal tool result, the verdict's body verbatim under `body`
+//!   with the refusal's `name`, `status`, `code`, `detail` and `op` beside it,
+//!   since a client that cannot decode a rejection has been silently failed
+//!   (wire.md §Rejections). `isError` is every other refusal — the shell could
+//!   not get the board's verdict: the board unreachable, a halt, the block, the
+//!   shell's own names — and `fetch`'s two answers of the adapter's own, a file
+//!   past its cap and a stream cut short, each a plain sentence. A write
+//!   refused `unreachable` may have committed: the shell faces a lost answer to
+//!   any write but a burst (whose line it holds, `sent`), and the adapter never
 //!   reissues it. A call the adapter will not run — a tool outside the catalog,
 //!   a member an adapter tool's row does not name — is no tool result at all:
 //!   it is refused -32602, as malformed `tools/call` params are; a member of
 //!   the wrong form is the shell's `malformed_args`.
-//! * SIGNED ONLY: the session is opened at startup, before the first tool
-//!   call, for the configured principal with the store's key for it —
-//!   enrolled in its account's set or the nearest set above it — and no
-//!   bare mode exists. No key, or a key the board refuses, stops the
-//!   adapter before it serves. A board restart is met by the shell's silent
-//!   re-open; a death the shell does not re-open — the key retired, the
-//!   prefix blocked, the account seeded, a re-open the board refused —
-//!   stops the process with one plain line naming the arm, and so does the
-//!   board's refusal of a session the adapter opens itself where the
-//!   shell's end left none. No person is at the seam (`ArmConfig::Refuse`):
-//!   no ceremony tool is offered, and every SECRET or CONSENT moment would
-//!   be refused `person_required`.
+//! * **A signed session, opened at startup**, before the first tool call, for
+//!   the configured principal with the store's key for it — enrolled in its
+//!   account's set or the nearest set above it — and no bare mode exists. No
+//!   key, or a key the board refuses, stops the adapter before it serves. A
+//!   board restart is met by the shell's silent re-open; a death the shell does
+//!   not re-open — the key retired, the prefix blocked, the account seeded, a
+//!   re-open the board refused — stops the process with one plain line naming
+//!   the arm, and so does the board's refusal of a session the adapter opens
+//!   itself where the shell's end left none. No person is at the seam
+//!   (`ArmConfig::Refuse`): no ceremony tool is offered, and every SECRET or
+//!   CONSENT moment would be refused `person_required`.
 //!
-//! `server.rs` is the MCP side: the stdio transport — stdin's reader, and
-//! the loop that answers each line on stdout — the JSON-RPC dispatch, and
-//! `call`, which keeps the second rule. `shell.rs` is the one seam onto
-//! `skep-shell`: the open and its checks, the one session's standing and
-//! its life, the bus drained. `media.rs` is the fetched file: its bytes
-//! read whole under the adapter's cap, its type sniffed, its base64.
+//! `server.rs` is the MCP side: the stdio transport — stdin's reader, and the
+//! loop that answers each line on stdout — the JSON-RPC dispatch, and `call`,
+//! which keeps *a refusal as a result*. `shell.rs` is the backend, the one
+//! module that calls `skep-shell`: the open and its checks, the one session's
+//! state and its life, the bus drained. `media.rs` is the fetched file: its
+//! bytes read whole under the adapter's cap, its type sniffed, its base64.
 //! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
 //! sentence, the dispatch's two kinds the catalog is checked against when
-//! loaded, the dispatch's door (`Tool::admit`, which admits a call or
-//! refuses it -32602), and the first rule's mapping of a wire op's call
-//! onto a frame. This file is startup — flags, environment, the
+//! loaded, the dispatch's door (`Tool::admit`, which admits a call or refuses
+//! it -32602), and a wire op's call mapped onto its frame (*every tool is one
+//! call of the shell*). This file is startup — flags, environment, the
 //! `SKEP_COMMONS` check, the shell's open — the loop's two inputs (stdin's
 //! reader, the backend's stop) wired onto one channel, and `log`, the
 //! operator's stream every module and the shell's TALK write through.

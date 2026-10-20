@@ -21,7 +21,8 @@ use serde_json::{json, Value};
 use crate::common::{base64_decode, seeded_bytes, Fixture, Launch, Mcp, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
 /// The ten ceremonial rows, the two media rows the shell does not reach,
-/// and the shell's apparatus calls — no tool of the adapter's.
+/// and the three calls the adapter makes of the shell itself (`op`,
+/// `session`, `close`) — no tool of the adapter's.
 const NOT_OFFERED: [&str; 15] = ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close"];
 
 /// The seven wire ops the first catalog lacked.
@@ -138,8 +139,9 @@ fn a1b_a_principal_under_the_claimants_account_signs_by_reference() {
 
 /// A2 NO PERSON: the startup line on stderr names the refusing seam —
 /// `person seam: refuse` — and `tools/list` names no ceremony, no `upload`,
-/// no `restore`, and none of the shell's apparatus (the mutant that opens
-/// the shell under the auto arm says `person seam: auto`).
+/// no `restore`, and none of the calls the adapter makes of the shell itself
+/// (the mutant that opens the shell under the auto arm says
+/// `person seam: auto`).
 #[test]
 fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() {
     let fixture = Fixture::new("a2");
@@ -415,7 +417,7 @@ fn a6_a_board_that_is_gone_answers_unreachable_and_the_adapter_stays_up() {
 
 /// A7 A REFUSAL AS A RESULT (ruling 3 (a)): the board's rejection of a
 /// frame rides as data — `isError` false, the verdict's body verbatim, the
-/// envelope's `name` the token — a non-200 verdict too; and the board
+/// refusal's `name` the token — a non-200 verdict too; and the board
 /// unreachable is `isError` true with the refusal's value (the mutant that
 /// marks every refusal `isError` fails the rejection; the one that marks
 /// none fails the unreachable board).

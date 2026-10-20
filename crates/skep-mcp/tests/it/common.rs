@@ -172,7 +172,7 @@ impl Fixture {
         }
     }
 
-    /// One frame under `token`, answered by the board: the document.
+    /// One frame under `token`, answered by the board: its response document.
     pub fn op(&self, token: &Token, frame: Value) -> Value {
         match self.board().op(Some(token), &frame).expect("the op's transport") {
             Answer::Document(v) => v,
@@ -234,7 +234,7 @@ impl Fixture {
     /// A picture seeded on the board: `bytes` uploaded under a bare session
     /// of principal 1's, its cell inserted into a fresh draft of the
     /// claimant's account under the same session (the deposit is the
-    /// uploader's); the content address the cell sits at, which `fetch`
+    /// uploader's); the I-address the cell sits at, which `fetch`
     /// takes.
     pub fn seed_picture(&self, bytes: &[u8]) -> String {
         let token = self.bare_session(1);
@@ -302,7 +302,7 @@ pub fn http(port: u16, method: &str, path: &str, session: Option<&str>, body: &[
     (status, headers, raw[sep + 4..].to_vec())
 }
 
-/// One frame on `/op` under `token`: the document.
+/// One frame on `/op` under `token`: its response document.
 pub fn op(port: u16, session: Option<&str>, frame: &Value) -> Value {
     let (st, _, body) = http(port, "POST", "/op", session, frame.to_string().as_bytes());
     assert_eq!(st, 200, "op transport: {}", String::from_utf8_lossy(&body));
@@ -340,7 +340,7 @@ pub fn cell_of(hash: &str, size: u64) -> String {
 }
 
 /// The cell inserted into `draft` at ordinal 1 under `token`, as ONE
-/// composite value: the content address it sits at.
+/// composite value: the I-address it sits at.
 pub fn insert_cell(port: u16, token: &str, draft: &str, cell: &str) -> String {
     let v = op(port, Some(token), &json!({"op": "insert", "doc": draft, "at": {"subspace": "1", "ordinal": "1"}, "values": [{"atom": cell}]}));
     assert_eq!(v["resp"], "ack_addr", "the cell's insert: {v}");
@@ -600,7 +600,7 @@ impl Mcp {
     }
 
     /// tools/call that must answer data: its text, parsed as JSON — a
-    /// response document, a refused verdict's envelope, or an apparatus
+    /// response document, a `refused` refusal, or an apparatus
     /// answer.
     pub fn call_json(&mut self, tool: &str, args: Value) -> Value {
         let (is_error, text) = self.call(tool, args);

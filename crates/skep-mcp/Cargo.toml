@@ -9,12 +9,12 @@ description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, the s
 readme = "README.md"
 
 [dependencies]
-# THE BACKEND: the shell's core, written once for the dev provider, the
-# desktop shell and this adapter — the signed session with its attest, the
-# hold that keeps a burst the board cannot take, the feed consumer behind
-# `search` and `places`, the change feed's page behind `changes_since`, and
-# the streamed blob fetch. The adapter is a transport over it: stdio
-# JSON-RPC in, `Shell::call` and `Shell::fetch` out.
+# The shell's core, written once for the dev provider, the desktop shell
+# and this adapter — the signed session with its attest, the hold that
+# keeps a burst the board cannot take, the feed consumer behind `search`
+# and `places`, the change feed's page behind `changes_since`, and the
+# streamed blob fetch. The adapter is a transport over it: stdio JSON-RPC
+# in, `Shell::call` and `Shell::fetch` out.
 skep-shell = { path = "../skep-shell" }
 # The board's canonical origin, which `ShellOptions` takes and the shell
 # does not re-export; the key's public facts (`KeyFacts`) the startup line

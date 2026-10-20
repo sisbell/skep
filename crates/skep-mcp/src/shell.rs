@@ -1,37 +1,38 @@
-//! The adapter's one seam onto `skep-shell`: THE BACKEND. It opens the
-//! shell over the one board in the SIGNED mode with the refusing arm
-//! (`ArmConfig::Refuse`: no person is present, so every SECRET and CONSENT
-//! moment is refused `person_required`), checks the board and the key as
-//! `skep-dev serve` does, opens ONE signed content-scoped session for the
-//! configured principal before any tool is served, and from then on supplies
-//! that session's reference to every call that runs under it, and the
-//! board's to the one call whose row names it, so no tool's arguments name
-//! either. The references are the shell's opaque names (THE PIN of
-//! `client.md` §4b.1): never a token, never a credential.
+//! The backend: the one module of the adapter that calls `skep-shell`.
 //!
-//! **The session's life.** The calls stand on one session, its standing held
-//! here (`Standing`): the session every call names, or the one that died and
+//! It opens the shell over the one board in the signed mode with the refusing
+//! arm (`ArmConfig::Refuse`: no person is present, so every SECRET and CONSENT
+//! moment is refused `person_required`), checks the board and the key as
+//! `skep-dev serve` does, opens one signed content-scoped session for the
+//! configured principal before any tool is served, and from then on supplies
+//! that session's reference to every call that runs under it, and the board's
+//! to the one call whose row names it, so no tool's arguments name either. The
+//! references are the shell's opaque names (THE PIN of `client.md` §4b.1):
+//! never a token, never a credential.
+//!
+//! **The session's life.** The calls run under one session, its state held here
+//! (`SessionState`): the session every call names, or the one that died and
 //! what its end left. A death signal the shell meets — at one of this adapter's
 //! calls, or at the board's feed thread first — ends the session by the shell's
 //! one sequence (`Sessions::end`), and on the restart arm the shell re-opens a
 //! signed session silently under a fresh reference (AUTH-5.31), named in the
-//! death's reason. That reason is the death's verdict, emitted once as
-//! `session-died`, and [`Backend::drain`] alone carries it into the standing. A
-//! call the shell answers `session_died` or `session_ended` waits for that
-//! verdict (within `VERDICT_WAIT`), reading no reason itself and opening no
-//! second session early, which would leave the shell's re-open adopted by
-//! nothing. It is then reissued once under the session that stands, one it
-//! opens itself where none does — the death executed nothing: the board refuses
-//! a dead token before it runs the frame — save that a death the shell did not
-//! re-open is the answer to the call that met it. A death the shell does not
-//! re-open — the key retired (AUTH-5.28, AUTH-5.77), the account seeded, the
-//! prefix blocked, or a restart whose re-open the board refused — stops the
-//! adapter: one plain line naming the arm goes to the process's stop, and
-//! nothing more is served; the person stops an agent by retiring its key, and
-//! the adapter's end is what the agent's client sees. A board that does not
-//! answer is served through: no session stands, every call answers its refusal,
-//! and the next call opens one once the board answers again, the board's
-//! refusal of it judged as a refused re-open is.
+//! death's reason. That reason is emitted once, as `session-died`, and
+//! [`Backend::drain`] alone settles the session's state by it. A call the shell
+//! answers `session_died` or `session_ended` waits for the drain to settle it
+//! (within `SETTLE_WAIT`), reading no reason itself and opening no second
+//! session early, which would leave the shell's re-open adopted by nothing. It
+//! is then reissued once under the session that stands, one it opens itself
+//! where none does — the death executed nothing: the board refuses a dead token
+//! before it runs the frame — save that a death the shell did not re-open is
+//! the answer to the call that met it. A death the shell does not re-open — the
+//! key retired (AUTH-5.28, AUTH-5.77), the account seeded, the prefix blocked,
+//! or a restart whose re-open the board refused — stops the adapter: one plain
+//! line naming the arm goes to the process's stop, and nothing more is served;
+//! the person stops an agent by retiring its key, and the adapter's end is what
+//! the agent's client sees. A board that does not answer is served through: no
+//! session stands, every call answers its refusal, and the next call opens one
+//! afresh once the board answers again, the board's refusal of it judged as a
+//! refused re-open is.
 //!
 //! The bus is subscribed in `Backend::open` before the session opens, so no
 //! death of it is emitted unheard, and drained on a thread of its own for the
@@ -51,31 +52,32 @@ use skep_client::store::KeyFacts;
 use skep_client::Origin;
 use skep_shell::{ArmConfig, Event, EventName, Fetched, Name, Refusal, SessionMode, Shell, ShellOptions, Talk};
 
-/// The longest a call waits for the verdict on a session the shell ended.
+/// The longest a call waits for the drain to settle a session the shell ended.
 ///
-/// The verdict is the `session-died` the drain moves the standing by. The
+/// The drain settles the session's state by the death's `session-died`. The
 /// shell's end derives its reason from the board and, on the restart arm,
 /// re-opens over several exchanges, each under skep-client's dial bounds
-/// (`CONNECT_TIMEOUT`, `IO_TIMEOUT`): milliseconds at a loopback board,
-/// seconds at a far one. A call that opened its own session first would
-/// leave the shell's re-open standing in the shell's table, adopted by
-/// nothing, so the call waits for the verdict and does not guess at it. The
-/// wait lapses only where an end outlasts it or never reports — one that
-/// panicked — and the call then opens a session itself.
-const VERDICT_WAIT: Duration = Duration::from_secs(60);
+/// (`CONNECT_TIMEOUT`, `IO_TIMEOUT`): milliseconds at a loopback board, seconds
+/// at a far one. A call that opened its own session first would leave the
+/// shell's re-open in the shell's table, adopted by nothing, so the call waits
+/// for the drain and does not guess at it. The wait runs out only where an end
+/// outlasts it or never reports — one that panicked — and the call then opens a
+/// session itself.
+const SETTLE_WAIT: Duration = Duration::from_secs(60);
 
 /// The process's stop: it takes the plain line the adapter stops with.
 ///
 /// `main` holds the other end, and its loop says the line and exits.
 pub type OnStop = Arc<dyn Fn(String) + Send + Sync>;
 
-/// The session the adapter's calls stand on, and what its end left.
+/// The state of the session the adapter's calls run under.
 ///
-/// Every variant carries a session's reference: the live one, or the one
-/// that died. A death's verdict moves it (`settle`), as does a session the
-/// adapter opens itself; nothing moves it off a stop.
+/// Every variant carries a session's reference: the live one, or the one that
+/// died and what its end left. The drain settles it by a death (`settle`), and
+/// a session the adapter opens itself moves it too; nothing moves it off a
+/// stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Standing {
+enum SessionState {
     /// The session every call runs under.
     Open(String),
     /// The session that died with no re-open, the board not answering.
@@ -89,18 +91,19 @@ enum Standing {
     Stopped(String),
 }
 
-/// What a death's reason asks of the adapter.
+/// What a death's reason, or a refused open, asks of the adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Death {
     /// The restart arm re-opened the session: the fresh reference.
     Reopened(String),
     /// No session stands, and the adapter serves on.
     ///
-    /// The `unreachable` arm, and a re-open that met a board that did not
-    /// answer: no one re-opens the session until the board answers again.
-    /// The adapter's own `closed` too.
+    /// The `unreachable` arm, and a re-open or an open of the adapter's own
+    /// that met a board that did not answer: no session stands until the board
+    /// answers and the next call opens one afresh. The adapter's own `closed`
+    /// too.
     ServeOn,
-    /// A death the shell does not re-open: the plain line the stop says.
+    /// A death not re-opened, or a refused open: the plain line the stop says.
     Stop(String),
 }
 
@@ -140,18 +143,26 @@ fn classify(reason: &Value) -> Death {
     }
 }
 
-/// Returns what a session the board did not give asks of the adapter.
-///
-/// The shell's re-open at a restart and a session the adapter opens itself
-/// are judged alike, by the refusal's name: a board that did not answer
-/// serves on, as a death's `unreachable` arm does, and any other refusal
-/// stops the adapter with a line naming it.
+/// Returns what the restart arm's re-open, refused, asks of the adapter.
 fn refused_reopen(refused: &str) -> Death {
+    refused_open(refused, "the board restarted and refused this key at the re-open")
+}
+
+/// Returns what an open of the adapter's own, refused, asks of it.
+fn refused_afresh(refused: &str) -> Death {
+    refused_open(refused, "the board refused this key the session this adapter opened afresh")
+}
+
+/// Returns what a refused open asks of the adapter.
+///
+/// The shell's re-open at a restart and a session the adapter opens afresh are
+/// judged alike, by the refusal's name: a board that did not answer serves on,
+/// as a death's `unreachable` arm does, and any other refusal stops the adapter
+/// with `what`, naming the refusal.
+fn refused_open(refused: &str, what: &str) -> Death {
     match refused {
         "unreachable" => Death::ServeOn,
-        _ => Death::Stop(format!(
-            "the board restarted and refused this key at the re-open ({refused}): the session is gone and no call is served; fix what the refusal names and start the adapter again"
-        )),
+        _ => Death::Stop(format!("{what} ({refused}): the session is gone and no call is served; fix what the refusal names and start the adapter again")),
     }
 }
 
@@ -168,10 +179,10 @@ fn stopped_before_serving(what: &str, refusal: &Refusal) -> String {
     format!("stopped before serving: {what}: {refusal}")
 }
 
-/// The backend: the seam onto the shell, and what it holds for the calls.
+/// The backend: the shell, and what the adapter holds beside it for the calls.
 ///
-/// It holds the shell, the one board's reference, the one session's
-/// standing, the process's stop, and the facts `session_info` reports.
+/// It holds the shell, the one board's reference, the one session's state, the
+/// process's stop, and the facts `session_info` reports.
 pub struct Backend {
     shell: Shell,
     /// The board's opaque reference, fixed at the open.
@@ -184,12 +195,12 @@ pub struct Backend {
     writes: bool,
     /// The store's key the adapter signs with.
     key: KeyFacts,
-    /// The session the calls stand on.
+    /// The session the calls run under.
     ///
-    /// The drain moves it by a death's verdict, and the call that opens a
+    /// The drain settles it by a death's reason, and the call that opens a
     /// session itself moves it too.
-    session: Arc<Mutex<Standing>>,
-    /// The process's stop, which a stopping verdict's line goes to.
+    session: Arc<Mutex<SessionState>>,
+    /// The process's stop, which every line that stops the adapter goes to.
     on_stop: OnStop,
     talk: Talk,
 }
@@ -215,9 +226,10 @@ impl Backend {
     pub fn open(origin: Origin, store_dir: PathBuf, principal: u64, talk: Talk, on_stop: OnStop) -> Result<Backend, String> {
         let mut options = ShellOptions::new(vec![origin.clone()], store_dir.clone(), SessionMode::Signed { principal }, Arc::clone(&talk));
         options.arm = ArmConfig::Refuse;
-        // The seam's name is read off the options the shell is opened with,
-        // so the startup line says what the shell holds and never a literal.
-        let seam = match &options.arm {
+        // The person seam's name is read off the options the shell is opened
+        // with, so the startup line says what the shell holds and never a
+        // literal.
+        let person_seam = match &options.arm {
             ArmConfig::Refuse => "refuse",
             ArmConfig::Auto => "auto",
             _ => "script",
@@ -254,8 +266,8 @@ impl Backend {
             key.label.as_deref().map(render_inert).unwrap_or_default(),
             store_dir.display()
         ));
-        talk(&format!("person seam: {seam} — no secret or consent moment is answered here: no key or claim ceremony runs through this adapter"));
-        let session = Arc::new(Mutex::new(Standing::Open(reference.to_string())));
+        talk(&format!("person seam: {person_seam} — no secret or consent moment is answered here: no key or claim ceremony runs through this adapter"));
+        let session = Arc::new(Mutex::new(SessionState::Open(reference.to_string())));
         let backend = Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk };
         backend.drain(events);
         Ok(backend)
@@ -268,12 +280,12 @@ impl Backend {
     /// Reads the bus on a thread of its own for the process's life.
     ///
     /// `events` is the subscription `open` took before the session opened. A
-    /// `session-died` of the session the calls stand on is that death's verdict
-    /// — the drain its one carrier, which a call that met the death waits on —
-    /// and moves the standing (`settle`): to the fresh session on the restart
-    /// arm's re-open, to a lapse where the adapter serves on — each said — and
-    /// to the stop on every other arm, its plain line handed to the stop. Every
-    /// other event is read and dropped.
+    /// `session-died` of the session the calls run under carries that death's
+    /// reason — the drain its one reader, which a call that met the death waits
+    /// on — and the drain settles the session's state by it (`settle`): to the
+    /// fresh session on the restart arm's re-open, to a lapse where the adapter
+    /// serves on — each said — and to the stop on every other arm, its plain
+    /// line handed to the stop. Every other event is read and dropped.
     fn drain(&self, events: Receiver<Event>) {
         let (session, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), Arc::clone(&self.on_stop));
         thread::spawn(move || {
@@ -299,13 +311,14 @@ impl Backend {
         });
     }
 
-    /// Opens a session where the session `died` left none, and stands on it.
+    /// Opens a session afresh where the session `died` left none.
     ///
-    /// The open is judged as the shell's re-open is (`refused_reopen`): a
-    /// board that does not answer leaves the standing lapsed, and any other
-    /// refusal stops the adapter, its line handed to the stop. Where a
-    /// verdict moved the standing while the session opened, the session is
-    /// closed, so none stands that no call names.
+    /// The calls run under it once it opens. A refusal of it is judged as a
+    /// refused re-open is (`refused_afresh`, by way of `refused_open`): a board
+    /// that does not answer leaves the session's state lapsed, and any other
+    /// refusal stops the adapter, its line naming this open handed to the stop.
+    /// Where the drain settled the session's state while the session opened,
+    /// the session is closed, so none stands that no call names.
     ///
     /// # Errors
     ///
@@ -319,11 +332,11 @@ impl Backend {
         let fresh = match self.shell.call("session", &json!({"board": self.board})) {
             Ok(opened) => opened["session"].as_str().expect("the shell's session answer names its session").to_string(),
             Err(refusal) => {
-                settle(&self.session, died, refused_reopen(refusal.name()), &self.on_stop);
+                settle(&self.session, died, refused_afresh(refusal.name()), &self.on_stop);
                 return Err(refusal);
             }
         };
-        if swap(&self.session, died, Standing::Open(fresh.clone())) {
+        if swap(&self.session, died, SessionState::Open(fresh.clone())) {
             self.say("the session had ended with no re-open: a session was opened afresh, and the call is served under it");
         } else {
             let _ = self.shell.call("close", &json!({"session": fresh}));
@@ -333,16 +346,15 @@ impl Backend {
 
     /// Runs one attempt under the session, and the session's life around it.
     ///
-    /// The session is the one the calls stand on. Where the last session
+    /// The session is the one the calls run under. Where the last session
     /// lapsed, one is opened first (`open_afresh`); where the adapter has
     /// stopped, the attempt runs under the reference that died, and the shell
     /// answers it. An attempt the shell answers `session_died` or
-    /// `session_ended` met an end the shell ran, whose verdict the drain
-    /// carries: the call waits for it (`verdict_within`), opens a session
-    /// itself where none comes, and is reissued once under what stands then —
-    /// save that a death the shell did not re-open is the call's answer. Every
-    /// other answer is the attempt's own, and a second death is answered as it
-    /// stands.
+    /// `session_ended` met an end the shell ran, which the drain settles: the
+    /// call waits for that (`settled_within`), opens a session itself where it
+    /// never comes, and is reissued once under what stands then — save that a
+    /// death the shell did not re-open is the call's answer. Every other answer
+    /// is the attempt's own, and a second death is answered as it stands.
     ///
     /// # Errors
     ///
@@ -351,14 +363,14 @@ impl Backend {
     fn under_session<T>(&self, attempt: impl Fn(&str) -> Result<T, Refusal>) -> Result<T, Refusal> {
         let mut reissued = false;
         loop {
-            let standing = self.session.lock().expect("the standing's lock").clone();
-            let reference = match standing {
-                Standing::Open(reference) => reference,
-                Standing::Lapsed(died) => {
+            let state = self.session.lock().expect("the session state's lock").clone();
+            let reference = match state {
+                SessionState::Open(reference) => reference,
+                SessionState::Lapsed(died) => {
                     self.open_afresh(&died)?;
                     continue;
                 }
-                Standing::Stopped(died) => return attempt(&died),
+                SessionState::Stopped(died) => return attempt(&died),
             };
             let outcome = attempt(&reference);
             let Err(refusal) = &outcome else { return outcome };
@@ -367,14 +379,14 @@ impl Backend {
             if reissued || !(met_death || met_end) {
                 return outcome;
             }
-            // The shell ran the session's end, and its `session-died` is the
-            // verdict the drain carries: wait for it, opening a session where
-            // none comes.
-            if !verdict_within(&self.session, &reference, VERDICT_WAIT) {
+            // The shell ran the session's end, and the drain settles the
+            // session's state by its `session-died`: wait for that, opening a
+            // session where it never comes.
+            if !settled_within(&self.session, &reference, SETTLE_WAIT) {
                 self.open_afresh(&reference)?;
             }
             // A death the shell did not re-open is the call's answer.
-            if met_death && !matches!(&*self.session.lock().expect("the standing's lock"), Standing::Open(_)) {
+            if met_death && !matches!(&*self.session.lock().expect("the session state's lock"), SessionState::Open(_)) {
                 return outcome;
             }
             reissued = true;
@@ -394,8 +406,10 @@ impl Backend {
 
     /// Returns the shell's `health(board)` of the adapter's one board.
     ///
-    /// The answer is the board's `/health` document verbatim with its
-    /// derived mode; the board's reference is supplied.
+    /// The answer is the board's `/health` reading verbatim with its derived
+    /// mode: a live reading with no address of its own, not the published head
+    /// document that records its pair (wire.md §The other endpoints). The
+    /// board's reference is supplied.
     ///
     /// # Errors
     ///
@@ -416,7 +430,7 @@ impl Backend {
         self.shell.call("probe", &json!({}))
     }
 
-    /// Makes a call of the shell's under the session the calls stand on.
+    /// Makes a call of the shell's under the adapter's one session.
     ///
     /// The calls are `op`, `search`, `places`, `held`, `resolve` and
     /// `changes`, the session's reference supplied beside the call's own
@@ -494,35 +508,34 @@ impl Backend {
     }
 }
 
-/// Carries a verdict into the standing, and its stop where it asks.
+/// Settles the session `died` by what its death, or a refused open, asks.
 ///
-/// The standing moves where it may (`swap`): to the fresh session on the
+/// The session's state moves where it may (`swap`): to the fresh session on the
 /// restart arm's re-open, to a lapse where the adapter serves on, and to the
 /// stop on every other arm, whose line then goes to `on_stop`. Returns whether
-/// this caller moved it; a verdict on a session the standing has left, or
-/// carried a second time, moves nothing, so a stop's line is said once.
-fn settle(standing: &Mutex<Standing>, died: &str, death: Death, on_stop: &OnStop) -> bool {
+/// this caller moved it; a death of a session the state has left, or settled a
+/// second time, moves nothing, so a stop's line is said once.
+fn settle(state: &Mutex<SessionState>, died: &str, death: Death, on_stop: &OnStop) -> bool {
     let next = match &death {
-        Death::Reopened(fresh) => Standing::Open(fresh.clone()),
-        Death::ServeOn => Standing::Lapsed(died.to_string()),
-        Death::Stop(_) => Standing::Stopped(died.to_string()),
+        Death::Reopened(fresh) => SessionState::Open(fresh.clone()),
+        Death::ServeOn => SessionState::Lapsed(died.to_string()),
+        Death::Stop(_) => SessionState::Stopped(died.to_string()),
     };
-    let moved = swap(standing, died, next);
+    let moved = swap(state, died, next);
     if let (true, Death::Stop(line)) = (moved, death) {
         on_stop(line);
     }
     moved
 }
 
-/// Returns whether the standing moved off the session `died` within `wait`.
+/// Returns whether the drain settled the session `died` within `wait`.
 ///
-/// It looks every twenty milliseconds for the verdict on `died` — the
-/// drain's, from the shell's end — to move the standing: to a fresh session,
-/// a lapse or the stop alike.
-fn verdict_within(standing: &Mutex<Standing>, died: &str, wait: Duration) -> bool {
+/// It looks every twenty milliseconds for the session's state to move off
+/// `died` — to a fresh session, a lapse or the stop alike.
+fn settled_within(state: &Mutex<SessionState>, died: &str, wait: Duration) -> bool {
     let deadline = Instant::now() + wait;
     loop {
-        if !matches!(&*standing.lock().expect("the standing's lock"), Standing::Open(reference) if reference == died) {
+        if !matches!(&*state.lock().expect("the session state's lock"), SessionState::Open(reference) if reference == died) {
             return true;
         }
         if Instant::now() >= deadline {
@@ -532,15 +545,14 @@ fn verdict_within(standing: &Mutex<Standing>, died: &str, wait: Duration) -> boo
     }
 }
 
-/// Moves the standing off the session `died` to `next`, where it may.
+/// Moves the session's state off the session `died` to `next`, where it may.
 ///
-/// It may where the standing still names `died`, live or lapsed, and differs
-/// from `next`: a stop is never moved off, and a standing that has moved on
-/// to another session is left as it stands. Returns whether this caller
-/// moved it.
-fn swap(standing: &Mutex<Standing>, died: &str, next: Standing) -> bool {
-    let mut current = standing.lock().expect("the standing's lock");
-    let names_it = matches!(&*current, Standing::Open(reference) | Standing::Lapsed(reference) if reference == died);
+/// It may where the state still names `died`, live or lapsed, and differs from
+/// `next`: a stop is never moved off, and a state that has moved on to another
+/// session is left alone. Returns whether this caller moved it.
+fn swap(state: &Mutex<SessionState>, died: &str, next: SessionState) -> bool {
+    let mut current = state.lock().expect("the session state's lock");
+    let names_it = matches!(&*current, SessionState::Open(reference) | SessionState::Lapsed(reference) if reference == died);
     if names_it && *current != next {
         *current = next;
         true
@@ -605,77 +617,82 @@ mod tests {
         assert_eq!(read, declared, "the arms read are the ones skep-shell declares");
     }
 
-    /// The standing moves off a session once, and never off a stop.
+    /// The session's state moves off a session once, and never off a stop.
     ///
-    /// Two callers carrying one re-open move it once; a verdict on a session
-    /// the standing has left moves nothing; a death no one re-opened lapses
-    /// it, the same verdict carried twice moves it once, and a late re-open of
-    /// the lapsed session is adopted; a stop moves it, and nothing after.
+    /// Two callers settling one re-open move it once; a death of a session the
+    /// state has left moves nothing; a death no one re-opened lapses it, the
+    /// same death settled twice moves it once, and a late re-open of the lapsed
+    /// session is adopted; a stop moves it, and nothing after.
     #[test]
-    fn the_standing_moves_off_a_session_once_and_never_off_a_stop() {
-        let standing = Mutex::new(Standing::Open("s-old".to_string()));
-        assert!(swap(&standing, "s-old", Standing::Open("s-new".into())));
-        assert!(!swap(&standing, "s-old", Standing::Open("s-other".into())), "the second caller finds it moved");
-        assert!(!swap(&standing, "s-old", Standing::Lapsed("s-old".into())), "a verdict on a session the standing left moves nothing");
-        assert!(swap(&standing, "s-new", Standing::Lapsed("s-new".into())), "a death no one re-opened lapses it");
-        assert!(!swap(&standing, "s-new", Standing::Lapsed("s-new".into())), "the same verdict carried twice moves it once");
-        assert!(swap(&standing, "s-new", Standing::Open("s-late".into())), "a late re-open of the lapsed session is adopted");
-        assert!(swap(&standing, "s-late", Standing::Stopped("s-late".into())));
-        for next in [Standing::Open("s-after".into()), Standing::Lapsed("s-late".into())] {
-            assert!(!swap(&standing, "s-late", next), "nothing moves the standing off a stop");
+    fn the_session_state_moves_off_a_session_once_and_never_off_a_stop() {
+        let state = Mutex::new(SessionState::Open("s-old".to_string()));
+        assert!(swap(&state, "s-old", SessionState::Open("s-new".into())));
+        assert!(!swap(&state, "s-old", SessionState::Open("s-other".into())), "the second caller finds it moved");
+        assert!(!swap(&state, "s-old", SessionState::Lapsed("s-old".into())), "a death of a session the state left moves nothing");
+        assert!(swap(&state, "s-new", SessionState::Lapsed("s-new".into())), "a death no one re-opened lapses it");
+        assert!(!swap(&state, "s-new", SessionState::Lapsed("s-new".into())), "the same death settled twice moves it once");
+        assert!(swap(&state, "s-new", SessionState::Open("s-late".into())), "a late re-open of the lapsed session is adopted");
+        assert!(swap(&state, "s-late", SessionState::Stopped("s-late".into())));
+        for next in [SessionState::Open("s-after".into()), SessionState::Lapsed("s-late".into())] {
+            assert!(!swap(&state, "s-late", next), "nothing moves the state off a stop");
         }
-        assert_eq!(*standing.lock().unwrap(), Standing::Stopped("s-late".into()));
+        assert_eq!(*state.lock().unwrap(), SessionState::Stopped("s-late".into()));
     }
 
-    /// A verdict is carried once, and a stop's line goes to the stop once.
+    /// A death is settled once, and a stop's line goes to the stop once.
     ///
-    /// A verdict carried a second time — a `session-died` heard twice, a
-    /// refused open judged twice — moves nothing: the first carrier moves the
-    /// standing and hands the stop its line, alone. A refused open stops a
-    /// lapsed standing as a stopping death stops a live one.
+    /// A death settled a second time — a `session-died` heard twice, a refused
+    /// open judged twice — moves nothing: the first to settle it moves the
+    /// session's state and hands the stop its line, alone. A refused open stops
+    /// a lapsed state as a stopping death stops an open one, and the two
+    /// refused opens — the shell's re-open, the adapter's own — each name the
+    /// open refused and agree that a board that does not answer serves on.
     #[test]
-    fn a_verdict_is_carried_once_and_its_stop_said_once() {
+    fn a_death_is_settled_once_and_its_stop_said_once() {
         let said = Arc::new(Mutex::new(Vec::new()));
         let on_stop: OnStop = {
             let said = Arc::clone(&said);
             Arc::new(move |line: String| said.lock().unwrap().push(line))
         };
-        let standing = Mutex::new(Standing::Open("s-1".into()));
-        assert!(settle(&standing, "s-1", Death::Reopened("s-2".into()), &on_stop));
-        assert!(!settle(&standing, "s-1", Death::Reopened("s-2".into()), &on_stop), "the second carrier finds it carried");
-        assert!(settle(&standing, "s-2", Death::ServeOn, &on_stop));
-        assert_eq!(*standing.lock().unwrap(), Standing::Lapsed("s-2".into()));
-        assert!(settle(&standing, "s-2", refused_reopen("retired"), &on_stop), "a refused open stops a lapsed standing");
-        assert!(!settle(&standing, "s-2", refused_reopen("retired"), &on_stop));
+        let state = Mutex::new(SessionState::Open("s-1".into()));
+        assert!(settle(&state, "s-1", Death::Reopened("s-2".into()), &on_stop));
+        assert!(!settle(&state, "s-1", Death::Reopened("s-2".into()), &on_stop), "the second finds it settled");
+        assert!(settle(&state, "s-2", Death::ServeOn, &on_stop));
+        assert_eq!(*state.lock().unwrap(), SessionState::Lapsed("s-2".into()));
+        assert!(settle(&state, "s-2", refused_afresh("retired"), &on_stop), "a refused open stops a lapsed state");
+        assert!(!settle(&state, "s-2", refused_afresh("retired"), &on_stop));
         let said = said.lock().unwrap();
         assert_eq!(said.len(), 1, "the stop's line handed on once: {said:?}");
-        assert!(said[0].contains("refused this key at the re-open (retired)"), "{said:?}");
+        assert!(said[0].contains("the board refused this key the session this adapter opened afresh (retired)"), "{said:?}");
+        let Death::Stop(line) = refused_reopen("origin_state") else { panic!("a refused re-open stops") };
+        assert!(line.contains("the board restarted and refused this key at the re-open (origin_state)"), "{line}");
         assert_eq!(refused_reopen("unreachable"), Death::ServeOn, "a board that does not answer serves on");
+        assert_eq!(refused_afresh("unreachable"), Death::ServeOn, "a board that does not answer serves on, whoever opened");
     }
 
-    /// The wait for a verdict ends as the standing moves off the session.
+    /// The wait ends as the drain settles the session.
     ///
-    /// A verdict carried a moment later ends it — a lapse or a stop as surely
-    /// as a re-open — and with none carried the wait lapses at its bound.
+    /// A death settled a moment later ends it — a lapse or a stop as surely as
+    /// a re-open — and with none settled the wait runs out at its bound.
     #[test]
-    fn the_wait_for_a_verdict_ends_as_the_standing_moves() {
-        for verdict in [Death::Reopened("s-2".into()), Death::ServeOn, Death::Stop("stopped".into())] {
-            let standing = Arc::new(Mutex::new(Standing::Open("s-1".into())));
-            let carrier = {
-                let standing = Arc::clone(&standing);
+    fn the_wait_to_settle_ends_as_the_session_state_moves() {
+        for death in [Death::Reopened("s-2".into()), Death::ServeOn, Death::Stop("stopped".into())] {
+            let state = Arc::new(Mutex::new(SessionState::Open("s-1".into())));
+            let settler = {
+                let state = Arc::clone(&state);
                 let on_stop: OnStop = Arc::new(|_: String| {});
                 thread::spawn(move || {
                     thread::sleep(Duration::from_millis(100));
-                    settle(&standing, "s-1", verdict, &on_stop)
+                    settle(&state, "s-1", death, &on_stop)
                 })
             };
             let started = Instant::now();
-            assert!(verdict_within(&standing, "s-1", Duration::from_secs(30)), "the verdict ends the wait");
-            assert!(started.elapsed() < Duration::from_secs(10), "as the standing moves: {:?}", started.elapsed());
-            assert!(carrier.join().expect("the carrier"), "the carrier moved it");
+            assert!(settled_within(&state, "s-1", Duration::from_secs(30)), "the settling ends the wait");
+            assert!(started.elapsed() < Duration::from_secs(10), "as the state moves: {:?}", started.elapsed());
+            assert!(settler.join().expect("the settler"), "the settler moved it");
         }
-        let standing = Mutex::new(Standing::Open("s-1".into()));
-        assert!(!verdict_within(&standing, "s-1", Duration::from_millis(100)), "with no verdict the wait lapses");
+        let state = Mutex::new(SessionState::Open("s-1".into()));
+        assert!(!settled_within(&state, "s-1", Duration::from_millis(100)), "with nothing settled the wait runs out");
     }
 
     /// A startup stop names what did not hold, then the refusal once.

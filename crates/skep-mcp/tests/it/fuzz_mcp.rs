@@ -22,7 +22,7 @@
 //! loudly with the line; per the H3 finding protocol the test is then
 //! converted to `#[ignore = "FINDING-n: …"]`, assertion intact.
 //!
-//! skep-mcp is binary-only (no library seam), so there is no per-input
+//! skep-mcp is binary-only (no library target), so there is no per-input
 //! libFuzzer target for it — this spawn-storm IS its fuzzing, and can be run
 //! standalone or widened with `FUZZ_EXHAUSTIVE=1`.
 

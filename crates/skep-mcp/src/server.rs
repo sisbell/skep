@@ -5,7 +5,7 @@
 //! the protocol is written; the dispatch takes `tools/call` onto the
 //! backend's calls.
 //!
-//! **A refusal as a result** — the crate's second rule — is kept here:
+//! **A refusal as a result**, the crate's rule of that name, is kept here:
 //! `tool_result` renders every answer the shell gives by it, the board's
 //! verdict as data and any other refusal `isError`; `Server::fetch` adds its
 //! own two `isError`, a file past the cap and a stream cut short; and `respond`
@@ -83,7 +83,7 @@ pub fn read_stdin(inbound: Sender<Inbound>) {
 /// The MCP side's state: the backend every tool calls and the catalog
 /// `tools/list` and `initialize` answer from.
 pub struct Server {
-    /// The seam onto the shell, its one session open.
+    /// The backend, its one session open.
     pub backend: Backend,
     /// The loaded catalog, its commons sentence appended where one is set.
     pub catalog: Catalog,
@@ -295,11 +295,11 @@ fn text_result(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
-/// Renders the shell's answer as a tool result, by the crate's second rule.
+/// Renders the shell's answer as a tool result: *a refusal as a result*.
 ///
 /// An answer is the result's text, `isError` false; the board's verdict
-/// (`Refusal::Board`) is data, its value — the shell's envelope with the
-/// verdict's body verbatim — the text, `isError` false; every other refusal
+/// (`Refusal::Board`) is data, its value — the `refused` refusal, the verdict's
+/// body verbatim under `body` — the text, `isError` false; every other refusal
 /// is its value as the text, `isError` true. `Server::fetch` answers its own
 /// two — a file past the cap, a stream cut short — itself.
 fn tool_result(answer: Result<Value, Refusal>) -> Value {
@@ -334,12 +334,14 @@ mod tests {
         assert!(call_params(Some(json!({"name": "fork", "arguments": 3}))).is_err());
     }
 
-    /// THE RULE: a value is data; the board's verdict is data — its body
-    /// verbatim under `body`, the envelope beside it, `isError` false; a
-    /// halt, the block, the unreachable board and the shell's own refusals
-    /// are `isError` true with the refusal's value as the text (the mutant
-    /// that marks every refusal `isError` loses "rejections are data"; the
-    /// one that marks none loses `unreachable`).
+    /// *A refusal as a result*: the board's verdict is data, and so is a value.
+    ///
+    /// The board's verdict rides with its body verbatim under `body`, the
+    /// refusal's members beside it, `isError` false; a halt, the block, the
+    /// unreachable board and the shell's own refusals are `isError` true with
+    /// the refusal's value as the text (the mutant that marks every refusal
+    /// `isError` loses "rejections are data"; the one that marks none loses
+    /// `unreachable`).
     #[test]
     fn a_refusal_as_a_result_follows_the_rule() {
         let read = |v: &Value| -> (bool, Value) {

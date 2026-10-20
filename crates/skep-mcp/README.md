@@ -30,7 +30,7 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   shell's own calls are tools of their names — `boards`, `health`,
   `probe`, `search`, `places`, `held`, `resolve` — their arguments the
   bridge's row minus the session and the board, the adapter supplying
-  each where the row requires it. Three are the adapter's own:
+  each where the row requires it. Three are the adapter's apparatus:
   `session_info` (the principal, the account, the key's fingerprint and
   label, the board, `writes`, the board's health with its mode),
   `changes_since(since, limit?)` (the shell's `changes`: a pull of what
@@ -41,13 +41,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   beside `Cargo.toml`, checked against the dispatch's two kinds at startup
   in both directions.
 - **A refusal as a result.** The board's verdict on a frame — a `refused`
-  refusal — is DATA: `isError: false`, the verdict's body verbatim with the
-  shell's envelope (`name`, `status`, `code`, `detail`, `op`) beside it.
-  Every other kind — `unreachable`, `halt`, `blocked`, the shell's own
-  names — is `isError: true` with the refusal's value as the text: the
-  shell could not get the board's verdict. `fetch` adds two of the
-  adapter's own, each `isError` with a plain sentence: a file past its cap,
-  and a stream cut short. A write refused `unreachable` may still have
+  refusal — is DATA: `isError: false`, the verdict's body verbatim under
+  `body`, the refusal's own `name`, `status`, `code`, `detail` and `op`
+  beside it. Every other kind — `unreachable`, `halt`, `blocked`, the
+  shell's own names — is `isError: true` with the refusal's value as the
+  text: the shell could not get the board's verdict. `fetch` adds two of
+  the adapter's own, each `isError` with a plain sentence: a file past its
+  cap, and a stream cut short. A write refused `unreachable` may still have
   committed — its frame may have reached the board before its answer was
   lost — and the adapter never reissues it.
 - **The session's life.** A board restart is met by the shell's silent

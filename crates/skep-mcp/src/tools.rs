@@ -5,18 +5,18 @@
 //! `--tools-file`. Loading cross-checks the catalog against the dispatch in
 //! BOTH directions, so the file and the code cannot drift silently: a file
 //! entry the dispatch doesn't know refuses startup, and a dispatch tool the
-//! file doesn't name refuses startup. The dispatch has TWO KINDS of tool
-//! ([`Tool`]): the WIRE OPS, each spelled as the wire spells it, whose
-//! arguments are the frame and which the adapter sends as `op(session,
-//! frame)` through the shell; and the ADAPTER's OWN — the shell's calls
-//! (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`) and
-//! the apparatus (`session_info`, `changes_since`, `fetch`) — whose
-//! arguments are the bridge's row minus the session and the board, the
-//! adapter supplying each where the row requires it, and whose members the
-//! adapter reads by name. `Tool::admit` is the dispatch's door, admitting a
-//! call or refusing it; `wire_frame` maps a wire op's call onto its frame,
-//! and `Catalog::append_commons` fills the commons template in beside the
-//! check on its placeholder.
+//! file doesn't name refuses startup. The dispatch has two kinds of tool
+//! ([`Tool`]): the *wire ops*, each spelled as the wire spells it, whose
+//! arguments are the frame and which the adapter sends as `op(session, frame)`
+//! through the shell; and the *adapter tools* — the shell's calls (`boards`,
+//! `health`, `probe`, `search`, `places`, `held`, `resolve`) and the apparatus
+//! (`session_info`, `changes_since`, `fetch`) — whose arguments are the
+//! bridge's row minus the session and the board, the adapter supplying each
+//! where the row requires it, and whose members the adapter reads by name.
+//! `Tool::admit` is the dispatch's door, admitting a call or refusing it;
+//! `wire_frame` maps a wire op's call onto its frame, and
+//! `Catalog::append_commons` fills the commons template in beside the check on
+//! its placeholder.
 
 use serde_json::{Map, Value};
 
@@ -85,8 +85,7 @@ const DISPATCH_OPS: &[&str] = &[
     "universal_grants",
 ];
 
-/// One tool the dispatch answers: a wire op by its name, or one of the
-/// adapter's own.
+/// One tool the dispatch answers: a wire op by its name, or an adapter tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     /// A wire op: its arguments the frame, sent as `op(session, frame)`.
@@ -109,7 +108,7 @@ pub enum Tool {
     Held,
     /// `resolve(session, held, act)`, the shell's: the session supplied.
     Resolve,
-    /// The apparatus: this adapter's standing.
+    /// The apparatus: who this adapter acts as, and its session's facts.
     SessionInfo,
     /// `changes(session, since, limit?)`, the shell's, as a pull tool.
     ChangesSince,
@@ -117,7 +116,7 @@ pub enum Tool {
     Fetch,
 }
 
-/// The adapter's own tools: each name, its tool, and the argument members
+/// The adapter tools: each name, its tool, and the argument members
 /// its row takes — the ones the adapter reads; a member outside them is
 /// refused before any call.
 const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
@@ -168,7 +167,7 @@ impl Tool {
     }
 
     /// Every name the dispatch answers, the wire ops first, then the
-    /// adapter's own in their table's order.
+    /// adapter tools in their table's order.
     fn names() -> impl Iterator<Item = &'static str> {
         DISPATCH_OPS.iter().copied().chain(ADAPTER_TOOLS.iter().map(|(name, _, _)| *name))
     }
@@ -194,10 +193,11 @@ impl Tool {
 /// untouched.
 const RENAMES_FROM: &[&str] = &["make_link", "emit"];
 
-/// A wire op's frame — the crate's first rule, in one place: the name IS
-/// the frame's `op`, the arguments ARE the frame, and on the `RENAMES_FROM`
-/// ops a top-level `from_` rides back as `from` where no `from` is already
-/// there.
+/// Returns a wire op's frame (*every tool is one call of the shell*).
+///
+/// The rule's mapping, in one place: the name is the frame's `op`, the
+/// arguments are the frame, and on the `RENAMES_FROM` ops a top-level `from_`
+/// rides back as `from` where no `from` is already there.
 pub fn wire_frame(op: &str, mut args: Map<String, Value>) -> Value {
     if RENAMES_FROM.contains(&op) && !args.contains_key("from") {
         if let Some(v) = args.remove("from_") {
@@ -463,12 +463,14 @@ mod tests {
         assert_eq!(catalog.instructions, "Base.\n\nCommons at 1.0.2.0.9; defines is 1.0.2.0.9.0.3.50.");
     }
 
-    /// The first rule, whole: the name rides as `op` (over any `op` the
-    /// arguments carry), a top-level `from_` comes back as `from` on the
-    /// renaming ops and nowhere else — unless a `from` is already there, when
-    /// both ride — and a nested `from_` is wire shape.
+    /// A wire op's frame makes the name the op and the arguments the frame.
+    ///
+    /// The name rides as `op` (over any `op` the arguments carry), a top-level
+    /// `from_` comes back as `from` on the renaming ops and nowhere else —
+    /// unless a `from` is already there, when both ride — and a nested `from_`
+    /// is wire shape.
     #[test]
-    fn wire_frame_is_the_first_rule() {
+    fn wire_frame_makes_the_name_the_op_and_the_arguments_the_frame() {
         let frame = |op: &str, args: Value| -> Value {
             let Value::Object(args) = args else { panic!("arguments are an object") };
             wire_frame(op, args)

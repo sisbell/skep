@@ -119,12 +119,13 @@ fn initialize_answers_the_fallback_revision_when_none_is_named() {
     assert_eq!((&v["id"], &v["result"]["protocolVersion"]), (&json!("bare"), &json!("2025-06-18")));
 }
 
-/// `session_info` reports the adapter's standing: the principal, its
-/// account, the key it signs with — the claimant's, by fingerprint and
-/// label — the board's origin, `writes`, the board's mode and its health
-/// document whole, `log_position` among its members.
+/// `session_info` reports who the adapter acts as, and its session's facts.
+///
+/// The principal, its account, the key it signs with — the claimant's, by
+/// fingerprint and label — the board's origin, `writes`, the board's mode and
+/// its `/health` answer whole, `log_position` among its members.
 #[test]
-fn session_info_reports_the_adapters_standing() {
+fn session_info_reports_who_the_adapter_acts_as() {
     let fixture = Fixture::new("sessinfo");
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
@@ -192,7 +193,7 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert!(v["result"]["ok"].as_array().is_some_and(|s| !s.is_empty()), "TO coverage nonempty: {v}");
 
     // A rejection is a NORMAL result: isError false, the board's verdict
-    // verbatim under `body`, the shell's envelope beside it.
+    // verbatim under `body`, the refusal's members beside it.
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]}));
     assert_eq!(v["kind"], "refused", "rejections pass through as content: {v}");
     assert_eq!(v["name"], "doc_not_registered");
@@ -330,8 +331,9 @@ fn slot_form_faults_surface_as_normal_results() {
 }
 
 /// `doc_metadata` IS DISPATCHED (the fork-source design record, decision 10),
-/// the first rule holding — the name the frame's `op`, the arguments the
-/// frame — and its answer carries the `source` a fork was born sharing.
+/// *every tool is one call of the shell* holding — the name the frame's `op`,
+/// the arguments the frame — and its answer carries the `source` a fork was
+/// born sharing.
 /// The agent space's principal, signing by reference with the claimant's
 /// key, forks the claimant's published doc 1 through the adapter (a
 /// cross-owner `version`, private, into its own account), then reads the
@@ -435,7 +437,7 @@ fn a_board_that_does_not_answer_stops_startup() {
 /// name outside the catalog, a ceremony's name among them, and an argument
 /// an adapter tool's row does not take (the adapter is the one party that
 /// reads those: ignored, a `principal` of 2 to `session_info` would be
-/// answered with this adapter's own standing, as if it were 2's; an
+/// answered with this adapter's own facts, as if they were 2's; an
 /// `under` to `changes_since` is a narrowing the tool does not take yet).
 /// A wire op's arguments pass through unread: the board's verdict on a
 /// stranger member is data.

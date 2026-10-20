@@ -66,10 +66,10 @@ blocks at test time, so it tracks the wire without a copy step.
 ## Why there is no `mcp` libFuzzer target
 
 `skep-mcp` is binary-only, and stays so: a library target would make the
-adapter's server, its seam onto the shell and its catalog a surface the
-tests and this crate compile against, and would put its `pub` items beyond
-the dead-code lint's reach — all to buy a per-input handler target that the
-tier-1 spawn-storm (`skep-mcp/tests/it/fuzz_mcp.rs`) already covers more
+adapter's server, its backend and its catalog a surface the tests and this
+crate compile against, and would put its `pub` items beyond the dead-code
+lint's reach — all to buy a per-input handler target that the tier-1
+spawn-storm (`skep-mcp/tests/it/fuzz_mcp.rs`) already covers more
 faithfully, since it drives the real process through its real stdio
 framing. Widen it the same way:
 `FUZZ_EXHAUSTIVE=1 cargo test -p skep-mcp --test it fuzz_mcp`.

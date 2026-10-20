@@ -116,18 +116,18 @@ fn every_arm_of_a_death_asks_one_thing() {
 /// session is adopted; a stop moves it, and nothing after.
 #[test]
 fn the_session_state_moves_off_a_session_once_and_never_off_a_stop() {
-    let state = SessionWatch::new("s-old".to_string());
-    assert!(state.swap("s-old", SessionState::Open("s-new".into())));
-    assert!(!state.swap("s-old", SessionState::Open("s-other".into())), "the second caller finds it moved");
-    assert!(!state.swap("s-old", SessionState::Lapsed("s-old".into())), "a death of a session the state left moves nothing");
-    assert!(state.swap("s-new", SessionState::Lapsed("s-new".into())), "a death no one re-opened lapses it");
-    assert!(!state.swap("s-new", SessionState::Lapsed("s-new".into())), "the same death settled twice moves it once");
-    assert!(state.swap("s-new", SessionState::Open("s-late".into())), "a late re-open of the lapsed session is adopted");
-    assert!(state.swap("s-late", SessionState::Stopped("s-late".into())));
+    let watch = SessionWatch::new("s-old".to_string());
+    assert!(watch.move_off("s-old", SessionState::Open("s-new".into())));
+    assert!(!watch.move_off("s-old", SessionState::Open("s-other".into())), "the second caller finds it moved");
+    assert!(!watch.move_off("s-old", SessionState::Lapsed("s-old".into())), "a death of a session the state left moves nothing");
+    assert!(watch.move_off("s-new", SessionState::Lapsed("s-new".into())), "a death no one re-opened lapses it");
+    assert!(!watch.move_off("s-new", SessionState::Lapsed("s-new".into())), "the same death settled twice moves it once");
+    assert!(watch.move_off("s-new", SessionState::Open("s-late".into())), "a late re-open of the lapsed session is adopted");
+    assert!(watch.move_off("s-late", SessionState::Stopped("s-late".into())));
     for next in [SessionState::Open("s-after".into()), SessionState::Lapsed("s-late".into())] {
-        assert!(!state.swap("s-late", next), "nothing moves the state off a stop");
+        assert!(!watch.move_off("s-late", next), "nothing moves the state off a stop");
     }
-    assert_eq!(state.current(), SessionState::Stopped("s-late".into()));
+    assert_eq!(watch.current(), SessionState::Stopped("s-late".into()));
 }
 
 /// A death is settled once, and a stop's line goes to the stop once.
@@ -142,13 +142,13 @@ fn the_session_state_moves_off_a_session_once_and_never_off_a_stop() {
 fn a_death_is_settled_once_and_its_stop_said_once() {
     let said = Mutex::new(Vec::new());
     let on_stop = |line: String| said.lock().unwrap().push(line);
-    let state = SessionWatch::new("s-1".into());
-    assert!(state.settle("s-1", Death::Reopened("s-2".into()), &on_stop));
-    assert!(!state.settle("s-1", Death::Reopened("s-2".into()), &on_stop), "the second finds it settled");
-    assert!(state.settle("s-2", Death::ServeOn, &on_stop));
-    assert_eq!(state.current(), SessionState::Lapsed("s-2".into()));
-    assert!(state.settle("s-2", refused_afresh("retired"), &on_stop), "a refused open stops a lapsed state");
-    assert!(!state.settle("s-2", refused_afresh("retired"), &on_stop));
+    let watch = SessionWatch::new("s-1".into());
+    assert!(watch.settle("s-1", Death::Reopened("s-2".into()), &on_stop));
+    assert!(!watch.settle("s-1", Death::Reopened("s-2".into()), &on_stop), "the second finds it settled");
+    assert!(watch.settle("s-2", Death::ServeOn, &on_stop));
+    assert_eq!(watch.current(), SessionState::Lapsed("s-2".into()));
+    assert!(watch.settle("s-2", refused_afresh("retired"), &on_stop), "a refused open stops a lapsed state");
+    assert!(!watch.settle("s-2", refused_afresh("retired"), &on_stop));
     let said = said.lock().unwrap();
     assert_eq!(said.len(), 1, "the stop's line handed on once: {said:?}");
     assert!(said[0].contains("the board refused this key the session this adapter opened afresh (retired)"), "{said:?}");
@@ -166,21 +166,21 @@ fn a_death_is_settled_once_and_its_stop_said_once() {
 #[test]
 fn the_wait_to_settle_ends_as_the_session_state_moves() {
     for death in [Death::Reopened("s-2".into()), Death::ServeOn, Death::Stop("stopped".into())] {
-        let state = Arc::new(SessionWatch::new("s-1".into()));
+        let watch = Arc::new(SessionWatch::new("s-1".into()));
         let settler = {
-            let state = Arc::clone(&state);
+            let watch = Arc::clone(&watch);
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(100));
-                state.settle("s-1", death, &|_: String| {})
+                watch.settle("s-1", death, &|_: String| {})
             })
         };
         let started = Instant::now();
-        assert!(state.settled_within("s-1", Duration::from_secs(30)), "the settling ends the wait");
+        assert!(watch.settled_within("s-1", Duration::from_secs(30)), "the settling ends the wait");
         assert!(started.elapsed() < Duration::from_secs(10), "as the state moves: {:?}", started.elapsed());
         assert!(settler.join().expect("the settler"), "the settler moved it");
     }
-    let state = SessionWatch::new("s-1".into());
-    assert!(!state.settled_within("s-1", Duration::from_millis(100)), "with nothing settled the wait runs out");
+    let watch = SessionWatch::new("s-1".into());
+    assert!(!watch.settled_within("s-1", Duration::from_millis(100)), "with nothing settled the wait runs out");
 }
 
 /// A startup stop names what did not hold, then the refusal once.
@@ -249,31 +249,31 @@ fn a_call_is_reissued_once_and_only_after_a_death_settled_into_a_session() {
     let died = || -> Result<&'static str, Refusal> { Err(Refusal::shell(Name::SESSION_DIED, json!({"session": "s-1"}))) };
     let ended = || -> Result<&'static str, Refusal> { Err(Refusal::shell(Name::SESSION_ENDED, json!({"session": "s-1"}))) };
     let named = |outcome: Result<&'static str, Refusal>| outcome.map_err(|refusal| refusal.name().to_string());
-    let s = |refs: &[&str]| refs.iter().map(|r| r.to_string()).collect::<Vec<_>>();
+    let references = |refs: &[&str]| refs.iter().map(|r| r.to_string()).collect::<Vec<_>>();
     for met in [died(), ended()] {
         let (ran, outcome) = call(&mut backend, None, vec![met, Ok("ack")], Some(Death::Reopened("s-2".into())));
-        assert_eq!((ran, named(outcome)), (s(&["s-1", "s-2"]), Ok("ack")), "reissued once, under the re-opened session");
+        assert_eq!((ran, named(outcome)), (references(&["s-1", "s-2"]), Ok("ack")), "reissued once, under the re-opened session");
     }
     for drained in [Death::Stop("stopped".into()), Death::ServeOn] {
         let (ran, outcome) = call(&mut backend, None, vec![died()], Some(drained));
-        assert_eq!((ran, named(outcome)), (s(&["s-1"]), Err("session_died".to_string())), "a death not re-opened is the answer");
+        assert_eq!((ran, named(outcome)), (references(&["s-1"]), Err("session_died".to_string())), "a death not re-opened is the answer");
     }
     let (ran, outcome) = call(&mut backend, None, vec![died(), died()], Some(Death::Reopened("s-2".into())));
-    assert_eq!((ran, named(outcome)), (s(&["s-1", "s-2"]), Err("session_died".to_string())), "one reissue, no second");
+    assert_eq!((ran, named(outcome)), (references(&["s-1", "s-2"]), Err("session_died".to_string())), "one reissue, no second");
     let lost = Refusal::Unreachable(DialError::Timeout("the answer was lost".into()));
     let body = json!({"code": "not_owner", "disposition": "permanent", "op": "insert", "resp": "rejected"});
     let verdict = Refusal::Board(Refused { status: 200, code: "not_owner".into(), detail: None, op: Some("insert".into()), body });
     for (other, name) in [(lost, "unreachable"), (verdict, "not_owner")] {
         let (ran, outcome) = call(&mut backend, None, vec![Err(other), Ok("ack")], Some(Death::Reopened("s-2".into())));
-        assert_eq!((ran, named(outcome)), (s(&["s-1"]), Err(name.to_string())), "{name}: the attempt's own, never reissued");
+        assert_eq!((ran, named(outcome)), (references(&["s-1"]), Err(name.to_string())), "{name}: the attempt's own, never reissued");
     }
     let (ran, outcome) = call(&mut backend, None, vec![ended()], Some(Death::ServeOn));
-    assert_eq!((ran, named(outcome)), (s(&["s-1"]), Err("unreachable".to_string())), "a lapse is opened afresh, not reissued under");
+    assert_eq!((ran, named(outcome)), (references(&["s-1"]), Err("unreachable".to_string())), "a lapse is opened afresh, not reissued under");
     let (ran, outcome) = call(&mut backend, Some(Death::ServeOn), Vec::new(), None);
-    assert_eq!((ran, named(outcome)), (s(&[]), Err("unreachable".to_string())), "no attempt runs under no session");
+    assert_eq!((ran, named(outcome)), (references(&[]), Err("unreachable".to_string())), "no attempt runs under no session");
     assert_eq!(backend.session.current(), SessionState::Lapsed("s-1".into()), "the lapse stands for the next call");
     let (ran, outcome) = call(&mut backend, Some(Death::Stop("stopped".into())), vec![ended()], None);
-    assert_eq!((ran, named(outcome)), (s(&["s-1"]), Err("session_ended".to_string())), "a stopped adapter's call, as the shell answers it");
+    assert_eq!((ran, named(outcome)), (references(&["s-1"]), Err("session_ended".to_string())), "a stopped adapter's call, as the shell answers it");
 }
 
 /// A session's open is refused with no answer's text in it.

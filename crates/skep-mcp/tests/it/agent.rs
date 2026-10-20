@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::common::{base64_decode, seeded_bytes, Fixture, Launch, Mcp, StreamHeld, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
+use crate::common::{base64_decode, seeded_bytes, FetchStreamHeld, Fixture, Launch, Mcp, WriteGuardHeld, AGENT_SPACE, CLAIMANT_ACCOUNT, CLAIMANT_DOC1};
 
 /// The ten ceremonial rows, the two media rows the shell does not reach,
 /// and the three calls the adapter makes of the shell itself (`op`,
@@ -172,8 +172,8 @@ fn a3_every_tool_is_listed_and_a_publish_lands_a_version() {
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let names = mcp.tool_names();
-    for op in ADDED_OPS.iter().chain(ADAPTER_TOOLS.iter()).chain(["insert", "make_link", "retrieve_v", "image", "doc_metadata", "window_ftt", "out_claims"].iter()) {
-        assert!(names.iter().any(|n| n == op), "`{op}` is listed: {names:?}");
+    for tool in ADDED_OPS.iter().chain(ADAPTER_TOOLS.iter()).chain(["insert", "make_link", "retrieve_v", "image", "doc_metadata", "window_ftt", "out_claims"].iter()) {
+        assert!(names.iter().any(|n| n == tool), "`{tool}` is listed: {names:?}");
     }
     // The shell's calls answer.
     let boards = mcp.call_json("boards", json!({}));
@@ -271,7 +271,7 @@ fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
     // Sixteen of the board's 64 KiB chunks, so the stream stops after one.
     let bytes = seeded_bytes(1024 * 1024, 5, b"SKEP");
     let i = fixture.seed_picture(&bytes);
-    let held = StreamHeld::arm(&fixture);
+    let held = FetchStreamHeld::arm(&fixture);
     let (is_error, text) = mcp.call("fetch", json!({"i": i}));
     drop(held);
     assert!(is_error, "a cut stream is isError: {text}");

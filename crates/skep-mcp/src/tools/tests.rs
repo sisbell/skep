@@ -173,7 +173,7 @@ fn the_dispatch_has_two_kinds_and_is_counted() {
 /// does not answer is refused before its arguments are read, and a member
 /// an adapter tool's row does not take is refused naming the row's own.
 #[test]
-fn admit_is_the_dispatchs_door() {
+fn the_dispatchs_door_admits_a_call_or_refuses_it_naming_the_culprit() {
     let args = |v: Value| -> Map<String, Value> {
         let Value::Object(m) = v else { panic!("arguments are an object") };
         m

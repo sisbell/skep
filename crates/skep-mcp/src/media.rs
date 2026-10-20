@@ -66,7 +66,7 @@ impl<R: Read> Read for Deadlined<R> {
 #[derive(Debug)]
 pub enum FetchAnswer {
     /// The file's bytes, whole.
-    Bytes(Vec<u8>),
+    Whole(Vec<u8>),
     /// The file is declared past [`MAX_FETCH_BYTES`], and no byte was read.
     ///
     /// `length` is its head's `Content-Length`.
@@ -108,11 +108,11 @@ fn read_within(headers: &Headers, body: impl Read, within: Duration) -> FetchAns
         }
     }
     let mut bytes = Vec::new();
-    let read = Deadlined { body, deadline: Instant::now() + within }.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
+    let outcome = Deadlined { body, deadline: Instant::now() + within }.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
     if bytes.len() as u64 > MAX_FETCH_BYTES {
         return FetchAnswer::RanPastTheCap { read: bytes.len() as u64 };
     }
-    if let Err(error) = read {
+    if let Err(error) = outcome {
         return FetchAnswer::Cut { read: bytes.len() as u64, length, error };
     }
     if let Some(length) = length {
@@ -121,7 +121,7 @@ fn read_within(headers: &Headers, body: impl Read, within: Duration) -> FetchAns
             return FetchAnswer::Cut { read: bytes.len() as u64, length: Some(length), error };
         }
     }
-    FetchAnswer::Bytes(bytes)
+    FetchAnswer::Whole(bytes)
 }
 
 /// Returns the image media type the bytes' magic names, where it names one.

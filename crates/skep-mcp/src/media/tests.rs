@@ -125,11 +125,11 @@ fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
         other => panic!("a broken read is cut: {other:?}"),
     }
     assert!(matches!(read_whole(&undeclared, BreaksAfter(b"abc")), FetchAnswer::Cut { read: 3, length: None, .. }), "a broken read of an undeclared file is cut, its length unknown");
-    assert!(matches!(read_whole(&declared(5), &b"hello"[..]), FetchAnswer::Bytes(bytes) if bytes == b"hello"));
+    assert!(matches!(read_whole(&declared(5), &b"hello"[..]), FetchAnswer::Whole(bytes) if bytes == b"hello"));
     let at_cap = read_whole(&undeclared, io::repeat(1).take(MAX_FETCH_BYTES));
-    assert!(matches!(at_cap, FetchAnswer::Bytes(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file at the cap is whole");
+    assert!(matches!(at_cap, FetchAnswer::Whole(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file at the cap is whole");
     let declared_at_cap = read_whole(&declared(MAX_FETCH_BYTES), io::repeat(1).take(MAX_FETCH_BYTES));
-    assert!(matches!(declared_at_cap, FetchAnswer::Bytes(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file declared at the cap is whole");
+    assert!(matches!(declared_at_cap, FetchAnswer::Whole(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file declared at the cap is whole");
 }
 
 /// A body paced inside the per-read bound is cut at its deadline.

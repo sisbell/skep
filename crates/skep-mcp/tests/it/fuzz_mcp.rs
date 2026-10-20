@@ -79,7 +79,7 @@ impl Mcp {
     /// Send `line` as given — any bytes but a newline — then a uniquely-id'd
     /// sentinel ping; return every message the adapter emitted for `line`
     /// (those before the ping's answer).
-    fn responses_for_raw(&mut self, line: &[u8]) -> Vec<Value> {
+    fn responses_for(&mut self, line: &[u8]) -> Vec<Value> {
         let shown = format!("{:.200}", String::from_utf8_lossy(line));
         let stdin = self.stdin.as_mut().expect("stdin open");
         stdin.write_all(line).expect("write to adapter");
@@ -148,11 +148,11 @@ fn owed(line: &str) -> Option<(Value, Option<i64>)> {
     }
 }
 
-/// Returns a storm line as one frame, its newlines dropped.
+/// Returns a storm line as one line of stdin, its newlines dropped.
 ///
 /// A newline would split one fuzz input into several lines and skew the
 /// count: the payload, not the framing, is under test there.
-fn framed(line: &str) -> String {
+fn one_line(line: &str) -> String {
     line.chars().filter(|&c| c != '\n' && c != '\r').collect()
 }
 
@@ -238,12 +238,12 @@ fn each_line_shape_gets_its_documented_answer() {
         (br#"{"jsonrpc":"1.0","id":"old","method":"ping"}"#, json!("old"), None),
     ];
     for (line, id, code) in requests {
-        let r = mcp.responses_for_raw(line);
+        let r = mcp.responses_for(line);
         assert_eq!(r.len(), 1, "a request gets exactly one response: {r:?}");
         assert_eq!((&r[0]["id"], r[0]["error"]["code"].as_i64()), (&id, code), "{:?}", r[0]);
     }
     for id in [json!(null), json!(true), json!(-7), json!(1.5), json!(""), json!([1, "a"]), json!({"k": [null]})] {
-        let r = mcp.responses_for_raw(json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string().as_bytes());
+        let r = mcp.responses_for(json!({"jsonrpc": "2.0", "id": id, "method": "ping"}).to_string().as_bytes());
         assert_eq!(r.len(), 1, "a request under {id} gets exactly one response: {r:?}");
         assert_eq!((r[0].get("id"), &r[0]["result"]), (Some(&id), &json!({})), "answered under {id}, as given");
     }
@@ -258,14 +258,14 @@ fn each_line_shape_gets_its_documented_answer() {
         b"\r",
     ];
     for line in unanswered {
-        let r = mcp.responses_for_raw(line);
+        let r = mcp.responses_for(line);
         assert!(r.is_empty(), "{:?} gets no response: {r:?}", String::from_utf8_lossy(line));
     }
     let deep = "[".repeat(1_000_000);
     let refused: [(&[u8], i64); 7] = [(b"{ this is not json", -32700), (b"\xff\xfe", -32700), (deep.as_bytes(), -32700), (b"[]", -32600), (b"7", -32600), (br#""ping""#, -32600), (b"null", -32600)];
     for (line, code) in refused {
         let shown = format!("{:.40}", String::from_utf8_lossy(line));
-        let r = mcp.responses_for_raw(line);
+        let r = mcp.responses_for(line);
         assert_eq!(r.len(), 1, "{shown:?} gets exactly one response: {r:?}");
         let (got_code, got_id) = (&r[0]["error"]["code"], &r[0]["id"]);
         assert_eq!((got_code, got_id), (&json!(code), &Value::Null), "{shown:?}");
@@ -295,8 +295,8 @@ fn mcp_line_protocol_storm_survives_and_answers_each_line_as_its_shape_owes() {
     let mut rng = 0x4D43_5000_0000_0001; // "MCP\0\0\0\0\1"
     for i in 0..budget(400) {
         let raw = if splitmix64(&mut rng).is_multiple_of(3) { random_utf8_line(&mut rng, 160) } else { String::from_utf8_lossy(&mutate(splitmix64(&mut rng), &corpus)).into_owned() };
-        let line = framed(&raw);
-        let responses = mcp.responses_for_raw(line.as_bytes());
+        let line = one_line(&raw);
+        let responses = mcp.responses_for(line.as_bytes());
         for v in &responses {
             assert_jsonrpc(v);
         }

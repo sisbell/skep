@@ -506,10 +506,10 @@ fn a_boards_text_reaches_the_operators_stream_inert() {
 #[test]
 fn a_token_in_a_session_answer_the_client_cannot_read_reaches_no_log_line() {
     const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
-    let store = TempDir::new("unreadable-session");
-    let keys = FileStore::open(store.path());
-    let id = keys.generate(None).expect("keygen");
-    let key = keys.select(&KeySelector::Path(&keys.key_path(&id.0)), Purpose::Read).expect("the key's facts");
+    let dir = TempDir::new("unreadable-session");
+    let store = FileStore::open(dir.path());
+    let id = store.generate(None).expect("keygen");
+    let key = store.select(&KeySelector::Path(&store.key_path(&id.0)), Purpose::Read).expect("the key's facts");
     let enrolled = json!({"resp": "key_set", "as_of": 0, "enrolled": [{"alg": key.public.alg(), "key": key.public.to_hex(), "fingerprint": key.fingerprint.to_hex(), "anchor": false}], "retired": []});
     let (opened, opens) = std::sync::mpsc::channel::<()>();
     let port = stand_in(move |head, body| {
@@ -529,7 +529,7 @@ fn a_token_in_a_session_answer_the_client_cannot_read_reaches_no_log_line() {
             "HTTP/1.1 404 Not Found\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{\"error\":\"not_found\"}".to_string()
         }
     });
-    let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", store.path()).env("SKEP_PRINCIPAL", "1").refusal();
+    let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
     assert!(opens.try_recv().is_ok(), "premise: the open's POST /session was answered:\n{err}");
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("stopped before serving: the signed session did not open: unreachable"), "{err}");

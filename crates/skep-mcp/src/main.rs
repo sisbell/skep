@@ -269,7 +269,7 @@ fn main() -> ExitCode {
     // `read_stdin` sends from a thread of its own, and the backend's stop,
     // which the drain sends on a death no one may re-open and a call sends
     // where the board refused a session the adapter opened itself.
-    let (inbound, lines) = mpsc::channel::<Inbound>();
+    let (inbound, inbox) = mpsc::channel::<Inbound>();
     let on_stop: OnStop = {
         let inbound = inbound.clone();
         Arc::new(move |line: String| {
@@ -293,7 +293,7 @@ fn main() -> ExitCode {
     ));
     read_stdin(inbound);
     let server = Server { backend, catalog };
-    let code = server.run(&lines);
+    let code = server.run(&inbox);
     log("stopping: closing the session at the board, saving the index");
     server.backend.shutdown();
     code

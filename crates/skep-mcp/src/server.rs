@@ -112,9 +112,9 @@ impl Server {
     /// returns the exit code the caller exits with once it has run the shell's
     /// stop: success at stdin's end and at a closed stdout (the harness hung
     /// up), and 1 where the backend asked a stop, its line said first.
-    pub fn run(&self, inbound: &Receiver<Inbound>) -> ExitCode {
+    pub fn run(&self, inbox: &Receiver<Inbound>) -> ExitCode {
         let mut out = std::io::stdout();
-        for message in inbound {
+        for message in inbox {
             match message {
                 Inbound::Line(line) => {
                     let Some(reply) = self.handle_line(&line) else { continue };
@@ -197,10 +197,10 @@ impl Server {
             "ping" => rpc_result(id, json!({})),
             "tools/list" => rpc_result(id, json!({"tools": self.catalog.tools()})),
             "tools/call" => {
-                let called = call_params(params).and_then(|(name, args)| self.call(&name, args));
-                match called {
+                let outcome = call_params(params).and_then(|(name, args)| self.call(&name, args));
+                match outcome {
                     Ok(result) => rpc_result(id, result),
-                    Err(refusal) => rpc_error(id, ErrorCode::InvalidParams, &refusal),
+                    Err(message) => rpc_error(id, ErrorCode::InvalidParams, &message),
                 }
             }
             other => {
@@ -259,7 +259,7 @@ impl Server {
         let i = i.as_str().unwrap_or_default();
         let cap = format!("this adapter's cap of {MAX_FETCH_BYTES} bytes ({} MiB) on one fetch", MAX_FETCH_BYTES / (1024 * 1024));
         match read_whole(&fetched.headers, fetched.body) {
-            FetchAnswer::Bytes(bytes) => {
+            FetchAnswer::Whole(bytes) => {
                 let data = Value::String(base64(&bytes));
                 let block = match sniff_image(&bytes) {
                     Some(mime) => Value::from_iter([("type", Value::from("image")), ("data", data), ("mimeType", Value::from(mime))]),
@@ -377,9 +377,9 @@ mod tests {
         assert!(call_params(Some(json!({"name": "fork", "arguments": 3}))).is_err());
     }
 
-    /// *A refusal as a result*: the board's verdict is data, and so is a value.
+    /// *A refusal as a result*: an answer and the board's verdict are data.
     ///
-    /// A value is the text whole; the board's verdict rides as the refusal's
+    /// An answer is the text whole; the board's verdict rides as the refusal's
     /// whole value — its body verbatim under `body`, every member skep-shell
     /// declares for it beside it and no other — `isError` false; a halt, the
     /// block, the unreachable board and the shell's own refusals are `isError`
@@ -387,7 +387,7 @@ mod tests {
     /// refusal `isError` loses "rejections are data"; the one that marks none
     /// loses `unreachable`).
     #[test]
-    fn a_refusal_as_a_result_follows_the_rule() {
+    fn an_answer_and_the_boards_verdict_are_data_and_every_other_refusal_is_an_error() {
         let read = |v: &Value| -> (bool, Value) {
             assert_eq!(v["content"].as_array().map(Vec::len), Some(1));
             let text = v["content"][0]["text"].as_str().expect("a text block");

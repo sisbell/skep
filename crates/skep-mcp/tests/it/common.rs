@@ -83,9 +83,9 @@ pub fn spawn_signing_at(dir: &Path, port: u16, signed: impl Fn(u16) -> String) -
         opts.configured = vec![skepd::Origin::parse(&signed(port)).expect("a canonical origin")];
         opts
     };
-    let sd = embed(dir, port, configured, MediaOptions::default(), DEFAULT_WORKERS).unwrap_or_else(|e| panic!("daemon start at {}: {e}", dir.display()));
-    sd.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
-    sd
+    let daemon = embed(dir, port, configured, MediaOptions::default(), DEFAULT_WORKERS).unwrap_or_else(|e| panic!("daemon start at {}: {e}", dir.display()));
+    daemon.wait_for_the_index(Duration::from_secs(60)).unwrap_or_else(|e| panic!("{e}"));
+    daemon
 }
 
 // ── the fixture ─────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ pub struct Fixture {
     daemon: Option<Skepd>,
     port: u16,
     pub store: PathBuf,
-    /// The claimant's device key, in hex.
+    /// The claimant's device key's fingerprint, in hex.
     pub fingerprint: String,
     /// The fixture's hold on [`SEAMS`], released once its daemon has stopped.
     seams: SeamsHeld,
@@ -120,8 +120,8 @@ impl Fixture {
     /// Returns a fresh board, claimed, while no other test's board runs.
     ///
     /// It is the fixture of a test that arms one of skepd's process-wide
-    /// seams ([`WriteGuardHeld`], [`StreamHeld`]), which park every board's
-    /// work in the process.
+    /// seams ([`WriteGuardHeld`], [`FetchStreamHeld`]), which park every
+    /// board's work in the process.
     pub fn alone(tag: &str) -> Fixture {
         Fixture::open(tag, SeamsHeld::Alone { _guard: SEAMS.write().unwrap_or_else(PoisonError::into_inner) })
     }
@@ -153,8 +153,8 @@ impl Fixture {
 
     /// The daemon stopped: the board gone until [`Fixture::restart`].
     pub fn stop(&mut self) {
-        if let Some(sd) = self.daemon.take() {
-            sd.shutdown();
+        if let Some(daemon) = self.daemon.take() {
+            daemon.shutdown();
         }
         let probe = self.board();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -281,8 +281,8 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        if let Some(sd) = self.daemon.take() {
-            sd.shutdown();
+        if let Some(daemon) = self.daemon.take() {
+            daemon.shutdown();
         }
     }
 }
@@ -340,25 +340,25 @@ impl Drop for WriteGuardHeld<'_> {
 /// It is `Daemon::hold_the_fetch_stream`, process-wide like the write guard,
 /// and borrows the board it is armed on as the write guard's hold does.
 #[must_use = "every fetch stream in the process parks until the drop"]
-pub struct StreamHeld<'f> {
+pub struct FetchStreamHeld<'f> {
     _board: &'f Fixture,
 }
 
-impl<'f> StreamHeld<'f> {
+impl<'f> FetchStreamHeld<'f> {
     /// Returns the hold, armed on `board`.
     ///
     /// # Panics
     ///
     /// Where `board` does not run alone ([`Fixture::alone`]): the hold parks
     /// every board's fetch streams in the process.
-    pub fn arm(board: &'f Fixture) -> StreamHeld<'f> {
+    pub fn arm(board: &'f Fixture) -> FetchStreamHeld<'f> {
         assert!(matches!(board.seams, SeamsHeld::Alone { .. }), "the fetch stream is held on a board run alone");
         Daemon::hold_the_fetch_stream();
-        StreamHeld { _board: board }
+        FetchStreamHeld { _board: board }
     }
 }
 
-impl Drop for StreamHeld<'_> {
+impl Drop for FetchStreamHeld<'_> {
     fn drop(&mut self) {
         Daemon::release_the_fetch_stream();
     }
@@ -390,13 +390,13 @@ pub fn claim_board(board_origin: &str, store: &Path, anchors: &Path) -> String {
 
 /// One exchange with the daemon: the request written whole, the answer
 /// read to its close — the status, the headers, the body.
-pub fn http(port: u16, method: &str, path: &str, session: Option<&str>, body: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
+pub fn http(port: u16, method: &str, path: &str, token: Option<&str>, body: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
     stream.set_read_timeout(Some(Duration::from_secs(120))).expect("read timeout");
     stream.set_write_timeout(Some(Duration::from_secs(120))).expect("write timeout");
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n", body.len());
-    if let Some(tok) = session {
-        head.push_str(&format!("Skepd-Session: {tok}\r\n"));
+    if let Some(token) = token {
+        head.push_str(&format!("Skepd-Session: {token}\r\n"));
     }
     head.push_str("Content-Type: application/json\r\n\r\n");
     // A write the daemon declined to read is no fault here: the answer is
@@ -415,8 +415,8 @@ pub fn http(port: u16, method: &str, path: &str, session: Option<&str>, body: &[
 }
 
 /// One frame on `/op` under `token`: its response document.
-pub fn op(port: u16, session: Option<&str>, frame: &Value) -> Value {
-    let (st, _, body) = http(port, "POST", "/op", session, frame.to_string().as_bytes());
+pub fn op(port: u16, token: Option<&str>, frame: &Value) -> Value {
+    let (st, _, body) = http(port, "POST", "/op", token, frame.to_string().as_bytes());
     assert_eq!(st, 200, "op transport: {}", String::from_utf8_lossy(&body));
     serde_json::from_slice(&body).expect("op response is JSON")
 }

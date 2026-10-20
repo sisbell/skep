@@ -406,7 +406,7 @@ impl Backend {
                 return Err(refusal);
             }
         };
-        if self.session.swap(died, SessionState::Open(fresh.clone())) {
+        if self.session.move_off(died, SessionState::Open(fresh.clone())) {
             self.say("the session had ended with no re-open: a session was opened afresh, and the call is served under it");
         } else {
             let _ = self.shell.call("close", &json!({"session": fresh}));
@@ -524,8 +524,8 @@ impl Backend {
     pub fn session_call(&self, name: &str, args: Map<String, Value>) -> Result<Value, Refusal> {
         // An object by construction, so setting a member of it cannot panic.
         let mut args = Value::Object(args);
-        self.under_session(|session| {
-            args["session"] = Value::from(session);
+        self.under_session(|reference| {
+            args["session"] = Value::from(reference);
             self.shell.call(name, &args)
         })
     }
@@ -545,7 +545,7 @@ impl Backend {
     /// `blob_missing`, …) under its own status; the unreachable board; or the
     /// session's end as `session_call` carries it.
     pub fn fetch(&self, i: &Value) -> Result<Fetched, Refusal> {
-        self.under_session(|session| self.shell.fetch(&json!({"session": session, "i": i})))
+        self.under_session(|reference| self.shell.fetch(&json!({"session": reference, "i": i})))
     }
 
     /// Returns the URI of the board's bytes at the address `i`.
@@ -588,7 +588,7 @@ impl Backend {
 ///
 /// It is the session the calls run under, watched: the drain settles it by a
 /// death (`SessionWatch::settle`), and a session the adapter opens itself moves
-/// it (`SessionWatch::swap`); a call that met a death waits on it
+/// it (`SessionWatch::move_off`); a call that met a death waits on it
 /// (`SessionWatch::settled_within`), woken by the move.
 #[derive(Debug)]
 struct SessionWatch {
@@ -624,7 +624,7 @@ impl SessionWatch {
     /// from `next`: a stop is never moved off, and a state that has moved on to
     /// another session is left alone. A move wakes every call waiting in
     /// `settled_within`. Returns whether this caller moved it.
-    fn swap(&self, died: &str, next: SessionState) -> bool {
+    fn move_off(&self, died: &str, next: SessionState) -> bool {
         let mut current = self.lock();
         let names_it = matches!(&*current, SessionState::Open(reference) | SessionState::Lapsed(reference) if reference == died);
         if names_it && *current != next {
@@ -638,19 +638,19 @@ impl SessionWatch {
 
     /// Settles the session `died` by what its death, or a refused open, asks.
     ///
-    /// The session's state moves where it may (`swap`): to the fresh session on
-    /// the restart arm's re-open, to a lapse where the adapter serves on, and
-    /// to the stop on every other arm, whose line then goes to `on_stop`.
-    /// Returns whether this caller moved it; a death of a session the state has
-    /// left, or settled a second time, moves nothing, so a stop's line is said
-    /// once.
+    /// The session's state moves where it may (`move_off`): to the fresh
+    /// session on the restart arm's re-open, to a lapse where the adapter
+    /// serves on, and to the stop on every other arm, whose line then goes to
+    /// `on_stop`. Returns whether this caller moved it; a death of a session
+    /// the state has left, or settled a second time, moves nothing, so a stop's
+    /// line is said once.
     fn settle(&self, died: &str, death: Death, on_stop: &dyn Fn(String)) -> bool {
         let next = match &death {
             Death::Reopened(fresh) => SessionState::Open(fresh.clone()),
             Death::ServeOn => SessionState::Lapsed(died.to_string()),
             Death::Stop(_) => SessionState::Stopped(died.to_string()),
         };
-        let moved = self.swap(died, next);
+        let moved = self.move_off(died, next);
         if let (true, Death::Stop(line)) = (moved, death) {
             on_stop(line);
         }
@@ -660,7 +660,7 @@ impl SessionWatch {
     /// Returns whether the drain settled the session `died` within `wait`.
     ///
     /// It sleeps until the state moves off `died` — to a fresh session, a lapse
-    /// or the stop alike — woken by `swap`, or until `wait` runs out.
+    /// or the stop alike — woken by `move_off`, or until `wait` runs out.
     fn settled_within(&self, died: &str, wait: Duration) -> bool {
         let names_died = |state: &mut SessionState| matches!(&*state, SessionState::Open(reference) if reference == died);
         let (_state, waited) = self.moved.wait_timeout_while(self.lock(), wait, names_died).unwrap_or_else(PoisonError::into_inner);

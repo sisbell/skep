@@ -1,5 +1,6 @@
-//! §C — the standalone transact-wrapped writes (M2 contract 3's second
-//! form), `test-hooks` builds only.
+//! §C — the standalone transact-wrapped writes, `test-hooks` builds only.
+//!
+//! They are M2 contract 3's second form.
 
 use std::sync::Arc;
 
@@ -13,10 +14,12 @@ use crate::store::{stage_stretch, stage_write, ContentStretch, ContentWrite};
 use crate::value::Val;
 use crate::HasContent;
 
-/// STANDALONE OP — the contract-required transact-wrapped form (M2 contract
-/// 3; §C). Generic over `W`. ISOLATION/TEST USE ONLY: committing a content
+/// Writes `val` at `addr` in a transaction of its own: the standalone op.
+///
+/// It is the contract-required transact-wrapped form (M2 contract 3; §C),
+/// generic over `W`. **Isolation and test use only**: committing a content
 /// write *alone* creates content with no placement, violating J0
-/// (content-allocation ⇒ placement) — production content writes MUST ride
+/// (content-allocation ⇒ placement) — production content writes must ride
 /// M5's J0/J1★-coupled composite via [`stage_write`].
 ///
 /// So it is compiled only under the `test-hooks` feature (default off),
@@ -29,40 +32,51 @@ use crate::HasContent;
 /// `#[doc(hidden)]` as well, so even a `test-hooks` build's docs send a
 /// reader to M5's composite.
 ///
-/// Locks the per-(document, content-subspace) lock key — the SAME key
-/// M3's content allocation and M5's placement composite hold, so alloc,
-/// write, and placement serialize in one scope. `home` is derived by M1's
-/// [`document_of`]; a content address has zeros = 3, so it is always `Some`,
-/// and the `.expect` turns the `None` of an address with no document
-/// (zeros < 2) into a documented violation of the trusted-address contract,
-/// never a domain rejection. It is a release build's only check of that
-/// contract, and a partial one: a document-level or mis-routed element
-/// address has a document, passes it, and is written as given. In debug
-/// builds the routing assertion runs BEFORE key derivation (mirroring
-/// [`stage_write`]'s order), so every non-content address panics on its own
-/// terms; in release it is compiled out. Either panic is located at the
-/// caller's line: `write` is `#[track_caller]`.
+/// Locks the per-(document, content-subspace) lock key — the same key M3's
+/// content allocation and M5's placement composite hold, so alloc, write,
+/// and placement serialize in one scope. `home` is derived by M1's
+/// [`document_of`]; a content address has zeros = 3, so it is always `Some`.
 ///
 /// On success returns the flat storage key and the committed `Seq` (the
-/// write's V1 coordinate). `stage_write`'s refusal surfaces verbatim as
-/// `TxnError::Rejected(ContentError)`; every other `TxnError` is M2's own,
-/// in the precedence [`Kernel::transact`] states.
+/// write's V1 coordinate).
 ///
-/// OPEN DECISION (drift-forced; §Dependencies & seams "M2"): the design
+/// **Open decision** (drift-forced; §Dependencies & seams "M2"): the design
 /// derives this key via a shared base-crate `key(home, …)` constructor plus
 /// an `s_C` LockKey space-tag in `skep-kernel`; neither exists in the built
 /// workspace — M3's injective `ns_lock_key` encoding and its public
 /// per-namespace constructors are the one source of
 /// `Space::Namespace`-tagged key bytes (they supersede the base-crate
 /// sketch, per M3's own recorded open decision). The design's load-bearing
-/// requirement — ONE source, so M3-alloc / M4-write / M5-placement keys are
+/// requirement — one source, so M3-alloc / M4-write / M5-placement keys are
 /// byte-identical by construction — is kept by calling
 /// [`M3State::content_lock_key`] rather than re-spelling the encoding
 /// locally (which the design forbids). Cost: an M4 → M3 crate edge the
-/// design's DAG did not carry, for a pure key constructor only. The edge is
+/// design's DAG does not carry, for a pure key constructor only. The edge is
 /// optional and only `test-hooks` takes it, so the shipped library carries
-/// none — nor its M2 edge, which `write` alone takes too — and no M3
-/// *state* is ever read.
+/// none — nor its M2 edge, which `write` and `write_stretch` alone take too
+/// — and no M3 *state* is ever read.
+///
+/// # Errors
+///
+/// `stage_write`'s refusal — `AlreadyStored`, where `addr` is already
+/// covered — surfaces verbatim as `TxnError::Rejected(ContentError)`; every
+/// other `TxnError` is M2's own, in the precedence [`Kernel::transact`]
+/// states.
+///
+/// # Panics
+///
+/// Panics where `addr` has no document: the `.expect` turns the `None` of an
+/// address with no document (zeros < 2) into a documented violation of the
+/// trusted-address contract, never a domain rejection. It is a release
+/// build's only check of that contract, and a partial one: a document-level
+/// or mis-routed element address has a document, passes it, and is written
+/// as given.
+///
+/// Panics in a debug build where `addr` is not a content-subspace element
+/// address: the routing assertion runs before key derivation (mirroring
+/// [`stage_write`]'s order), so every non-content address panics on its own
+/// terms; in release it is compiled out. Either panic is located at the
+/// caller's line: `write` is `#[track_caller]`.
 #[doc(hidden)]
 #[track_caller]
 pub fn write<W>(
@@ -83,26 +97,32 @@ where
     })
 }
 
-/// STANDALONE OP — the twin of [`write`] for a stretch: commits one
-/// [`ContentStretch`] of `bytes` at `first` alone, in one transaction under
-/// the same lock key, through [`stage_stretch`]'s door. ISOLATION/TEST USE
-/// ONLY, for `write`'s reason: a stretch committed alone has no placement
-/// (J0), so production stretches ride M5's composite. Compiled only under
-/// `test-hooks`, `#[doc(hidden)]`, `#[track_caller]`, and bounded as `write`
-/// is — `W::Record: From<ContentStretch>` in place of `From<ContentWrite>`.
-/// The per-byte fixtures of this crate's suite and skep-retrieval's seed
-/// through it, so they hold stretches as a board this build wrote does.
+/// Commits one [`ContentStretch`] of `bytes` at `first` alone.
+///
+/// It is the standalone op, the twin of [`write`] for a stretch: one
+/// transaction under the same lock key, through [`stage_stretch`]'s door.
+/// **Isolation and test use only**, for `write`'s reason: a stretch
+/// committed alone has no placement (J0), so production stretches ride M5's
+/// composite. Compiled only under `test-hooks`, `#[doc(hidden)]`,
+/// `#[track_caller]`, and bounded as `write` is —
+/// `W::Record: From<ContentStretch>` in place of `From<ContentWrite>`. The
+/// per-byte fixtures of this crate's suite and skep-retrieval's seed through
+/// it, so they hold stretches as a board this build wrote does.
 ///
 /// On success returns the first address's flat storage key and the committed
-/// `Seq`. `stage_stretch`'s refusal — `EmptyStretch`, `AlreadyStored`,
-/// `Overlap`, in its order — surfaces verbatim as
-/// `TxnError::Rejected(ContentError)`; every other `TxnError` is M2's own.
+/// `Seq`.
+///
+/// # Errors
+///
+/// `stage_stretch`'s refusal — `EmptyStretch`, `AlreadyStored`, `Overlap`,
+/// in its order — surfaces verbatim as `TxnError::Rejected(ContentError)`;
+/// every other `TxnError` is M2's own.
 ///
 /// # Panics
 ///
-/// As [`write`] does: the routing assertion in debug builds, and the
-/// trusted-address `expect` on an address with no document, each at the
-/// caller's line.
+/// Panics as [`write`] does: in a debug build at the routing assertion, and
+/// at the trusted-address `expect` on an address with no document, each at
+/// the caller's line.
 #[doc(hidden)]
 #[track_caller]
 pub fn write_stretch<W>(

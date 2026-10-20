@@ -318,11 +318,15 @@ impl Catalog {
                 return Err(format!("unknown root field '{k}'"));
             }
         }
-        let instructions = root.get("instructions").and_then(Value::as_str).ok_or("missing string field 'instructions'")?.to_string();
+        let Some(Value::String(instructions)) = root.remove("instructions") else {
+            return Err("missing string field 'instructions'".into());
+        };
         if instructions.is_empty() {
             return Err("'instructions' must be nonempty".into());
         }
-        let commons_instructions = root.get("commons_instructions").and_then(Value::as_str).ok_or("missing string field 'commons_instructions'")?.to_string();
+        let Some(Value::String(commons_instructions)) = root.remove("commons_instructions") else {
+            return Err("missing string field 'commons_instructions'".into());
+        };
         if !commons_instructions.contains(ADDR_PLACEHOLDER) {
             return Err(format!("'commons_instructions' must contain the '{ADDR_PLACEHOLDER}' placeholder"));
         }

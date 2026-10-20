@@ -175,13 +175,13 @@ impl SessionWatch {
     /// the state has left, or settled a second time, moves nothing, so a stop's
     /// line is said once.
     pub(super) fn settle(&self, died: &str, death: Death, on_stop: &dyn Fn(String)) -> bool {
-        let next = match &death {
-            Death::Reopened(fresh) => SessionState::Open(fresh.clone()),
-            Death::ServeOn => SessionState::Lapsed(died.to_string()),
-            Death::Stop(_) => SessionState::Stopped(died.to_string()),
+        let (next, line) = match death {
+            Death::Reopened(fresh) => (SessionState::Open(fresh), None),
+            Death::ServeOn => (SessionState::Lapsed(died.to_string()), None),
+            Death::Stop(line) => (SessionState::Stopped(died.to_string()), Some(line)),
         };
         let moved = self.move_off(died, next);
-        if let (true, Death::Stop(line)) = (moved, death) {
+        if let (true, Some(line)) = (moved, line) {
             on_stop(line);
         }
         moved

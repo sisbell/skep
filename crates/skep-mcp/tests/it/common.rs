@@ -192,8 +192,8 @@ impl Fixture {
     }
 
     /// One frame under `token`, answered by the board: its response document.
-    fn op(&self, token: &Token, frame: Value) -> Value {
-        match self.board().op(Some(token), &frame).expect("the op's transport") {
+    fn op(&self, token: &Token, frame: &Value) -> Value {
+        match self.board().op(Some(token), frame).expect("the op's transport") {
             Answer::Document(v) => v,
             other => panic!("{frame}: {other:?}"),
         }
@@ -201,7 +201,7 @@ impl Fixture {
 
     /// One acknowledged write under `token`: its `addr`.
     pub fn write(&self, token: &Token, frame: Value) -> String {
-        let v = self.op(token, frame.clone());
+        let v = self.op(token, &frame);
         assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "{frame}: {v}");
         v["addr"].as_str().unwrap_or_default().to_string()
     }

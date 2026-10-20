@@ -108,6 +108,12 @@ impl OnStop {
     }
 }
 
+impl fmt::Debug for OnStop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("OnStop").finish_non_exhaustive()
+    }
+}
+
 /// Returns whether `refusal` is the shell's own, named `named`.
 fn is_shell(refusal: &Refusal, named: Name) -> bool {
     matches!(refusal, Refusal::Shell { name, .. } if *name == named)
@@ -199,7 +205,7 @@ const UNQUOTED: &str = "the session's open met an answer this client could not r
 ///
 /// It holds the shell, the one board's reference, the one session's state, the
 /// process's stop, and the facts `session_info` reports; its `Debug` shows all
-/// but the stop and the TALK sink, which hold closures.
+/// but the TALK sink, a bare closure.
 pub struct Backend {
     shell: Shell,
     /// The board's opaque reference, fixed at the open.
@@ -233,6 +239,7 @@ impl fmt::Debug for Backend {
             .field("writes", &self.writes)
             .field("key", &self.key)
             .field("session", &self.session)
+            .field("on_stop", &self.on_stop)
             .finish_non_exhaustive()
     }
 }
@@ -576,7 +583,12 @@ impl Backend {
     /// refused open stopped the adapter, or the board did not answer — the
     /// session already ended there, its end having left the shell's table,
     /// and the line says so.
-    pub fn shutdown(&self) {
+    ///
+    /// It takes the backend, since nothing is served after it: a call made
+    /// through it then would find its session closed, wait out `SETTLE_WAIT`
+    /// for a death the stop never announces, and meet a dialer that dials no
+    /// more.
+    pub fn shutdown(self) {
         let said = match self.session.current() {
             SessionState::Open(_) => "stopping: closing the session at the board, saving the index",
             SessionState::Lapsed(_) | SessionState::Stopped(_) => "stopping: the session already ended at the board; saving the index",

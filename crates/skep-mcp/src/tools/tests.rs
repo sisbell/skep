@@ -65,6 +65,8 @@ fn every_fault_that_would_load_refuses_by_name() {
     for (err, names) in [
         (refusal(|v| v["version"] = json!(1)), "'version'"),
         (refusal(|v| v["instructions"] = json!("")), "'instructions'"),
+        (refusal(|v| v["instructions"] = json!(7)), "missing string field 'instructions'"),
+        (refusal(|v| v["commons_instructions"] = json!(["{addr}"])), "missing string field 'commons_instructions'"),
         (refusal(|v| tool(v, "insert")["title"] = json!("Insert")), "'title'"),
         (refusal(|v| tool(v, "insert")["description"] = json!("")), "'description'"),
         (refusal(|v| tool(v, "insert")["inputSchema"] = json!("object")), "'inputSchema'"),

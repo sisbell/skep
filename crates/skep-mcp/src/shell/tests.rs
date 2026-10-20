@@ -244,6 +244,19 @@ fn a_blob_uri_is_the_fetch_route_and_takes_an_address_alone() {
     assert!(broken.is_err(), "an `i` that is no address breaks the precondition");
 }
 
+/// The backend's `Debug` names its stop and shows no closure.
+///
+/// The stop prints as `OnStop(..)`, its closure unshown, and takes its place
+/// among the backend's fields; the TALK sink, a bare closure, is left out.
+#[test]
+fn the_backends_debug_names_its_stop_and_shows_no_closure() {
+    let scratch = Scratch::new("debug");
+    let backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+    assert_eq!(format!("{:?}", backend.on_stop), "OnStop(..)");
+    let shown = format!("{backend:?}");
+    assert!(shown.ends_with(", on_stop: OnStop(..), .. }"), "the stop among the fields, the TALK sink left out: {shown}");
+}
+
 /// The clean stop says first what it closes, as the session's state has it.
 ///
 /// A session the calls run under is said closed at the board; a lapsed one
@@ -264,7 +277,8 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
             let lines = Arc::clone(&lines);
             Arc::new(move |line: &str| lines.lock().expect("the lines' lock").push(line.to_string()))
         };
+        let state = backend.session.current();
         backend.shutdown();
-        assert_eq!(*lines.lock().expect("the lines' lock"), [said], "{:?}", backend.session.current());
+        assert_eq!(*lines.lock().expect("the lines' lock"), [said], "{state:?}");
     }
 }

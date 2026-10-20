@@ -107,7 +107,10 @@ fn read_within(headers: &Headers, body: impl Read, within: Duration) -> FetchAns
             return FetchAnswer::DeclaredPastTheCap { length };
         }
     }
-    let mut bytes = Vec::new();
+    // Sized to the declared length, as std's `fs::read` sizes its buffer to
+    // the file's, so a body of that length fits it exactly; the length is at
+    // most the cap, checked above, so it fits a `usize`.
+    let mut bytes = Vec::with_capacity(length.map_or(0, |n| n as usize));
     let outcome = Deadlined { body, deadline: Instant::now() + within }.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
     if bytes.len() as u64 > MAX_FETCH_BYTES {
         return FetchAnswer::RanPastTheCap { read: bytes.len() as u64 };

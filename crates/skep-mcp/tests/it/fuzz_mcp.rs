@@ -228,9 +228,10 @@ fn random_utf8_line(rng: &mut u64, max_len: usize) -> String {
 /// does not offer the -32601, MCP's own `resources/list` among them; an id
 /// with no method, no `result` and no `error`, the -32600 under that id; a
 /// notification of any method, a stray response, an id-less non-request and a
-/// blank line (`\r` alone included), none; a line that is no JSON — bytes that
-/// are not UTF-8, and nesting far past the parser's depth bound, included —
-/// the -32700 parse error, and JSON that is no object the -32600, both id
+/// blank line (`\r` alone included, and U+3000 alone, which `str::trim` reads
+/// as whitespace though JSON does not), none; a line that is no JSON — bytes
+/// that are not UTF-8, and nesting far past the parser's depth bound, included
+/// — the -32700 parse error, and JSON that is no object the -32600, both id
 /// null; and every sentinel `ping` answers `{}`. No line here reaches the
 /// board.
 #[test]
@@ -256,7 +257,7 @@ fn each_line_shape_gets_its_documented_answer() {
         assert_eq!(r.len(), 1, "a request under {id} gets exactly one response: {r:?}");
         assert_eq!((r[0].get("id"), &r[0]["result"]), (Some(&id), &json!({})), "answered under {id}, as given");
     }
-    let unanswered: [&[u8]; 8] = [
+    let unanswered: [&[u8]; 9] = [
         br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
         br#"{"jsonrpc":"2.0","method":"no/such"}"#,
         br#"{"jsonrpc":"2.0","id":7,"result":{}}"#,
@@ -265,6 +266,7 @@ fn each_line_shape_gets_its_documented_answer() {
         b"",
         b"   ",
         b"\r",
+        "\u{3000}".as_bytes(),
     ];
     for line in unanswered {
         let r = mcp.responses_for(line);

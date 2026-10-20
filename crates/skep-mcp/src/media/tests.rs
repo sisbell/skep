@@ -79,7 +79,9 @@ fn the_cap_sits_well_under_the_boards_per_file_cap() {
 /// of its declared length is cut `UnexpectedEof`, and one broken off by a
 /// failed read is cut with that read's own error, the bytes that came counted
 /// — an undeclared file's length unknown; a body at its declared length is
-/// whole, and so is one at the cap, declared or not.
+/// whole, and so is one at the cap, declared or not; and a body past its
+/// declared length within the cap, `read_whole`'s precondition broken, is
+/// answered as it came, never cut again: skep-client's cut is the one.
 #[test]
 fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
     // A body no read may touch.
@@ -130,6 +132,7 @@ fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
     assert!(matches!(at_cap, FetchAnswer::Whole(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file at the cap is whole");
     let declared_at_cap = read_whole(&declared(MAX_FETCH_BYTES), io::repeat(1).take(MAX_FETCH_BYTES));
     assert!(matches!(declared_at_cap, FetchAnswer::Whole(bytes) if bytes.len() as u64 == MAX_FETCH_BYTES), "a file declared at the cap is whole");
+    assert!(matches!(read_whole(&declared(3), &b"hello"[..]), FetchAnswer::Whole(bytes) if bytes == b"hello"), "a body past its declared length is skep-client's to cut, never cut again here");
 }
 
 /// A body paced inside the per-read bound is cut at its deadline.

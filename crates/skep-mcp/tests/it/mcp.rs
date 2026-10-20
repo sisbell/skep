@@ -5,11 +5,12 @@
 //! and the built `skep-mcp` binary spawned over it, real JSON-RPC driven
 //! through its stdin/stdout. Store semantics are trusted to the stores' own
 //! tests; these assert the adapter: the protocol's framing and codes, the
-//! tools' frames and answers, the board's verdict as data, the session's
-//! re-open across a daemon restart, the token and the key's seed in no answer
-//! and no log line, and its own streams — a log no one reads fails no work, a
-//! closed stdout ends it. Startup is `startup.rs`'s; the fence's cases are
-//! `agent.rs`'s; the daemon, the claim and the driver are `common`'s.
+//! tools' frames and answers, the board's verdict as data, the shell's own
+//! refusal of a frame it cannot send, the session's re-open across a daemon
+//! restart, the token and the key's seed in no answer and no log line, and its
+//! own streams — a log no one reads fails no work, a closed stdout ends it.
+//! Startup is `startup.rs`'s; the fence's cases are `agent.rs`'s; the daemon,
+//! the claim and the driver are `common`'s.
 
 use std::io::{Read, Write};
 use std::process::Stdio;
@@ -77,6 +78,20 @@ fn initialize_answers_the_fallback_revision_when_none_is_named() {
     mcp.send_line(r#"{"jsonrpc":"2.0","id":"bare","method":"initialize"}"#);
     let v = mcp.read_message();
     assert_eq!((&v["id"], &v["result"]["protocolVersion"]), (&json!("bare"), &json!("2025-06-18")));
+}
+
+/// `initialize` answers the revision the client names, as it names it.
+///
+/// A client naming 2024-11-05 is answered 2024-11-05: the echo `respond`
+/// states, where MCP 2025-06-18's version negotiation has a server answer a
+/// revision it supports, and this adapter names no such set.
+#[test]
+fn initialize_answers_the_revision_the_client_names() {
+    let fixture = Fixture::new("echo");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    let v = mcp.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}}));
+    assert_eq!(v["result"]["protocolVersion"], "2024-11-05", "{v}");
+    assert!(mcp.finish().success());
 }
 
 /// A notification is consumed, and nothing it names runs.
@@ -301,6 +316,34 @@ fn slot_form_faults_surface_as_normal_results() {
     let v = mcp.call_json("make_link", json!({"home": doc, "from": [], "from_": [], "to": [], "ty": {"addrs": []}}));
     assert_eq!((&v["body"]["op"], &v["body"]["code"]), (&json!("unparseable"), &json!("malformed")), "{v}");
     assert!(v["body"]["detail"].as_str().is_some_and(|d| d.contains("from_")), "{v}");
+    assert!(mcp.finish().success());
+}
+
+/// A frame the shell cannot send is refused before the board sees it.
+///
+/// The board's strict parse judges a wire op's frame once the shell sends it;
+/// the shell judges some first, nothing sent. Its own refusals are `isError`:
+/// an insert — a burst — whose `doc` is an account, no document address, at
+/// the burst's door (`malformed_args` naming `frame.doc`), no line held; and a
+/// `create_new_document`, a kind the session's key attests, whose `account` is
+/// no address, at the attest's composer (`attest_not_composed`, a halt). The
+/// board's refusal of a read the composer makes is data, that read's verdict:
+/// a `make_link` whose `from_` slot reads a document the board does not
+/// register is answered `image`'s refusal, never `make_link`'s.
+#[test]
+fn a_frame_the_shell_cannot_send_is_refused_before_the_board_sees_it() {
+    let fixture = Fixture::new("shell-refuses");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let refused = mcp.call_error("insert", json!({"doc": CLAIMANT_ACCOUNT, "at": {"subspace": "1", "ordinal": "1"}, "values": ["x"]}));
+    assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some("frame.doc")), "the burst's door: {refused}");
+    assert_eq!(mcp.call_json("held", json!({})), json!([]), "no line held");
+    let halted = mcp.call_error("create_new_document", json!({"account": 7}));
+    assert_eq!((halted["kind"].as_str(), halted["name"].as_str()), (Some("halt"), Some("attest_not_composed")), "the attest's composer: {halted}");
+    let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let unread = json!([{"source": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]);
+    let read = mcp.call_json("make_link", json!({"home": doc, "from_": unread, "to": {"addrs": [doc]}, "ty": {"addrs": [doc]}}));
+    assert_eq!((read["kind"].as_str(), read["op"].as_str()), (Some("refused"), Some("image")), "the composer's read refused, as data: {read}");
     assert!(mcp.finish().success());
 }
 

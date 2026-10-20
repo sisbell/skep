@@ -157,12 +157,14 @@ impl Tool {
     /// Admits the call a `tools/call` names, or refuses it.
     ///
     /// `name` must be one the dispatch answers. A wire op's arguments pass
-    /// through unread as the frame, the daemon's strict parse their validator,
-    /// save one shape: a numeric `at` beside an object `frame`, which
-    /// skep-shell's `op` row reads as its `/op-at` form and would send as
-    /// another frame. An adapter tool's every member must be one its row
-    /// takes, and every member of its `opts` one of the row's options the door
-    /// takes (`OPTS_MEMBERS`) — members the adapter and the shell read.
+    /// through unread here as the frame — the shell's checks of what it sends
+    /// or holds, then the daemon's strict parse, their validators (*every tool
+    /// is one call of the shell*) — save one shape: a numeric `at` beside an
+    /// object `frame`, which skep-shell's `op` row reads as its `/op-at` form
+    /// and would send as another frame. An adapter tool's every member must be
+    /// one its row takes, and every member of its `opts` one of the row's
+    /// options the door takes (`OPTS_MEMBERS`) — members the adapter and the
+    /// shell read.
     ///
     /// # Errors
     ///

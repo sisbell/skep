@@ -6,7 +6,8 @@
 //! the state behind one door, `move_off`, which moves it off the session that
 //! died only while the state still names that session, never off a stop, and
 //! wakes every call waiting in `settled_within`. The drain moves it by a death
-//! (`settle`), and the backend by a session it opens itself.
+//! (`settle`), and the backend by a session it opens itself (`move_off`) or by
+//! the board's refusal of one (`settle`).
 //!
 //! The state's lock and its signal are private to this module, so the backend
 //! moves the state through `move_off` alone, and every holder of the lock is a
@@ -21,8 +22,9 @@ use serde_json::Value;
 ///
 /// Every variant carries a session's reference: the live one, or the one that
 /// died and what its end left. The drain settles it by a death
-/// (`SessionWatch::settle`), and a session the adapter opens itself moves it
-/// too; nothing moves it off a stop.
+/// (`SessionWatch::settle`); the backend moves it to a session it opens
+/// itself, or settles it by the board's refusal of that open; nothing moves it
+/// off a stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SessionState {
     /// The session every call runs under.
@@ -31,10 +33,12 @@ pub(super) enum SessionState {
     ///
     /// The next call opens one.
     Lapsed(String),
-    /// The session whose death stops the adapter.
+    /// The session whose end stops the adapter.
     ///
-    /// No call opens a session; a call still in flight runs under the
-    /// reference that died, and the shell answers it.
+    /// The end is a death the shell did not re-open, or the board's refusal of
+    /// the session the adapter opened in its place. No call opens a session; a
+    /// call still in flight runs under the reference that died, and the shell
+    /// answers it.
     Stopped(String),
 }
 
@@ -116,8 +120,9 @@ fn refused_open(refused: &str, what: &str) -> Death {
 /// The session's state, and the signal each move of it raises.
 ///
 /// It is the session the calls run under, watched: the drain settles it by a
-/// death (`SessionWatch::settle`), and a session the adapter opens itself moves
-/// it (`SessionWatch::move_off`); a call that met a death waits on it
+/// death (`SessionWatch::settle`), and the backend moves it to a session it
+/// opens itself (`SessionWatch::move_off`) or settles it by the board's refusal
+/// of that open; a call that met a death waits on it
 /// (`SessionWatch::settled_within`), woken by the move.
 #[derive(Debug)]
 pub(super) struct SessionWatch {

@@ -18,11 +18,19 @@
 //!   adapter supplying each where the row requires it; and three are the
 //!   adapter's apparatus: `session_info`, `changes_since` (the shell's
 //!   `changes`, a pull), and `fetch` (the shell's streamed fetch as an image or
-//!   resource block, the type sniffed off the bytes, the size capped).
-//!   Arguments pass through unvalidated on a wire op — the daemon's strict
-//!   parse is the validator, and its rejection comes back as data — save the
-//!   one shape the shell's `op` row reads as its `/op-at` form, a numeric `at`
-//!   beside an object `frame`, which no wire op takes.
+//!   resource block, the type sniffed off the bytes, the size capped). The
+//!   adapter passes a wire op's arguments through unread, save the one shape
+//!   the shell's `op` row reads as its `/op-at` form, a numeric `at` beside an
+//!   object `frame`, which no wire op takes. Before the board sees a frame,
+//!   the shell refuses one it cannot send or hold whole, nothing sent, each
+//!   refusal `isError`: a burst whose `doc` is no document address in its one
+//!   spelling (`malformed_args` naming `frame.doc`) or whose frame would pass
+//!   the board's cap (`frame_too_large`), and a write of the ten kinds the
+//!   session's key attests whose attest it cannot compose from the frame
+//!   (`attest_not_composed`, a halt). Where the board refuses a read the shell
+//!   makes to compose that attest, the call answers the read's verdict, as
+//!   data, and the write is not sent. Past the shell's checks, a frame goes to
+//!   the board, whose strict parse is its validator, its rejection data.
 //! * **A refusal as a result.** The board's verdict is data: a `refused`
 //!   refusal is a normal tool result, the verdict's body verbatim under `body`
 //!   with the refusal's `name`, `status`, `code`, `detail` and `op` beside it,

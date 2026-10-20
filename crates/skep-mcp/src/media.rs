@@ -73,7 +73,8 @@ pub enum FetchAnswer {
     DeclaredPastTheCap { length: u64 },
     /// The body ran past [`MAX_FETCH_BYTES`], and its read was dropped.
     ///
-    /// No length was declared, or one the body overran: `read` bytes came,
+    /// No length was declared — or one was, and the body broke
+    /// [`read_whole`]'s precondition by running past it: `read` bytes came,
     /// one past the cap, and how long the file is, nothing here knows.
     RanPastTheCap { read: u64 },
     /// The stream ended short, a read failed, or its deadline passed.
@@ -93,6 +94,13 @@ pub enum FetchAnswer {
 /// before `FETCH_DEADLINE` has passed. A file past the cap and a stream cut
 /// short are answers, not errors: the shell's refusal of the fetch came
 /// earlier, as [`Backend::fetch`](crate::shell::Backend::fetch)'s `Err`.
+///
+/// **Precondition.** Where `headers` declares a length, `body` ends at it:
+/// skep-client's streamed form cuts the body there (`StreamedResponse`'s body,
+/// the one owner of that cut, which reads the length as this read does), and
+/// this read does not cut it again — a body that ran past its declared length
+/// within the cap would be answered whole as it came. A body short of its
+/// length is this read's to catch, and it does.
 pub fn read_whole(headers: &Headers, body: impl Read) -> FetchAnswer {
     read_within(headers, body, FETCH_DEADLINE)
 }

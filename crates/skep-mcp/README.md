@@ -33,7 +33,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   startup.
 - **A refusal as a result.** The board's verdict on a frame comes back as
   data, `isError: false`; `isError` means the shell could not get the
-  board's verdict, or `fetch` declined a file.
+  board's verdict — among the causes, a board not answering and a frame the
+  shell refused itself, nothing sent — or `fetch` declined a file.
 - **The session's life.** A board restart is met by the shell's silent
   re-open, and the agent sees nothing. A death the shell does not re-open —
   the key retired, the prefix blocked, the account seeded, a re-open the

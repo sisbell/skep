@@ -221,7 +221,8 @@ pub struct Backend {
     /// The session the calls run under, watched.
     ///
     /// The drain settles it by a death's reason, and the call that opens a
-    /// session itself moves it too.
+    /// session itself moves it to that session, or settles it by the board's
+    /// refusal of the open (`open_afresh`).
     session: Arc<SessionWatch>,
     /// The process's stop, which every line that stops the adapter goes to.
     on_stop: OnStop,

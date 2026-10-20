@@ -24,8 +24,10 @@ use crate::media::{base64, read_whole, sniff_image, FetchAnswer, MAX_FETCH_BYTES
 use crate::shell::Backend;
 use crate::tools::{wire_frame, Catalog, Tool};
 
-/// When the client's `initialize` names no protocolVersion (it always
-/// should), answer the newest revision this server was written against.
+/// The revision `initialize` answers where the client names none.
+///
+/// It is the newest revision this server was written against; a client that
+/// names one, as it always should, is answered that one (`Server::respond`).
 const FALLBACK_PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// The JSON-RPC 2.0 error codes this server answers (the spec's §5.1),
@@ -137,17 +139,21 @@ impl Server {
         code
     }
 
-    /// One inbound line, as raw bytes → at most one outbound message,
-    /// classified by two members alone: `method` (a string) and `id` (any
-    /// JSON value, echoed as given; `jsonrpc` is not read). A request — a
-    /// method and an id — gets its response under that id. `None` for a
-    /// blank line, a notification (a method, no id: all consumed silently),
-    /// a stray response (an id, no method, a `result` or an `error`) or an
-    /// id-less non-request: there is nothing to answer under. A line that
-    /// does not parse as JSON — bytes that are not UTF-8 included — is the
-    /// -32700 parse error and JSON that is no object the -32600, both id
-    /// null; an id with no method, no `result` and no `error` is the -32600
-    /// under that id.
+    /// Returns the one message, if any, that answers one inbound line.
+    ///
+    /// The line, as raw bytes, is classified by two members alone: `method`
+    /// (a string) and `id` (any JSON value, echoed as given; `jsonrpc` is not
+    /// read). A request — a method and an id — gets its response under that
+    /// id. `None` for a blank line, a notification (a method, no id: all
+    /// consumed silently), a stray response (an id, no method, a `result` or
+    /// an `error`) or an id-less non-request: there is nothing to answer
+    /// under. A line is blank where it is UTF-8 that is empty or whitespace
+    /// alone as `str::trim` reads it — Unicode's White_Space, wider than
+    /// JSON's four whitespace characters, so a line of U+3000 alone is blank,
+    /// never the -32700. A line that does not parse as JSON — bytes that are
+    /// not UTF-8 included — is the -32700 parse error and JSON that is no
+    /// object the -32600, both id null; an id with no method, no `result` and
+    /// no `error` is the -32600 under that id.
     fn handle_line(&self, line: &[u8]) -> Option<Value> {
         if std::str::from_utf8(line).is_ok_and(|s| s.trim().is_empty()) {
             return None;
@@ -182,7 +188,16 @@ impl Server {
         }
     }
 
-    /// One request → its JSON-RPC response.
+    /// Returns one request's JSON-RPC response.
+    ///
+    /// `initialize` answers the `protocolVersion` the client named, as it
+    /// named it — an echo of any revision, where MCP 2025-06-18's version
+    /// negotiation has a server answer a revision it supports, and this
+    /// adapter names no such set — or `FALLBACK_PROTOCOL_VERSION` where it
+    /// named none, beside the server's name and version, the catalog's
+    /// instructions and the tools capability. `ping` answers `{}`,
+    /// `tools/list` the catalog's tools, `tools/call` its tool result or
+    /// -32602 (`Server::call`), and any other method -32601.
     fn respond(&self, method: &str, params: Option<Value>, id: Value) -> Value {
         match method {
             "initialize" => {

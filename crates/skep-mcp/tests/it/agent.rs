@@ -1,6 +1,6 @@
 //! The fence: the adapter as an agent's door, each case keyed to its rulings.
 //!
-//! A1 signed only — the session writes, attested, and no key stops startup;
+//! A1 signed only — its writes attested or testified, and no key stops startup;
 //! A1b a principal under the claimant's account signs by reference with the
 //! key enrolled in the set above; A2 the startup line names the refusing
 //! seam and no ceremony tool is listed; A3 the tools — every wire op, the
@@ -52,18 +52,19 @@ fn entry_at(mcp: &mut Mcp, since: u64, at: u64) -> Value {
     }
 }
 
-/// A1 SIGNED ONLY: the one session is signed and writes — `session_info`
-/// says `writes` true and names the claimant's key — and a write lands
-/// ATTESTED: a publish-class mint's `/changes` row carries `attest`, the
-/// entry's signature, and a draft write's row the key's fingerprint as its
-/// testimony (wire.md §The change feed: `key` on an unsigned entry, `attest`
-/// on a signed one; the mutant with a bare fallback lands them `key:
-/// "bare"` and `signed_session_required`). With the key removed — a fresh,
-/// keyless store — startup STOPS with the plain face (`no_key`) and serves
-/// nothing: an `initialize` on stdin is answered by the end of stdout,
-/// exit 1.
+/// A1: the signed session writes, and no key stops startup.
+///
+/// `session_info` says `writes` true and names the claimant's key, and each
+/// write lands under it: a publish-class mint's `/changes` row carries
+/// `attest`, the entry's own signature, and a draft write's row the key's
+/// fingerprint, the board's testimony (wire.md §The change feed: `key` on an
+/// unsigned entry, `attest` on a signed one; the mutant with a bare fallback
+/// lands them `key: "bare"` and `signed_session_required`). With the key
+/// removed — a fresh, keyless store — startup stops with the plain face
+/// (`no_key`) and serves nothing: an `initialize` on stdin is answered by
+/// the end of stdout, exit 1.
 #[test]
-fn a1_the_session_is_signed_writes_attested_and_no_key_stops_startup() {
+fn a1_the_signed_session_writes_and_no_key_stops_startup() {
     let fixture = Fixture::new("a1");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
@@ -94,7 +95,7 @@ fn a1_the_session_is_signed_writes_attested_and_no_key_stops_startup() {
     assert!(stopped.stdout_closed(), "nothing is served");
     let status = stopped.wait_exit(Duration::from_secs(30)).expect("the adapter stopped");
     assert_eq!(status.code(), Some(1), "{status:?}");
-    let log = stopped.talk_holding(&["stopped before serving: no key to sign with: no_key"], Duration::from_secs(5));
+    let log = stopped.log_holding(&["stopped before serving: no key to sign with: no_key"], Duration::from_secs(5));
     assert!(log.contains("keyless for this claimed board"), "the face in plain words:\n{log}");
     assert!(!log.contains("serving "), "the serving line never came:\n{log}");
 }
@@ -146,7 +147,7 @@ fn a2_the_startup_line_names_the_refusing_seam_and_no_ceremony_tool_is_listed() 
     let fixture = Fixture::new("a2");
     let mut mcp = Launch::over(&fixture, 1).logged().spawn();
     mcp.initialize();
-    let log = mcp.talk_holding(&["person seam: refuse"], Duration::from_secs(10));
+    let log = mcp.log_holding(&["person seam: refuse"], Duration::from_secs(10));
     assert!(log.contains("person seam: refuse — no secret or consent moment is answered here"), "{log}");
     assert!(!log.contains("person seam: auto") && !log.contains("person seam: script"), "{log}");
     let names = mcp.tool_names();
@@ -224,28 +225,28 @@ fn a3_fetch_answers_an_image_block_a_resource_blob_and_refuses_past_the_cap() {
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     let png = seeded_bytes(1_000, 1, b"\x89PNG\r\n\x1a\n");
-    let picture = fixture.seed_picture(&png);
-    let (is_error, block) = mcp.call_block("fetch", json!({"i": picture}));
+    let png_cell = fixture.seed_picture(&png);
+    let (is_error, block) = mcp.call_block("fetch", json!({"i": png_cell}));
     assert!(!is_error, "{block}");
     assert_eq!((block["type"].as_str(), block["mimeType"].as_str()), (Some("image"), Some("image/png")), "{block}");
     assert_eq!(base64_decode(block["data"].as_str().expect("base64")), png, "the bytes intact");
     let plain = seeded_bytes(2_000, 2, b"SKEP");
-    let blob = fixture.seed_picture(&plain);
-    let (is_error, block) = mcp.call_block("fetch", json!({"i": blob}));
+    let plain_cell = fixture.seed_picture(&plain);
+    let (is_error, block) = mcp.call_block("fetch", json!({"i": plain_cell}));
     assert!(!is_error, "{block}");
     assert_eq!(block["type"], "resource", "{block}");
     assert_eq!(block["resource"]["mimeType"], "application/octet-stream", "{block}");
-    assert_eq!(block["resource"]["uri"], format!("{}/blob?i={blob}", fixture.origin()), "{block}");
+    assert_eq!(block["resource"]["uri"], format!("{}/blob?i={plain_cell}", fixture.origin()), "{block}");
     assert_eq!(base64_decode(block["resource"]["blob"].as_str().expect("base64")), plain, "the bytes intact");
     // The cap, from below and from above.
     let at_cap = seeded_bytes(MAX_FETCH_BYTES, 3, b"SKEP");
-    let whole = fixture.seed_picture(&at_cap);
-    let (is_error, block) = mcp.call_block("fetch", json!({"i": whole}));
+    let at_cap_cell = fixture.seed_picture(&at_cap);
+    let (is_error, block) = mcp.call_block("fetch", json!({"i": at_cap_cell}));
     assert!(!is_error, "a file at the cap answers: {:.200}", block.to_string());
     assert_eq!(base64_decode(block["resource"]["blob"].as_str().expect("base64")), at_cap, "the bytes intact at the cap");
     let past = seeded_bytes(MAX_FETCH_BYTES + 1, 4, b"SKEP");
-    let too_large = fixture.seed_picture(&past);
-    let (is_error, text) = mcp.call("fetch", json!({"i": too_large}));
+    let past_cell = fixture.seed_picture(&past);
+    let (is_error, text) = mcp.call("fetch", json!({"i": past_cell}));
     assert!(is_error, "{text}");
     assert!(text.contains(&format!("{} bytes, past this adapter's cap of {MAX_FETCH_BYTES} bytes (8 MiB)", MAX_FETCH_BYTES + 1)) && text.contains("no byte of it was read"), "the cap named: {text}");
     // A value that is no cell: the board's verdict, as data.
@@ -268,9 +269,9 @@ fn a3_a_fetch_cut_short_is_an_error_in_plain_words_and_fetched_again_whole() {
     // Sixteen of the board's 64 KiB chunks, so the stream stops after one.
     let bytes = seeded_bytes(1024 * 1024, 5, b"SKEP");
     let i = fixture.seed_picture(&bytes);
-    let held = FetchStreamHeld::arm(&fixture);
+    let hold = FetchStreamHeld::arm(&fixture);
     let (is_error, text) = mcp.call("fetch", json!({"i": i}));
-    drop(held);
+    drop(hold);
     assert!(is_error, "a cut stream is isError: {text}");
     assert!(text.starts_with(&format!("the fetch of {i} ended before the file was whole: ")) && text.ends_with("fetch it again"), "{text}");
     assert!(text.contains(&format!(" of {} bytes came", bytes.len())) && !text.contains(&format!("{0} of {0}", bytes.len())), "short of the declared length: {text}");
@@ -382,9 +383,9 @@ fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     let second = fixture.dir.path().join("second");
     let k2 = fixture.enroll_second_key(&second, "second");
     fixture.retire_from(&second, &fixture.fingerprint);
-    let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.talk()));
-    assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.talk());
-    let log = mcp.talk_holding(&["stopped: the key ", "stopping: the session already ended at the board"], Duration::from_secs(5));
+    let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.log()));
+    assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.log());
+    let log = mcp.log_holding(&["stopped: the key ", "stopping: the session already ended at the board"], Duration::from_secs(5));
     assert!(log.contains(&format!("stopped: the key {} was retired at the board by the key {k2} (second): your person stops you by retiring your key", fixture.fingerprint)), "the plain line:\n{log}");
     assert!(mcp.stdout_closed(), "nothing is served after the stop");
     let out = Launch::over(&fixture, 1).output();
@@ -405,9 +406,9 @@ fn a6_a_reopen_the_board_refuses_stops_naming_the_refusal() {
     mcp.initialize();
     assert_eq!(mcp.call_json("session_info", json!({}))["writes"], true);
     fixture.restart_signing_elsewhere();
-    let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.talk()));
-    assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.talk());
-    let log = mcp.talk_holding(&["refused this key at the re-open (origin_state)"], Duration::from_secs(5));
+    let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.log()));
+    assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.log());
+    let log = mcp.log_holding(&["refused this key at the re-open (origin_state)"], Duration::from_secs(5));
     assert!(log.contains("stopped: the board restarted and refused this key at the re-open (origin_state)"), "{log}");
 }
 
@@ -435,13 +436,13 @@ fn a6_a_board_that_is_gone_answers_unreachable_and_the_adapter_stays_up() {
     assert_eq!(mcp.request("ping", json!({}))["result"], json!({}), "the adapter keeps answering");
     fixture.restart();
     let meta = mcp.call_json("doc_metadata", json!({"doc": draft}));
-    assert_eq!(meta["resp"], "doc_metadata", "the board back, the read answers: {meta}\n{}", mcp.talk());
+    assert_eq!(meta["resp"], "doc_metadata", "the board back, the read answers: {meta}\n{}", mcp.log());
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         if mcp.call_json("held", json!({})) == json!([]) {
             break;
         }
-        assert!(Instant::now() < deadline, "the held burst was never resent:\n{}", mcp.talk());
+        assert!(Instant::now() < deadline, "the held burst was never resent:\n{}", mcp.log());
         std::thread::sleep(Duration::from_millis(200));
     }
     let read = mcp.call_json("retrieve_v", json!({"specs": [{"doc": draft, "span": {"start": "1.1", "width": "0.4"}}]}));
@@ -502,11 +503,11 @@ fn a7_a_write_whose_answer_is_lost_is_unreachable_and_lands_once() {
     mcp.initialize();
     let before = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
     let pool = fixture.free_write_permits();
-    let held = WriteGuardHeld::arm(&fixture);
+    let hold = WriteGuardHeld::arm(&fixture);
     let lost = mcp.call_error("create_new_document", json!({"account": CLAIMANT_ACCOUNT}));
     assert_eq!(lost["kind"], "unreachable", "a lost answer is faced unreachable: {lost}");
     assert_eq!(fixture.free_write_permits(), pool - 1, "exactly one attempt reached the board, parked there");
-    drop(held);
+    drop(hold);
     let deadline = Instant::now() + Duration::from_secs(30);
     while fixture.free_write_permits() < pool {
         assert!(Instant::now() < deadline, "the released write never finished");

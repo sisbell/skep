@@ -327,20 +327,20 @@ enum SeamsHeld {
 /// joins a parked worker.
 #[must_use = "every plain write in the process parks until the drop"]
 pub struct WriteGuardHeld<'f> {
-    _board: &'f Fixture,
+    _fixture: &'f Fixture,
 }
 
 impl<'f> WriteGuardHeld<'f> {
-    /// Returns the hold, armed on `board`.
+    /// Returns the hold, armed on `fixture`.
     ///
     /// # Panics
     ///
-    /// Where `board` does not run alone ([`Fixture::alone`]): the hold parks
+    /// Where `fixture` does not run alone ([`Fixture::alone`]): the hold parks
     /// every board's writes in the process.
-    pub fn arm(board: &'f Fixture) -> WriteGuardHeld<'f> {
-        assert!(matches!(board.seams, SeamsHeld::Alone { .. }), "the write guard is held on a board run alone");
+    pub fn arm(fixture: &'f Fixture) -> WriteGuardHeld<'f> {
+        assert!(matches!(fixture.seams, SeamsHeld::Alone { .. }), "the write guard is held on a board run alone");
         Daemon::hold_the_write_guard();
-        WriteGuardHeld { _board: board }
+        WriteGuardHeld { _fixture: fixture }
     }
 }
 
@@ -356,20 +356,20 @@ impl Drop for WriteGuardHeld<'_> {
 /// and borrows the board it is armed on as the write guard's hold does.
 #[must_use = "every fetch stream in the process parks until the drop"]
 pub struct FetchStreamHeld<'f> {
-    _board: &'f Fixture,
+    _fixture: &'f Fixture,
 }
 
 impl<'f> FetchStreamHeld<'f> {
-    /// Returns the hold, armed on `board`.
+    /// Returns the hold, armed on `fixture`.
     ///
     /// # Panics
     ///
-    /// Where `board` does not run alone ([`Fixture::alone`]): the hold parks
+    /// Where `fixture` does not run alone ([`Fixture::alone`]): the hold parks
     /// every board's fetch streams in the process.
-    pub fn arm(board: &'f Fixture) -> FetchStreamHeld<'f> {
-        assert!(matches!(board.seams, SeamsHeld::Alone { .. }), "the fetch stream is held on a board run alone");
+    pub fn arm(fixture: &'f Fixture) -> FetchStreamHeld<'f> {
+        assert!(matches!(fixture.seams, SeamsHeld::Alone { .. }), "the fetch stream is held on a board run alone");
         Daemon::hold_the_fetch_stream();
-        FetchStreamHeld { _board: board }
+        FetchStreamHeld { _fixture: fixture }
     }
 }
 
@@ -540,7 +540,7 @@ pub const VARIABLES: [&str; 5] = ["SKEP_BOARD", "SKEP_KEYSTORE", "SKEP_PRINCIPAL
 /// names.
 pub struct Launch {
     cmd: Command,
-    log: Option<Stdio>,
+    stderr: Option<Stdio>,
 }
 
 impl Launch {
@@ -550,7 +550,7 @@ impl Launch {
         for var in VARIABLES {
             cmd.env_remove(var);
         }
-        Launch { cmd, log: None }
+        Launch { cmd, stderr: None }
     }
 
     /// A launch over the fixture's board and store, acting as `principal`,
@@ -575,15 +575,20 @@ impl Launch {
         self
     }
 
-    /// The adapter's stderr as the test names it; inherited by default,
-    /// read by [`Mcp::talk`] under [`Launch::logged`].
-    pub fn stderr(mut self, log: Stdio) -> Launch {
-        self.log = Some(log);
+    /// Returns the launch with the adapter's stderr sent to `stderr`.
+    ///
+    /// Where a test names none, a spawned adapter inherits the test's own
+    /// stderr and `output` pipes it; [`Launch::logged`] pipes it for
+    /// [`Mcp::log`].
+    pub fn stderr(mut self, stderr: Stdio) -> Launch {
+        self.stderr = Some(stderr);
         self
     }
 
-    /// The adapter's log read on a thread, for [`Mcp::talk`] and
-    /// [`Mcp::finish_logged`].
+    /// Returns the launch with the adapter's log piped.
+    ///
+    /// A spawned adapter's log is read on a thread: [`Mcp::log`] answers it so
+    /// far, and [`Mcp::finish_logged`] to its end.
     pub fn logged(self) -> Launch {
         self.stderr(Stdio::piped())
     }
@@ -591,8 +596,8 @@ impl Launch {
     /// The adapter spawned, its stdin and stdout piped, its stderr as the
     /// launch named it: the child, for a driver of a suite's own.
     pub fn child(mut self) -> Child {
-        let log = self.log.take().unwrap_or_else(Stdio::inherit);
-        self.cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log).spawn().expect("spawn skep-mcp")
+        let stderr = self.stderr.take().unwrap_or_else(Stdio::inherit);
+        self.cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(stderr).spawn().expect("spawn skep-mcp")
     }
 
     /// The adapter spawned, its stdin and stdout piped.
@@ -600,9 +605,9 @@ impl Launch {
         let mut child = self.child();
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
-        let talk = Arc::new(Mutex::new(String::new()));
+        let log = Arc::new(Mutex::new(String::new()));
         if let Some(stderr) = child.stderr.take() {
-            let kept = Arc::clone(&talk);
+            let kept = Arc::clone(&log);
             std::thread::spawn(move || {
                 let mut reader = BufReader::new(stderr);
                 let mut line = String::new();
@@ -610,18 +615,18 @@ impl Launch {
                     if n == 0 {
                         break;
                     }
-                    kept.lock().expect("the talk's lock").push_str(&line);
+                    kept.lock().expect("the log's lock").push_str(&line);
                     line.clear();
                 }
             });
         }
-        Mcp { child, stdin: Some(stdin), stdout, talk, next_id: 0 }
+        Mcp { child, stdin: Some(stdin), stdout, log, next_id: 0 }
     }
 
     /// The adapter run to completion with stdin empty: its output.
     pub fn output(mut self) -> Output {
-        let log = self.log.take().unwrap_or_else(Stdio::piped);
-        self.cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(log).output().expect("run skep-mcp")
+        let stderr = self.stderr.take().unwrap_or_else(Stdio::piped);
+        self.cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(stderr).output().expect("run skep-mcp")
     }
 
     /// The adapter run to completion with stdin empty: its exit code and its
@@ -644,7 +649,7 @@ pub struct Mcp {
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     /// The adapter's log so far, where the launch was `logged`.
-    talk: Arc<Mutex<String>>,
+    log: Arc<Mutex<String>>,
     next_id: u64,
 }
 
@@ -662,7 +667,7 @@ impl Mcp {
         loop {
             line.clear();
             let n = self.stdout.read_line(&mut line).expect("read from adapter");
-            assert!(n > 0, "adapter closed stdout unexpectedly:\n{}", self.talk());
+            assert!(n > 0, "adapter closed stdout unexpectedly:\n{}", self.log());
             if !line.trim().is_empty() {
                 return serde_json::from_str(line.trim()).unwrap_or_else(|e| panic!("adapter wrote a non-JSON line ({e}): {:.300?}", line));
             }
@@ -724,7 +729,7 @@ impl Mcp {
     /// answer.
     pub fn call_json(&mut self, tool: &str, args: Value) -> Value {
         let (is_error, text) = self.call(tool, args);
-        assert!(!is_error, "{tool}: unexpected isError: {text}\n{}", self.talk());
+        assert!(!is_error, "{tool}: unexpected isError: {text}\n{}", self.log());
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("tool result's text is not JSON ({e}): {text}"))
     }
 
@@ -739,20 +744,20 @@ impl Mcp {
     /// A write through the adapter, acknowledged: its answer.
     pub fn acked(&mut self, tool: &str, args: Value) -> Value {
         let v = self.call_json(tool, args.clone());
-        assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "{tool} {args}: {v}\n{}", self.talk());
+        assert!(v["resp"].as_str().is_some_and(|r| r.starts_with("ack")), "{tool} {args}: {v}\n{}", self.log());
         v
     }
 
     /// The adapter's log so far (a `logged` launch).
-    pub fn talk(&self) -> String {
-        self.talk.lock().expect("the talk's lock").clone()
+    pub fn log(&self) -> String {
+        self.log.lock().expect("the log's lock").clone()
     }
 
     /// The log once it holds every one of `needles`, within `within`.
-    pub fn talk_holding(&self, needles: &[&str], within: Duration) -> String {
+    pub fn log_holding(&self, needles: &[&str], within: Duration) -> String {
         let deadline = Instant::now() + within;
         loop {
-            let said = self.talk();
+            let said = self.log();
             if needles.iter().all(|n| said.contains(n)) {
                 return said;
             }
@@ -788,10 +793,10 @@ impl Mcp {
         let status = self.child.wait().expect("wait for adapter");
         // The log's reader trails the exit by a line or two.
         let deadline = Instant::now() + Duration::from_secs(5);
-        let mut last = self.talk();
+        let mut last = self.log();
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
-            let now = self.talk();
+            let now = self.log();
             if now == last {
                 break;
             }

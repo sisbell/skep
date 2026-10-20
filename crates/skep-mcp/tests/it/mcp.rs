@@ -216,7 +216,7 @@ fn daemon_restart_reopens_the_session_and_reissues() {
     fixture.restart();
 
     let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "6"}, "values": [", wire"]}));
-    assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}\n{}", mcp.talk());
+    assert_eq!(v["resp"], "ack_addr", "the write after restart must succeed: {v}\n{}", mcp.log());
 
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.11"}}]}));
     assert_eq!(v["items"], json!([{"content": "hello, wire"}]));

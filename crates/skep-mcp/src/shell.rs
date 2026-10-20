@@ -335,7 +335,7 @@ impl Backend {
     /// stop on every other arm, its plain line handed to the stop. Every other
     /// event is read and dropped.
     fn drain(&self, events: Receiver<Event>) {
-        let (session, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), self.on_stop.clone());
+        let (watch, talk, on_stop) = (Arc::clone(&self.session), Arc::clone(&self.talk), self.on_stop.clone());
         thread::spawn(move || {
             for event in events {
                 if event.name != EventName::SessionDied {
@@ -350,7 +350,7 @@ impl Backend {
                     }
                     Death::Stop(_) => None,
                 };
-                if session.settle(died, death, &|line| on_stop.stop(line)) {
+                if watch.settle(died, death, &|line| on_stop.stop(line)) {
                     if let Some(line) = said {
                         talk(line);
                     }

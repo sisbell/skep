@@ -406,20 +406,20 @@ mod tests {
             (v["isError"].as_bool().expect("isError"), serde_json::from_str(text).expect("JSON text"))
         };
         let answer = json!({"resp": "ack_addr", "addr": "1.0.1.0.2", "at": 7});
-        let (is_error, text) = read(&tool_result(Ok(answer.clone())));
+        let (is_error, value) = read(&tool_result(Ok(answer.clone())));
         assert!(!is_error);
-        assert_eq!(text, answer, "the shell's answer, whole");
+        assert_eq!(value, answer, "the shell's answer, whole");
         let verdict = json!({"code": "doc_not_registered", "disposition": "reorder", "op": "retrieve_v", "resp": "rejected"});
         let detail = Some("the frame names no registered document".to_string());
         let refused = Refusal::Board(Refused { status: 200, code: "doc_not_registered".into(), detail, op: Some("retrieve_v".into()), body: verdict.clone() });
         let expected = refused.to_value();
-        let (is_error, text) = read(&tool_result(Err(refused)));
+        let (is_error, value) = read(&tool_result(Err(refused)));
         assert!(!is_error, "the board's verdict is data");
-        assert_eq!((text["kind"].as_str(), text["name"].as_str(), text["status"].as_u64()), (Some("refused"), Some("doc_not_registered"), Some(200)));
-        assert_eq!(text["body"], verdict, "the verdict's body verbatim");
-        assert_eq!(text, expected, "the board's verdict rides as the refusal's whole value");
+        assert_eq!((value["kind"].as_str(), value["name"].as_str(), value["status"].as_u64()), (Some("refused"), Some("doc_not_registered"), Some(200)));
+        assert_eq!(value["body"], verdict, "the verdict's body verbatim");
+        assert_eq!(value, expected, "the board's verdict rides as the refusal's whole value");
         let declared: BTreeSet<&str> = skep_shell::shapes::shape("RefusedByBoard").expect("skep-shell declares the board's refusal").fields.iter().map(|field| field.name).collect();
-        let members: BTreeSet<&str> = text.as_object().expect("the refusal is an object").keys().map(String::as_str).collect();
+        let members: BTreeSet<&str> = value.as_object().expect("the refusal is an object").keys().map(String::as_str).collect();
         assert_eq!(members, declared, "every member skep-shell declares, and no other");
         let face = Face { state: "s".into(), cause: "c".into(), act: "a".into() };
         for other in [
@@ -431,9 +431,9 @@ mod tests {
             Refusal::malformed("since"),
         ] {
             let expected = other.to_value();
-            let (is_error, text) = read(&tool_result(Err(other)));
+            let (is_error, value) = read(&tool_result(Err(other)));
             assert!(is_error, "{expected}");
-            assert_eq!(text, expected, "the refusal's value is the text");
+            assert_eq!(value, expected, "the refusal's value is the text");
         }
     }
 

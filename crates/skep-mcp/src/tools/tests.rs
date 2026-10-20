@@ -364,7 +364,7 @@ fn each_adapter_tool_takes_its_shell_rows_members_bar_the_session_and_board() {
         }
         assert_eq!(members.iter().copied().collect::<BTreeSet<&str>>(), declared, "{name}: the door takes the {row} row's members");
         let entry = catalog.tools.iter().find(|t| t["name"] == *name).expect("every adapter tool is catalogued");
-        let requires: BTreeSet<&str> = entry["inputSchema"]["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-        assert_eq!(requires, required, "{name}: the schema requires what the {row} row requires");
+        let schema_required: BTreeSet<&str> = entry["inputSchema"]["required"].as_array().map(|r| r.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        assert_eq!(schema_required, required, "{name}: the schema requires what the {row} row requires");
     }
 }

@@ -257,7 +257,11 @@ impl Backend {
         let events = shell.subscribe();
         let board = shell.board_references().into_iter().next().expect("`Shell::open` issues one reference per board, and these options name one");
         let health = shell.call("health", &json!({"board": board})).map_err(|r| stopped_before_serving("the board's health was not read", &r))?;
-        let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) { "; writes HALTED: every write is refused `poisoned` until the board restarts" } else { "" };
+        let halted = if health["health"]["writes"]["halted"].as_bool() == Some(true) {
+            "; writes HALTED until the board restarts: a burst is held for the shell's resend, and any other write refused `poisoned`"
+        } else {
+            ""
+        };
         talk(&format!(
             "board {origin} (reference {board}): mode {} (claimant {}, local_trust {}){halted}",
             health["mode"].as_str().unwrap_or("?"),
@@ -528,9 +532,20 @@ impl Backend {
         }))
     }
 
-    /// THE CLEAN STOP: the shell's — every session closed at the board,
-    /// every index saved, the feed threads joined.
+    /// Runs the clean stop, said first as the session's state has it.
+    ///
+    /// The stop is the shell's: every session in its table closed at the
+    /// board, every index saved, the feed threads joined. A session the calls
+    /// run under is said closed at the board; where none stands — a death or a
+    /// refused open stopped the adapter, or the board did not answer — the
+    /// session already ended there, its end having left the shell's table,
+    /// and the line says so.
     pub fn shutdown(&self) {
+        let said = match self.session.current() {
+            SessionState::Open(_) => "stopping: closing the session at the board, saving the index",
+            SessionState::Lapsed(_) | SessionState::Stopped(_) => "stopping: the session already ended at the board; saving the index",
+        };
+        self.say(said);
         self.shell.shutdown();
     }
 }

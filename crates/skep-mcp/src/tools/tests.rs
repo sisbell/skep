@@ -69,6 +69,7 @@ fn every_fault_that_would_load_refuses_by_name() {
         (refusal(|v| tool(v, "insert")["description"] = json!("")), "'description'"),
         (refusal(|v| tool(v, "insert")["inputSchema"] = json!("object")), "'inputSchema'"),
         (refusal(|v| tool(v, "insert")["inputSchema"] = json!({"properties": {}})), "'inputSchema'"),
+        (refusal(|v| tool(v, "insert")["inputSchema"]["properties"]["from_"] = json!({"type": "string"})), "'from_'"),
         (
             refusal(|v| {
                 let twin = tool(v, "insert").clone();
@@ -82,23 +83,32 @@ fn every_fault_that_would_load_refuses_by_name() {
     }
 }
 
-/// One fault at a time, the first found speaking: a catalog with an
-/// unknown root field, a malformed entry and a missing op is refused for
-/// the root field; without it, for the entry; without both, for the op.
+/// One fault at a time, the first found speaking.
+///
+/// A catalog with an unknown root field, a malformed entry, a missing op and
+/// a `from_` on an op the dispatch does not rename is refused for the root
+/// field; without it, for the entry; without both, for the op; and with the
+/// op back, for the `from_`.
 #[test]
 fn the_first_fault_found_speaks() {
     let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+    let insert = v["tools"].as_array().expect("tools").iter().find(|t| t["name"] == "insert").cloned().expect("the insert entry");
     v["version"] = json!(1);
     v["tools"][0]["title"] = json!("Title");
     v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
-    let err = Catalog::load(&v.to_string()).expect_err("three faults");
+    let delete = v["tools"].as_array_mut().expect("tools").iter_mut().find(|t| t["name"] == "delete").expect("the delete entry");
+    delete["inputSchema"]["properties"]["from_"] = json!({"type": "string"});
+    let err = Catalog::load(&v.to_string()).expect_err("four faults");
     assert!(err.contains("'version'"), "the root speaks first: {err}");
     v.as_object_mut().expect("root").remove("version");
-    let err = Catalog::load(&v.to_string()).expect_err("two faults");
+    let err = Catalog::load(&v.to_string()).expect_err("three faults");
     assert!(err.starts_with("tools[0]: ") && err.contains("'title'"), "then the entry: {err}");
     v["tools"][0].as_object_mut().expect("entry").remove("title");
-    let err = Catalog::load(&v.to_string()).expect_err("one fault");
+    let err = Catalog::load(&v.to_string()).expect_err("two faults");
     assert!(err.contains("'insert'"), "then the op: {err}");
+    v["tools"].as_array_mut().expect("tools").push(insert);
+    let err = Catalog::load(&v.to_string()).expect_err("one fault");
+    assert!(err.contains("'delete'") && err.contains("'from_'"), "then the from_: {err}");
 }
 
 /// The commons sentence template is catalog data like everything else:
@@ -229,6 +239,27 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
             None => assert!(opts.is_null(), "{name}: no opts schema where the row takes none"),
         }
     }
+}
+
+/// The embedded catalog states the adapter's own facts as the code holds them.
+///
+/// Its schemas spell `from_` on exactly the ops `wire_frame` maps back, and
+/// its naming note names each of them; its `fetch` card and fetch paragraph
+/// name the cap `media` enforces: a fact changed in one place alone tells
+/// every agent what the adapter then does otherwise.
+#[test]
+fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
+    let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let spelled: BTreeSet<&str> = catalog.tools.iter().filter(|t| t["inputSchema"]["properties"].get("from_").is_some()).filter_map(|t| t["name"].as_str()).collect();
+    assert_eq!(spelled, RENAMES_FROM.iter().copied().collect::<BTreeSet<&str>>(), "the ops whose schema spells from_");
+    let note = catalog.instructions().lines().find(|line| line.starts_with("One naming note:")).expect("the instructions' naming note");
+    for op in RENAMES_FROM {
+        assert!(note.contains(op), "the naming note names {op}: {note}");
+    }
+    let (cap, mib) = (crate::media::MAX_FETCH_BYTES, crate::media::MAX_FETCH_BYTES / (1024 * 1024));
+    let card = catalog.tools.iter().find(|t| t["name"] == "fetch").and_then(|t| t["description"].as_str()).expect("the fetch card");
+    assert!(card.contains(&format!("cap of {mib} MiB ({cap} bytes)")), "the fetch card names the cap: {card}");
+    assert!(catalog.instructions().contains(&format!("cap of {mib} MiB")), "the fetch paragraph names the cap");
 }
 
 /// The options the door admits are the ones skep-shell declares.

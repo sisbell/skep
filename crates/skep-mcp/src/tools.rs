@@ -225,14 +225,17 @@ fn listed(members: &[&str]) -> String {
     members.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(", ")
 }
 
-/// The ops whose wire `from` argument rides as `from_` in the tool schema
-/// (harnesses that turn schemas into function parameters cannot always take
-/// `from`); `wire_frame` renames it back — unless the arguments already
-/// carry the wire's own `from`, when both ride and the daemon's
-/// unknown-field refusal answers: the collision is the strict parse's to
-/// refuse, never the relay's to resolve. Only top-level argument names are
-/// affected — a `from` nested inside an object value is wire shape,
-/// untouched.
+/// The ops whose wire `from` argument rides as `from_` in the tool schema.
+///
+/// Harnesses that turn schemas into function parameters cannot always take
+/// `from`, so the schema spells it `from_` and `wire_frame` renames it back —
+/// unless the arguments already carry the wire's own `from`, when both ride
+/// and the daemon's unknown-field refusal answers: the collision is the
+/// strict parse's to refuse, never the relay's to resolve. Only top-level
+/// argument names are affected — a `from` nested inside an object value is
+/// wire shape, untouched. `Catalog::load` refuses a schema that spells
+/// `from_` on any other op, whose agents' `from_` would reach the wire
+/// unmapped.
 const RENAMES_FROM: &[&str] = &["make_link", "emit"];
 
 /// Returns a wire op's frame (*every tool is one call of the shell*).
@@ -255,15 +258,18 @@ pub fn wire_frame(op: &str, mut args: Map<String, Value>) -> Value {
 /// every one.
 const ADDR_PLACEHOLDER: &str = "{addr}";
 
-/// The loaded catalog: the server instructions, the commons sentence
-/// template, and the tool definitions `tools/list` answers. Its invariant,
-/// established by `Catalog::load`: `instructions` is nonempty;
-/// `commons_instructions` holds `{addr}`; `tools` is one `check_tool`-valid
-/// entry per name of [`Tool::names`] — every wire op and every adapter tool
-/// — no name twice, in file order; so every tool `tools/list` names is one
-/// `Server::call` runs, and every tool it runs is listed. The fields are
-/// private, so outside this module `load` is the one way to build one, and
-/// `append_commons`, the one mutation, only appends to `instructions`.
+/// The loaded catalog: the instructions, the commons template, and the tools.
+///
+/// Its invariant, established by `Catalog::load`: `instructions` is
+/// nonempty; `commons_instructions` holds `{addr}`; `tools` is one
+/// `check_tool`-valid entry per name of `Tool::names` — every wire op and
+/// every adapter tool — no name twice, in file order, a top-level `from_`
+/// argument named on the `RENAMES_FROM` ops alone; so every tool `tools/list`
+/// names is one `Server::call` runs, every tool it runs is listed, and every
+/// `from_` a schema names is one `wire_frame` maps back to the wire's `from`.
+/// The fields are private, so outside this module `load` is the one way to
+/// build one, and `append_commons`, the one mutation, only appends to
+/// `instructions`.
 #[derive(Debug)]
 pub struct Catalog {
     instructions: String,
@@ -277,17 +283,28 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Parses and validates one catalog, establishing `Catalog`'s invariant
-    /// — the no-drift contract, in both directions and over both kinds.
+    /// Parses and validates one catalog, establishing `Catalog`'s invariant.
+    ///
+    /// It is the no-drift contract: the tools' names held to the dispatch in
+    /// both directions and over both kinds, and the one argument the dispatch
+    /// renames held to the ops it renames on.
     ///
     /// # Errors
     ///
     /// Every fault is a startup error naming what is wrong — the field, the
     /// entry's index, the tool or the op — one fault at a time, the first
-    /// found speaking: the root and its fields, `instructions`,
-    /// `commons_instructions`, then each entry by index, then each name in
-    /// file order (a duplicate, or one the dispatch doesn't know), then each
-    /// dispatch tool the file doesn't name.
+    /// found speaking, in this order:
+    ///
+    /// 1. text that is no JSON, a root that is no object, or a root field
+    ///    the catalog does not hold;
+    /// 2. `instructions` missing or empty, `commons_instructions` missing or
+    ///    without `{addr}`, then `tools` missing or no array;
+    /// 3. each entry by index, as `check_tool` refuses it;
+    /// 4. each name in file order: a duplicate, or one the dispatch doesn't
+    ///    know;
+    /// 5. each dispatch tool the file doesn't name;
+    /// 6. each entry in file order whose schema spells a top-level `from_`
+    ///    on an op `wire_frame` does not map back.
     pub fn load(text: &str) -> Result<Catalog, String> {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
         let Value::Object(mut root) = v else {
@@ -314,7 +331,7 @@ impl Catalog {
             names.push(check_tool(t).map_err(|e| format!("tools[{i}]: {e}"))?);
         }
         let mut seen = std::collections::BTreeSet::new();
-        for name in names {
+        for &name in &names {
             if !seen.insert(name) {
                 return Err(format!("duplicate tool '{name}'"));
             }
@@ -325,6 +342,11 @@ impl Catalog {
         for name in Tool::names() {
             if !seen.contains(name) {
                 return Err(format!("dispatch tool '{name}' has no tools-file entry"));
+            }
+        }
+        for (t, name) in tools.iter().zip(&names) {
+            if t["inputSchema"]["properties"].get("from_").is_some() && !RENAMES_FROM.contains(name) {
+                return Err(format!("tool '{name}' names a 'from_' argument, which this adapter maps back to the wire's 'from' on {} alone", listed(RENAMES_FROM)));
             }
         }
         Ok(Catalog { instructions, commons_instructions, tools })

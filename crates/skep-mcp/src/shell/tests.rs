@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::Mutex;
 
 use skep_client::halt::{Face, Refused};
 use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose};
@@ -202,4 +203,29 @@ fn a_blob_uri_is_the_fetch_route_and_takes_an_address_alone() {
     assert_eq!(backend.blob_uri("1.0.1.0.1.0.1.1"), "http://127.0.0.1:1/blob?i=1.0.1.0.1.0.1.1");
     let broken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.blob_uri("1.0.1&i=2")));
     assert!(broken.is_err(), "an `i` that is no address breaks the precondition");
+}
+
+/// The clean stop says first what it closes, as the session's state has it.
+///
+/// A session the calls run under is said closed at the board; a lapsed one
+/// and a stopped one ended there already, and the line says so: the
+/// backend's one line, said before the shell's stop runs.
+#[test]
+fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
+    let closing = "stopping: closing the session at the board, saving the index";
+    let ended = "stopping: the session already ended at the board; saving the index";
+    for (k, death, said) in [(0, None, closing), (1, Some(Death::ServeOn), ended), (2, Some(Death::Stop("stopped".into())), ended)] {
+        let scratch = Scratch::new(&format!("clean-stop-{k}"));
+        let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+        if let Some(death) = death {
+            backend.session.settle("s-1", death, &|_: String| {});
+        }
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        backend.talk = {
+            let lines = Arc::clone(&lines);
+            Arc::new(move |line: &str| lines.lock().expect("the lines' lock").push(line.to_string()))
+        };
+        backend.shutdown();
+        assert_eq!(*lines.lock().expect("the lines' lock"), [said], "{:?}", backend.session.current());
+    }
 }

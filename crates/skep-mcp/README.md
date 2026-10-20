@@ -46,7 +46,8 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   under a cap of 8 MiB checked before a byte is read, and a deadline of ten
   and a half minutes on its body, an honest board's own bound on the
   stream). The catalog is `tools.json` beside `Cargo.toml`, checked against
-  the dispatch's two kinds at startup in both directions.
+  the dispatch's two kinds at startup in both directions, and a schema's
+  `from_` argument against the ops the adapter maps it back to `from` on.
 - **A refusal as a result.** The board's verdict on a frame — a `refused`
   refusal — is DATA: `isError: false`, the verdict's body verbatim under
   `body`, the refusal's own `name`, `status`, `code`, `detail` and `op`

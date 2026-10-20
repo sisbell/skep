@@ -2095,7 +2095,7 @@
     },
     {
       "name": "health",
-      "description": "The shell's health call for the board: {health, mode} — the board's GET /health answer verbatim, a live reading with no address ({ok, log_position, head_time, chain_head, auth: {claimant, local_trust, origins, signed_origins}, media, writes: {halted}}) and the mode derived from it: UNCLAIMED, CLAIMED-PERMISSIVE or ENFORCING. writes.halted true means every write is refused poisoned until the board restarts.",
+      "description": "The shell's health call for the board: {health, mode} — the board's GET /health answer verbatim, a live reading with no address ({ok, log_position, head_time, chain_head, auth: {claimant, local_trust, origins, signed_origins}, media, writes: {halted}}) and the mode derived from it: UNCLAIMED, CLAIMED-PERMISSIVE or ENFORCING. writes.halted true means the board takes no write until it restarts: a burst is held and sent by the shell once the board takes writes again (HELD WRITES), and any other write is refused poisoned, as data.",
       "inputSchema": {
         "type": "object",
         "properties": {},

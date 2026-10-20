@@ -313,7 +313,6 @@ fn main() -> ExitCode {
     read_stdin(inbound);
     let server = Server { backend, catalog };
     let code = server.run(&inbox);
-    log("stopping: closing the session at the board, saving the index");
     server.backend.shutdown();
     code
 }

@@ -367,9 +367,10 @@ fn a5_skep_board_is_read_and_skepd_url_alone_is_refused_naming_skep_board() {
 /// the retirement of a set's last key being refused, "it would empty the
 /// set" — and the adapter's session dies on the `retired` arm, which the
 /// shell does not re-open (ruling 4 (c)): the process stops, exit 1, with one
-/// plain line naming the retirement and the hand, and serves nothing after.
-/// Started again over the same store, it stays stopped: the open is refused
-/// `retired` before anything is served, and no bare session stands in.
+/// plain line naming the retirement and the hand, its clean stop saying the
+/// session already ended at the board, and serves nothing after. Started
+/// again over the same store, it stays stopped: the open is refused `retired`
+/// before anything is served, and no bare session stands in.
 #[test]
 fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     let fixture = Fixture::new("a6-retired");
@@ -381,7 +382,7 @@ fn a6_a_retired_key_stops_the_adapter_and_a_relaunch_refuses_before_serving() {
     fixture.retire_from(&second, &fixture.fingerprint);
     let status = mcp.wait_exit(Duration::from_secs(60)).unwrap_or_else(|| panic!("the adapter did not stop:\n{}", mcp.talk()));
     assert_eq!(status.code(), Some(1), "{status:?}\n{}", mcp.talk());
-    let log = mcp.talk_holding(&["stopped: the key "], Duration::from_secs(5));
+    let log = mcp.talk_holding(&["stopped: the key ", "stopping: the session already ended at the board"], Duration::from_secs(5));
     assert!(log.contains(&format!("stopped: the key {} was retired at the board by the key {k2} (second): your person stops you by retiring your key", fixture.fingerprint)), "the plain line:\n{log}");
     assert!(mcp.stdout_closed(), "nothing is served after the stop");
     let out = Launch::over(&fixture, 1).output();

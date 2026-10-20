@@ -11,11 +11,12 @@
 //! frame)` through the shell; and the ADAPTER's OWN — the shell's calls
 //! (`boards`, `health`, `probe`, `search`, `places`, `held`, `resolve`) and
 //! the apparatus (`session_info`, `changes_since`, `fetch`) — whose
-//! arguments are the bridge's row minus the session and the board the
-//! adapter supplies, and whose members the adapter reads by name.
-//! `wire_frame` maps a wire op's call onto its frame, and
-//! `Catalog::append_commons` fills the commons template in beside the check
-//! on its placeholder.
+//! arguments are the bridge's row minus the session and the board, the
+//! adapter supplying each where the row requires it, and whose members the
+//! adapter reads by name. `Tool::admit` is the dispatch's door, admitting a
+//! call or refusing it; `wire_frame` maps a wire op's call onto its frame,
+//! and `Catalog::append_commons` fills the commons template in beside the
+//! check on its placeholder.
 
 use serde_json::{Map, Value};
 
@@ -96,11 +97,13 @@ pub enum Tool {
     Health,
     /// `probe()`, the shell's.
     Probe,
-    /// `search(session, board, query, opts?)`, the shell's: the session and
-    /// the board supplied.
+    /// `search(session, query, opts?)`, the shell's: the session supplied.
+    ///
+    /// The shell reads a session's search at the session's own board.
     Search,
-    /// `places(session, board, opts?)`, the shell's: the session and the
-    /// board supplied.
+    /// `places(session, opts?)`, the shell's: the session supplied.
+    ///
+    /// The shell lists a session's places at the session's own board.
     Places,
     /// `held(session)`, the shell's: the session supplied.
     Held,
@@ -131,8 +134,33 @@ const ADAPTER_TOOLS: &[(&str, Tool, &[&str])] = &[
 ];
 
 impl Tool {
+    /// Admits the call a `tools/call` names, or refuses it.
+    ///
+    /// `name` must be one the dispatch answers and, for an adapter tool,
+    /// every member of `args` one its row takes — the members the adapter
+    /// reads. A wire op's arguments pass through unread as the frame, the
+    /// daemon's strict parse their validator.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of a call the adapter will not run, which
+    /// `Server::respond` answers -32602, in this order: a name the dispatch
+    /// does not answer, then a member an adapter tool's row does not take.
+    pub fn admit(name: &str, args: &Map<String, Value>) -> Result<Tool, String> {
+        let tool = Tool::named(name).ok_or_else(|| format!("unknown tool '{name}'; tools/list names the available tools"))?;
+        if let Some(members) = tool.members() {
+            if let Some(arg) = args.keys().find(|k| !members.contains(&k.as_str())) {
+                return Err(match members {
+                    [] => format!("{name} takes no arguments; got '{arg}'"),
+                    _ => format!("{name} takes {}; got '{arg}'", members.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(", ")),
+                });
+            }
+        }
+        Ok(tool)
+    }
+
     /// The tool the dispatch answers `name` by, where it answers one.
-    pub fn named(name: &str) -> Option<Tool> {
+    fn named(name: &str) -> Option<Tool> {
         if let Some(op) = DISPATCH_OPS.iter().find(|op| **op == name) {
             return Some(Tool::Op(op));
         }
@@ -148,7 +176,7 @@ impl Tool {
     /// The argument members an adapter tool's row takes — the only ones the
     /// adapter reads, so any other is refused by name — or `None` for a wire
     /// op, whose arguments pass through unread as the frame.
-    pub fn members(self) -> Option<&'static [&'static str]> {
+    fn members(self) -> Option<&'static [&'static str]> {
         match self {
             Tool::Op(_) => None,
             other => ADAPTER_TOOLS.iter().find(|(_, tool, _)| *tool == other).map(|(_, _, members)| *members),
@@ -474,5 +502,26 @@ mod tests {
         for not_a_tool in ["keygen", "fingerprint", "claim", "enroll", "bind", "recover", "rotate", "retire", "handoff", "accept", "upload", "restore", "op", "session", "close", "frobnicate"] {
             assert_eq!(Tool::named(not_a_tool), None, "{not_a_tool} is no tool");
         }
+    }
+
+    /// The dispatch's door admits a call or refuses it, naming the culprit.
+    ///
+    /// A name it answers is admitted, a wire op's arguments unread; a name it
+    /// does not answer is refused before its arguments are read, and a member
+    /// an adapter tool's row does not take is refused naming the row's own.
+    #[test]
+    fn admit_is_the_dispatchs_door() {
+        let args = |v: Value| -> Map<String, Value> {
+            let Value::Object(m) = v else { panic!("arguments are an object") };
+            m
+        };
+        assert_eq!(Tool::admit("insert", &args(json!({"stranger": 1}))), Ok(Tool::Op("insert")), "a wire op's arguments pass through unread");
+        assert_eq!(Tool::admit("search", &args(json!({"query": "x", "opts": {}}))), Ok(Tool::Search));
+        let err = Tool::admit("frobnicate", &args(json!({"stranger": 1}))).expect_err("no tool");
+        assert!(err.contains("unknown tool 'frobnicate'"), "the name speaks first: {err}");
+        let err = Tool::admit("session_info", &args(json!({"principal": 2}))).expect_err("a stranger");
+        assert!(err.contains("session_info takes no arguments") && err.contains("'principal'"), "{err}");
+        let err = Tool::admit("changes_since", &args(json!({"since": 0, "under": "1"}))).expect_err("a stranger");
+        assert!(err.contains("'since', 'limit'") && err.contains("'under'"), "{err}");
     }
 }

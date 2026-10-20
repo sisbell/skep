@@ -29,32 +29,41 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the shell does. No general `op` tool ships: every op has a name. The
   shell's own calls are tools of their names — `boards`, `health`,
   `probe`, `search`, `places`, `held`, `resolve` — their arguments the
-  bridge's row minus the session and the board, which the adapter
-  supplies. Three are the adapter's own: `session_info` (the principal,
-  the account, the key's fingerprint and label, the board, `writes`, the
-  board's health with its mode), `changes_since(since, limit?)` (the
-  shell's `changes`: a pull of what changed, the agent keeping `next`) and
-  `fetch(i)` (a picture's bytes as an image block — the type sniffed off
-  the bytes' magic for PNG, JPEG, GIF and WebP, never attested — else an
-  embedded resource blob, under a cap of 8 MiB checked before a byte is
-  read). The catalog is `tools.json` beside `Cargo.toml`, checked against
-  the dispatch's two kinds at startup in both directions.
+  bridge's row minus the session and the board, the adapter supplying
+  each where the row requires it. Three are the adapter's own:
+  `session_info` (the principal, the account, the key's fingerprint and
+  label, the board, `writes`, the board's health with its mode),
+  `changes_since(since, limit?)` (the shell's `changes`: a pull of what
+  changed, the agent keeping `next`) and `fetch(i)` (a picture's bytes as
+  an image block — the type sniffed off the bytes' magic for PNG, JPEG,
+  GIF and WebP, never attested — else an embedded resource blob, under a
+  cap of 8 MiB checked before a byte is read). The catalog is `tools.json`
+  beside `Cargo.toml`, checked against the dispatch's two kinds at startup
+  in both directions.
 - **A refusal as a result.** The board's verdict on a frame — a `refused`
   refusal — is DATA: `isError: false`, the verdict's body verbatim with the
   shell's envelope (`name`, `status`, `code`, `detail`, `op`) beside it.
   Every other kind — `unreachable`, `halt`, `blocked`, the shell's own
-  names — is `isError: true` with the refusal's value as the text: `isError`
-  means one thing, that the shell could not get the board's verdict.
+  names — is `isError: true` with the refusal's value as the text: the
+  shell could not get the board's verdict. `fetch` adds two of the
+  adapter's own, each `isError` with a plain sentence: a file past its cap,
+  and a stream cut short. A write refused `unreachable` may still have
+  committed — its frame may have reached the board before its answer was
+  lost — and the adapter never reissues it.
 - **The session's life.** A board restart is met by the shell's silent
   re-open under a fresh reference, which the adapter takes from the call
   that met the death (reissuing it once) or from the `session-died` event
-  it drains for the process's life; the agent sees nothing. A death the
-  shell does not re-open — the key retired, the prefix blocked, the
-  account seeded, a restart whose re-open the board refused — stops the
-  process with one plain line naming the arm: the person stops an agent by
-  retiring its key, and the adapter's end is what the agent's client sees.
-  A board that is not answering refuses each call `unreachable` and the
-  adapter stays up.
+  it drains for the process's life, whichever comes first; a call that
+  finds its session already ended waits for that event rather than open a
+  second session early. The agent sees nothing. A death the shell does not
+  re-open — the key retired, the prefix blocked, the account seeded, a
+  restart whose re-open the board refused — stops the process with one
+  plain line naming the arm, and so does the board's refusal of a session
+  the adapter opens itself where the shell's end left none: the person
+  stops an agent by retiring its key, and the adapter's end is what the
+  agent's client sees. A board that is not answering refuses each call
+  `unreachable` and the adapter stays up, opening a session once the board
+  answers again.
 - **No person at the seam.** The shell is opened with the refusing arm:
   every SECRET and CONSENT moment would be refused `person_required`, and
   no ceremony tool is offered (no `keygen`, `fingerprint`, `claim`,

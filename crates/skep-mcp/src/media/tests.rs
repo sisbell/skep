@@ -71,8 +71,9 @@ fn the_cap_sits_well_under_the_boards_per_file_cap() {
 /// The read holds the cap both ways and tells a whole file from a cut one.
 ///
 /// A declared length past the cap is refused before a byte of the body is
-/// read, and a body that declares no length is refused once a byte past the
-/// cap has come; a body short of its declared length, or broken off by a
+/// read, and a body that declares no length, or overruns the one it
+/// declares, is refused once a byte past the cap has come — the two told
+/// apart; a body short of its declared length, or broken off by a
 /// failed read, is cut, the bytes that came counted; a body at its declared
 /// length is whole, and so is one at the cap that declares no length.
 #[test]
@@ -100,9 +101,11 @@ fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
     let declared = |n: u64| Headers(vec![("Content-Length".to_string(), n.to_string())]);
     let undeclared = Headers(Vec::new());
     let past = MAX_FETCH_BYTES + 1;
-    assert!(matches!(read_whole(&declared(past), Untouched), FetchAnswer::PastTheCap { length } if length == past));
+    assert!(matches!(read_whole(&declared(past), Untouched), FetchAnswer::DeclaredPastTheCap { length } if length == past));
     let oversized = io::repeat(7).take(MAX_FETCH_BYTES + 2);
-    assert!(matches!(read_whole(&undeclared, oversized), FetchAnswer::PastTheCap { length } if length == past), "the read stops one byte past the cap");
+    assert!(matches!(read_whole(&undeclared, oversized), FetchAnswer::RanPastTheCap { read } if read == past), "the read stops one byte past the cap");
+    let overrun = io::repeat(7).take(MAX_FETCH_BYTES + 2);
+    assert!(matches!(read_whole(&declared(10), overrun), FetchAnswer::RanPastTheCap { read } if read == past), "a body past its own declared length is read to the cap too");
     match read_whole(&declared(10), &b"abcd"[..]) {
         FetchAnswer::Cut { read: 4, length: Some(10), error } => assert!(error.contains("short of its declared length"), "{error}"),
         other => panic!("a short body is cut: {other:?}"),

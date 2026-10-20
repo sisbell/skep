@@ -5,18 +5,22 @@
 //! the protocol is written; the dispatch takes `tools/call` onto the
 //! backend's calls.
 //!
-//! A REFUSAL AS A RESULT: every tool's answer is the shell's — a value, or a
-//! [`Refusal`] of one of five kinds — and the tool result says which. A
-//! `refused` refusal is THE BOARD's VERDICT on the frame: it rides as DATA,
+//! **A refusal as a result.** Every tool's answer is the shell's — a value,
+//! or a [`Refusal`] of one of five kinds — and the tool result says which. A
+//! `refused` refusal is the board's verdict on the frame: it rides as data,
 //! `isError: false`, the verdict's body verbatim under `body` with the
 //! shell's envelope (`name`, `status`, `code`, `detail`, `op`) beside it — a
-//! client that cannot read a rejection has been silently failed. Every
-//! other kind — `halt`, `blocked`, `unreachable`, and `shell`, the shell's
-//! own names among them — is `isError: true` with the refusal's value as
-//! the text: `isError` means ONE thing, that the shell could not get the
-//! board's verdict. A call the adapter will not run — a tool outside the
-//! catalog, an argument an adapter tool does not take — is no tool result
-//! at all: it is refused -32602, as malformed `tools/call` params are.
+//! client that cannot read a rejection has been silently failed. Every other
+//! kind — `halt`, `blocked`, `unreachable`, and `shell`, the shell's own
+//! names among them — is `isError: true` with the refusal's value as the
+//! text: the shell could not get the board's verdict. `Server::fetch`
+//! answers two more `isError` of the adapter's own, each a plain sentence: a
+//! file past its cap, and a stream cut short. A write refused `unreachable`
+//! may have committed — the shell faces a lost answer to any write but a
+//! burst — and nothing here reissues it. A call the adapter will not run — a
+//! tool outside the catalog, a member an adapter tool's row does not name —
+//! is no tool result at all: it is refused -32602, as malformed `tools/call`
+//! params are; a member of the wrong form is the shell's `malformed_args`.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{Receiver, Sender};
@@ -43,9 +47,11 @@ enum ErrorCode {
     InvalidParams = -32602,
 }
 
-/// What reaches the loop: a line of stdin, stdin's end, or the backend's
-/// stop — a death of the session the shell did not re-open, with the plain
-/// line the stop says.
+/// What reaches the loop: a stdin line, stdin's end, or the backend's stop.
+///
+/// The stop comes where a death of the session no one may re-open, or the
+/// board's refusal of a session the adapter opened itself, ends the adapter,
+/// with the plain line it says.
 #[derive(Debug)]
 pub enum Inbound {
     /// One line of stdin, as raw bytes.
@@ -198,73 +204,74 @@ impl Server {
         }
     }
 
-    /// Run one tool: `Ok` its tool result, `Err` the refusal of a call the
-    /// adapter will not run — a name outside the catalog, or an argument an
-    /// adapter tool's row does not take (the adapter is the one party that
-    /// reads those; a wire op's arguments pass through unread as the frame,
-    /// the daemon's strict parse their validator) — which `respond` answers
-    /// -32602, the channel `call_params`' faults take (MCP 2025-06-18, Tools
-    /// §Error Handling: unknown tools and invalid arguments are protocol
-    /// errors). A tool's result is its answer rendered by `tool_result`'s
-    /// rule: a value or the board's verdict as data, any other refusal
-    /// `isError`.
+    /// Runs one tool and returns its tool result.
+    ///
+    /// The result is the tool's answer rendered by `tool_result`'s rule: a
+    /// value or the board's verdict as data, any other refusal `isError`;
+    /// `fetch` answers a content block of its own (`Server::fetch`).
+    ///
+    /// # Errors
+    ///
+    /// The refusal of a call the adapter will not run, `Tool::admit`'s — a
+    /// name outside the catalog, or a member an adapter tool's row does not
+    /// take — which `respond` answers -32602, the channel `call_params`'
+    /// faults take (MCP 2025-06-18, Tools §Error Handling: unknown tools and
+    /// invalid arguments are protocol errors).
     fn call(&self, name: &str, args: Map<String, Value>) -> Result<Value, String> {
-        let tool = Tool::named(name).ok_or_else(|| format!("unknown tool '{name}'; tools/list names the available tools"))?;
-        if let Some(members) = tool.members() {
-            if let Some(arg) = args.keys().find(|k| !members.contains(&k.as_str())) {
-                return Err(match members {
-                    [] => format!("{name} takes no arguments; got '{arg}'"),
-                    _ => format!("{name} takes {}; got '{arg}'", members.iter().map(|m| format!("'{m}'")).collect::<Vec<_>>().join(", ")),
-                });
-            }
-        }
+        let tool = Tool::admit(name, &args)?;
         let answer = match tool {
             Tool::Op(op) => self.backend.session_call("op", json!({"frame": wire_frame(op, args)})),
-            Tool::Boards => self.backend.board_call("boards", json!({})),
-            Tool::Health => self.backend.board_call("health", json!({})),
-            Tool::Probe => self.backend.board_call("probe", json!({})),
-            Tool::Search | Tool::Places | Tool::Held | Tool::Resolve => self.backend.session_call(name, Value::Object(args)),
+            Tool::Boards => self.backend.boards(),
+            Tool::Health => self.backend.health(),
+            Tool::Probe => self.backend.probe(),
+            Tool::Search => self.backend.session_call("search", Value::Object(args)),
+            Tool::Places => self.backend.session_call("places", Value::Object(args)),
+            Tool::Held => self.backend.session_call("held", Value::Object(args)),
+            Tool::Resolve => self.backend.session_call("resolve", Value::Object(args)),
             Tool::ChangesSince => self.backend.session_call("changes", Value::Object(args)),
             Tool::SessionInfo => self.backend.session_info(),
-            Tool::Fetch => return Ok(self.fetch(args.get("i"))),
+            Tool::Fetch => return Ok(self.fetch(args.get("i").unwrap_or(&Value::Null))),
         };
         Ok(tool_result(answer))
     }
 
-    /// `fetch(i)` as a content block: the board's bytes at `i`, sniffed —
-    /// an image block with the type the magic names, else an embedded
-    /// resource blob of `application/octet-stream` at the fetch's own URI —
-    /// base64 within; a file past the cap refused in plain words naming it,
-    /// a stream cut short said so, each `isError`; the shell's refusal by
+    /// Answers `fetch(i)` as a content block.
+    ///
+    /// The board's bytes at `i` — `i` as the agent gave it, the shell its one
+    /// doorkeeper — are sniffed: an image block with the type the magic
+    /// names, else an embedded resource blob of `application/octet-stream`
+    /// at the URI the backend names for the bytes, base64 within. A file
+    /// past the cap is refused in plain words naming it, and a stream cut
+    /// short is said so, each `isError`; the shell's refusal goes by
     /// `tool_result`'s rule.
-    fn fetch(&self, i: Option<&Value>) -> Value {
-        let Some(i) = i.and_then(Value::as_str) else {
-            return tool_result(Err(Refusal::malformed("i")));
+    fn fetch(&self, i: &Value) -> Value {
+        let fetched = match self.backend.fetch(i) {
+            Ok(fetched) => fetched,
+            Err(refusal) => return tool_result(Err(refusal)),
         };
-        match self.backend.fetch(i).map(|fetched| read_whole(&fetched.headers, fetched.body)) {
-            Ok(FetchAnswer::Bytes(bytes)) => {
+        // The shell fetched, so `i` is an address in its one spelling.
+        let i = i.as_str().unwrap_or_default();
+        let cap = format!("this adapter's cap of {MAX_FETCH_BYTES} bytes ({} MiB) on one fetch", MAX_FETCH_BYTES / (1024 * 1024));
+        match read_whole(&fetched.headers, fetched.body) {
+            FetchAnswer::Bytes(bytes) => {
                 let data = base64(&bytes);
                 let block = match sniff_image(&bytes) {
                     Some(mime) => json!({"type": "image", "data": data, "mimeType": mime}),
-                    None => json!({"type": "resource", "resource": {"uri": format!("{}/blob?i={i}", self.backend.origin().as_str()), "mimeType": "application/octet-stream", "blob": data}}),
+                    None => json!({"type": "resource", "resource": {"uri": self.backend.blob_uri(i), "mimeType": "application/octet-stream", "blob": data}}),
                 };
                 json!({"content": [block], "isError": false})
             }
-            Ok(FetchAnswer::PastTheCap { length }) => text_result(
-                format!(
-                    "the file at {i} is {length} bytes, past this adapter's cap of {MAX_FETCH_BYTES} bytes ({} MiB) on one fetch: no byte of it was read; a smaller file is served whole",
-                    MAX_FETCH_BYTES / (1024 * 1024)
-                ),
-                true,
-            ),
-            Ok(FetchAnswer::Cut { read, length, error }) => text_result(
+            FetchAnswer::DeclaredPastTheCap { length } => text_result(format!("the file at {i} is {length} bytes, past {cap}: no byte of it was read; a smaller file is served whole"), true),
+            FetchAnswer::RanPastTheCap { read } => {
+                text_result(format!("the file at {i} runs past {cap}: its body was read to {read} bytes, one past the cap, and dropped; a smaller file is served whole"), true)
+            }
+            FetchAnswer::Cut { read, length, error } => text_result(
                 format!(
                     "the fetch of {i} ended before the file was whole: {read} of {} bytes came ({error}); the board resets a stream whose requester it can no longer serve — fetch it again",
                     length.map_or("an undeclared number of".to_string(), |n| n.to_string())
                 ),
                 true,
             ),
-            Err(refusal) => tool_result(Err(refusal)),
         }
     }
 }
@@ -298,10 +305,13 @@ fn text_result(text: String, is_error: bool) -> Value {
     json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
-/// THE RULE (the module doc): an answer as the result's text, `isError`
-/// false; the board's verdict (`Refusal::Board`) as data, its value — the
-/// shell's envelope with the verdict's body verbatim — the text, `isError`
-/// false; every other refusal its value as the text, `isError` true.
+/// Renders the shell's answer as a tool result, by the module doc's rule.
+///
+/// An answer is the result's text, `isError` false; the board's verdict
+/// (`Refusal::Board`) is data, its value — the shell's envelope with the
+/// verdict's body verbatim — the text, `isError` false; every other refusal
+/// is its value as the text, `isError` true. `Server::fetch` answers its own
+/// two — a file past the cap, a stream cut short — itself.
 fn tool_result(answer: Result<Value, Refusal>) -> Value {
     match answer {
         Ok(v) => text_result(v.to_string(), false),

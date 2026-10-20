@@ -34,10 +34,15 @@ pub const MAX_FETCH_BYTES: u64 = 8 * 1024 * 1024;
 pub enum FetchAnswer {
     /// The file's bytes, whole.
     Bytes(Vec<u8>),
-    /// The file passes [`MAX_FETCH_BYTES`]: its declared `length` does, and
-    /// no byte of it was read, or its body ran past the cap and the read
-    /// stopped at `length`, one byte past it.
-    PastTheCap { length: u64 },
+    /// The file is declared past [`MAX_FETCH_BYTES`], and no byte was read.
+    ///
+    /// `length` is its head's `Content-Length`.
+    DeclaredPastTheCap { length: u64 },
+    /// The body ran past [`MAX_FETCH_BYTES`], and its read was dropped.
+    ///
+    /// No length was declared, or one the body overran: `read` bytes came,
+    /// one past the cap, and how long the file is, nothing here knows.
+    RanPastTheCap { read: u64 },
     /// The stream ended short of the declared length — the board's RESET
     /// (wire.md §Media, THE FETCH), or a read that failed: `read` bytes came.
     Cut { read: usize, length: Option<u64>, error: String },
@@ -55,13 +60,13 @@ pub fn read_whole(headers: &Headers, body: impl Read) -> FetchAnswer {
     let length = headers.get("Content-Length").and_then(|v| v.trim().parse::<u64>().ok());
     if let Some(length) = length {
         if length > MAX_FETCH_BYTES {
-            return FetchAnswer::PastTheCap { length };
+            return FetchAnswer::DeclaredPastTheCap { length };
         }
     }
     let mut bytes = Vec::new();
     let read = body.take(MAX_FETCH_BYTES + 1).read_to_end(&mut bytes);
     if bytes.len() as u64 > MAX_FETCH_BYTES {
-        return FetchAnswer::PastTheCap { length: bytes.len() as u64 };
+        return FetchAnswer::RanPastTheCap { read: bytes.len() as u64 };
     }
     if let Err(e) = read {
         return FetchAnswer::Cut { read: bytes.len(), length, error: e.to_string() };

@@ -13,19 +13,25 @@
 //!   once and a `durability` twice within the call, as the shell does. The
 //!   shell's own calls — `boards`, `health`, `probe`, `search`, `places`,
 //!   `held`, `resolve` — are tools of those names, their arguments the
-//!   bridge's row minus the session and the board the adapter supplies; and
-//!   three are the adapter's own: `session_info`, `changes_since` (the
-//!   shell's `changes`, a pull), and `fetch` (the shell's streamed fetch as
-//!   an image or resource block, the type sniffed off the bytes, the size
-//!   capped). Arguments pass through unvalidated on a wire op — the daemon's
-//!   strict parse is the validator, and its rejection comes back as data.
-//! * The board's verdict is DATA: a `refused` refusal is a normal tool
+//!   bridge's row minus the session and the board, the adapter supplying
+//!   each where the row requires it; and three are the adapter's own:
+//!   `session_info`, `changes_since` (the shell's `changes`, a pull), and
+//!   `fetch` (the shell's streamed fetch as an image or resource block, the
+//!   type sniffed off the bytes, the size capped). Arguments pass through
+//!   unvalidated on a wire op — the daemon's strict parse is the validator,
+//!   and its rejection comes back as data.
+//! * The board's verdict is data: a `refused` refusal is a normal tool
 //!   result, the verdict's body verbatim with the shell's envelope beside
 //!   it. `isError` is every other refusal — the shell could not get the
 //!   board's verdict: the board unreachable, a halt, the block, the shell's
-//!   own names. A call the adapter will not run — a tool outside the
-//!   catalog, an argument an adapter tool does not take — is no tool result
-//!   at all: it is refused -32602, as malformed `tools/call` params are.
+//!   own names — and `fetch`'s two answers of the adapter's own, a file past
+//!   its cap and a stream cut short, each a plain sentence. A write refused
+//!   `unreachable` may have committed: the shell faces a lost answer to any
+//!   write but a burst (whose line it holds, `sent`), and the adapter never
+//!   reissues it. A call the adapter will not run — a tool outside the
+//!   catalog, a member an adapter tool's row does not name — is no tool
+//!   result at all: it is refused -32602, as malformed `tools/call` params
+//!   are; a member of the wrong form is the shell's `malformed_args`.
 //! * SIGNED ONLY: the session is opened at startup, before the first tool
 //!   call, for the configured principal with the store's key for it —
 //!   enrolled in its account's set or the nearest set above it — and no
@@ -33,23 +39,26 @@
 //!   adapter before it serves. A board restart is met by the shell's silent
 //!   re-open; a death the shell does not re-open — the key retired, the
 //!   prefix blocked, the account seeded, a re-open the board refused —
-//!   stops the process with one plain line naming the arm. No person is at
-//!   the seam (`ArmConfig::Refuse`): no ceremony tool is offered, and every
-//!   SECRET or CONSENT moment would be refused `person_required`.
+//!   stops the process with one plain line naming the arm, and so does the
+//!   board's refusal of a session the adapter opens itself where the
+//!   shell's end left none. No person is at the seam (`ArmConfig::Refuse`):
+//!   no ceremony tool is offered, and every SECRET or CONSENT moment would
+//!   be refused `person_required`.
 //!
 //! `server.rs` is the MCP side: the stdio transport — stdin's reader, and
 //! the loop that answers each line on stdout — the JSON-RPC dispatch, and
 //! `call`, which keeps the second rule. `shell.rs` is the one seam onto
-//! `skep-shell`: the open and its checks, the one session's reference and
+//! `skep-shell`: the open and its checks, the one session's standing and
 //! its life, the bus drained. `media.rs` is the fetched file: its bytes
 //! read whole under the adapter's cap, its type sniffed, its base64.
 //! `tools.rs` holds the catalog (`tools.json`, embedded) with its commons
 //! sentence, the dispatch's two kinds the catalog is checked against when
-//! loaded, and the first rule's mapping of a wire op's call onto a frame.
-//! This file is startup — flags, environment, the `SKEP_COMMONS` check, the
-//! shell's open — the loop's two inputs (stdin's reader, the bus's drain)
-//! wired onto one channel, and `log`, the operator's stream every module
-//! and the shell's TALK write through.
+//! loaded, the dispatch's door (`Tool::admit`, which admits a call or
+//! refuses it -32602), and the first rule's mapping of a wire op's call
+//! onto a frame. This file is startup — flags, environment, the
+//! `SKEP_COMMONS` check, the shell's open — the loop's two inputs (stdin's
+//! reader, the backend's stop) wired onto one channel, and `log`, the
+//! operator's stream every module and the shell's TALK write through.
 //!
 //! stdout is protocol-only; all logging goes to stderr, through `log`,
 //! whose failure fails nothing. Stdin EOF is the clean exit: the shell's
@@ -75,7 +84,7 @@ use std::sync::Arc;
 use skep_client::Origin;
 
 use crate::server::{read_stdin, Inbound, Server};
-use crate::shell::Backend;
+use crate::shell::{Backend, OnStop};
 use crate::tools::Catalog;
 
 const USAGE: &str = "\
@@ -235,10 +244,21 @@ fn main() -> ExitCode {
     if let Some(addr) = &commons {
         catalog.append_commons(addr);
     }
+    // The loop's two inputs, on one channel: stdin's lines and its end, which
+    // `read_stdin` sends from a thread of its own, and the backend's stop,
+    // which the drain sends on a death no one may re-open and a call sends
+    // where the board refused a session the adapter opened itself.
+    let (inbound, lines) = mpsc::channel::<Inbound>();
+    let on_stop: OnStop = {
+        let inbound = inbound.clone();
+        Arc::new(move |line: String| {
+            let _ = inbound.send(Inbound::Stop(line));
+        })
+    };
     // THE SHELL: opened, checked and its one session opened before any tool
     // is served; a stop here returns, so the shell's own stop has run.
     let talk: skep_shell::Talk = Arc::new(|line: &str| log(line));
-    let backend = match Backend::open(origin, store_dir, principal, talk) {
+    let backend = match Backend::open(origin, store_dir, principal, talk, on_stop) {
         Ok(backend) => backend,
         Err(line) => {
             log(line);
@@ -250,14 +270,8 @@ fn main() -> ExitCode {
         catalog.tools().len(),
         commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     ));
-    // The loop's two inputs, on one channel: stdin's lines and its end, which
-    // `read_stdin` sends from a thread of its own, and the bus's drain, which
-    // sends the backend's stop.
-    let (inbound, lines) = mpsc::channel::<Inbound>();
-    read_stdin(inbound.clone());
-    backend.drain(move |line| {
-        let _ = inbound.send(Inbound::Stop(line));
-    });
+    read_stdin(inbound);
+    backend.drain();
     let server = Server { backend, catalog };
     let code = server.run(&lines);
     log("stopping: closing the session at the board, saving the index");

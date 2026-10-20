@@ -333,4 +333,30 @@ mod tests {
         let watch = SessionWatch::new("s-1".into());
         assert!(!watch.settled_within("s-1", Duration::from_millis(100)), "with nothing settled the wait runs out");
     }
+
+    /// A panic under the lock leaves the session's state standing and moving.
+    ///
+    /// A holder that panics poisons the lock; the state still reads as it
+    /// stood, still moves off its session, and a wait still reads the move:
+    /// no call fails for another's panic.
+    #[test]
+    fn a_poisoned_lock_still_guards_the_session_state() {
+        let watch = Arc::new(SessionWatch::new("s-1".into()));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = watch.lock();
+            panic!("a holder of the lock panics");
+        }));
+        assert!(panicked.is_err() && watch.state.is_poisoned(), "premise: the lock is poisoned");
+        assert_eq!(watch.current(), SessionState::Open("s-1".into()), "the state reads as it stood");
+        let settler = {
+            let watch = Arc::clone(&watch);
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                watch.move_off("s-1", SessionState::Lapsed("s-1".into()))
+            })
+        };
+        assert!(watch.settled_within("s-1", Duration::from_secs(10)), "a wait reads the move");
+        assert!(settler.join().expect("the settler"), "the state still moves");
+        assert_eq!(watch.current(), SessionState::Lapsed("s-1".into()));
+    }
 }

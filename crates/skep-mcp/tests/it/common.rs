@@ -656,13 +656,6 @@ impl Mcp {
         stdin.flush().expect("flush to adapter");
     }
 
-    /// Raw bytes onto the adapter's stdin — for a line no `&str` can hold.
-    pub fn send_bytes(&mut self, bytes: &[u8]) {
-        let stdin = self.stdin.as_mut().expect("stdin open");
-        stdin.write_all(bytes).expect("write to adapter");
-        stdin.flush().expect("flush to adapter");
-    }
-
     /// One message off stdout: every line is JSON, or the adapter died.
     pub fn read_message(&mut self) -> Value {
         let mut line = String::new();

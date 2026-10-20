@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use skep_client::halt::{Face, Refused};
@@ -73,6 +74,21 @@ fn stand_in(answer: impl Fn(&str) -> Option<String> + Send + 'static) -> Origin 
         }
     });
     origin
+}
+
+/// Returns an answer of `status` carrying `body`, its length declared.
+fn answered(status: &str, body: &str) -> String {
+    format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+}
+
+/// Returns the lines the backend says from now on, its TALK sink replaced.
+fn said_by(backend: &mut Backend) -> Arc<Mutex<Vec<String>>> {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    backend.talk = {
+        let lines = Arc::clone(&lines);
+        Arc::new(move |line: &str| lines.lock().expect("the lines' lock").push(line.to_string()))
+    };
+    lines
 }
 
 /// A startup stop names what did not hold, then the refusal once.
@@ -175,8 +191,9 @@ fn a_call_is_reissued_once_and_only_after_a_death_settled_into_a_session() {
 /// intermediary re-framed and then lost — whose text holds the session's token:
 /// the afresh open's refusal is `unreachable`, the session lapses as at a board
 /// that did not answer, and neither the refusal's text, its value nor its
-/// `Debug` carries the token. A dial fault that names no answer's bytes stands
-/// whole, and a refusal of another kind is untouched.
+/// `Debug` carries the token. Each of the nine dial faults that name no
+/// answer's bytes stands whole, a `Response` fault — which may quote one — is
+/// replaced by one sentence, and a refusal of another kind is untouched.
 #[test]
 fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
     const TOKEN: &str = "9f3a6c21d4b8e07a5c1b2d4e6f708192";
@@ -196,8 +213,22 @@ fn a_sessions_open_is_refused_with_no_answers_text_in_it() {
         assert!(!shown.contains(TOKEN), "the session's token is quoted: {shown}");
     }
     assert_eq!(backend.session.current(), SessionState::Lapsed("s-1".into()), "the session lapses, as at a board that did not answer");
-    let refused = Refusal::Unreachable(DialError::Connect("refused".into()));
-    assert_eq!(unquoted(refused.clone()), refused, "a fault that names no answer's bytes stands whole");
+    for fault in [
+        DialError::NotHeld("https".into()),
+        DialError::Resolve("no such host".into()),
+        DialError::Connect("refused".into()),
+        DialError::Timeout("the read ran past its bound".into()),
+        DialError::Io("broken pipe".into()),
+        DialError::Truncated { declared: 64, got: 7 },
+        DialError::TooLarge { cap: 8 },
+        DialError::Tls("the server name was refused".into()),
+        DialError::Request("a header holds a line break".into()),
+    ] {
+        let refused = Refusal::Unreachable(fault);
+        assert_eq!(unquoted(refused.clone()), refused, "{refused}: a fault that names no answer's bytes stands whole");
+    }
+    let quoting = Refusal::Unreachable(DialError::Response(format!("the answer was not JSON: {{\"session\":\"{TOKEN}\"")));
+    assert_eq!(unquoted(quoting), Refusal::Unreachable(DialError::Response(UNQUOTED.to_string())), "a fault that may quote an answer is replaced");
     let retired = Refusal::named(Name::RETIRED, Face { state: "s".into(), cause: "c".into(), act: "a".into() });
     assert_eq!(unquoted(retired.clone()), retired, "a refusal of another kind is untouched");
 }
@@ -231,17 +262,146 @@ fn a_refused_open_of_the_adapters_own_stops_it_on_the_calling_thread() {
     assert!(stops[0].1.contains("opened afresh (session_rejected)"), "the line names the adapter's own open: {}", stops[0].1);
 }
 
+/// A lapsed session is opened afresh, and the call runs under it.
+///
+/// A stand-in board answers the bare open a lapse calls for — its first
+/// `POST /session` with a token, any later one refused, so an adapter that
+/// opened without adopting ends in that refusal instead of opening forever:
+/// one session is opened, the session's state moves to it, the adapter says
+/// so once, and the attempt runs once, under the fresh reference.
+#[test]
+fn a_lapsed_session_is_opened_afresh_and_the_call_runs_under_it() {
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    let opens = Arc::new(AtomicUsize::new(0));
+    let origin = stand_in({
+        let opens = Arc::clone(&opens);
+        move |head: &str| {
+            if head.starts_with("POST /session ") {
+                Some(match opens.fetch_add(1, Ordering::SeqCst) {
+                    0 => answered("200 OK", &format!(r#"{{"principal":1,"session":"{TOKEN}"}}"#)),
+                    _ => answered("401 Unauthorized", r#"{"error":"session_rejected"}"#),
+                })
+            } else if head.starts_with("POST /op ") {
+                Some(answered("200 OK", r#"{"resp":"maybe_addr","addr":"1.0.1","as_of":0}"#))
+            } else if head.starts_with("POST /session/close ") {
+                Some(answered("204 No Content", ""))
+            } else {
+                None
+            }
+        }
+    });
+    let scratch = Scratch::new("afresh-adopted");
+    let mut backend = backend_at(&scratch.0, origin, SessionMode::Bare { principal: 1 });
+    let lines = said_by(&mut backend);
+    backend.session.settle("s-1", Death::ServeOn, &|_: String| {});
+    let mut ran = Vec::new();
+    let outcome = backend.under_session(|reference| -> Result<&'static str, Refusal> {
+        ran.push(reference.to_string());
+        Ok("ack")
+    });
+    assert_eq!(outcome.map_err(|refusal| refusal.to_string()), Ok("ack"), "the call is served");
+    let SessionState::Open(fresh) = backend.session.current() else { panic!("no session stands: {:?}", backend.session.current()) };
+    assert_ne!(fresh, "s-1", "a fresh reference");
+    assert_eq!(ran, [fresh], "the attempt ran once, under the session opened");
+    assert_eq!(opens.load(Ordering::SeqCst), 1, "one open at the board");
+    assert_eq!(*lines.lock().expect("the lines' lock"), ["the session had ended with no re-open: a session was opened afresh, and the call is served under it"]);
+}
+
+/// A session opened afresh after the drain settled is closed at the board.
+///
+/// The drain's late re-open of the lapsed session lands while the adapter's
+/// own open is in flight at a stand-in board: the session that open made is
+/// adopted by nothing, so it is closed at the board under its own token, the
+/// re-open stands, and nothing is said.
+#[test]
+fn a_session_opened_afresh_after_the_drain_settled_is_closed_at_the_board() {
+    const TOKEN: &str = "fedcba9876543210fedcba9876543210";
+    let watch = Arc::new(SessionWatch::new("s-1".into()));
+    watch.settle("s-1", Death::ServeOn, &|_: String| {});
+    let (heads, seen) = std::sync::mpsc::channel::<String>();
+    let origin = stand_in({
+        let watch = Arc::clone(&watch);
+        move |head: &str| {
+            let _ = heads.send(head.to_string());
+            if head.starts_with("POST /session ") {
+                // The drain settles the lapse by a late re-open, mid-open.
+                watch.settle("s-1", Death::Reopened("s-2".into()), &|_: String| {});
+                Some(answered("200 OK", &format!(r#"{{"principal":1,"session":"{TOKEN}"}}"#)))
+            } else if head.starts_with("POST /op ") {
+                Some(answered("200 OK", r#"{"resp":"maybe_addr","addr":"1.0.1","as_of":0}"#))
+            } else if head.starts_with("POST /session/close ") {
+                Some(answered("204 No Content", ""))
+            } else {
+                None
+            }
+        }
+    });
+    let scratch = Scratch::new("afresh-closed");
+    let mut backend = backend_at(&scratch.0, origin, SessionMode::Bare { principal: 1 });
+    backend.session = Arc::clone(&watch);
+    let lines = said_by(&mut backend);
+    backend.open_afresh("s-1").expect("the open is answered");
+    assert_eq!(backend.session.current(), SessionState::Open("s-2".into()), "the drain's re-open stands");
+    let heads: Vec<String> = seen.try_iter().collect();
+    let closes: Vec<&String> = heads.iter().filter(|head| head.starts_with("POST /session/close ")).collect();
+    assert_eq!(closes.len(), 1, "the session that open made is closed at the board, once: {heads:?}");
+    assert!(closes[0].to_ascii_lowercase().contains(&format!("skepd-session: {TOKEN}")), "under its own token: {}", closes[0]);
+    assert!(lines.lock().expect("the lines' lock").is_empty(), "nothing is said");
+}
+
+/// The drain settles the session's state by its deaths, and says so once.
+///
+/// Fed by hand in the bus's place: a `held` and an `index` event, which name
+/// the session the calls run under too, move nothing; nor does a death of a
+/// session the state never named, or one heard twice; a `session-died` of the
+/// live session moves the state as its reason asks — to the fresh session on
+/// the restart arm's re-open and to a lapse on the unreachable arm, each said
+/// once, and to the stop on a stopping arm, its line handed to the stop alone.
+#[test]
+fn the_drain_settles_each_death_of_the_session_once_and_drops_every_other_event() {
+    let scratch = Scratch::new("drain");
+    let mut backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
+    let lines = said_by(&mut backend);
+    let (stops, stopped) = std::sync::mpsc::channel::<String>();
+    backend.on_stop = OnStop::new(stops, |line| line);
+    let (bus, events) = std::sync::mpsc::channel::<Event>();
+    backend.drain(events);
+    let died = |session: &str, reason: Value| Event { name: EventName::SessionDied, data: json!({"session": session, "reason": reason}) };
+    for event in [
+        Event { name: EventName::Held, data: json!({"board": "b-1", "session": "s-1", "doc": "1.0.1.0.2", "held": 1, "state": "holding"}) },
+        Event { name: EventName::Index, data: json!({"board": "b-1", "session": "s-1", "state": {"arm": "building"}}) },
+        died("s-0", json!({"arm": "retired", "fingerprint": "ff00"})),
+        died("s-1", json!({"arm": "restart", "reopened": true, "session": "s-2"})),
+        died("s-1", json!({"arm": "restart", "reopened": true, "session": "s-2"})),
+        died("s-2", json!({"arm": "unreachable", "text": "connect refused"})),
+        died("s-2", json!({"arm": "retired", "fingerprint": "ab12"})),
+    ] {
+        bus.send(event).expect("the drain listens");
+    }
+    let line = stopped.recv_timeout(Duration::from_secs(10)).expect("the stopping death hands the stop its line");
+    assert!(line.starts_with("the key ab12 was retired at the board"), "the live session's stop: {line}");
+    // A line said after the stop would land within this beat.
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(backend.session.current(), SessionState::Stopped("s-2".into()));
+    assert!(stopped.try_recv().is_err(), "the stop is handed one line");
+    let said = lines.lock().expect("the lines' lock").clone();
+    assert_eq!(said.len(), 2, "the re-open and the lapse said once each, and nothing else: {said:?}");
+    assert!(said[0].starts_with("the board restarted: the session was re-opened"), "{said:?}");
+    assert!(said[1].starts_with("the session ended and was not re-opened"), "{said:?}");
+}
+
 /// A blob's URI is the fetch's route at the board's origin, `i` as written.
 ///
 /// An `i` in its one spelling rides the query untouched; one that is no
-/// address breaks the precondition, which a debug build checks.
+/// address breaks the precondition, which a debug build checks and a release
+/// build does not.
 #[test]
 fn a_blob_uri_is_the_fetch_route_and_takes_an_address_alone() {
     let scratch = Scratch::new("blob-uri");
     let backend = backend_at(&scratch.0, Origin::parse("http://127.0.0.1:1").expect("a canonical origin"), SessionMode::Bare { principal: 1 });
     assert_eq!(backend.blob_uri("1.0.1.0.1.0.1.1"), "http://127.0.0.1:1/blob?i=1.0.1.0.1.0.1.1");
     let broken = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.blob_uri("1.0.1&i=2")));
-    assert!(broken.is_err(), "an `i` that is no address breaks the precondition");
+    assert_eq!(broken.is_err(), cfg!(debug_assertions), "an `i` that is no address breaks the precondition a debug build checks");
 }
 
 /// The backend's `Debug` names its stop and shows no closure.
@@ -272,11 +432,7 @@ fn the_clean_stop_says_what_it_closes_as_the_session_state_has_it() {
         if let Some(death) = death {
             backend.session.settle("s-1", death, &|_: String| {});
         }
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        backend.talk = {
-            let lines = Arc::clone(&lines);
-            Arc::new(move |line: &str| lines.lock().expect("the lines' lock").push(line.to_string()))
-        };
+        let lines = said_by(&mut backend);
         let state = backend.session.current();
         backend.shutdown();
         assert_eq!(*lines.lock().expect("the lines' lock"), [said], "{state:?}");

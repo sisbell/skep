@@ -137,8 +137,8 @@ fn the_read_holds_the_cap_and_tells_a_whole_file_from_a_cut_one() {
 /// Each read yields one byte after a short wait, as a peer pacing bytes inside
 /// skep-client's per-read bound does, so no read's own timeout fires: the
 /// deadline alone ends the read, `TimedOut`, the bytes that came counted; a
-/// body whose deadline has passed is never read; and the deadline is never
-/// shorter than an honest board's stream.
+/// body whose deadline has passed is never read; and the deadline is an honest
+/// board's own bound on its stream, no shorter and no longer.
 #[test]
 fn a_paced_body_is_cut_at_its_deadline_and_one_past_it_is_never_read() {
     // A hundred bytes, one each 20 ms: two seconds whole.
@@ -172,5 +172,5 @@ fn a_paced_body_is_cut_at_its_deadline_and_one_past_it_is_never_read() {
     }
     assert!(started.elapsed() < Duration::from_secs(1), "cut at the deadline, not at the body's end: {:?}", started.elapsed());
     assert!(matches!(read_within(&Headers(Vec::new()), Untouched, Duration::ZERO), FetchAnswer::Cut { read: 0, length: None, .. }), "a body past its deadline is never read");
-    assert!(FETCH_DEADLINE >= Duration::from_secs(10 * 60 + 30), "never shorter than an honest board's stream");
+    assert_eq!(FETCH_DEADLINE, Duration::from_secs(10 * 60 + 30), "an honest board's own bound on its stream: no shorter, and no longer");
 }

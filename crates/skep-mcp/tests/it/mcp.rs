@@ -11,7 +11,7 @@
 //! closed stdout ends it. Startup is `startup.rs`'s; the fence's cases are
 //! `agent.rs`'s; the daemon, the claim and the driver are `common`'s.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,11 @@ fn width_of(addr: &str, last: u64) -> String {
 
 // ── the tests ────────────────────────────────────────────────────────────
 
+/// `initialize` and `tools/list` answer the catalog the binary embeds.
+///
+/// `initialize` answers 2025-06-18 to a client naming it, the server's name and
+/// version, its instructions and the tools capability; `tools/list` is the
+/// tools file's entries verbatim, in file order; stdin's end is the clean exit.
 #[test]
 fn initialize_and_tools_list_serve_the_catalog() {
     let fixture = Fixture::new("catalog");
@@ -39,6 +44,7 @@ fn initialize_and_tools_list_serve_the_catalog() {
     let init = mcp.initialize();
     assert_eq!(init["protocolVersion"], "2025-06-18", "a client naming 2025-06-18 is answered it — also the fallback, so this cannot tell an echo from a constant");
     assert_eq!(init["serverInfo"]["name"], "skep");
+    assert_eq!(init["serverInfo"]["version"], env!("CARGO_PKG_VERSION"), "MCP's Implementation names its version: {init}");
     assert!(init["instructions"].as_str().is_some_and(|s| !s.is_empty()), "instructions non-empty: {init}");
     assert!(init["capabilities"]["tools"].is_object(), "tools capability: {init}");
 
@@ -53,20 +59,6 @@ fn initialize_and_tools_list_serve_the_catalog() {
         assert!(t["description"].as_str().is_some_and(|s| !s.is_empty()), "every tool carries a description: {t}");
         assert!(t["inputSchema"].is_object(), "every tool carries a schema: {t}");
     }
-
-    // Protocol basics alongside: ping, and unknown method → -32601.
-    let v = mcp.request("ping", json!({}));
-    assert_eq!(v["result"], json!({}));
-    let v = mcp.request("resources/list", json!({}));
-    assert_eq!(v["error"]["code"], json!(-32601), "unknown method: {v}");
-
-    // Invalid params and an invalid request, JSON-RPC 2.0's own codes.
-    let v = mcp.request("tools/call", json!({}));
-    assert_eq!(v["error"]["code"], json!(-32602), "params that name no tool: {v}");
-    mcp.send_line(r#"{"jsonrpc":"2.0","id":"no-method"}"#);
-    let v = mcp.read_message();
-    assert_eq!(v["error"]["code"], json!(-32600), "a request that names no method: {v}");
-    assert_eq!(v["id"], json!("no-method"), "answered under its own id: {v}");
 
     // Stdin EOF is the clean exit.
     let status = mcp.finish();
@@ -85,6 +77,25 @@ fn initialize_answers_the_fallback_revision_when_none_is_named() {
     mcp.send_line(r#"{"jsonrpc":"2.0","id":"bare","method":"initialize"}"#);
     let v = mcp.read_message();
     assert_eq!((&v["id"], &v["result"]["protocolVersion"]), (&json!("bare"), &json!("2025-06-18")));
+}
+
+/// A notification is consumed, and nothing it names runs.
+///
+/// A `tools/call` sent with no id — a mint's — answers nothing and mints
+/// nothing: the draft minted next is the one after the draft minted before
+/// it, and the next request's answer is the next line on stdout.
+#[test]
+fn a_tools_call_sent_as_a_notification_runs_nothing() {
+    let fixture = Fixture::new("notified");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let before = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    mcp.send_line(&json!({"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "create_new_document", "arguments": {"account": CLAIMANT_ACCOUNT}}}).to_string());
+    let after = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let (docs, last) = before.rsplit_once('.').expect("a document address");
+    let n: u64 = last.parse().expect("a document ordinal");
+    assert_eq!(after, format!("{docs}.{}", n + 1), "the notification minted nothing");
+    assert!(mcp.finish().success());
 }
 
 /// `session_info` reports who the adapter acts as, and its session's facts.
@@ -111,8 +122,13 @@ fn session_info_reports_who_the_adapter_acts_as() {
     assert!(mcp.finish().success());
 }
 
+/// `insert` seats a string byte by byte, and an atom at one position.
+///
+/// "hello" is five values at five positions, read back over width 0.5 as one
+/// content item; an atom inserted after it is one value at one position, never
+/// coalesced into the run, read back as its own item.
 #[test]
-fn lifecycle_create_insert_retrieve_link_and_rejections() {
+fn insert_seats_a_string_byte_by_byte_and_an_atom_at_one_position() {
     let fixture = Fixture::new("life");
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
@@ -134,6 +150,22 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     assert_eq!(v["resp"], "ack_addr", "atom insert: {v}");
     let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": doc, "span": {"start": "1.1", "width": "0.6"}}]}));
     assert_eq!(v["items"], json!([{"content": "hello"}, {"atom": "chunk"}]));
+    assert!(mcp.finish().success());
+}
+
+/// `make_link` takes `from_` as the wire's `from`; `follow_link` reads TO.
+///
+/// A link from five positions of one draft to six of another, typed by a
+/// third's first, acks through the schema's `from_`, and its TO slot's coverage
+/// reads back nonempty.
+#[test]
+fn make_link_takes_from_as_the_wires_from_and_follow_link_reads_the_to_slot() {
+    let fixture = Fixture::new("life-link");
+    let mut mcp = Launch::over(&fixture, 1).spawn();
+    mcp.initialize();
+    let doc = draft_of(&mut mcp, CLAIMANT_ACCOUNT);
+    let v = mcp.call_json("insert", json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}));
+    assert_eq!(v["resp"], "ack_addr", "insert: {v}");
 
     // make_link (through the schema's from_ → the wire's from) and
     // follow_link on the TO slot.
@@ -159,32 +191,6 @@ fn lifecycle_create_insert_retrieve_link_and_rejections() {
     let v = mcp.call_json("follow_link", json!({"a": link, "slot": 2}));
     assert_eq!(v["resp"], "follow");
     assert!(v["result"]["ok"].as_array().is_some_and(|s| !s.is_empty()), "TO coverage nonempty: {v}");
-
-    // A rejection is a NORMAL result: isError false, the board's verdict
-    // verbatim under `body`, the refusal's members beside it.
-    let v = mcp.call_json("retrieve_v", json!({"specs": [{"doc": "1.0.9.0.1", "span": {"start": "1.1", "width": "0.1"}}]}));
-    assert_eq!(v["kind"], "refused", "rejections pass through as content: {v}");
-    assert_eq!(v["name"], "doc_not_registered");
-    assert_eq!(v["body"]["resp"], "rejected", "the verdict verbatim: {v}");
-    assert_eq!(v["body"]["code"], "doc_not_registered");
-    assert_eq!(v["body"]["op"], "retrieve_v");
-
-    // A malformed JSON line gets -32700 with id null, and the process
-    // survives to answer the next request.
-    mcp.send_line("this is not json");
-    let v = mcp.read_message();
-    assert_eq!(v["error"]["code"], json!(-32700), "parse error: {v}");
-    assert!(v["id"].is_null(), "parse errors carry id null: {v}");
-    let v = mcp.request("ping", json!({}));
-    assert_eq!(v["result"], json!({}), "the adapter survives malformed input");
-
-    // A line that is not UTF-8 is a parse error too, never the end of stdin.
-    mcp.send_bytes(b"\xff\xfe\n");
-    let v = mcp.read_message();
-    assert_eq!(v["error"]["code"], json!(-32700), "non-UTF-8 parse error: {v}");
-    assert!(v["id"].is_null(), "parse errors carry id null: {v}");
-    let v = mcp.request("ping", json!({}));
-    assert_eq!(v["result"], json!({}), "the adapter survives a non-UTF-8 line");
     assert!(mcp.finish().success());
 }
 
@@ -394,25 +400,27 @@ fn a_log_no_one_reads_fails_no_work() {
 /// A call the adapter will not run is -32602; one of the wrong form, refused.
 ///
 /// The adapter's own refusals of a call it will not run take the channel
-/// `call_params`' faults take — -32602 under the call's id, never `isError`:
-/// a name outside the catalog, a ceremony's name among them; an argument an
-/// adapter tool's row does not take, or its `opts` (the adapter is the one
-/// party that refuses those: ignored, a `principal` of 2 to `session_info`
-/// would be answered with this adapter's own facts, as if they were 2's, and
-/// a misspelt `under` would list the whole index as though narrowed; an
-/// `under` to `changes_since` is a narrowing the tool does not take yet);
-/// and a wire op's arguments of the shape the shell reads as its `/op-at`
-/// form, whose inner frame it would send to the board's history. A wire
-/// op's other arguments pass through unread: the board's verdict on a
-/// stranger member is data. A member of the wrong form, or missing, reaches
-/// the shell, which refuses it `malformed_args` naming it, `isError`; the
-/// adapter never crashes on it.
+/// `call_params`' faults take, params that name no tool among them — -32602
+/// under the call's id, never `isError`: a name outside the catalog, a
+/// ceremony's name among them; an argument an adapter tool's row does not take,
+/// or its `opts` (the adapter is the one party that refuses those: ignored, a
+/// `principal` of 2 to `session_info` would be answered with this adapter's own
+/// facts, as if they were 2's, and a misspelt `under` would list the whole
+/// index as though narrowed; an `under` to `changes_since` is a narrowing the
+/// tool does not take yet); and a wire op's arguments of the shape the shell
+/// reads as its `/op-at` form, whose inner frame it would send to the board's
+/// history. A wire op's other arguments pass through unread: the board's
+/// verdict on a stranger member is data. A member of the wrong form, or
+/// missing, reaches the shell — `fetch`'s `i`, and an adapter tool's `opts` or
+/// an option in it, which the door passes on whole — which refuses it
+/// `malformed_args` naming it, `isError`; the adapter never crashes on it.
 #[test]
 fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_the_shells_refusal() {
     let fixture = Fixture::new("refuse");
     let mut mcp = Launch::over(&fixture, 1).spawn();
     mcp.initialize();
     for (call, names) in [
+        (json!({}), "'name'"),
         (json!({"name": "frobnicate", "arguments": {}}), "'frobnicate'"),
         (json!({"name": "keygen", "arguments": {"label": "x"}}), "'keygen'"),
         (json!({"name": "session_info", "arguments": {"principal": 2}}), "'principal'"),
@@ -429,9 +437,16 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
     }
     let v = mcp.call_json("doc_metadata", json!({"doc": CLAIMANT_DOC1, "stranger": 1}));
     assert_eq!((v["kind"].as_str(), v["body"]["op"].as_str()), (Some("refused"), Some("unparseable")), "a wire op's stranger member is the board's to refuse: {v}");
-    for args in [json!({}), json!({"i": 7}), json!({"i": "1..2"})] {
-        let refused = mcp.call_error("fetch", args.clone());
-        assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some("i")), "{args}: {refused}");
+    for (tool, args, what) in [
+        ("fetch", json!({}), "i"),
+        ("fetch", json!({"i": 7}), "i"),
+        ("fetch", json!({"i": "1..2"}), "i"),
+        ("search", json!({"query": "x", "opts": {"limit": "three"}}), "opts.limit"),
+        ("places", json!({"opts": {"under": 7}}), "opts.under"),
+        ("places", json!({"opts": 3}), "opts"),
+    ] {
+        let refused = mcp.call_error(tool, args.clone());
+        assert_eq!((refused["kind"].as_str(), refused["name"].as_str(), refused["what"].as_str()), (Some("shell"), Some("malformed_args"), Some(what)), "{tool} {args}: {refused}");
     }
     assert!(mcp.finish().success());
 }
@@ -440,11 +455,20 @@ fn a_call_the_adapter_will_not_run_is_invalid_params_and_one_of_the_wrong_form_t
 ///
 /// The first answer it cannot write is its exit, stdin still open — no
 /// orphan goes on taking requests whose answers nobody reads — and the exit
-/// is the clean one.
+/// is the clean one: the clean stop runs, the session closed at the board, as
+/// at stdin's end.
 #[test]
 fn a_closed_stdout_ends_the_adapter() {
     let fixture = Fixture::new("hangup");
-    let mut child = Launch::over(&fixture, 1).stderr(Stdio::null()).child();
+    let mut child = Launch::over(&fixture, 1).logged().child();
+    let log = {
+        let mut stderr = child.stderr.take().expect("the adapter's log");
+        std::thread::spawn(move || {
+            let mut log = String::new();
+            let _ = stderr.read_to_string(&mut log);
+            log
+        })
+    };
     drop(child.stdout.take());
     let mut stdin = child.stdin.take().expect("child stdin");
     stdin.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n").expect("a request");
@@ -463,5 +487,7 @@ fn a_closed_stdout_ends_the_adapter() {
     }
     drop(stdin);
     let status = exited.unwrap_or_else(|| panic!("the adapter outlived its closed stdout by 30 s, stdin open"));
+    let log = log.join().expect("the log's reader");
     assert!(status.success(), "a harness that hung up is the clean exit: {status:?}");
+    assert!(log.contains("stopping: closing the session at the board, saving the index"), "the clean stop ran, its session closed at the board:\n{log}");
 }

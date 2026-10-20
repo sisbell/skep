@@ -5,11 +5,12 @@
 //! malformed — the principal, the board, the key store, the commons, a value
 //! that is not UTF-8 — and served where it is given: a flag beating its
 //! variable, the commons sentence, a tools file in the embedded catalog's place
-//! and a drifted one refused; and the board's refusals of the open, a halted
-//! board's line, the log inert and no token in it. Most run the built binary
-//! with no board, or a stand-in one answering what a real board never does;
-//! the rest over a claimed board (`common`'s `Fixture`). The fence's startup
-//! cases — no key, `SKEP_BOARD`, a retired key's relaunch — are `agent.rs`'s.
+//! and a drifted one refused; and the board's refusals of the open, a board
+//! said halted exactly where its writes are, the log inert and no token in it.
+//! Most run the built binary with no board, or a stand-in one answering what a
+//! real board never does; the rest over a claimed board (`common`'s
+//! `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`, a retired
+//! key's relaunch — are `agent.rs`'s.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -116,20 +117,25 @@ fn a_boards_text_reaches_the_log_inert() {
     assert!(!err.lines().any(|l| l.starts_with("skep-mcp: forged")), "a line the board wrote opens as the adapter's: {err:?}");
 }
 
-/// A halted board is said at startup with what a write then meets.
+/// A board is said halted at startup exactly where its writes are halted.
 ///
-/// A stand-in board's `/health` reports its writes halted; the adapter says
-/// the board's line before its keyless store stops startup, and the line says
-/// what a write meets through the shell until the board restarts: a burst
-/// held for the shell's resend, any other write refused `poisoned`.
+/// A stand-in board's `/health` reports its writes halted, running, or says
+/// nothing of them; the adapter says the board's line before its keyless store
+/// stops startup, and the halted board's line alone says what a write meets
+/// through the shell until the board restarts: a burst held for the shell's
+/// resend, any other write refused `poisoned`.
 #[test]
-fn a_halted_board_is_said_at_startup_with_what_a_write_then_meets() {
-    let health = r#"{"ok":true,"log_position":0,"auth":{"claimant":"1.0.1","local_trust":false},"writes":{"halted":true}}"#;
-    let port = stand_in(move |_, _| answered(health));
-    let keyless = TempDir::new("halted");
-    let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", keyless.path()).env("SKEP_PRINCIPAL", "1").refusal();
-    assert_eq!(code, Some(1), "the keyless store stops startup: {err}");
-    assert!(err.contains("; writes HALTED until the board restarts: a burst is held for the shell's resend, and any other write refused `poisoned`"), "the halt said, and what a write meets: {err}");
+fn a_board_is_said_halted_at_startup_exactly_where_its_writes_are_halted() {
+    let halted = "; writes HALTED until the board restarts: a burst is held for the shell's resend, and any other write refused `poisoned`";
+    for (writes, said) in [(r#","writes":{"halted":true}"#, true), (r#","writes":{"halted":false}"#, false), ("", false)] {
+        let health = format!(r#"{{"ok":true,"log_position":0,"auth":{{"claimant":"1.0.1","local_trust":false}}{writes}}}"#);
+        let port = stand_in(move |_, _| answered(&health));
+        let keyless = TempDir::new("halted");
+        let (code, err) = Launch::new().env("SKEP_BOARD", format!("http://127.0.0.1:{port}")).env("SKEP_KEYSTORE", keyless.path()).env("SKEP_PRINCIPAL", "1").refusal();
+        assert_eq!(code, Some(1), "the keyless store stops startup: {err}");
+        assert!(err.contains(&format!("board http://127.0.0.1:{port} (reference ")), "premise: the board's line is said: {err}");
+        assert_eq!(err.contains(halted), said, "{writes:?}: {err}");
+    }
 }
 
 /// A token in a session answer the client cannot read reaches no log line.
@@ -189,12 +195,14 @@ fn a_board_that_does_not_answer_stops_startup() {
     assert!(out.stdout.is_empty(), "nothing served: {:?}", String::from_utf8_lossy(&out.stdout));
 }
 
-/// The principal is required and one the board seats: unset, startup
-/// refuses by name; set to anything that is no integer from 0 to 2^53 − 1,
-/// it refuses quoting the value; set to an id the board seats no account
-/// for — 2^53 − 1, the largest a board registers, and an undelegated 2 —
-/// the session's pre-check stops startup `not_registered`, exit 1, with
-/// nothing served. A flag beats its variable.
+/// The principal is required, an integer from 0 to 2^53 − 1 the board seats.
+///
+/// Unset, startup refuses by name; set to anything that is no integer in that
+/// range, it refuses quoting the value, while 0, the range's floor, passes and
+/// startup goes on to the board; set to an id the board seats no account for —
+/// 2^53 − 1, the largest a board registers, and an undelegated 2 — the
+/// session's pre-check stops startup `not_registered`, exit 1, with nothing
+/// served. A flag beats its variable.
 #[test]
 fn the_principal_is_required_and_one_the_board_seats() {
     let fixture = Fixture::new("principal");
@@ -206,6 +214,8 @@ fn the_principal_is_required_and_one_the_board_seats() {
         assert_eq!(code, Some(1), "'{bad}': {err}");
         assert!(err.contains(&format!("'{bad}' is not a principal")), "{err}");
     }
+    let (_, err) = Launch::over(&fixture, 1).env("SKEP_PRINCIPAL", "0").refusal();
+    assert!(!err.contains("is not a principal") && err.contains(&format!("board {} (reference ", fixture.origin())), "0, the range's floor, is a principal: startup goes on to the board: {err}");
     for unseated in ["9007199254740991", "2"] {
         let (code, err) = Launch::over(&fixture, 1).env("SKEP_PRINCIPAL", unseated).refusal();
         assert_eq!(code, Some(1), "{unseated}: {err}");

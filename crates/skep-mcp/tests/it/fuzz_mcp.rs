@@ -220,26 +220,31 @@ fn random_utf8_line(rng: &mut u64, max_len: usize) -> String {
 ///
 /// Counted by the sentinel, so a reply where none is owed shows: a request,
 /// one response under its id as given — whatever JSON the id is, `jsonrpc`
-/// absent or another version — a CRLF-ended one included; a notification of
-/// any method, a stray response, an id-less non-request and a blank line
-/// (`\r` alone included), none; a line that is no JSON — bytes that are not
-/// UTF-8, and nesting far past the parser's depth bound, included — the
-/// -32700 parse error, and JSON that is no object the -32600, both id null.
-/// No line here reaches the board.
+/// absent or another version — a CRLF-ended one included, a method this server
+/// does not offer the -32601, MCP's own `resources/list` among them; an id
+/// with no method, no `result` and no `error`, the -32600 under that id; a
+/// notification of any method, a stray response, an id-less non-request and a
+/// blank line (`\r` alone included), none; a line that is no JSON — bytes that
+/// are not UTF-8, and nesting far past the parser's depth bound, included —
+/// the -32700 parse error, and JSON that is no object the -32600, both id
+/// null; and every sentinel `ping` answers `{}`. No line here reaches the
+/// board.
 #[test]
 fn each_line_shape_gets_its_documented_answer() {
     let fixture = Fixture::new("shapes");
     let mut mcp = Mcp::spawn(&fixture);
-    let requests: [(&[u8], Value, Option<i64>); 5] = [
+    let answered: [(&[u8], Value, Option<i64>); 7] = [
         (br#"{"jsonrpc":"2.0","id":"probe","method":"ping"}"#, json!("probe"), None),
         (b"{\"jsonrpc\":\"2.0\",\"id\":\"crlf\",\"method\":\"ping\"}\r", json!("crlf"), None),
         (br#"{"jsonrpc":"2.0","id":99,"method":"no/such"}"#, json!(99), Some(-32601)),
+        (br#"{"jsonrpc":"2.0","id":"listing","method":"resources/list"}"#, json!("listing"), Some(-32601)),
+        (br#"{"jsonrpc":"2.0","id":"no-method"}"#, json!("no-method"), Some(-32600)),
         (br#"{"id":"bare","method":"ping"}"#, json!("bare"), None),
         (br#"{"jsonrpc":"1.0","id":"old","method":"ping"}"#, json!("old"), None),
     ];
-    for (line, id, code) in requests {
+    for (line, id, code) in answered {
         let r = mcp.responses_for(line);
-        assert_eq!(r.len(), 1, "a request gets exactly one response: {r:?}");
+        assert_eq!(r.len(), 1, "{:?} gets exactly one response: {r:?}", String::from_utf8_lossy(line));
         assert_eq!((&r[0]["id"], r[0]["error"]["code"].as_i64()), (&id, code), "{:?}", r[0]);
     }
     for id in [json!(null), json!(true), json!(-7), json!(1.5), json!(""), json!([1, "a"]), json!({"k": [null]})] {
@@ -262,7 +267,8 @@ fn each_line_shape_gets_its_documented_answer() {
         assert!(r.is_empty(), "{:?} gets no response: {r:?}", String::from_utf8_lossy(line));
     }
     let deep = "[".repeat(1_000_000);
-    let refused: [(&[u8], i64); 7] = [(b"{ this is not json", -32700), (b"\xff\xfe", -32700), (deep.as_bytes(), -32700), (b"[]", -32600), (b"7", -32600), (br#""ping""#, -32600), (b"null", -32600)];
+    let refused: [(&[u8], i64); 8] =
+        [(b"{ this is not json", -32700), (b"this is not json", -32700), (b"\xff\xfe", -32700), (deep.as_bytes(), -32700), (b"[]", -32600), (b"7", -32600), (br#""ping""#, -32600), (b"null", -32600)];
     for (line, code) in refused {
         let shown = format!("{:.40}", String::from_utf8_lossy(line));
         let r = mcp.responses_for(line);

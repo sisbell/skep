@@ -2197,7 +2197,7 @@
     },
     {
       "name": "session_info",
-      "description": "Adapter apparatus, not a wire operation: who you are at this board — {principal, account (your principal's account: a principal the board seats no account for stops this adapter at startup), key: {fingerprint, label} (the key this session signs with, enrolled in the account's set or the nearest set above it), board (the origin), writes (whether this session may write), mode (UNCLAIMED, CLAIMED-PERMISSIVE or ENFORCING) and health (the board's GET /health answer verbatim, log_position among its members)}. Call it first.",
+      "description": "Adapter apparatus, not a wire operation: who you are at this board — {principal, account (your principal's account: a principal the board seats no account for stops this adapter at startup), key: {fingerprint, label} (the store's key as the adapter selected it at its start, enrolled in the account's set or the nearest set above it; a key bound into the store since then signs from the next session the shell opens, which this answer does not name), board (the origin), writes (whether this session may write), mode (UNCLAIMED, CLAIMED-PERMISSIVE or ENFORCING) and health (the board's GET /health answer verbatim, log_position among its members)}. Call it first.",
       "inputSchema": {
         "type": "object",
         "properties": {},

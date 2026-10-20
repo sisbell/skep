@@ -80,9 +80,11 @@
 //! with the moment it was said and cut of any answer's text, and never
 //! waiting on its reader, with the panic hook that makes a panic one line of
 //! it.
-//! This file is startup — flags, environment, the `SKEP_COMMONS` check, the
-//! shell's open — and the loop's two inputs (stdin's reader, the backend's
-//! stop) wired onto one channel.
+//! This file is startup — the settings, each spelled once and refused by name
+//! before any dial, the store's write probe and the hold that keeps it one
+//! adapter process's, the `settings:` line naming each setting in force and
+//! its source, the shell's open — and the loop's two inputs (stdin's reader,
+//! the backend's stop) wired onto one channel.
 //!
 //! stdout is protocol-only; all logging goes to stderr, through `log`, which
 //! fails nothing and waits on nothing. Stdin EOF is the clean exit: the
@@ -97,15 +99,21 @@ mod shell;
 mod tools;
 
 use std::borrow::Cow;
-use std::env::{self, VarError};
+use std::env;
 use std::ffi::OsString;
 use std::fmt;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use skep_client::dial::plaintext_non_loopback_warning;
+use skep_client::search::SearchDir;
+use skep_client::store::default_store_dir;
 use skep_client::Origin;
 
 use crate::log::{install_the_panic_hook, log};
@@ -116,17 +124,24 @@ use crate::tools::Catalog;
 const USAGE: &str = "\
 usage: skep-mcp [--board <ORIGIN>] [--dir <PATH>] [--principal <N>] [--tools-file <PATH>]
 
-  --board <ORIGIN>     the board, a canonical http:// origin such as
-                       http://127.0.0.1:8642 (env SKEP_BOARD; required): an
-                       https:// one is refused, this adapter dialing plain
-                       http:// alone, and one off this machine's loopback
-                       carries the session's token in the clear unless a
-                       tunnel carries it
+  --board <ORIGIN>     the board, by a canonical http:// origin it signs
+                       sessions for — one its --origin names, as written,
+                       the origin the agent's key is bound at (env
+                       SKEP_BOARD; required): this adapter signs for the
+                       origin it dials, so a tunnel serves only where its
+                       local end is such an origin; an https:// one is
+                       refused, this adapter dialing plain http:// alone,
+                       and one off this machine's loopback carries the
+                       session's token in the clear
   --dir <PATH>         the key store this adapter signs from (env
-                       SKEP_KEYSTORE; required, a directory that stands:
-                       ~/.skep is never consulted), and where its search
-                       index and held bursts sit — ONE directory per
-                       adapter process, never a running dev provider's
+                       SKEP_KEYSTORE; required, a directory that stands
+                       and this process can write: ~/.skep is never
+                       consulted), and where its search index and held
+                       bursts sit — ONE directory per adapter process,
+                       never a running dev provider's: a second start
+                       over it waits up to 30 s for the first to end, and
+                       is refused after that. Read at start, and the
+                       store's key again at each session the shell opens
   --principal <N>      the principal this adapter acts as (env
                        SKEP_PRINCIPAL; required: an integer, 0 to
                        9007199254740991, the largest a board registers)
@@ -135,12 +150,13 @@ usage: skep-mcp [--board <ORIGIN>] [--dir <PATH>] [--principal <N>] [--tools-fil
   --help               this text
   --version            this binary's version and the commit it was built from
 
-environment:
-  SKEP_BOARD      the board (--board); a flag beats its variable
+environment (a flag beats its variable; a variable set empty is unset, as
+the skep command reads it):
+  SKEP_BOARD      the board (--board)
   SKEP_KEYSTORE   the key store (--dir)
   SKEP_PRINCIPAL  the principal (--principal)
-  SKEP_COMMONS    optional address of the commons, the document whose
-                  subspace 3 names link types; when set, the server
+  SKEP_COMMONS    optional: the commons, 1.1.0.1.0.1, alone — the document
+                  whose subspace 3 names link types; when set, the server
                   instructions point agents at it
   SKEPD_URL       no longer read: the board is named by --board or
                   SKEP_BOARD, as the skep command names it
@@ -154,6 +170,13 @@ exit status:
     2  a usage error
   101  a panic: a bug, said in one line of the log
 
+stop:
+  stdin's end closes the session at the board and saves the index,
+  seconds where the board answers. A signal ends the process at once,
+  its held bursts already on disk, its session left at the board until
+  the board restarts. The person stops an agent for good by retiring
+  its key (skep retire)
+
 log:
   stderr, every line opening 'skep-mcp: ' and the moment it was said,
   RFC 3339 UTC to the millisecond, the first naming the version and the
@@ -165,6 +188,56 @@ Speaks MCP (JSON-RPC 2.0, one message per line) on stdio, and serves every
 tool through the shell's core (skep-shell) under one signed session it
 opens at startup for the principal, with the store's key for it.";
 
+/// A setting's spelling: its flag, and the variable that stands in for it.
+///
+/// Each setting is spelled once, here: the parse reads it, the refusals and
+/// the `settings:` line name it, and the suite holds the usage and the
+/// README's settings table to it.
+type Spelling = (&'static str, Option<&'static str>);
+
+/// The board's spelling: `--board`, or `SKEP_BOARD`, the `skep` command's too.
+const BOARD: Spelling = ("--board", Some("SKEP_BOARD"));
+
+/// The key store's spelling: `--dir`, or `SKEP_KEYSTORE`.
+///
+/// It is the `skep` command's spelling, which defaults it to `~/.skep`, a
+/// default this adapter never takes.
+const DIR: Spelling = ("--dir", Some("SKEP_KEYSTORE"));
+
+/// The principal's spelling: `--principal`, or `SKEP_PRINCIPAL`.
+///
+/// It is the `skep` command's spelling too, under the same bound
+/// (`MAX_PRINCIPAL`).
+const PRINCIPAL: Spelling = ("--principal", Some("SKEP_PRINCIPAL"));
+
+/// The tools file's spelling: `--tools-file`, which no variable stands in for.
+const TOOLS_FILE: Spelling = ("--tools-file", None);
+
+/// The variable that points the server instructions at the commons.
+///
+/// No flag stands in for it.
+const COMMONS_VARIABLE: &str = "SKEP_COMMONS";
+
+/// The variable the board was named by before `SKEP_BOARD`, read no longer.
+///
+/// Whether it is set is said; its value is never decoded.
+const RETIRED_BOARD_VARIABLE: &str = "SKEPD_URL";
+
+/// Every setting a flag supplies, for the suite that holds the usage and the
+/// README's settings table to their spellings.
+#[cfg(test)]
+const SETTINGS: [Spelling; 4] = [BOARD, DIR, PRINCIPAL, TOOLS_FILE];
+
+/// The commons: the system account's first document, `1.1.0.1.0.1`.
+///
+/// Its subspace 3 holds every link type's address on every board
+/// (`1.1.0.1.0.1 · 0 · 3 · n`, commons-map), and the format fixes it:
+/// skep-namespace's `ghost_home_document`, skep-registry's
+/// `COMMONS_TYPE_PREFIX` and every type address skep-client signs and reads
+/// (`T_ENROLL`, `T_GRANT`, …), which the suite holds to it. `SKEP_COMMONS`
+/// takes this value alone.
+const COMMONS_DOCUMENT: &str = "1.1.0.1.0.1";
+
 /// The largest principal id a board registers: `2^53 − 1`, the top of the
 /// range a JSON number carries exactly — skepd's `delegate` refuses a
 /// larger `new_id` at the parse (wire.md §Value encodings), so every
@@ -173,6 +246,29 @@ opens at startup for the principal, with the store's key for it.";
 /// as skep-cli's `parse_principal` is for the same variable, at the same
 /// bound.
 const MAX_PRINCIPAL: u64 = (1 << 53) - 1;
+
+/// The file under the store whose lock keeps it one adapter process's.
+///
+/// It is this adapter's own: the store's `lock` is the key store's, taken for
+/// a binding's append alone (`client.md` §3.7), and the shell's are per board,
+/// under its search index and its held bursts. The holder writes its pid in
+/// it, for the next start to name.
+const STORE_LOCK: &str = "skep-mcp.lock";
+
+/// The longest a start waits for another adapter's hold on its store to end.
+///
+/// INTERIM: a restart's predecessor's clean stop at a board that answers —
+/// the session's close and the index's save, a few seconds — with room, and
+/// well inside the time a harness gives `initialize`. A predecessor still
+/// stopping past it, or a second adapter left running over the store, refuses
+/// the start.
+const STORE_WAIT: Duration = Duration::from_secs(30);
+
+/// The directory under the store the shell keeps its held bursts in.
+///
+/// It is `client.md` §3c.1's `held/`, which skep-shell's private held store
+/// spells, spelled here for the start's write probe alone.
+const HELD_DIR: &str = "held";
 
 /// Returns this binary's build: `<crate version> (<commit>)`.
 ///
@@ -194,8 +290,7 @@ fn version_line() -> String {
 
 /// A setting a flag supplies, or the variable that stands in for it.
 ///
-/// It holds its flag, its variable — none for `--tools-file` — and the
-/// value the flag was given, at most once.
+/// It holds its spelling and the value the flag was given, at most once.
 #[derive(Debug)]
 struct Setting {
     flag: &'static str,
@@ -204,8 +299,8 @@ struct Setting {
 }
 
 impl Setting {
-    /// Returns the setting of `flag`, read from `var` where it is not given.
-    fn new(flag: &'static str, var: Option<&'static str>) -> Setting {
+    /// Returns the setting spelled `spelling`, its flag not yet given.
+    fn new((flag, var): Spelling) -> Setting {
         Setting { flag, var, given: None }
     }
 
@@ -222,7 +317,8 @@ impl Setting {
 
     /// Returns the setting's text: the flag's value, else its variable's.
     ///
-    /// A value that is not UTF-8 is refused by name.
+    /// A value that is not UTF-8 is refused by name; a variable set empty is
+    /// unset (`env_set`).
     fn text(&self) -> Option<String> {
         match &self.given {
             Some(value) => match value.to_str() {
@@ -231,6 +327,27 @@ impl Setting {
             },
             None => self.var.and_then(env_text),
         }
+    }
+
+    /// Returns the setting's source: its flag where given, else its variable.
+    fn source(&self) -> &'static str {
+        match self.var {
+            Some(var) if self.given.is_none() => var,
+            _ => self.flag,
+        }
+    }
+
+    /// Returns the line owed where the flag beats a variable set beside it.
+    ///
+    /// It is owed where the variable is set to another value than the flag's:
+    /// the variable is not read, and a value a shell exported there — the
+    /// person's own `SKEP_KEYSTORE` or `SKEP_PRINCIPAL`, which the `skep`
+    /// command reads — would otherwise stand behind the flag unsaid.
+    fn shadowed(&self) -> Option<String> {
+        let (given, var) = (self.given.as_ref()?, self.var?);
+        let set = env_set(var).filter(|set| set != given)?;
+        let beside = set.to_str().map_or_else(|| "to a value that is not UTF-8 text".to_string(), |text| format!("to '{text}'"));
+        Some(format!("{} '{}' beats {var}, set beside it {beside}: the variable is not read", self.flag, given.to_string_lossy()))
     }
 
     /// Returns the setting as a refusal names it: `--board (or SKEP_BOARD)`.
@@ -251,10 +368,10 @@ fn main() -> ExitCode {
 
 /// Starts the adapter and serves it to its end: the code to exit with.
 fn serve() -> ExitCode {
-    let mut board = Setting::new("--board", Some("SKEP_BOARD"));
-    let mut dir = Setting::new("--dir", Some("SKEP_KEYSTORE"));
-    let mut principal = Setting::new("--principal", Some("SKEP_PRINCIPAL"));
-    let mut tools_file = Setting::new("--tools-file", None);
+    let mut board = Setting::new(BOARD);
+    let mut dir = Setting::new(DIR);
+    let mut principal = Setting::new(PRINCIPAL);
+    let mut tools_file = Setting::new(TOOLS_FILE);
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
         // A flag is looked up by the spelling its own setting holds, so no
@@ -284,31 +401,45 @@ fn serve() -> ExitCode {
     // id.
     log(format_args!("version {}, pid {}", build(), std::process::id()));
     // The catalog next: a drifted tools file is a startup error before any
-    // environment or network is consulted. Its source is named where it is
-    // refused and where the serving line counts its tools.
-    let source = match &tools_file.given {
+    // environment or network is consulted. Its source is named, by its
+    // absolute path, where it is refused, where the settings line names it and
+    // where the serving line counts its tools.
+    let tools_path = tools_file.given.as_deref().map(|path| resolved(&tools_file, Path::new(path)));
+    let source = match &tools_path {
         None => "the embedded catalog".to_string(),
-        Some(path) => format!("the tools file {}", Path::new(path).display()),
+        Some(path) => format!("the tools file {}", path.display()),
     };
-    let text = match &tools_file.given {
+    let text = match &tools_path {
         None => Cow::Borrowed(tools::EMBEDDED),
-        Some(path) => match std::fs::read_to_string(path) {
+        Some(path) => match fs::read_to_string(path) {
             Ok(t) => Cow::Owned(t),
-            Err(e) => die(format_args!("{} {}: {e}", tools_file.flag, Path::new(path).display())),
+            Err(e) => die(format_args!("{} {}: {e}", tools_file.flag, path.display())),
         },
     };
     let mut catalog = match Catalog::load(&text) {
         Ok(c) => c,
         // A tools file is held to this binary's dispatch at every start, so
         // the likeliest drift is one written for another release.
-        Err(e) if tools_file.given.is_some() => die(format_args!(
+        Err(e) if tools_path.is_some() => die(format_args!(
             "{source}: {e} — a tools file replaces the embedded catalog whole and is held to this binary's dispatch at every start: write it afresh from this release's tools.json (crates/skep-mcp/tools.json at its tag), or drop --tools-file"
         )),
         Err(e) => die(format_args!("{source}: {e}")),
     };
+    // A tools file is served whole in the embedded catalog's place, so where
+    // its text differs from this release's — one written for another release
+    // whose tools match, or one edited — every agent is told that text, and
+    // the start says so.
+    if tools_path.is_some() {
+        let embedded = Catalog::load(tools::EMBEDDED).expect("the embedded catalog loads: `tools::tests` holds it to the dispatch");
+        if let Some(drift) = catalog.drift_from(&embedded) {
+            log(format_args!(
+                "{source} differs from the catalog this release embeds ({drift}): every agent is told that file's text, not this release's — rewrite it from this release's tools.json where it was written for another"
+            ));
+        }
+    }
     // Then the settings, each refused by name and the first refusal ending
     // startup: the principal, the board, the store, the commons.
-    let principal = match principal.text() {
+    let principal_id = match principal.text() {
         Some(v) => match v.parse::<u64>().ok().filter(|p| *p <= MAX_PRINCIPAL) {
             Some(p) => p,
             None => die(format_args!("{}: '{v}' is not a principal (a non-negative integer no greater than {MAX_PRINCIPAL})", principal.named())),
@@ -321,19 +452,24 @@ fn serve() -> ExitCode {
             None => die(format_args!("{}: '{text}' is not a canonical origin (http://host[:port], lowercase, no path, no trailing slash)", board.named())),
         },
         None => {
-            // `SKEPD_URL` is read no longer: whether it is set is said, its
-            // value never decoded.
-            let retired = if env::var_os("SKEPD_URL").is_some() { format!(" — SKEPD_URL is set and no longer read: the board is named by {} alone", board.named()) } else { String::new() };
+            let retired = if env_set(RETIRED_BOARD_VARIABLE).is_some() {
+                format!(" — {RETIRED_BOARD_VARIABLE} is set and no longer read: the board is named by {} alone", board.named())
+            } else {
+                String::new()
+            };
             die(format_args!("{} is required: the board this adapter serves{retired}", board.named()))
         }
     };
     // This adapter dials plain http:// alone — the release builds its
-    // skep-client without `tls` — so an https:// board is refused here, where
-    // the setting is read, in the words of whoever set it, and never meets a
-    // dialer that holds no transport for it.
+    // skep-client without `tls` — and signs for the origin it dials, so an
+    // https:// board is refused here, where the setting is read, in the words
+    // of whoever set it, and never meets a dialer that holds no transport for
+    // it. What serves instead is an http:// origin the board signs sessions
+    // for: its loopback origin on its own machine, or that origin a tunnel
+    // carries here, never a hosted board's.
     if origin.is_https() {
         die(format_args!(
-            "{}: '{origin}' is an https:// origin, and this adapter dials plain http:// alone: give it the board's loopback origin on the board's own machine, or the http:// origin of a tunnel to the board",
+            "{}: '{origin}' is an https:// origin, and this adapter dials plain http:// alone: give it an http:// origin the board signs sessions for — its loopback origin on its own machine, or that origin carried here by a tunnel; a hosted board signs its https:// origin alone, out of this adapter's reach",
             board.named()
         ));
     }
@@ -345,14 +481,15 @@ fn serve() -> ExitCode {
     if let Some(warning) = plaintext_non_loopback_warning(&origin) {
         log(warning);
     }
-    let store_dir = match dir.text() {
+    let given = match dir.text() {
         Some(path) if !path.is_empty() => PathBuf::from(path),
         _ => die(format_args!("{} is required: the key store this adapter signs from, one directory per adapter process (~/.skep is never consulted)", dir.named())),
     };
+    let store_dir = resolved(&dir, &given);
     // The store stands before the shell opens over it: the shell's feed thread
     // makes the search index under it at its open, so a path that names
     // nothing is refused here, before anything is made at it.
-    match std::fs::metadata(&store_dir) {
+    match fs::metadata(&store_dir) {
         Ok(meta) if meta.is_dir() => {}
         Ok(_) => die(format_args!("{}: '{}' is no directory: the key store this adapter signs from is the directory the agent's key was made in", dir.named(), store_dir.display())),
         Err(e) => die(format_args!(
@@ -361,17 +498,75 @@ fn serve() -> ExitCode {
             store_dir.display()
         )),
     }
-    // The commons pointer: an address the instructions hand to agents,
-    // never dereferenced here — T4 well-formedness is the whole startup
-    // check, the same class of refusal as a bad board.
-    let commons = env_text("SKEP_COMMONS").inspect(|a| {
+    // The shell writes its search index and its held bursts under the store,
+    // and a burst held where it cannot be written is kept in memory alone, lost
+    // at the process's end: so the store, and each of the two that stands, is
+    // one this process can write, or the start is refused.
+    for at in store_writes(&store_dir) {
+        if let Err(e) = writable(&at) {
+            die(format_args!(
+                "{}: '{}' cannot be written ({e}): the shell keeps this adapter's search index and held bursts under the key store, and a burst held where it cannot be written is lost at the process's end",
+                dir.named(),
+                at.display()
+            ));
+        }
+    }
+    // The commons pointer: the address the instructions hand to agents,
+    // never dereferenced here. The format fixes it (`COMMONS_DOCUMENT`), so a
+    // value that is no T4 address is refused as malformed, and any other as
+    // not the commons.
+    let commons = env_text(COMMONS_VARIABLE).inspect(|a| {
         if !is_t4_address(a) {
-            die(format_args!("SKEP_COMMONS: '{a}' is not a T4-valid address"));
+            die(format_args!("{COMMONS_VARIABLE}: '{a}' is not a T4-valid address"));
+        }
+        if a != COMMONS_DOCUMENT {
+            die(format_args!(
+                "{COMMONS_VARIABLE}: '{a}' is not the commons: every board's link types are addresses in subspace 3 of {COMMONS_DOCUMENT}, its system account's first document — set it to that, or leave it unset"
+            ));
         }
     });
     if let Some(addr) = &commons {
         catalog.append_commons(addr);
     }
+    // What the start reads, said before it dials: each flag that beats a
+    // variable set beside it, the retired variable set beside a named board,
+    // and a store that is the person's own; then every setting in force and
+    // where it came from, on one line.
+    for line in [&board, &dir, &principal].into_iter().filter_map(Setting::shadowed) {
+        log(line);
+    }
+    if env_set(RETIRED_BOARD_VARIABLE).is_some() {
+        log(format_args!("{RETIRED_BOARD_VARIABLE} is set and no longer read: the board is {origin} ({})", board.source()));
+    }
+    if is_the_persons_store(&store_dir) {
+        log(format_args!(
+            "warning: {} '{}' is the person's own store, ~/.skep: the agent signs with the person's key, and retiring that key to stop the agent retires it for the person — give the agent a store of its own",
+            dir.named(),
+            store_dir.display()
+        ));
+    }
+    let given_as = if given.is_relative() {
+        let cwd = env::current_dir().map_or_else(|e| format!("that could not be read ({e})"), |cwd| cwd.display().to_string());
+        format!(", given as {} against the working directory {cwd}", given.display())
+    } else {
+        String::new()
+    };
+    let catalog_said = if tools_path.is_some() { format!("{source} ({})", tools_file.flag) } else { source.clone() };
+    let commons_said = match &commons {
+        None => format!("no commons ({COMMONS_VARIABLE} unset)"),
+        Some(addr) => format!("the commons {addr} ({COMMONS_VARIABLE})"),
+    };
+    log(format_args!(
+        "settings: board {origin} ({}), store {} ({}{given_as}), principal {principal_id} ({}), {catalog_said}, {commons_said} — each read once, at this start, save the store's key, which the shell selects anew at each session it opens",
+        board.source(),
+        store_dir.display(),
+        dir.source(),
+        principal.source()
+    ));
+    // The store is this process's for its life: a second adapter over it — a
+    // restart's predecessor still stopping among them — is waited for, and
+    // refused past `STORE_WAIT`.
+    let _store_hold = hold_the_store(&store_dir, &dir.named(), STORE_WAIT).unwrap_or_else(|line| die(format_args!("{line}")));
     // The loop's two inputs, on one channel: stdin's lines and its end, which
     // `read_stdin` sends from a thread of its own, and the backend's stop,
     // which `OnStop` sends on this unbounded channel and never waits on.
@@ -380,7 +575,7 @@ fn serve() -> ExitCode {
     // THE SHELL: opened, checked and its one session opened before any tool
     // is served; a stop here returns, so the shell's own stop has run.
     let talk: skep_shell::Talk = Arc::new(|line: &str| log(line));
-    let backend = match Backend::open(origin, store_dir, principal, talk, on_stop) {
+    let backend = match Backend::open(origin, store_dir, principal_id, talk, on_stop) {
         Ok(backend) => backend,
         Err(line) => {
             log(line);
@@ -394,6 +589,110 @@ fn serve() -> ExitCode {
     ));
     read_stdin(inbound);
     Server { backend, catalog }.run(&inbox)
+}
+
+/// Returns `path` resolved against the working directory, as an absolute path.
+///
+/// Symlinks are left as they stand, so every line after names the path as
+/// given, made absolute. A path that cannot be resolved — an empty one, or a
+/// working directory that cannot be read — is refused naming `setting`.
+fn resolved(setting: &Setting, path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|e| die(format_args!("{}: '{}' cannot be resolved to an absolute path ({e})", setting.named(), path.display())))
+}
+
+/// Returns the directories the start's write probe reads.
+///
+/// They are the store, where the shell makes its search index and its held
+/// bursts, and each of those two directories that stands: the index's root
+/// (`SearchDir`) and `HELD_DIR`.
+fn store_writes(store_dir: &Path) -> Vec<PathBuf> {
+    let under = [SearchDir::new(store_dir).root().to_path_buf(), store_dir.join(HELD_DIR)];
+    std::iter::once(store_dir.to_path_buf()).chain(under.into_iter().filter(|dir| dir.is_dir())).collect()
+}
+
+/// Returns whether this process can make and remove a file in `dir`.
+///
+/// # Errors
+///
+/// The I/O error making or removing the probe, `.skep-mcp-probe-<pid>`.
+fn writable(dir: &Path) -> io::Result<()> {
+    let probe = dir.join(format!(".skep-mcp-probe-{}", std::process::id()));
+    File::create(&probe)?;
+    fs::remove_file(&probe)
+}
+
+/// Returns whether `store_dir` is the person's own store, `~/.skep`.
+///
+/// Both are read as the filesystem resolves them, so a symlink or another
+/// spelling of the person's store is found too; a person's store that does not
+/// stand is none.
+fn is_the_persons_store(store_dir: &Path) -> bool {
+    let Some(persons) = default_store_dir() else { return false };
+    matches!((fs::canonicalize(persons), fs::canonicalize(store_dir)), (Ok(persons), Ok(store)) if persons == store)
+}
+
+/// Takes the store for this process: the lock on `STORE_LOCK` under it.
+///
+/// The lock is held for the file's life, the process's, so it ends with the
+/// process however that ends. Where another adapter holds it — a restart's
+/// predecessor still stopping, or a second adapter over one store — the wait
+/// is said once, naming that process by the pid it wrote, and the lock is
+/// tried each tenth of a second until `wait` runs out. Once taken, this
+/// process's pid is written in the file for the next start to name.
+///
+/// # Errors
+///
+/// The refusal's line, naming the setting as `named`: the lock file could not
+/// be opened, locked or written, or another adapter still held it when `wait`
+/// ran out.
+fn hold_the_store(store_dir: &Path, named: &str, wait: Duration) -> Result<File, String> {
+    let path = store_dir.join(STORE_LOCK);
+    let faulted = |e: io::Error| format!("{named}: '{}' cannot be held ({e}): the start locks it so one adapter process serves over the store", path.display());
+    let mut opts = OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&path).map_err(faulted)?;
+    let deadline = Instant::now() + wait;
+    let mut said = false;
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(TryLockError::Error(e)) => return Err(faulted(e)),
+            Err(TryLockError::WouldBlock) => {
+                let holder = holder_of(&mut file);
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "{named}: '{}' is held by another skep-mcp process ({holder}): one directory per adapter process — stop that one, or give this one a store of its own",
+                        store_dir.display()
+                    ));
+                }
+                if !said {
+                    log(format_args!("the store '{}' is held by another skep-mcp process ({holder}): waiting up to {} s for it to end", store_dir.display(), wait.as_secs()));
+                    said = true;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    file.set_len(0).and_then(|()| file.seek(SeekFrom::Start(0))).and_then(|_| writeln!(file, "{}", std::process::id())).map_err(faulted)?;
+    Ok(file)
+}
+
+/// Returns the lock file's holder as a line names it: by the pid it wrote.
+///
+/// A holder that has not written its pid yet — it writes it once the lock is
+/// its own — is named so.
+fn holder_of(file: &mut File) -> String {
+    let mut text = String::new();
+    let read = file.seek(SeekFrom::Start(0)).and_then(|_| file.read_to_string(&mut text));
+    match read.ok().and_then(|_| text.trim().parse::<u32>().ok()) {
+        Some(pid) => format!("pid {pid}"),
+        None => "its pid not yet written".to_string(),
+    }
 }
 
 /// Says a refusal before the shell is open, and exits 1.
@@ -417,15 +716,25 @@ fn die_usage(msg: fmt::Arguments<'_>) -> ! {
     std::process::exit(2);
 }
 
-/// A variable's text, `None` while it is unset. A value that is not UTF-8
-/// text is refused by name, in skepd's words, never read as unset: it was
-/// given, and running on a default in its place is the silent failure the
-/// refusal exists to prevent.
+/// Returns a variable's value, `None` while it is unset or set empty.
+///
+/// A variable set empty is unset, as the `skep` command reads the same
+/// variables (skep-cli's `args.rs`, the way a shell unsets one for a single
+/// run): a harness template that writes every key, an empty one meaning
+/// none, runs as if that key were absent.
+fn env_set(var: &str) -> Option<OsString> {
+    env::var_os(var).filter(|value| !value.is_empty())
+}
+
+/// Returns a variable's text, `None` while it is unset or set empty.
+///
+/// A value that is not UTF-8 text is refused by name, in skepd's words, never
+/// read as unset: it was given, and running on a default in its place is the
+/// silent failure the refusal exists to prevent.
 fn env_text(var: &str) -> Option<String> {
-    match env::var(var) {
+    match env_set(var)?.into_string() {
         Ok(text) => Some(text),
-        Err(VarError::NotPresent) => None,
-        Err(VarError::NotUnicode(_)) => die(format_args!("{var}: the value is not UTF-8 text")),
+        Err(_) => die(format_args!("{var}: the value is not UTF-8 text")),
     }
 }
 
@@ -459,105 +768,4 @@ fn is_t4_address(s: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The startup gate on SKEP_COMMONS is exactly T4: leading/trailing
-    /// zero, adjacent zeros, and a fourth separator all refuse; depth and
-    /// magnitude do not.
-    #[test]
-    fn the_commons_gate_refuses_each_t4_clause_but_no_depth_or_magnitude() {
-        for good in ["1", "1.1", "1.0.2", "1.0.1.0.1", "1.0.1.0.1.0.1.1", "1.0.2.0.3.0.3.6.1", "10.20.30"] {
-            assert!(is_t4_address(good), "'{good}' is T4-valid");
-        }
-        for bad in ["", "0", "0.1", "1.0", "1..2", "1.a", " 1", "1.0.0.1", "1.0.1.0.1.0.1.0.2", "1.-2"] {
-            assert!(!is_t4_address(bad), "'{bad}' is not T4-valid");
-        }
-    }
-
-    /// The gate is skep-address's T4 validator read off the digits — a law,
-    /// so every string of a family is visited, not a chosen few: each dotted
-    /// decimal of one to nine components drawn from `0`, `00`, `1` and `10`.
-    /// Nine components are the fewest in which a fourth zero breaks no other
-    /// clause; `00` is a zero by its digits, `10` a nonzero ending in one.
-    #[test]
-    fn the_commons_gate_agrees_with_skep_address_on_every_short_dotted_decimal() {
-        use skep_address::{is_t4_valid, Nat, Tumbler};
-        let alphabet: [(&str, u32); 4] = [("0", 0), ("00", 0), ("1", 1), ("10", 10)];
-        let (mut visited, mut disagreements) = (0usize, Vec::new());
-        for depth in 1..=9u32 {
-            for mut n in 0..4usize.pow(depth) {
-                let (mut digits, mut comps) = (Vec::new(), Vec::new());
-                for _ in 0..depth {
-                    let (text, value) = alphabet[n % 4];
-                    digits.push(text);
-                    comps.push(Nat::from(value));
-                    n /= 4;
-                }
-                let s = digits.join(".");
-                let valid = is_t4_valid(&Tumbler::new(comps).expect("a nonempty tumbler"));
-                if is_t4_address(&s) != valid {
-                    disagreements.push(s);
-                }
-                visited += 1;
-            }
-        }
-        assert_eq!(visited, 349_524, "the family visited whole");
-        assert!(disagreements.is_empty(), "{} strings judged unlike is_t4_valid, first: {:?}", disagreements.len(), &disagreements[..disagreements.len().min(5)]);
-    }
-
-    /// The build is the crate's version and the build's commit, and names both.
-    ///
-    /// It is `<crate version> (<commit>)`, the version `CARGO_PKG_VERSION`'s
-    /// and the commit `SKEP_GIT_SHA`'s at build time, `unknown` where the
-    /// build set none, which this suite's build never does; the version line is
-    /// `skep-mcp <build>`; and the usage names the flag.
-    #[test]
-    fn the_version_line_names_the_binary_its_version_and_the_build_commit() {
-        assert_eq!(build(), format!("{} ({})", env!("CARGO_PKG_VERSION"), option_env!("SKEP_GIT_SHA").unwrap_or("unknown")));
-        assert_eq!(version_line(), format!("skep-mcp {}", build()));
-        assert!(USAGE.contains("\n  --version            this binary's version"), "{USAGE}");
-    }
-
-    /// A setting names its flag and variable, and holds the flag's value.
-    #[test]
-    fn a_setting_names_its_flag_and_variable_and_holds_the_flags_value() {
-        let mut board = Setting::new("--board", Some("SKEP_BOARD"));
-        assert_eq!(board.named(), "--board (or SKEP_BOARD)");
-        assert_eq!(Setting::new("--tools-file", None).named(), "--tools-file");
-        board.take(&mut [OsString::from("http://127.0.0.1:8642")].into_iter());
-        assert_eq!(board.text().as_deref(), Some("http://127.0.0.1:8642"), "the flag's value, its variable unread");
-    }
-
-    /// The usage names the three settings by flag and variable, and says
-    /// `SKEPD_URL` is read no longer: a person whose shell still exports it
-    /// reads here where the board is named now.
-    #[test]
-    fn the_usage_names_the_settings_and_retires_skepd_url() {
-        for named in ["--board <ORIGIN>", "SKEP_BOARD", "--dir <PATH>", "SKEP_KEYSTORE", "--principal <N>", "SKEP_PRINCIPAL", "SKEP_COMMONS", "SKEPD_URL       no longer read"] {
-            assert!(USAGE.contains(named), "the usage names {named}: {USAGE}");
-        }
-    }
-
-    /// The usage states the exit statuses the suites pin.
-    ///
-    /// 0 at stdin's end or a closed stdout, 1 a refusal before serving or a
-    /// stop while serving, 2 a usage error, 101 a panic.
-    #[test]
-    fn the_usage_states_the_exit_statuses() {
-        for status in ["\nexit status:\n    0  stdin's end", "\n    1  a refusal before serving", "\n    2  a usage error", "\n  101  a panic"] {
-            assert!(USAGE.contains(status), "the usage states {status:?}: {USAGE}");
-        }
-    }
-
-    /// The usage says where the log is, and that its reader holds nothing up.
-    #[test]
-    fn the_usage_says_where_the_log_is() {
-        for said in [
-            "\nlog:\n  stderr, every line opening 'skep-mcp: ' and the moment it was said,\n  RFC 3339 UTC to the millisecond, the first naming the version and the\n  process id",
-            "never holds the adapter up",
-        ] {
-            assert!(USAGE.contains(said), "the usage says {said:?}: {USAGE}");
-        }
-    }
-}
+mod tests;

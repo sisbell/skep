@@ -18,11 +18,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   key enrolled in the person's set, until the hire ceremony lands). No
   key in the store, or a key the board refuses, stops the adapter before
   it serves, with the shell's face in plain words; no bare mode exists.
-  The startup lines on stderr name the board and its mode, the key and
-  the account, and the person seam — and, for a board off this machine's
-  loopback, the warning that its session's token rides in the clear
-  unless a tunnel carries it, and the principal's held bursts an earlier
-  run left at the board, or a held file the shell halted. Every line on
+  The startup lines on stderr name every setting in force and where it
+  came from, the board and its mode, the key and the account, and the
+  person seam — and, for a board off this machine's loopback, the warning
+  that its session's token rides in the clear unless a tunnel carries it,
+  and the principal's held bursts an earlier run left at the board, or a
+  held file the shell halted. Every line on
   stderr opens `skep-mcp: ` and the moment it was said: a C0 control, DEL or
   bidi control a board's text carries there is shown as its code point, and
   a line break in it continues the line indented.
@@ -75,19 +76,47 @@ in the crate doc (`src/main.rs`).
 
 ## Settings
 
-| flag | variable | what |
-|---|---|---|
-| `--board <origin>` | `SKEP_BOARD` | the board, a canonical `http://` origin such as `http://127.0.0.1:8642`; required. An `https://` origin is refused: the adapter dials plain `http://` alone, so a hosted board is reached at the `http://` origin of a tunnel to it, and a board on another machine without one carries its session's token in the clear, as the start's warning says. `SKEPD_URL` is no longer read. |
-| `--dir <path>` | `SKEP_KEYSTORE` | the key store the adapter signs from, a directory that stands; required, `~/.skep` never consulted. The shell's search index and its held bursts sit there too, so it is ONE DIRECTORY PER ADAPTER PROCESS, never a running `skep-dev serve`'s: the index's and the held store's locks are per process, and a second process on the same directory gets a `busy` index, said in its log, and holds its bursts in memory alone. The index persists there across runs and is built from scratch in a fresh directory — `search` and `places` answer `state.arm` `building` meanwhile. |
-| `--principal <n>` | `SKEP_PRINCIPAL` | the principal the adapter acts as; required, an integer from 0 to 2^53 − 1 |
-| — | `SKEP_COMMONS` | optional: the commons' address, which the server instructions then point agents at |
-| `--tools-file <path>` | — | override the embedded catalog |
+Every value the adapter runs with is read once, at its start — a change
+takes a restart, and nothing re-reads one mid-run — save the store's key,
+which the shell selects anew at each session it opens. A flag beats its
+variable, and the start says so where the variable is set beside it to
+another value; a variable set empty is unset, as the `skep` command reads
+the same variables; a value that is not UTF-8 text is refused by name. Each
+setting's refusal is exit 1, naming the setting as it was given, and the
+start's `settings:` line names every setting in force and where it came
+from. `src/main.rs`'s unit suite (`src/tests.rs`) holds each row's
+spelling to the parse's and the figures it states to their constants, and
+`tests/it/tidy.rs` holds every variable the source reads to a row here.
 
-A flag beats its variable. `--version` and `--help` answer before any
-setting or stdin is read. The process exits 0 at stdin's end or a closed
-stdout, the session closed at the board; 1 at a refusal before serving or
-a stop while serving; 2 at a usage error; 101 at a panic, a bug said in
-one line of the log.
+| setting | variable | default | checked | said at start | read | what it sets |
+|---|---|---|---|---|---|---|
+| `--board` | `SKEP_BOARD` (`skep` reads it too) | none: required | a canonical `http://` origin, an `https://` one refused, before any dial; one the board signs sessions for, at the session's open (`origin_state`) | the `settings:` line; the board line; the plaintext warning, off this machine's loopback | once, at start | the board, by one of its `--origin`s as written ([RUNBOOK.md](../../RUNBOOK.md) §3), the origin the agent's key is bound at: the adapter signs for the origin it dials, so a tunnel serves only where its local end is such an origin, and a hosted board, which signs its `https://` origin alone, is out of its reach |
+| `--dir` | `SKEP_KEYSTORE` (`skep` reads it too, defaulting it to `~/.skep`; this adapter never does) | none: required | a directory that stands, that this process can write, and that no other adapter holds — waited for up to 30 s — before any dial; the store's key for the principal, before serving (`no_key`, `store_unreadable`) | the `settings:` line, as an absolute path; the signed-as line; a warning where it is the person's own `~/.skep` | at start, and the store's key again at each session the shell opens | the key store — `keys/` and `bindings`, the agent's key and its binding — and beside them the shell's search index (`index/`) and held bursts (`held/`), and `skep-mcp.lock`, whose lock keeps it one adapter process's; never a running `skep-dev serve`'s, which takes no such lock: a second shell over one directory finds its index `busy` and keeps its bursts in memory alone, each said in its log. The index persists across runs, built from scratch in a fresh directory, `search` and `places` answering `state.arm` `building` meanwhile |
+| `--principal` | `SKEP_PRINCIPAL` (`skep` reads it too) | none: required | an integer from 0 to 2^53 − 1, before any dial; one the board seats, at the session's open (`not_registered`) | the `settings:` line; the signed-as line | once, at start | the principal the session acts as |
+| `--tools-file` | — | the embedded catalog | read whole and held to this binary's dispatch, before any other setting | the `settings:` and serving lines, by its absolute path; a line where its text differs from the embedded catalog's | once, at start | the catalog every agent is told: the instructions, and each tool's name, description and schema |
+| — | `SKEP_COMMONS` | unset | the commons' address, `1.1.0.1.0.1`, alone, before any dial | the `settings:` and serving lines | once, at start | the commons sentence the server instructions end with, pointing agents at the document whose subspace 3 names every link type |
+| — | `SKEPD_URL` | — | never decoded | a line where it is set | never | nothing: no longer read |
+| — | `HOME`, else `USERPROFILE` | — | — | the warning, where the store is the person's own | once, at start | where the person's own store, `~/.skep`, is, which the start compares the store with |
+| — | `HOSTNAME`, else `COMPUTERNAME` | `dev-machine` | — | — | at the shell's open | an anchor box's default name, which the refusing arm never asks for |
+
+`--version`'s commit is the build's `SKEP_GIT_SHA`, compiled in: `unknown`
+where the build set none, as a developer's own `cargo build` does;
+`scripts/release-pack.sh` sets it for a release. `--version` and `--help`
+answer before any setting or stdin is read. The process exits 0 at stdin's
+end or a closed stdout, the session closed at the board; 1 at a refusal
+before serving or a stop while serving; 2 at a usage error; 101 at a panic,
+a bug said in one line of the log.
+
+Not settings: the pins, carded constants a rebuild alone moves, each stated
+once at its home — the fetch's cap and deadline (`MAX_FETCH_BYTES`,
+`FETCH_DEADLINE`, `src/media.rs`); the wait for a session the shell ended
+(`SETTLE_WAIT`, `src/shell.rs`); the slow-call bound (`SLOW_CALL`,
+`src/server.rs`, skep-client's `IO_TIMEOUT`) and the revision `initialize`
+answers where a client names none (`FALLBACK_PROTOCOL_VERSION`); the start's
+wait for a store another adapter holds (`STORE_WAIT`, `src/main.rs`); the
+log's queue, line and stall bounds (`QUEUE_BYTES`, `LINE_BYTES`,
+`DRAIN_STALL`, `src/log.rs`); skep-client's dial bounds (`CONNECT_TIMEOUT`,
+`IO_TIMEOUT`); and skep-shell's own.
 
 The log is stderr: every line opens `skep-mcp: ` and the moment it was said,
 RFC 3339 UTC to the millisecond, as the daemon's own lines do, and the first
@@ -127,6 +156,48 @@ signs with — generated and enrolled by the person at their own client
 retiring it (`skep retire`).
 
 A binary crate; pair it with a running [skepd](../skepd).
+
+## Running it
+
+**Start.** One origin names the board in three places, character for
+character: the board signs sessions for it (its `--origin`,
+[RUNBOOK.md](../../RUNBOOK.md) §3); the agent's store binds its key at it
+(the person's `skep keygen --dir <store> --payload` in that store, `skep
+enroll` of the record from the person's own device, and `skep bind --dir
+<store> --board <origin>` with the reply); and the harness runs `skep-mcp
+--board <origin> --dir <store> --principal <n>`. The start is done when the
+log says `signed as principal …` and `serving … tools`; a refusal before
+then is one line naming the check that did not hold, and exit 1.
+
+**Stop.** The harness closes stdin and waits for the exit. The clean stop
+closes the session at the board and saves the index: seconds where the
+board answers or is gone, up to about a minute and a half where it accepts
+the connection and then stops answering — the close and the feed's last
+read each held to skep-client's exchange deadline. A signal ends the
+process at once: its held bursts are already on disk, the session lives on
+at the board until the board restarts, and the index resumes from its last
+save. The person stops an agent for good by retiring its key (`skep
+retire`); every start over that store is then refused `retired`.
+
+**Restart.** Stop it, then start it over the same `--dir`: the held bursts,
+counted at the start, and the index carry over. A start over a store
+another adapter still holds — a predecessor still stopping — waits up to
+30 s for it to end, and is refused after that.
+
+**Upgrade.** Stop it, replace the binary, start it. Write any `--tools-file`
+afresh from the new release's `tools.json`: the start refuses one whose
+tools are not this release's, and says so of one whose text differs. An
+older release over a store a newer one wrote leaves the newer index and held
+file as found, each said at the start, until the newer release runs there
+again.
+
+**Back up.** Copy the store with the adapter stopped. `keys/` and `bindings`
+are the agent's key and its binding: a copy of `keys/` is a copy of the
+agent's signing key, and the person remakes both where they are lost.
+`held/` is the one state only this adapter holds: put back, the shell reads
+each document's changes before it resends a line, and a line whose document
+moved waits on the agent's `resolve`. `index/` is rebuilt from the board and
+needs no copy, and `skep-mcp.lock` is the running process's.
 
 ## License
 

@@ -65,6 +65,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 use skep_client::address::is_address_text;
+use skep_client::search::SearchDir;
 use skep_client::sheet::render_inert;
 use skep_client::store::KeyFacts;
 use skep_client::{DialError, Origin};
@@ -195,8 +196,9 @@ fn halted_line(path: &str, why: &str) -> String {
 ///
 /// The state is skep-shell's `IndexState`, three of whose arms ask an act of
 /// whoever runs the adapter (search.md §5.1, §5.6, §7.4): `busy`, another
-/// process holding the index's directory, as a second adapter or a dev
-/// provider over the same `--dir` does; `newer_skep`, the file a newer skep's,
+/// process holding the index's directory, as a dev provider over the same
+/// `--dir` does — a second adapter waits for the first at the start, the
+/// store's lock its own — `newer_skep`, the file a newer skep's,
 /// faced and searched not; and `past_the_ceiling`, units left out past the
 /// index's ceiling. `index_dir` is the directory the line names. `None` for
 /// every other arm.
@@ -205,7 +207,7 @@ fn index_line(state: &Value, index_dir: &str) -> Option<(&'static str, String)> 
         "busy" => Some((
             "busy",
             format!(
-                "the search index at {index_dir} answers busy: another process holds this directory — two adapters on one --dir, or an adapter beside a dev provider — so search and places answer no hit for this process's life, and where the other holds the held store too, a burst this process holds is kept in memory alone and lost at its end: stop one of the two and start this one again (a busy the next commit clears was the board's history, busy at the index's resume)"
+                "the search index at {index_dir} answers busy: another process holds this directory — a dev provider over this --dir, whose shell locks the index and not the store — so search and places answer no hit for this process's life, and where the other holds the held store too, a burst this process holds is kept in memory alone and lost at its end: stop the other and start this one again (a busy the next commit clears was the board's history, busy at the index's resume)"
             ),
         )),
         "newer_skep" => {
@@ -432,9 +434,10 @@ impl Backend {
     /// earlier run left standing, or the shell's halt of their file.
     /// The bus is subscribed before that session opens and drained from the
     /// open's end (`Backend::drain`), so no death of it goes unheard, and the
-    /// search index under `store_dir` is named in the states it says. Each
-    /// line goes to `talk`, and `on_stop` is the process's stop, kept for the
-    /// backend's life.
+    /// search index under `store_dir` — where skep-client's `SearchDir` puts
+    /// it, the shell's feed opening it there — is named in the states it
+    /// says. Each line goes to `talk`, and `on_stop` is the process's stop,
+    /// kept for the backend's life.
     ///
     /// # Errors
     ///
@@ -513,7 +516,7 @@ impl Backend {
         }
         let session = Arc::new(SessionWatch::new(reference));
         let backend = Backend { shell, board, origin, principal, account, writes, key, session, on_stop, talk };
-        backend.drain(events, &store_dir.join("index"));
+        backend.drain(events, SearchDir::new(store_dir).root());
         Ok(backend)
     }
 
@@ -808,7 +811,11 @@ impl Backend {
     /// The answer is the principal, its account, the signing key's
     /// fingerprint and label, the board's origin, `writes`, and the board's
     /// `health` with its derived `mode` — the shell's `health` call, made now;
-    /// the rest is the session's open's, kept since startup.
+    /// the rest is the session's open's, kept since startup. The key is the
+    /// store's as the start selected it: the shell selects the store's key
+    /// anew at each session it opens (`open_signed`), so a key bound into the
+    /// store since signs from the next session the shell opens, which this
+    /// answer does not name.
     ///
     /// # Errors
     ///

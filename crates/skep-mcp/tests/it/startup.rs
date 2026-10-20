@@ -2,20 +2,23 @@
 //!
 //! The flags answered before anything else is read (`--version`, `--help`), and
 //! a usage error; the log opening on the version it runs and the process; each
-//! setting refused by name where it is missing or malformed — the principal,
-//! the board (an `https://` one among them), the key store (one that does not
-//! stand among them), the commons, a value that is not UTF-8 — and served
-//! where it is given: a flag beating its variable, a board off the loopback
-//! warned of, the commons sentence, a tools file in the embedded catalog's
-//! place, named where it is served, and a drifted one refused naming it; the
-//! board's refusals of the open, a board said halted exactly where its writes
-//! are, the log inert and no token in it, nor a document's text an answer the
-//! client cannot parse quoted; and what the start finds under the store: an
-//! earlier run's held bursts, a halted held file, a search index another
-//! adapter holds. Most run the built binary with no board, or a stand-in one
-//! answering what a real board never does; the rest over a claimed board
-//! (`common`'s `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`,
-//! a retired key's relaunch — are `agent.rs`'s.
+//! setting refused by name where it is missing, set empty or malformed — the
+//! principal, the board (an `https://` one among them), the key store (one
+//! that does not stand, or that this process cannot write, among them), the
+//! commons (any address but the commons' among them), a value that is not
+//! UTF-8 — and served where it is given: a flag beating its variable, said
+//! where both are set, a board off the loopback warned of, the `settings:`
+//! line naming each setting and its source, the commons sentence, a tools
+//! file in the embedded catalog's place, named where it is served and said
+//! where its text differs, and a drifted one refused naming it; the board's
+//! refusals of the open, a board said halted exactly where its writes are, the
+//! log inert and no token in it, nor a document's text an answer the client
+//! cannot parse quoted; and what the start finds under the store: an earlier
+//! run's held bursts, a halted held file, another adapter still holding it.
+//! Most run the built binary with no board, or a stand-in one answering what a
+//! real board never does; the rest over a claimed board (`common`'s
+//! `Fixture`). The fence's startup cases — no key, `SKEP_BOARD`, a retired
+//! key's relaunch — are `agent.rs`'s.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -303,9 +306,11 @@ fn a_board_off_the_loopback_is_warned_of_where_the_setting_is_read() {
 
 /// An `https://` board is refused where the setting is read.
 ///
-/// The adapter dials plain `http://` alone, so the refusal names the setting,
-/// the origin and what serves instead — by variable and by flag alike — before
-/// any dial: no health read is tried, and no line names a transport feature.
+/// The adapter dials plain `http://` alone and signs for the origin it dials,
+/// so the refusal names the setting, the origin and what serves instead — an
+/// `http://` origin the board signs sessions for, never a hosted board's — by
+/// variable and by flag alike, before any dial: no health read is tried, and
+/// no line names a transport feature.
 #[test]
 fn an_https_board_is_refused_where_the_setting_is_read() {
     let dir = TempDir::new("https");
@@ -313,26 +318,33 @@ fn an_https_board_is_refused_where_the_setting_is_read() {
         let (code, err) = launch.env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").refusal();
         assert_eq!(code, Some(1), "{err}");
         assert!(err.contains("--board (or SKEP_BOARD): 'https://127.0.0.1:1' is an https:// origin, and this adapter dials plain http:// alone"), "{err}");
-        assert!(err.contains("the http:// origin of a tunnel to the board"), "what serves instead: {err}");
+        assert!(err.contains("an http:// origin the board signs sessions for") && err.contains("a hosted board signs its https:// origin alone"), "what serves instead: {err}");
         assert!(!err.contains("health was not read") && !err.contains("`tls`"), "refused before any dial: {err}");
     }
 }
 
 /// The principal is required, an integer from 0 to 2^53 − 1 the board seats.
 ///
-/// Unset, startup refuses by name; set to anything that is no integer in that
-/// range, it refuses quoting the value, while 0, the range's floor, passes and
-/// startup goes on to the board; set to an id the board seats no account for —
-/// 2^53 − 1, the largest a board registers, and an undelegated 2 — the
-/// session's pre-check stops startup `not_registered`, exit 1, with nothing
-/// served. A flag beats its variable.
+/// Unset, or set empty — a variable set empty is unset, as the `skep` command
+/// reads it — startup refuses by name; set to anything that is no integer in
+/// that range, it refuses quoting the value, while 0, the range's floor,
+/// passes and startup goes on to the board; set to an id the board seats no
+/// account for — 2^53 − 1, the largest a board registers, and an undelegated
+/// 2 — the session's pre-check stops startup `not_registered`, exit 1, with
+/// nothing served. A flag beats its variable.
 #[test]
 fn the_principal_is_required_and_one_the_board_seats() {
     let fixture = Fixture::new("principal");
-    let (code, err) = Launch::new().env("SKEP_BOARD", fixture.origin()).env("SKEP_KEYSTORE", &fixture.store).refusal();
-    assert_eq!(code, Some(1), "unset: {err}");
-    assert!(err.contains("--principal (or SKEP_PRINCIPAL) is required"), "{err}");
-    for bad in ["", "abc", "-1", "1.5", "9007199254740992", "18446744073709551616"] {
+    for set in [None, Some("")] {
+        let mut launch = Launch::new().env("SKEP_BOARD", fixture.origin()).env("SKEP_KEYSTORE", &fixture.store);
+        if let Some(value) = set {
+            launch = launch.env("SKEP_PRINCIPAL", value);
+        }
+        let (code, err) = launch.refusal();
+        assert_eq!(code, Some(1), "{set:?}: {err}");
+        assert!(err.contains("--principal (or SKEP_PRINCIPAL) is required"), "{set:?}: {err}");
+    }
+    for bad in ["abc", "-1", "1.5", "9007199254740992", "18446744073709551616"] {
         let (code, err) = Launch::over(&fixture, 1).env("SKEP_PRINCIPAL", bad).refusal();
         assert_eq!(code, Some(1), "'{bad}': {err}");
         assert!(err.contains(&format!("'{bad}' is not a principal")), "{err}");
@@ -410,9 +422,11 @@ fn an_unknown_word_or_a_flag_without_its_value_or_given_twice_is_a_usage_error()
     }
 }
 
-/// SKEP_COMMONS set: the instructions carry the commons sentence with the
-/// address substituted, and the serving line names the commons. Unset:
-/// byte-identical to the tools file's instructions.
+/// SKEP_COMMONS set to the commons appends the commons sentence.
+///
+/// The instructions carry the commons sentence with the commons' address,
+/// `1.1.0.1.0.1`, substituted, and the serving line names the commons. Unset,
+/// the instructions are byte-identical to the tools file's.
 #[test]
 fn skep_commons_appends_the_commons_sentence() {
     let fixture = Fixture::new("commons");
@@ -420,7 +434,7 @@ fn skep_commons_appends_the_commons_sentence() {
     let base = file["instructions"].as_str().expect("instructions").to_string();
     let template = file["commons_instructions"].as_str().expect("template").to_string();
 
-    let commons = "1.0.2.0.9";
+    let commons = "1.1.0.1.0.1";
     let mut mcp = Launch::over(&fixture, 1).env("SKEP_COMMONS", commons).logged().spawn();
     let init = mcp.initialize();
     let expected = format!("{base}\n\n{}", template.replace("{addr}", commons));
@@ -428,7 +442,7 @@ fn skep_commons_appends_the_commons_sentence() {
     assert!(expected.contains(&format!("{commons}.0.3.50")), "the defines-type address rides in the sentence: {expected}");
     let (status, log) = mcp.finish_logged();
     assert!(status.success());
-    assert!(log.contains(", commons 1.0.2.0.9"), "the serving line names the commons:\n{log}");
+    assert!(log.contains(", commons 1.1.0.1.0.1"), "the serving line names the commons:\n{log}");
 
     let mut mcp = Launch::over(&fixture, 1).spawn();
     let init = mcp.initialize();
@@ -436,18 +450,28 @@ fn skep_commons_appends_the_commons_sentence() {
     assert!(mcp.finish().success());
 }
 
-/// A malformed SKEP_COMMONS refuses startup naming the variable — before
-/// any dial: the board here answers nothing, and the refusal is the
-/// commons' own.
+/// A SKEP_COMMONS that is not the commons refuses startup naming it.
+///
+/// A malformed address and a well-formed address that is not the commons are
+/// each refused naming the variable, the second naming the commons' one
+/// address, before any dial: the board here answers nothing, and the refusal
+/// is the commons' own. Set empty, it is unset, and startup goes on to the
+/// board.
 #[test]
-fn malformed_skep_commons_refuses_startup() {
+fn a_skep_commons_that_is_not_the_commons_refuses_startup() {
     let dir = TempDir::new("badcommons");
-    for bad in ["", "banana", "1..2", "0.1", "1.0", "1.0.0.1", "1.0.1.0.1.0.1.0.2"] {
+    for bad in ["banana", "1..2", "0.1", "1.0", "1.0.0.1", "1.0.1.0.1.0.1.0.2", "1.0.2.0.9", "1.1.0.1.0.2"] {
         let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", bad).refusal();
         assert_eq!(code, Some(1), "'{bad}' must refuse startup: {err}");
-        assert!(err.contains("SKEP_COMMONS"), "stderr names the variable for '{bad}': {err}");
+        assert!(err.contains(&format!("SKEP_COMMONS: '{bad}' is not ")), "stderr names the variable for '{bad}': {err}");
         assert!(!err.contains("health was not read"), "refused before any dial: {err}");
     }
+    let (_, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", "1.0.2.0.9").refusal();
+    assert!(err.contains("SKEP_COMMONS: '1.0.2.0.9' is not the commons: every board's link types are addresses in subspace 3 of 1.1.0.1.0.1"), "{err}");
+    let (code, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_KEYSTORE", dir.path()).env("SKEP_PRINCIPAL", "1").env("SKEP_COMMONS", "").refusal();
+    assert_eq!(code, Some(1), "{err}");
+    assert!(!err.contains("SKEP_COMMONS:") && err.contains("no commons (SKEP_COMMONS unset)"), "set empty, it is unset: {err}");
+    assert!(err.contains("stopped before serving: the board's health was not read"), "startup goes on to the board: {err}");
 }
 
 /// A variable set to bytes that are not UTF-8 is refused by name, never
@@ -546,7 +570,9 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
 /// A tools file is the catalog served, in place of the embedded one.
 ///
 /// Its instructions and its tools are what `initialize` and `tools/list`
-/// answer, and the serving line names the file it counts the tools of.
+/// answer, the start says where its text differs from the catalog this
+/// release embeds, and the serving line names the file it counts the tools
+/// of.
 #[test]
 fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
     let fixture = Fixture::new("tools-file");
@@ -562,6 +588,8 @@ fn a_tools_file_is_the_catalog_served_in_place_of_the_embedded_one() {
     let (status, log) = mcp.finish_logged();
     assert!(status.success(), "{status:?}\n{log}");
     assert!(log.contains(&format!("tools of the tools file {} on stdio", path.display())), "the serving line names the file:\n{log}");
+    let differs = format!("the tools file {} differs from the catalog this release embeds (its instructions, and 1 of its ", path.display());
+    assert!(log.contains(&differs) && log.contains("every agent is told that file's text, not this release's"), "the start says the file's text differs:\n{log}");
 }
 
 /// The adapter run to completion on `tools_file`, which startup must
@@ -612,24 +640,116 @@ fn an_earlier_runs_held_bursts_and_a_halted_held_file_are_said_at_the_start() {
     assert!(halted.finish().success());
 }
 
-/// A second adapter over one store is told its search index answers busy.
+/// A second start over one store waits for the first adapter to end.
 ///
 /// The key store is one directory per adapter process: a second adapter
-/// started over a running one's store finds the search index's lock held, and
-/// its log says so — the index's directory, the cause, and the act.
+/// started over a running one's store says the store is held, naming the first
+/// by its pid, and waits before it opens anything; once the first has ended it
+/// serves, its search index its own — never `busy`, as an index two processes
+/// share answers.
 #[test]
-fn a_second_adapter_over_one_store_is_told_its_index_answers_busy() {
+fn a_second_start_over_one_store_waits_for_the_first_to_end() {
+    let fixture = Fixture::new("held-store");
+    let mut first = Launch::over(&fixture, 1).spawn();
+    first.initialize();
+    let mut second = Launch::over(&fixture, 1).logged().spawn();
+    let held = format!("is held by another skep-mcp process (pid {}): waiting up to 30 s for it to end", first.pid());
+    second.log_holding(&[&held], Duration::from_secs(10));
+    assert!(!second.log().contains("serving "), "premise: the second waits before it serves:\n{}", second.log());
+    assert!(first.finish().success());
+    second.initialize();
+    second.log_holding(&["serving "], Duration::from_secs(30));
+    let listed = second.call_json("places", json!({}));
+    assert_ne!(listed["state"]["arm"], "busy", "the second's index is its own: {listed}");
+    let (status, log) = second.finish_logged();
+    assert!(status.success(), "{status:?}\n{log}");
+    assert!(!log.contains("answers busy"), "no busy index is said:\n{log}");
+}
+
+/// A search index another process holds is said busy, naming its directory.
+///
+/// A dev provider over the adapter's store locks the search index and not the
+/// store; the suite holds the index's lock in its place, once an adapter has
+/// made the index and stopped: the next adapter serves, and its log says the
+/// index answers busy — the index's directory under the store, where
+/// skep-client's `SearchDir` puts it, the cause and the act.
+#[test]
+fn a_search_index_another_process_holds_is_said_busy_naming_its_directory() {
+    use skep_client::search::{SearchDir, LOCK_NAME};
     let fixture = Fixture::new("busy-index");
     let mut first = Launch::over(&fixture, 1).spawn();
     first.initialize();
     // Answered on the board's feed thread, which mounts the index first.
     let listed = first.call_json("places", json!({}));
-    assert_ne!(listed["state"]["arm"], "busy", "premise: the first adapter holds the index: {listed}");
+    assert_ne!(listed["state"]["arm"], "busy", "premise: the first adapter mounts the index: {listed}");
+    assert!(first.finish().success());
+    let index = SearchDir::new(&fixture.store).root().to_path_buf();
+    let boards: Vec<PathBuf> = std::fs::read_dir(&index).expect("the index's root").filter_map(Result::ok).map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+    let [board] = &boards[..] else { panic!("one board's index directory: {boards:?}") };
+    let lock = std::fs::OpenOptions::new().read(true).write(true).open(board.join(LOCK_NAME)).expect("the index's lock file");
+    lock.try_lock().expect("the suite holds the index's lock in a dev provider's place");
     let mut second = Launch::over(&fixture, 1).logged().spawn();
     second.initialize();
-    let index = fixture.store.join("index");
     let log = second.log_holding(&[&format!("the search index at {} answers busy: another process holds this directory", index.display())], Duration::from_secs(10));
-    assert!(log.contains("stop one of the two and start this one again"), "the act:\n{log}");
+    assert!(log.contains("stop the other and start this one again"), "the act:\n{log}");
     assert!(second.finish().success());
-    assert!(first.finish().success());
+    drop(lock);
+}
+
+/// A key store this process cannot write is refused before any dial.
+///
+/// The shell keeps its search index and its held bursts under the store, and
+/// a burst held where it cannot be written is lost at the process's end: a
+/// store whose mode lets this process read it and not write it is refused
+/// naming the path, exit 1, with no health read tried. A process every mode
+/// lets write — one run as root — proves nothing here, and the case passes.
+#[cfg(unix)]
+#[test]
+fn a_key_store_this_process_cannot_write_is_refused_before_any_dial() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("store-unwritable");
+    let store = dir.path().join("store");
+    std::fs::create_dir(&store).expect("the store");
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o500)).expect("the store made read-only");
+    let writes_anyway = std::fs::write(store.join("probe"), b"").is_ok();
+    let outcome = (!writes_anyway).then(|| Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_PRINCIPAL", "1").env("SKEP_KEYSTORE", &store).refusal());
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).expect("the store's mode restored");
+    let Some((code, err)) = outcome else { return };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains(&format!("--dir (or SKEP_KEYSTORE): '{}' cannot be written (", store.display())), "{err}");
+    assert!(err.contains("a burst held where it cannot be written is lost at the process's end"), "why: {err}");
+    assert!(!err.contains("health was not read"), "refused before any dial: {err}");
+}
+
+/// The start names each setting in force and where it came from.
+///
+/// One `settings:` line, said before the board is dialed, names the board,
+/// the store, the principal, the catalog and the commons, each with its
+/// source; a flag given beside its variable set to another value is said to
+/// beat it; `SKEPD_URL` set beside a named board is said to be read no
+/// longer; a store that is the person's own, `~/.skep`, is warned of; and a
+/// store given as a relative path is named absolute, beside the path given
+/// and the working directory it was read against.
+#[test]
+fn the_start_names_each_setting_in_force_and_where_it_came_from() {
+    let home = TempDir::new("settings-home");
+    let store = home.path().join(".skep");
+    std::fs::create_dir(&store).expect("the person's own store");
+    let launch = Launch::new().env("HOME", home.path()).env("SKEP_BOARD", "http://127.0.0.1:2").env("SKEPD_URL", "http://127.0.0.1:3").env("SKEP_PRINCIPAL", "1");
+    let (code, err) = launch.env("SKEP_KEYSTORE", &store).args(["--board", "http://127.0.0.1:1"]).refusal();
+    assert_eq!(code, Some(1), "the unanswering board stops it: {err}");
+    let settings = format!(
+        "settings: board http://127.0.0.1:1 (--board), store {} (SKEP_KEYSTORE), principal 1 (SKEP_PRINCIPAL), the embedded catalog, no commons (SKEP_COMMONS unset) — each read once, at this start, save the store's key, which the shell selects anew at each session it opens",
+        store.display()
+    );
+    let said = err.find(&settings).unwrap_or_else(|| panic!("the settings line: {err}"));
+    let dialed = err.find("stopped before serving: the board's health was not read").unwrap_or_else(|| panic!("the board's own stop: {err}"));
+    assert!(said < dialed, "the settings said before the board is dialed: {err}");
+    assert!(err.contains("--board 'http://127.0.0.1:1' beats SKEP_BOARD, set beside it to 'http://127.0.0.1:2': the variable is not read"), "{err}");
+    assert!(err.contains("SKEPD_URL is set and no longer read: the board is http://127.0.0.1:1 (--board)"), "{err}");
+    assert!(err.contains(&format!("warning: --dir (or SKEP_KEYSTORE) '{}' is the person's own store, ~/.skep", store.display())), "{err}");
+    let working = std::fs::canonicalize(home.path()).expect("the working directory");
+    let (_, err) = Launch::new().env("SKEP_BOARD", "http://127.0.0.1:1").env("SKEP_PRINCIPAL", "1").args(["--dir", ".skep"]).current_dir(home.path()).refusal();
+    let given = format!("store {} (--dir, given as .skep against the working directory {})", working.join(".skep").display(), working.display());
+    assert!(err.contains(&given), "a relative store, named absolute: {err}");
 }

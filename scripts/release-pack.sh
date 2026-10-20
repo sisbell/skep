@@ -104,7 +104,9 @@ Four binaries:
             bind, and the key ceremonies (enroll, recover, retire, rotate,
             handoff, accept).
   skep-mcp  the MCP adapter: an agent harness on stdio on one side, the
-            daemon's HTTP wire on the other.
+            daemon's HTTP wire on the other. Its settings and its stop:
+            skep-mcp --help; how to start, restart, upgrade and back it
+            up: https://github.com/sisbell/skep/blob/v$VERSION/crates/skep-mcp/README.md
   skep-provision
             the service behind a hosted board's sign-up: run on a host
             that serves boards for other people, as RUNBOOK.md §10 says —

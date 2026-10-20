@@ -23,9 +23,17 @@ skep-shell = { path = "../skep-shell" }
 # (`dial::Headers`), whose declared length `media::read_whole` holds to the
 # cap; the address spelling (`address::is_address_text`) `blob_uri` asserts,
 # the one the shell's `fetch` row admits; `render_inert`, the rendering
-# every log line takes (AUTH-5.2); and the plaintext non-loopback warning
-# (`dial::plaintext_non_loopback_warning`, AUTH-4.53) the start says.
-skep-client = { path = "../skep-client" }
+# every log line takes (AUTH-5.2); the plaintext non-loopback warning
+# (`dial::plaintext_non_loopback_warning`, AUTH-4.53) the start says; the
+# search index's directory under the store (`search::SearchDir`), where the
+# shell's feed opens it and the start's write probe and the drain's lines
+# find it; and the person's own store (`store::default_store_dir`), which
+# the start warns of where it is the agent's. `search`, which skep-shell
+# turns on as well, is named here for `search::SearchDir`; the unit suite
+# reads its query bound (`search::QUERY_BOUND`), the change feed's default
+# page (`board::DEFAULT_CHANGES_LIMIT`) and the commons' type addresses
+# (`board::T_ENROLL`, …) the catalog and the commons gate restate.
+skep-client = { path = "../skep-client", features = ["search"] }
 # The bridge's values: every call's input and output is a
 # `serde_json::Value`; JSON-RPC's framing is this crate's own.
 serde_json.workspace = true

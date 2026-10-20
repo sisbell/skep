@@ -42,8 +42,9 @@ pub const MAX_FETCH_BYTES: u64 = 8 * 1024 * 1024;
 /// the body's time to its caller, a peer pacing a byte inside each per-read
 /// bound renews that bound for as long as it likes, and this adapter
 /// answers one call at a time. It is checked before each read, so the read
-/// ends within one per-read bound past it.
-const FETCH_DEADLINE: Duration = Duration::from_secs(10 * 60 + 30);
+/// ends within one per-read bound past it. The `fetch` card names it in words,
+/// and the catalog's suite holds the two equal.
+pub const FETCH_DEADLINE: Duration = Duration::from_secs(10 * 60 + 30);
 
 /// A body read under a deadline.
 ///

@@ -252,10 +252,14 @@ fn each_adapter_tools_schema_names_exactly_the_members_its_row_takes() {
 ///
 /// Its schemas spell `from_` on exactly the ops `wire_frame` maps back, and
 /// its naming note names each of them; its `fetch` card and fetch paragraph
-/// name the cap `media` enforces: a fact changed in one place alone tells
-/// every agent what the adapter then does otherwise.
+/// name the cap `media` enforces, and the card the fetch's deadline in words;
+/// the `search` card and its query's schema name skep-client's query bound,
+/// and `changes_since`'s limit the change feed's default page: a fact changed
+/// in one place alone tells every agent what the adapter then does otherwise.
 #[test]
 fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
+    use skep_client::board::DEFAULT_CHANGES_LIMIT;
+    use skep_client::search::QUERY_BOUND;
     let catalog = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
     let spelled: BTreeSet<&str> = catalog.tools.iter().filter(|t| t["inputSchema"]["properties"].get("from_").is_some()).filter_map(|t| t["name"].as_str()).collect();
     assert_eq!(spelled, RENAMES_FROM.iter().copied().collect::<BTreeSet<&str>>(), "the ops whose schema spells from_");
@@ -263,10 +267,45 @@ fn the_embedded_catalog_states_the_adapters_own_facts_as_the_code_holds_them() {
     for op in RENAMES_FROM {
         assert!(note.contains(op), "the naming note names {op}: {note}");
     }
+    let entry = |name: &str| catalog.tools.iter().find(|t| t["name"] == name).unwrap_or_else(|| panic!("the {name} card"));
     let (cap, mib) = (crate::media::MAX_FETCH_BYTES, crate::media::MAX_FETCH_BYTES / (1024 * 1024));
-    let card = catalog.tools.iter().find(|t| t["name"] == "fetch").and_then(|t| t["description"].as_str()).expect("the fetch card");
+    let card = entry("fetch")["description"].as_str().expect("the fetch card");
     assert!(card.contains(&format!("cap of {mib} MiB ({cap} bytes)")), "the fetch card names the cap: {card}");
     assert!(catalog.instructions().contains(&format!("cap of {mib} MiB")), "the fetch paragraph names the cap");
+    assert_eq!(crate::media::FETCH_DEADLINE, std::time::Duration::from_secs(10 * 60 + 30), "the deadline the fetch card names in words");
+    assert!(card.contains("still unfinished at ten and a half minutes"), "the fetch card names the deadline: {card}");
+    let search = entry("search");
+    assert!(search["description"].as_str().is_some_and(|d| d.contains(&format!("A query past {QUERY_BOUND} bytes is refused query_too_long"))), "the search card names the query's bound: {search}");
+    let query = search["inputSchema"]["properties"]["query"]["description"].as_str().expect("the query's description");
+    assert!(query.contains(&format!("at most {QUERY_BOUND} bytes")), "the query's schema names its bound: {query}");
+    let limit = entry("changes_since")["inputSchema"]["properties"]["limit"]["description"].as_str().expect("the limit's description");
+    assert!(limit.contains(&format!("the board's default, {DEFAULT_CHANGES_LIMIT}, when absent")), "the limit names the default page: {limit}");
+}
+
+/// A catalog's drift from another counts what an agent is told otherwise.
+///
+/// A catalog read from the same text drifts nowhere; an entry described
+/// otherwise is counted among the catalog's tools; instructions read
+/// otherwise — or a commons template — are said, with the entries beside them
+/// where any differ.
+#[test]
+fn a_catalogs_drift_from_another_counts_what_an_agent_is_told_otherwise() {
+    let embedded = Catalog::load(EMBEDDED).expect("embedded tools.json must validate");
+    let tools = embedded.tools.len();
+    let drift = |edit: &dyn Fn(&mut Value)| {
+        let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+        edit(&mut v);
+        Catalog::load(&v.to_string()).expect("the edited catalog loads").drift_from(&embedded).map(|drift| drift.to_string())
+    };
+    assert_eq!(drift(&|_| {}), None, "the same text drifts nowhere");
+    let fork = |v: &mut Value| v["tools"].as_array_mut().expect("tools").iter_mut().find(|t| t["name"] == "fork").expect("fork")["description"] = json!("Another description.");
+    assert_eq!(drift(&fork), Some(format!("1 of its {tools} tools' entries")));
+    assert_eq!(drift(&|v| v["commons_instructions"] = json!("Another commons at {addr}.")), Some("its instructions".to_string()));
+    let both = |v: &mut Value| {
+        fork(v);
+        v["instructions"] = json!("Other instructions.");
+    };
+    assert_eq!(drift(&both), Some(format!("its instructions, and 1 of its {tools} tools' entries")));
 }
 
 /// Every paragraph the catalog sends an agent to opens its instructions.

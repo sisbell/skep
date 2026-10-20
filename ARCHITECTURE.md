@@ -207,8 +207,10 @@ foundation and on the stores above it.
   fetch beside them. One binary: of the skep crates it depends on
   `skep-shell` and `skep-client` — the latter for the types the shell's
   surface names, the inert rendering a key's label and every log line
-  take, and the plaintext warning its start says — and never `skepd`,
-  which its suite spawns as a dev-dependency. No feature, and no TLS: it
+  take, the plaintext warning its start says, and the places its start
+  checks the store against: the search index's directory under it and the
+  person's own store — and never `skepd`, which its suite spawns as a
+  dev-dependency. No feature, and no TLS: it
   refuses an `https://` board at start and dials plain `http://` alone;
   every test build compiles it with `skep-client`'s `test-hooks` on, so
   `scripts/gate-full.sh` checks the binary as it ships. Its modules and

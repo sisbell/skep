@@ -17,3 +17,6 @@ mod mcp;
 // Startup: the flags answered up front, each setting read or refused, the
 // catalog file, and the board's refusals of the open.
 mod startup;
+// The source held to its tables: every variable it reads a row of the
+// README's settings.
+mod tidy;

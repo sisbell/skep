@@ -593,6 +593,13 @@ impl Launch {
         self
     }
 
+    /// Returns the launch run from the working directory `dir`, against which
+    /// a relative setting resolves.
+    pub fn current_dir(mut self, dir: &Path) -> Launch {
+        self.cmd.current_dir(dir);
+        self
+    }
+
     /// Returns the launch with the adapter's stderr sent to `stderr`.
     ///
     /// Where a test names none, a spawned adapter inherits the test's own
@@ -769,6 +776,12 @@ impl Mcp {
     /// The adapter's log so far (a `logged` launch).
     pub fn log(&self) -> String {
         self.log.lock().expect("the log's lock").clone()
+    }
+
+    /// Returns the adapter's process id, which its log and its store's lock
+    /// name it by.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
     }
 
     /// The log once it holds every one of `needles`, within `within`.

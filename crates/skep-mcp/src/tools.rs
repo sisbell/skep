@@ -18,6 +18,8 @@
 //! `Catalog::append_commons` fills the commons template in beside the check on
 //! its placeholder.
 
+use std::fmt;
+
 use serde_json::{Map, Value};
 
 /// The shipped catalog (`tools.json` beside `Cargo.toml`).
@@ -384,15 +386,54 @@ impl Catalog {
         &self.tools
     }
 
-    /// Point the instructions at the commons: the commons template with
-    /// every `{addr}` replaced by `addr`, appended after a blank line.
-    /// `addr` goes in as given: that it is T4-valid is the caller's to have
-    /// checked — `main`'s `SKEP_COMMONS` gate — and it is checked nowhere
-    /// here.
+    /// Points the instructions at the commons, `addr`.
+    ///
+    /// The commons template, every `{addr}` replaced by `addr`, is appended
+    /// after a blank line. `addr` goes in as given: that it is the commons is
+    /// the caller's to have checked — `main`'s `SKEP_COMMONS` gate, which
+    /// takes the commons' one address alone — and it is checked nowhere here.
     pub fn append_commons(&mut self, addr: &str) {
         let sentence = self.commons_instructions.replace(ADDR_PLACEHOLDER, addr);
         self.instructions.push_str("\n\n");
         self.instructions.push_str(&sentence);
+    }
+
+    /// Returns how this catalog's text differs from `other`'s, where it does.
+    ///
+    /// Its instructions differ where they, or the commons template, read
+    /// otherwise; an entry differs where `other` holds no entry the same,
+    /// whole. Two catalogs `load` admitted name the same tools, so the entries
+    /// counted are those of a tool the two describe otherwise.
+    pub fn drift_from(&self, other: &Catalog) -> Option<Drift> {
+        let instructions = self.instructions != other.instructions || self.commons_instructions != other.commons_instructions;
+        let entries = self.tools.iter().filter(|entry| !other.tools.contains(entry)).count();
+        (instructions || entries > 0).then_some(Drift { instructions, entries, tools: self.tools.len() })
+    }
+}
+
+/// How a catalog's text differs from another's, as `Catalog::drift_from`
+/// counts it.
+///
+/// Its `Display` is the clause a line names the difference by: `its
+/// instructions, and <n> of its <m> tools' entries`, or either half alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drift {
+    /// Whether the instructions, or the commons template, read otherwise.
+    pub instructions: bool,
+    /// How many of the tools' entries describe their tool otherwise.
+    pub entries: usize,
+    /// How many tools the catalog holds.
+    pub tools: usize,
+}
+
+impl fmt::Display for Drift {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let entries = format!("{} of its {} tools' entries", self.entries, self.tools);
+        match (self.instructions, self.entries) {
+            (true, 0) => f.write_str("its instructions"),
+            (true, _) => write!(f, "its instructions, and {entries}"),
+            (false, _) => f.write_str(&entries),
+        }
     }
 }
 

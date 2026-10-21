@@ -16,6 +16,7 @@ use super::LockWrite;
 /// consulted inside `credential_lock.write()` before the precheck; purged
 /// with its session. It stores marshaled bytes at execute time (AUTH-7.20's
 /// first horn).
+#[derive(Default)]
 pub struct CredMemo {
     /// Session → its acks.
     ///

@@ -115,8 +115,23 @@ pub(crate) const PATIENCE: Duration = Duration::from_secs(60);
 const REFUSAL_CEILING: Duration = Duration::from_secs(10);
 
 /// The binary over `dir` with `flags` after `--data-dir`, both streams
-/// piped — what every spawn here starts from.
+/// piped — what every spawn here starts from — given `--create` where no
+/// board stands at `dir`, as an operator gives it to a first start: the
+/// binary begins a board only under the word (`operations.md` §3.1 step 2).
 pub(crate) fn skepd(dir: &Path, flags: &[&str]) -> Command {
+    let mut cmd = skepd_bare(dir, flags);
+    if matches!(tools::board_stands(dir), Ok(false))
+        || matches!(&tools::board_stands(dir), Err(e) if e.kind() == io::ErrorKind::NotFound)
+    {
+        cmd.arg("--create");
+    }
+    cmd
+}
+
+/// [`skepd`] with the command line exactly as given: no `--create` added.
+///
+/// What the claims about the word itself start from.
+pub(crate) fn skepd_bare(dir: &Path, flags: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_skepd"));
     cmd.arg("--data-dir").arg(dir).args(flags).stdout(Stdio::piped()).stderr(Stdio::piped());
     cmd
@@ -339,6 +354,42 @@ pub(crate) fn serving_port(child: &mut Child, within: Duration) -> u16 {
         .unwrap_or_else(|| panic!("no port in skepd's serving line {line:?}"))
 }
 
+/// Waits, bounded, for the kernel's lock at `dir` to be free.
+///
+/// An in-process daemon's stop releases the journal directory's lock a
+/// moment after its shutdown returns — the harness's own spawn retries a
+/// `WouldBlock` for it (`embed`) — where the binary's open and the two tools
+/// retry nothing: a child or a tool started over the directory inside that
+/// moment is refused at the lock, which is no finding about either. Probed
+/// as the kernel takes it, `flock` without waiting, and released at once;
+/// a directory holding no lock file holds no lock.
+pub(crate) fn wait_for_the_lock(dir: &Path) {
+    let lock = dir.join("kernel.lock");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match fs::File::open(&lock) {
+            Ok(file) => match file.try_lock() {
+                Ok(()) => {
+                    file.unlock().expect("release the probe's lock");
+                    return;
+                }
+                Err(fs::TryLockError::WouldBlock) => {}
+                Err(fs::TryLockError::Error(e)) => {
+                    panic!("the lock's probe at {}: {e}", lock.display())
+                }
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+            Err(e) => panic!("the lock file at {}: {e}", lock.display()),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the kernel's lock at {} stayed held ten seconds past the stop",
+            dir.display()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// A binary serving over `dir`, its open read: the child, still running;
 /// its stderr, read up to the recovery's landing; the port; and the open's
 /// three lines after their heads.
@@ -552,7 +603,8 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 /// The beginning's line, after its head: the open found no journal in the
-/// directory and began a board rather than recovering one.
+/// directory and began a board rather than recovering one — the binary's
+/// under `--create`, the word every first start here is given.
 const BEGAN: &str =
     "no journal stood in the data directory: this open began a new board at genesis";
 
@@ -808,9 +860,10 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
     let (base, head, replayed, _) = recovered_figures(&first.recovered_line);
     assert_eq!((base.as_str(), head, replayed), ("genesis", 0, 0), "{}", first.recovered_line);
     let began = await_said(&mut first.stderr, "open", BEGAN);
-    assert!(
-        began.contains("the directory named above is not where it lives"),
-        "the beginning says what it means on a board that had a journal: {began}"
+    assert_eq!(
+        began,
+        format!("{BEGAN}, as --create asked; start it again without --create"),
+        "the beginning under --create is the first start's landing, no tell of a wrong directory"
     );
     let at = |seen: &[String], prefix: &str| seen.iter().position(|l| said(l, "open", prefix));
     assert!(
@@ -1678,4 +1731,425 @@ fn a_panic_on_main_exits_101_on_a_stderr_whose_reader_has_stopped() {
     let status = child.wait_within(PATIENCE);
     assert_eq!(status.code(), Some(101), "FINDING (§0 fact 1): a panic on main: {status:?}");
     assert_the_reader_took_nothing(pipe);
+}
+
+// ── the damaged tail, decided once: the board's word, the halt, the cut ──
+
+/// Every frame of a clean segment as `(start, len)`: the `SKJ4` layout
+/// restated — `[magic 4][len u32 LE][crc u32 LE][payload]` — read as bytes,
+/// since this tier judges the binary from outside.
+fn frame_spans(segment: &Path) -> Vec<(usize, usize)> {
+    let buf = fs::read(segment).expect("the segment");
+    let mut spans = Vec::new();
+    let mut pos = 0usize;
+    while pos + 12 <= buf.len() {
+        assert_eq!(&buf[pos..pos + 4], b"SKJ4", "a clean frame stream at {pos}");
+        let len =
+            u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().expect("four bytes")) as usize;
+        spans.push((pos, 12 + len));
+        pos += 12 + len;
+    }
+    assert_eq!(pos, buf.len(), "the frames fill the segment");
+    spans
+}
+
+/// Rots the last acknowledged transaction's last record: one byte of its
+/// payload flipped, so its marker — the segment's last frame — stands intact
+/// and commits nothing. Answers the byte the tail begins at: the
+/// transaction's first record, the frame after the marker before it (a
+/// payload's tag `1` is a marker's, `0` a record's).
+fn rot_the_last_transaction(segment: &Path) -> u64 {
+    let spans = frame_spans(segment);
+    let mut data = fs::read(segment).expect("the segment");
+    let tag =
+        |start: usize| u32::from_le_bytes(data[start + 12..start + 16].try_into().expect("a tag"));
+    assert_eq!(tag(spans[spans.len() - 1].0), 1, "the segment ends on a marker");
+    let previous_marker = spans[..spans.len() - 1].iter().rposition(|&(start, _)| tag(start) == 1);
+    let first_record = previous_marker.map_or(0, |i| spans[i + 1].0);
+    let (record, _) = spans[spans.len() - 2];
+    assert_eq!(tag(record), 0, "the frame before the last marker is a record");
+    data[record + 12 + 1] ^= 0xFF;
+    fs::write(segment, data).expect("write the rotted segment");
+    first_record as u64
+}
+
+/// The committed positions above `position` as `GET /changes` serves them
+/// to a guest, each row's `at`: on an unclaimed board, every commit.
+fn positions_above(port: u16, position: u64) -> Vec<u64> {
+    let (st, body) = get(port, &format!("/changes?since={position}"));
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    v["changes"]
+        .as_array()
+        .expect("the changes array")
+        .iter()
+        .map(|row| row["at"].as_u64().expect("a position"))
+        .collect()
+}
+
+/// Polls `holds` for up to twenty seconds, naming `what` on a timeout.
+fn poll_until(what: &str, holds: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !holds() {
+        assert!(Instant::now() < deadline, "no {what} within 20 s");
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// THE BOARD's WORD (`operations.md` §3.1 step 2; the runbook's Start, step
+/// 2): the binary on a directory holding no journal segment — absent, or
+/// empty — refuses without `--create`, exit 2, the one usage line naming the
+/// directory and the word, and creates nothing; under `--create` it begins
+/// the board and says so as the first start's landing; `--create` on a
+/// directory holding a board is a usage refusal, exit 2, nothing written;
+/// and the library's open begins a board unasked, as every in-process suite
+/// relies on, saying the tell of a wrong directory an embedder reads.
+#[test]
+fn a_start_begins_a_board_only_under_create_and_refuses_the_word_on_a_standing_board() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let absent = tmp.path().join("absent");
+    let empty = tmp.path().join("empty");
+    // Owner-only, as the served start holds a standing directory to.
+    let mut builder = fs::DirBuilder::new();
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&empty).expect("an empty directory");
+    for dir in [&absent, &empty] {
+        let mut cmd = skepd_bare(dir, &["--port", "0"]);
+        let mut refused = Spawned::launch(&mut cmd);
+        let stderr = Stderr::of(&mut refused.child);
+        let status = refused.wait_within(PATIENCE);
+        let whole = stderr.whole();
+        assert_eq!(status.code(), Some(2), "FINDING (--create): exit 2:\n{}", whole.join("\n"));
+        assert_eq!(
+            whole,
+            [format!(
+                "skepd: no board at {}: no journal segment stands there; pass --create to begin \
+                 one there, or name the board's directory; skepd --help prints the usage",
+                dir.display()
+            )],
+            "the one usage line, off a terminal"
+        );
+        assert!(dir.exists() == (dir == &empty), "the absent directory is not created");
+        if dir.exists() {
+            assert!(fs::read_dir(dir).expect("list").next().is_none(), "nothing created in it");
+        }
+    }
+    // Under the word: begun, and said as the first start's landing.
+    let mut served = serve_and_read_the_open_with(&empty, &["--create"], &[]);
+    let began = await_said(&mut served.stderr, "open", BEGAN);
+    assert_eq!(began, format!("{BEGAN}, as --create asked; start it again without --create"));
+    served.child.kill();
+    assert!(empty.join("seg-1.wal").exists(), "the board begun");
+    // The word on a standing board: refused, nothing written.
+    let before = crate::tools::tree(&empty);
+    let mut cmd = skepd_bare(&empty, &["--port", "0", "--create"]);
+    let mut refused = Spawned::launch(&mut cmd);
+    let stderr = Stderr::of(&mut refused.child);
+    let status = refused.wait_within(PATIENCE);
+    let whole = stderr.whole();
+    assert_eq!(status.code(), Some(2), "FINDING (--create): exit 2:\n{}", whole.join("\n"));
+    assert_eq!(
+        whole,
+        [format!(
+            "skepd: --create: a board stands at {} already; start it without --create; skepd \
+             --help prints the usage",
+            empty.display()
+        )]
+    );
+    assert_eq!(crate::tools::tree(&empty), before, "the refusal wrote nothing");
+    // The library's open, in-process, begins unasked — the embedder's and
+    // the suites' door (its line, the tell of a wrong directory, is the
+    // unit suite's pin: the open's report is said on the stream, which no
+    // in-process record holds).
+    let fresh = tmp.path().join("fresh");
+    assert!(!fresh.exists());
+    let sd = spawn_unclaimed(&fresh);
+    assert_eq!(sd.daemon().log_position(), skepd::Seq(0), "begun at genesis");
+    sd.shutdown();
+    assert!(fresh.join("seg-1.wal").exists(), "the library's open began a board unasked");
+}
+
+/// THE DAMAGED TAIL HALTS THE BINARY UNTIL THE CUT IS ACCEPTED BY NAME, WHICH
+/// KEEPS, CUTS AND SKIPS THE CLAIMED POSITION (`operations.md` §3.1 step 3,
+/// item 8; §4 row 15): a board closed in-process, the last acknowledged
+/// transaction's record rotted so its marker commits nothing. The binary
+/// without the flag exits 1, its refusal the kernel's own sentence — the
+/// position the tail claims, the bytes, the frame, the two acts — and the
+/// daemon's flag after it; the segment byte-identical, nothing kept, the
+/// directory as it stood. Under `--cut-damaged-tail` it serves: the cut
+/// said as a failure naming the claim, the kept file and the gap the order
+/// leaves; the kept file listed; the kept bytes the segment's own from the
+/// cut on; the first write landing past the claimed position, never on it.
+/// The next start, without the flag, says no cut and lists the kept file
+/// again; and the standing line carries it, in-process, at its tick.
+#[test]
+fn a_damaged_tail_halts_the_binary_until_the_cut_is_accepted_and_the_cut_is_kept_said_and_skipped()
+{
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    let (boundaries, home) = {
+        let sd = spawn_unclaimed(&dir);
+        let (home, session) = delegate_a_home(sd.port());
+        insert_into_the_home(sd.port(), &session, &home, 1, 2);
+        let boundaries = positions_above(sd.port(), 0);
+        assert_eq!(
+            boundaries.last().copied(),
+            Some(head_position(sd.port())),
+            "the last commit is the head"
+        );
+        sd.shutdown();
+        (boundaries, home)
+    };
+    wait_for_the_lock(&dir);
+    let claimed = *boundaries.last().expect("a commit");
+    let head = boundaries[boundaries.len() - 2];
+    let segment = active_segment(&dir);
+    let name =
+        segment.file_name().and_then(|n| n.to_str()).expect("the segment's name").to_string();
+    let byte = rot_the_last_transaction(&segment);
+    let found = fs::read(&segment).expect("the segment as rotted");
+    let before = crate::tools::tree(&dir);
+
+    // THE HALT: the kernel's refusal, the daemon's flag after it; nothing
+    // cut, nothing kept, the directory as it stood.
+    let mut cmd = skepd_bare(&dir, &["--port", "0", "--workers", &skepd::MIN_WORKERS.to_string()]);
+    let mut refused = Spawned::launch(&mut cmd);
+    let stderr = Stderr::of(&mut refused.child);
+    let status = refused.wait_within(PATIENCE);
+    let whole = stderr.whole();
+    assert_eq!(status.code(), Some(1), "FINDING (the halt): exit 1:\n{}", whole.join("\n"));
+    let last = whole.last().expect("the refusal");
+    let opening = format!(
+        "skepd: engine open: durable committed data cannot be read; position {claimed} names the \
+         damage: damaged journal tail: the {} bytes after the last committed marker at position \
+         {head}, from byte {byte} of {name}, are not a crash's — the intact commit marker at \
+         byte ",
+        found.len() as u64 - byte
+    );
+    assert!(last.starts_with(&opening), "the refusal's words: {last}");
+    for words in [
+        &format!("claims position {claimed}, the position the write it closed was acknowledged at"),
+        "nothing was cut. Two acts: restore ",
+        &format!("beside the journal as {name}.cut-{byte} and then cuts them"),
+        "; under skepd the one-start flag is --cut-damaged-tail (SKEPD_CUT_DAMAGED_TAIL=true), \
+         given to one start and never kept in a unit file",
+    ] {
+        assert!(last.contains(words), "{words:?} missing from: {last}");
+    }
+    assert!(
+        !whole.iter().any(|l| said(l, "open", "recovered from ")),
+        "a refused open landed nothing:\n{}",
+        whole.join("\n")
+    );
+    assert_eq!(
+        fs::read(&segment).expect("the segment"),
+        found,
+        "FINDING (the halt): the segment moved"
+    );
+    assert_eq!(crate::tools::tree(&dir), before, "FINDING (the halt): the refused start wrote");
+
+    // THE CUT ACCEPTED: said as a failure, the kept file listed, the order
+    // started past the claim.
+    let kept = format!("{name}.cut-{byte}");
+    let mut served = serve_and_read_the_open_with(&dir, &["--cut-damaged-tail"], &[]);
+    let (_, landed_at, _, _) = recovered_figures(&served.recovered_line);
+    assert_eq!(landed_at, head, "the open came back at the marker before the cut");
+    let cut = await_said(&mut served.stderr, "failure", "journal tail cut (");
+    assert_eq!(
+        cut,
+        format!(
+            "journal tail cut ({} bytes, beginning at byte {byte} of {name}, past position {head}), \
+             1 of its frames intact on disk — a commit marker whose records failed their check, or \
+             a frame no writer of this format writes, the signature of rot in or a rewrite of the \
+             journal's last transaction rather than of a crash — cut under --cut-damaged-tail: a \
+             write this daemon acknowledged may be among the cut, at position {claimed}, the \
+             position an intact commit marker in the cut claims; the open kept the cut bytes in \
+             {kept}, beside the journal in the data directory, where no open reads, moves or \
+             removes it — copy it off the volume before you remove it; positions ({head}, \
+             {claimed}] are left a gap and the next write takes position {}, so a client holding \
+             that acknowledgement is answered a missing write, never another's; check the volume \
+             and its device",
+            found.len() as u64 - byte,
+            claimed + 1
+        ),
+        "FINDING (the accepted cut): the failure line"
+    );
+    // The listing: every kept file standing once this start's opens have
+    // kept — the journal's, and the change feed's, whose files held the cut
+    // commit's lines above the new head and kept them too — as the tool
+    // lists them, the journal's and `commits.log`'s among them.
+    let listed =
+        await_said(&mut served.stderr, "open", "kept files beside the journal and the logs: ");
+    let standing = tools::kept_files(&dir).expect("the listing");
+    assert!(
+        standing.contains(&kept) && standing.iter().any(|f| f.starts_with("commits.log.cut-")),
+        "the journal's kept file and the feed's: {standing:?}"
+    );
+    assert_eq!(
+        listed,
+        format!(
+            "kept files beside the journal and the logs: {} — {}; each holds bytes an open cut \
+             as damage: copy them off the volume, and remove them once the writes they held are \
+             accounted for",
+            standing.len(),
+            standing.join(", ")
+        )
+    );
+    assert_eq!(
+        fs::read(dir.join(&kept)).expect("the kept file"),
+        &found[byte as usize..],
+        "kept whole"
+    );
+    assert_eq!(
+        fs::metadata(&segment).expect("the segment").len(),
+        byte,
+        "cut at the rotted record"
+    );
+    assert_eq!(head_position(served.port), head, "the board serves at the marker before the cut");
+    // A write into the home — a session of the home's principal, one insert
+    // at the ordinal the cut's write held, which the board no longer does.
+    let session = open_session(served.port, 1);
+    insert_into_the_home(served.port, &session, &home, 2, 1);
+    // The feed names a write by its boundary, the last of its records; the
+    // write is the shape of the one the cut took, so its first record takes
+    // the position after the claim and its boundary lies one such width
+    // above the claim — where an order restarted at the head would have
+    // landed it on the claim itself.
+    let landed = positions_above(served.port, head);
+    let width = claimed - head;
+    assert_eq!(
+        landed.first().copied(),
+        Some(claimed + width),
+        "FINDING (the order): the first write after the cut takes the positions after the claim, \
+         never the claim: {landed:?} (head {head}, claim {claimed}, the write {width} wide)"
+    );
+    served.child.kill();
+
+    // THE NEXT START, no flag: a clean open, no cut said, the kept files
+    // listed again — a standing state until the operator removes them —
+    // after the media's lines, where the listing stands in the open's report.
+    let mut next = serve_and_read_the_open(&dir, &[]);
+    await_said(&mut next.stderr, "open", "media uploads: ");
+    let listed =
+        await_said(&mut next.stderr, "open", "kept files beside the journal and the logs: ");
+    assert!(
+        listed.starts_with(&format!(
+            "kept files beside the journal and the logs: {} — {};",
+            standing.len(),
+            standing.join(", ")
+        )),
+        "the same files, listed again: {listed}"
+    );
+    next.child.kill();
+    let whole = next.stderr.whole();
+    assert!(
+        !whole.iter().any(|l| l.contains("journal tail cut (")),
+        "a clean open says no cut:\n{}",
+        whole.join("\n")
+    );
+    assert_eq!(
+        fs::read(dir.join(&kept)).expect("the kept file"),
+        &found[byte as usize..],
+        "untouched"
+    );
+
+    // THE STANDING LINE, in-process at its tick: the kept file, by name.
+    let sd = spawn_unclaimed(&dir);
+    sd.daemon().set_standing_interval_millis(50);
+    let standing_lines = || -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.starts_with("standing: ")).collect()
+    };
+    poll_until("the standing line", || !standing_lines().is_empty());
+    assert_eq!(
+        standing_lines()[0],
+        format!(
+            "standing: kept files beside the journal and the logs: {} ({})",
+            tools::kept_files(&dir).expect("the listing").len(),
+            tools::kept_files(&dir).expect("the listing").join(", ")
+        ),
+        "FINDING (m11): the kept files, a standing state, re-said at the tick"
+    );
+    sd.shutdown();
+}
+
+/// THE FLAG ON A CLEAN OPEN says so and the start goes on: a board closed
+/// cleanly, started under `--cut-damaged-tail`, cuts nothing, keeps nothing,
+/// and writes one `open:` line naming the flag as unneeded; and a crash's
+/// torn tail under the flag is cut as every open cuts it, nothing kept, the
+/// same line said.
+#[test]
+fn the_flag_on_a_clean_or_crashed_open_says_it_was_not_needed_and_keeps_nothing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    {
+        let sd = spawn_unclaimed(&dir);
+        let (home, session) = delegate_a_home(sd.port());
+        insert_into_the_home(sd.port(), &session, &home, 1, 2);
+        sd.shutdown();
+    }
+    wait_for_the_lock(&dir);
+    let segment = active_segment(&dir);
+    let clean_len = fs::metadata(&segment).expect("the segment").len();
+    let unneeded = "--cut-damaged-tail was given and no damaged tail stood: nothing was kept; the \
+                    flag is for one start — remove it from the command line or the unit file";
+    let mut served = serve_and_read_the_open_with(&dir, &["--cut-damaged-tail"], &[]);
+    assert_eq!(await_said(&mut served.stderr, "open", "--cut-damaged-tail was given"), unneeded);
+    served.child.kill();
+    assert!(crate::tools::tree(&dir).keys().all(|p| !p.to_string_lossy().contains(".cut-")));
+    // A crash's torn tail under the flag: cut as the open's own landing.
+    let mut f = fs::OpenOptions::new().append(true).open(&segment).expect("open the segment");
+    f.write_all(&[0xA5u8; 777]).expect("append the garbage");
+    drop(f);
+    let mut served = serve_and_read_the_open_with(&dir, &[], &[("SKEPD_CUT_DAMAGED_TAIL", "true")]);
+    let cut = await_said(&mut served.stderr, "open", "journal tail cut (");
+    assert!(cut.ends_with("every acknowledged write stands"), "a crash's tail: {cut}");
+    assert_eq!(await_said(&mut served.stderr, "open", "--cut-damaged-tail was given"), unneeded);
+    served.child.kill();
+    assert_eq!(fs::metadata(&segment).expect("the segment").len(), clean_len);
+    assert!(crate::tools::tree(&dir).keys().all(|p| !p.to_string_lossy().contains(".cut-")));
+}
+
+/// A LINK UNDER `blobs/` IS REFUSED BEFORE THE ENGINE's OPEN (`operations.md`
+/// §3.1 step 3; PATTERNS P13): a board closed in-process, a symbolic link
+/// planted under `blobs/`, a stray `checkpoint.tmp` planted beside the
+/// journal and bytes that spell no frame appended past its last marker. The
+/// binary exits 1 on the blob store's refusal; no recovery is said, the
+/// stray file stands un-removed and the tail uncut — the engine's open never
+/// ran — and every file under the data directory stands as it stood.
+#[cfg(unix)]
+#[test]
+fn a_link_under_blobs_is_refused_before_the_engines_open_touches_the_directory() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    {
+        let sd = spawn_unclaimed(&dir);
+        sd.shutdown();
+    }
+    wait_for_the_lock(&dir);
+    let elsewhere = tmp.path().join("elsewhere");
+    fs::write(&elsewhere, b"a file outside the board").expect("the link's target");
+    std::os::unix::fs::symlink(&elsewhere, dir.join("blobs").join("elsewhere")).expect("the link");
+    fs::write(dir.join("checkpoint.tmp"), b"half a checkpoint").expect("the stray");
+    let segment = active_segment(&dir);
+    let mut f = fs::OpenOptions::new().append(true).open(&segment).expect("open the segment");
+    f.write_all(&[0xA5u8; 777]).expect("append the garbage");
+    drop(f);
+    let before = crate::tools::tree(&dir);
+    let mut cmd = skepd_bare(&dir, &["--port", "0", "--workers", &skepd::MIN_WORKERS.to_string()]);
+    let mut refused = Spawned::launch(&mut cmd);
+    let stderr = Stderr::of(&mut refused.child);
+    let status = refused.wait_within(PATIENCE);
+    let whole = stderr.whole();
+    assert_eq!(status.code(), Some(1), "the link stops the start:\n{}", whole.join("\n"));
+    let last = whole.last().expect("the refusal");
+    assert!(last.starts_with("skepd: blob store: "), "the store's refusal, named: {last}");
+    assert!(
+        !whole
+            .iter()
+            .any(|l| said(l, "open", "recovered from ") || l.contains("journal tail cut (")),
+        "FINDING (P13): the engine's open ran before the refusal:\n{}",
+        whole.join("\n")
+    );
+    assert!(dir.join("checkpoint.tmp").exists(), "the stray stands: the kernel's open never ran");
+    assert_eq!(crate::tools::tree(&dir), before, "FINDING (P13): the refused start wrote");
 }

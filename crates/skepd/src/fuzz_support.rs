@@ -519,16 +519,14 @@ fn object_edit(m: &mut Map<String, Value>, recipe: u64, rng: &mut u64) {
                 *slot = retype(slot, rng);
             }
         }
-        4 => {
-            if keys.len() >= 2 {
-                let k2 = keys[(splitmix64(rng) as usize) % keys.len()].clone();
-                if k2 != k {
-                    let a = m.get(&k).cloned();
-                    let b = m.get(&k2).cloned();
-                    if let (Some(a), Some(b)) = (a, b) {
-                        m.insert(k, b);
-                        m.insert(k2, a);
-                    }
+        4 if keys.len() >= 2 => {
+            let k2 = keys[(splitmix64(rng) as usize) % keys.len()].clone();
+            if k2 != k {
+                let a = m.get(&k).cloned();
+                let b = m.get(&k2).cloned();
+                if let (Some(a), Some(b)) = (a, b) {
+                    m.insert(k, b);
+                    m.insert(k2, a);
                 }
             }
         }

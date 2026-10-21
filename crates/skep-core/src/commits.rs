@@ -1288,7 +1288,9 @@ impl FeedWalk {
     /// Spawned fallibly, as the daemon's other threads are: where the OS
     /// refuses the thread the walk runs here, at the open, as the cell
     /// index's does — the board serves later rather than never covering —
-    /// said.
+    /// said, and under the same catch: a panic on the opening thread marks
+    /// the walk ended and the region pending, said, and the open goes on,
+    /// where an uncaught one would end the process with the open.
     fn spawn(
         feed: Arc<Feed>,
         stores: EngineStores,
@@ -1331,9 +1333,17 @@ impl FeedWalk {
                 lines.say(Class::Failure, FeedWalkRefusedLine { error: &e, low, head });
                 // The head's world again: this runs inside the open, before
                 // any writer exists, so the root is the one the feed opened
-                // at. Not under the catch — a panic here is the open's.
+                // at. Under the catch, as the thread's arm is: a panic here
+                // ends the walk and not the open.
                 let snapshot = stores.kernel().snapshot();
-                feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines);
+                let walked = catch_unwind(AssertUnwindSafe(|| {
+                    feed.walk_and_land(stores.kernel(), &snapshot, &shared.control, &lines)
+                }));
+                if let Err(payload) = walked {
+                    shared.ended.store(true, Ordering::Release);
+                    let payload = payload_text(payload.as_ref());
+                    lines.say(Class::Failure, FeedWalkEndedLine { payload, low, head });
+                }
                 None
             }
         };

@@ -65,7 +65,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   walk died on either, marking the index FAILED under one catch, the third
   state beside ready and not-ready, read through the gate's
   `index_failed`.
-- **The pruner**, `pruner` — `Pruner` (`new`), one per daemon beside its
+- **The pruner**, `pruner` — `Pruner` (`new`, and `halt_the_unlink_pass`,
+  the daemon's standing halt of the unlink pass for the uptime where the
+  lease log's open found damage, read by every pass ahead of the halts it
+  reads itself), one per daemon beside its
   gate, whose `pass(&gate, exclusive)` answers a `PrunePass` — or nothing
   where the index is not ready: its figures and the bytes they freed, the
   halt, each log's size and compaction, and each step's failure beside

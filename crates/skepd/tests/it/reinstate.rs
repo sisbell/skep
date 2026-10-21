@@ -232,11 +232,11 @@ fn a_reinstate_into_a_published_document_is_refused_by_name_and_the_document_is_
 
     let before = head_position(port);
     assert_permanent(
-        &op(port, Some(&signed), &reinstate(CLAIMANT_DOC1, extent + 1, &[own.clone()])),
+        &op(port, Some(&signed), &reinstate(CLAIMANT_DOC1, extent + 1, std::slice::from_ref(&own))),
         "published_target",
     );
     assert_eq!(
-        verdict(&op(port, Some(&bare), &reinstate(CLAIMANT_DOC1, extent + 1, &[own.clone()]))),
+        verdict(&op(port, Some(&bare), &reinstate(CLAIMANT_DOC1, extent + 1, std::slice::from_ref(&own)))),
         "credential_refused:signed_session_required",
         "a bare session on the claimed board: the gate ahead of the store"
     );
@@ -257,11 +257,11 @@ fn a_reinstate_into_a_published_document_is_refused_by_name_and_the_document_is_
     ));
     let before = head_position(port);
     assert_permanent(
-        &op(port, Some(&signed), &reinstate(&member, extent + 1, &[own.clone()])),
+        &op(port, Some(&signed), &reinstate(&member, extent + 1, std::slice::from_ref(&own))),
         "published_target",
     );
     assert_eq!(
-        verdict(&op(port, Some(&bare), &reinstate(&member, extent + 1, &[own.clone()]))),
+        verdict(&op(port, Some(&bare), &reinstate(&member, extent + 1, std::slice::from_ref(&own)))),
         "credential_refused:signed_session_required"
     );
     assert_eq!(head_position(port), before);
@@ -394,7 +394,7 @@ fn the_wire_frame_is_the_op_and_a_write_on_op_at_is_refused() {
         "POST",
         "/op-at",
         mine,
-        format!(r#"{{"at":{head},"frame":{}}}"#, reinstate(&draft, 1, &[one.clone()])).as_bytes(),
+        format!(r#"{{"at":{head},"frame":{}}}"#, reinstate(&draft, 1, std::slice::from_ref(&one))).as_bytes(),
     );
     assert_eq!(st, 400, "{}", String::from_utf8_lossy(&body));
     assert_eq!(json(&body)["error"].as_str(), Some("write_at_history"));
@@ -411,9 +411,9 @@ fn the_wire_frame_is_the_op_and_a_write_on_op_at_is_refused() {
             ),
         )
     };
-    assert_permanent(&send(1, 2, &[bad.clone()]), "not_content_subspace");
-    assert_permanent(&send(5, 1, &[bad.clone()]), "out_of_bounds");
-    assert_permanent(&send(0, 1, &[one.clone()]), "out_of_bounds");
+    assert_permanent(&send(1, 2, std::slice::from_ref(&bad)), "not_content_subspace");
+    assert_permanent(&send(5, 1, std::slice::from_ref(&bad)), "out_of_bounds");
+    assert_permanent(&send(0, 1, std::slice::from_ref(&one)), "out_of_bounds");
     assert_permanent(&send(1, 1, &[bad]), "bad_run");
     assert_permanent(&send(1, 1, &[]), "empty_result");
     assert_eq!(head_position(port), head, "every refusal commits nothing");

@@ -136,7 +136,7 @@ fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
                 _ => format!("/blob/upload/{}", random_token(rng, 40)),
             };
             let body = random_bytes(rng, 3000);
-            let overstate = splitmix64(rng) % 3 == 0;
+            let overstate = splitmix64(rng).is_multiple_of(3);
             let declared =
                 body.len() + if overstate { 1 + splitmix64(rng) as usize % 4096 } else { 0 };
             let mut v = format!(

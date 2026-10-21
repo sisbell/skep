@@ -38,26 +38,35 @@
 //! the halt marks and any foreign designation directory; the asides and
 //! the partials no upload record names, by count; the cells and the values
 //! the walk read and the files the cells reference, by count, and whether
-//! the holes were re-hashed; and the journal's log position, its start
-//! point and the checkpoints its open skipped, by count. It records no read
-//! anywhere (D9) and writes nothing under `blobs/`. What the engine's open
-//! writes to the directory it is run over — the copy the inventory proves —
-//! is the kernel's own: the lock file `kernel.lock`, created where absent;
-//! a torn tail cut off the journal's end where a crash left one, which the
-//! inventory reports as `journal.tail_cut` — the bytes cut, `0` where the
-//! last committed marker ended the journal: a count and never `null`, since
-//! every open runs the cut and a cut that took nothing leaves the journal a
-//! clean close left it; a tail holding an intact frame no torn write leaves
-//! cut too, every byte of it first kept beside the journal in
-//! `seg-{n}.wal.cut-{byte}` files no open removes; and a stray
-//! `checkpoint.tmp` — a checkpoint a crash or a full volume left
-//! half-written — removed, which the inventory reports as
-//! `journal.stray_checkpoint_removed`; no checkpoint, no commit,
-//! no head, no feed sidecar — the daemon's own open is never run. So the
-//! copy is run over writable: one the open cannot write — a read-only
-//! mount, a directory or a file without its write bit — is refused by name
-//! ([`ToolError::ReadOnlyCopy`]), never read as a journal that would not
-//! open.
+//! the holes were re-hashed; the blob store's two logs as read
+//! (`blob_logs`: each by name, whether it stood, its whole lines, the lines
+//! read as no record, and the cut the open would make — where trust ends,
+//! the whole lines after it, and whether it is damage, the first untrusted
+//! line whole, or a crash's torn line); and the journal's log position, its
+//! start point, the checkpoints its open skipped and the corrupt runs it
+//! passed over, by count, the tail it cut with the position the cut claimed,
+//! where it began, the intact frames among it and the files it kept them
+//! in, and every kept file standing beside the journal and the logs
+//! (`journal.kept_files`, [`kept_files`]). It records no read anywhere (D9)
+//! and writes nothing under `blobs/`. What the engine's open writes to the
+//! directory it is run over — the copy the inventory proves — is the
+//! kernel's own: the lock file `kernel.lock`, created where absent; a
+//! crash's torn tail cut off the journal's end, which the inventory reports
+//! as `journal.tail_cut` — the bytes cut, `0` where the last committed
+//! marker ended the journal: a count and never `null`, since every open
+//! runs the cut and a cut that took nothing leaves the journal a clean close
+//! left it; and a stray `checkpoint.tmp` — a checkpoint a crash or a full
+//! volume left half-written — removed, which the inventory reports as
+//! `journal.stray_checkpoint_removed`; no checkpoint, no commit, no head,
+//! no feed sidecar — the daemon's own open is never run. A copy whose tail
+//! is damage rather than a crash's — an intact marker committing nothing, a
+//! frame that does not decode, more bytes than one append leaves — is
+//! refused by the kernel's own refusal ([`ToolError::Journal`]), the copy as
+//! found: the tools accept no cut, so `journal.tail_cut_kept` never names a
+//! file this run kept. So the copy is run over writable: one the open cannot
+//! write — a read-only mount, a directory or a file without its write bit —
+//! is refused by name ([`ToolError::ReadOnlyCopy`]), never read as a
+//! journal that would not open.
 //!
 //! **The pull** ([`pull`];
 //! `skepd pull --data-dir <dir> [--hash <hex>] <file>`): takes a file,
@@ -102,7 +111,10 @@ use skep_util::json::{obj, parse_lower_hex};
 pub enum ToolError {
     /// No board stands at the directory: no journal segment there.
     ///
-    /// A directory that cannot be read is answered as one with none.
+    /// Judged by the kernel's own test of a segment's name
+    /// ([`board_stands`]), so a file the kernel would not read back is no
+    /// board here either; a directory that does not exist holds none. A
+    /// directory that cannot be read is not this but [`ToolError::Io`].
     NoBoard(PathBuf),
     /// The journal is held: the kernel's exclusion lock refused this open.
     ///
@@ -118,9 +130,15 @@ pub enum ToolError {
     ReadOnlyCopy(PathBuf),
     /// The engine's open refused the journal for another reason.
     ///
-    /// A corrupt journal, a bad checkpoint: the operator's condition.
+    /// A corrupt journal, a bad checkpoint, a damaged tail — the kernel's
+    /// refusal of a tail that is not a crash's, which the tools never accept
+    /// the cut of: the operator's condition, named in the kernel's words.
     Journal(EngineError),
-    /// The blob store or the file could not be read.
+    /// The data directory, the blob store or the file could not be read.
+    ///
+    /// The data directory's listing failing other than for its absence —
+    /// a permission, a device — is this, named `{dir}: list: {cause}`, and
+    /// never [`ToolError::NoBoard`]: the board may well stand there.
     Io(io::Error),
     /// The pull: a hex that is not 64 lowercase hexadecimal characters.
     NotAHash(String),
@@ -225,12 +243,13 @@ pub enum HoleCheck {
 /// # Errors
 ///
 /// In the order it meets them: [`ToolError::NoBoard`] where no journal
-/// segment stands at `data_dir`, or the directory cannot be read;
-/// [`ToolError::JournalHeld`] where a live kernel holds the journal,
-/// [`ToolError::ReadOnlyCopy`] where the copy cannot be written, and
-/// [`ToolError::Journal`] where the engine's open refuses the journal for
-/// another reason; and [`ToolError::Io`] where the blob store or a
-/// referenced file cannot be read.
+/// segment stands at `data_dir` or the directory does not stand, and
+/// [`ToolError::Io`] where it cannot be read; [`ToolError::JournalHeld`]
+/// where a live kernel holds the journal, [`ToolError::ReadOnlyCopy`] where
+/// the copy cannot be written, and [`ToolError::Journal`] where the engine's
+/// open refuses the journal for another reason — a damaged tail among them,
+/// which the inventory never cuts; and [`ToolError::Io`] where the blob
+/// store, the kept files' listing or a referenced file cannot be read.
 pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> {
     require_board(data_dir)?;
     let engine = open_journal(data_dir)?;
@@ -349,9 +368,27 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
         None => Vec::new(),
     };
     let recovery = engine.recovery();
+    // The blob store's two logs as the inspection read them: what the open
+    // would cut and keep, and the lines it would drop, cut and kept nowhere
+    // by the inspection.
+    let blob_logs: Vec<Value> = match &store {
+        Some(s) => {
+            let (uploads_log, leases_log) = s.logs();
+            [uploads_log, leases_log].into_iter().map(log_read_object).collect()
+        }
+        None => Vec::new(),
+    };
+    // The kept files beside the journal and the logs: every `*.cut-*` the
+    // copy holds, this open's among them (`operations.md` §3.5 step 2).
+    let kept_files: Vec<Value> = kept_files(data_dir)?.into_iter().map(Value::String).collect();
+    let number = |n: u64| Value::Number(n.into());
+    let strings = |names: &[String]| {
+        Value::Array(names.iter().map(|name| Value::String(name.clone())).collect())
+    };
     Ok(obj(vec![
         ("accounts", Value::Array(accounts)),
         ("asides", Value::Number((asides as u64).into())),
+        ("blob_logs", Value::Array(blob_logs)),
         ("cells", Value::Number((report.cells as u64).into())),
         ("expired_uploads", Value::Number((expired_uploads as u64).into())),
         ("foreign_designations", Value::Array(foreign)),
@@ -360,7 +397,11 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
         (
             "journal",
             obj(vec![
+                ("kept_files", Value::Array(kept_files)),
                 ("log_position", Value::Number(engine.kernel().current_seq().0.into())),
+                // The corrupt runs below the start point the open read and
+                // passed over, which a fallback past that start point meets.
+                ("runs_passed_over", number(recovery.map_or(0, |r| r.runs_passed_over))),
                 (
                     "skipped_checkpoints",
                     Value::Number((recovery.map_or(0, |r| r.skipped.len()) as u64).into()),
@@ -376,8 +417,26 @@ pub fn inventory(data_dir: &Path, check: HoleCheck) -> Result<Value, ToolError> 
                 // The tail cut's bytes: a count, `0` for a clean close — the
                 // kernel's member is one, every journaled open running the
                 // cut — and `0` too where the engine gave no account, as the
-                // start point renders the same absence.
+                // start point renders the same absence. Beside it, what the
+                // count does not say: the position an intact marker in the
+                // cut claimed (`null` where none did), where the cut began
+                // (`null` where nothing was cut), the intact frames among the
+                // cut bytes, and the files this open kept them in — never
+                // more than none, since the tools accept no damaged tail's
+                // cut, so a copy whose tail is damage is refused instead.
                 ("tail_cut", Value::Number(recovery.map_or(0, |r| r.tail_cut).into())),
+                (
+                    "tail_cut_claimed",
+                    recovery.and_then(|r| r.tail_cut_claimed).map_or(Value::Null, |c| number(c.0)),
+                ),
+                (
+                    "tail_cut_from",
+                    recovery.and_then(|r| r.tail_cut_from.as_ref()).map_or(Value::Null, |(seg, b)| {
+                        obj(vec![("byte", number(*b)), ("segment", Value::String(seg.clone()))])
+                    }),
+                ),
+                ("tail_cut_intact", number(recovery.map_or(0, |r| r.tail_cut_intact))),
+                ("tail_cut_kept", strings(recovery.map_or(&[][..], |r| &r.tail_cut_kept))),
             ]),
         ),
         ("orphan_partials", Value::Number((orphan_partials as u64).into())),
@@ -434,30 +493,115 @@ pub fn pull(data_dir: &Path, file: &Path, expected: Option<&str>) -> Result<Pull
     Ok(Pulled { path: root.join(&finished.designation).join(&finished.hex), hex: finished.hex, size: finished.size })
 }
 
-/// Checks that a board stands at `dir`.
+/// Returns whether a board stands at `dir`: the kernel's own answer.
 ///
-/// A board is a directory holding at least one journal segment. Nothing is
-/// created for a directory that holds none — the engine's open would make a
-/// genesis there.
+/// A board is a directory holding at least one journal segment, judged by
+/// the kernel's test of a segment's name (`skep_kernel::journal_stands`):
+/// the one spelling its writer emits, `seg-<n>.wal`, read back by the same
+/// round trip — so a file named `seg-01.wal`, which the kernel would not
+/// read, is no segment here either, and a tool that trusted it would open a
+/// fresh journal beside it. The binary asks this before it begins a board
+/// (`--create`), the two tools before they open one. Nothing is created.
 ///
 /// # Errors
 ///
-/// [`ToolError::NoBoard`] where `dir` holds no journal segment, or cannot
-/// be read.
+/// The directory could not be listed, named `{dir}: list: {cause}`, the
+/// kind kept: `NotFound` where it does not stand, which the callers read
+/// as no board, and every other kind — a permission, a device — as the
+/// read's own failure, never as a directory with no board in it.
+pub fn board_stands(dir: &Path) -> io::Result<bool> {
+    skep_kernel::journal_stands(dir)
+}
+
+/// Checks that a board stands at `dir` ([`board_stands`]).
+///
+/// Nothing is created for a directory that holds none — the engine's open
+/// would make a genesis there.
+///
+/// # Errors
+///
+/// [`ToolError::NoBoard`] where `dir` holds no journal segment or does not
+/// stand; [`ToolError::Io`] where it cannot be read.
 fn require_board(dir: &Path) -> Result<(), ToolError> {
-    let has_segment = fs::read_dir(dir)
-        .map(|entries| {
-            entries.flatten().any(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                name.starts_with("seg-") && name.ends_with(".wal")
-            })
-        })
-        .unwrap_or(false);
-    if has_segment {
-        Ok(())
-    } else {
-        Err(ToolError::NoBoard(dir.to_path_buf()))
+    match board_stands(dir) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ToolError::NoBoard(dir.to_path_buf())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(ToolError::NoBoard(dir.to_path_buf())),
+        Err(e) => Err(ToolError::Io(e)),
     }
+}
+
+/// Returns the kept files beside the journal and the logs at `dir`, sorted.
+///
+/// They are every regular file whose name holds `.cut-` in the data
+/// directory and in `blobs/` under it — the kernel's `seg-<n>.wal.cut-<byte>`
+/// (`….<k>`), the change feed's `commits.log.cut-<byte>` and
+/// `feed-*.log.cut-<byte>`, the blob store's `blobs/uploads.log.cut-<byte>`
+/// and `blobs/leases.log.cut-<byte>` — each named within the data
+/// directory, as the lines name them. Each holds bytes an open cut as damage
+/// and kept, a standing state until the operator removes it
+/// (`operations.md` §1.1 m11): the daemon lists them at every open and at
+/// the standing line's tick, the inventory under `journal.kept_files`. An
+/// absent `blobs/` holds none.
+///
+/// # Errors
+///
+/// The data directory's listing failing, named `{dir}: list: {cause}`, or
+/// `blobs/`'s save for its absence.
+pub fn kept_files(dir: &Path) -> io::Result<Vec<String>> {
+    let listed = |dir: &Path, e: io::Error| {
+        io::Error::new(e.kind(), format!("{}: list: {e}", dir.display()))
+    };
+    let kept_in = |under: &Path, prefix: &str, out: &mut Vec<String>| -> io::Result<()> {
+        for entry in fs::read_dir(under).map_err(|e| listed(under, e))? {
+            let entry = entry.map_err(|e| listed(under, e))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.contains(".cut-") && entry.file_type().map_err(|e| listed(under, e))?.is_file()
+            {
+                out.push(format!("{prefix}{name}"));
+            }
+        }
+        Ok(())
+    };
+    let mut kept = Vec::new();
+    kept_in(dir, "", &mut kept)?;
+    let blobs = dir.join(STORE_DIR);
+    match fs::symlink_metadata(&blobs) {
+        Ok(meta) if meta.is_dir() => kept_in(&blobs, &format!("{STORE_DIR}/"), &mut kept)?,
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(listed(&blobs, e)),
+    }
+    kept.sort();
+    Ok(kept)
+}
+
+/// Returns one blob log's reading as the inventory renders it.
+///
+/// The members, in sorted order: `absent`, `cut` — `null`, or the cut the
+/// open would make: `at`, `len`, `lines_after` and `damage`, whether the
+/// first untrusted line was whole, which the open keeps and a crash's torn
+/// line is not — `lines`, `name` and `unread` (`LogRead`'s fields; nothing
+/// is cut or kept by the inspection).
+fn log_read_object(read: &skep_blobs::LogRead) -> Value {
+    let number = |n: u64| Value::Number(n.into());
+    obj(vec![
+        ("absent", Value::Bool(read.absent)),
+        (
+            "cut",
+            read.cut.map_or(Value::Null, |cut| {
+                obj(vec![
+                    ("at", number(cut.at)),
+                    ("damage", Value::Bool(cut.damage())),
+                    ("len", number(cut.len)),
+                    ("lines_after", number(cut.lines_after as u64)),
+                ])
+            }),
+        ),
+        ("lines", number(read.lines as u64)),
+        ("name", Value::String(read.name.clone())),
+        ("unread", number(read.unread as u64)),
+    ])
 }
 
 /// Opens the engine over `dir` through its ordinary public open.
@@ -486,6 +630,7 @@ fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Os,

@@ -60,6 +60,7 @@ pub(crate) use writer::{CommitFail, Journal, JournalWriter, UnwindRepair};
 
 use std::io;
 use std::ops::Range;
+use std::path::Path;
 
 use bincode::Options;
 use serde::de::DeserializeOwned;
@@ -67,6 +68,26 @@ use serde::{Deserialize, Serialize};
 
 use attest::SIG_ALG_UNSIGNED;
 use chain::{slot_digest, ChainLink};
+
+/// Returns whether a journal segment stands in `dir`.
+///
+/// It is the kernel's own test of whether a board's journal lives there,
+/// read as recovery reads the directory: a segment is a file the writer's
+/// one spelling names, `seg-<n>.wal`, read back by the same round trip, so
+/// a name the kernel would not read back (`seg-01.wal`) is no segment here
+/// either. A caller deciding whether to open a directory as a board asks
+/// this ahead of [`crate::Kernel::open`], which begins a journal where none
+/// stands.
+///
+/// # Errors
+///
+/// The directory could not be listed, named `{dir}: list`, the kind kept: a
+/// directory that does not exist is `NotFound` and one the process may not
+/// read `PermissionDenied` — each told from an empty directory, which
+/// answers `false`.
+pub fn journal_stands(dir: &Path) -> io::Result<bool> {
+    Ok(!list_segments(dir)?.is_empty())
+}
 
 /// The per-frame sync word anchoring recovery resynchronization (§1/§7).
 ///
@@ -194,6 +215,19 @@ pub const MAX_SEGMENT_LEN: u64 = 2 * MAX_TXN_BYTES;
 // segment pass the ceiling — a commit acknowledged that the next open refuses.
 const _: () =
     assert!(SEGMENT_ROTATE_BYTES - 1 + MAX_TXN_BYTES + MAX_SIG_BYTES as u64 <= MAX_SEGMENT_LEN);
+/// The most bytes one interrupted append leaves past the last committed marker.
+///
+/// A crash tears at most one transaction's append: its record frames and
+/// its commit marker, at most [`MAX_TXN_BYTES`] together, and the marker's
+/// signature slot, at most [`MAX_SIG_BYTES`] more — the quantity the segment
+/// ceiling above is asserted against. So a tail after the last committed
+/// marker holding no intact frame and longer than this is not a crash's
+/// (§7): decay over the journal's trailing bytes, or bytes no writer of this
+/// journal left, which the open refuses as a damaged tail
+/// ([`crate::DamagedTail`]) rather than cutting as the un-acked tail. A tail
+/// of exactly this length is a crash's. Moves with the two figures it is
+/// made of, never alone.
+pub const MAX_CRASH_TAIL_BYTES: u64 = MAX_TXN_BYTES + MAX_SIG_BYTES as u64;
 /// The resynchronization budget, as a multiple of a segment's own size.
 ///
 /// It is how many bytes of CRC a scan will spend on rejected frame candidates

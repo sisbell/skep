@@ -1199,7 +1199,7 @@ fn an_intact_frame_no_torn_write_leaves_is_counted_where_the_tail_holds_it() {
     assert_eq!(out.committed_head, 2, "the rotted transaction is cut as the tail");
     assert_eq!(out.tail_intact, 1, "its intact marker is counted");
     assert_eq!(out.tail_claimed, Some(3), "…with the position T3's acknowledgement named");
-    let cut = truncate_tail(dir.path(), &out, &Seam::default()).unwrap();
+    let cut = truncate_tail(dir.path(), &out, true, &Seam::default()).unwrap();
     assert_eq!(cut.bytes, found.len() as u64 - starts[4] as u64, "T3 cut whole");
     assert_eq!(cut.from, Some(("seg-1.wal".to_string(), starts[4] as u64)), "from T3's record");
     let kept = format!("seg-1.wal.cut-{}", starts[4]);
@@ -1221,7 +1221,7 @@ fn an_intact_frame_no_torn_write_leaves_is_counted_where_the_tail_holds_it() {
     assert_eq!(out.committed_head, 3);
     assert_eq!(out.tail_intact, 0, "a commit after it resets the count");
     assert_eq!(out.tail_claimed, None, "…and the claim beside it");
-    let cut = truncate_tail(dir.path(), &out, &Seam::default()).unwrap();
+    let cut = truncate_tail(dir.path(), &out, false, &Seam::default()).unwrap();
     assert_eq!((cut.bytes, cut.from), (0, None), "the last committed marker ends the journal");
     assert!(cut.kept.is_empty(), "nothing cut, nothing kept");
 }
@@ -1264,7 +1264,7 @@ fn a_keep_that_fails_cuts_nothing_and_leaves_no_copy() {
 
     let seam = Seam::default();
     seam.fail_the_next(Step::TailKeep, io::ErrorKind::StorageFull);
-    let refused = truncate_tail(dir.path(), &out, &seam).expect_err("the keep fails");
+    let refused = truncate_tail(dir.path(), &out, true, &seam).expect_err("the keep fails");
     assert_eq!(refused.kind(), io::ErrorKind::StorageFull, "the kind armed: {refused}");
     assert!(
         refused.to_string().starts_with(&format!("{kept}: fsync: injected StorageFull")),
@@ -1274,7 +1274,8 @@ fn a_keep_that_fails_cuts_nothing_and_leaves_no_copy() {
     assert!(!dir.path().join(&kept).exists(), "…and left no copy standing");
     assert!(seam.armed_steps().is_empty(), "the arm fired once");
 
-    let cut = truncate_tail(dir.path(), &out, &seam).expect("the next attempt keeps and cuts");
+    let cut =
+        truncate_tail(dir.path(), &out, true, &seam).expect("the next attempt keeps and cuts");
     assert_eq!(cut.kept, vec![kept.clone()]);
     assert_eq!(fs::read(dir.path().join(&kept)).unwrap(), &found[from..]);
     assert_eq!(fs::metadata(&segment).unwrap().len(), from as u64);
@@ -1295,7 +1296,7 @@ fn an_unfinished_keep_is_completed_in_place_and_an_earlier_cuts_bytes_are_never_
     fs::write(dir.path().join(&kept), &tail[..tail.len() / 2]).unwrap();
     let segs = list_segments(dir.path()).unwrap();
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
-    let cut = truncate_tail(dir.path(), &out, &Seam::default()).unwrap();
+    let cut = truncate_tail(dir.path(), &out, true, &Seam::default()).unwrap();
     assert_eq!(cut.kept, vec![kept.clone()], "the copy a crash cut short, completed in place");
     assert_eq!(fs::read(dir.path().join(&kept)).unwrap(), tail);
     assert!(!dir.path().join(format!("{kept}.1")).exists(), "no second copy");
@@ -1306,7 +1307,7 @@ fn an_unfinished_keep_is_completed_in_place_and_an_earlier_cuts_bytes_are_never_
     fs::write(dir.path().join(&kept), earlier).unwrap();
     let segs = list_segments(dir.path()).unwrap();
     let out = scan(&segs, 0, None, CHAIN_GENESIS).unwrap();
-    let cut = truncate_tail(dir.path(), &out, &Seam::default()).unwrap();
+    let cut = truncate_tail(dir.path(), &out, true, &Seam::default()).unwrap();
     assert_eq!(cut.kept, vec![format!("{kept}.1")], "the copy takes the next name");
     assert_eq!(fs::read(dir.path().join(&kept)).unwrap(), earlier, "the earlier cut's, whole");
     assert_eq!(fs::read(dir.path().join(format!("{kept}.1"))).unwrap(), tail);
@@ -1336,14 +1337,16 @@ fn a_tail_of_whole_segments_is_moved_aside_and_a_failed_keep_moves_them_back() {
     assert_eq!((out.committed_head, out.tail_intact), (1, 1), "T2's intact marker closes nothing");
 
     fs::remove_file(&segs[2].path).unwrap();
-    let refused = truncate_tail(dir.path(), &out, &Seam::default()).expect_err("seg-3 is gone");
+    let refused =
+        truncate_tail(dir.path(), &out, true, &Seam::default()).expect_err("seg-3 is gone");
     assert!(refused.to_string().starts_with("seg-3.wal: stat: "), "{refused}");
     assert_eq!(fs::read(&segs[1].path).unwrap(), found[1], "seg-2 is back under its own name");
     assert!(!dir.path().join("seg-2.wal.cut-0").exists(), "…and kept nowhere else");
     assert_eq!(fs::read(&segs[0].path).unwrap(), found[0], "seg-1 is uncut");
 
     fs::write(&segs[2].path, &found[2]).unwrap();
-    let cut = truncate_tail(dir.path(), &out, &Seam::default()).expect("the keep and the cut");
+    let cut =
+        truncate_tail(dir.path(), &out, true, &Seam::default()).expect("the keep and the cut");
     assert_eq!(cut.kept, vec!["seg-2.wal.cut-0".to_string(), "seg-3.wal.cut-0".to_string()]);
     assert_eq!(cut.bytes, (found[1].len() + found[2].len()) as u64);
     assert_eq!(cut.from, Some(("seg-2.wal".to_string(), 0)), "seg-1 gave no byte");
@@ -1468,7 +1471,7 @@ fn the_cut_names_the_segment_holding_the_last_committed_marker() {
     // …so the cut takes no byte of seg-1, and begins at seg-2's first.
     let seg2_len = fs::metadata(&segs[1].path).unwrap().len();
     drop(writer);
-    let cut = truncate_tail(dir.path(), &out, &Seam::default()).unwrap();
+    let cut = truncate_tail(dir.path(), &out, false, &Seam::default()).unwrap();
     assert_eq!(cut.bytes, seg2_len, "seg-2 discarded whole");
     assert_eq!(cut.from, Some(("seg-2.wal".to_string(), 0)), "from the first byte a cut took");
     // A crash's tail — T2's record intact, its marker torn — holds no frame

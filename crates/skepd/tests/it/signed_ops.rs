@@ -1503,7 +1503,7 @@ fn a_shot_past_the_stores_re_insert_budget_passes_unattested_to_its_refusal() {
     // `count` draft-native values: the stretch, again and again, then a tail.
     let shot_frame = |count: u64| {
         let mut runs = vec![run(&d, &first, stretch); (count / stretch) as usize];
-        if count % stretch > 0 {
+        if !count.is_multiple_of(stretch) {
             runs.push(run(&d, &first, count % stretch));
         }
         publish_frame(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), Some(&d), &runs)
@@ -2730,7 +2730,8 @@ fn the_entry_frames_bytes_per_op_are_pinned() {
     // THE OTHER LINK WRITES: the stored tuple's four rows, each slot a unit
     // span — the type the class's reserved ghost address — under the op's
     // own token.
-    let (link_1, link_2): ((&[u8], &[u8]), (&[u8], &[u8])) =
+    type Link<'a> = (&'a [u8], &'a [u8]);
+    let (link_1, link_2): (Link<'_>, Link<'_>) =
         ((b"1.0.1.0.1.0.2.1", b"0.0.0.0.0.0.0.1"), (b"1.0.1.0.1.0.2.2", b"0.0.0.0.0.0.0.1"));
     let home: (&[u8], &[u8]) = (b"1.0.1.0.1", b"0.0.0.0.1");
     let mut want = prefix.clone();

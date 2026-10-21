@@ -712,6 +712,7 @@ fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 2,
             burned_seq: BurnedSeqPolicy::TolerateGap,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(TEST_SEED),

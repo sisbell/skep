@@ -543,10 +543,8 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         assert_eq!(st, 204);
     }
     let written = lines("uploads.log");
-    assert!(
-        written >= COMPACTION_MIN_LINES && written > COMPACTION_TRIGGER,
-        "past the minimum, and four times its one record: {written} lines"
-    );
+    assert!(written >= COMPACTION_MIN_LINES, "past the minimum: {written} lines");
+    assert!(written > COMPACTION_TRIGGER, "four times its one record: {written} lines");
     assert!(pass_failures(&sd).is_empty(), "no pass has failed yet");
     // The cadence's first pass, run as the index readied, has ended: the
     // clock moves only after it, so the passes below are the ones that judge
@@ -569,7 +567,7 @@ fn a_failed_step_never_skips_the_compaction_that_lifts_a_stop() {
         sd.shutdown();
         return;
     };
-    assert_eq!(stopping.failed, [failed.clone()], "one failure, step (b)'s: {stopping:?}");
+    assert_eq!(stopping.failed, std::slice::from_ref(&failed), "one failure, step (b)'s: {stopping:?}");
     assert_eq!(failed.step, PassStep::Halts, "{stopping:?}");
     // (b) gates (c): halts unread halt the unlink pass as halts read do.
     assert_eq!(

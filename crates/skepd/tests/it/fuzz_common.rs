@@ -88,7 +88,7 @@ pub fn op_at_frames() -> Vec<Vec<u8>> {
         .filter_map(|(_, _, body)| {
             let v: serde_json::Value = serde_json::from_str(&body).ok()?;
             let frame = v.get("frame")?;
-            Some(serde_json::to_vec(frame).ok()?)
+            serde_json::to_vec(frame).ok()
         })
         .collect()
 }

@@ -77,7 +77,7 @@
 //! is omitted whatever put it forward.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -85,7 +85,8 @@ use skep_util::json::obj;
 use skep_util::notice::Class;
 
 use super::super::sidecar::{
-    line_bytes, say_a_compact_twin, Cut, EntryLines, IoCause, RewriteFail,
+    keep_dropped_lines, line_bytes, say_a_compact_twin, Cut, EntryLines, IoCause, KeptName,
+    RewriteFail,
 };
 use super::super::Lines;
 
@@ -250,14 +251,22 @@ pub(super) type Entries = Vec<(u64, Map<String, Value>)>;
 ///
 /// [`LineFile::open`] answers it beside the entries: the [`Cut`] where trust
 /// ended before the file's end, and the entry lines past the head it purged
-/// ([`EntryLines`]). A derived file re-derives both; the attest store says
-/// each, its lines being primary below the reclaim floor.
+/// ([`EntryLines`]) — each with the file the dropped bytes were kept in,
+/// where they were ([`keep_dropped_lines`]): a damaged line's cut, never a
+/// torn line's, and every purge. A derived file re-derives both; the attest
+/// store says each, its lines being primary below the reclaim floor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Replayed {
     /// The cut, or `None` for a file read whole.
     pub cut: Option<Cut>,
+    /// The file the cut bytes were kept in, where the cut was a damaged
+    /// line's.
+    pub kept: Option<KeptName>,
     /// The entry lines past the head, or `None` where the file named none.
     pub foreign: Option<EntryLines>,
+    /// The file the entry lines past the head were kept in, where it named
+    /// any.
+    pub foreign_kept: Option<KeptName>,
 }
 
 impl LineFile {
@@ -275,9 +284,14 @@ impl LineFile {
     /// (rewriting the file without it, and answering the entry lines dropped,
     /// [`EntryLines`]), and hands back the entries at or below `head` that
     /// `keep` admits, with the file's coverage — which counts every trusted
-    /// line at or below `head`, kept or not. Both answers ride [`Replayed`]:
-    /// `None` for the cut is a file read whole, and `None` for the foreign
-    /// lines a file naming no entry past the head.
+    /// line at or below `head`, kept or not. What it drops in class B it
+    /// keeps beside the file first, durably ([`keep_dropped_lines`]): the
+    /// bytes from a damaged line — one ended by its newline that does not
+    /// parse, which no crash leaves — to the file's end, and the entry lines
+    /// above the head; a torn last line is cut and gone. Every answer rides
+    /// [`Replayed`]: `None` for the cut is a file read whole, `None` for the
+    /// foreign lines a file naming no entry past the head, and each kept
+    /// name `None` where nothing was kept.
     ///
     /// `lines` is the classed door the file keeps for its stop's line while
     /// serving, a failed append's or a rewrite's; the open says through it a
@@ -312,6 +326,9 @@ impl LineFile {
         let mut entries = Vec::new();
         let mut foreign = false;
         let mut foreign_entries = None;
+        // The byte the first entry line above the head begins at: where the
+        // purge's keep is named from.
+        let mut first_foreign: Option<u64> = None;
         let mut valid_end = 0u64;
         let mut reader = BufReader::new(&file);
         let mut line = Vec::new();
@@ -321,6 +338,7 @@ impl LineFile {
             // Trust ends at the first line that is torn — no newline, the end
             // of the file included — or does not parse.
             let Some(record) = line.strip_suffix(b"\n").and_then(parse_line) else { break };
+            let offset = valid_end;
             valid_end += read as u64;
             match record {
                 Record::Fence(n) if n <= head => coverage = coverage.max(n),
@@ -332,6 +350,7 @@ impl LineFile {
                 }
                 Record::Entry(at, _) => {
                     foreign = true;
+                    first_foreign.get_or_insert(offset);
                     foreign_entries = Some(EntryLines::with(foreign_entries, at));
                 }
                 Record::Fence(_) => foreign = true,
@@ -340,8 +359,11 @@ impl LineFile {
         // The line the scan stopped on, read for the caller's case: a torn
         // line — no newline, the file's end — names its own position where
         // its `at` stands whole; a whole line that does not parse is damage,
-        // its digits no witness, and the whole lines after it are read on.
-        let (first, whole_after) = if line.ends_with(b"\n") {
+        // its digits no witness, and the whole lines after it are read on —
+        // and it is the cut's class: a damaged line's cut is kept, a torn
+        // line's is gone.
+        let damaged = line.ends_with(b"\n");
+        let (first, whole_after) = if damaged {
             let mut whole_after = None;
             loop {
                 line.clear();
@@ -360,13 +382,23 @@ impl LineFile {
         };
         drop(reader);
         let len = file.metadata().map_err(with_file)?.len();
-        let cut = if valid_end < len {
+        let (cut, kept) = if valid_end < len {
+            // A damaged line's cut is kept first, from the file itself —
+            // the bytes from the trusted end on, never held whole in memory
+            // — durably, before the truncation; a torn line's is not.
+            let kept = if damaged {
+                (&file).seek(SeekFrom::Start(valid_end)).map_err(with_file)?;
+                let dropped = (&file).take(len - valid_end);
+                Some(keep_dropped_lines(dir, name, valid_end, dropped).map_err(with_file)?)
+            } else {
+                None
+            };
             // Cut, and answered: the caller says it, with its own case — in
             // the attest store the cut can take primary state with it.
             file.set_len(valid_end).map_err(with_file)?;
-            Some(Cut { valid_end, len, trusted: coverage, first, whole_after })
+            (Some(Cut { valid_end, len, trusted: coverage, first, whole_after }), kept)
         } else {
-            None
+            (None, None)
         };
         let mut this = LineFile {
             file,
@@ -380,11 +412,13 @@ impl LineFile {
             #[cfg(any(test, feature = "test-hooks"))]
             fail_next_rewrite_past_rename: false,
         };
+        let mut foreign_kept = None;
         if foreign {
-            // Purge what is not this journal's, once, so it cannot come back.
-            this.purge_foreign(head).map_err(with_file)?;
+            // Purge what is not this journal's, once, so it cannot come back
+            // — its entry lines kept beside the file first.
+            foreign_kept = this.purge_foreign(head, first_foreign).map_err(with_file)?;
         }
-        Ok((this, entries, Replayed { cut, foreign: foreign_entries }))
+        Ok((this, entries, Replayed { cut, kept, foreign: foreign_entries, foreign_kept }))
     }
 
     /// Returns the file's length in bytes, as its handle reads it.
@@ -719,7 +753,7 @@ impl LineFile {
         }
     }
 
-    /// Rewrites the file without another journal's lines.
+    /// Rewrites the file without another journal's lines, kept first.
     ///
     /// Every entry line at or below `head` is copied verbatim, in file order,
     /// then one fence at the coverage — through `<file>.compact` renamed over
@@ -727,14 +761,44 @@ impl LineFile {
     /// is copied whether or not a caller kept it: in the attest store a line
     /// no caller keeps lies below the floor and is an entry signature's only
     /// copy, so its bytes are moved and never re-rendered. The file is already
-    /// cut at its trusted end, so every line read here is whole.
+    /// cut at its trusted end, so every line read here is whole. The entry
+    /// lines above `head` — another journal's, or the cut commits' own after
+    /// a journal tail cut — are kept beside the file before the rewrite
+    /// ([`keep_dropped_lines`]), named by `first_foreign`, the byte the first
+    /// of them begins at, and gathered in memory first: they are the lines a
+    /// copy holds past its journal's head, a bounded few. Answers the kept
+    /// name, `None` where no entry line lay above the head (a fence alone).
     ///
     /// # Errors
     ///
-    /// The OS refused the temp file's creation, a read, a write, the sync,
-    /// the rename or the reopen.
-    fn purge_foreign(&mut self, head: u64) -> io::Result<()> {
+    /// The OS refused the keep, the temp file's creation, a read, a write,
+    /// the sync, the rename or the reopen.
+    fn purge_foreign(
+        &mut self,
+        head: u64,
+        first_foreign: Option<u64>,
+    ) -> io::Result<Option<KeptName>> {
         let path = self.dir.join(self.name);
+        let kept = match first_foreign {
+            Some(byte) => {
+                let mut above_the_head = Vec::new();
+                let mut reader = BufReader::new(File::open(&path)?);
+                reader.seek(SeekFrom::Start(byte))?;
+                let mut line = Vec::new();
+                while reader.read_until(b'\n', &mut line)? > 0 {
+                    if let Some(Record::Entry(at, _)) =
+                        line.strip_suffix(b"\n").and_then(parse_line)
+                    {
+                        if at > head {
+                            above_the_head.extend_from_slice(&line);
+                        }
+                    }
+                    line.clear();
+                }
+                Some(keep_dropped_lines(&self.dir, self.name, byte, above_the_head.as_slice())?)
+            }
+            None => None,
+        };
         let tmp = self.dir.join(format!("{}.compact", self.name));
         let mut out = BufWriter::new(create_rewrite_temp(&tmp)?);
         let mut reader = BufReader::new(File::open(&path)?);
@@ -753,7 +817,7 @@ impl LineFile {
         drop(f);
         std::fs::rename(&tmp, &path)?;
         self.file = open_line_file(&path)?;
-        Ok(())
+        Ok(kept)
     }
 }
 

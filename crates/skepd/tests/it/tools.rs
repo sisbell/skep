@@ -28,6 +28,7 @@ use skepd::tools::{self, HoleCheck, ToolError};
 
 use crate::common;
 use crate::media::{seed_pre_fence_draft, unknown_schema_value};
+use crate::open::wait_for_the_lock;
 use common::*;
 
 /// Every file under `root` with its length and its modification time — what
@@ -392,6 +393,7 @@ fn the_inventory_counts_the_bytes_the_open_cut_off_a_torn_tail_and_zero_after_a_
         assert_eq!(insert_cell(port, &owner, &owner_draft(port, &owner), &bytes, 1_000), "ok");
         sd.shutdown();
     }
+    wait_for_the_lock(dir.path());
     let segment = active_segment(dir.path());
     let len_of = |segment: &Path| fs::metadata(segment).expect("the segment").len();
     let clean_len = len_of(&segment);
@@ -559,6 +561,7 @@ fn the_binary_runs_the_inventory_and_the_pull_as_subcommands() {
         assert_eq!(insert_cell(port, &owner, &owner_draft(port, &owner), &bytes, 2_000), "ok");
         sd.shutdown();
     }
+    wait_for_the_lock(dir.path());
     let blake3_dir = dir.path().join("blobs").join("blake3");
     fs::remove_file(blake3_dir.join(&hex)).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_skepd"))
@@ -599,4 +602,222 @@ fn the_binary_runs_the_inventory_and_the_pull_as_subcommands() {
         .expect("run the inventory");
     assert_eq!(out.status.code(), Some(1), "no board: refused");
     assert!(String::from_utf8_lossy(&out.stderr).contains("no board at"));
+}
+
+// ── the board's test, the inventory's members and a damaged copy ─────────
+
+/// THE BOARD CHECK IS THE KERNEL's OWN, AND AN UNREADABLE DIRECTORY IS NO
+/// "NO BOARD" (#503, #504): a directory whose only journal file is named
+/// `seg-01.wal` — which the kernel would not read back — is refused as no
+/// board, as an empty one is, and nothing is created beside it; a directory
+/// the process cannot read is refused as the read's own failure, naming the
+/// directory and the act, never as a directory with no board in it. The
+/// binary's inventory exits 1 with each line.
+#[cfg(unix)]
+#[test]
+fn the_board_check_reads_only_the_kernels_spelling_and_an_unreadable_directory_is_io() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let aliased = dir.path().join("aliased");
+    fs::create_dir(&aliased).unwrap();
+    fs::write(aliased.join("seg-01.wal"), b"").unwrap();
+    let err = tools::inventory(&aliased, HoleCheck::LengthOnly).expect_err("no board");
+    assert!(matches!(&err, ToolError::NoBoard(d) if d == &aliased), "{err}");
+    assert_eq!(
+        fs::read_dir(&aliased).unwrap().count(),
+        1,
+        "nothing created beside the file the kernel would not read"
+    );
+    assert!(!tools::board_stands(&aliased).unwrap(), "the kernel's own spelling");
+    let absent = tools::board_stands(&dir.path().join("absent"));
+    assert!(matches!(&absent, Err(e) if e.kind() == std::io::ErrorKind::NotFound), "{absent:?}");
+
+    let board = dir.path().join("board");
+    {
+        let sd = spawn(&board);
+        sd.shutdown();
+    }
+    assert!(tools::board_stands(&board).unwrap());
+    let _readable_again = WritableAgain(board.clone());
+    fs::set_permissions(&board, fs::Permissions::from_mode(0o000)).expect("chmod 000");
+    match tools::inventory(&board, HoleCheck::LengthOnly) {
+        Err(ToolError::Io(e)) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied, "{e}");
+            assert!(
+                e.to_string().starts_with(&format!("{}: list: ", board.display())),
+                "the directory and the act: {e}"
+            );
+        }
+        other => panic!("FINDING (#504): an unreadable directory answered {other:?}"),
+    }
+    let out = Command::new(env!("CARGO_BIN_EXE_skepd"))
+        .args(["inventory", "--data-dir"])
+        .arg(&board)
+        .output()
+        .expect("run the inventory");
+    assert_eq!(out.status.code(), Some(1));
+    let line = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        line.starts_with(&format!("skepd inventory: {}: list: ", board.display()))
+            && !line.contains("no board at"),
+        "the read's own failure, never no board: {line}"
+    );
+}
+
+/// THE JOURNAL OBJECT's MEMBERS AND THE BLOB LOGS (#490; `operations.md`
+/// §3.5 step 2): over a copy closed cleanly, with kept files planted beside
+/// the journal and under `blobs/`, the inventory renders the four members
+/// the open knew and did not report — `tail_cut_intact`, `tail_cut_claimed`,
+/// `tail_cut_from`, `runs_passed_over` — the files this open kept
+/// (`tail_cut_kept`, none: the tools accept no cut) and every kept file
+/// standing (`kept_files`), and the blob store's two logs as read; over a
+/// copy with garbage past the last marker `tail_cut_from` names the segment
+/// and the byte; and over a copy whose lease log is damaged the log's cut
+/// reads as damage, the copy's log untouched — the inspection cuts and keeps
+/// nothing.
+#[test]
+fn the_inventory_renders_the_tails_members_the_kept_files_and_the_blob_logs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board");
+    let bytes = seeded_bytes(500, 3);
+    {
+        let sd = spawn(&board);
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        put_whole(port, &owner, &bytes);
+        sd.shutdown();
+    }
+    let copy = dir.path().join("copy");
+    copy_board(&board, &copy);
+    fs::write(copy.join("seg-1.wal.cut-99"), b"a kept tail").unwrap();
+    fs::write(copy.join("blobs").join("leases.log.cut-0"), b"a kept line\n").unwrap();
+    fs::create_dir(copy.join("not-a-file.cut-1")).unwrap();
+    let v = tools::inventory(&copy, HoleCheck::LengthOnly).expect("the inventory");
+    let journal = &v["journal"];
+    assert_eq!(journal["tail_cut"].as_u64(), Some(0), "{journal}");
+    assert_eq!(journal["tail_cut_intact"].as_u64(), Some(0), "{journal}");
+    assert!(journal["tail_cut_claimed"].is_null(), "{journal}");
+    assert!(journal["tail_cut_from"].is_null(), "{journal}");
+    assert_eq!(journal["runs_passed_over"].as_u64(), Some(0), "{journal}");
+    assert_eq!(journal["tail_cut_kept"], serde_json::json!([]), "{journal}");
+    assert_eq!(
+        journal["kept_files"],
+        serde_json::json!(["blobs/leases.log.cut-0", "seg-1.wal.cut-99"]),
+        "every kept file standing, regular files alone, sorted: {journal}"
+    );
+    let logs = v["blob_logs"].as_array().expect("the two logs");
+    assert_eq!(
+        logs.iter().map(|l| l["name"].as_str().unwrap_or_default()).collect::<Vec<_>>(),
+        ["blobs/uploads.log", "blobs/leases.log"]
+    );
+    for log in logs {
+        assert!(log["cut"].is_null() && !log["absent"].as_bool().unwrap_or(true), "{log}");
+    }
+    assert_eq!(logs[1]["lines"].as_u64(), Some(1), "the one lease: {}", logs[1]);
+
+    // GARBAGE PAST THE LAST MARKER: the cut names where it began.
+    let segment = active_segment(&copy);
+    let name = segment.file_name().and_then(|n| n.to_str()).expect("the name").to_string();
+    let clean_len = fs::metadata(&segment).unwrap().len();
+    let mut f = fs::OpenOptions::new().append(true).open(&segment).unwrap();
+    f.write_all(&[0xA5u8; 300]).unwrap();
+    drop(f);
+    let v = tools::inventory(&copy, HoleCheck::LengthOnly).expect("the inventory");
+    assert_eq!(v["journal"]["tail_cut"].as_u64(), Some(300));
+    assert_eq!(
+        v["journal"]["tail_cut_from"],
+        serde_json::json!({"byte": clean_len, "segment": name}),
+        "{}",
+        v["journal"]
+    );
+    assert_eq!(v["journal"]["tail_cut_intact"].as_u64(), Some(0));
+
+    // A DAMAGED LEASE LOG in the copy: read as damage, cut nowhere.
+    let log = copy.join("blobs").join("leases.log");
+    let mut damaged = fs::read(&log).unwrap();
+    damaged[0] = b'x';
+    fs::write(&log, &damaged).unwrap();
+    let v = tools::inventory(&copy, HoleCheck::LengthOnly).expect("the inventory");
+    let leases = &v["blob_logs"][1];
+    assert_eq!(
+        leases["cut"],
+        serde_json::json!({"at": 0, "damage": true, "len": damaged.len(), "lines_after": 0}),
+        "{leases}"
+    );
+    assert_eq!(fs::read(&log).unwrap(), damaged, "the inspection cuts nothing");
+    assert!(!copy.join("blobs").join("leases.log.cut-0.1").exists(), "and keeps nothing");
+}
+
+/// A DAMAGED COPY IS REFUSED (`operations.md` §3.5 step 2; the runbook's
+/// Back up, step 2): a copy whose last acknowledged transaction's record
+/// rotted — its marker intact, committing nothing — is refused by the
+/// kernel's own refusal, the damaged tail named with the position it claims
+/// and the two acts, the copy as found and nothing kept: the tools accept
+/// no cut. The binary's subcommand exits 1 with that line.
+#[test]
+fn a_copy_whose_tail_is_damage_is_refused_and_left_as_found() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = dir.path().join("board");
+    {
+        // The claim's commits are the journal: the last transaction's record
+        // is what rots below.
+        let sd = spawn(&board);
+        sd.shutdown();
+    }
+    let copy = dir.path().join("copy");
+    copy_board(&board, &copy);
+    let segment = active_segment(&copy);
+    // The last frame is the last marker; the one before it a record of the
+    // last transaction: one payload byte flipped rots the record. The tail
+    // begins at that transaction's first record, the frame after the marker
+    // before it (a payload's tag `1` is a marker's).
+    let data = fs::read(&segment).unwrap();
+    let mut starts = Vec::new();
+    let mut pos = 0usize;
+    while pos + 12 <= data.len() {
+        starts.push(pos);
+        let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        pos += 12 + len;
+    }
+    let tag = |start: usize| u32::from_le_bytes(data[start + 12..start + 16].try_into().unwrap());
+    let previous_marker = starts[..starts.len() - 1].iter().rposition(|&start| tag(start) == 1);
+    let record = previous_marker.map_or(0, |i| starts[i + 1]);
+    let last_record = starts[starts.len() - 2];
+    let mut rotted = data.clone();
+    rotted[last_record + 12 + 1] ^= 0xFF;
+    fs::write(&segment, &rotted).unwrap();
+    let before = tree(&copy);
+    let err = tools::inventory(&copy, HoleCheck::LengthOnly).expect_err("refused");
+    let ToolError::Journal(engine) = &err else { panic!("the kernel's own refusal: {err}") };
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(engine);
+    let mut damaged = None;
+    while let Some(e) = source {
+        if let Some(d) = e.downcast_ref::<skepd::DamagedTail>() {
+            damaged = Some(d.clone());
+        }
+        source = e.source();
+    }
+    let damaged = damaged.expect("the typed cause in the chain");
+    assert_eq!((damaged.byte, damaged.intact), (record as u64, 1), "{damaged:?}");
+    assert!(
+        matches!(damaged.tell, skepd::DamagedTailTell::MarkerCommitsNothing { .. }),
+        "{damaged:?}"
+    );
+    let line = err.to_string();
+    assert!(
+        line.starts_with("the journal could not be opened: engine open: durable committed data \
+                          cannot be read; position ")
+            && line.contains("damaged journal tail: ")
+            && line.contains("Two acts: restore "),
+        "{line}"
+    );
+    assert_eq!(fs::read(&segment).unwrap(), rotted, "the copy as found");
+    assert_eq!(tree(&copy), before, "nothing written, nothing kept");
+    let out = Command::new(env!("CARGO_BIN_EXE_skepd"))
+        .args(["inventory", "--data-dir"])
+        .arg(&copy)
+        .output()
+        .expect("run the inventory");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("damaged journal tail: "));
 }

@@ -403,6 +403,7 @@ pub fn journaled() -> Journaled {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 1,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0),

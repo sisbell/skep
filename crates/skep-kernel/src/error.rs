@@ -291,7 +291,16 @@ pub enum OpenError {
     /// 7. a committed head that leaves no coordinate for a successor, which
     ///    no sequencer here could have written;
     /// 8. the fold's own verdict: a committed record that does not decode as
-    ///    `W::Record`, or a `Seq` the committed set presents twice.
+    ///    `W::Record`, or a `Seq` the committed set presents twice;
+    /// 9. a damaged journal tail ([`DamagedTail`]): the bytes after the last
+    ///    committed marker are not what one interrupted append leaves — an
+    ///    intact commit marker committing nothing, a CRC-intact frame that
+    ///    does not decode, or no intact frame over more bytes than one
+    ///    append can leave — so the write they held may have been
+    ///    acknowledged, and the open cuts them only where its configuration
+    ///    accepts the cut by name ([`crate::Durability::Fsync`]'s
+    ///    `cut_damaged_tail`); the cause names the frame, the position the
+    ///    tail claims where one is read, and the two acts.
     ///
     /// Halt, never drop — nothing is folded, nothing is installed, and
     /// nothing is truncated. Operator-intervention condition — not
@@ -314,7 +323,9 @@ pub enum OpenError {
         /// the rewritten field; for a chain break, the `last_seq` of the first
         /// transaction whose chain did not verify; for an exhausted order, the
         /// committed head itself; for an undecodable or repeated record, that
-        /// record's own `Seq`.
+        /// record's own `Seq`; for a damaged tail, the position an intact
+        /// marker in it claims, else the first position above the committed
+        /// head, the lowest the tail's frames could hold.
         at: Seq,
         /// The account of what could not be read, where there is one.
         ///
@@ -335,13 +346,155 @@ pub enum OpenError {
         /// carries the serializer's own refusal, which is what separates a
         /// writer/reader skew — a binary rolled back over a record format —
         /// from bit-rot, two conditions this variant otherwise reports alike
-        /// and an operator must not treat alike. `None` for the rest: an
-        /// exhausted order is arithmetic, and a `Seq` the committed set
-        /// presents twice is a malformed journal rather than an unreadable
-        /// one.
+        /// and an operator must not treat alike; and a damaged tail's is
+        /// [`DamagedTail`], a typed value a caller above may read back
+        /// through `source`, naming the frame, the segment and the two acts.
+        /// `None` for the rest: an exhausted order is arithmetic, and a `Seq`
+        /// the committed set presents twice is a malformed journal rather
+        /// than an unreadable one.
         cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
 }
+
+/// A journal tail that is not a crash's, refused at the open (§7).
+///
+/// It is [`OpenError::Corruption`]'s ninth cause. The bytes after the last
+/// committed marker are, after a crash, one interrupted append's: the
+/// record frames of one transaction and at most one short or CRC-failing
+/// frame, never longer than a transaction at the budget and its signature
+/// slot at the cap ([`crate::MAX_CRASH_TAIL_BYTES`]); every write they held
+/// was unacknowledged, and the open cuts them. A tail of any other shape —
+/// [`DamagedTailTell`] names the three the scan tells — is damage: decay in
+/// the last acknowledged transaction, a rewrite of it, or bytes no writer
+/// of this journal left, and the write it holds may have been acknowledged.
+/// The open leaves the journal as it found it and refuses, and the operator
+/// chooses: restore the segment from a copy, or open once accepting the cut
+/// ([`crate::Durability::Fsync`]'s `cut_damaged_tail`), which keeps every
+/// byte of the tail beside the journal before it cuts one
+/// ([`crate::Recovery`]'s `tail_cut_kept`) and hands out no position the
+/// tail claimed ([`crate::Kernel::order_floor`]).
+///
+/// Every field is public and the struct is plain: a caller above renders its
+/// own line from the facts, as the daemon renders its refusal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DamagedTail {
+    /// The segment the tail begins in, by its name in the journal directory.
+    ///
+    /// It is the segment holding the last committed marker where a byte of
+    /// it lies past that marker, else the first wholly-later segment that
+    /// holds a byte — the file the keep would name, `{segment}.cut-{byte}`.
+    pub segment: String,
+    /// The byte of that segment the tail begins at.
+    pub byte: u64,
+    /// The committed head: the position every write at or below stands at.
+    pub head: Seq,
+    /// The tail's length in bytes, over every segment it reaches.
+    pub bytes: u64,
+    /// The intact frames of no writer's among them.
+    ///
+    /// They are commit markers committing nothing and CRC-intact frames that
+    /// do not decode — what [`crate::Recovery`]'s `tail_cut_intact` counts
+    /// once the cut is accepted; `0` where the tail's tell is its length.
+    pub intact: u64,
+    /// The greatest position an intact marker in the tail claims.
+    ///
+    /// It is the position the lost acknowledgement named, where a marker
+    /// stands to read it from; `None` otherwise.
+    pub claimed: Option<Seq>,
+    /// The tell that makes the tail damage rather than a crash's.
+    pub tell: DamagedTailTell,
+}
+
+/// What tells a damaged journal tail from a crash's ([`DamagedTail`]).
+///
+/// The first of the three the scan meets names the tail; a tail may show
+/// several. `#[non_exhaustive]`: a fourth tell is an addition, and a caller
+/// rendering these keeps a wildcard arm.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DamagedTailTell {
+    /// An intact commit marker commits nothing.
+    ///
+    /// Its records fail their check, or stand out of order: rot in the
+    /// records of the transaction the board acknowledged at `position`, or a
+    /// rewrite of them, which a crash leaves only where the disk wrote an
+    /// append's pages out of order.
+    MarkerCommitsNothing {
+        /// The marker's segment, by name.
+        segment: String,
+        /// The byte of that segment the marker's frame begins at.
+        byte: u64,
+        /// The position the marker claims: its `last_seq`.
+        position: Seq,
+    },
+    /// A frame passes its CRC and does not decode.
+    ///
+    /// Under one stamp no writer of this format writes one and no torn write
+    /// leaves one: a rewrite with its CRC re-fixed, or a frame of a layout
+    /// this build does not read.
+    FrameDoesNotDecode {
+        /// The frame's segment, by name.
+        segment: String,
+        /// The byte of that segment the frame begins at.
+        byte: u64,
+    },
+    /// No intact frame stands in the tail and it is longer than one append.
+    ///
+    /// One interrupted append leaves at most `bound` bytes
+    /// ([`crate::MAX_CRASH_TAIL_BYTES`]); a longer run of bytes no frame
+    /// anchors is decay over the journal's trailing bytes, or bytes no writer
+    /// of this journal left.
+    LongerThanOneAppend {
+        /// The most bytes one interrupted append leaves.
+        bound: u64,
+    },
+}
+
+impl fmt::Display for DamagedTailTell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DamagedTailTell::MarkerCommitsNothing { segment, byte, position } => write!(
+                f,
+                "the intact commit marker at byte {byte} of {segment} commits nothing — the \
+                 records it closes fail their check — and claims position {position}, the \
+                 position the write it closed was acknowledged at: rot in that write's records, \
+                 or a rewrite of them"
+            ),
+            DamagedTailTell::FrameDoesNotDecode { segment, byte } => write!(
+                f,
+                "the frame at byte {byte} of {segment} passes its CRC and does not decode, which \
+                 no torn write leaves: a rewrite, or a frame this build does not read"
+            ),
+            DamagedTailTell::LongerThanOneAppend { bound } => write!(
+                f,
+                "no intact frame stands among them and they are longer than one interrupted \
+                 append leaves ({bound} bytes: a transaction at the budget and its signature \
+                 slot at the cap): decay over the journal's trailing bytes, or bytes no writer \
+                 of this journal left"
+            ),
+        }
+    }
+}
+
+impl fmt::Display for DamagedTail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "damaged journal tail: the {bytes} bytes after the last committed marker at position \
+             {head}, from byte {byte} of {segment}, are not a crash's — {tell}; nothing was cut. \
+             Two acts: restore {segment} from a copy, or open once accepting the cut, which \
+             first keeps every one of the {bytes} bytes beside the journal as {segment}.cut-{byte} \
+             and then cuts them, handing out no position the tail claims",
+            bytes = self.bytes,
+            head = self.head,
+            byte = self.byte,
+            segment = self.segment,
+            tell = self.tell,
+        )
+    }
+}
+
+impl std::error::Error for DamagedTail {}
 
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

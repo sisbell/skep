@@ -237,11 +237,18 @@ apart.
      deletes them itself: old checkpoints, and the journal below
      them, as new checkpoints land; a stray `checkpoint.tmp` at
      the next open;
-   - a `seg-<n>.wal.cut-<byte>` file is a journal tail an open cut
-     that held an intact frame, kept beside the journal — the one
-     copy of a write the board may have acknowledged (Start, step 3,
-     item 8): the kernel never removes it; copy it off the volume
-     before you remove it;
+   - a file whose name holds `.cut-` is bytes an open cut as damage
+     and kept first, every one of them before a byte was cut (Start,
+     step 3, item 8): `seg-<n>.wal.cut-<byte>` beside the journal,
+     the one copy of a write the board may have acknowledged;
+     `commits.log.cut-<byte>` and `feed-<name>.log.cut-<byte>`, the
+     change feed's lines for such a write (item 11);
+     `blobs/uploads.log.cut-<byte>` and `blobs/leases.log.cut-<byte>`,
+     the store's records a damaged line took with it (item 9) —
+     `….<k>` where the name already stood. No open reads, moves,
+     removes or writes over one, and the open and the standing line
+     list them while any stands: copy them off the volume before you
+     remove them;
    - below the journal's reclaim floor, `feed-attest.log` holds the
      only copy of each attested commit's signature;
    - the deposited files under `blobs/` are the depositors' own,
@@ -308,13 +315,16 @@ apart.
    as bytes; it compacts the change feed's files where the
    journal's reclaim floor has passed their oldest entries, and
    writes back, and syncs, any lines `feed-attest.log` is missing.
-   Where the journal's tail holds an intact frame no torn write
-   leaves, the kernel's own open first keeps every byte it will cut
-   beside the journal (Start, step 3, item 8): a copy of the cut
-   segment's tail, at most one segment, and a rename of each later
-   segment, which takes no room; a keep refused cuts nothing. If any
-   of these is refused, the open stops with exit 1, and a board that
-   was still serving reads is down:
+   Where the journal's tail is damage rather than a crash's, the
+   open halts until a start accepts the cut by name, and that start
+   first keeps every byte it will cut beside the journal (Start,
+   step 3, item 8): a copy of the cut segment's tail, at most one
+   segment, and a rename of each later segment, which takes no room.
+   The change feed's open and the blob store's keep what a damaged
+   line's cut drops beside each file the same way (items 9 and 11).
+   A keep refused cuts nothing. If any of these is refused, the open
+   stops with exit 1, and a board that was still serving reads is
+   down:
 
    ```
    skepd: change-feed sidecar: {file}: {error}
@@ -480,6 +490,7 @@ apart.
    deposits refused at the floor (free space {free} below the floor in force {floor})
    a deposit's file is unread ({cause}), {n} reads failed over {ms} ms
    CLAIMED-PERMISSIVE
+   kept files beside the journal and the logs: {n} ({names})
    ```
 
    Each clause carries the position or the file its first line
@@ -487,8 +498,9 @@ apart.
    `at position {position}`, or `({file}: {act}: {error})` where the
    read failed. Where the host refused the free space's read, the
    floor's clause names the cause in place of the figures: `deposits
-   refused at the floor (free space unread: {cause})` (step 1). What
-   ends each:
+   refused at the floor (free space unread: {cause})` (step 1). The
+   kept files are listed afresh at each tick, by name within the
+   data directory (Start, step 3, item 8). What ends each:
 
    - the write path's halt and the kernel's: a restart, once the
      volume has room and the device answers (step 5);
@@ -515,7 +527,10 @@ apart.
      ends it at the next tick, saying so, if no request's read has;
    - `CLAIMED-PERMISSIVE`: a restart with `--no-local-trust`, where
      local trust on a claimed board was not meant (Start, step 3,
-     item 13).
+     item 13);
+   - the kept files: your removing them, once each is copied off the
+     volume and the writes it held are accounted for (step 2; Start,
+     step 3, item 8). No open removes one.
 
    The standing line is the checkpoint thread's. Where the stream
    holds `checkpoint thread ended: …` or `checkpoint thread: the OS
@@ -606,6 +621,17 @@ is the evidence, and the way back. Then act on the account:
   chain break at its first transaction, since that build's chain
   hashed no signature slot; there is no migration path, so start
   over.
+- `damaged journal tail: the {bytes} bytes after the last committed
+  marker at position {head}, from byte {byte} of {segment}, are not
+  a crash's — …`: the bytes past the last committed marker are not
+  what a crash leaves, and the write they held may have been
+  acknowledged. The line names the tell, that nothing was cut, and
+  the two acts: restore `{segment}` from a copy that holds it whole,
+  or start once under `--cut-damaged-tail`, which keeps every one of
+  the bytes beside the journal as `{segment}.cut-{byte}` before it
+  cuts them and hands out no position the tail claimed (Start, step
+  3, item 8). Every other file stands whole: nothing else is refused
+  or moved.
 - an account in the serializer's own words (`invalid value: …`,
   `… expected variant index …`): a record this build cannot decode,
   written by a newer build; run that build (Upgrade, step 5).
@@ -669,10 +695,18 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    failure: feed-attest.log: the journal refused the rebuild above position {last} ({account}): any attested commit in ({last}, {head}] serves attest: null, its line LOST at this store and not retried — restore this file and the segment the account names from a copy taken before this open (RUNBOOK §2)
    ```
 
-   Where trust ended at a damaged line and not a torn one, either
-   LOST ending goes on with the whole lines the cut took with it —
-   the signatures the copy you restore must hold: `; the cut took {n}
-   whole lines with it, positions {first}–{last}`.
+   Where trust ended at a damaged line and not a torn one — a whole
+   line that does not read, which no crash leaves — the open keeps
+   the cut bytes beside the file before it cuts them, as
+   `feed-attest.log.cut-{n}` (`….{k}` where that name stood), and the
+   line says so: `…; the {k} bytes after it are cut, kept in
+   feed-attest.log.cut-{n}; …`, either LOST ending then reading `LOST
+   unless restored from feed-attest.log.cut-{n} or the board
+   directory's backup`, and going on with the whole lines the cut
+   took with it — the signatures the copy you restore must hold: `;
+   the cut took {n} whole lines with it, positions {first}–{last}`.
+   The kept file holds those lines as found, and is the first copy
+   to read them back from.
 
    Stop the daemon, put back `feed-attest.log` from a copy that
    holds it whole and took it after its journal (Back up, step 1),
@@ -698,13 +732,16 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    Put back `commits.log` from the copy, whole, and start again.
 
    A copy taken while the daemon ran may hold lines past its own
-   journal's head. The open drops them, and says so for the two files
+   journal's head. The open drops them, keeping them first beside
+   the file as `{file}.cut-{byte}`, and says so for the two files
    whose lines it does not re-derive; after a journal tail cut that
-   took intact frames, they are the cut commits' own, which a copy
-   taken before this open still holds:
+   took acknowledged commits (Start, step 3, item 8), they are the
+   cut commits' own, and the line ends by naming the journal's kept
+   file beside them — `, whose markers the journal's kept file
+   {segment}.cut-{byte} holds too`:
 
    ```
-   open: {file} held {n} lines past the journal's head at position {head} (positions {first}–{last}): dropped — a live copy taken after its journal holds them; after a journal tail cut that took intact frames they are the cut commits' {testimony | signatures}, which a copy taken before this open still holds
+   open: {file} held {n} lines past the journal's head at position {head} (positions {first}–{last}): dropped and kept in {file}.cut-{byte} — a live copy taken after its journal holds them; after a journal tail cut that took acknowledged commits they are the cut commits' {testimony | signatures}
    ```
 
 6. **Put back one deposited file**, a hole the inventory lists,
@@ -826,11 +863,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    local trust off:
 
    ```
-   skepd --data-dir <DIR> --origin http://127.0.0.1:8642 --no-local-trust
+   skepd --data-dir <DIR> --create --origin http://127.0.0.1:8642 --no-local-trust
    ```
 
    `<DIR>`, or `SKEPD_DATA_DIR`, is the board's directory, the one
-   setting the daemon requires. A notebook you keep lives in the
+   setting the daemon requires; `--create` is the first start's
+   word, and every later start drops it. A notebook you keep lives in the
    platform's data directory: on macOS
    `~/Library/Application Support/skep/board/`; on Linux
    `$XDG_DATA_HOME/skep/board/`, by default
@@ -840,9 +878,22 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    filesystem that makes hard links — APFS, HFS+, ext4, XFS, btrfs
    and ZFS do; FAT, exFAT and some network shares do not, and the
    daemon refuses to start on one (step 3) — outside a synced
-   folder (Back up, step 1). One that does not exist is created
-   readable by you alone, the directory mode 700 and each file 600;
-   one that exists is recovered.
+   folder (Back up, step 1). Under `--create` the directory is made
+   where it does not exist, readable by you alone — the directory
+   mode 700 and each file 600 — and the board begun at genesis,
+   said in the open's report (step 3, item 6). Every later start
+   names the directory alone and recovers the board there. A start
+   without `--create` on a directory holding no journal — a
+   mistyped path, a volume not mounted over its mount point, an
+   empty directory — is refused, exit 2, nothing created and no
+   port held, since the open would otherwise make and serve an
+   empty board there; `--create` on a directory holding a board is
+   refused the same way:
+
+   ```
+   skepd: no board at {path}: no journal segment stands there; pass --create to begin one there, or name the board's directory; skepd --help prints the usage
+   skepd: --create: a board stands at {path} already; start it without --create; skepd --help prints the usage
+   ```
 
    The directory is one volume, the blob store inside it at
    `blobs/`. Never move `blobs/` to another disk behind a symbolic
@@ -925,6 +976,14 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    - `--node-prefix <PREFIX>` (`SKEPD_NODE_PREFIX`): the board's
      node prefix, `1.N`. Without it the blocked-prefix list's
      off-board test is off.
+   - `--cut-damaged-tail` (`SKEPD_CUT_DAMAGED_TAIL=true|false`):
+     accept, for this one start, the cut of a journal tail the open
+     refuses as damage (step 3, item 8), every byte of it kept
+     beside the journal first. Give it to one start, by hand, and
+     never keep it in a unit file: a start that needs no cut says
+     so, and a later damage would then be cut unasked.
+   - `--create`: begin a board where none stands, as above. A flag
+     and no variable: it is the first start's alone.
    - `--allow-preview-keys`: a development setting, with no
      variable. A served board runs without it.
 
@@ -1015,16 +1074,23 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
       Where no journal stood in the data directory, no segment and
       no checkpoint, the open began a new board rather than
-      recovering one, and says so after this line:
+      recovering one, and says so after this line — the first
+      start's landing under `--create`, the one word the binary
+      begins a board under (step 2):
 
       ```
-      open: no journal stood in the data directory: this open began a new board at genesis — on a board that had one, the directory named above is not where it lives (a volume not mounted over it, a mistyped --data-dir): stop the daemon before a write lands on the new board
+      open: no journal stood in the data directory: this open began a new board at genesis, as --create asked; start it again without --create
       ```
 
-      On a fresh board's first start this is the expected line. On
-      a board that had a journal, stop the daemon (Stop), mount the
-      volume or correct `--data-dir`, and start again: a write taken
-      meanwhile lands on the new journal and is not the board's.
+      The binary says no other form of it: a start without
+      `--create` on a directory holding no journal is refused
+      before the open (step 2), so a board that had a journal is
+      never silently begun again. A program that embeds the
+      daemon's library opens without the word and begins a board
+      unasked; its line is the tell of a wrong directory instead,
+      saying that on a board that had one the directory named
+      above is not where it lives, and to stop the daemon before a
+      write lands on the new board.
 
    7. A checkpoint a crash left half-written, now removed:
 
@@ -1041,22 +1107,74 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       ```
 
       `{position}` is the committed head the open left: every write
-      at or below it stands.
+      at or below it stands. A crash's tail is one interrupted
+      append's bytes — the records of one write and at most one
+      short or failing frame, never more than 67,174,400 bytes —
+      and every open cuts it of its own accord, keeping nothing.
 
-      Where the cut tail held intact frames no torn write leaves,
-      the line is a failure instead, since the cut may then have
-      taken a write the daemon acknowledged, and names it:
+      A tail of any other shape is damage, and the write it holds
+      may have been acknowledged: an intact commit marker that
+      commits nothing, its records failing their check — rot in the
+      last acknowledged write, or a rewrite of it; a frame that
+      passes its check and does not decode, which no torn write
+      leaves; or no intact frame over more bytes than one append
+      leaves. The open refuses it, exit 1, the journal as it found
+      it, and the refusal says which, the position the tail
+      claims, that nothing was cut, and the two acts:
 
       ```
-      failure: journal tail cut ({bytes} bytes, beginning at byte {byte} of {segment}, past position {position}), {n} of its frames intact on disk — a commit marker whose records failed their check, or a frame no writer of this format writes, the signature of rot in or a rewrite of the journal's last transaction rather than of a crash: a write this daemon acknowledged may be among the cut, at position {claimed}, the position an intact commit marker in the cut claims; the open kept the cut bytes in {kept}, beside the journal in the data directory, where no open reads, moves or removes it — copy it off the volume before you remove it; check the volume and its device
+      skepd: engine open: durable committed data cannot be read; position {claimed} names the damage: damaged journal tail: the {bytes} bytes after the last committed marker at position {position}, from byte {byte} of {segment}, are not a crash's — {tell}; nothing was cut. Two acts: restore {segment} from a copy, or open once accepting the cut, which first keeps every one of the {bytes} bytes beside the journal as {segment}.cut-{byte} and then cuts them, handing out no position the tail claims; under skepd the one-start flag is --cut-damaged-tail (SKEPD_CUT_DAMAGED_TAIL=true), given to one start and never kept in a unit file
       ```
+
+      `{tell}` is one of three: `the intact commit marker at byte
+      {byte} of {segment} commits nothing — the records it closes
+      fail their check — and claims position {claimed}, the position
+      the write it closed was acknowledged at: rot in that write's
+      records, or a rewrite of them`; `the frame at byte {byte} of
+      {segment} passes its CRC and does not decode, which no torn
+      write leaves: a rewrite, or a frame this build does not read`;
+      or `no intact frame stands among them and they are longer than
+      one interrupted append leaves (67174400 bytes: a transaction at
+      the budget and its signature slot at the cap): decay over the
+      journal's trailing bytes, or bytes no writer of this journal
+      left`. `{claimed}` is the position an intact marker in the tail
+      claims — the one that write's acknowledgement named, and `GET
+      /changes` named it by while it stood — or, where no marker
+      reads, the first position above the head. The refusal repeats
+      at every start until one of the two acts, and under a unit
+      that restarts on failure each attempt refuses and touches
+      nothing (Running it as a service). Restore `{segment}` from a
+      copy that holds it whole (Restore), and the write stands; or,
+      where no copy does, start once under `--cut-damaged-tail`
+      (step 2), which keeps, cuts and says so as a failure, since
+      the cut may have taken a write the daemon acknowledged:
+
+      ```
+      failure: journal tail cut ({bytes} bytes, beginning at byte {byte} of {segment}, past position {position}), {n} of its frames intact on disk — a commit marker whose records failed their check, or a frame no writer of this format writes, the signature of rot in or a rewrite of the journal's last transaction rather than of a crash — cut under --cut-damaged-tail: a write this daemon acknowledged may be among the cut, at position {claimed}, the position an intact commit marker in the cut claims; the open kept the cut bytes in {kept}, beside the journal in the data directory, where no open reads, moves or removes it — copy it off the volume before you remove it; positions ({position}, {claimed}] are left a gap and the next write takes position {next}, so a client holding that acknowledgement is answered a missing write, never another's; check the volume and its device
+      ```
+
+      Where no frame of the tail was intact and it was longer than
+      one append, the clause after the bytes reads `, no frame of it
+      intact and more of it than one interrupted append leaves —
+      decay over the journal's trailing bytes, or bytes no writer
+      left, rather than a crash — cut under --cut-damaged-tail: …`
+      instead.
 
       `{claimed}` is the position that write's acknowledgement named,
       and `GET /changes` named it by while it stood: a client holding
-      an acknowledgement at that position holds the write the cut may
-      have taken. Where no intact marker in the cut claims a position
-      above the head, the line reads `at a position above {position}`
-      instead.
+      an acknowledgement at that position holds the write the cut
+      took. The order starts past it: positions `({position},
+      {claimed}]` are never given out again, and the next write
+      takes `{next}`, the one after the claim, so that client is
+      answered a missing write at its position, and never another's
+      write under the position its own was acknowledged at. Where
+      no intact marker in the cut claims a position above the head,
+      the line reads `at a position above {position}` instead; and
+      there, as where the claim is one the cut's bytes could not
+      have carried — more positions above the head than its frames
+      could hold — the line ends `; the next write takes position
+      {next}`, the one after the head, since the tail claimed
+      nothing the order can be held to.
 
       The cut bytes are gone from the journal, and every one of them
       was kept first, before a byte was cut: `{kept}` names the files,
@@ -1076,14 +1194,72 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       to take again, and the segment that name may since have been
       given is theirs.
 
-      The board already serves by the time this line is read: check
-      the volume and its device now.
+      The change feed's files held that write's lines too, above the
+      head the cut left: the open drops them and keeps them beside
+      each file the same way (item 11; Restore, step 5), and the
+      listing at the end of the change feed's lines names them with
+      the journal's.
 
-      The inventory reports the bytes cut as `journal.tail_cut`
-      (Stop, step 2).
+      The flag is for that one start. The next start, without it,
+      recovers as every start does and lists the kept files again
+      (item 11). Given to a start that finds no damage — a clean
+      tail, or a crash's, cut as every open cuts it — it keeps
+      nothing and says so, and the start goes on:
 
-   9. The media limits and the floor in force, then the volume's
-      free space beside it:
+      ```
+      open: --cut-damaged-tail was given and no damaged tail stood: nothing was kept; the flag is for one start — remove it from the command line or the unit file
+      ```
+
+      The board already serves by the time the cut's line is read:
+      check the volume and its device now.
+
+      The inventory reports the bytes cut as `journal.tail_cut`, the
+      position the cut claimed as `journal.tail_cut_claimed` and the
+      kept files as `journal.tail_cut_kept` (Stop, step 2; Back up,
+      step 2); over a copy whose tail is damage it refuses, as the
+      open does, and cuts nothing.
+
+   9. What the blob store's open found of its two logs,
+      `blobs/uploads.log` and `blobs/leases.log`, where anything —
+      a crash's torn last line, its newline unwritten, cut as the
+      open's own repair:
+
+      ```
+      open: {log}: a torn last line cut ({n} bytes), a crash's or a kill's, never answered over; every acknowledged {upload | lease} stands
+      ```
+
+      and, as failures, a whole line that does not read — damage to
+      a record the store answered over, cut with every whole line
+      after it and kept first beside the log as `{log}.cut-{at}`
+      (`….{k}` where that name stood) — lines another build wrote,
+      or damaged ones, read as no record and removed by the open's
+      compaction, and a log absent beside a standing store — one a
+      deposit had reached, or whose other log stood; a `blobs/` made
+      by hand before the first start is no store — begun empty:
+
+      ```
+      failure: {log}: trust ends at byte {at} of {len}; the {n} bytes after it are cut, kept in {log}.cut-{at}: a whole line that does not read, which no crash leaves — damage to {upload | lease}s the store answered over, {m} whole lines after it cut with it; each lost {upload | lease} reads as none, cured by a re-PUT
+      failure: {log}: {n} lines read as no {upload | lease}: lines another build wrote, or damaged ones, removed by the open's compaction; each reads as none, cured by a re-PUT
+      failure: {log} was absent beside a standing store, and is begun empty: every {upload | lease} it held reads as none, cured by a re-PUT
+      ```
+
+      A lost upload record is no upload: its partial is removed as
+      an orphan, and its client's resume is answered `404
+      no_upload`. A lost lease is no lease, and the pruner's pass
+      would take the file it held as unreferenced: so where the
+      lease log's line is a failure, the open halts the pass's
+      unlinking for this uptime, said once the open is done, with
+      `{reason}` restating the lease log's failure; the pass's own
+      line carries the halt each hour (The full volume, step 3),
+      and the next start, its open reading the log whole, lifts it.
+      The depositors' re-PUTs restore the leases meanwhile:
+
+      ```
+      failure: pruner: the unlink pass is halted for this uptime — {reason}: a lease the open lost holds no file in memory, so the pass would unlink files their depositors hold; expired partials are still removed and the logs compacted at each pass; the next start, its open reading the log whole, lifts it
+      ```
+
+      Then the media limits and the floor in force, and the
+      volume's free space beside it:
 
       ```
       open: media limits: no record installed — the daemon's default stands: per-account {bytes} (one part in 8 of the volume's capacity of {bytes} bytes, never below 268435456 bytes), venue total none, lease interval 604800000 ms, per-file cap 67108864; the floor in force {floor} bytes of the volume's free space (never below the constant 268435456 bytes; twice the newest checkpoint's size plus one maximal segment of 134217728 bytes above it, re-read as each checkpoint lands)
@@ -1124,15 +1300,19 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        failure: {file}: trust ends at position {last} (byte {n} of {length}); the {k} bytes after it are cut; {what follows}
        ```
 
+       Where trust ended at a damaged line rather than a torn one —
+       a whole line that does not read, which no crash leaves — the
+       open keeps the cut bytes beside the file before it cuts them,
+       as `{file}.cut-{n}` (`….{k}` where that name stood), and the
+       line goes on `, kept in {file}.cut-{n}` ahead of the `;`.
        What follows is, for `commits.log`:
-       `the cut part is re-derived as bare entries`, and where trust
-       ended at a damaged line rather than a torn one, `; the cut took
-       {n} whole lines with it, positions {first}–{last}: their keys
-       and times are LOST unless the board directory's backup is
-       restored` — the walk brings each back bare, so put back that
-       copy's `commits.log` (Restore) where the testimony matters; for
-       the four
-       index files: `the cut part is re-derived`; and for
+       `the cut part is re-derived as bare entries`, and after a
+       damaged line, `; the cut took {n} whole lines with it,
+       positions {first}–{last}: their keys and times are LOST to the
+       feed and stand in commits.log.cut-{n} alone` — the walk brings
+       each back bare, so read the kept file, or put back that copy's
+       `commits.log` (Restore), where the testimony matters; for the
+       four index files: `the cut part is re-derived`; and for
        `feed-attest.log`, one of the three endings in Restore,
        step 5. What a file holds that this daemon cannot read is
        said once per open:
@@ -1203,6 +1383,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        position yet, the head at position {head}, in {ms} ms`. Where
        `commits.log` was lost or torn, the open also starts a walk
        that re-covers it while the board serves (Restart, step 3).
+
+       Last of the report on the board's files, where any kept file
+       stands beside the journal or the logs — this open's, and every
+       earlier open's you have not yet removed — the listing, said at
+       every open while one stands and by the standing line each hour
+       (The full volume, step 8), each named within the data
+       directory:
+
+       ```
+       open: kept files beside the journal and the logs: {n} — {names}; each holds bytes an open cut as damage: copy them off the volume, and remove them once the writes they held are accounted for
+       ```
 
    12. On a claimed board whose journal holds no head, the board's
        first head, written now:
@@ -1549,7 +1740,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      where the cut began and the position it lies past (`journal
      tail cut ({bytes} bytes, beginning at byte {byte} of {segment},
      past position {position}): …`, Start, step 3); the inventory
-     reports the bytes as `journal.tail_cut`.
+     reports the bytes as `journal.tail_cut`. A tail that is not a
+     crash's — damage in or a rewrite of the last acknowledged
+     write, or bytes no writer left — halts the next open until a
+     start accepts the cut by name, which keeps every byte of it
+     first (Start, step 3, item 8); the inventory refuses such a
+     copy as the open does.
    - A claim stopped before its first head: the next open writes
      the head and says so (Start, step 3).
    - The walk that re-covers a lost `commits.log` (Restart,
@@ -1579,12 +1775,16 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    at each attempt, it is a defect of the build, which a restart does
    not mend: stop the unit and keep the line.
 
-   One such panic is caught, and the daemon goes on: the cell index's
-   walk, where it ran at the open because the OS refused its thread
-   (Start, step 3, item 17). Its line names `main`, the walk's own
-   line follows it (Start, step 3, item 18), and the board serves,
-   uploads and the listing of one's deposits answered `503
-   index_failed` until a restart.
+   Two such panics are caught, and the daemon goes on: the cell
+   index's walk, where it ran at the open because the OS refused its
+   thread (Start, step 3, item 17) — its line names `main`, the
+   walk's own line follows it (Start, step 3, item 18), and the board
+   serves, uploads and the listing of one's deposits answered `503
+   index_failed` until a restart; and the change feed's walk, where
+   it ran at the open for the same reason — its line names `main`,
+   `failure: the feed walk ended: …` follows it, and `GET /changes`
+   refuses pages into the positions it left uncovered until a
+   restart (Restart, step 3).
 
 ## 5. Restart
 
@@ -1608,8 +1808,10 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    the listener: reads are served and writes accepted meanwhile.
    `GET /changes` answers `503 feed_rebuilding` for a page that
    reaches into the positions not yet covered; `/events` is
-   untouched. A torn file is cut first, said as a `failure:` line
-   (Start, step 3, item 11). An absent one is said first too, by the
+   untouched. A torn file is cut first, said as a `failure:` line,
+   and a damaged one — a whole line that does not read — is kept
+   beside the file before the cut (Start, step 3, item 11). An
+   absent one is said first too, by the
    `failure:` line that names the positions walked back as bare
    entries (Restore, step 5); there `{covered}` below is the fence
    under which `/changes` answers `410 history_reclaimed`, not a
@@ -1838,10 +2040,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    file, of other bytes (`--no-rehash` checks lengths alone); each
    account's base and pending bytes, the unattributed bytes and the
    venue total they sum to; the standing and expired uploads; the
-   halt marks and any foreign designation directory; and under
+   halt marks and any foreign designation directory; under
+   `blob_logs`, each of the blob store's two logs as read — whether
+   it stood, its whole lines, the lines read as no record, and the
+   cut the open would make, its `damage` saying whether the first
+   untrusted line was whole (Start, step 3, item 9); and under
    `journal`, its `log_position`, `start_point`,
-   `skipped_checkpoints`, `tail_cut` and
-   `stray_checkpoint_removed`. It proves the copy's newest
+   `skipped_checkpoints`, `runs_passed_over`, `tail_cut` with
+   `tail_cut_from`, `tail_cut_intact`, `tail_cut_claimed` and
+   `tail_cut_kept` beside it, `stray_checkpoint_removed`, and
+   `kept_files`, every kept file the copy holds beside the journal
+   and the logs (Start, step 3, item 8). It proves the copy's newest
    checkpoint and the journal above it, not the older checkpoint a
    damaged newest falls back to; step 1's check is what keeps that
    one whole. A served directory is refused at the kernel's lock,
@@ -1853,15 +2062,23 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
    The inventory writes nothing under `blobs/`, but its open does
    to the journal what every open does. It takes the kernel's lock,
-   creating `kernel.lock`; it cuts a torn tail, reported as
-   `journal.tail_cut` (`0` where nothing was cut), and where that
-   tail held an intact frame no torn write leaves it first keeps
-   every byte it cuts beside the journal, in the
-   `seg-<n>.wal.cut-<byte>` files the copy then holds (Start,
-   step 3, item 8); and it removes a stray `checkpoint.tmp`,
-   reported as `journal.stray_checkpoint_removed` (`null` where
-   none stood). So it needs a copy it can write. One it cannot is
-   refused, exit 1:
+   creating `kernel.lock`; it cuts a crash's torn tail, reported as
+   `journal.tail_cut` (`0` where nothing was cut); and it removes a
+   stray `checkpoint.tmp`, reported as
+   `journal.stray_checkpoint_removed` (`null` where none stood). A
+   tail that is damage it refuses as the open does, the copy as
+   found and nothing kept — `journal.tail_cut_kept` never names a
+   file the inventory kept — exit 1, `{refusal}` being the open's
+   own line (Start, step 3, item 8): prove such a copy by restoring
+   the segment the refusal names, or run the daemon over the copy
+   once under `--cut-damaged-tail` and prove what that left.
+
+   ```
+   skepd inventory: the journal could not be opened: engine open: {refusal}
+   ```
+
+   So it needs a copy it can write. One it cannot is refused,
+   exit 1:
 
    ```
    skepd inventory: the copy at {dir} is read-only: the inventory's open writes the kernel's lock and may cut a torn tail; run it over a writable copy
@@ -1879,11 +2096,12 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    skepd inventory: blobs/ holds {n} entries the blob store never makes, and nothing was followed or written through them: {file} has {n} links; … Then try again.
    ```
 
-   It reports nothing of the blob store's two logs themselves: it
-   counts the uploads and leases their whole lines hold, so a copy
-   whose `uploads.log` or `leases.log` is torn or damaged still
-   proves clean, and the copy's open cuts the lines it cannot trust
-   and says nothing of it.
+   Of the blob store's two logs it reports what its reading found,
+   under `blob_logs`, and cuts and keeps nothing: it counts the
+   uploads and leases their whole lines hold, so a copy whose
+   `uploads.log` or `leases.log` is torn or damaged still proves
+   clean, its `cut` saying what the daemon's open would cut, keep
+   where it is damage, and say (Start, step 3, item 9).
 
 3. **Label the copy.** The daemon writes no line that marks a
    moment to copy at. The nearest is a checkpoint's landing line,
@@ -1934,7 +2152,21 @@ confirm on the first one. What every unit here shares:
   service manager does not. A start the daemon refuses is retried
   at the unit's pace, its refusal written to the log each time —
   save a command line it cannot read (exit 2), which 9.2's unit
-  leaves failed and 9.1's agent retries.
+  leaves failed and 9.1's agent retries. A damaged journal tail
+  (Start, step 3, item 8) is such a refusal, exit 1: each attempt
+  refuses, the same line each time, and touches nothing. Stop the
+  unit, act by hand — restore the segment the line names, or run
+  the binary once with `--cut-damaged-tail` and the unit's other
+  flags, and stop it once its serving line shows — then start the
+  unit again. Never add `--cut-damaged-tail` to a unit: it would
+  cut the next damage unasked.
+- **The first start by hand.** Neither unit carries `--create`:
+  begin the board before you enable one, with `skepd --data-dir
+  <DIR> --create` and the unit's other flags (Start, step 2),
+  stopped once its serving line shows. A unit started on a
+  directory holding no board is refused, exit 2, which 9.2's unit
+  leaves failed; and `--create` kept in a unit is refused at every
+  start after the first.
 - **Room for descriptors.** The unit sets the open-file limit to
   1,024; the daemon sizes its 64 live event streams against a
   limit of 256.
@@ -2063,6 +2295,13 @@ start by the `checkpoint.tmp` line (Start, step 3, item 7); with 64
 `GET /events` streams open, `/health` still answers and the daemon
 closes a 65th; and another user of the machine is refused a bare
 session on the claimed board, and a read of its files.
+
+Under `Restart=on-failure` an open the journal refuses — a damaged
+journal tail among them (Start, step 3, item 8) — is tried again
+every five seconds, each attempt the same line in the journal and
+nothing touched, until `systemctl --user stop skepd` and the act by
+hand the list above gives; the unit never carries
+`--cut-damaged-tail`.
 
 A dedicated user is an option on Linux, never the recipe: a system
 unit that runs the daemon as a `_skepd` user owning the data

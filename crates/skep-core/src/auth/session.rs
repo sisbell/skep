@@ -399,6 +399,7 @@ pub enum Lookup {
 /// Process-lifetime, no cap, no TTL (AUTH-7.15's declined knob — lazy
 /// eviction at presentation, `/session/close`, and restart are the reclaim
 /// mechanisms, AUTH-1.53).
+#[derive(Default)]
 pub struct Sessions {
     /// Token → the binding it names.
     ///

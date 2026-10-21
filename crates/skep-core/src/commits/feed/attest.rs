@@ -93,7 +93,9 @@ use skep_util::json::hex_string;
 use skep_util::notice::Class;
 
 use super::super::board_term;
-use super::super::sidecar::{CommitsLog, Cut, CutHead, EntryLines, ForeignLinesLine, IoCause};
+use super::super::sidecar::{
+    CommitsLog, Cut, CutHead, EntryLines, ForeignLinesLine, IoCause, KeptName,
+};
 use super::super::Lines;
 use super::derived::{LineFile, OwedSync, SyncHandle};
 use super::{AttestStoreFailed, AttestStoreFigures};
@@ -225,11 +227,24 @@ impl AttestStore {
         let absent = !dir.join(ATTEST_FILE).try_exists().unwrap_or(true);
         let (mut file, entries, replayed) =
             LineFile::open(dir, ATTEST_FILE, head, served_only, lines)?;
-        if let Some(foreign) = replayed.foreign {
-            lines.say(
-                Class::Open,
-                ForeignLinesLine { name: ATTEST_FILE, foreign, head, what: "signatures" },
-            );
+        if let (Some(foreign), Some(kept)) = (replayed.foreign, replayed.foreign_kept) {
+            // The second copy: a line here is a marker's slot mirrored, so
+            // after a journal tail cut the cut commits' markers hold these
+            // signatures too — in the files the journal's open kept at this
+            // start, where it kept any.
+            let journal_kept = engine
+                .recovery()
+                .map(|recovery| recovery.tail_cut_kept.clone())
+                .unwrap_or_default();
+            let line = ForeignLinesLine {
+                name: ATTEST_FILE,
+                foreign,
+                head,
+                what: "signatures",
+                kept,
+                journal_kept,
+            };
+            lines.say(Class::Open, line);
         }
         let mut served = BTreeMap::new();
         let mut unreadable: Option<(usize, u64)> = None;
@@ -272,7 +287,8 @@ impl AttestStore {
         if let Some(cut) = replayed.cut {
             let rebuilt = refused.is_none();
             let floor = floor.unwrap_or(0);
-            lines.say(Class::Failure, AttestCutLine { cut, floor, attested, rebuilt });
+            let kept = replayed.kept;
+            lines.say(Class::Failure, AttestCutLine { cut, floor, attested, rebuilt, kept });
         }
         if let (true, Some(floor)) = (absent, floor) {
             if let Some(above) = attested.edge().filter(|&edge| edge < floor) {
@@ -489,11 +505,15 @@ impl Attested {
 /// tears a line above the floor, the store's durable-before-the-next-commit
 /// premise, so its cut reads as rebuilt wherever a witness names its side.
 /// Otherwise the lines between the edge and the floor may be entry
-/// signatures' only copies, lost unless the board directory's backup is
-/// restored; and where the journal refused the rebuild, the cut lines above
-/// the floor are lost with them ([`RebuildRefusedLine`] names the account).
-/// Each lost arm adds the whole lines the cut took with it, where it took
-/// any: `; the cut took {m} whole lines with it, positions {a}–{b}`.
+/// signatures' only copies, LOST to the feed — standing in the file the open
+/// kept the cut bytes in, where the cut was a damaged line's
+/// (`, kept in {kept}` after the head, and the lost arm's `unless restored
+/// from {kept} or the board directory's backup`), and otherwise lost unless
+/// the board directory's backup is restored; and where the journal refused
+/// the rebuild, the cut lines above the floor are lost with them
+/// ([`RebuildRefusedLine`] names the account). Each lost arm adds the whole
+/// lines the cut took with it, where it took any: `; the cut took {m} whole
+/// lines with it, positions {a}–{b}`.
 ///
 /// `floor` is the reclaim floor at this open — genesis, 0, where nothing is
 /// reclaimed. Said once the rebuild has run. A pure value, pinned by
@@ -505,6 +525,9 @@ struct AttestCutLine {
     attested: Attested,
     /// Whether the journal answered the rebuild.
     rebuilt: bool,
+    /// The file the cut bytes were kept in: a damaged line's cut, never a
+    /// torn line's.
+    kept: Option<KeptName>,
 }
 
 impl AttestCutLine {
@@ -537,20 +560,31 @@ impl AttestCutLine {
 
 impl std::fmt::Display for AttestCutLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let head = CutHead { name: ATTEST_FILE, cut: self.cut };
+        write!(f, "{}", CutHead { name: ATTEST_FILE, cut: self.cut })?;
+        if let Some(kept) = self.kept {
+            write!(f, ", kept in {}", kept.of(ATTEST_FILE))?;
+        }
+        let unless = match self.kept {
+            Some(kept) => {
+                format!(
+                    "unless restored from {} or the board directory's backup",
+                    kept.of(ATTEST_FILE)
+                )
+            }
+            None => "unless the board directory's backup is restored".to_string(),
+        };
         match (self.above_the_floor(), self.rebuilt) {
             (true, true) => write!(
                 f,
-                "{head}; every cut line lies above the reclaim floor at position {} and is \
-                 rebuilt from the journal",
+                "; every cut line lies above the reclaim floor at position {} and is rebuilt \
+                 from the journal",
                 self.floor
             ),
             (true, false) => {
                 write!(
                     f,
-                    "{head}; every cut line lies above the reclaim floor at position {}, but the \
-                     journal refused their rebuild: they are LOST unless the board directory's \
-                     backup is restored",
+                    "; every cut line lies above the reclaim floor at position {}, but the \
+                     journal refused their rebuild: they are LOST {unless}",
                     self.floor
                 )?;
                 self.whole_after(f)
@@ -558,8 +592,8 @@ impl std::fmt::Display for AttestCutLine {
             (false, _) => {
                 write!(
                     f,
-                    "{head}; the lines between position {} and the reclaim floor at position {} \
-                     are LOST unless the board directory's backup is restored",
+                    "; the lines between position {} and the reclaim floor at position {} are \
+                     LOST {unless}",
                     self.edge(),
                     self.floor
                 )?;

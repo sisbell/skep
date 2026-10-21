@@ -53,7 +53,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   bytes — each account's base and pending bytes, the bytes whose key names
   no account, and the venue total they all sum to, the standing and
   expired uploads, the halt marks and any foreign
-  designation directory, recording no read and writing nothing under
+  designation directory, the blob store's two logs as read, the kept
+  files beside the journal and the logs, and what the open did to the
+  journal's tail — a copy whose tail is damage refused as the open
+  refuses it — recording no read and writing nothing under
   `blobs/`; `skepd pull --data-dir <dir> [--hash <hex>] <file>` restores
   a file a committed cell names by the PUT's own install order, no lease
   and no record written, beside a serving daemon when held to the
@@ -73,7 +76,16 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   by the daemon's own checkpoint thread off the write path's guard so no
   write waits for it, a failure said once on the operator stream, and the
   change feed's files compacted to the journal's reclaim floor after each
-  landing.
+  landing. So is the start's word: the binary begins a board only under
+  `--create` and refuses a directory holding none without it, and a
+  journal tail that is not a crash's halts the open — the kernel's
+  refusal, with the flag's spelling after it — until one start passes
+  `--cut-damaged-tail` (`SKEPD_CUT_DAMAGED_TAIL=true`), which keeps every
+  byte beside the journal first, cuts, and starts the order past the
+  position the tail claimed; the change feed's and the blob store's opens
+  keep what a damaged line's cut drops the same way, and every kept file
+  is listed at each open and on the standing line until removed
+  (`StartOptions`, `Daemon::open_started`).
 
 A library and a binary. The binary runs against a data directory and
 serves a board; the library (`Daemon`, `serve`) is the same daemon for

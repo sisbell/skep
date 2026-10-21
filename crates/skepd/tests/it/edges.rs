@@ -191,16 +191,16 @@ fn the_pools_pair_is_said_once_per_episode(sd: &Skepd, pool: &Pool) {
         .collect();
     assert!(!held.is_empty(), "{}: a pool to hold", pool.word);
     refused("the first request to meet the pool full");
-    assert_eq!(lines(), [failure.clone()], "FINDING (m12): the first edge, once, its text whole");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "FINDING (m12): the first edge, once, its text whole");
     refused("the second");
-    assert_eq!(lines(), [failure.clone()], "FINDING (m12): no line at the next refusal");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "FINDING (m12): no line at the next refusal");
 
     // SHORT OF THE HOLD-DOWN: a permit back, the clock short, a request
     // admitted — no landing.
     drop(held.pop());
     daemon.advance_edge_clock_ms(SHORT_OF_THE_HOLD_DOWN_MS);
     admitted("one permit free, short of the hold-down");
-    assert_eq!(lines(), [failure.clone()], "FINDING (M2): a landing short of the hold-down");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "FINDING (M2): a landing short of the hold-down");
 
     // INSIDE THE HOLD-DOWN, REFUSED AGAIN: the episode stays open, the
     // hold-down restarts, nothing said.
@@ -208,7 +208,7 @@ fn the_pools_pair_is_said_once_per_episode(sd: &Skepd, pool: &Pool) {
     refused("refilled, inside the hold-down");
     assert_eq!(
         lines(),
-        [failure.clone()],
+        std::slice::from_ref(&failure),
         "FINDING (m12): a refusal inside the hold-down says nothing"
     );
 
@@ -219,7 +219,7 @@ fn the_pools_pair_is_said_once_per_episode(sd: &Skepd, pool: &Pool) {
     admitted("a hold-down past the first refusal, half of one past the last");
     assert_eq!(
         lines(),
-        [failure.clone()],
+        std::slice::from_ref(&failure),
         "FINDING (M3): the hold-down did not restart at the refusal inside it"
     );
 
@@ -442,12 +442,12 @@ fn the_budgets_pair_is_said_at_the_65th_stream_and_at_the_first_admission_a_hold
     );
     assert_eq!(
         lines(),
-        [failure.clone()],
+        std::slice::from_ref(&failure),
         "FINDING (M5): the 65th stream says the first edge, once"
     );
     let (_surplus_too, head) = raw_events(port);
     assert!(head.is_empty(), "the 66th is refused too");
-    assert_eq!(lines(), [failure.clone()], "FINDING (m12): no line at the next refusal");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "FINDING (m12): no line at the next refusal");
 
     // One stream closed; its slot returns by the daemon's own mechanism — a
     // commit wakes the parked subscriber, whose failed write ends it, and
@@ -512,13 +512,13 @@ fn the_stream_threads_pair_is_said_once_per_episode() {
             String::from_utf8_lossy(&head)
         );
     }
-    assert_eq!(lines(), [failure.clone()], "FINDING: one line for the episode, the OS's cause");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "FINDING: one line for the episode, the OS's cause");
     let (st, _) = get(port, "/health");
     assert_eq!(st, 200, "the daemon serves while the streams are refused");
 
     let (_inside, head) = raw_events(port);
     assert!(head.starts_with(b"HTTP/1.1 200 "), "the seam spent: a stream is served");
-    assert_eq!(lines(), [failure.clone()], "inside the hold-down: no landing");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "inside the hold-down: no landing");
 
     sd.daemon().advance_edge_clock_ms(PAST_THE_HOLD_DOWN_MS);
     let (_past, head) = raw_events(port);
@@ -579,18 +579,18 @@ fn the_challenge_pair_is_said_at_a_live_eviction_once_and_at_a_clean_mint_a_hold
     mint();
     assert_eq!(
         lines(),
-        [failure.clone()],
+        std::slice::from_ref(&failure),
         "FINDING (m12): the first live eviction, once, its text whole"
     );
     mint();
     mint();
-    assert_eq!(lines(), [failure.clone()], "FINDING (m12): no line at the next live evictions");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "FINDING (m12): no line at the next live evictions");
 
     // After the hold-down, a mint that still evicts a live nonce: a refusal
     // never lands, and the episode stands.
     sd.daemon().advance_edge_clock_ms(PAST_THE_HOLD_DOWN_MS);
     mint();
-    assert_eq!(lines(), [failure.clone()], "a live eviction after the hold-down lands nothing");
+    assert_eq!(lines(), std::slice::from_ref(&failure), "a live eviction after the hold-down lands nothing");
 
     // Past the TTL: the oldest nonce standing is expired, so the mint evicts
     // it dead — a clean mint, a whole hold-down after the last live eviction.

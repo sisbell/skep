@@ -221,8 +221,8 @@ fn the_registrar_binds_a_prefix_two_consoles_read_it_back_and_the_org_deposits_i
     let binding = acked_addr(&v);
     let link_at = acked_at(&v);
     let stored = read_link(port, None, &binding);
-    assert_eq!(slot_addrs(&stored, 0), [atom.clone()], "from the atom's verified I-address");
-    assert_eq!(slot_addrs(&stored, 1), [board.node_account.clone()], "to the account bound");
+    assert_eq!(slot_addrs(&stored, 0), std::slice::from_ref(&atom), "from the atom's verified I-address");
+    assert_eq!(slot_addrs(&stored, 1), std::slice::from_ref(&board.node_account), "to the account bound");
     assert_eq!(slot_addrs(&stored, 2), [T_BINDING.to_string()]);
 
     // THE TWO ROWS on /changes, read by a GUEST (D12; wire.md §The change

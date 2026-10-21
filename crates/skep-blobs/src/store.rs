@@ -166,12 +166,16 @@ pub struct Finished {
 /// once.
 ///
 /// **What tells routine from damage.** A log's
-/// [`TailCut`](crate::TailCut) with whole lines past its first untrusted
-/// one, a log's `unread` lines, and a log found `absent` beside a root that
-/// stood are each a loss of leases or uploads a client was answered over —
-/// a damaged log, a copy that stopped short or that another build wrote —
-/// which the open has already acted on and nothing else will say. The rest
-/// are the open's ordinary repairs after a crash or a stop.
+/// [`TailCut`](crate::TailCut) whose first untrusted line was whole
+/// ([`TailCut::damage`](crate::TailCut::damage) — a damaged last line
+/// included, and the whole lines past it with it), a log's `unread` lines,
+/// and a log found `absent` beside a root that stood are each a loss of
+/// leases or uploads a client was answered over — a damaged log, a copy
+/// that stopped short or that another build wrote — which the open has
+/// already acted on and nothing else will say: a damaged cut's bytes it
+/// kept beside the log first ([`LogRead::kept`](crate::LogRead::kept)). The
+/// rest are the open's ordinary repairs after a crash or a stop, a torn
+/// last line's cut among them.
 ///
 /// `#[non_exhaustive]`: emitted, never constructed by a caller — field
 /// reads are unaffected, and a further field is an addition rather than a
@@ -484,6 +488,33 @@ impl Store {
     /// asked. The store says none of it itself.
     pub fn opened(&self) -> &Opened {
         &self.opened
+    }
+
+    /// Refuses a root holding a link or a special file, reading alone.
+    ///
+    /// It is the check [`Store::open`] and [`Store::inspect`] make first,
+    /// offered on its own so an embedder can make it ahead of every write
+    /// its start would otherwise make before reaching the store's open — the
+    /// journal's open among them (`operations.md` §3.1 step 3: the refusal
+    /// at the earliest act the fault is decidable from). It reads every
+    /// entry under the root and writes nothing; the open makes it again as
+    /// its own precondition. It judges a root standing as a directory alone:
+    /// one that does not stand — a first start's — or is no directory, or
+    /// cannot be read, holds nothing this check refuses, and answers `Ok`,
+    /// leaving the open to meet it in its own order.
+    ///
+    /// # Errors
+    ///
+    /// A symbolic link, a special file, or a second link to a file the store
+    /// writes in place, as `InvalidData`, one refusal counting every one
+    /// (`Store::open`'s first refusal); a listing or a stat under the root
+    /// that fails, named.
+    pub fn refuse_links_and_special_files(root: impl AsRef<Path>) -> io::Result<()> {
+        let root = root.as_ref();
+        if fs::symlink_metadata(root).is_ok_and(|meta| meta.is_dir()) {
+            blobs::refuse_links_and_special_files(root)?;
+        }
+        Ok(())
     }
 
     // ── the directory, as the pruner reads it ────────────────────────────

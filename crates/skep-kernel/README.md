@@ -31,16 +31,29 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   open skipped is passed over by the count of bases kept and removed
   as excess, so the first landing after a skip keeps the base the open
   loaded from.
+- **The journal's tail, decided once** — the bytes after the last
+  committed marker are a crash's where they are one interrupted
+  append's, at most `MAX_CRASH_TAIL_BYTES`, and every open cuts those;
+  a tail of any other shape — an intact marker committing nothing, a
+  CRC-intact frame that does not decode, or no intact frame over more
+  bytes than one append leaves — is refused as `OpenError::Corruption`
+  carrying `DamagedTail`, its `DamagedTailTell` naming which, the
+  journal as found, until `Durability::Fsync`'s `cut_damaged_tail`
+  accepts the cut for one open: then every byte is kept beside the
+  journal first, the tail is cut, and the order starts past the
+  position the tail claimed (`Kernel::order_floor`), so no
+  acknowledged position is handed out twice. `journal_stands` answers
+  whether a journal stands in a directory at all.
 - **Read seams** — the kernel answers facts and says nothing: `Recovery`
   carries the start point, the bases passed over, the commits
-  `replayed`, the bytes of un-acked tail cut (`tail_cut`), the file
+  `replayed`, the bytes of tail cut (`tail_cut`), the file
   and byte the cut began at (`tail_cut_from`), the intact frames among
   them no torn write leaves (`tail_cut_intact`), the files beside the
   journal those bytes were kept in before a byte was cut, where the
-  tail held such a frame (`tail_cut_kept`, `seg-{n}.wal.cut-{byte}`,
-  the operator's to keep), and the position an intact marker in the
-  cut claimed (`tail_cut_claimed`), whether the open `began` a
-  journal where none stood, and the corrupt runs below
+  tail was damage and the open accepted its cut (`tail_cut_kept`,
+  `seg-{n}.wal.cut-{byte}`, the operator's to keep), and the position
+  an intact marker in the cut claimed (`tail_cut_claimed`), whether
+  the open `began` a journal where none stood, and the corrupt runs below
   the start point it read and answered around (`runs_passed_over`,
   with the account of the first); `poison_cause` why the write paths
   halted, where they have, a panic's words only where the code wrote

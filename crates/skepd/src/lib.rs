@@ -171,7 +171,7 @@ pub use skep_core::auth::{
 pub use skep_core::codec::JsonCodec;
 pub use server::{
     bind, body_cap, embed, serve, serve_bound, Body, Daemon, DaemonError, EmbedError, Fetch,
-    HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, DEFAULT_PORT,
+    HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, StartOptions, DEFAULT_PORT,
     DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 /// Which arm of the parse set a setting, `skep-util`'s, re-exported too.
@@ -274,6 +274,16 @@ pub use skep_engine::dump::WorldDump;
 /// reason the engine types above are.
 pub use skep_kernel::Seq;
 
+/// The kernel's refusal of a damaged journal tail, and its tell.
+///
+/// They are what [`DaemonError::Engine`] carries, through [`OpenError`]'s
+/// `Corruption` cause, where the open refused a journal whose tail is not a
+/// crash's — the refusal `--cut-damaged-tail` answers — re-exported for the
+/// reason the engine types above are: a caller reading the cause back
+/// downcasts to this very type, and one taken at another version would not
+/// match.
+pub use skep_kernel::{DamagedTail, DamagedTailTell};
+
 /// The refusal [`DaemonError::Registry`] carries.
 ///
 /// It is the registry's seeding check's, naming the arm that fired
@@ -337,6 +347,7 @@ const _: fn() = || {
     // across a thread boundary; the rest ride in and out of that surface.
     assert_send_sync::<AuthOptions>();
     assert_send_sync::<MediaOptions>();
+    assert_send_sync::<StartOptions>();
     assert_send_sync::<Origin>();
     assert_send_sync::<NotCanonical>();
     assert_send_sync::<NodePrefix>();

@@ -84,29 +84,32 @@ pub struct Recovery {
     /// They are the cut segment's bytes past the last committed marker — the
     /// whole first scanned segment where the scan found none — plus every
     /// wholly-later segment it discarded — §7's un-acked / torn tail,
-    /// physically cut before any write is served: a write caught before its
-    /// commit was durable, and so never acknowledged — save where
-    /// [`Recovery::tail_cut_intact`] counts a frame, when every one of these
-    /// bytes was first kept beside the journal ([`Recovery::tail_cut_kept`]),
-    /// and where the journal's last commit marker rotted at rest, which reads
-    /// as a torn write, counts nothing and leaves its acknowledged transaction
-    /// cut. `0` where the last committed marker ended the journal, as it does
-    /// after every clean shutdown. A count and not an option: a cut that took
-    /// nothing and no cut leave the same journal, so the two are one fact,
-    /// and every journaled open runs the cut.
+    /// physically cut before any write is served. A crash's tail, which is
+    /// what every open cuts of its own accord: a write caught before its
+    /// commit was durable, and so never acknowledged. A tail that is not a
+    /// crash's — damage, [`crate::DamagedTail`] — is cut only by an open
+    /// told to ([`Durability::Fsync`]'s `cut_damaged_tail`), every one of its
+    /// bytes first kept beside the journal ([`Recovery::tail_cut_kept`]); an
+    /// open not told refuses and cuts nothing. `0` where the last committed
+    /// marker ended the journal, as it does after every clean shutdown. A
+    /// count and not an option: a cut that took nothing and no cut leave the
+    /// same journal, so the two are one fact, and every journaled open runs
+    /// the cut.
     pub tail_cut: u64,
     /// Of the frames the cut removed, the intact ones no torn write leaves.
     ///
     /// They are a commit marker that commits nothing, or a frame whose CRC
     /// passes and that does not decode. `0` after every clean shutdown and
-    /// after nearly every crash — a crash leaves one only where the disk
-    /// wrote an append's pages out of order. Rot in the records of the
-    /// journal's last committed transaction leaves one, and so does a rewrite
-    /// of it (the open item in [`Kernel::open`]'s damage model): the cut then
-    /// may have taken a transaction this kernel acknowledged. Counted, so that
-    /// cut is said rather than taken in silence — and, where it is not `0`,
-    /// the cut bytes are kept beside the journal before one is cut
-    /// ([`Recovery::tail_cut_kept`]).
+    /// after every crash's cut — a crash leaves one only where the disk
+    /// wrote an append's pages out of order, and a tail holding one is no
+    /// crash's to this open: rot in the records of the journal's last
+    /// committed transaction leaves one, and so does a rewrite of it, and the
+    /// cut then may have taken a transaction this kernel acknowledged. So the
+    /// open refuses such a tail ([`crate::DamagedTail`]) until it is told to
+    /// cut it, and this is not `0` only after that accepted cut, whose bytes
+    /// were kept beside the journal before one was cut
+    /// ([`Recovery::tail_cut_kept`]). A tail refused for its length alone
+    /// holds none, and cuts under the same word with this at `0`.
     pub tail_cut_intact: u64,
     /// Where the cut began: a file's name in the journal directory, and a byte.
     ///
@@ -119,10 +122,10 @@ pub struct Recovery {
     pub tail_cut_from: Option<(String, u64)>,
     /// The files the cut's bytes were kept in, by name, in journal order.
     ///
-    /// Where the cut took an intact frame no torn write leaves
-    /// ([`Recovery::tail_cut_intact`]), every byte it took was first kept
-    /// beside the journal, durably, before a byte was cut (§7's tail
-    /// truncation): the cut segment's bytes from the cut on copied to
+    /// Where the cut was an accepted cut of a damaged tail
+    /// ([`Durability::Fsync`]'s `cut_damaged_tail`), every byte it took was
+    /// first kept beside the journal, durably, before a byte was cut (§7's
+    /// tail truncation): the cut segment's bytes from the cut on copied to
     /// `seg-{n}.wal.cut-{byte}`, and each wholly-later segment that held a
     /// byte moved whole to `seg-{n}.wal.cut-0`, a name already standing
     /// passed over for `….{k}` save a short copy of these very bytes, which
@@ -131,10 +134,9 @@ pub struct Recovery {
     /// removes one only where the keep that made or completed it fails. They
     /// are the operator's: the evidence of what the cut took and of what
     /// befell it, and the one copy of an acknowledged write it may have taken.
-    /// None is to be moved back under its segment's name: the positions it
-    /// holds are the next commits' to take again, and the segment that name
-    /// may since have been given is theirs. Empty for nearly every crash's
-    /// tail, which is cut and gone, and where nothing was cut.
+    /// None is to be moved back under its segment's name: the segment that
+    /// name may since have been given is the next commits'. Empty for a
+    /// crash's tail, which is cut and gone, and where nothing was cut.
     pub tail_cut_kept: Vec<String>,
     /// The position the cut tail claimed.
     ///
@@ -144,9 +146,11 @@ pub struct Recovery {
     /// committed transaction's records leaves that transaction's own marker
     /// intact, and this is then the position the transaction's
     /// acknowledgement named, its writer's and the change feed's alike: the
-    /// one figure that names which acknowledged write the cut may have taken.
-    /// `None` where no intact marker stood in the cut — nearly every crash's
-    /// tail, and a tail whose intact frame does not decode, its fields unread.
+    /// one figure that names which acknowledged write the cut may have taken
+    /// — and, where the cut could have held it, the position the order
+    /// starts past ([`Kernel::order_floor`]), so no later write takes it.
+    /// `None` where no intact marker stood in the cut — every crash's tail,
+    /// and a tail whose intact frame does not decode, its fields unread.
     pub tail_cut_claimed: Option<Seq>,
     /// Whether no journal stood in the directory when the open listed it.
     ///
@@ -426,6 +430,18 @@ impl Cadence {
 /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
 struct Sequencer {
     high_water: u64,
+    /// The position the order never goes back below (§7).
+    ///
+    /// It is the committed head the open recovered, or — after an accepted
+    /// cut of a damaged tail — the position an intact marker in the cut
+    /// claimed, where the cut could have held it: a rollback under
+    /// [`BurnedSeqPolicy::Rollback`] sets the high-water back to the base the
+    /// failed transaction found, which before the first commit after such an
+    /// open is the head below the claim, and this is what keeps the claimed
+    /// positions a gap rather than the next transaction's.
+    ///
+    /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
+    floor: u64,
     burned_seq: BurnedSeqPolicy,
 }
 
@@ -434,10 +450,13 @@ impl Sequencer {
     ///
     /// The single `Seq` high-water is the whole of the recovered sequencer
     /// state: `Txn` is a transaction's first `Seq`, so the next session's
-    /// first `Txn` = W + 1 needs no second counter (§1/§7).
-    fn recovered(head: Seq, burned_seq: BurnedSeqPolicy) -> Sequencer {
+    /// first `Txn` = W + 1 needs no second counter (§1/§7) — `W` being the
+    /// committed head, or the position an accepted cut's tail claimed where
+    /// that lies above it (`floor`; [`Kernel::order_floor`]).
+    fn recovered(floor: u64, burned_seq: BurnedSeqPolicy) -> Sequencer {
         Sequencer {
-            high_water: head.0,
+            high_water: floor,
+            floor,
             burned_seq,
         }
     }
@@ -473,15 +492,17 @@ impl Sequencer {
     ///
     /// The roll-back is an absolute set back to `base_seq`, the head the
     /// transaction found, hence idempotent, iff [`BurnedSeqPolicy::Rollback`]
-    /// is in force. Under [`BurnedSeqPolicy::TolerateGap`] this does nothing
-    /// and the order relaxes to monotone-only, with recovery tolerating the
-    /// gap (§1/§3).
+    /// is in force — never below the order's floor, which a base below the
+    /// position an accepted cut's tail claimed is until the first commit
+    /// after that open. Under [`BurnedSeqPolicy::TolerateGap`] this does
+    /// nothing and the order relaxes to monotone-only, with recovery
+    /// tolerating the gap (§1/§3).
     ///
     /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
     /// [`BurnedSeqPolicy::TolerateGap`]: crate::BurnedSeqPolicy::TolerateGap
     fn roll_back_to(&mut self, base_seq: Seq) {
         if self.burned_seq == BurnedSeqPolicy::Rollback {
-            self.high_water = base_seq.0;
+            self.high_water = base_seq.0.max(self.floor);
         }
     }
 }
@@ -580,6 +601,9 @@ struct Recovered<W> {
     lock: File,
     recovery: Recovery,
     stray_checkpoint_removed: Option<u64>,
+    /// The order's floor ([`Kernel::order_floor`]): the root's seq, or the
+    /// position an accepted cut's tail claimed where that lies above it.
+    order_floor: u64,
 }
 
 /// One checkpoint [`Kernel::transact`] ran inline on a committing thread (§6).
@@ -667,6 +691,8 @@ pub struct Kernel<W: WorldState> {
     /// least as new as that run's ([`Kernel::last_inline_checkpoint`]).
     last_inline: ArcSwapOption<InlineCheckpoint>,
     cfg: KernelConfig,
+    /// The order's floor, fixed at the open ([`Kernel::order_floor`]).
+    order_floor: Seq,
     /// The write-fault seam this kernel's write paths hook before each step.
     ///
     /// The commit path and the checkpoint write, and the open's tail keep
@@ -814,17 +840,20 @@ impl<W: WorldState> Kernel<W> {
     /// `journal_path` caller contract still keeps the files whole; what it
     /// does not have to keep is the silence.
     ///
-    /// **Not caught, and not by design** — an open item (the matrix's case 17,
-    /// standing `#[ignore]`d): a frame of the last transaction rewritten so it
-    /// does not decode — a payload tag, a length prefix, the signature slot's
-    /// one spelling of empty — its CRC re-fixed. Mid-history the
-    /// corrupt run it opens halts at the next intact frame (case 4); in the
-    /// last transaction the run lies above the committed head, §7's torn tail,
-    /// and the transaction is cut from the journal though its CRC proves these
-    /// are the bytes that were written — said as an intact frame in the cut
-    /// ([`Recovery::tail_cut_intact`]), and its bytes kept beside the journal
-    /// ([`Recovery::tail_cut_kept`]), but the open serves the shorter journal.
-    /// Closing it amends §7's tail rule.
+    /// **Caught at the tail** (the matrix's case 17): a frame of the last
+    /// transaction rewritten so it does not decode — a payload tag, a length
+    /// prefix, the signature slot's one spelling of empty — its CRC re-fixed.
+    /// Mid-history the corrupt run it opens halts at the next intact frame
+    /// (case 4); in the last transaction the run lies above the committed
+    /// head, where §7's tail rule asks whether the tail is a crash's, and a
+    /// CRC-intact frame that does not decode says it is not: the open
+    /// refuses it as a damaged tail ([`OpenError::Corruption`] carrying
+    /// [`crate::DamagedTail`]), the journal as found, as it refuses an intact
+    /// marker committing nothing and a frameless tail longer than one append
+    /// — until the configuration accepts the cut by name
+    /// ([`Durability::Fsync`]'s `cut_damaged_tail`), when the tail is kept
+    /// beside the journal ([`Recovery::tail_cut_kept`]) and cut, and no
+    /// position it claimed is handed out again ([`Kernel::order_floor`]).
     ///
     /// # Errors
     ///
@@ -846,14 +875,16 @@ impl<W: WorldState> Kernel<W> {
     /// runs by inferred `Seq` max — in `(S_load, W]` ⟹
     /// [`OpenError::Corruption`], halt, never drop), replay exactly
     /// `S_load < Seq ≤ W` through [`WorldState::apply`] in `Seq` order (Pass 2
-    /// — no contiguity required: `TolerateGap` burns fold harmlessly), then
-    /// durably truncate the un-acked/torn tail beyond `W` before any write is
-    /// served (skipped on every halt path; a truncation failure fails `open()`
-    /// with `Io` — idempotent, retried next `open()`) — first keeping its every
-    /// byte beside the journal where it holds an intact frame no torn write
-    /// leaves ([`Recovery::tail_cut_kept`]; a keep that fails cuts nothing and
-    /// fails `open()` with `Io` the same way). A committed-but-unacked tail
-    /// marker is replayed — the lost-ack case is the client's (ASN-0134
+    /// — no contiguity required: `TolerateGap` burns fold harmlessly), judge
+    /// the tail beyond `W` — a crash's, or damage, which is
+    /// [`OpenError::Corruption`]'s ninth cause and halts unless the
+    /// configuration accepts the cut — then durably truncate it before any
+    /// write is served (skipped on every halt path; a truncation failure
+    /// fails `open()` with `Io` — idempotent, retried next `open()`), an
+    /// accepted cut of a damaged tail first keeping its every byte beside the
+    /// journal ([`Recovery::tail_cut_kept`]; a keep that fails cuts nothing
+    /// and fails `open()` with `Io` the same way). A committed-but-unacked
+    /// tail marker is replayed — the lost-ack case is the client's (ASN-0134
     /// SAFE(b)(iii)), not a phantom.
     ///
     /// **Refusal precedence.** The steps above are the order in which refusals
@@ -864,14 +895,14 @@ impl<W: WorldState> Kernel<W> {
     /// scan — which answers [`OpenError::ForeignFormat`] for a journal of
     /// another format and [`OpenError::Corruption`] for one damaged sync word;
     /// and every route to `Corruption` — [`OpenError::Corruption`] lists them
-    /// in the order they speak — precedes the tail truncation, which is why a
-    /// halt never cuts anything.
+    /// in the order they speak, the damaged tail last, after the fold —
+    /// precedes the tail truncation, which is why a halt never cuts anything.
     pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
         cfg.validate().map_err(OpenError::InvalidConfig)?;
         // The seam is made here, before the appender it is handed to and
         // the kernel that holds it exist, so one state serves both.
         let seam = Seam::default();
-        let (root, journal, journaled) = match &cfg.durability {
+        let (root, journal, journaled, order_floor) = match &cfg.durability {
             // "Directly from genesis" (Lifecycle): no journal, no recovery,
             // no rebuild_derived — the caller's live value becomes the root,
             // and nothing else here wants it, so it is moved rather than kept.
@@ -883,10 +914,12 @@ impl<W: WorldState> Kernel<W> {
                 },
                 Journal::InMemory,
                 None,
+                0,
             ),
             Durability::Fsync {
                 journal_path,
                 retain_checkpoints,
+                cut_damaged_tail,
                 ..
             } => {
                 // The directory as the path names it now: a relative path is
@@ -895,7 +928,8 @@ impl<W: WorldState> Kernel<W> {
                 // it named at the open, wherever that working directory moves.
                 let dir = std::path::absolute(journal_path)
                     .map_err(at_file(journal_path.display(), "resolve"))?;
-                let recovered = Self::recover(&dir, &genesis, cfg.salt, seam.clone())?;
+                let recovered =
+                    Self::recover(&dir, &genesis, cfg.salt, *cut_damaged_tail, seam.clone())?;
                 // The names the open passed over, for retention to pass over
                 // in turn, until the first landing has removed them.
                 let skipped_bases = recovered.recovery.skipped.iter().map(|b| b.seq.0).collect();
@@ -913,10 +947,11 @@ impl<W: WorldState> Kernel<W> {
                         last_removed: ArcSwap::from_pointee(Vec::new()),
                         _lock: recovered.lock,
                     }),
+                    recovered.order_floor,
                 )
             }
         };
-        Ok(Self::assemble(cfg, root, journal, journaled, seam))
+        Ok(Self::assemble(cfg, root, journal, journaled, seam, order_floor))
     }
 
     /// Recovers the journal at `dir`, answering what the open commits from.
@@ -927,10 +962,13 @@ impl<W: WorldState> Kernel<W> {
     /// each salt off its marker — and `seam`, the kernel's write-fault seam,
     /// which the appender's append, barrier and repair hook before they run;
     /// the exclusion lock the kernel holds for its lifetime, the account of
-    /// the base it stood on and the bases it passed over (§7), and the stray
-    /// `checkpoint.tmp` it removed, if one stood ([`Recovered`]). Recovery's
-    /// own writes — the stray's removal, the tail cut and its keep, the first
-    /// segment's creation — run no step of the seam but the tail keep's fsync
+    /// the base it stood on and the bases it passed over (§7), the stray
+    /// `checkpoint.tmp` it removed, if one stood, and the order's floor
+    /// ([`Recovered`]). `cut_damaged_tail` is the configuration's word on a
+    /// damaged tail ([`Durability::Fsync`]): without it such a tail halts
+    /// the open; with it the tail is kept and cut. Recovery's own writes —
+    /// the stray's removal, the tail cut and its keep, the first segment's
+    /// creation — run no step of the seam but the tail keep's fsync
     /// ([`crate::Step::TailKeep`]), hooked on `seam`, which nothing has
     /// armed: it was made for this open.
     ///
@@ -942,6 +980,7 @@ impl<W: WorldState> Kernel<W> {
         dir: &Path,
         genesis: &W,
         salt_source: SaltSource,
+        cut_damaged_tail: bool,
         seam: Seam,
     ) -> Result<Recovered<W>, OpenError> {
         // The directory, owner-only: every component this creates is born
@@ -1065,6 +1104,23 @@ impl<W: WorldState> Kernel<W> {
             }
         })?;
 
+        // The tail's class, the last refusal (§7): a crash's tail is cut
+        // below as every open cuts it; damage — an intact frame no torn
+        // write leaves, or more bytes than one append leaves — may hold a
+        // write this kernel acknowledged, so it halts the open, the journal
+        // as found, unless the configuration accepts the cut by name. Judged
+        // after the fold, so a committed record that does not decode speaks
+        // ahead of it, as the other at-rest verdicts do; the coordinate is
+        // the position the tail claims, else the first above the head.
+        if let Some(damaged) = scan.damaged_tail() {
+            if !cut_damaged_tail {
+                return Err(OpenError::Corruption {
+                    at: damaged.claimed.unwrap_or(Seq(next_seq)),
+                    cause: Some(Box::new(damaged)),
+                });
+            }
+        }
+
         // Tail truncation: after every refusal, and before any write is
         // served (§7). The fold serves none, so the §7 obligation is kept
         // while an `open()` that refuses leaves the journal exactly as it
@@ -1072,7 +1128,7 @@ impl<W: WorldState> Kernel<W> {
         // removed — which is what an operator images after a halt. It is
         // also before the appender is opened over that segment, whose length
         // this cut settles and which the appender reads once. Where the tail
-        // holds an intact frame no torn write leaves, the cut keeps its every
+        // is damage the cut was accepted above, and the cut keeps its every
         // byte beside the journal before it cuts one. What it cut, in bytes
         // and from where, and the files it kept them in, is the open's to
         // report, as the commits the fold replayed are: the scan counted
@@ -1080,7 +1136,17 @@ impl<W: WorldState> Kernel<W> {
         // in the tail as it met them, with the position their markers
         // claimed, and the corrupt runs below the start point it read and
         // passed over.
-        let cut = journal::truncate_tail(dir, &scan, &seam)?;
+        let cut = journal::truncate_tail(dir, &scan, cut_damaged_tail, &seam)?;
+        // The order's floor: the head, or the position an accepted cut's
+        // tail claimed where the cut could have held it, so a client holding
+        // that acknowledgement is never shown another write under it. The
+        // appender continues past it; the root stays at the head, the
+        // positions between a gap the next recovery folds across.
+        let order_floor = scan.restored_high_water();
+        let next_seq = order_floor.checked_add(1).ok_or(OpenError::Corruption {
+            at: Seq(order_floor),
+            cause: None,
+        })?;
         let (runs_passed_over, first_run_passed_over) = scan.runs_passed_over();
         let recovery = Recovery {
             start_point,
@@ -1108,6 +1174,7 @@ impl<W: WorldState> Kernel<W> {
             lock,
             recovery,
             stray_checkpoint_removed,
+            order_floor,
         })
     }
 
@@ -1117,9 +1184,10 @@ impl<W: WorldState> Kernel<W> {
         journal: Journal,
         journaled: Option<Journaled<W>>,
         seam: Seam,
+        order_floor: u64,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint.clone());
-        let sequencer = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
+        let sequencer = Sequencer::recovered(order_floor, cfg.durability.burned_seq_policy());
         Kernel {
             root: ArcSwap::from_pointee(root),
             applier: ApplierLock::new(ApplierState {
@@ -1134,6 +1202,7 @@ impl<W: WorldState> Kernel<W> {
             inline_checkpoints: AtomicU64::new(0),
             last_inline: ArcSwapOption::empty(),
             cfg,
+            order_floor: Seq(order_floor),
             seam,
             journaled,
         }
@@ -1662,6 +1731,26 @@ impl<W: WorldState> Kernel<W> {
     /// nothing here either. Lock-free, like every other read.
     pub fn recovery(&self) -> Option<&Recovery> {
         self.journaled.as_ref().map(|journaled| &journaled.recovery)
+    }
+
+    /// Returns the position the order started past at the open (§7).
+    ///
+    /// It is the committed head the open recovered — equal to
+    /// [`Kernel::current_seq`] at the open — save after an accepted cut of a
+    /// damaged tail ([`Durability::Fsync`]'s `cut_damaged_tail`), where an
+    /// intact marker in the cut claimed a position above the head
+    /// ([`Recovery`]'s `tail_cut_claimed`) and the cut could have held it:
+    /// then it is that position, so the first transaction after the open
+    /// takes the one after it and a client holding the acknowledgement that
+    /// named it finds a missing write there, never another's. The positions
+    /// between the head and it are a gap the next recovery folds across, and
+    /// a rollback of a failed transaction never goes below it. A claim the
+    /// cut could not have held — a `last_seq` forged past what its bytes
+    /// could number, or at the order's ceiling — is not trusted, and the
+    /// floor is the head. `Seq(0)` under [`Durability::InMemory`]. Fixed at
+    /// `open`; lock-free.
+    pub fn order_floor(&self) -> Seq {
+        self.order_floor
     }
 
     /// Returns the currently installed root's seq.

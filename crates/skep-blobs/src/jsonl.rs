@@ -36,8 +36,14 @@
 //! log this reader does not own. Both answer what the reading found
 //! ([`LogRead`]): the lines trusted, and where trust ended short of the
 //! file's end ([`TailCut`]) — told apart from a crash's half-written tail
-//! by the whole lines the cut takes past the first untrusted one, which a
-//! crash never leaves and damage does.
+//! by whether the first untrusted line was whole, ended by its newline,
+//! which a crash never leaves and damage does. **A damaged cut is kept
+//! first.** Where the first untrusted line is whole — damage to a line the
+//! store answered over, and every whole line after it with it — the open
+//! keeps the bytes from the cut to the file's end beside the log, durably,
+//! as `{log}.cut-{byte}` (`….{k}` where that name stands), before it cuts
+//! them, and names the file ([`LogRead::kept`]); a crash's torn line is cut
+//! and gone. The inspection keeps nothing, and answers the class alone.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -82,6 +88,16 @@ pub struct LogRead {
     /// The open cut the file there; the inspection read nothing past it and
     /// cut nothing.
     pub cut: Option<TailCut>,
+    /// The file the open kept the cut bytes in, where the cut was damage.
+    ///
+    /// It is `{log}.cut-{byte}` beside the log, named within the data
+    /// directory as `name` is (`blobs/leases.log.cut-512`; `….{k}` where
+    /// that name already stood), holding every byte from the cut to the
+    /// file's end as found, written and synced before the cut
+    /// ([`TailCut::damage`]). `None` for a crash's torn line, cut and gone,
+    /// for a file read whole, and for the inspection's reading, which keeps
+    /// nothing.
+    pub kept: Option<String>,
     /// The trusted lines that read as no record.
     ///
     /// Such a line has a shape this build does not read, a name the store's
@@ -113,17 +129,37 @@ pub struct TailCut {
     ///
     /// They are the newline-ended lines after it, which a crash never
     /// leaves: a crash or a kill tears only the last line, its newline
-    /// written with it, so `0` is that half-written tail and every
+    /// written with it, so `0` is that half-written tail where the first
+    /// untrusted line was torn too ([`TailCut::first_whole`]) and every
     /// acknowledged line stands; more is damage — a bad sector, a damaged or
     /// truncated copy — whose whole lines, leases a PUT answered over or
     /// offsets a settle answered, the cut takes with it.
     pub lines_after: usize,
+    /// Whether the first untrusted line was whole: ended by its newline.
+    ///
+    /// A crash tears the last line and never writes its newline, so a whole
+    /// line that does not read is damage to a line the store answered over
+    /// — the tell that separates the two where `lines_after` cannot, a
+    /// damaged LAST line having none after it. `true` wherever
+    /// `lines_after` is above `0`.
+    pub first_whole: bool,
 }
 
 impl TailCut {
     /// Returns the bytes cut, from where trust ends to the file's end.
     pub fn bytes(&self) -> u64 {
         self.len.saturating_sub(self.at)
+    }
+
+    /// Returns whether the cut is damage rather than a crash's torn tail.
+    ///
+    /// It is where the first untrusted line was whole
+    /// ([`TailCut::first_whole`]): a line the store answered over, damaged
+    /// since, and every whole line after it. The open keeps such a cut's
+    /// bytes beside the log before it cuts them ([`LogRead::kept`]); a
+    /// crash's torn line, never acknowledged, is cut and gone.
+    pub fn damage(&self) -> bool {
+        self.first_whole
     }
 }
 
@@ -532,16 +568,21 @@ fn write_twin(
 ///
 /// Answers the values of its whole lines in order, what the reading found
 /// and the bytes trusted, the cut made there. An absent log holds none, and
-/// is found absent.
+/// is found absent. A cut that is damage ([`TailCut::damage`]) is kept
+/// first ([`keep_cut`]), the kept file named in the reading.
 ///
 /// # Errors
 ///
-/// The read failing, save for the log's absence, or the cut failing, named
-/// (`read`, `cut back`).
+/// The read failing, save for the log's absence, the keep failing, or the
+/// cut failing, named (`read`, the kept file's acts, `cut back`).
 fn read_log(path: &Path, name: &str) -> io::Result<(Vec<Value>, LogRead, u64)> {
     let bytes = not_found_as_none(fs::read(path)).map_err(|e| named(e, name, "read"))?;
-    let (values, found, good) = reading(name.to_string(), bytes.as_deref());
-    if found.cut.is_some() {
+    let (values, mut found, good) = reading(name.to_string(), bytes.as_deref());
+    if let Some(cut) = found.cut {
+        if cut.damage() {
+            let dropped = bytes.as_deref().map_or(&[][..], |bytes| &bytes[good as usize..]);
+            found.kept = Some(keep_cut(path, name, good, dropped)?);
+        }
         OpenOptions::new()
             .write(true)
             .open(path)
@@ -551,29 +592,72 @@ fn read_log(path: &Path, name: &str) -> io::Result<(Vec<Value>, LogRead, u64)> {
     Ok((values, found, good))
 }
 
+/// Keeps a damaged cut's bytes beside the log, durably, before the cut.
+///
+/// They go to `{log}.cut-{at}` beside the log — `….{k}` where that name and
+/// the `k − 1` before it already stand; a standing name is never written
+/// over, whatever it holds — born owner-only ([`file_options`]), written
+/// whole, synced, the directory synced after. The kernel's own spelling for
+/// a journal tail it keeps, so every kept file in the data directory is
+/// found by one listing. Answers the kept file's name within the data
+/// directory, as [`LogRead::name`] names the log.
+///
+/// # Errors
+///
+/// The kept file's creation, write or sync, or the directory's sync,
+/// failing, named `{kept}: {act}: {cause}`.
+fn keep_cut(path: &Path, name: &str, at: u64, dropped: &[u8]) -> io::Result<String> {
+    let dir = path.parent().expect("a log sits in a directory");
+    let mut k = 0u64;
+    let (mut out, kept) = loop {
+        let file_name = match k {
+            0 => format!("{}.cut-{at}", label(path, 1)),
+            k => format!("{}.cut-{at}.{k}", label(path, 1)),
+        };
+        let kept =
+            format!("{name}.cut-{at}{}", if k == 0 { String::new() } else { format!(".{k}") });
+        match file_options().write(true).create_new(true).open(dir.join(&file_name)) {
+            Ok(out) => break (out, kept),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => k += 1,
+            Err(e) => return Err(named(e, &kept, "create")),
+        }
+    };
+    out.write_all(dropped).map_err(|e| named(e, &kept, "write"))?;
+    out.sync_all().map_err(|e| named(e, &kept, "fsync"))?;
+    drop(out);
+    fsync_dir(dir).map_err(|e| named(e, dir_label(dir, 1), "fsync"))?;
+    Ok(kept)
+}
+
 /// Reads a log's bytes, `None` where no file stood.
 ///
 /// It is the one reading both [`read_log`] and [`Log::read_as_found`] make:
 /// it answers the values of its whole lines ([`whole_lines`]), what it
 /// found, and the bytes trusted. Where trust ends short of the end, the cut
-/// ([`TailCut`]) counts the whole lines past the first untrusted one: the
-/// bytes from that line's newline, or the end where it has none, to the end.
+/// ([`TailCut`]) says whether the first untrusted line was whole — ended by
+/// its newline — and counts the whole lines past it: the bytes from that
+/// line's newline, or the end where it has none, to the end. Nothing is
+/// kept here: the keep is the open's ([`read_log`]).
 fn reading(name: String, bytes: Option<&[u8]>) -> (Vec<Value>, LogRead, u64) {
     let Some(bytes) = bytes else {
-        return (Vec::new(), LogRead { name, absent: true, lines: 0, cut: None, unread: 0 }, 0);
+        let found = LogRead { name, absent: true, lines: 0, cut: None, kept: None, unread: 0 };
+        return (Vec::new(), found, 0);
     };
     let (values, good) = whole_lines(bytes);
     let cut = (good < bytes.len()).then(|| {
         let rest = &bytes[good..];
-        let first = rest.iter().position(|&b| b == b'\n').map_or(rest.len(), |at| at + 1);
+        let newline = rest.iter().position(|&b| b == b'\n');
+        let first = newline.map_or(rest.len(), |at| at + 1);
         TailCut {
             at: good as u64,
             len: bytes.len() as u64,
             lines_after: rest[first..].iter().filter(|&&b| b == b'\n').count(),
+            first_whole: newline.is_some(),
         }
     });
     let lines = values.len();
-    (values, LogRead { name, absent: false, lines, cut, unread: 0 }, good as u64)
+    let found = LogRead { name, absent: false, lines, cut, kept: None, unread: 0 };
+    (values, found, good as u64)
 }
 
 /// Returns the values of `bytes`' whole lines in order, and their byte length.

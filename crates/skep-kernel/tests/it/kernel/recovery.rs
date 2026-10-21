@@ -1,13 +1,53 @@
 //! Recovery (§7) and the kernel's lifecycle: exactly-once replay, the torn
-//! tail cut and its coordinates reused, halts that cut nothing, the fallback
-//! chain, and one live kernel per journal.
+//! tail cut and its coordinates reused, the damaged tail refused until its
+//! cut is accepted by name — then kept, cut, and the order started past the
+//! position it claimed — halts that cut nothing, the fallback chain, and one
+//! live kernel per journal.
 
 use std::io;
 
 use super::*;
-use crate::mutilate::{append_bytes, ckpt_file, copy_dir, flip_byte, seg_file, truncate_file};
-use skep_kernel::{HistoryError, OpenError};
+use crate::mutilate::{
+    append_bytes, ckpt_file, copy_dir, flip_byte, rewrite_frame, seg_file, truncate_file,
+    MARKER_LAST_SEQ_AT, MARKER_SIG_ALG_AT, RECORD_BYTES_AT,
+};
+use skep_kernel::{
+    DamagedTail, DamagedTailTell, HistoryError, OpenError, TxnError, MAX_CRASH_TAIL_BYTES,
+};
 use tempfile::tempdir;
+
+/// [`cfg_fsync`] with the damaged tail's cut accepted: the operator's word
+/// for one open (`Durability::Fsync`'s `cut_damaged_tail`).
+fn cfg_cutting(dir: &Path) -> KernelConfig {
+    let mut cfg = cfg_fsync(dir);
+    if let Durability::Fsync { cut_damaged_tail, .. } = &mut cfg.durability {
+        *cut_damaged_tail = true;
+    }
+    cfg
+}
+
+/// Returns the damaged tail's halt: the coordinate and the typed cause.
+///
+/// It is `OpenError::Corruption` carrying a `DamagedTail`, which a caller
+/// above reads back through the cause's downcast; anything else is a
+/// finding.
+fn damaged_tail_of(err: &OpenError) -> (Seq, DamagedTail) {
+    match err {
+        OpenError::Corruption { at, cause: Some(cause) } => {
+            let damaged = cause
+                .downcast_ref::<DamagedTail>()
+                .unwrap_or_else(|| panic!("the ninth cause, typed: {err}"))
+                .clone();
+            (*at, damaged)
+        }
+        other => panic!("expected the damaged tail's halt, got {other:?}"),
+    }
+}
+
+/// Sets `path`'s length to `len`, zero-filled: bytes no frame anchors.
+fn extend_to(path: &Path, len: u64) {
+    fs::OpenOptions::new().write(true).open(path).unwrap().set_len(len).unwrap();
+}
 
 #[test]
 fn recovery_replays_journal_exactly_once() {
@@ -310,17 +350,18 @@ fn kept_files(dir: &std::path::Path) -> Vec<String> {
     kept
 }
 
+/// Rot in the LAST acknowledged transaction's record HALTS the open (§7).
+///
+/// The transaction's marker stands intact and closes nothing — a tell no
+/// crash leaves — so the tail is not a crash's, and the write it holds was
+/// acknowledged at the position the marker claims. The open refuses it as
+/// `Corruption` at that position, the cause a typed `DamagedTail` naming
+/// the marker's frame, the claim, the tail's extent and the two acts; the
+/// journal is byte-identical after the refusal and nothing is kept, so the
+/// directory an operator images is the one that was there — and a second
+/// open without the operator's word refuses the same way.
 #[test]
-fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_marker() {
-    // The documented §7 blind spot, asserted as specified: rot in the LAST
-    // committed txn's record leaves its marker intact but checksum-failing,
-    // W demotes to the prior marker, and the acked txn is cut from the journal
-    // as tail — no Corruption signal (out of scope for v1). Not in silence,
-    // though, and not destroyed: the marker the cut takes is intact, which no
-    // torn write leaves, so the open keeps every byte it cuts beside the
-    // journal before it cuts one, and its report counts the marker and names
-    // the file the bytes were kept in — the one copy of a write that may have
-    // been acknowledged, where a copy taken before this open rarely exists.
+fn post_commit_rot_of_the_final_txn_halts_the_open_naming_the_marker_and_its_claim() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     commit(&k, 10);
@@ -331,7 +372,78 @@ fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_mar
     let spans = frame_spans(&seg);
     flip_byte(&seg, spans[4].0 + FRAME_HEADER_LEN + 1); // T3's record
     let found = fs::read(&seg).unwrap();
+    for attempt in ["the first open", "the open after it"] {
+        let err = Kernel::open(cfg_fsync(dir.path()), genesis())
+            .expect_err("a damaged tail halts the open");
+        let (at, damaged) = damaged_tail_of(&err);
+        assert_eq!(at, Seq(3), "{attempt}: the position the cut tail claims");
+        assert_eq!(
+            damaged,
+            DamagedTail {
+                segment: "seg-1.wal".to_string(),
+                byte: spans[4].0,
+                head: Seq(2),
+                bytes: found.len() as u64 - spans[4].0,
+                intact: 1,
+                claimed: Some(Seq(3)),
+                tell: DamagedTailTell::MarkerCommitsNothing {
+                    segment: "seg-1.wal".to_string(),
+                    byte: spans[5].0,
+                    position: Seq(3),
+                },
+            },
+            "{attempt}: the frame, the claim and the extent, typed"
+        );
+        let line = err.to_string();
+        assert!(
+            line.starts_with(&format!(
+                "durable committed data cannot be read; position 3 names the damage: damaged \
+                 journal tail: the {} bytes after the last committed marker at position 2, from \
+                 byte {} of seg-1.wal, are not a crash's — the intact commit marker at byte {} of \
+                 seg-1.wal commits nothing",
+                found.len() as u64 - spans[4].0,
+                spans[4].0,
+                spans[5].0
+            )),
+            "{attempt}: the refusal's words: {line}"
+        );
+        for act in [
+            "claims position 3, the position the write it closed was acknowledged at",
+            "nothing was cut. Two acts: restore seg-1.wal from a copy, or open once accepting the cut",
+            &format!("beside the journal as seg-1.wal.cut-{} and then cuts them", spans[4].0),
+            "handing out no position the tail claims",
+        ] {
+            assert!(line.contains(act), "{attempt}: {act:?} missing from: {line}");
+        }
+        assert_eq!(fs::read(&seg).unwrap(), found, "{attempt}: a halt cuts nothing");
+        assert_eq!(kept_files(dir.path()), Vec::<String>::new(), "{attempt}: and keeps nothing");
+    }
+}
+
+/// An ACCEPTED cut of the rotted transaction keeps, cuts, and starts the
+/// order past the position the cut claimed (§7).
+///
+/// Under `cut_damaged_tail` the open keeps every byte it will cut beside the
+/// journal first, owner-only, cuts, and reports the cut as the kept file,
+/// the intact marker and the claim; the recovered head is the marker before
+/// the cut, and the order's floor is the claim: a failed transaction before
+/// the first commit rolls back to it and never below, the first commit takes
+/// the position after it — never the claimed one — and the reopen, told
+/// nothing, is clean, the claimed position a gap no boundary answers and
+/// the kept file untouched.
+#[test]
+fn an_accepted_cut_keeps_the_rotted_txn_cuts_it_and_starts_the_order_past_its_claim() {
+    let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
+    drop(k);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    flip_byte(&seg, spans[4].0 + FRAME_HEADER_LEN + 1); // T3's record
+    let found = fs::read(&seg).unwrap();
+    let k = Kernel::open(cfg_cutting(dir.path()), genesis()).expect("the cut, accepted");
     assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
     assert_eq!(fs::metadata(&seg).unwrap().len(), spans[4].0); // cut from the journal
@@ -343,13 +455,8 @@ fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_mar
         "T3 cut whole, its marker with it"
     );
     assert_eq!(recovery.tail_cut_intact, 1, "T3's intact marker, counted as the rot's tell");
-    // …and WHICH write: the position T3's intact marker claims — the one its
-    // acknowledgement named — and the file and byte the cut began at.
     assert_eq!(recovery.tail_cut_claimed, Some(Seq(3)), "the position the acked write held");
     assert_eq!(recovery.tail_cut_from, Some(("seg-1.wal".to_string(), spans[4].0)));
-    // …and where its bytes are: kept, before the cut, byte for byte as found
-    // from the byte the cut began at — the rotted record and its intact
-    // marker, the evidence of the write and of what befell it.
     let kept = format!("seg-1.wal.cut-{}", spans[4].0);
     assert_eq!(recovery.tail_cut_kept, vec![kept.clone()], "the one kept file, named");
     assert_eq!(kept_files(dir.path()), vec![kept.clone()]);
@@ -364,29 +471,240 @@ fn post_commit_rot_of_the_final_txn_demotes_w_and_the_open_counts_its_intact_mar
         let mode = fs::metadata(&kept_path).unwrap().permissions().mode() & 0o7777;
         assert_eq!(mode, 0o600, "the kept file is 0600 exactly");
     }
-    // The next session takes the cut position again, and no open reads,
-    // moves or writes over what was kept: the journal goes on as if the tail
-    // were gone, and the kept file stands as it was.
-    assert_eq!(commit(&k, 31), Seq(3));
+    // THE ORDER STARTS PAST THE CLAIM: the floor is the claimed position,
+    // a failed transaction rolls back to it and not to the head below it,
+    // and the first commit takes the position after it — never position 3,
+    // which a client's acknowledgement still names.
+    assert_eq!(k.order_floor(), Seq(3), "the claim, trusted: the cut could hold it");
+    k.fail_the_next(Step::JournalBarrier, io::ErrorKind::StorageFull);
+    let refused = k.transact(&[], |stg| {
+        stg.push(TestRec::Append(99));
+        Ok::<(), ()>(())
+    });
+    assert!(matches!(refused, Err(TxnError::Durability(_))), "the barrier refused: {refused:?}");
+    assert_eq!(commit(&k, 31), Seq(4), "the next commit takes C+1, never the claimed C");
     drop(k);
+    // The reopen, told nothing: clean, the gap folded across, the kept file
+    // as it was and no open reading, moving or writing over it.
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20, 31]);
+    assert_eq!(k.current_seq(), Seq(4));
+    assert_eq!(k.order_floor(), Seq(4), "a clean open's floor is its head");
     let recovery = k.recovery().expect("journaled");
     assert_eq!((recovery.tail_cut, recovery.tail_cut_kept.len()), (0, 0), "a clean reopen");
     assert_eq!(fs::read(&kept_path).unwrap(), kept_bytes, "the kept file, untouched");
+    assert!(
+        matches!(k.world_at(Seq(3)), Err(HistoryError::NotABoundary { nearest: Seq(2) })),
+        "the claimed position is a gap no boundary answers"
+    );
 }
 
-/// A wholly-later segment is kept whole, and a kept name is never written over.
+/// A CRC-intact frame of the last transaction that does not decode halts
+/// the open, and cuts only under the knob (§7; the chain matrix's case 17).
+///
+/// The last marker's signature slot is rewritten to its tag with no bytes
+/// after it, its CRC re-fixed: no torn write leaves a frame that passes its
+/// CRC and does not decode. The open refuses at the first position above the
+/// head — the frame claims none, its fields unread — naming the frame; under
+/// `cut_damaged_tail` the whole transaction is kept and cut, the intact frame
+/// counted, no claim read, and the order starts at the head.
+#[test]
+fn a_crc_intact_frame_that_does_not_decode_in_the_last_txn_halts_and_cuts_only_under_the_knob() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
+    drop(k);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    rewrite_frame(&seg, spans[5].0 as usize, |payload| payload[MARKER_SIG_ALG_AT] = 1);
+    let found = fs::read(&seg).unwrap();
+    let err = Kernel::open(cfg_fsync(dir.path()), genesis()).expect_err("the frame halts");
+    let (at, damaged) = damaged_tail_of(&err);
+    assert_eq!(at, Seq(3), "no claim read: the first position above the head");
+    assert_eq!(
+        (damaged.segment.as_str(), damaged.byte, damaged.head, damaged.intact, damaged.claimed),
+        ("seg-1.wal", spans[4].0, Seq(2), 1, None),
+        "the tail begins at T3's record, its marker the intact frame of no writer's"
+    );
+    assert_eq!(
+        damaged.tell,
+        DamagedTailTell::FrameDoesNotDecode { segment: "seg-1.wal".to_string(), byte: spans[5].0 }
+    );
+    assert!(
+        err.to_string().contains(&format!(
+            "the frame at byte {} of seg-1.wal passes its CRC and does not decode",
+            spans[5].0
+        )),
+        "{err}"
+    );
+    assert_eq!(fs::read(&seg).unwrap(), found, "a halt cuts nothing");
+    assert!(kept_files(dir.path()).is_empty());
+
+    let k = Kernel::open(cfg_cutting(dir.path()), genesis()).expect("the cut, accepted");
+    assert_eq!((items(&k), k.current_seq()), (vec![10, 20], Seq(2)));
+    let recovery = k.recovery().expect("journaled");
+    let kept = format!("seg-1.wal.cut-{}", spans[4].0);
+    assert_eq!(
+        (recovery.tail_cut_intact, recovery.tail_cut_claimed, recovery.tail_cut_kept.clone()),
+        (1, None, vec![kept.clone()])
+    );
+    assert_eq!(fs::read(dir.path().join(&kept)).unwrap(), &found[spans[4].0 as usize..]);
+    assert_eq!(k.order_floor(), Seq(2), "nothing claimed: the order starts at the head");
+    assert_eq!(commit(&k, 31), Seq(3));
+}
+
+/// THE LENGTH TEST, either side of the bound (§7): a tail no frame anchors
+/// is a crash's at exactly what one append can leave, and damage one byte
+/// past it.
+///
+/// Zero-filled bytes past the last committed marker hold no sync word, so
+/// the scan reads one run to the end of the file. At `MAX_CRASH_TAIL_BYTES`
+/// the open cuts them as the torn tail, nothing kept; one byte more and no
+/// append could have left them — the open halts naming the bound, the file
+/// as found, and under the knob keeps every one of them and cuts, the order
+/// starting at the head.
+#[test]
+fn a_frameless_tail_at_the_bound_is_cut_as_a_crashs_and_one_byte_past_it_halts() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    drop(k);
+    let seg = seg_file(dir.path(), 1);
+    let clean_len = fs::metadata(&seg).unwrap().len();
+
+    // AT THE BOUND: a crash's, cut and gone.
+    extend_to(&seg, clean_len + MAX_CRASH_TAIL_BYTES);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).expect("at the bound, a crash's");
+    let recovery = k.recovery().expect("journaled");
+    assert_eq!(
+        (recovery.tail_cut, recovery.tail_cut_intact, recovery.tail_cut_kept.len()),
+        (MAX_CRASH_TAIL_BYTES, 0, 0),
+        "cut whole, nothing kept"
+    );
+    assert_eq!(fs::metadata(&seg).unwrap().len(), clean_len);
+    assert_eq!(k.current_seq(), Seq(2));
+    drop(k);
+    assert!(kept_files(dir.path()).is_empty());
+
+    // ONE BYTE PAST IT: damage, refused with the bound named.
+    extend_to(&seg, clean_len + MAX_CRASH_TAIL_BYTES + 1);
+    let err = Kernel::open(cfg_fsync(dir.path()), genesis()).expect_err("past the bound");
+    let (at, damaged) = damaged_tail_of(&err);
+    assert_eq!(at, Seq(3), "the first position above the head");
+    assert_eq!(
+        damaged,
+        DamagedTail {
+            segment: "seg-1.wal".to_string(),
+            byte: clean_len,
+            head: Seq(2),
+            bytes: MAX_CRASH_TAIL_BYTES + 1,
+            intact: 0,
+            claimed: None,
+            tell: DamagedTailTell::LongerThanOneAppend { bound: MAX_CRASH_TAIL_BYTES },
+        }
+    );
+    assert!(
+        err.to_string().contains(&format!(
+            "no intact frame stands among them and they are longer than one interrupted append \
+             leaves ({MAX_CRASH_TAIL_BYTES} bytes"
+        )),
+        "{err}"
+    );
+    assert_eq!(fs::metadata(&seg).unwrap().len(), clean_len + MAX_CRASH_TAIL_BYTES + 1, "uncut");
+    assert!(kept_files(dir.path()).is_empty());
+
+    // THE CUT ACCEPTED: kept whole, cut, the head the floor.
+    let k = Kernel::open(cfg_cutting(dir.path()), genesis()).expect("the cut, accepted");
+    let recovery = k.recovery().expect("journaled");
+    let kept = format!("seg-1.wal.cut-{clean_len}");
+    assert_eq!(
+        (recovery.tail_cut, recovery.tail_cut_intact, recovery.tail_cut_kept.clone()),
+        (MAX_CRASH_TAIL_BYTES + 1, 0, vec![kept.clone()])
+    );
+    assert_eq!(
+        fs::metadata(dir.path().join(&kept)).unwrap().len(),
+        MAX_CRASH_TAIL_BYTES + 1,
+        "every byte kept"
+    );
+    assert_eq!(fs::metadata(&seg).unwrap().len(), clean_len);
+    assert_eq!(k.order_floor(), Seq(2));
+    assert_eq!(commit(&k, 30), Seq(3));
+}
+
+/// A claim the cut could not have held is NOT trusted (§7).
+///
+/// The last transaction's record is rotted and its marker's `last_seq`
+/// forged, the CRC re-fixed — the rot, so the marker is the tail's bare
+/// tell and not the edited transaction the chain matrix halts on first
+/// (case 2) — so the marker closes nothing and claims the forged position:
+/// the open halts at it, and under the knob the order's floor is the head
+/// where the claim lies past what the tail's bytes could number — a record
+/// frame of the smallest payload per position — or at the order's ceiling,
+/// where no successor could follow; a claim within what the tail could hold
+/// is trusted, and the first commit takes the position after it.
+#[test]
+fn a_claim_the_cut_could_not_have_held_is_not_trusted() {
+    let fixture = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(fixture.path()), genesis()).unwrap();
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
+    drop(k);
+    let spans = frame_spans(&seg_file(fixture.path(), 1));
+    let tail_bytes = fs::metadata(seg_file(fixture.path(), 1)).unwrap().len() - spans[4].0;
+    let smallest_record_frame = FRAME_HEADER_LEN + RECORD_BYTES_AT as u64;
+    let could_hold = tail_bytes / smallest_record_frame;
+    assert!(could_hold >= 2, "the fixture's tail could number more than its one position");
+    let claiming = |name: &str, claim: u64| {
+        let case = fixture.path().join(name);
+        copy_dir(fixture.path(), &case);
+        flip_byte(&seg_file(&case, 1), spans[4].0 + FRAME_HEADER_LEN + 1); // T3's record
+        rewrite_frame(&seg_file(&case, 1), spans[5].0 as usize, |payload| {
+            payload[MARKER_LAST_SEQ_AT..MARKER_LAST_SEQ_AT + 8]
+                .copy_from_slice(&claim.to_le_bytes());
+        });
+        let err = Kernel::open(cfg_fsync(&case), genesis()).expect_err("a forged claim halts");
+        let (at, damaged) = damaged_tail_of(&err);
+        assert_eq!((at, damaged.claimed), (Seq(claim), Some(Seq(claim))), "{name}: the claim");
+        let k = Kernel::open(cfg_cutting(&case), genesis()).expect("the cut, accepted");
+        assert_eq!(k.recovery().unwrap().tail_cut_claimed, Some(Seq(claim)), "{name}: reported");
+        let floor = k.order_floor();
+        let next = commit(&k, 31);
+        (floor, next)
+    };
+    assert_eq!(
+        claiming("ceiling", u64::MAX - 2),
+        (Seq(2), Seq(3)),
+        "a claim at the order's ceiling is not trusted: the head is the floor"
+    );
+    assert_eq!(
+        claiming("past", 2 + could_hold + 1),
+        (Seq(2), Seq(3)),
+        "a claim past what the tail's bytes could number is not trusted"
+    );
+    assert_eq!(
+        claiming("held", 2 + could_hold),
+        (Seq(2 + could_hold), Seq(2 + could_hold + 1)),
+        "a claim the tail could hold is trusted, and the next commit takes the position after it"
+    );
+}
+
+/// A wholly-later segment is refused, then kept whole under the knob, and the
+/// order starts past the position it claimed.
 ///
 /// Rot in the record of the transaction that opened a segment leaves the
 /// segment's own intact marker closing nothing, the last committed marker
-/// ending the segment before it — so the open moves the tail segment aside
-/// whole, `seg-5.wal.cut-0`, before the cut, and the cut takes no byte of the
-/// segment before. The next session's commit takes the cut position, and so
-/// the segment's name, again; the same rot there is kept under the next free
-/// name, `seg-5.wal.cut-0.1`, the first kept file standing as it was.
+/// ending the segment before it. The open refuses, naming the later segment
+/// as where the tail begins; told to cut, it moves the tail segment aside
+/// whole, `seg-5.wal.cut-0`, before the cut, and the cut takes no byte of
+/// the segment before. The next commit takes the position after the claim,
+/// and so a new segment's name, `seg-6.wal`; the same rot there is refused
+/// and kept the same way, the first kept file standing as it was.
 #[test]
-fn a_tail_segment_holding_an_intact_frame_is_moved_aside_whole_and_never_written_over() {
+fn a_tail_segment_holding_an_intact_frame_is_refused_then_moved_aside_whole_under_the_knob() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     for _ in 0..4 {
@@ -397,14 +715,23 @@ fn a_tail_segment_holding_an_intact_frame_is_moved_aside_whole_and_never_written
     let seg5 = seg_file(dir.path(), 5);
     let rot = |seg: &std::path::Path| {
         let spans = frame_spans(seg);
-        assert_eq!(spans.len(), 2, "T5's record and its marker");
-        flip_byte(seg, spans[0].0 + FRAME_HEADER_LEN + 1); // T5's record
+        assert_eq!(spans.len(), 2, "the segment's one record and its marker");
+        flip_byte(seg, spans[0].0 + FRAME_HEADER_LEN + 1); // the record
     };
     rot(&seg5);
     let found = fs::read(&seg5).unwrap();
     let seg1_len = fs::metadata(seg_file(dir.path(), 1)).unwrap().len();
 
-    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let err = Kernel::open(cfg_fsync(dir.path()), genesis()).expect_err("refused");
+    let (at, damaged) = damaged_tail_of(&err);
+    assert_eq!((at, damaged.segment.as_str(), damaged.byte), (Seq(5), "seg-5.wal", 0));
+    assert_eq!(
+        (damaged.head, damaged.bytes, damaged.claimed),
+        (Seq(4), found.len() as u64, Some(Seq(5)))
+    );
+    assert!(seg5.exists() && fs::read(&seg5).unwrap() == found, "a halt moves nothing");
+
+    let k = Kernel::open(cfg_cutting(dir.path()), genesis()).expect("the cut, accepted");
     assert_eq!(k.current_seq(), Seq(4));
     assert_eq!(items(&k).len(), 4);
     let recovery = k.recovery().expect("journaled");
@@ -416,22 +743,27 @@ fn a_tail_segment_holding_an_intact_frame_is_moved_aside_whole_and_never_written
     assert_eq!(fs::read(dir.path().join("seg-5.wal.cut-0")).unwrap(), found, "moved whole");
     assert_eq!(fs::metadata(seg_file(dir.path(), 1)).unwrap().len(), seg1_len, "seg-1 uncut");
 
-    // The next commit takes position 5 again — and the name `seg-5.wal` with
-    // it, a fresh segment — and the same rot there is kept beside the first.
-    assert_eq!(commit_blob(&k), Seq(5));
+    // The next commit takes position 6, past the claim — and a fresh segment
+    // named for it — and the same rot there is kept beside the first.
+    assert_eq!(k.order_floor(), Seq(5));
+    assert_eq!(commit_blob(&k), Seq(6));
     drop(k);
-    assert!(seg5.exists(), "the next session's segment takes the name again");
-    rot(&seg5);
-    let again = fs::read(&seg5).unwrap();
-    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let seg6 = seg_file(dir.path(), 6);
+    assert!(!seg5.exists() && seg6.exists(), "the next session's segment takes the next name");
+    rot(&seg6);
+    let again = fs::read(&seg6).unwrap();
+    assert!(Kernel::open(cfg_fsync(dir.path()), genesis()).is_err(), "refused again");
+    let k = Kernel::open(cfg_cutting(dir.path()), genesis()).unwrap();
     assert_eq!(k.current_seq(), Seq(4));
-    assert_eq!(k.recovery().unwrap().tail_cut_kept, vec!["seg-5.wal.cut-0.1".to_string()]);
+    assert_eq!(k.recovery().unwrap().tail_cut_kept, vec!["seg-6.wal.cut-0".to_string()]);
     assert_eq!(fs::read(dir.path().join("seg-5.wal.cut-0")).unwrap(), found, "never written over");
-    assert_eq!(fs::read(dir.path().join("seg-5.wal.cut-0.1")).unwrap(), again);
+    assert_eq!(fs::read(dir.path().join("seg-6.wal.cut-0")).unwrap(), again);
     assert_eq!(
         kept_files(dir.path()),
-        vec!["seg-5.wal.cut-0".to_string(), "seg-5.wal.cut-0.1".to_string()]
+        vec!["seg-5.wal.cut-0".to_string(), "seg-6.wal.cut-0".to_string()]
     );
+    assert_eq!(k.order_floor(), Seq(6));
+    assert_eq!(commit_blob(&k), Seq(7));
 }
 
 /// A name standing where the keep would go is passed over whole.
@@ -458,7 +790,7 @@ fn a_name_standing_where_the_keep_would_go_is_passed_over_whole() {
     // keep passes it over whole and takes the next name.
     fs::create_dir(dir.path().join(&kept)).unwrap();
     fs::write(dir.path().join(&kept).join("theirs"), b"an operator's file").unwrap();
-    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let k = Kernel::open(cfg_cutting(dir.path()), genesis()).unwrap();
     assert_eq!(k.recovery().unwrap().tail_cut_kept, vec![format!("{kept}.1")]);
     assert_eq!(
         fs::read(dir.path().join(format!("{kept}.1"))).unwrap(),

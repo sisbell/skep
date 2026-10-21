@@ -195,8 +195,8 @@ pub enum Durability {
         /// foreign file bearing one of those names is, as far as the kernel
         /// is concerned, a segment, a base, the stray temp file the open
         /// removes, or the lock. The fifth is the tail cut's keep — the bytes
-        /// an open cut from a tail holding an intact frame no torn write
-        /// leaves ([`crate::Recovery`]'s `tail_cut_kept`) — which the kernel
+        /// an open cut from a damaged tail under `cut_damaged_tail`
+        /// ([`crate::Recovery`]'s `tail_cut_kept`) — which the kernel
         /// creates and never writes over, removing one only where the keep
         /// that made or completed it fails: a kept file is the operator's.
         /// Every other name it leaves alone, its listings taking only the
@@ -219,6 +219,26 @@ pub enum Durability {
         retain_checkpoints: usize,
         /// Policy for the `Seq`s a failed transaction burned.
         burned_seq: BurnedSeqPolicy,
+        /// Whether this open accepts the cut of a damaged journal tail (§7).
+        ///
+        /// The tail after the last committed marker is cut at every open
+        /// where it is a crash's — one interrupted append's bytes, never
+        /// acknowledged. Where it is not — an intact commit marker committing
+        /// nothing, a CRC-intact frame that does not decode, or no intact
+        /// frame over more bytes than one append leaves
+        /// ([`crate::MAX_CRASH_TAIL_BYTES`]) — the write it holds may have
+        /// been acknowledged, and the open refuses with
+        /// [`crate::OpenError::Corruption`] carrying [`crate::DamagedTail`],
+        /// the journal as it found it, until this is `true`: then the open
+        /// keeps every byte of the tail beside the journal
+        /// (`seg-<n>.wal.cut-<b>`, [`crate::Recovery`]'s `tail_cut_kept`),
+        /// cuts it, and hands out no position the tail claimed
+        /// ([`crate::Kernel::order_floor`]). The operator's word for one
+        /// open, read once there and persisted nowhere, as every knob here
+        /// is; `false` for every open that has not been told. Carries no
+        /// rule: a clean tail under `true` is cut as it would be under
+        /// `false`, nothing kept.
+        cut_damaged_tail: bool,
     },
     /// Fully in-memory: no journal, no barrier, no recovery.
     ///

@@ -91,6 +91,8 @@ pub(crate) fn spawn_skepd(dir: &Path) -> (Child, u16) {
         .arg("--data-dir")
         .arg(dir)
         .args(["--port", "0", "--workers", &skepd::DEFAULT_WORKERS.to_string()])
+        // A fresh directory: the binary begins a board under `--create` alone.
+        .arg("--create")
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -1002,6 +1004,7 @@ fn kernel_below_the_door(dir: &Path) -> Engine {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0),
@@ -1218,9 +1221,13 @@ fn try_put(port: u16, token: &str, bytes: &[u8]) -> Option<Value> {
     }
 }
 
+/// What the deposit read answers: each hash's size and whether its lease
+/// lapsed, and the standing uploads' identifiers and offsets.
+type DepositRead = (std::collections::HashMap<String, (u64, bool)>, Vec<(String, u64)>);
+
 /// The principal's deposit read through the socket-free router, as
 /// `(hash → (size, lapsed), the standing uploads' (id, offset))`.
-fn deposit_read(d: &Daemon, token: &str) -> (std::collections::HashMap<String, (u64, bool)>, Vec<(String, u64)>) {
+fn deposit_read(d: &Daemon, token: &str) -> DepositRead {
     let r = route_raw(d, "GET", BLOB_UPLOAD, None, Some(token), b"");
     assert_eq!(r.status, 200, "the deposit read: {}", String::from_utf8_lossy(r.bytes()));
     let v = json(r.bytes());

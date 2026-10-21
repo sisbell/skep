@@ -1507,14 +1507,16 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
 }
 
 fn p_hex(s: &str) -> PResult<Vec<u8>> {
-    // The odd-length refusal comes first, because `chunks_exact` below
-    // drops a trailing half-byte in silence — exactly the reading this
-    // check exists to refuse.
+    // The odd-length refusal comes first, because the pairing below drops
+    // a trailing half-byte in silence — exactly the reading this check
+    // exists to refuse.
     if !s.len().is_multiple_of(2) {
         return Err(PErr("hex string has odd length".into()));
     }
     s.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| Ok(hex_digit(pair[0])? * 16 + hex_digit(pair[1])?))
         .collect()
 }
@@ -1532,7 +1534,9 @@ pub(crate) fn parse_lower_hex_bytes(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     s.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| Some((hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?))
         .collect()
 }

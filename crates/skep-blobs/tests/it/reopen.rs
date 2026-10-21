@@ -746,13 +746,17 @@ fn what_the_open_found_absent_it_answers_made() {
     assert_eq!(store.lease_state("k", "blake3", &hex, 3), LeaseState::None);
 }
 
-/// A DAMAGED LOG's CUT IS TOLD FROM A CRASH's (`Store::opened`, `TailCut`):
-/// three deposits' lease lines. A crash's tail — bytes of a line with no
-/// newline — is cut taking no whole line, and every lease stands. Then the
-/// first line damaged in place — a bad sector, a damaged copy — and the
-/// open's tail check cuts at it, the two whole lines after it with it:
-/// their leases, which a PUT answered 200 over, read as none, and the
-/// account names the cut and the two lines among it.
+/// A DAMAGED LOG's CUT IS TOLD FROM A CRASH's, AND KEPT (`Store::opened`,
+/// `TailCut`, `LogRead::kept`): three deposits' lease lines. A crash's tail
+/// — bytes of a line with no newline — is cut taking no whole line, its
+/// first line torn, nothing kept, and every lease stands. Then the last line
+/// damaged in place, whole and ended by its newline — no whole line after it,
+/// yet damage, told by its first line being whole: cut and KEPT beside the
+/// log, byte for byte, as `blobs/leases.log.cut-{byte}`. Then the first line
+/// damaged in place — a bad sector, a damaged copy — and the open's tail
+/// check cuts at it, the two whole lines after it with it, every byte kept
+/// first: their leases, which a PUT answered 200 over, read as none, and the
+/// account names the cut, the two lines among it and the kept file.
 #[test]
 fn a_damaged_lease_log_is_cut_and_the_open_answers_the_whole_lines_it_took() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -770,18 +774,63 @@ fn a_damaged_lease_log_is_cut_and_the_open_answers_the_whole_lines_it_took() {
     let read = &store.opened().leases_log;
     let cut = read.cut.expect("the torn tail cut");
     assert_eq!((read.lines, cut.at, cut.bytes(), cut.lines_after), (3, whole.len() as u64, 19, 0), "{read:?}");
+    assert!(!cut.first_whole && !cut.damage(), "a crash's: its first line torn: {read:?}");
+    assert_eq!(read.kept, None, "a crash's tail is cut and gone, nothing kept");
     assert_eq!(store.opened().leases, 3, "a crash's tail: every lease stands");
     drop(store);
+    // The LAST line damaged, whole: no whole line after it, and damage all
+    // the same — kept, then cut.
+    let last_line_at =
+        whole[..whole.len() - 1].iter().rposition(|&b| b == b'\n').map_or(0, |at| at + 1);
+    let mut last_damaged = whole.clone();
+    last_damaged[last_line_at] = b'x';
+    fs::write(&log, &last_damaged).unwrap();
+    let store = open(&root, 3);
+    let read = &store.opened().leases_log;
+    let cut = read.cut.expect("trust ends at the damaged last line");
+    assert_eq!(
+        (read.lines, cut.at, cut.len, cut.lines_after),
+        (2, last_line_at as u64, whole.len() as u64, 0),
+        "{read:?}"
+    );
+    assert!(cut.first_whole && cut.damage(), "a damaged last line is damage: {read:?}");
+    let kept = format!("blobs/leases.log.cut-{last_line_at}");
+    assert_eq!(read.kept.as_deref(), Some(kept.as_str()), "{read:?}");
+    assert_eq!(
+        fs::read(dir.path().join(&kept)).unwrap(),
+        &last_damaged[last_line_at..],
+        "kept byte for byte"
+    );
+    assert_eq!(store.opened().leases, 2, "the lease the cut took");
+    drop(store);
+    fs::remove_file(dir.path().join(&kept)).unwrap();
+    // The FIRST line damaged: the two whole lines after it go with it, kept.
     let mut damaged = fs::read(&log).unwrap();
     damaged[0] = b'x';
     fs::write(&log, &damaged).unwrap();
-    let store = open(&root, 3);
+    let store = open(&root, 4);
     let read = &store.opened().leases_log;
     let cut = read.cut.expect("trust ends at the damaged line");
-    assert_eq!((read.lines, cut.at, cut.len, cut.lines_after), (0, 0, damaged.len() as u64, 2), "{read:?}");
+    assert_eq!(
+        (read.lines, cut.at, cut.len, cut.lines_after),
+        (0, 0, damaged.len() as u64, 1),
+        "{read:?}"
+    );
+    assert!(cut.damage(), "{read:?}");
+    assert_eq!(read.kept.as_deref(), Some("blobs/leases.log.cut-0"), "{read:?}");
+    assert_eq!(
+        fs::read(root.join("leases.log.cut-0")).unwrap(),
+        damaged,
+        "every byte from the cut on"
+    );
+    assert_eq!(fs::metadata(&log).unwrap().len(), 0, "cut at the damaged line");
     assert_eq!(store.opened().leases, 0, "the leases the cut took");
-    for hex in &hexes {
-        assert_eq!(store.lease_state("k", "blake3", hex, 3), LeaseState::None, "{hex}: answered over, and gone");
+    for hex in &hexes[..2] {
+        assert_eq!(
+            store.lease_state("k", "blake3", hex, 4),
+            LeaseState::None,
+            "{hex}: answered over, and gone"
+        );
     }
 }
 

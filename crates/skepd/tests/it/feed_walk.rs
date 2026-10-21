@@ -533,7 +533,7 @@ fn a_page_is_refused_by_its_rows_not_its_since_alone() {
         assert_eq!(st, 200, "{query}: {v}");
         assert_eq!(positions(&v), want, "{query}: {v}");
         assert_eq!(v["more"].as_bool(), Some(more), "{query}: {v}");
-        assert_eq!(v["last"].as_u64(), Some(want.last().copied().unwrap_or(0).max(0)), "{query}: {v}");
+        assert_eq!(v["last"].as_u64(), Some(want.last().copied().unwrap_or(0)), "{query}: {v}");
     };
     refused(Some(&owner), "since=20&limit=10");
     served(Some(&owner), "since=20&limit=3", &[21, 22, 23], true);
@@ -585,7 +585,7 @@ fn the_walks_death_is_said_once_and_the_board_serves_with_the_region_pending() {
          its time lost — restart soon"
     );
     wait_until("the catch's line", || !lines_with(&sd, "failure: the feed walk ended").is_empty());
-    assert_eq!(lines_with(&sd, "failure: the feed walk ended"), [ended.clone()], "FINDING (row 41)");
+    assert_eq!(lines_with(&sd, "failure: the feed walk ended"), std::slice::from_ref(&ended), "FINDING (row 41)");
     assert_eq!(sd.daemon().feed_pending_region(), Some((low, head)), "the region pends for the uptime");
     // The pruner's own landing line is on the record; the walk's never comes.
     after_the_first_pass(&sd);
@@ -759,7 +759,7 @@ fn a_checkpoint_during_the_walk_defers_its_rewrite_to_the_landing() {
     // B, the three mints above it and the cadence head the checkpoint
     // triggered (its draft insert and its publish): six boundaries, no
     // more than the positions from B to the head.
-    assert!((4..=head - b + 1).contains(&(walked as u64)), "B and every boundary above it to the head: {landing:?}");
+    assert!((4..=head - b + 1).contains(&walked), "B and every boundary above it to the head: {landing:?}");
     println!("feed walk over a bulk-written world: {walked} boundaries in {ms} ms ({:.0} ms per boundary)", ms as f64 / walked as f64);
     let text = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
     assert!(text.starts_with(&format!("{{\"min_since\":{}}}\n", b - 1)), "the landing's fence is the floor's: {text}");

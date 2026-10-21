@@ -16,6 +16,7 @@ pub(super) fn fsync_engine(dir: &std::path::Path) -> Engine {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EveryN(1024))),
         salt: SaltSource::Os,
@@ -1305,6 +1306,46 @@ fn a_walk_whose_thread_the_os_refuses_is_walked_at_the_open() {
     let owner = served(page_from(&wp, &FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL)), low));
     let positions: Vec<u64> = owner.keys().copied().collect();
     assert_eq!(positions, board[1..]);
+}
+
+/// Checks that a panic in the walk run at the open is caught, and said.
+///
+/// Where the OS refuses the walk's thread the region is walked at the open,
+/// and a panic there would end the process with the open. It runs under the
+/// thread's own catch instead: the open returns, the walk's end is said in
+/// the operator's terms with the region it left uncovered, the liveness flag
+/// the standing line reads is set, and the region pends for the uptime —
+/// the board serving.
+#[test]
+fn a_panic_in_the_walk_run_at_the_open_is_caught_and_the_open_goes_on() {
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let board = a_torn_board(dir.path(), &engine);
+    let (low, head) = (board[0], board[3]);
+    REFUSE_THE_FEED_WALKS_THREAD.store(true, Ordering::Release);
+    arm_the_feed_walks_fault();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert!(!REFUSE_THE_FEED_WALKS_THREAD.load(Ordering::Acquire), "the seam fired once");
+    assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends for the uptime");
+    assert_eq!(wp.feed_walk_gone(), Some((low, head)), "the flag the standing line reads");
+    let said = wp.lines_said().lock().clone();
+    let all = said.join("\n");
+    let ended = FeedWalkEndedLine {
+        payload: "the test seam's fault in the feed walk",
+        low,
+        head,
+    }
+    .to_string();
+    assert_eq!(
+        said.iter().filter(|l| **l == format!("failure: {ended}")).count(),
+        1,
+        "the walk's end, said once in the operator's terms:\n{all}"
+    );
+    assert!(
+        said.iter().any(|l| l.contains("the OS refused its thread")),
+        "the refusal said before it:\n{all}"
+    );
 }
 
 /// Checks that a landing cut between its rewrites leaves the region pending.

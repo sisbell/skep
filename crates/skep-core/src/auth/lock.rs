@@ -25,6 +25,7 @@
 /// the RES-26 gate once claimed and `pre_claim_gate` before, with the
 /// write-path check behind the first — and the precheck's ordered slots),
 /// which is wire.md's term for a rule that refuses a write.
+#[derive(Default)]
 pub struct CredentialLock(parking_lot::RwLock<()>);
 
 /// The credential lock's read guard (AUTH-3.3).

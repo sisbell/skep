@@ -821,6 +821,8 @@ fn the_upload_familys_log_names_no_principal_no_token_and_no_upload() {
             .arg("--data-dir")
             .arg(&dir)
             .args(["--port", &port.to_string(), "--workers", &skepd::DEFAULT_WORKERS.to_string(), "--origin", &format!("http://127.0.0.1:{port}")])
+            // A fresh directory: the binary begins a board under `--create` alone.
+            .arg("--create")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -1325,7 +1327,7 @@ fn every_act_of_the_upload_answers_claim_first_before_the_claim() {
         assert_eq!(v["error"].as_str(), Some("upload_refused"));
         assert_eq!(v["detail"].as_str(), Some("claim_first"));
     }
-    assert!(!std::fs::read_dir(dir.path().join("blobs").join("blake3")).map_or(false, |d| d.count() > 0), "nothing deposited");
+    assert!(!std::fs::read_dir(dir.path().join("blobs").join("blake3")).is_ok_and(|d| d.count() > 0), "nothing deposited");
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     expect_resp(&op(port, Some(&signed), &claim_frame(CLAIMANT_DOC1, CLAIMANT_ACCOUNT)), "ack_addr");
     put_whole(port, &claimant, b"hello");
@@ -1742,5 +1744,164 @@ fn an_expired_uploads_partial_goes_at_the_next_open_and_a_standing_one_survives_
     let (st, _, resp) = blob_resume(port, Some(&token), &standing, 5, b"world");
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&resp));
     assert_eq!(json(&resp)["hash"].as_str(), Some(blob_hex(b"helloworld").as_str()), "the hash covers the bytes received before the reopen");
+    sd.shutdown();
+}
+
+/// THE LEASE LOG's DAMAGE IS SAID, KEPT, AND HALTS THE UNLINK PASS FOR THE
+/// UPTIME (#441, #414; `operations.md` §4 row 19): a deposit held by its
+/// lease alone, the board closed, and the lease log's one line damaged in
+/// place. The binary's next open says the damaged cut as a failure naming
+/// the kept file, `blobs/leases.log.cut-0`, which holds the line byte for
+/// byte, and the pruner's halt with its reason, once, on its stderr; the
+/// same damage opened in-process, the pass run now halts at its unlink step
+/// with that reason, unlinks nothing, and the deposited file — which the
+/// lost lease held — stands, the halt standing for the uptime and the
+/// pass's own line carrying it. A crash's torn line, the same board torn
+/// instead, is the open's own landing: nothing kept, no halt, the pass
+/// unlinking as it does.
+#[test]
+fn a_damaged_lease_log_is_said_kept_and_halts_the_unlink_pass_for_the_uptime() {
+    use crate::open::{
+        after_the_head, serving_port, skepd, wait_for_the_lock, Spawned, Stderr, PATIENCE,
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    // The board's own directory, made owner-only by its first open: the
+    // served start refuses a loose one.
+    let data = dir.path().join("data");
+    let bytes = seeded_bytes(700, 11);
+    let hex = {
+        let sd = spawn(data.as_path());
+        let port = sd.port();
+        let token = open_session(port, CLAIMANT_PRINCIPAL);
+        let hex = put_whole(port, &token, &bytes)["hash"].as_str().unwrap().to_string();
+        sd.shutdown();
+        hex
+    };
+    wait_for_the_lock(&data);
+    let file = data.as_path().join("blobs").join("blake3").join(&hex);
+    assert!(file.exists(), "the deposit stands, held by its lease alone");
+    let log = data.as_path().join("blobs").join("leases.log");
+    let kept = data.as_path().join("blobs").join("leases.log.cut-0");
+    let whole = std::fs::read(&log).expect("the lease log");
+    let mut damaged = whole.clone();
+    damaged[0] = b'x';
+    let reason = "blobs/leases.log's open cut a damaged line and the 0 whole lines after it, kept \
+                  in blobs/leases.log.cut-0";
+
+    // THE BINARY's OPEN over the damage: the lines, on its stderr.
+    std::fs::write(&log, &damaged).expect("damage the log");
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut cmd = skepd(data.as_path(), &["--port", "0", "--workers", workers.as_str()]);
+    let mut child = Spawned::launch(&mut cmd);
+    let mut stderr = Stderr::of(&mut child.child);
+    thread::sleep(Duration::from_millis(500));
+    if let Ok(Some(status)) = child.child.try_wait() {
+        panic!("the start exited {status} before serving:\n{}", stderr.whole().join("\n"));
+    }
+    serving_port(&mut child.child, PATIENCE);
+    stderr.wait_for("the pruner's halt", Duration::from_secs(10), |l| {
+        after_the_head(l, "failure")
+            .is_some_and(|t| t.starts_with("pruner: the unlink pass is halted"))
+    });
+    child.kill();
+    let said: Vec<String> = stderr.whole();
+    let of = |class: &str, prefix: &str| -> Vec<String> {
+        said.iter()
+            .filter_map(|l| after_the_head(l, class))
+            .filter(|t| t.starts_with(prefix))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(
+        of("failure", "blobs/leases.log"),
+        [format!(
+            "blobs/leases.log: trust ends at byte 0 of {}; the {} bytes after it are cut, kept in \
+             blobs/leases.log.cut-0: a whole line that does not read, which no crash leaves — \
+             damage to leases the store answered over, 0 whole lines after it cut with it; each \
+             lost lease reads as none, cured by a re-PUT",
+            damaged.len(),
+            damaged.len()
+        )],
+        "FINDING (#441): the damaged last line, said as damage:\n{}",
+        said.join("\n")
+    );
+    assert_eq!(std::fs::read(&kept).expect("the kept file"), damaged, "kept byte for byte");
+    assert_eq!(
+        of("failure", "pruner: the unlink pass is halted"),
+        [format!(
+            "pruner: the unlink pass is halted for this uptime — {reason}: a lease the open lost \
+             holds no file in memory, so the pass would unlink files their depositors hold; \
+             expired partials are still removed and the logs compacted at each pass; the next \
+             start, its open reading the log whole, lifts it"
+        )],
+        "FINDING (#414): the halt, said once:\n{}",
+        said.join("\n")
+    );
+    assert_eq!(
+        of("open", "kept files beside the journal and the logs: "),
+        ["kept files beside the journal and the logs: 1 — blobs/leases.log.cut-0; each holds \
+          bytes an open cut as damage: copy them off the volume, and remove them once the writes \
+          they held are accounted for"]
+    );
+    assert!(file.exists(), "the deposited file stands");
+
+    // THE SAME DAMAGE, IN-PROCESS: the pass halts for the uptime.
+    std::fs::remove_file(&kept).expect("the kept file goes");
+    std::fs::write(&log, &damaged).expect("damage the log again");
+    let sd = spawn(data.as_path());
+    let lines = |prefix: &str| -> Vec<String> {
+        sd.daemon().lines_said().into_iter().filter(|l| l.starts_with(prefix)).collect()
+    };
+    assert_eq!(lines("failure: pruner: the unlink pass is halted").len(), 1, "said once");
+    let pass = sd.daemon().prune_now().expect("the index is ready");
+    assert_eq!(pass.halted.as_deref(), Some(reason), "FINDING (#414): the pass halts: {pass:?}");
+    assert_eq!(pass.unlinked, 0, "{pass:?}");
+    assert!(file.exists(), "FINDING (#414): the file the lost lease held was unlinked");
+    let again = sd.daemon().prune_now().expect("the index is ready");
+    assert_eq!(again.halted.as_deref(), Some(reason), "for the uptime");
+    assert_eq!(lines("failure: pruner: the unlink pass is halted").len(), 1, "still once");
+    assert!(
+        lines("landing: pruner: ")
+            .iter()
+            .all(|l| l.contains(&format!("the unlink pass halted: {reason}"))),
+        "the pass's own line carries the halt: {:?}",
+        lines("landing: pruner: ")
+    );
+    sd.shutdown();
+    wait_for_the_lock(&data);
+    std::fs::remove_file(&kept).expect("the kept file goes");
+
+    // A CRASH's TORN LINE: the open's own landing, nothing kept, no halt.
+    let mut torn = whole.clone();
+    torn.extend_from_slice(b"{\"designation\":\"bla");
+    std::fs::write(&log, &torn).expect("tear the log");
+    let mut cmd = skepd(data.as_path(), &["--port", "0", "--workers", workers.as_str()]);
+    let mut child = Spawned::launch(&mut cmd);
+    let mut stderr = Stderr::of(&mut child.child);
+    serving_port(&mut child.child, PATIENCE);
+    stderr.wait_for("the upload setting", Duration::from_secs(10), |l| {
+        after_the_head(l, "open").is_some_and(|t| t.starts_with("media uploads: "))
+    });
+    child.kill();
+    let said: Vec<String> = stderr.whole();
+    let of = |class: &str, prefix: &str| -> Vec<String> {
+        said.iter()
+            .filter_map(|l| after_the_head(l, class))
+            .filter(|t| t.starts_with(prefix))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(
+        of("open", "blobs/leases.log"),
+        ["blobs/leases.log: a torn last line cut (19 bytes), a crash's or a kill's, never \
+          answered over; every acknowledged lease stands"]
+    );
+    assert!(of("failure", "blobs/leases.log").is_empty() && of("failure", "pruner:").is_empty());
+    assert!(!kept.exists(), "nothing kept");
+    let sd = spawn(data.as_path());
+    let pass = sd.daemon().prune_now().expect("the index is ready");
+    assert_eq!(pass.halted, None, "{pass:?}");
+    assert!(file.exists(), "held by its lease, which stands");
     sd.shutdown();
 }

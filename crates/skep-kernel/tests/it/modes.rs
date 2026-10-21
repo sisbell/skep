@@ -65,6 +65,7 @@ fn cfg(dir: &Path) -> KernelConfig {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0x4D),

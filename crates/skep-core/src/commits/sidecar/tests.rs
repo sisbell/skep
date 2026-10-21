@@ -789,14 +789,78 @@ fn the_cause_and_the_foreign_lines_render_the_ruled_words() {
         foreign: foreign.expect("three"),
         head: 28,
         what: "testimony",
+        kept: KeptName { byte: 4_096, k: 0 },
+        journal_kept: Vec::new(),
     };
     assert_eq!(
         line.to_string(),
         "commits.log held 3 lines past the journal's head at position 28 (positions 29–33): \
-         dropped — a live copy taken after its journal holds them; after a journal tail cut that \
-         took intact frames they are the cut commits' testimony, which a copy taken before this \
-         open still holds"
+         dropped and kept in commits.log.cut-4096 — a live copy taken after its journal holds \
+         them; after a journal tail cut that took acknowledged commits they are the cut commits' \
+         testimony",
+        "the kept file named, and never a copy taken before the open"
     );
+    // The attest store's: the journal's kept files are a second copy of the
+    // signatures, named where the journal's open kept any at this start; a
+    // standing name moved the keep to `….1`.
+    let attest = ForeignLinesLine {
+        name: "feed-attest.log",
+        foreign: foreign.expect("three"),
+        head: 28,
+        what: "signatures",
+        kept: KeptName { byte: 4_096, k: 1 },
+        journal_kept: vec!["seg-7.wal.cut-0".to_string()],
+    };
+    assert_eq!(
+        attest.to_string(),
+        "feed-attest.log held 3 lines past the journal's head at position 28 (positions 29–33): \
+         dropped and kept in feed-attest.log.cut-4096.1 — a live copy taken after its journal \
+         holds them; after a journal tail cut that took acknowledged commits they are the cut \
+         commits' signatures, whose markers the journal's kept file seg-7.wal.cut-0 holds too"
+    );
+    let two = ForeignLinesLine {
+        journal_kept: vec!["seg-7.wal.cut-0".to_string(), "seg-9.wal.cut-0".to_string()],
+        ..attest
+    };
+    assert!(
+        two.to_string().ends_with(
+            "signatures, whose markers the journal's kept files seg-7.wal.cut-0 and \
+             seg-9.wal.cut-0 hold too"
+        ),
+        "{two}"
+    );
+    assert_eq!(KeptName { byte: 12, k: 0 }.of("commits.log"), "commits.log.cut-12");
+    assert_eq!(KeptName { byte: 12, k: 2 }.of("commits.log"), "commits.log.cut-12.2");
+}
+
+/// THE KEEP: what an open drops in class B stands beside the file first
+/// (`operations.md` §3.6).
+///
+/// The dropped bytes are written whole to `{file}.cut-{byte}` — a standing
+/// name passed over for `….{k}`, never written over — born owner-only and
+/// synced; the routine every line file's open shares.
+#[test]
+fn dropped_lines_are_kept_beside_the_file_under_the_next_free_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let kept = keep_dropped_lines(dir.path(), "x.log", 40, &b"{\"at\":4}\n{\"at\":5}\n"[..])
+        .expect("the keep");
+    assert_eq!(kept, KeptName { byte: 40, k: 0 });
+    let path = dir.path().join("x.log.cut-40");
+    assert_eq!(std::fs::read(&path).expect("read"), b"{\"at\":4}\n{\"at\":5}\n");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o7777;
+        assert_eq!(mode, 0o600, "born owner-only");
+    }
+    let again = keep_dropped_lines(dir.path(), "x.log", 40, &b"other bytes"[..]).expect("again");
+    assert_eq!(again, KeptName { byte: 40, k: 1 }, "a standing name is passed over");
+    assert_eq!(
+        std::fs::read(&path).expect("read"),
+        b"{\"at\":4}\n{\"at\":5}\n",
+        "never written over"
+    );
+    assert_eq!(std::fs::read(dir.path().join("x.log.cut-40.1")).expect("read"), b"other bytes");
 }
 
 /// THE LINES PAST THE HEAD LEAVE THE FILE at the open that drops them, and
@@ -828,13 +892,20 @@ fn the_lines_past_the_head_leave_the_file_and_are_said_once() {
         lines.said().lock().as_slice(),
         [format!(
             "open: commits.log held 2 lines past the journal's head at position {head} (positions \
-             {}–{}): dropped — a live copy taken after its journal holds them; after a journal \
-             tail cut that took intact frames they are the cut commits' testimony, which a copy \
-             taken before this open still holds",
+             {}–{}): dropped and kept in commits.log.cut-0 — a live copy taken after its journal \
+             holds them; after a journal tail cut that took acknowledged commits they are the \
+             cut commits' testimony",
             head + 1,
             head + 3
         )],
-        "said once, with the count and the positions"
+        "said once, with the count, the positions and the kept file"
+    );
+    // THE KEEP: the dropped lines stand beside the file, byte for byte as
+    // they were written — testimony no marker holds a copy of.
+    assert_eq!(
+        std::fs::read(dir.path().join("commits.log.cut-0")).expect("the kept file"),
+        lines_past,
+        "the lines above the head, kept whole before the rewrite dropped them"
     );
 }
 
@@ -856,13 +927,23 @@ fn the_cut_and_the_malformed_names_render_the_ruled_words() {
          cut"
     );
     assert_eq!(
-        LogCutLine { cut }.to_string(),
+        LogCutLine { cut, kept: None }.to_string(),
         "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
-         cut; the cut part is re-derived as bare entries"
+         cut; the cut part is re-derived as bare entries",
+        "a torn line's cut: nothing kept"
     );
     let damaged = Cut { whole_after: Some(EntryLines { lines: 2, first: 33, last: 35 }), ..cut };
+    let kept = Some(KeptName { byte: 4_096, k: 0 });
     assert_eq!(
-        LogCutLine { cut: damaged }.to_string(),
+        LogCutLine { cut: damaged, kept }.to_string(),
+        "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
+         cut, kept in commits.log.cut-4096; the cut part is re-derived as bare entries; the cut \
+         took 2 whole lines with it, positions 33–35: their keys and times are LOST to the feed \
+         and stand in commits.log.cut-4096 alone",
+        "a damaged line's cut names the kept file"
+    );
+    assert_eq!(
+        LogCutLine { cut: damaged, kept: None }.to_string(),
         "commits.log: trust ends at position 32 (byte 4096 of 4106); the 10 bytes after it are \
          cut; the cut part is re-derived as bare entries; the cut took 2 whole lines with it, \
          positions 33–35: their keys and times are LOST unless the board directory's backup is \
@@ -895,14 +976,16 @@ fn the_cut_and_the_malformed_names_render_the_ruled_words() {
     );
 }
 
-/// Checks that a cut past a damaged line names the whole lines it takes.
+/// Checks that a cut past a damaged line keeps and names what it takes.
 ///
 /// A `commits.log` whose third line is damaged — whole, ended by its
-/// newline, and no record — is cut there at the open, and the whole lines
-/// after it go with it: the two at or below the head are counted with their
-/// positions, the one past the head is not, and the line says what they held
-/// is lost unless a copy holds it. A torn line at the file's end takes no
-/// whole line with it, and the cut line says none.
+/// newline, and no record — is cut there at the open, the damaged line and
+/// every line after it kept beside the file first, byte for byte, in
+/// `commits.log.cut-{byte}`; the whole lines after it go with the cut: the
+/// two at or below the head are counted with their positions, the one past
+/// the head is not, and the line names the kept file where what they held
+/// stands. A torn line at the file's end takes no whole line with it, keeps
+/// nothing, and the cut line says none.
 #[test]
 fn a_cut_past_a_damaged_line_names_the_whole_lines_it_takes() {
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, SaltSource};
@@ -923,7 +1006,7 @@ fn a_cut_past_a_damaged_line_names_the_whole_lines_it_takes() {
     let head = engine.kernel().current_seq().0;
     let line = |at| entry_line(at, &recorded("insert", &["1.0.1.0.1"], 1, Some("bare")));
     let trusted = [line(1), line(2)].concat();
-    let cut_line = |file: &[u8]| -> Vec<String> {
+    let cut_line = |file: &[u8]| -> (Vec<String>, Option<Vec<u8>>) {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(SIDECAR_FILE), file).expect("the file");
         let lines = Lines::new();
@@ -931,27 +1014,38 @@ fn a_cut_past_a_damaged_line_names_the_whole_lines_it_takes() {
         let on_disk = std::fs::read(dir.path().join(SIDECAR_FILE)).expect("read");
         assert_eq!(on_disk, trusted, "cut at the last whole record");
         let said = lines.said().lock().clone();
-        said.into_iter().filter(|l| l.contains("trust ends at")).collect()
+        let kept =
+            std::fs::read(dir.path().join(format!("commits.log.cut-{}", trusted.len()))).ok();
+        let others: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("list")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.contains(".cut-") && *name != format!("commits.log.cut-{}", trusted.len())
+            })
+            .collect();
+        assert!(others.is_empty(), "no other kept file: {others:?}");
+        (said.into_iter().filter(|l| l.contains("trust ends at")).collect(), kept)
     };
     let head_words =
         format!("failure: commits.log: trust ends at position 2 (byte {} of ", trusted.len());
-    let damaged =
-        [trusted.clone(), b"{\"at\":3,\"docs\":[\n".to_vec(), line(4), line(5), line(head + 7)]
-            .concat();
-    let said = cut_line(&damaged);
+    let dropped = [b"{\"at\":3,\"docs\":[\n".to_vec(), line(4), line(5), line(head + 7)].concat();
+    let damaged = [trusted.clone(), dropped.clone()].concat();
+    let (said, kept) = cut_line(&damaged);
     assert_eq!(said.len(), 1, "the cut said once: {said:?}");
     assert!(said[0].starts_with(&head_words), "{}", said[0]);
+    let kept_name = format!("commits.log.cut-{}", trusted.len());
     assert!(
-        said[0].ends_with(
-            "; the cut part is re-derived as bare entries; the cut took 2 whole lines with it, \
-             positions 4–5: their keys and times are LOST unless the board directory's backup is \
-             restored"
-        ),
-        "the two whole lines at or below the head, named: {}",
+        said[0].ends_with(&format!(
+            "after it are cut, kept in {kept_name}; the cut part is re-derived as bare entries; \
+             the cut took 2 whole lines with it, positions 4–5: their keys and times are LOST to \
+             the feed and stand in {kept_name} alone"
+        )),
+        "the kept file named, the two whole lines at or below the head counted: {}",
         said[0]
     );
+    assert_eq!(kept, Some(dropped), "the damaged line and every line after it, kept whole");
     let torn = [trusted.clone(), b"{\"at\":3,\"do".to_vec()].concat();
-    let said = cut_line(&torn);
+    let (said, kept) = cut_line(&torn);
     assert_eq!(said.len(), 1, "the cut said once: {said:?}");
     assert!(
         said[0].starts_with(&head_words)
@@ -959,6 +1053,7 @@ fn a_cut_past_a_damaged_line_names_the_whole_lines_it_takes() {
         "a torn line takes no whole line with it: {}",
         said[0]
     );
+    assert_eq!(kept, None, "a crash's torn line is cut and gone, nothing kept");
 }
 
 /// Checks that a progress line is due every so many steps or so long.

@@ -140,7 +140,8 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
     let head = "feed-attest.log: trust ends at position 40 (byte 1400 of 2000); the 600 bytes \
                 after it are cut";
     let attested = Attested::Above(0);
-    let line = |floor, rebuilt| AttestCutLine { cut, floor, attested, rebuilt }.to_string();
+    let line =
+        |floor, rebuilt| AttestCutLine { cut, floor, attested, rebuilt, kept: None }.to_string();
     let rebuilt = |floor| {
         format!(
             "{head}; every cut line lies above the reclaim floor at position {floor} and is \
@@ -171,6 +172,35 @@ fn the_attest_cut_names_the_floor_and_its_side_and_the_unreadable_slots_their_co
         "feed-attest.log: 3 slots this daemon cannot read, the first at position 17; their \
          rows serve attest: null, the lines kept as written"
     );
+    // A damaged line's cut names the kept file after the head, and the
+    // lost arms name it as what restores the lines beside the backup.
+    let kept = Some(KeptName { byte: 1_400, k: 0 });
+    let kept_line =
+        |floor, rebuilt| AttestCutLine { cut, floor, attested, rebuilt, kept }.to_string();
+    let kept_head = format!("{head}, kept in feed-attest.log.cut-1400");
+    assert_eq!(
+        kept_line(40, true),
+        format!(
+            "{kept_head}; every cut line lies above the reclaim floor at position 40 and is \
+             rebuilt from the journal"
+        )
+    );
+    assert_eq!(
+        kept_line(42, true),
+        format!(
+            "{kept_head}; the lines between position 40 and the reclaim floor at position 42 \
+             are LOST unless restored from feed-attest.log.cut-1400 or the board directory's \
+             backup"
+        )
+    );
+    assert_eq!(
+        kept_line(40, false),
+        format!(
+            "{kept_head}; every cut line lies above the reclaim floor at position 40, but the \
+             journal refused their rebuild: they are LOST unless restored from \
+             feed-attest.log.cut-1400 or the board directory's backup"
+        )
+    );
 }
 
 /// Checks the edge's two other witnesses, in the case a crash leaves.
@@ -190,8 +220,9 @@ fn a_torn_line_or_the_board_term_names_the_side_the_last_trusted_position_cannot
                 after it are cut";
     let cut =
         |first, whole_after| Cut { valid_end: 1_400, len: 2_000, trusted: 40, first, whole_after };
-    let line =
-        |cut, attested, rebuilt| AttestCutLine { cut, floor: 50, attested, rebuilt }.to_string();
+    let line = |cut, attested, rebuilt| {
+        AttestCutLine { cut, floor: 50, attested, rebuilt, kept: None }.to_string()
+    };
     let rebuilt = format!(
         "{head}; every cut line lies above the reclaim floor at position 50 and is rebuilt \
          from the journal"

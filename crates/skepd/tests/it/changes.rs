@@ -1265,7 +1265,7 @@ fn a_position_carrying_a_malformed_document_name_answers_bare() {
         bare_to_owner_masked_from_guest(sd.port(), "with the derived index gone");
         assert_eq!(
             malformed_lines(&sd),
-            [log_line.clone()],
+            std::slice::from_ref(&log_line),
             "FINDING (row 11): the second open, the authority file alone:\n{}",
             sd.daemon().lines_said().join("\n")
         );
@@ -1436,6 +1436,7 @@ fn pre_feature_positions_answer_bare_entries() {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 2,
                 burned_seq: BurnedSeqPolicy::Rollback,
+                cut_damaged_tail: false,
             },
             checkpoint: CheckpointPolicy::EveryN(1024),
             salt: SaltSource::Seeded(0),
@@ -1550,6 +1551,7 @@ fn reclaim_below_the_head(dir: &Path, head: u64) {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(0),

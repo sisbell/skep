@@ -822,6 +822,18 @@ impl CommitsLog {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(with_file)?;
         let (records, valid_end) = parse_records(&bytes);
+        // The cut's class, judged before the cut: a crash tears the last
+        // line, its newline unwritten, and that line is cut and gone; a
+        // whole line that does not parse is damage, and it and every line
+        // after it — testimony this file alone holds — are kept beside the
+        // file, durably, before the cut.
+        let cut_kept = if valid_end < bytes.len() && bytes[valid_end..].contains(&b'\n') {
+            let kept = keep_dropped_lines(dir, SIDECAR_FILE, valid_end as u64, &bytes[valid_end..])
+                .map_err(with_file)?;
+            Some(kept)
+        } else {
+            None
+        };
         let cut = if valid_end < bytes.len() {
             // The torn (or corrupt) tail: truncate at the last whole record.
             // Anything the dropped lines described is re-covered as bare
@@ -833,6 +845,30 @@ impl CommitsLog {
             None
         };
         let len = valid_end as u64;
+        let head = engine.kernel().current_seq().0;
+        // The entry lines above the head, kept before the rewrite below
+        // drops them: each by the offsets the parse answered, the last one
+        // reaching the trusted end. Named by the first's byte.
+        let mut above_the_head: Vec<u8> = Vec::new();
+        let mut first_above: Option<usize> = None;
+        for (i, (offset, record)) in records.iter().enumerate() {
+            if let Record::Entry(at, _) = record {
+                if *at > head {
+                    let end = records.get(i + 1).map_or(valid_end, |(next, _)| *next);
+                    first_above.get_or_insert(*offset);
+                    above_the_head.extend_from_slice(&bytes[*offset..end]);
+                }
+            }
+        }
+        let foreign_kept = match first_above {
+            Some(byte) => {
+                let kept =
+                    keep_dropped_lines(dir, SIDECAR_FILE, byte as u64, above_the_head.as_slice())
+                        .map_err(with_file)?;
+                Some(kept)
+            }
+            None => None,
+        };
         let mut entries = BTreeMap::new();
         let mut offsets = BTreeMap::new();
         let mut min_since = 0u64;
@@ -845,7 +881,6 @@ impl CommitsLog {
                 Record::MinSince(s) => min_since = min_since.max(s),
             }
         }
-        let head = engine.kernel().current_seq().0;
         // Entries beyond this journal's head describe a different journal —
         // a live copy taken after its journal, an operator's swap, or the
         // testimony of commits a journal tail cut took — and are never
@@ -884,7 +919,7 @@ impl CommitsLog {
             let whole_after = whole_lines_past(&bytes[valid_end..], head);
             let (valid_end, len) = (valid_end as u64, bytes.len() as u64);
             let cut = Cut { valid_end, len, trusted: low, first: None, whole_after };
-            lines.say(Class::Failure, LogCutLine { cut });
+            lines.say(Class::Failure, LogCutLine { cut, kept: cut_kept });
         }
         // The region, pending: what the file does not cover, `(low, head]`,
         // is the walk thread's to re-cover and its landing's to write — the
@@ -936,9 +971,18 @@ impl CommitsLog {
         let held = log.entries.len();
         log.compact_inner(floor_fence.unwrap_or(0), stale_fence || foreign.is_some())
             .map_err(|failed| with_file(failed.into_io()))?;
-        if let Some(foreign) = foreign {
-            let what = "testimony";
-            lines.say(Class::Open, ForeignLinesLine { name: SIDECAR_FILE, foreign, head, what });
+        if let (Some(foreign), Some(kept)) = (foreign, foreign_kept) {
+            // No marker holds this file's testimony, so no journal file is a
+            // second copy of it: the kept file alone.
+            let line = ForeignLinesLine {
+                name: SIDECAR_FILE,
+                foreign,
+                head,
+                what: "testimony",
+                kept,
+                journal_kept: Vec::new(),
+            };
+            lines.say(Class::Open, line);
         }
         let dropped = held - log.entries.len();
         if let (Some(fence), true) = (floor_fence, dropped > 0) {
@@ -1550,15 +1594,96 @@ impl Cut {
     }
 }
 
+/// The name of a file an open kept dropped lines in (`operations.md` §3.6).
+///
+/// It is `{file}.cut-{byte}` beside the file, in the data directory, or
+/// `{file}.cut-{byte}.{k}` where that name and the `k − 1` before it
+/// already stand — the kernel's own spelling for a journal tail it keeps, so
+/// every kept file in the directory is found by one listing. `byte` is where
+/// in the file the dropped lines began: the byte trust ended at, for a cut,
+/// and the first line above the journal's head, for a purge. Rendered beside
+/// the file's name ([`KeptName::of`]); `Copy`, so the line types that carry
+/// it stay plain values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct KeptName {
+    /// The byte of the file the dropped lines began at.
+    pub byte: u64,
+    /// The name's suffix: `0` for the first name, `k` for `….{k}`.
+    pub k: u64,
+}
+
+impl KeptName {
+    /// Returns the kept file's name beside `file`.
+    pub(super) fn of(self, file: &str) -> String {
+        match self.k {
+            0 => format!("{file}.cut-{}", self.byte),
+            k => format!("{file}.cut-{}.{k}", self.byte),
+        }
+    }
+}
+
+/// Keeps the lines an open drops from `file` beside it, before they go.
+///
+/// It is the one keep every line file's open takes — `commits.log`'s and
+/// the derived files' (`LineFile`, `feed/derived.rs`) — for what it drops in class B
+/// (`operations.md` §3.6): a whole line that does not parse and every line
+/// after it, which a crash never leaves, and the entry lines above the
+/// journal's head, another journal's. A crash's torn last line is cut and
+/// gone. The bytes are written whole to the first of [`KeptName`]'s names
+/// that stands empty — never over a standing name, whatever it holds, so a
+/// crash between the keep and the drop leaves the first kept file beside the
+/// next open's — born `0600`, synced, and the directory synced after, so
+/// the bytes are durable before the cut or the rewrite that drops them
+/// runs. `dropped` is the bytes, read through: a slice of a file read whole,
+/// or the file itself from the byte on. Answers the name; the line that
+/// says the drop names it ([`LogCutLine`], [`ForeignLinesLine`]).
+///
+/// # Errors
+///
+/// The kept file's creation, write or sync, or the directory's sync,
+/// failing, each named `{kept}: {act}: {cause}` — fatal at the open, as
+/// every failure there is, so no drop runs over a keep that did not.
+pub(super) fn keep_dropped_lines(
+    dir: &Path,
+    file: &str,
+    byte: u64,
+    mut dropped: impl io::Read,
+) -> io::Result<KeptName> {
+    let mut kept = KeptName { byte, k: 0 };
+    let (mut out, name) = loop {
+        let name = kept.of(file);
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(dir.join(&name)) {
+            Ok(out) => break (out, name),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => kept.k += 1,
+            Err(e) => return Err(io::Error::new(e.kind(), format!("{name}: create: {e}"))),
+        }
+    };
+    let named = |act: &str, e: io::Error| io::Error::new(e.kind(), format!("{name}: {act}: {e}"));
+    io::copy(&mut dropped, &mut out).map_err(|e| named("write", e))?;
+    out.sync_all().map_err(|e| named("fsync", e))?;
+    drop(out);
+    #[cfg(unix)]
+    File::open(dir).and_then(|d| d.sync_all()).map_err(|e| named("fsync the directory of", e))?;
+    Ok(kept)
+}
+
 /// Entry lines a feed file's replay dropped, by count and position.
 ///
 /// A replay answers two such runs: the lines past the head this open read,
 /// another journal's (`LineFile::open`'s `Replayed`, and `commits.log`'s
 /// own open) — a live copy taken after its journal holds them, and after a
-/// journal tail cut that took intact frames they are the cut commits' own,
-/// said by the two files whose lines no open re-derives, `commits.log`'s
-/// testimony and `feed-attest.log`'s signatures ([`ForeignLinesLine`]); and
-/// the whole lines a cut takes with it ([`Cut`]'s `whole_after`).
+/// journal tail cut that took acknowledged commits they are the cut commits'
+/// own, kept beside the file ([`keep_dropped_lines`]) and said by the two
+/// files whose lines no open re-derives, `commits.log`'s testimony and
+/// `feed-attest.log`'s signatures ([`ForeignLinesLine`]); and the whole
+/// lines a cut takes with it ([`Cut`]'s `whole_after`), kept the same way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct EntryLines {
     /// How many entry lines were dropped.
@@ -1584,18 +1709,29 @@ impl EntryLines {
 /// The open's line for the lines past the head it dropped.
 ///
 /// The words: `{file} held {n} lines past the journal's head at position
-/// {h} (positions {a}–{b}): dropped — a live copy taken after its journal
-/// holds them; after a journal tail cut that took intact frames they are
-/// the cut commits' {what}, which a copy taken before this open still
-/// holds`. A pure value, pinned by `to_string()` in the unit suite;
-/// emitted under `Class::Open` by `commits.log`'s open and the attest
-/// store's.
+/// {h} (positions {a}–{b}): dropped and kept in {kept} — a live copy taken
+/// after its journal holds them; after a journal tail cut that took
+/// acknowledged commits they are the cut commits' {what}`, and, for the
+/// attest store where the journal's own open kept its cut tail at this
+/// start, `, whose markers the journal's kept file {seg} holds too` — the
+/// second copy of the signatures, never of `commits.log`'s testimony, which
+/// no marker carries. Never "a copy taken before this open still holds
+/// them": the open keeps what it drops. A pure value, pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Open` by
+/// `commits.log`'s open and the attest store's.
 pub(super) struct ForeignLinesLine {
     pub name: &'static str,
     pub foreign: EntryLines,
     pub head: u64,
     /// What the lines carry: `testimony` or `signatures`.
     pub what: &'static str,
+    /// The file the dropped lines were kept in, beside this one.
+    pub kept: KeptName,
+    /// The files the journal's open kept its cut tail in at this start.
+    ///
+    /// Empty where it kept none this start, and for `commits.log`, whose
+    /// lines no marker holds a copy of.
+    pub journal_kept: Vec<String>,
 }
 
 impl std::fmt::Display for ForeignLinesLine {
@@ -1604,11 +1740,23 @@ impl std::fmt::Display for ForeignLinesLine {
         write!(
             f,
             "{} held {lines} lines past the journal's head at position {} (positions \
-             {first}–{last}): dropped — a live copy taken after its journal holds them; after a \
-             journal tail cut that took intact frames they are the cut commits' {}, which a \
-             copy taken before this open still holds",
-            self.name, self.head, self.what
-        )
+             {first}–{last}): dropped and kept in {} — a live copy taken after its journal \
+             holds them; after a journal tail cut that took acknowledged commits they are the \
+             cut commits' {}",
+            self.name,
+            self.head,
+            self.kept.of(self.name),
+            self.what
+        )?;
+        match self.journal_kept.as_slice() {
+            [] => Ok(()),
+            [one] => write!(f, ", whose markers the journal's kept file {one} holds too"),
+            [first @ .., last] => write!(
+                f,
+                ", whose markers the journal's kept files {} and {last} hold too",
+                first.join(", ")
+            ),
+        }
     }
 }
 
@@ -1681,29 +1829,41 @@ impl std::fmt::Display for CutHead {
 /// The cut part is re-derived as bare entries, by the walk behind the
 /// listener from the last trusted position (the file's own recovery, which
 /// line 31 names for a failed append). Where trust ended at a damaged line
-/// and not a torn one, the line goes on with the whole lines the cut took
-/// with it: `; the cut took {n} whole lines with it, positions {a}–{b}: their
-/// keys and times are LOST unless the board directory's backup is restored` —
+/// and not a torn one — a whole line that does not parse, which no crash
+/// leaves — the cut bytes were kept beside the file first
+/// ([`keep_dropped_lines`]), and the line names the kept file after the
+/// head, `, kept in {kept}`, and goes on with the whole lines the cut took
+/// with it: `; the cut took {n} whole lines with it, positions {a}–{b}:
+/// their keys and times are LOST to the feed and stand in {kept} alone` —
 /// their testimony is held by no file the open reads, and the walk brings
 /// each back bare. Emitted under `Class::Failure` by [`CommitsLog::open`].
 pub(super) struct LogCutLine {
     pub cut: Cut,
+    /// The file the cut bytes were kept in: a damaged line's cut, never a
+    /// torn line's.
+    pub kept: Option<KeptName>,
 }
 
 impl std::fmt::Display for LogCutLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}; the cut part is re-derived as bare entries",
-            CutHead { name: SIDECAR_FILE, cut: self.cut }
-        )?;
-        match self.cut.whole_after {
-            Some(EntryLines { lines, first, last }) => write!(
+        write!(f, "{}", CutHead { name: SIDECAR_FILE, cut: self.cut })?;
+        if let Some(kept) = self.kept {
+            write!(f, ", kept in {}", kept.of(SIDECAR_FILE))?;
+        }
+        f.write_str("; the cut part is re-derived as bare entries")?;
+        match (self.cut.whole_after, self.kept) {
+            (Some(EntryLines { lines, first, last }), Some(kept)) => write!(
+                f,
+                "; the cut took {lines} whole lines with it, positions {first}–{last}: their keys \
+                 and times are LOST to the feed and stand in {} alone",
+                kept.of(SIDECAR_FILE)
+            ),
+            (Some(EntryLines { lines, first, last }), None) => write!(
                 f,
                 "; the cut took {lines} whole lines with it, positions {first}–{last}: their keys \
                  and times are LOST unless the board directory's backup is restored"
             ),
-            None => Ok(()),
+            (None, _) => Ok(()),
         }
     }
 }

@@ -431,6 +431,7 @@ fn a_home_minted_private_below_the_door_is_served_private_and_has_no_clearing_ac
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 2,
                 burned_seq: BurnedSeqPolicy::Rollback,
+                cut_damaged_tail: false,
             },
             checkpoint: CheckpointPolicy::EveryN(1024),
             salt: SaltSource::Seeded(0),

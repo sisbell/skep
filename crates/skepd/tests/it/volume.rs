@@ -284,7 +284,7 @@ fn a_refused_open_names_its_file_and_keeps_the_kind() {
             eprintln!("a privileged user reads a mode-000 file: the row 2 claim judges nothing");
             return;
         }
-        let refused = open_in_process(dir.path()).err().expect("the open is refused");
+        let refused = open_in_process(dir.path()).expect_err("the open is refused");
         set_permissions(&path, Permissions::from_mode(0o600)).expect("restore");
         assert_eq!(
             refused.to_string(),

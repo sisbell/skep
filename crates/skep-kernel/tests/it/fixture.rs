@@ -96,6 +96,7 @@ pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelCon
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint,
         salt: SaltSource::Seeded(GOLDEN_SALT_SEED),

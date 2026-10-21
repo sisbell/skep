@@ -195,6 +195,7 @@ fn cfg_retain(dir: &Path, retain: usize) -> KernelConfig {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::Manual,
         salt: SaltSource::Seeded(TEST_SEED),

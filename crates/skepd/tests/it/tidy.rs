@@ -420,7 +420,7 @@ fn root_reexports(lib: &str, top: &HashSet<&str>) -> HashSet<String> {
         if !top.contains(head) {
             continue;
         }
-        for item in items.split(|c: char| matches!(c, '{' | '}' | ',')) {
+        for item in items.split(['{', '}', ',']) {
             let item = item.trim().rsplit("::").next().unwrap_or("");
             if !item.is_empty() {
                 names.insert(item.to_string());

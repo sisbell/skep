@@ -17,7 +17,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `blobs/leases.log` — append-only JSON lines, tail-checked and compacted
   at open, and by the caller's runtime compaction once a log has passed a
   size trigger; a lost record reads as no upload, a lost lease as no
-  lease, cured by a re-PUT.
+  lease, cured by a re-PUT. A crash's torn last line is cut and gone; a
+  whole line that does not read is damage, cut with every whole line
+  after it and kept first beside the log as `{log}.cut-<byte>`, the
+  reading naming the file (`LogRead::kept`, `TailCut::damage`).
 - **The pruner's acts**, one method each — the lease read per hash, the
   rename aside under the caller's arm and the aside's removal after it,
   so no arm is held across the freeing of a file's blocks, each removal
@@ -26,7 +29,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   stores as they stand, which creates, cuts, renames and syncs nothing and
   answers what each log's reading found; and the pull's install of one
   file by the PUT's own order, no lease and no record, its refusal saying
-  whether anything was installed.
+  whether anything was installed. Beside them, the open's first check on
+  its own — `Store::refuse_links_and_special_files`, reading alone — so an
+  embedder refuses a root holding a link or a special file before any
+  write its start would otherwise make.
 
 The store knows a principal only as an opaque string, takes no lock of its
 caller's, writes no operator stream and reads no limits record: what bounds

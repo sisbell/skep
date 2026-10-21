@@ -204,7 +204,7 @@ mod scan;
 
 use std::fmt;
 use std::num::NonZeroU64;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -215,11 +215,14 @@ use skep_address::Address;
 use skep_engine::{Engine, EngineError, HistoryError, Recovery, World, WORLD_FORMAT};
 use skep_febe::OperationSurface;
 use skep_identity::HasIdentity;
+use skep_blobs::{LogRead, Store};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointError, CheckpointHeader, CheckpointPolicy, Durability,
-    InlineCheckpoint, KernelConfig, LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT, JOURNAL_FORMAT,
+    BurnedSeqPolicy, CheckpointError, CheckpointHeader, CheckpointPolicy, DamagedTail,
+    Durability, InlineCheckpoint, KernelConfig, LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT,
+    JOURNAL_FORMAT,
 };
-use skep_media::gate::{MediaGate, UnreadDeposit};
+use skep_media::cell::DESIGNATION;
+use skep_media::gate::{MediaGate, UnreadDeposit, STORE_DIR};
 use skep_media::index;
 use skep_media::limits::MAX_BLOB_BYTES;
 use skep_media::pools::{FetchPool, UploadPool};
@@ -240,6 +243,7 @@ use skep_core::auth::{
 use skep_core::codec::JsonCodec;
 use crate::history::History;
 use crate::limits::MAX_SMALL_BODY;
+use crate::tools;
 use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
@@ -435,13 +439,71 @@ pub enum DaemonError {
 impl std::fmt::Display for DaemonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DaemonError::Engine(e) => write!(f, "{e}"),
+            // The kernel's sentence names the two acts in the kernel's words;
+            // where the refusal is a damaged journal tail the daemon adds the
+            // spelling of its own one-start flag, which the kernel cannot
+            // know (`operations.md` §1.1 row 2).
+            DaemonError::Engine(e) => {
+                write!(f, "{e}")?;
+                if damaged_tail_in(e) {
+                    f.write_str(
+                        "; under skepd the one-start flag is --cut-damaged-tail \
+                         (SKEPD_CUT_DAMAGED_TAIL=true), given to one start and never kept in a \
+                         unit file",
+                    )?;
+                }
+                Ok(())
+            }
             DaemonError::Sidecar(e) => write!(f, "change-feed sidecar: {e}"),
             DaemonError::BlockedPrefixes(e) => write!(f, "blocked-prefix list: {e}"),
             DaemonError::Media(e) => write!(f, "blob store: {e}"),
             DaemonError::Registry(e) => write!(f, "registry seeding: {e}"),
         }
     }
+}
+
+/// Returns whether `e` is the kernel's refusal of a damaged journal tail.
+///
+/// The kernel carries it as `OpenError::Corruption`'s cause, a typed
+/// `DamagedTail` reached through the error chain: the engine's open wraps
+/// the kernel's refusal, whose `source` is the cause.
+fn damaged_tail_in(e: &EngineError) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = source {
+        if err.downcast_ref::<DamagedTail>().is_some() {
+            return true;
+        }
+        source = err.source();
+    }
+    false
+}
+
+/// What the binary's start asked of the open, beyond the two option types.
+///
+/// They are the operator's words for one start (`operations.md` §3.1):
+/// `cut_damaged_tail` is `--cut-damaged-tail` (`SKEPD_CUT_DAMAGED_TAIL`),
+/// the acceptance of a damaged journal tail's cut, which the open otherwise
+/// refuses — threaded into the kernel's own knob (`Durability::Fsync`'s
+/// `cut_damaged_tail`); `create` is `--create`, the word under which the
+/// binary begins a board where none stands, which [`Daemon::open`] does
+/// unasked for an embedder or a test. Built from its defaults and set:
+/// `#[non_exhaustive]`, so a knob added here arrives at its default.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StartOptions {
+    /// Accept the cut of a damaged journal tail at this open.
+    ///
+    /// The kernel keeps every byte of the tail beside the journal first and
+    /// hands out no position it claimed; the open says the cut as a
+    /// failure, naming the kept files. A clean tail under it is cut as every
+    /// open cuts a crash's, and the open says the flag was not needed.
+    pub cut_damaged_tail: bool,
+    /// Whether the start was told to begin a board where none stands.
+    ///
+    /// The open begins one either way where none stands (`Recovery::began`);
+    /// this decides the line said of it — the expected landing under the
+    /// word, the tell of a wrong directory without it.
+    pub create: bool,
 }
 
 /// The error's chain: `source` exposes the cause as a link.
@@ -533,6 +595,11 @@ pub const MAX_CONCURRENT_WRITES: usize = 4;
 /// surface as a request→reply function over this state, with no socket in
 /// its signature. Not a pure one: see [`Daemon::route`].
 pub struct Daemon {
+    /// The data directory, as the open was handed it.
+    ///
+    /// The standing line lists the kept files beside the journal and the
+    /// logs from it at each tick (`tools::kept_files`).
+    data_dir: PathBuf,
     engine: Engine,
     /// M10's front door: the operation surface every frame executes against.
     ///
@@ -897,6 +964,31 @@ impl Daemon {
         opts: AuthOptions,
         media: MediaOptions,
     ) -> Result<Daemon, DaemonError> {
+        Self::open_started(data_dir, opts, media, StartOptions::default())
+    }
+
+    /// Opens as [`Daemon::open_configured`] does, with the start's own words.
+    ///
+    /// The start's options ([`StartOptions`]) are the binary's: the
+    /// acceptance of a damaged journal tail's cut, and whether the start was
+    /// told to begin a board. The three doors above delegate here under the
+    /// defaults — no cut accepted, no board asked for — so all four carry
+    /// one contract, and an embedder's open begins a board where none stands
+    /// as it always has.
+    ///
+    /// # Errors
+    ///
+    /// [`Daemon::open_with`]'s: the [`DaemonError`] naming the subsystem
+    /// that refused — [`DaemonError::Engine`] carrying the kernel's refusal
+    /// of a damaged tail where the cut was not accepted, and
+    /// [`DaemonError::Media`] where `blobs/` holds a link or a special file,
+    /// refused ahead of the engine's open.
+    pub fn open_started(
+        data_dir: impl AsRef<Path>,
+        opts: AuthOptions,
+        media: MediaOptions,
+        start: StartOptions,
+    ) -> Result<Daemon, DaemonError> {
         // The production salt (`SKJ4`): OS entropy per transaction, the one
         // source a daemon opens under — a seeded stream is a pure function
         // of the seed and the position, which is exactly the predictability
@@ -904,10 +996,28 @@ impl Daemon {
         // source reaches a daemon through the test seam alone
         // (`Daemon::open_seeded`, compiled only under `test-hooks` or in this
         // crate's own unit tests).
-        Self::open_under(data_dir.as_ref(), opts, media, SaltSource::Os)
+        Self::open_under_started(data_dir.as_ref(), opts, media, SaltSource::Os, start)
     }
 
-    /// Opens under a named salt source: [`Daemon::open_configured`]'s body.
+    /// Opens under a named salt source, the start's options at their defaults.
+    ///
+    /// It is the test seam's door (`Daemon::open_seeded`), a shim over
+    /// [`Daemon::open_under_started`], compiled where that door is.
+    ///
+    /// # Errors
+    ///
+    /// [`Daemon::open_under_started`]'s.
+    #[cfg(any(test, feature = "test-hooks"))]
+    fn open_under(
+        data_dir: &Path,
+        opts: AuthOptions,
+        media_opts: MediaOptions,
+        salt: SaltSource,
+    ) -> Result<Daemon, DaemonError> {
+        Self::open_under_started(data_dir, opts, media_opts, salt, StartOptions::default())
+    }
+
+    /// Opens under a named salt source: [`Daemon::open_started`]'s body.
     ///
     /// That door reaches it with [`SaltSource::Os`] and the test seam
     /// `Daemon::open_seeded` with a seeded stream. Private, so no caller
@@ -922,14 +1032,19 @@ impl Daemon {
     /// the seeding check refuses the genesis and
     /// [`DaemonError::BlockedPrefixes`] where the supply file `opts` names
     /// cannot be read as a list, both before anything under `data_dir` is
-    /// touched; then [`DaemonError::Engine`] where the engine cannot genesis
-    /// or recover, [`DaemonError::Media`] where the blob store cannot be
-    /// opened, and [`DaemonError::Sidecar`] where the change feed cannot be.
-    fn open_under(
+    /// touched; then [`DaemonError::Media`] where `blobs/` holds a link or a
+    /// special file, decided by reading alone and so ahead of the engine's
+    /// open (`operations.md` §3.1 step 3); then [`DaemonError::Engine`]
+    /// where the engine cannot genesis or recover — a damaged journal tail
+    /// among its refusals, unless `start` accepts the cut —
+    /// [`DaemonError::Media`] where the blob store cannot be opened, and
+    /// [`DaemonError::Sidecar`] where the change feed cannot be.
+    fn open_under_started(
         data_dir: &Path,
         opts: AuthOptions,
         media_opts: MediaOptions,
         salt: SaltSource,
+        start: StartOptions,
     ) -> Result<Daemon, DaemonError> {
         // The version line, the open's first (§3.4 step 6's gap): the
         // build's version and the three format stamps it reads, before the
@@ -954,6 +1069,9 @@ impl Daemon {
                 journal_path: data_dir.to_path_buf(),
                 retain_checkpoints: RETAINED_CHECKPOINTS,
                 burned_seq: BurnedSeqPolicy::Rollback,
+                // The operator's word for this one start, where it was
+                // given: the kernel's knob, read once at the open.
+                cut_damaged_tail: start.cut_damaged_tail,
             },
             checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
                 Box::new(CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS)),
@@ -982,6 +1100,29 @@ impl Daemon {
         // below, whose claimant the list is compared against (AUTH-4.36
         // step 4b).
         let auth_start = AuthStart::read(opts).map_err(DaemonError::BlockedPrefixes)?;
+        // The blob store's read-only refusal, ahead of the engine's open
+        // (`operations.md` §3.1 step 3, PATTERNS P13: the refusal at the
+        // earliest act the fault is decidable from): a link or a special
+        // file under `blobs/` is decided by reading alone, so it is refused
+        // here, before the kernel's lock is taken, a stray `checkpoint.tmp`
+        // removed or the journal's tail cut — a start refused for it leaves
+        // the directory as it found it. The store's own open makes the check
+        // again as its precondition; a `blobs/` that does not stand holds
+        // nothing to refuse.
+        Store::refuse_links_and_special_files(data_dir.join(STORE_DIR))
+            .map_err(DaemonError::Media)?;
+        // Whether a store stood under the directory before this open makes
+        // anything there — its designation directory, the first thing a
+        // deposit makes, or either log (`BlobLogLines`): a log absent beside
+        // one is a loss the open says; beside a root that held no deposit
+        // and no log, a first start's. Read here, ahead of the open that
+        // begins the absent logs.
+        let store_stood = {
+            let root = data_dir.join(STORE_DIR);
+            [DESIGNATION, "uploads.log", "leases.log"]
+                .iter()
+                .any(|name| std::fs::symlink_metadata(root.join(name)).is_ok())
+        };
         // The engine's open, timed: the daemon's own `Instant` around the
         // call, the figure the recovery's landing carries.
         let began = Instant::now();
@@ -1005,11 +1146,17 @@ impl Daemon {
         // The beginning (AUTH-2.86's family of startup reports): where no
         // journal stood in the directory the landing above reads `recovered
         // from genesis` all the same, so the open says it began a board —
-        // the expected line on a fresh board's first start, and on a board
-        // that had a journal the one tell that the directory opened is not
-        // where it lives, before a write lands beside the real journal.
+        // under `--create`, the expected landing of a first start; without
+        // the word, an embedder's or a test's open, which begins one unasked,
+        // and on a board that had a journal the one tell that the directory
+        // opened is not where it lives, before a write lands beside the real
+        // journal. The binary refuses to reach here without the word.
         if engine.recovery().is_some_and(|recovery| recovery.began) {
-            say_open_line(BeganLine);
+            if start.create {
+                say_open_line(BeganUnderCreateLine);
+            } else {
+                say_open_line(BeganLine);
+            }
         }
         // The stray temp file (AUTH-2.86's family of startup reports): a
         // checkpoint a crash or a full volume left half-written, which the
@@ -1029,18 +1176,33 @@ impl Daemon {
         // read before anything is served — said here as the stray file is,
         // and nothing where nothing was cut, which is every open after a
         // clean close. Of two arms (`TailCutLine`): a crash's or a kill's
-        // tail, said under `Class::Open` through the door; and a tail holding
-        // intact frames no torn write leaves (`Recovery::tail_cut_intact`),
-        // where the cut may have taken an acknowledged write — at the
-        // position its marker claimed, its bytes kept beside the journal in
-        // the files the line names (`Recovery::tail_cut_kept`) — said as the
-        // failure it is. The inventory reports the same bytes as
-        // `journal.tail_cut`.
-        if let Some(cut) = TailCutLine::of(engine.recovery(), engine.kernel().current_seq()) {
+        // tail, said under `Class::Open` through the door; and a damaged
+        // tail cut under `--cut-damaged-tail` — intact frames no torn write
+        // leaves among its bytes (`Recovery::tail_cut_intact`), or more of
+        // them than one append leaves — where the cut may have taken an
+        // acknowledged write: at the position its marker claimed, its bytes
+        // kept beside the journal in the files the line names
+        // (`Recovery::tail_cut_kept`), the order started past the claim
+        // (`Kernel::order_floor`) — said as the failure it is. A tail the
+        // open refused never reaches here: the engine's open refused above.
+        // The inventory reports the same bytes as `journal.tail_cut`.
+        let floor = engine.kernel().order_floor();
+        if let Some(cut) = TailCutLine::of(engine.recovery(), engine.kernel().current_seq(), floor)
+        {
             match cut.class() {
                 Class::Open => say_open_line(cut),
                 class => notice::emit(class, cut),
             }
+        }
+        // The flag given to a start that needed none: said, and the start
+        // goes on — a clean tail, or a crash's, is cut under it as under
+        // no flag, nothing kept; the word is for one start and must not
+        // stand in a unit file (`operations.md` §3.1 step 3).
+        if start.cut_damaged_tail && engine.recovery().is_none_or(|r| r.tail_cut_kept.is_empty()) {
+            say_open_line(
+                "--cut-damaged-tail was given and no damaged tail stood: nothing was kept; the \
+                 flag is for one start — remove it from the command line or the unit file",
+            );
         }
         // The start point's size, read once here: the byte bound of the
         // cadence and the floor in force both scale by a checkpoint's size,
@@ -1080,6 +1242,28 @@ impl Daemon {
         let uploads_source = media_opts.uploads_source;
         let media = MediaGate::open_with(data_dir, media_opts).map_err(DaemonError::Media)?;
         media.note_checkpoint(start_point_len);
+        // What the store's open found of its two logs (`Store::opened`), said
+        // here — the store writes no line of its own (`operations.md` §4 row
+        // 19): a torn last line, a crash's, as the open's own landing; a
+        // damaged line's cut, kept beside the log, the lines read as no
+        // record and a log absent beside a standing store as the failures
+        // they are, each lost lease or record reading as none. Lease damage
+        // halts the pruner's unlink pass for this uptime, below, once the
+        // daemon stands.
+        let opened = media.store().opened();
+        let logs = [
+            BlobLogLines { read: &opened.uploads_log, store_stood, each: "upload" },
+            BlobLogLines { read: &opened.leases_log, store_stood, each: "lease" },
+        ];
+        for log in &logs {
+            for (class, line) in log.lines() {
+                match class {
+                    Class::Open => say_open_line(line),
+                    class => notice::emit(class, line),
+                }
+            }
+        }
+        let lease_damage = logs[1].damage();
         say_open_line(media.startup_line());
         // The volume's free space beside the floor just named (m4): a start
         // below the floor, or one whose read the host refuses, says so here,
@@ -1089,6 +1273,28 @@ impl Daemon {
         say_open_line(UploadsLine { open: media.uploads_open(), source: uploads_source });
         let commits = Commits::open(data_dir, &engine, Arc::clone(media.index()))
             .map_err(DaemonError::Sidecar)?;
+        // The kept files beside the journal and the logs (`operations.md`
+        // §1.1 m11): a standing state, listed and said at every open while
+        // any stands — after every open of this start that keeps, the
+        // journal's, the blob logs' and the change feed's, so the ones this
+        // open kept are among them, each already said by its own line —
+        // until the operator removes them.
+        let kept_files = match tools::kept_files(data_dir) {
+            Ok(kept) => kept,
+            Err(e) => {
+                notice::emit(
+                    Class::Failure,
+                    format_args!(
+                        "the kept files beside the journal and the logs could not be listed: \
+                         {e}; the standing line lists them again at its next tick"
+                    ),
+                );
+                Vec::new()
+            }
+        };
+        if !kept_files.is_empty() {
+            say_open_line(KeptFilesLine { kept: &kept_files });
+        }
         // The read predicate (PUB-1.31; PUB-6.39's one-per-request shape).
         // The live front door is given no consult: M10 answers
         // `World::readable` — published ∨ subtree ∨ grant, with the version
@@ -1124,6 +1330,7 @@ impl Daemon {
         let fetches = FetchPool::new(&media, EDGE_HOLD_DOWN);
         let uploads = UploadPool::new(&media, EDGE_HOLD_DOWN);
         let daemon = Daemon {
+            data_dir: data_dir.to_path_buf(),
             engine,
             febe,
             codec: JsonCodec,
@@ -1160,6 +1367,15 @@ impl Daemon {
             #[cfg(any(test, feature = "test-hooks"))]
             said,
         };
+        // The pruner's unlink pass, halted for the uptime where the lease
+        // log's open found damage (`operations.md` §4 row 19): the leases it
+        // lost hold no file in memory, so a pass would unlink the files
+        // their depositors hold as unreferenced. Said once here; the pass's
+        // own line carries the halt hourly (row 34).
+        if let Some(reason) = lease_damage {
+            daemon.pruner.halt_the_unlink_pass(reason.clone());
+            daemon.say(Class::Failure, PrunerHaltedByLeaseDamageLine { reason: &reason });
+        }
         // The crash window, closed before anything is served (signed ops;
         // see the method): a claimed board whose journal holds no head owes
         // `H.1`, and the open is where it is paid.
@@ -1720,6 +1936,9 @@ impl Daemon {
                 .map(|(free_space, floor)| FloorBinding { free_space, floor }),
             unread_deposit: self.media.unread_deposit(),
             claimed_permissive: self.auth.cfg.claimed_permissive(self.board_is_claimed()),
+            // (11) the kept files beside the journal and the logs, listed
+            // afresh: a listing the host refuses lists none this tick.
+            kept_files: tools::kept_files(&self.data_dir).unwrap_or_default(),
         };
         if line.stands() {
             self.say(Class::Standing, line);
@@ -2152,7 +2371,7 @@ impl Daemon {
                             base: newest.map(LandedBase::from),
                             step: *step,
                             cause,
-                            after,
+                            after: Box::new(after),
                         }
                     }
                     CheckpointError::Io(_)
@@ -2511,7 +2730,10 @@ enum FailureLine<'a> {
         /// The step's cause.
         cause: &'a std::io::Error,
         /// What the thread's re-reads off the landed base moved.
-        after: AfterLanding,
+        ///
+        /// Boxed: the re-reads' figures outweigh the other arm's by far,
+        /// and the line is rendered once and dropped.
+        after: Box<AfterLanding>,
     },
 }
 
@@ -2957,6 +3179,201 @@ impl fmt::Display for BeganLine {
     }
 }
 
+/// The open's beginning under `--create`: the first start's landing.
+///
+/// It is [`BeganLine`]'s fact under the word the binary begins a board
+/// under ([`StartOptions`]'s `create`): no tell of a wrong directory, since
+/// the start asked for a board here. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
+struct BeganUnderCreateLine;
+
+impl fmt::Display for BeganUnderCreateLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "no journal stood in the data directory: this open began a new board at genesis, as \
+             --create asked; start it again without --create",
+        )
+    }
+}
+
+/// The kept files beside the journal and the logs, said at an open.
+///
+/// They are the `*.cut-*` files a standing state is made of
+/// (`operations.md` §1.1 m11; `tools::kept_files`): the journal's
+/// `seg-{n}.wal.cut-{byte}`, the change feed's `{file}.cut-{byte}` and the
+/// blob store's `blobs/{log}.cut-{byte}`, each holding bytes an open cut as
+/// damage and kept — this open's among them, each already said by its own
+/// line — listed at every open while any stands, and by the standing line
+/// hourly, until the operator removes them. The words: `kept files beside
+/// the journal and the logs: {n} — {names}; each holds bytes an open cut as
+/// damage: copy them off the volume, and remove them once the writes they
+/// held are accounted for`. A pure value the unit suite pins by
+/// `to_string()`; emitted under `Class::Open` through [`say_open_line`].
+struct KeptFilesLine<'a> {
+    kept: &'a [String],
+}
+
+impl fmt::Display for KeptFilesLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "kept files beside the journal and the logs: {} — {}; each holds bytes an open cut \
+             as damage: copy them off the volume, and remove them once the writes they held are \
+             accounted for",
+            self.kept.len(),
+            self.kept.join(", ")
+        )
+    }
+}
+
+/// The pruner's halt for the uptime where the lease log's open found damage.
+///
+/// It is `operations.md` §4 row 19's consequence said once at the open: the
+/// leases the open lost hold no file in memory, so the unlink pass would
+/// take the files their depositors hold as unreferenced. The words:
+/// `pruner: the unlink pass is halted for this uptime — {reason}: a lease
+/// the open lost holds no file in memory, so the pass would unlink files
+/// their depositors hold; expired partials are still removed and the logs
+/// compacted at each pass; the next start, its open reading the log whole,
+/// lifts it`. The pass's own line carries the halt hourly (§1.1 row 34). A
+/// pure value the unit suite pins by `to_string()`; emitted under
+/// `Class::Failure`.
+struct PrunerHaltedByLeaseDamageLine<'a> {
+    reason: &'a str,
+}
+
+impl fmt::Display for PrunerHaltedByLeaseDamageLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "pruner: the unlink pass is halted for this uptime — {}: a lease the open lost holds \
+             no file in memory, so the pass would unlink files their depositors hold; expired \
+             partials are still removed and the logs compacted at each pass; the next start, \
+             its open reading the log whole, lifts it",
+            self.reason
+        )
+    }
+}
+
+/// A blob log's open, as the daemon says it (`operations.md` §4 row 19).
+///
+/// The store answers what its open found of each log and says none of it
+/// (`Store::opened`, `LogRead`); these are the lines, one per cause, in the
+/// grammar's classes. A torn last line — a crash's or a kill's, its newline
+/// unwritten, never answered over — is the open's own landing: `{log}: a
+/// torn last line cut ({n} bytes), a crash's or a kill's, never answered
+/// over; every acknowledged {each} stands`. A damaged cut — the first
+/// untrusted line whole, which no crash leaves — is a failure naming the
+/// kept file: `{log}: trust ends at byte {at} of {len}; the {n} bytes after
+/// it are cut, kept in {kept}: a whole line that does not read, which no
+/// crash leaves — damage to {each}s the store answered over, {m} whole lines
+/// after it cut with it; each lost {each} reads as none, cured by a re-PUT`.
+/// Lines read as no record are a failure: `{log}: {n} lines read as no
+/// {each}: lines another build wrote, or damaged ones, removed by the open's
+/// compaction; each reads as none, cured by a re-PUT`. A log absent beside a
+/// standing store — one whose designation directory or other log stood
+/// before the open ([`BlobLogLines::store_stood`]) — is one: `{log} was
+/// absent beside a standing store, and is begun empty: every {each} it held
+/// reads as none, cured by a re-PUT`. The
+/// leases' failures are the pruner's halt's reasons
+/// ([`BlobLogLines::damage`]). A pure value the unit suite pins.
+struct BlobLogLines<'a> {
+    read: &'a LogRead,
+    /// Whether a store stood before the open: its designation directory,
+    /// the first thing a deposit makes, or either log stood under `blobs/`.
+    ///
+    /// A log absent beside one is a loss — a copy that stopped short, a log
+    /// removed; beside a root that held no deposit and no log, a first
+    /// start's, which the open begins and says nothing of.
+    store_stood: bool,
+    /// What a line of the log is: `lease` or `upload`.
+    each: &'static str,
+}
+
+impl BlobLogLines<'_> {
+    /// Returns the lines to say, each with its class, in the order they
+    /// stand.
+    fn lines(&self) -> Vec<(Class, String)> {
+        let name = &self.read.name;
+        let each = self.each;
+        let mut lines = Vec::new();
+        if let Some(cut) = self.read.cut {
+            if cut.damage() {
+                let kept = self.read.kept.as_deref().unwrap_or("no file");
+                lines.push((
+                    Class::Failure,
+                    format!(
+                        "{name}: trust ends at byte {} of {}; the {} bytes after it are cut, kept \
+                         in {kept}: a whole line that does not read, which no crash leaves — \
+                         damage to {each}s the store answered over, {} whole lines after it cut \
+                         with it; each lost {each} reads as none, cured by a re-PUT",
+                        cut.at,
+                        cut.len,
+                        cut.bytes(),
+                        cut.lines_after
+                    ),
+                ));
+            } else {
+                lines.push((
+                    Class::Open,
+                    format!(
+                        "{name}: a torn last line cut ({} bytes), a crash's or a kill's, never \
+                         answered over; every acknowledged {each} stands",
+                        cut.bytes()
+                    ),
+                ));
+            }
+        }
+        if self.read.unread > 0 {
+            lines.push((
+                Class::Failure,
+                format!(
+                    "{name}: {} lines read as no {each}: lines another build wrote, or damaged \
+                     ones, removed by the open's compaction; each reads as none, cured by a \
+                     re-PUT",
+                    self.read.unread
+                ),
+            ));
+        }
+        if self.read.absent && self.store_stood {
+            lines.push((
+                Class::Failure,
+                format!(
+                    "{name} was absent beside a standing store, and is begun empty: every {each} \
+                     it held reads as none, cured by a re-PUT"
+                ),
+            ));
+        }
+        lines
+    }
+
+    /// Returns the damage the open found, as the pruner's halt names it.
+    ///
+    /// It is the first of a damaged cut, lines read as no record and a log
+    /// absent beside a standing store; `None` where the log read whole or
+    /// lost a torn line alone.
+    fn damage(&self) -> Option<String> {
+        let name = &self.read.name;
+        if let Some(cut) = self.read.cut.filter(|cut| cut.damage()) {
+            let kept = self.read.kept.as_deref().unwrap_or("no file");
+            return Some(format!(
+                "{name}'s open cut a damaged line and the {} whole lines after it, kept in {kept}",
+                cut.lines_after
+            ));
+        }
+        if self.read.unread > 0 {
+            return Some(format!(
+                "{name}'s open read {} lines as no {}",
+                self.read.unread, self.each
+            ));
+        }
+        if self.read.absent && self.store_stood {
+            return Some(format!("{name} was absent beside a standing store"));
+        }
+        None
+    }
+}
+
 /// The tail cut (`operations.md` §1.1 m3; §4 row 8).
 ///
 /// It is rendered in the operator stream's words from the engine's account
@@ -2968,19 +3385,25 @@ impl fmt::Display for BeganLine {
 /// leaves (`Recovery::tail_cut_intact`). Two arms, since the two say
 /// opposite things of the acknowledged writes:
 ///
-/// * none intact — the tail a crash or a kill left, a write caught before
-///   its commit was durable and so never acknowledged: `Class::Open`;
-/// * some intact — a commit marker whose records failed their check, or a
-///   frame no writer of this format writes: the signature of rot in, or a
-///   rewrite of, the journal's last transaction (the kernel's damage
-///   model), where the cut may have taken a write this daemon acknowledged
-///   — `Class::Failure`, naming which: the position an intact marker in the
-///   cut claimed (`Recovery::tail_cut_claimed`), the one that write's own
-///   acknowledgement and the change feed named it by, where the claim lies
-///   above the head; else a position above the head, unnamed — and where the
-///   bytes still are: the files the kernel's open kept them in beside the
-///   journal before it cut a byte (`Recovery::tail_cut_kept`), which no open
-///   reads, moves or removes — and the act.
+/// * a crash's tail — nothing kept: a write caught before its commit was
+///   durable and so never acknowledged, which every open cuts of its own
+///   accord: `Class::Open`;
+/// * a damaged tail, cut under `--cut-damaged-tail` and kept beside the
+///   journal first (`Recovery::tail_cut_kept`) — intact frames among its
+///   bytes, a commit marker whose records failed their check or a frame no
+///   writer of this format writes, the signature of rot in or a rewrite of
+///   the journal's last transaction; or no frame of it intact and more of
+///   it than one append leaves, decay over the trailing bytes — where the
+///   cut may have taken a write this daemon acknowledged: `Class::Failure`,
+///   naming which — the position an intact marker in the cut claimed
+///   (`Recovery::tail_cut_claimed`), the one that write's own acknowledgement
+///   and the change feed named it by, where the claim lies above the head;
+///   else a position above the head, unnamed — where the bytes still are,
+///   the kept files, which no open reads, moves or removes; what the order
+///   does next — the positions up to the claim left a gap and the next
+///   write taking the one after it (`Kernel::order_floor`), so a client
+///   holding that acknowledgement is answered a missing write and never
+///   another's — and the act. A tail the open refused never reaches here.
 ///
 /// A pure value the unit suite pins by `to_string()` and
 /// [`TailCutLine::class`].
@@ -2993,18 +3416,22 @@ struct TailCutLine {
     claimed: Option<Seq>,
     /// The committed head the open left: the cut lies past it.
     head: Seq,
+    /// The order's floor: the position the next write takes the one after.
+    floor: Seq,
     /// The files in the data directory the cut bytes were kept in, by name.
     kept: Vec<String>,
 }
 
 impl TailCutLine {
-    /// Returns the line from the engine's account and the head the open left.
+    /// Returns the line from the engine's account, the head and the floor.
     ///
     /// The head is read before anything is served, so it is the recovered
-    /// committed head. `None` where nothing was cut, which is every open
-    /// after a clean close, and where the engine gave no account
-    /// (`Durability::InMemory`, which no daemon opens under).
-    fn of(recovery: Option<&Recovery>, head: Seq) -> Option<TailCutLine> {
+    /// committed head; the floor is the kernel's (`Kernel::order_floor`),
+    /// the head save under an accepted cut whose claim the kernel trusted.
+    /// `None` where nothing was cut, which is every open after a clean
+    /// close, and where the engine gave no account (`Durability::InMemory`,
+    /// which no daemon opens under).
+    fn of(recovery: Option<&Recovery>, head: Seq, floor: Seq) -> Option<TailCutLine> {
         let recovery = recovery?;
         (recovery.tail_cut > 0).then(|| TailCutLine {
             bytes: recovery.tail_cut,
@@ -3012,16 +3439,19 @@ impl TailCutLine {
             from: recovery.tail_cut_from.clone(),
             claimed: recovery.tail_cut_claimed,
             head,
+            floor,
             kept: recovery.tail_cut_kept.clone(),
         })
     }
 
     /// Returns the class the line is said under.
     ///
-    /// It is the report's own, `Class::Open`, for a crash's tail;
-    /// `Class::Failure` where the cut may have taken an acknowledged write.
+    /// It is the report's own, `Class::Open`, for a crash's tail — nothing
+    /// kept, no intact frame; `Class::Failure` for a damaged tail's accepted
+    /// cut, which kept its bytes, where the cut may have taken an
+    /// acknowledged write.
     fn class(&self) -> Class {
-        if self.intact == 0 {
+        if self.intact == 0 && self.kept.is_empty() {
             Class::Open
         } else {
             Class::Failure
@@ -3031,26 +3461,37 @@ impl TailCutLine {
 
 impl fmt::Display for TailCutLine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let TailCutLine { bytes, intact, from, claimed, head, kept } = self;
+        let TailCutLine { bytes, intact, from, claimed, head, floor, kept } = self;
         write!(f, "journal tail cut ({bytes} bytes, ")?;
         if let Some((segment, byte)) = from {
             write!(f, "beginning at byte {byte} of {segment}, ")?;
         }
         write!(f, "past position {head})")?;
-        if *intact == 0 {
+        if self.class() == Class::Open {
             return f.write_str(
                 ": the un-acked tail a crash or a kill left past the last committed marker — a \
                  write caught before its commit was durable, never acknowledged — removed by the \
                  open; every acknowledged write stands",
             );
         }
-        write!(
-            f,
-            ", {intact} of its frames intact on disk — a commit marker whose records failed their \
-             check, or a frame no writer of this format writes, the signature of rot in or a \
-             rewrite of the journal's last transaction rather than of a crash: a write this \
-             daemon acknowledged may be among the cut, "
-        )?;
+        if *intact > 0 {
+            write!(
+                f,
+                ", {intact} of its frames intact on disk — a commit marker whose records failed \
+                 their check, or a frame no writer of this format writes, the signature of rot \
+                 in or a rewrite of the journal's last transaction rather than of a crash — cut \
+                 under --cut-damaged-tail: a write this daemon acknowledged may be among the \
+                 cut, "
+            )?;
+        } else {
+            write!(
+                f,
+                ", no frame of it intact and more of it than one interrupted append leaves — \
+                 decay over the journal's trailing bytes, or bytes no writer left, rather than a \
+                 crash — cut under --cut-damaged-tail: a write this daemon acknowledged may be \
+                 among the cut, "
+            )?;
+        }
         // The claimed position names the write only where it lies above the
         // head: a claim at or below it is a position that stands, and naming
         // it would send an operator after a write the journal still holds.
@@ -3062,11 +3503,9 @@ impl fmt::Display for TailCutLine {
             _ => write!(f, "at a position above {head}")?,
         }
         // Where the bytes are: the files the kernel's open kept them in
-        // before it cut one, where its tail held such a frame — which every
-        // tail this arm says does. A kept list the kernel left empty says
-        // what a copy taken before the open holds instead.
+        // before it cut one, which every accepted cut does.
         match kept.as_slice() {
-            [] => f.write_str("; a copy taken before this open holds the bytes")?,
+            [] => {}
             [one] => write!(
                 f,
                 "; the open kept the cut bytes in {one}, beside the journal in the data \
@@ -3080,6 +3519,19 @@ impl fmt::Display for TailCutLine {
                  volume before you remove them",
                 first.join(", ")
             )?,
+        }
+        // The order: the claimed positions are never handed out again where
+        // the kernel trusted the claim, a gap the next write lands past.
+        if floor > head {
+            write!(
+                f,
+                "; positions ({head}, {floor}] are left a gap and the next write takes position \
+                 {}, so a client holding that acknowledgement is answered a missing write, never \
+                 another's",
+                floor.0.saturating_add(1)
+            )?;
+        } else {
+            write!(f, "; the next write takes position {}", head.0.saturating_add(1))?;
         }
         f.write_str("; check the volume and its device")
     }
@@ -3330,7 +3782,9 @@ impl fmt::Display for JournalDamageSite<'_> {
 ///
 /// It is in the operator stream's words: one clause per standing bad state,
 /// each by name with its position or file, joined by `; ` in the rates'
-/// order — `the write path is halted since position {p} (feed-attest.log)`;
+/// order — ending, where any stand, with the kept files beside the journal
+/// and the logs, `kept files beside the journal and the logs: {n}
+/// ({names})` — `the write path is halted since position {p} (feed-attest.log)`;
 /// `the kernel is poisoned since position {p}`, the position the kernel's
 /// halt line named; `a history read found the journal unreadable at
 /// position {p}` or `… ({error})` (the damage [`HistoryDamageLine`] said,
@@ -3387,6 +3841,12 @@ pub(super) struct StandingLine {
     pub(super) unread_deposit: Option<UnreadDeposit>,
     /// Whether the board is `CLAIMED-PERMISSIVE`.
     pub(super) claimed_permissive: bool,
+    /// The kept files beside the journal and the logs, listed at the tick.
+    ///
+    /// They are `tools::kept_files`'s: the `*.cut-*` files an open kept
+    /// bytes it cut as damage in, a standing state until the operator
+    /// removes them (`operations.md` §1.1 m11).
+    pub(super) kept_files: Vec<String>,
 }
 
 /// The floor's binding at the tick: the free space read, and the floor.
@@ -3414,6 +3874,7 @@ impl StandingLine {
             || self.floor.is_some()
             || self.unread_deposit.is_some()
             || self.claimed_permissive
+            || !self.kept_files.is_empty()
     }
 }
 
@@ -3463,6 +3924,13 @@ impl fmt::Display for StandingLine {
         }
         if self.claimed_permissive {
             clauses.push("CLAIMED-PERMISSIVE".to_string());
+        }
+        if !self.kept_files.is_empty() {
+            clauses.push(format!(
+                "kept files beside the journal and the logs: {} ({})",
+                self.kept_files.len(),
+                self.kept_files.join(", ")
+            ));
         }
         f.write_str(&clauses.join("; "))
     }

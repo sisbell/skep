@@ -75,6 +75,7 @@ fn reopen(dir: &Path) -> Engine {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
             burned_seq: BurnedSeqPolicy::Rollback,
+            cut_damaged_tail: false,
         },
         checkpoint: CheckpointPolicy::EveryN(1024),
         salt: SaltSource::Seeded(0),

@@ -330,9 +330,18 @@ The kernel owns its names in one directory: the journal's segments
 removes its own before answering, and `Kernel::open` removes one a crash
 left, reporting its size), the exclusion lock (`kernel.lock`), and the
 files the open's tail cut keeps (`seg-<n>.wal.cut-<byte>`, then `….<k>`):
-where the tail holds an intact frame no torn write leaves, every byte the
-cut takes is kept there first, durably, and the kernel never reads, moves,
-removes or writes over one — they are the operator's. Every other name in
+a tail that is not a crash's — an intact marker committing nothing, a
+CRC-intact frame that does not decode, or no intact frame over more bytes
+than one interrupted append leaves (`MAX_CRASH_TAIL_BYTES`) — is refused at
+the open as `OpenError::Corruption` carrying `DamagedTail`, the journal as
+found, until the configuration accepts the cut by name
+(`Durability::Fsync`'s `cut_damaged_tail`, one open's word); then every
+byte the cut takes is kept there first, durably, no position the tail
+claimed is handed out again (`Kernel::order_floor`, the sequencer's floor),
+and the kernel never reads, moves, removes or writes over a kept file —
+they are the operator's. Whether a journal stands in a directory at all is
+`journal_stands`'s answer, the one spelling of a segment's name read back.
+Every other name in
 that directory it leaves alone, so an embedder keeps files of its own
 beside the journal — the daemon keeps its change feed and its blob store
 there. The directory is born `0700` and every file the kernel
@@ -397,10 +406,11 @@ Rules that hold across its files:
   call; the in-memory journal, which has no barrier, installs at the same
   point.
 - **A halt cuts nothing.** Every refusal in `Kernel::open` precedes
-  `journal::truncate_tail`, recovery's one destructive step — and that
-  step keeps before it cuts: where the tail holds an intact frame no torn
-  write leaves, every byte it will take is first copied or moved beside
-  the journal and synced, and a keep that fails cuts nothing.
+  `journal::truncate_tail`, recovery's one destructive step — a damaged
+  tail's refusal among them, so the cut runs on such a tail only under
+  `cut_damaged_tail` — and that step keeps before it cuts: every byte a
+  damaged tail's cut will take is first copied or moved beside the journal
+  and synced, and a keep that fails cuts nothing.
 - **One door to the write state.** `ApplierLock::acquire`, which refuses
   a nested acquisition, is the only way to the sequencer, the journal and
   the cadence; the lock's fields are private to `kernel/applier.rs`.
@@ -3185,14 +3195,22 @@ the store's install — nothing above their own layer.
    holes, each account's base and pending bytes, the bytes whose key names
    no account, the venue total under the gate's own pending rule, the
    standing and expired uploads, the halt marks, a foreign designation
-   directory, and of the journal what the open did to the copy — the
-   stray checkpoint removed and the torn tail cut, each in bytes;
+   directory, the blob store's two logs as read, the kept files beside
+   the journal and the logs (`kept_files`, every `*.cut-*` an open kept
+   bytes it cut as damage in), and of the journal what the open did to
+   the copy — the stray checkpoint removed and a crash's torn tail cut,
+   each in bytes, with where the cut began, the position it claimed, the
+   intact frames among it and the files it kept; a copy whose tail is
+   damage refused as the open refuses it, the tools accepting no cut;
    recording no read, writing nothing under `blobs/`; a copy the open
    cannot write refused by name, since the open writes the lock and may
-   cut a tail) and the
+   cut a tail), the
    pull (a file a committed cell names restored by the store's install,
    no lease and no record; beside a serving daemon held to the inventory's
-   hash), the two subcommands `main.rs` parses as a leading verb.
+   hash), the two subcommands `main.rs` parses as a leading verb, and
+   `board_stands`, the kernel's own answer whether a journal stands in a
+   directory, which the binary asks before it begins a board under
+   `--create` and refuses to begin one without.
 3. **The daemon's vocabulary** — `server/reply.rs` (the reply and every
    transport refusal), `server/request.rs` (the request, the streaming
    body's source and the slot it rides in, and the rules the request's

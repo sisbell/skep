@@ -47,7 +47,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `deposits_registry_link`; the refusals `CredentialRefusal` and
   `RegistryRefusal` (each `token`, `disposition`) and the attestation's
   causes `AttestFault`.
-- **The commits**, `commits` — `Commits`: `open`, `serial_lock`,
+- **The commits**, `commits` — `Commits`: `open` (a damaged line's cut
+  and the lines a file held above the journal's head are kept beside the
+  file as `{file}.cut-<byte>` before a byte is cut or dropped, each line
+  naming the kept file; the walk run at the open under the same catch as
+  its thread), `serial_lock`,
   `serial_figures`, `commit_under`, `take_turn_after_refusal`,
   `write_first_head` (`FirstHead`), `changes` (`ChangesQuery`,
   `ChangesAnswer`, `FeedClass` with `of`), `head_time`, `next_step`

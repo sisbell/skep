@@ -322,6 +322,13 @@ impl fmt::Display for PrunePass {
 /// a suite waits on; outside the seam, nothing.
 #[derive(Default)]
 pub struct Pruner {
+    /// A halt of the unlink pass the daemon arms for the uptime.
+    ///
+    /// It is the reason [`Pruner::halt_the_unlink_pass`] gave, read by step
+    /// (b) ahead of the halts it reads itself, and never cleared: the leases
+    /// the lease log's open lost to damage are gone from memory, and a pass
+    /// that unlinked over that loss would delete the files they held.
+    unlink_halted: std::sync::OnceLock<String>,
     /// The test seam's hold inside the pass, after a rename aside.
     #[cfg(any(test, feature = "test-hooks"))]
     hold: AtomicBool,
@@ -336,6 +343,20 @@ impl Pruner {
     /// nought, under the test seam.
     pub fn new() -> Pruner {
         Pruner::default()
+    }
+
+    /// Halts the unlink pass for the rest of this uptime, for `reason`.
+    ///
+    /// It is the daemon's word where the blob store's open found the lease
+    /// log damaged — a whole line cut as damage, lines it could not read, or
+    /// the log absent beside a standing store — so the leases lost with it
+    /// hold no file in memory, and a pass's step (c) would unlink the files
+    /// they held as unreferenced. Every later pass halts at step (b) with
+    /// this reason, said on its line (`operations.md` §1.1 row 34), while
+    /// steps (a) and (d) run as before; nothing but a restart, whose open
+    /// reads the log afresh, lifts it. The first reason given stands.
+    pub fn halt_the_unlink_pass(&self, reason: String) {
+        let _ = self.unlink_halted.set(reason);
     }
 
     /// ONE PASS over the media gate's store and index (`media_gate`),
@@ -422,14 +443,20 @@ impl Pruner {
     /// Each step's failure is pushed onto the report's `failed` in step order
     /// and ends no other step: (a) runs, then (b), and (c) only where (b) read
     /// the halts and found none. A halt read is the report's `halted`, and so
-    /// is a read that failed ([`HALTS_UNREAD`]); nothing is unlinked under
-    /// either. The figures land in `report` as each act completes, so a failed
-    /// step's report still counts what ran before its failure.
+    /// is a read that failed ([`HALTS_UNREAD`]) and the daemon's standing
+    /// halt ([`Pruner::halt_the_unlink_pass`]), read first; nothing is
+    /// unlinked under any. The figures land in `report` as each act
+    /// completes, so a failed step's report still counts what ran before its
+    /// failure.
     fn steps<G>(&self, media_gate: &MediaGate, exclusive: &impl Fn() -> G, report: &mut PrunePass) {
         if let Err(failure) = expire_partials(media_gate, report) {
             report.failed.push(failure);
         }
-        match halts(media_gate) {
+        let halt = match self.unlink_halted.get() {
+            Some(reason) => Ok(Some(reason.clone())),
+            None => halts(media_gate),
+        };
+        match halt {
             Ok(None) => {
                 if let Err(failure) = self.unlink_unreferenced(media_gate, exclusive, report) {
                     report.failed.push(failure);

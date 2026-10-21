@@ -38,12 +38,9 @@ impl Origin {
     /// `None` for anything else — uppercase, a path, a trailing slash,
     /// `null`, an explicit default port, a zero-padded port.
     pub fn parse(s: &str) -> Option<Origin> {
-        let (https, rest) = if let Some(r) = s.strip_prefix("http://") {
-            (false, r)
-        } else if let Some(r) = s.strip_prefix("https://") {
-            (true, r)
-        } else {
-            return None;
+        let (https, rest) = match s.strip_prefix("http://") {
+            Some(r) => (false, r),
+            None => (true, s.strip_prefix("https://")?),
         };
         let (host, port_text) = if let Some(after) = rest.strip_prefix('[') {
             // Bracketed IPv6 host.

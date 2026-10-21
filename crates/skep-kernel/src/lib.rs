@@ -49,6 +49,24 @@
 //! removes one a crash or a failed write left, reporting its size as
 //! [`Kernel::stray_checkpoint_removed`].
 //!
+//! ## The journal's tail, at the open
+//!
+//! Every journaled open sorts the bytes after the last committed marker into
+//! two classes (§7). A crash's tail — one interrupted append's bytes, at
+//! most [`MAX_CRASH_TAIL_BYTES`], none of them acknowledged — is cut and
+//! gone. Anything else is damage, and the write it holds may have been
+//! acknowledged: an intact commit marker committing nothing, a CRC-intact
+//! frame that does not decode, or no intact frame over more bytes than one
+//! append leaves. The open refuses such a tail, the journal as it found it
+//! ([`OpenError::Corruption`] carrying [`DamagedTail`]), until the
+//! configuration accepts the cut by name ([`Durability::Fsync`]'s
+//! `cut_damaged_tail`, one open's word): then every byte of the tail is kept
+//! beside the journal first (`seg-<n>.wal.cut-<b>`, [`Recovery`]'s
+//! `tail_cut_kept`), the tail is cut, and no position it claimed is handed
+//! out again ([`Kernel::order_floor`]). Whether a journal stands in a
+//! directory at all is [`journal_stands`]'s answer, the one a tool asks
+//! before an open that would begin one.
+//!
 //! The kernel has no logging seam: it answers facts, and the caller above
 //! says them. A journaled open reports what it found and did as [`Recovery`]
 //! — the start point, the bases it passed over, the commits it replayed, the
@@ -145,6 +163,7 @@
 //!         journal_path: "/var/lib/skep/journal".into(),
 //!         retain_checkpoints: 2,
 //!         burned_seq: BurnedSeqPolicy::Rollback,
+//!         cut_damaged_tail: false,
 //!     },
 //!     checkpoint: CheckpointPolicy::EveryN(1024),
 //!     salt: SaltSource::Os,
@@ -193,9 +212,13 @@ mod kernel;
 
 pub use checkpoint::{CheckpointHeader, CHECKPOINT_FORMAT};
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
-pub use error::{CheckpointError, HistoryError, LandedStep, OpenError, RebuildError, TxnError};
+pub use error::{
+    CheckpointError, DamagedTail, DamagedTailTell, HistoryError, LandedStep, OpenError,
+    RebuildError, TxnError,
+};
 pub use journal::{
-    Attestation, AttestationError, JOURNAL_FORMAT, MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES,
+    journal_stands, Attestation, AttestationError, JOURNAL_FORMAT, MAX_CRASH_TAIL_BYTES,
+    MAX_SEGMENT_LEN, MAX_SIG_BYTES, MAX_TXN_BYTES,
 };
 pub use kernel::{InlineCheckpoint, Kernel, Recovery, Snapshot, Staging};
 pub use replay::SkippedBase;

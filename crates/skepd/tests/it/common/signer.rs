@@ -171,10 +171,9 @@ fn write_form_values(v: &Value, out: &mut Vec<Vec<u8>>) -> Option<()> {
                 out.extend(unhex(h)?.into_iter().map(|b| vec![b]));
             } else if let Some(s) = m.get("atom").and_then(Value::as_str) {
                 out.push(s.as_bytes().to_vec());
-            } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
-                out.push(unhex(h)?);
             } else {
-                return None;
+                let h = m.get("atom_hex").and_then(Value::as_str)?;
+                out.push(unhex(h)?);
             }
         }
         _ => return None,
@@ -193,16 +192,15 @@ fn delivery_item_values(v: &Value, out: &mut Vec<Vec<u8>>) -> Option<()> {
         out.extend(unhex(h)?.into_iter().map(|b| vec![b]));
     } else if let Some(s) = m.get("atom").and_then(Value::as_str) {
         out.push(s.as_bytes().to_vec());
-    } else if let Some(h) = m.get("atom_hex").and_then(Value::as_str) {
-        out.push(unhex(h)?);
     } else {
-        return None;
+        let h = m.get("atom_hex").and_then(Value::as_str)?;
+        out.push(unhex(h)?);
     }
     Some(())
 }
 
 fn unhex(h: &str) -> Option<Vec<u8>> {
-    if h.len() % 2 != 0 {
+    if !h.len().is_multiple_of(2) {
         return None;
     }
     (0..h.len() / 2).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect()

@@ -1223,7 +1223,7 @@ fn run_case(plan: &[PlanOp]) {
     for (op_index, planned) in plan.iter().enumerate() {
         let writes_before = state.n_writes;
         step(op_index, planned, &mut shadow, &mut state);
-        if state.n_writes > writes_before && state.n_writes % CADENCE == 0 {
+        if state.n_writes > writes_before && state.n_writes.is_multiple_of(CADENCE) {
             capture_position(&shadow, &mut state);
         }
         if (op_index + 1) % CADENCE == 0 {

@@ -69,6 +69,11 @@ fn records_and_fences_replay_and_coverage_follows_them() {
         "the cut names the trusted end, the length before it (the 12-byte fragment after the \
          whole lines), the last trusted position and the position the torn line names"
     );
+    assert_eq!(answered.kept, None, "a crash's torn line is cut and gone, nothing kept");
+    assert!(
+        !dir.path().join(format!("{MASKED_FILE}.cut-{whole}")).exists(),
+        "no kept file for a torn line"
+    );
     drop(f);
     // A record and a fence above the head are another journal's: dropped
     // and purged from the file.
@@ -89,24 +94,64 @@ fn records_and_fences_replay_and_coverage_follows_them() {
     // journal's entry lines verbatim, drops every fence, and fences once
     // at the coverage.
     assert_eq!(purged, contents, "a purged file keeps this journal's lines as written");
+    // THE KEEP: the entry line past the head stands beside the file, byte
+    // for byte, named by the byte it began at; the fence, derived, is not
+    // among the kept bytes, and a torn cut kept nothing.
+    assert_eq!(
+        answered.foreign_kept,
+        Some(KeptName { byte: whole, k: 0 }),
+        "the purge's keep, named by the first foreign line's byte"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(format!("{MASKED_FILE}.cut-{whole}")))
+            .expect("read"),
+        "{\"at\":99}\n",
+        "the entry line above the head, kept whole before the purge dropped it"
+    );
+    assert_eq!(answered.kept, None, "no cut, nothing kept for one");
 }
 
-/// Checks that a cut names what the last trusted position cannot.
+/// Checks that a cut names what the last trusted position cannot, and keeps
+/// a damaged line's bytes.
 ///
 /// A torn line at the file's end names its own position where its `at`
 /// stands whole — a tear inside the digits, zero-fill, or a position the
-/// trusted lines cover or the head does not reach names none — and past a
-/// damaged whole line, whose digits are no witness, the whole entry lines
-/// the cut takes with it are counted, the ones at or below the head alone.
+/// trusted lines cover or the head does not reach names none — and is cut
+/// and gone; past a damaged whole line, whose digits are no witness, the
+/// whole entry lines the cut takes with it are counted, the ones at or below
+/// the head alone, and every byte from the trusted end on is kept beside the
+/// file first.
 #[test]
 fn a_cut_names_the_torn_lines_position_or_the_whole_lines_it_takes() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join(MASKED_FILE);
+    let trusted_len = "{\"at\":3}\n{\"covered\":9}\n".len() as u64;
+    let kept_names = |dir: &Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("list")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".cut-"))
+            .collect();
+        names.sort();
+        names
+    };
     let cut_of = |tail: &str| {
+        let case = tempfile::tempdir().expect("tempdir");
+        let path = case.path().join(MASKED_FILE);
         std::fs::write(&path, format!("{{\"at\":3}}\n{{\"covered\":9}}\n{tail}")).expect("write");
-        let (_, _, replayed) = open(dir.path(), MASKED_FILE, 20, |_| true).expect("open");
+        let (_, _, replayed) = open(case.path(), MASKED_FILE, 20, |_| true).expect("open");
         let cut = replayed.cut.expect("a cut");
         assert_eq!(cut.trusted, 9, "the last trusted position is the fence's");
+        // THE KEEP follows the class: a torn line's cut keeps nothing; a
+        // damaged line's keeps every byte from the trusted end on.
+        if tail.contains('\n') {
+            let kept = replayed.kept.expect("a damaged line's cut is kept");
+            assert_eq!(kept, KeptName { byte: trusted_len, k: 0 }, "{tail:?}");
+            let kept_file = case.path().join(kept.of(MASKED_FILE));
+            assert_eq!(std::fs::read(&kept_file).expect("read"), tail.as_bytes(), "{tail:?}");
+            assert_eq!(kept_names(case.path()), vec![kept.of(MASKED_FILE)]);
+        } else {
+            assert_eq!(replayed.kept, None, "{tail:?}: a torn line keeps nothing");
+            assert!(kept_names(case.path()).is_empty(), "{tail:?}");
+        }
         (cut.first, cut.whole_after)
     };
     assert_eq!(cut_of("{\"at\":12,\"do"), (Some(12), None), "its digits stand whole");

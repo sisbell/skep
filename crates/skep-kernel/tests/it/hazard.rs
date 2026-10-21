@@ -641,7 +641,8 @@ fn hazard_d_child_process_entry() {
         .expect("hazard child: engine open");
     const BLOB: usize = 48 * 1024;
     let stdout = std::io::stdout();
-    for i in 0u64.. {
+    let mut i = 0u64;
+    loop {
         // One fat Val occupies ONE position: append at ordinal i+1.
         let ord = (i + 1) as u32;
         engine
@@ -652,6 +653,7 @@ fn hazard_d_child_process_entry() {
         let mut out = stdout.lock();
         writeln!(out, "HAZACK {seq}").expect("hazard child: ack line");
         out.flush().expect("hazard child: ack flush");
+        i += 1;
     }
 }
 
@@ -789,7 +791,12 @@ fn d_trial(trial: u64) -> (usize, u64) {
 ///   intact, so the boundary rule applies unchanged and the judgment is
 ///   scenario A's — recover to EXACTLY the boundary the intact prefix
 ///   supports, byte-equal to the oracle there — plus the reopen, since a
-///   recovery that truncated a tail must answer the same on its second look;
+///   recovery that truncated a tail must answer the same on its second look.
+///   A flip in the final transaction's RECORDS leaves its marker intact and
+///   committing nothing, which is no crash's tail: the open refuses it as the
+///   damaged tail (§7), repeatably and writing nothing, and the boundary
+///   rule binds once the cut is accepted by name — the judgment then made
+///   under `cut_damaged_tail`, the kept file standing beside the journal;
 /// * flips anywhere can tear an interior transaction, which is durable
 ///   committed data and licenses the halt, so the judgment is the one that
 ///   holds either way: it answers at all (no panic, no wedge), and a refusal
@@ -832,9 +839,52 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
         );
         if final_txn_only {
             // Nothing below the first flip changed, so the boundary rule
-            // binds exactly as it does under a clean truncation there.
-            recovered += 1;
+            // binds exactly as it does under a clean truncation there — at
+            // once where the flip tore the marker (a crash's tail), and
+            // once the cut is accepted where it left the marker intact over
+            // records that fail their check (the damaged tail, refused).
             let depth = if trial % 8 == 0 { Depth::Full } else { Depth::Head };
+            match timed_open_result(&case, &ctx) {
+                Ok(engine) => {
+                    recovered += 1;
+                    drop(engine);
+                }
+                Err(e) => {
+                    refused += 1;
+                    let damaged = std::error::Error::source(&e)
+                        .and_then(|cause| cause.downcast_ref::<OpenError>())
+                        .is_some_and(|open| match open {
+                            OpenError::Corruption { cause: Some(cause), .. } => {
+                                cause.downcast_ref::<skep_kernel::DamagedTail>().is_some()
+                            }
+                            _ => false,
+                        });
+                    assert!(damaged, "FINDING ({ctx}): refused, but not as the damaged tail: {e}");
+                    let segment = fs::read(seg_file(&case, 1)).expect("the segment");
+                    let again = timed_open_result(&case, &ctx)
+                        .err()
+                        .unwrap_or_else(|| panic!("FINDING ({ctx}): the refusal did not repeat"));
+                    assert_eq!(
+                        again.to_string(),
+                        e.to_string(),
+                        "FINDING ({ctx}): a second refusal"
+                    );
+                    assert_eq!(
+                        fs::read(seg_file(&case, 1)).expect("the segment"),
+                        segment,
+                        "FINDING ({ctx}): a halt wrote to the segment"
+                    );
+                    // The cut, accepted by name: the kept file stands beside
+                    // the journal, and the boundary rule binds below.
+                    let accepted = timed_open_accepting_the_cut(&case, &ctx);
+                    let kept = accepted.recovery().expect("journaled").tail_cut_kept.clone();
+                    assert!(!kept.is_empty(), "FINDING ({ctx}): an accepted cut kept nothing");
+                    drop(accepted);
+                    for name in &kept {
+                        assert!(case.join(name).is_file(), "FINDING ({ctx}): {name} not kept");
+                    }
+                }
+            }
             let head = judge_prefix(&fixture, &case, first_flip, depth, &ctx);
             let again = timed_open(&case, &ctx).world_dump();
             assert_eq!(
@@ -889,4 +939,23 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
          {recovered} recovered, {refused} refused loudly",
         exhaustive()
     );
+}
+
+/// `Engine::open` under the deadline [`timed_open`] keeps, the damaged
+/// tail's cut accepted (`Durability::Fsync`'s `cut_damaged_tail`): the
+/// operator's word for one open, where a refusal is a finding.
+fn timed_open_accepting_the_cut(dir: &Path, ctx: &str) -> Engine {
+    let mut cfg = cfg_manual(dir);
+    if let skep_kernel::Durability::Fsync { cut_damaged_tail, .. } = &mut cfg.durability {
+        *cut_damaged_tail = true;
+    }
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(Engine::open(cfg));
+    });
+    match rx.recv_timeout(OPEN_TIMEOUT) {
+        Ok(Ok(engine)) => engine,
+        Ok(Err(e)) => panic!("FINDING: the accepted cut refused — {ctx}: {e}"),
+        Err(_) => panic!("FINDING (wedge): Engine::open hung past {OPEN_TIMEOUT:?} — {ctx}"),
+    }
 }

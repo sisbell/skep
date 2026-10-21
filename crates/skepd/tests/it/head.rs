@@ -1515,7 +1515,7 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
          attestation_invalid:board_unavailable until one lands — tried again at every write's \
          turn"
     );
-    assert_eq!(head_lines(&sd), [refused.clone()], "the refused H.1, said once with its position");
+    assert_eq!(head_lines(&sd), std::slice::from_ref(&refused), "the refused H.1, said once with its position");
 
     // The next attested write: refused for want of the board term — and its
     // turn pays the owed head.

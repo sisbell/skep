@@ -275,6 +275,7 @@ fn chain_at_below_the_retention_floor_is_history_reclaimed() {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 1,
                 burned_seq: BurnedSeqPolicy::Rollback,
+                cut_damaged_tail: false,
             },
             checkpoint: CheckpointPolicy::Manual,
             salt: SaltSource::Seeded(0),

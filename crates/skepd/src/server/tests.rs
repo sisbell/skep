@@ -472,14 +472,21 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
         first_run_passed_over: None,
         identity_resolved_empty: false,
     };
+    assert_eq!(
+        BeganUnderCreateLine.to_string(),
+        "no journal stood in the data directory: this open began a new board at genesis, as \
+         --create asked; start it again without --create"
+    );
+
     let head = Seq(2);
-    assert!(TailCutLine::of(None, head).is_none(), "no account, nothing cut");
+    assert!(TailCutLine::of(None, head, head).is_none(), "no account, nothing cut");
     assert!(
-        TailCutLine::of(Some(&account(0, 0, None, &[])), head).is_none(),
+        TailCutLine::of(Some(&account(0, 0, None, &[])), head, head).is_none(),
         "a clean close cut nothing"
     );
 
-    let crash = TailCutLine::of(Some(&account(55, 0, None, &[])), head).expect("a crash's tail");
+    let crash =
+        TailCutLine::of(Some(&account(55, 0, None, &[])), head, head).expect("a crash's tail");
     assert!(matches!(crash.class(), Class::Open), "a crash's tail is the report's own line");
     assert_eq!(
         crash.to_string(),
@@ -490,62 +497,252 @@ fn the_opens_beginning_and_its_tail_cut_say_what_the_open_found_in_their_words()
     );
 
     let kept = ["seg-1.wal.cut-218"];
-    let rot_at = |claimed: Option<Seq>, kept: &[&str]| {
-        TailCutLine::of(Some(&account(109, 1, claimed, kept)), head)
+    let rot_at = |claimed: Option<Seq>, kept: &[&str], floor: Seq| {
+        TailCutLine::of(Some(&account(109, 1, claimed, kept)), head, floor)
             .expect("a tail with an intact frame")
             .to_string()
     };
-    let rot = TailCutLine::of(Some(&account(109, 1, Some(Seq(3)), &kept)), head)
+    let rot = TailCutLine::of(Some(&account(109, 1, Some(Seq(3)), &kept)), head, Seq(3))
         .expect("an intact tail");
     assert!(matches!(rot.class(), Class::Failure), "an acknowledged write may be among the cut");
     let opening = "journal tail cut (109 bytes, beginning at byte 218 of seg-1.wal, past position \
                    2), 1 of its frames intact on disk — a commit marker whose records failed their \
                    check, or a frame no writer of this format writes, the signature of rot in or a \
-                   rewrite of the journal's last transaction rather than of a crash: a write this \
-                   daemon acknowledged may be among the cut, ";
-    let trailer = "; the open kept the cut bytes in seg-1.wal.cut-218, beside the journal in the \
+                   rewrite of the journal's last transaction rather than of a crash — cut under \
+                   --cut-damaged-tail: a write this daemon acknowledged may be among the cut, ";
+    let kept_in = "; the open kept the cut bytes in seg-1.wal.cut-218, beside the journal in the \
                    data directory, where no open reads, moves or removes it — copy it off the \
-                   volume before you remove it; check the volume and its device";
+                   volume before you remove it";
+    let device = "; check the volume and its device";
     // The claimed position above the head names the write — the position its
-    // acknowledgement and the change feed named it by — and the kept file
-    // names where its bytes are.
+    // acknowledgement and the change feed named it by — the kept file names
+    // where its bytes are, and the order starts past the claim where the
+    // kernel trusted it.
     assert_eq!(
         rot.to_string(),
         format!(
             "{opening}at position 3, the position an intact commit marker in the cut claims\
-             {trailer}"
+             {kept_in}; positions (2, 3] are left a gap and the next write takes position 4, so a \
+             client holding that acknowledgement is answered a missing write, never another's\
+             {device}"
         )
+    );
+    // A claim the kernel did not trust leaves the floor at the head: the
+    // next write takes the position after the head.
+    assert_eq!(
+        rot_at(Some(Seq(3)), &kept, head),
+        format!(
+            "{opening}at position 3, the position an intact commit marker in the cut claims\
+             {kept_in}; the next write takes position 3{device}"
+        ),
+        "a claim not trusted"
     );
     // No marker read — an intact frame that does not decode — and a claim at
     // or below the head, a position that stands: the write is placed above
     // the head and never named by a position the journal still holds.
     for claimed in [None, Some(Seq(2)), Some(Seq(1))] {
         assert_eq!(
-            rot_at(claimed, &kept),
-            format!("{opening}at a position above 2{trailer}"),
+            rot_at(claimed, &kept, head),
+            format!(
+                "{opening}at a position above 2{kept_in}; the next write takes position 3{device}"
+            ),
             "claimed {claimed:?}"
         );
     }
     // Several kept files — the cut segment's copy and the later segments
     // moved aside whole — are named as one list, in journal order.
     assert_eq!(
-        rot_at(None, &["seg-1.wal.cut-218", "seg-5.wal.cut-0", "seg-9.wal.cut-0"]),
+        rot_at(None, &["seg-1.wal.cut-218", "seg-5.wal.cut-0", "seg-9.wal.cut-0"], head),
         format!(
             "{opening}at a position above 2; the open kept the cut bytes in seg-1.wal.cut-218, \
              seg-5.wal.cut-0 and seg-9.wal.cut-0, beside the journal in the data directory, where \
              no open reads, moves or removes them — copy them off the volume before you remove \
-             them; check the volume and its device"
+             them; the next write takes position 3{device}"
         )
     );
-    // A kept list the kernel left empty — which no tail of this arm leaves —
-    // points at the copy taken before the open instead.
+    // A kept list the kernel left empty beside an intact frame — which no
+    // accepted cut leaves — names no file.
     assert_eq!(
-        rot_at(None, &[]),
+        rot_at(None, &[], head),
+        format!("{opening}at a position above 2; the next write takes position 3{device}")
+    );
+    // The length tell: no frame intact, more bytes than one append leaves,
+    // cut under the flag and kept — a failure, placed above the head.
+    let long = TailCutLine::of(Some(&account(109, 0, None, &kept)), head, head)
+        .expect("a long tail, kept");
+    assert!(matches!(long.class(), Class::Failure), "kept bytes are damage's, never a crash's");
+    assert_eq!(
+        long.to_string(),
         format!(
-            "{opening}at a position above 2; a copy taken before this open holds the bytes; \
-             check the volume and its device"
+            "journal tail cut (109 bytes, beginning at byte 218 of seg-1.wal, past position 2), \
+             no frame of it intact and more of it than one interrupted append leaves — decay \
+             over the journal's trailing bytes, or bytes no writer left, rather than a crash — \
+             cut under --cut-damaged-tail: a write this daemon acknowledged may be among the \
+             cut, at a position above 2{kept_in}; the next write takes position 3{device}"
         )
     );
+}
+
+/// The blob logs' lines, the kept-files line, the pruner's halt and the
+/// daemon's refusal of a damaged tail, each a pure value in its words.
+///
+/// A torn last line is the open's own landing; a damaged cut, the lines
+/// read as no record and a log absent beside a standing store are failures,
+/// each naming what is lost and the cure, the damaged cut its kept file;
+/// the leases' damage is the pruner's halt's reason. The kept files beside
+/// the journal and the logs are one line with their count and names. And
+/// the engine's refusal of a damaged tail gains the daemon's own flag.
+#[test]
+fn the_blob_logs_the_kept_files_and_the_damaged_tails_refusal_say_their_words() {
+    use skep_blobs::{LogRead, Store};
+    use skep_kernel::{DamagedTail, DamagedTailTell, OpenError};
+
+    // The reads are a real store's: its two types are built by no caller,
+    // so each case is a `blobs/leases.log` the open reads, keeps and cuts.
+    // A `{"n":1}` line is a whole object that folds as no lease: the
+    // `unread` count's own case, beside each cut's.
+    // A store that stood is one a deposit had reached: its designation
+    // directory under the root, as the daemon reads it ahead of the open.
+    let read = |leases_log: Option<&str>, deposited: bool| -> (LogRead, bool) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("blobs");
+        if deposited || leases_log.is_some() {
+            std::fs::create_dir(&root).expect("the root");
+        }
+        if deposited {
+            std::fs::create_dir(root.join(DESIGNATION)).expect("the designation directory");
+        }
+        if let Some(bytes) = leases_log {
+            std::fs::write(root.join("leases.log"), bytes).expect("the log");
+        }
+        let store_stood = [DESIGNATION, "uploads.log", "leases.log"]
+            .iter()
+            .any(|name| root.join(name).exists());
+        let store = Store::open(&root, Duration::from_secs(1), 0).expect("the open");
+        (store.opened().leases_log.clone(), store_stood)
+    };
+    let lines = |(read, store_stood): &(LogRead, bool)| {
+        BlobLogLines { read, store_stood: *store_stood, each: "lease" }
+            .lines()
+            .into_iter()
+            .map(|(class, line)| format!("{class}: {line}"))
+            .collect::<Vec<_>>()
+    };
+    let damage = |(read, store_stood): &(LogRead, bool)| {
+        BlobLogLines { read, store_stood: *store_stood, each: "lease" }.damage()
+    };
+    let whole = read(Some(""), true);
+    assert_eq!(lines(&whole), Vec::<String>::new(), "read whole, nothing to say");
+    assert_eq!(damage(&whole), None);
+    let torn = read(Some("{\"n\":1}\n{\"n\":2"), true);
+    assert_eq!(
+        lines(&torn),
+        [
+            "open: blobs/leases.log: a torn last line cut (6 bytes), a crash's or a kill's, never \
+             answered over; every acknowledged lease stands",
+            "failure: blobs/leases.log: 1 lines read as no lease: lines another build wrote, or \
+             damaged ones, removed by the open's compaction; each reads as none, cured by a \
+             re-PUT",
+        ],
+        "a torn line is the open's own landing; the unread line a failure"
+    );
+    assert_eq!(
+        damage(&torn).as_deref(),
+        Some("blobs/leases.log's open read 1 lines as no lease"),
+        "a crash's torn line is no damage; the unread line is"
+    );
+    let damaged = read(Some("{\"n\":1}\ngarbage\n{\"n\":3}\n{\"n\":4}\n"), true);
+    assert_eq!(
+        lines(&damaged),
+        [
+            "failure: blobs/leases.log: trust ends at byte 8 of 32; the 24 bytes after it are \
+             cut, kept in blobs/leases.log.cut-8: a whole line that does not read, which no \
+             crash leaves — damage to leases the store answered over, 2 whole lines after it cut \
+             with it; each lost lease reads as none, cured by a re-PUT",
+            "failure: blobs/leases.log: 1 lines read as no lease: lines another build wrote, or \
+             damaged ones, removed by the open's compaction; each reads as none, cured by a \
+             re-PUT",
+        ]
+    );
+    assert_eq!(
+        damage(&damaged).as_deref(),
+        Some("blobs/leases.log's open cut a damaged line and the 2 whole lines after it, kept in \
+              blobs/leases.log.cut-8")
+    );
+    let absent = read(None, true);
+    assert_eq!(
+        lines(&absent),
+        ["failure: blobs/leases.log was absent beside a standing store, and is begun empty: \
+          every lease it held reads as none, cured by a re-PUT"]
+    );
+    assert_eq!(
+        damage(&absent).as_deref(),
+        Some("blobs/leases.log was absent beside a standing store")
+    );
+    let fresh = read(None, false);
+    assert_eq!(lines(&fresh), Vec::<String>::new(), "a root the open made held no log");
+    assert_eq!(damage(&fresh), None);
+    // A root standing with no deposit and no log — made by hand, or holding
+    // a foreign directory alone — is a first start's too: nothing stood to
+    // lose, so nothing is said and nothing halts the pruner.
+    let planted = {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("blobs");
+        std::fs::create_dir_all(root.join("sha256-tree")).expect("a planted directory");
+        let store = Store::open(&root, Duration::from_secs(1), 0).expect("the open");
+        (store.opened().leases_log.clone(), false)
+    };
+    assert!(planted.0.absent, "the log was absent");
+    assert_eq!(lines(&planted), Vec::<String>::new(), "a root holding no store said nothing");
+    assert_eq!(damage(&planted), None);
+    assert_eq!(
+        PrunerHaltedByLeaseDamageLine { reason: "blobs/leases.log's open read 2 lines as no lease" }
+            .to_string(),
+        "pruner: the unlink pass is halted for this uptime — blobs/leases.log's open read 2 \
+         lines as no lease: a lease the open lost holds no file in memory, so the pass would \
+         unlink files their depositors hold; expired partials are still removed and the logs \
+         compacted at each pass; the next start, its open reading the log whole, lifts it"
+    );
+    let kept = ["blobs/leases.log.cut-80".to_string(), "seg-1.wal.cut-218".to_string()];
+    assert_eq!(
+        KeptFilesLine { kept: &kept }.to_string(),
+        "kept files beside the journal and the logs: 2 — blobs/leases.log.cut-80, \
+         seg-1.wal.cut-218; each holds bytes an open cut as damage: copy them off the volume, \
+         and remove them once the writes they held are accounted for"
+    );
+    // The daemon's refusal: the kernel's sentence, then the flag the kernel
+    // cannot name.
+    let damaged_tail = DamagedTail {
+        segment: "seg-1.wal".to_string(),
+        byte: 218,
+        head: Seq(2),
+        bytes: 109,
+        intact: 1,
+        claimed: Some(Seq(3)),
+        tell: DamagedTailTell::FrameDoesNotDecode { segment: "seg-1.wal".to_string(), byte: 300 },
+    };
+    let refused = DaemonError::Engine(EngineError::Open(OpenError::Corruption {
+        at: Seq(3),
+        cause: Some(Box::new(damaged_tail.clone())),
+    }));
+    let line = refused.to_string();
+    assert!(
+        line.starts_with(&format!(
+            "engine open: durable committed data cannot be read; position 3 names the damage: \
+             {damaged_tail}"
+        )),
+        "{line}"
+    );
+    assert!(
+        line.ends_with(
+            "; under skepd the one-start flag is --cut-damaged-tail (SKEPD_CUT_DAMAGED_TAIL=true), \
+             given to one start and never kept in a unit file"
+        ),
+        "{line}"
+    );
+    let other =
+        DaemonError::Engine(EngineError::Open(OpenError::Corruption { at: Seq(3), cause: None }));
+    assert!(!other.to_string().contains("--cut-damaged-tail"), "another cause names no flag");
 }
 
 /// THE VERSION LINE's WORDS (`operations.md` §3.4 step 6's gap, closed),
@@ -622,10 +819,11 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        9,
-        "the nine lines — the version, the directory, the recovery, the beginning, the stray \
-         checkpoint.tmp, the tail cut, the media limits, the volume's free space, the upload \
-         setting — each through the door"
+        13,
+        "the thirteen lines — the version, the directory, the recovery, the beginning under \
+         --create and without it, the stray checkpoint.tmp, the tail cut, the flag given to a \
+         start that needed none, the blob logs' torn-line landing, the kept files, the media \
+         limits, the volume's free space, the upload setting — each through the door"
     );
     assert!(
         open_under.contains("say_open_line(BeganLine)"),
@@ -1420,7 +1618,7 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
             base: Some(LandedBase { position: Seq(96), bytes: 1_048_576 }),
             step,
             cause: &full_volume,
-            after: after_a_landing(Some(95)),
+            after: Box::new(after_a_landing(Some(95))),
         }
         .to_string();
         assert_eq!(
@@ -1443,7 +1641,7 @@ fn the_failure_line_keys_its_trailer_to_the_cause_and_names_a_landed_bases_step(
             base: None,
             step: LandedStep::Retention,
             cause: &squatted,
-            after: after_a_landing(None),
+            after: Box::new(after_a_landing(None)),
         }
         .to_string(),
         format!(
@@ -1684,6 +1882,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
             failed: 12,
         }),
         claimed_permissive: true,
+        kept_files: Vec::new(),
     };
     assert!(every.stands());
     assert_eq!(
@@ -1709,6 +1908,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         floor: None,
         unread_deposit: None,
         claimed_permissive: false,
+        kept_files: Vec::new(),
     };
     assert!(one.stands());
     assert_eq!(one.to_string(), "the pruner's thread is gone");
@@ -1747,9 +1947,31 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
         floor: None,
         unread_deposit: None,
         claimed_permissive: false,
+        kept_files: Vec::new(),
     };
     assert!(!none.stands(), "nothing on a healthy board");
     assert_eq!(none.to_string(), "");
+    // The kept files beside the journal and the logs: a standing state of
+    // their own, last among the clauses, with their count and names.
+    let kept = StandingLine {
+        halted_at: None,
+        poisoned: None,
+        history_damaged: None,
+        stopped_files: Vec::new(),
+        pruner_gone: false,
+        feed_walk_gone: None,
+        index_failed: false,
+        floor: None,
+        unread_deposit: None,
+        claimed_permissive: false,
+        kept_files: vec!["blobs/leases.log.cut-0".to_string(), "seg-1.wal.cut-218".to_string()],
+    };
+    assert!(kept.stands(), "a kept file stands until the operator removes it");
+    assert_eq!(
+        kept.to_string(),
+        "kept files beside the journal and the logs: 2 (blobs/leases.log.cut-0, \
+         seg-1.wal.cut-218)"
+    );
     let unread = StandingLine {
         floor: Some(FloorBinding {
             free_space: Err(std::io::Error::other("blobs/: statvfs: Input/output error (os error 5)")),
@@ -1828,6 +2050,7 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
             failed: 9006,
         }),
         claimed_permissive: true,
+        kept_files: vec!["{names}".to_string()],
     };
     let written = [
         ("9001", "{position}"),
@@ -1837,6 +2060,8 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         ("9005", "{floor}"),
         ("9006", "{n}"),
         ("9007", "{ms}"),
+        // The kept files' count, one name standing in for the list.
+        ("logs: 1 ({names})", "logs: {n} ({names})"),
     ]
     .into_iter()
     .fold(every.to_string(), |line, (figure, named)| line.replace(figure, named));

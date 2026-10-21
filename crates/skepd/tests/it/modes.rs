@@ -99,6 +99,8 @@ fn skepd_under_umask_022(dir: &Path) -> Command {
         .arg("--data-dir")
         .arg(dir)
         .args(["--port", "0", "--workers", workers.as_str()])
+        // A fresh directory: the binary begins a board under `--create` alone.
+        .arg("--create")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd

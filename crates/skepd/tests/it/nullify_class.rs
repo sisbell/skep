@@ -477,7 +477,7 @@ fn the_registry_classes_refuse_a_nullify_and_the_endpoints_commits() {
     };
     assert_eq!(active(port), [first.clone(), second.clone()]);
     expect_resp(&nullify(port, Some(&node_signed), &doc1, &second), "ack_addr");
-    assert_eq!(active(port), [first.clone()], "the deposit before it stands current");
+    assert_eq!(active(port), std::slice::from_ref(&first), "the deposit before it stands current");
     sd.shutdown();
 }
 

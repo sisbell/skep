@@ -567,14 +567,18 @@ fn the_guest_and_the_claimant_draw_on_one_pool() {
 /// park real writes on the guard (`write_pool.rs`) instead.
 #[test]
 fn the_minimum_worker_count_is_evaluable_and_serves_with_every_pool_drained() {
-    assert!(
-        skepd::MIN_WORKERS > 1,
-        "the minimum leaves a worker free of the pools, so it exceeds serve's own floor"
-    );
-    assert!(
-        skepd::DEFAULT_WORKERS >= skepd::MIN_WORKERS,
-        "the shipped default satisfies the obligation it documents"
-    );
+    const {
+        assert!(
+            skepd::MIN_WORKERS > 1,
+            "the minimum leaves a worker free of the pools, so it exceeds serve's own floor"
+        )
+    };
+    const {
+        assert!(
+            skepd::DEFAULT_WORKERS >= skepd::MIN_WORKERS,
+            "the shipped default satisfies the obligation it documents"
+        )
+    };
 
     let dir = tempfile::tempdir().expect("tempdir");
     let daemon = skepd::Daemon::open(dir.path()).expect("genesis open");

@@ -1602,19 +1602,13 @@ fn c16_a_markers_salt_edited_breaks_at_that_transaction() {
 /// breaks it mid-history. The frame is intact by CRC, so these are the bytes
 /// that were written, and under one stamp no writer of this format writes
 /// them: a rewrite. The ruling requires the open to halt, as it does
-/// mid-history (case 4). It does not: the corrupt run the frame opens lies
-/// above the committed head, §7's torn tail, and the transaction is cut from
-/// the journal as the tail — its bytes kept beside the journal first, the
-/// intact frame being one no torn write leaves (`Recovery::tail_cut_kept`),
-/// but cut all the same, and the open serving. A STOP by name — closing it
-/// amends §7's tail rule, the owner's call — so the case stands ignored with
-/// the ruling's outcome asserted intact, named in `Kernel::open`'s damage
-/// model.
+/// mid-history (case 4), and it does: the corrupt run the frame opens lies
+/// above the committed head, where §7's tail rule asks whether the tail is a
+/// crash's, and a CRC-intact frame that does not decode says it is not — the
+/// open refuses it as a damaged tail, the directory as found, until the cut
+/// is accepted by name (`Kernel::open`'s damage model, "caught at the
+/// tail").
 #[test]
-#[ignore = "STOP (owner): a frame of the LAST transaction rewritten so it no longer decodes, its \
-            CRC re-fixed, opens a corrupt run above the committed head, which §7's tail rule \
-            cuts as the torn tail — the ruling requires a halt; closing it amends §7 \
-            (Kernel::open's damage model: NOT CAUGHT, AND NOT BY DESIGN)"]
 fn c17_the_last_transactions_frame_rewritten_so_it_will_not_decode_halts_the_open() {
     let golden = Golden::build();
     let case = golden.case("c17");

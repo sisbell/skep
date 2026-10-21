@@ -10,12 +10,12 @@ use super::attest::{self, Attestation};
 use super::chain::{slot_digest, ChainLink};
 use super::segment::{file_options, fsync_dir, scanned_above, SegmentMeta};
 use super::{
-    codec, find_magic, frame_len, parse_frame, CommittedRecord, FramePayload, LogRecord, Marker,
-    Parsed, Txn, FRAME_HEADER_LEN, MAGIC, MARKER_FRAME_LEN, MAX_SEGMENT_LEN, MAX_TXN_BYTES,
-    RESYNC_BUDGET_PASSES, STAMP_PREFIX,
+    codec, find_magic, frame_len, parse_frame, record_frame_len, CommittedRecord, FramePayload,
+    LogRecord, Marker, Parsed, Txn, FRAME_HEADER_LEN, MAGIC, MARKER_FRAME_LEN,
+    MAX_CRASH_TAIL_BYTES, MAX_SEGMENT_LEN, MAX_TXN_BYTES, RESYNC_BUDGET_PASSES, STAMP_PREFIX,
 };
-use crate::error::{at_file, stamp_text, Cause};
-use crate::{Seam, Step};
+use crate::error::{at_file, stamp_text, Cause, DamagedTail, DamagedTailTell};
+use crate::{Seam, Seq, Step};
 
 /// How a corrupt run (frames that fail their CRC or do not decode) ended (§7).
 #[derive(Debug, PartialEq, Eq)]
@@ -33,11 +33,11 @@ enum RunEnd {
     ///
     /// It classes as the un-acked / torn tail (`> W`), sound because the last
     /// committed marker is itself intact and so precedes any EOF-reaching run
-    /// (§7) — sound against torn writes and CRC-failing damage under §1's
-    /// storage assumptions, save §7's documented post-commit-rot exception;
-    /// not against a rewrite that leaves one of the last transaction's frames
-    /// intact and undecodable, which reads as a run reaching here and is cut
-    /// (the open item in [`crate::Kernel::open`]'s damage model).
+    /// (§7). Whether that tail is a crash's or damage is a second question,
+    /// asked of the whole tail once the scan returns
+    /// ([`ScanOutcome::damaged_tail`]): an intact frame of no writer's in it,
+    /// or a length past what one append leaves, makes it damage the open
+    /// refuses rather than cuts.
     Eof,
 }
 
@@ -179,16 +179,24 @@ impl From<io::Error> for ScanFail {
     }
 }
 
-/// Where the un-acked / torn tail begins.
+/// Where the un-acked / torn tail begins, and what it holds.
 ///
 /// The segment file to cut, the offset to cut it at, and the wholly-later
 /// segment files to remove (§7). Resolved to paths by the scan itself, while
 /// the segment list is in hand, so a truncation cannot be aimed at a list
-/// other than the one that was scanned.
+/// other than the one that was scanned. Beside them, measured off the same
+/// read: the tail's length over every segment it reaches, and the first file
+/// a byte of it lies in with the byte it begins at — the cut segment at the
+/// offset where a byte lies past it, else the first wholly-later segment that
+/// holds one, at `0`; `None` where the tail is empty. These are what the
+/// damaged-tail verdict and its account read ([`ScanOutcome::damaged_tail`]),
+/// before any file is touched.
 struct TailCut {
     segment: PathBuf,
     offset: u64,
     discard: Vec<PathBuf>,
+    bytes: u64,
+    from: Option<(String, u64)>,
 }
 
 /// What a scan collects of the committed transactions it scans.
@@ -307,12 +315,21 @@ pub(crate) struct ScanOutcome {
     /// them in the tail the cut removes ([`truncate_tail`]) — what a recovery
     /// reports as [`crate::Recovery`]'s `tail_cut_intact`. A crash leaves one
     /// only where the disk wrote an append's pages out of order; rot in the
-    /// last committed transaction, or a rewrite of it, leaves one too (the
-    /// open item in [`crate::Kernel::open`]'s damage model), which is why it
-    /// is counted, and why a tail that holds one is kept beside the journal
-    /// before a byte of it is cut rather than cut in silence. Never bounded,
-    /// for the reason the head is not.
+    /// last committed transaction, or a rewrite of it, leaves one too, which
+    /// is why one makes the tail damage ([`ScanOutcome::damaged_tail`]): the
+    /// open refuses it until the cut is accepted, and then keeps the tail
+    /// beside the journal before a byte of it is cut rather than cutting it
+    /// in silence. Never bounded, for the reason the head is not.
     pub tail_intact: u64,
+    /// The first intact frame of no writer's in the tail, as a tell.
+    ///
+    /// It is the frame [`ScanOutcome::tail_intact`] first counted — its
+    /// kind, its segment and its byte, and the position it claims where it
+    /// is a marker — recorded by the walk as it is met and reset beside the
+    /// count by every committed marker, so once the scan returns it names
+    /// the frame the damaged tail's account names ([`DamagedTailTell`]).
+    /// `None` where the tail holds no such frame.
+    tail_tell: Option<DamagedTailTell>,
     /// The greatest `last_seq` an intact marker in the tail claims.
     ///
     /// It is a marker after the last committed one that
@@ -557,6 +574,7 @@ impl ScanOutcome {
         // a committed one now, and so outside any tail a cut removes.
         self.tail_intact = 0;
         self.tail_claimed = None;
+        self.tail_tell = None;
         self.committed_head = self.committed_head.max(marker.last_seq);
         let Collect::Records { bound } = self.collect else {
             // The boundary mode keeps no record: the group, and every record
@@ -589,13 +607,82 @@ impl ScanOutcome {
     ///
     /// The run is classified within the committed region this scan derived:
     /// a run above the committed head is the un-acked / torn tail, which
-    /// recovery is about to discard (§7) — the tail against torn writes and
-    /// CRC-failing damage; not against a rewrite that leaves one of the last
-    /// transaction's frames intact and undecodable, whose run lands here above
-    /// the head, or reaches end-of-journal, and is cut with the transaction
-    /// (the open item in [`crate::Kernel::open`]'s damage model).
+    /// recovery discards (§7) — where that tail is a crash's. Whether it is
+    /// one is the next question, asked after these verdicts and before the
+    /// cut ([`ScanOutcome::damaged_tail`]): a rewrite that leaves one of the
+    /// last transaction's frames intact and undecodable opens a run here
+    /// above the head, which no verdict of this method halts on, and makes
+    /// the tail damage, which that one refuses.
     pub(crate) fn halt_to_head(&self) -> Option<Halt> {
         self.halt_on(self.fatal_run(Some(self.committed_head)))
+    }
+
+    /// Returns the tail as damage, where it is not a crash's (§7).
+    ///
+    /// The tail is the bytes after the last committed marker, which the cut
+    /// removes. A crash leaves one interrupted append's: intact record frames
+    /// of one transaction and at most one short or CRC-failing frame, at most
+    /// [`MAX_CRASH_TAIL_BYTES`] together, none of it acknowledged. Three
+    /// tells say the tail is not that, the first met naming it
+    /// ([`DamagedTailTell`]): an intact commit marker that commits nothing
+    /// and a CRC-intact frame that does not decode — the frames
+    /// [`ScanOutcome::tail_intact`] counts, rot in or a rewrite of the last
+    /// acknowledged transaction — and a tail longer than one append leaves
+    /// with no such frame in it, decay over the trailing bytes or bytes no
+    /// writer left. Such a tail may hold an acknowledged write, so it is the
+    /// open's ninth halt ([`crate::OpenError::Corruption`]) until the cut is
+    /// accepted, when [`truncate_tail`] keeps every byte of it first. `None`
+    /// for a crash's tail and for a journal that ends on its last committed
+    /// marker, which the cut removes or leaves as every open does.
+    ///
+    /// Asked by a recovery alone: a history read truncates nothing, and
+    /// answers the committed region whatever the tail holds.
+    pub(crate) fn damaged_tail(&self) -> Option<DamagedTail> {
+        let tail = self.tail.as_ref()?;
+        let (segment, byte) = tail.from.clone()?;
+        let tell = match &self.tail_tell {
+            Some(tell) => tell.clone(),
+            None if tail.bytes > MAX_CRASH_TAIL_BYTES => {
+                DamagedTailTell::LongerThanOneAppend { bound: MAX_CRASH_TAIL_BYTES }
+            }
+            None => return None,
+        };
+        Some(DamagedTail {
+            segment,
+            byte,
+            head: Seq(self.committed_head),
+            bytes: tail.bytes,
+            intact: self.tail_intact,
+            claimed: self.tail_claimed.map(Seq),
+            tell,
+        })
+    }
+
+    /// Returns the position no transaction after an accepted cut takes (§7).
+    ///
+    /// It is the committed head, raised to the greatest position an intact
+    /// marker in the tail claims ([`ScanOutcome::tail_claimed`]) where that
+    /// claim is trusted: a client holding the acknowledgement that named it
+    /// then finds no other write under its position, only a missing one, and
+    /// the positions between the head and the claim are a gap the next
+    /// recovery folds across without a contiguity check. The claim is
+    /// trusted only as far as the tail could hold it — a record frame of the
+    /// smallest payload per position, so a `last_seq` forged past what the
+    /// tail's bytes could number is not — and never to the order's ceiling,
+    /// where no successor could follow it. What the appender's first
+    /// transaction after the cut draws past, and what a rollback of a failed
+    /// transaction never goes below.
+    pub(crate) fn restored_high_water(&self) -> u64 {
+        let head = self.committed_head;
+        let Some(claimed) = self.tail_claimed.filter(|&claimed| claimed > head) else {
+            return head;
+        };
+        let could_hold = self.tail.as_ref().map_or(0, |tail| tail.bytes / record_frame_len(0));
+        if claimed - head <= could_hold && claimed < u64::MAX - 1 {
+            claimed
+        } else {
+            head
+        }
     }
 
     /// Returns why a history read cannot answer from this scan, if it cannot.
@@ -1198,6 +1285,7 @@ fn walk(
         runs: Vec::new(),
         tail_intact: 0,
         tail_claimed: None,
+        tail_tell: None,
         tail: None,
         chain_head: chain_at_base,
         chain_break: None,
@@ -1221,11 +1309,16 @@ fn walk(
     // closes it as `RunEnd::Eof`; either way the run is recorded with the
     // place its bytes span (`RunPlace::of`).
     let mut run_began: Option<(usize, usize)> = None;
+    // Each scanned segment's length, by index, as read: what the tail is
+    // measured from once the cut point is known, off the same bytes the
+    // verdicts were drawn from.
+    let mut lens: Vec<(usize, u64)> = Vec::new();
     for (seg_index, seg) in scanned_above(segs, s_load) {
         if first_scanned.is_none() {
             first_scanned = Some(seg_index);
         }
         let buf = read_segment(seg, s_load)?;
+        lens.push((seg_index, buf.len() as u64));
         // This segment's resynchronization budget. Every rejected candidate
         // charges, not only the ones a resync landed on: a payload can plant
         // a valid frame between two expensive rejections, which clears the
@@ -1284,11 +1377,19 @@ fn walk(
                                     // a crash leaves one only where the disk
                                     // wrote an append's pages out of order, so
                                     // it is counted as the tail's own tell
-                                    // (`ScanOutcome::tail_intact`), and the
-                                    // position it claims kept beside the count.
+                                    // (`ScanOutcome::tail_intact`), the
+                                    // position it claims kept beside the
+                                    // count, and the first such frame named.
                                     outcome.tail_intact += 1;
                                     outcome.tail_claimed =
                                         outcome.tail_claimed.max(Some(marker.last_seq));
+                                    outcome.tail_tell.get_or_insert_with(|| {
+                                        DamagedTailTell::MarkerCommitsNothing {
+                                            segment: seg.name(),
+                                            byte: pos as u64,
+                                            position: Seq(marker.last_seq),
+                                        }
+                                    });
                                     if group.clean && outcome.uncommitted_intact.is_none() {
                                         // Every frame intact, the marker
                                         // intact, and it does not close them:
@@ -1311,6 +1412,13 @@ fn walk(
                                     outcome.tail_intact += 1;
                                     outcome.tail_claimed =
                                         outcome.tail_claimed.max(Some(marker.last_seq));
+                                    outcome.tail_tell.get_or_insert_with(|| {
+                                        DamagedTailTell::MarkerCommitsNothing {
+                                            segment: seg.name(),
+                                            byte: pos as u64,
+                                            position: Seq(marker.last_seq),
+                                        }
+                                    });
                                     if let Some(group) = pending.as_ref().filter(|group| group.clean)
                                     {
                                         // A clean group whose next intact frame
@@ -1339,15 +1447,19 @@ fn walk(
                         // group is marked unclean: mid-history the run lands
                         // on the next intact frame and halts the caller; in the
                         // last transaction the run lies above the committed
-                        // head, where §7 calls it the torn tail, and the
-                        // transaction is cut from the journal though its CRC
-                        // proves these are the bytes that were written — the
-                        // open item in `Kernel::open`'s damage model, which the
-                        // count reports and whose bytes the count has kept
-                        // beside the journal (`truncate_tail`).
+                        // head, where it makes the tail damage
+                        // (`ScanOutcome::damaged_tail`), which the open refuses
+                        // until the cut is accepted and then keeps beside the
+                        // journal before it cuts (`truncate_tail`).
                         Err(_) => {
                             run_began.get_or_insert((seg_index, pos));
                             outcome.tail_intact += 1;
+                            outcome.tail_tell.get_or_insert_with(|| {
+                                DamagedTailTell::FrameDoesNotDecode {
+                                    segment: seg.name(),
+                                    byte: pos as u64,
+                                }
+                            });
                             if let Some(group) = pending.as_mut() {
                                 group.clean = false;
                             }
@@ -1388,16 +1500,36 @@ fn walk(
     // region holds no committed marker at all, everything scanned is tail:
     // the first scanned segment is cut at offset 0. A harmless corrupt run
     // (inferred max ≤ `s_load`) below the last committed marker sits below
-    // the cut and is not touched; one past it is tail like the rest.
+    // the cut and is not touched; one past it is tail like the rest. The
+    // tail is measured here, off the lengths read: the cut segment's bytes
+    // past the offset and every wholly-later segment's, and the first file a
+    // byte of it lies in — what the damaged-tail verdict reads before a file
+    // is touched, and what the cut reads again off the files as it cuts.
     outcome.tail = cut
         .or_else(|| first_scanned.map(|first| (first, 0)))
-        .map(|(seg_index, offset)| TailCut {
-            segment: segs[seg_index].path.clone(),
-            offset,
-            discard: segs[seg_index + 1..]
-                .iter()
-                .map(|seg| seg.path.clone())
-                .collect(),
+        .map(|(seg_index, offset)| {
+            let len_of = |index: usize| {
+                lens.iter().find(|&&(i, _)| i == index).map_or(0, |&(_, len)| len)
+            };
+            let mut bytes = len_of(seg_index).saturating_sub(offset);
+            let mut from = (bytes > 0).then(|| (segs[seg_index].name(), offset));
+            for (later, seg) in segs.iter().enumerate().skip(seg_index + 1) {
+                let len = len_of(later);
+                if from.is_none() && len > 0 {
+                    from = Some((seg.name(), 0));
+                }
+                bytes = bytes.saturating_add(len);
+            }
+            TailCut {
+                segment: segs[seg_index].path.clone(),
+                offset,
+                discard: segs[seg_index + 1..]
+                    .iter()
+                    .map(|seg| seg.path.clone())
+                    .collect(),
+                bytes,
+                from,
+            }
         });
     Ok(outcome)
 }
@@ -1758,23 +1890,27 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
 /// true at the next recovery (§1/§7). Idempotent at the open: a failed cut
 /// is retried by the next `open()`.
 ///
-/// **The keep.** Where the tail holds an intact frame no torn write leaves
-/// ([`ScanOutcome::tail_intact`]) — the sign that the cut may take a
-/// transaction this kernel acknowledged, rot in or a rewrite of the journal's
-/// last transaction (the open item in [`crate::Kernel::open`]'s damage
-/// model), whose bytes are then the one record of that write and of what
-/// befell it — every byte the cut takes is first kept beside the journal,
-/// durably ([`keep_aside`]). The cut segment's bytes from the cut on are
-/// copied to `{segment}.cut-{byte}`, and each wholly-later segment that holds
-/// a byte is moved whole to `{segment}.cut-0`, so no byte leaves the journal
-/// that a durable file beside it does not hold. A crash's tail holds no such
-/// frame save where the disk wrote an append's pages out of order — a torn
-/// write leaves a frame that fails its CRC, and the intact records before it
-/// were never acknowledged — and is cut and gone, as §7 has it. No listing
-/// of the kernel's reads a kept file's name, so the next session's appends
-/// and every recovery's scan go on as if the tail were gone; the kept files
-/// are the operator's, and no open writes over one ([`keep_a_copy`]), or
-/// removes one save where the keep that made or completed it fails.
+/// **The keep.** Where the tail is damage and not a crash's
+/// ([`ScanOutcome::damaged_tail`]) — an intact frame no torn write leaves in
+/// it, rot in or a rewrite of the journal's last acknowledged transaction,
+/// or more bytes than one append leaves, decay over the trailing bytes —
+/// the cut may take a transaction this kernel acknowledged, and its bytes
+/// are then the one record of that write and of what befell it. So the open
+/// cuts such a tail only where its configuration accepts the cut by name
+/// (`accept`, [`crate::Durability::Fsync`]'s `cut_damaged_tail`; the open
+/// has already refused it otherwise), and then every byte the cut takes is
+/// first kept beside the journal, durably ([`keep_aside`]). The cut
+/// segment's bytes from the cut on are copied to `{segment}.cut-{byte}`, and
+/// each wholly-later segment that holds a byte is moved whole to
+/// `{segment}.cut-0`, so no byte leaves the journal that a durable file
+/// beside it does not hold. A crash's tail — intact record frames of one
+/// transaction, a torn frame, the whole under [`MAX_CRASH_TAIL_BYTES`],
+/// none of it acknowledged — is cut and gone under either value of
+/// `accept`, as §7 has it. No listing of the kernel's reads a kept file's
+/// name, so the next session's appends and every recovery's scan go on as if
+/// the tail were gone; the kept files are the operator's, and no open writes
+/// over one ([`keep_a_copy`]), or removes one save where the keep that made
+/// or completed it fails.
 ///
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.
@@ -1803,10 +1939,27 @@ pub(crate) fn first_sync_word(segs: &[SegmentMeta], s_load: u64) -> io::Result<F
 /// opened, sized, cut, synced or removed, named `{file}: {act}`, or where
 /// the keep fails ([`keep_aside`]). A keep that fails cuts nothing and puts
 /// back what it made, best-effort, so the next open keeps and cuts.
-pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome, seam: &Seam) -> io::Result<Truncated> {
+///
+/// # Panics
+///
+/// Panics where the tail is damage and `accept` is `false`: the open halts
+/// on such a tail before it reaches here, so the call is a caller's bug,
+/// answered as one rather than with a cut the operator never accepted.
+pub(crate) fn truncate_tail(
+    dir: &Path,
+    scan: &ScanOutcome,
+    accept: bool,
+    seam: &Seam,
+) -> io::Result<Truncated> {
     let Some(tail) = &scan.tail else {
         return Ok(Truncated { bytes: 0, from: None, kept: Vec::new() });
     };
+    let damaged = scan.damaged_tail().is_some();
+    assert!(
+        accept || !damaged,
+        "a damaged journal tail is kept and cut only under cut_damaged_tail: the open refuses \
+         it first (Kernel::open)"
+    );
     let name = file_name(&tail.segment);
     let segment =
         OpenOptions::new().write(true).open(&tail.segment).map_err(at_file(&name, "truncate"))?;
@@ -1815,7 +1968,7 @@ pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome, seam: &Seam) -> io::
         .map_err(at_file(&name, "truncate"))?
         .len()
         .saturating_sub(tail.offset);
-    let kept = if scan.tail_intact > 0 {
+    let kept = if damaged {
         keep_aside(dir, tail, above, seam)?
     } else {
         Kept::default()

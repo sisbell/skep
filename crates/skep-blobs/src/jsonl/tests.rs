@@ -60,10 +60,14 @@ fn a_whole_object_without_its_newline_is_a_torn_tail() {
 /// EACH READING ANSWERS WHAT IT FOUND (`LogRead`, `TailCut`): an absent log
 /// found absent — the inspection making nothing, the open making it empty;
 /// a whole one trusted to its end, no cut; a half-written tail — a crash's,
-/// its newline never written — cut with no whole line past it; and a
+/// its newline never written — cut with no whole line past it, its first
+/// line torn, nothing kept; a damaged LAST line — whole, ended by its
+/// newline, and no object — cut with no whole line past it either, and told
+/// from the crash's by its first line being whole: damage, kept; and a
 /// damaged line mid-file cut with the two whole lines after it, which no
-/// crash takes — the inspection's reading answering exactly what the open
-/// then finds and cuts.
+/// crash takes, kept — the inspection's reading answering exactly what the
+/// open then finds, keeps and cuts, save the kept name, the inspection
+/// keeping nothing.
 #[test]
 fn each_reading_answers_where_trust_ended_and_the_whole_lines_the_cut_took() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -80,19 +84,63 @@ fn each_reading_answers_where_trust_ended_and_the_whole_lines_the_cut_took() {
     );
     for (bytes, lines, cut) in [
         ("{\"n\":1}\n{\"n\":2}\n", 2, None),
-        ("{\"n\":1}\n{\"n\"", 1, Some((8, 12, 0))),
-        ("{\"n\":1}\ngarbage\n{\"n\":3}\n{\"n\":4}\n", 1, Some((8, 32, 2))),
+        ("{\"n\":1}\n{\"n\"", 1, Some((8, 12, 0, false))),
+        ("{\"n\":1}\ngarbage\n", 1, Some((8, 16, 0, true))),
+        ("{\"n\":1}\ngarbage\n{\"n\":3}\n{\"n\":4}\n", 1, Some((8, 32, 2, true))),
     ] {
         fs::write(&path, bytes).unwrap();
         let (_, as_found) = Log::read_as_found(&path).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), bytes, "{bytes:?}: the inspection cuts nothing");
+        assert_eq!(as_found.kept, None, "{bytes:?}: the inspection keeps nothing");
         let (_, _, opened) = Log::open(path.clone()).unwrap();
-        assert_eq!(as_found, opened, "{bytes:?}: the inspection answers what the open finds");
+        assert_eq!(
+            LogRead { kept: None, ..opened.clone() },
+            as_found,
+            "{bytes:?}: the inspection answers what the open finds, the kept name aside"
+        );
         assert_eq!((opened.absent, opened.lines, opened.unread), (false, lines, 0), "{bytes:?}");
-        assert_eq!(opened.cut.map(|c| (c.at, c.len, c.lines_after)), cut, "{bytes:?}");
-        let kept = cut.map_or(bytes.len() as u64, |(at, _, _)| at);
-        assert_eq!(fs::metadata(&path).unwrap().len(), kept, "{bytes:?}: the open cut there");
+        assert_eq!(
+            opened.cut.map(|c| (c.at, c.len, c.lines_after, c.first_whole)),
+            cut,
+            "{bytes:?}"
+        );
+        let at = cut.map_or(bytes.len() as u64, |(at, _, _, _)| at);
+        assert_eq!(fs::metadata(&path).unwrap().len(), at, "{bytes:?}: the open cut there");
+        // THE KEEP follows the class: damage is kept beside the log, byte
+        // for byte from the cut to the end, named within the data
+        // directory; a crash's torn line is cut and gone.
+        match cut {
+            Some((at, _, _, true)) => {
+                let kept = format!("{name}.cut-{at}");
+                assert_eq!(opened.kept.as_deref(), Some(kept.as_str()), "{bytes:?}: damage, kept");
+                assert_eq!(
+                    fs::read(dir.path().join(format!("x.log.cut-{at}"))).unwrap(),
+                    &bytes.as_bytes()[at as usize..],
+                    "{bytes:?}: every byte from the cut on"
+                );
+                fs::remove_file(dir.path().join(format!("x.log.cut-{at}"))).unwrap();
+            }
+            _ => {
+                assert_eq!(opened.kept, None, "{bytes:?}: nothing kept");
+                assert!(
+                    fs::read_dir(dir.path()).unwrap().all(|e| {
+                        !e.unwrap().file_name().to_string_lossy().contains(".cut-")
+                    }),
+                    "{bytes:?}: no kept file"
+                );
+            }
+        }
     }
+    // A standing kept name is never written over: the next keep takes `.1`.
+    fs::write(&path, "{\"n\":1}\ngarbage\n").unwrap();
+    fs::write(dir.path().join("x.log.cut-8"), "an earlier cut's bytes").unwrap();
+    let (_, _, opened) = Log::open(path.clone()).unwrap();
+    assert_eq!(opened.kept.as_deref(), Some(format!("{name}.cut-8.1").as_str()));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("x.log.cut-8")).unwrap(),
+        "an earlier cut's bytes"
+    );
+    assert_eq!(fs::read_to_string(dir.path().join("x.log.cut-8.1")).unwrap(), "garbage\n");
 }
 
 /// AN APPEND THAT FAILS is cut back off the file: a write cut short —

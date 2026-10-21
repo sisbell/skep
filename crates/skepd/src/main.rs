@@ -1,21 +1,25 @@
 //! The `skepd` binary: it binds, opens and serves one board, and exits 1.
 //!
-//! The sequence is the panic hook, then flags/env → [`bind`] →
-//! [`Daemon::open_configured`] → [`serve_bound`] → wait → exit 1. The
-//! listener is bound before the open, so a held port is refused in
-//! milliseconds with the open's whole cost unpaid and no `kernel.lock`
-//! taken; `wait` returns only when every worker thread has ended, which the
+//! The sequence is the panic hook, then flags/env → the board judged
+//! against `--create` ([`judge_the_board`]) → [`bind`] →
+//! [`Daemon::open_started`] → [`serve_bound`] → wait → exit 1. The board is
+//! judged first, read-only: a start on a directory holding no journal is
+//! refused without `--create`, nothing created. The listener is bound
+//! before the open, so a held port is refused in milliseconds with the
+//! open's whole cost unpaid and no `kernel.lock` taken; `wait` returns only
+//! when every worker thread has ended, which the
 //! binary says and exits 1 on — a failure, on a code a supervisor reads as
 //! one. Crash-stop is the shutdown story (M2's WAL recovers), so there is
 //! no signal handling to get wrong. The binary's own lines — the refusals
 //! before each exit, on stderr, and the serving line, on stdout — are
-//! written synchronously with the write's result discarded, as the operator
-//! stream writes, so a lost reader costs the line and never the daemon or
-//! its exit code; the hook's line and the exit's go through the stream's
-//! classed door. Every drain of the stream gives up on a reader that has
-//! taken no line for `DRAIN_STALL`, and a refusal after the stream's first
-//! line is written only behind a stream that drained, so a reader that has
-//! stopped costs the lines and never the exit. And the operator's two tools
+//! written with the write's result discarded, as the operator stream
+//! writes, so a lost reader costs the line and never the daemon or its exit
+//! code; the hook's line and the exit's go through the stream's classed
+//! door. Every drain of the stream gives up on a reader that has taken no
+//! line for `DRAIN_STALL`; a refusal before the stream's first line is
+//! waited for that long and no longer (`refuse`), and one after it is
+//! written only behind a stream that drained, so a reader that has stopped
+//! costs the lines and never the exit. And the operator's two tools
 //! over a board directory, run with no server — `skepd inventory` and
 //! `skepd pull` (`skepd::tools`) — a leading verb parsed before any flag;
 //! and `skepd --version`, read the same way, the one line a release's check
@@ -28,11 +32,11 @@ use std::net::Ipv4Addr;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use skep_core::limits::STANDING_INTERVAL;
 use skep_util::notice::{self, Class};
 use skep_util::source::Source;
@@ -51,7 +55,7 @@ use skep_util::source::Source;
 // programs' defaults are written to meet it — `skep-mcp`'s `SKEPD_URL`,
 // `skep-dev serve --own`'s `--port` — and their suites read it there.
 use skepd::{
-    bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin,
+    bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, StartOptions,
     DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT, DEFAULT_WORKERS, DESIGNATION,
     MIN_WORKERS, STORE_DIR,
 };
@@ -93,6 +97,15 @@ const SKEPD_LOCAL_TRUST: EnvSetting =
 ///
 /// `false` closes the upload's creation and resume, as `--no-uploads` does.
 const SKEPD_UPLOADS: EnvSetting = EnvSetting { var: "SKEPD_UPLOADS", expected: "true or false" };
+/// The damaged tail's acceptance, as a variable (`--cut-damaged-tail`).
+///
+/// `true` accepts the cut of a damaged journal tail at this one start, as
+/// the flag does. A variable under the daemon's rule that every flag has
+/// one — and the one setting that must not stand in a unit file: a start
+/// that needs no cut says so and goes on, and a later damage would then be
+/// cut unasked.
+const SKEPD_CUT_DAMAGED_TAIL: EnvSetting =
+    EnvSetting { var: "SKEPD_CUT_DAMAGED_TAIL", expected: "true or false" };
 
 /// The data dir's variable, a bare name rather than an [`EnvSetting`].
 ///
@@ -324,14 +337,39 @@ fn install_the_panic_hook() {
 
 /// Writes one line of the binary's own on stderr: a refusal before its exit.
 ///
-/// It is written synchronously with the write's result discarded
-/// (`operations.md` §0 fact 1): a lost reader costs the line and never the
-/// exit code, where `eprintln!` would panic and turn an exit 1 or 2 into
-/// 101. Synchronous because the exit follows at once; where a line of the
-/// open's could still be waiting, [`refuse_once_drained`] drains the stream
-/// first and writes the refusal only behind a stream that drained.
+/// It is written with the write's result discarded (`operations.md` §0
+/// fact 1): a lost reader costs the line and never the exit code, where
+/// `eprintln!` would panic and turn an exit 1 or 2 into 101. The write runs
+/// on a thread of its own and is waited for [`DRAIN_STALL`] and no longer —
+/// a reader that has stopped, its pipe full, would hold a write on this
+/// thread for as long as it stands still, and the exit that follows at once
+/// must not wait on it; the exit ends the parked write with the process.
+/// Where the OS refuses the thread the line is written here, as before.
+/// Where a line of the open's could still be waiting,
+/// [`refuse_once_drained`] drains the stream first and writes the refusal
+/// only behind a stream that drained.
 fn refuse(line: fmt::Arguments<'_>) {
-    let _ = writeln!(io::stderr(), "{line}");
+    let text = format!("{line}\n");
+    let written = Arc::new((Mutex::new(false), Condvar::new()));
+    let flag = Arc::clone(&written);
+    let spawned = std::thread::Builder::new().name("skepd-refusal".into()).spawn(move || {
+        let _ = io::stderr().write_all(text.as_bytes());
+        let (done, taken) = &*flag;
+        *done.lock() = true;
+        taken.notify_all();
+    });
+    match spawned {
+        Ok(_) => {
+            let (done, taken) = &*written;
+            let mut guard = done.lock();
+            if !*guard {
+                taken.wait_for(&mut guard, DRAIN_STALL);
+            }
+        }
+        Err(_) => {
+            let _ = writeln!(io::stderr(), "{line}");
+        }
+    }
 }
 
 /// Writes an exit's refusal behind the operator stream's queued lines.
@@ -438,7 +476,7 @@ const NODE_PREFIX_FORM: &str =
 /// help's `SKEPD_` names to it, so a setting the help documents and this
 /// list omits fails there, and one the parse reads and this list omits is
 /// refused the first time anyone sets it.
-const VARIABLES: [&str; 9] = [
+const VARIABLES: [&str; 10] = [
     SKEPD_DATA_DIR,
     SKEPD_PORT.var,
     SKEPD_BIND.var,
@@ -448,6 +486,7 @@ const VARIABLES: [&str; 9] = [
     SKEPD_ORIGIN,
     SKEPD_BLOCKED_PREFIXES,
     SKEPD_NODE_PREFIX.var,
+    SKEPD_CUT_DAMAGED_TAIL.var,
 ];
 
 /// The `SKEPD_` variables another program of the workspace reads.
@@ -509,11 +548,11 @@ fn usage() -> String {
         if AuthOptions::default().local_trust { "--local-trust" } else { "--no-local-trust" };
     format!(
         "\
-usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
+usage: skepd --data-dir <DIR> [--create] [--bind <ADDR>] [--port <PORT>]
              [--workers <N>] [--local-trust | --no-local-trust]
              [--allow-preview-keys] [--uploads | --no-uploads]
              [--origin <ORIGIN>]... [--blocked-prefixes <FILE>]
-             [--node-prefix <PREFIX>]
+             [--node-prefix <PREFIX>] [--cut-damaged-tail]
        skepd inventory --data-dir <DIR> [--no-rehash]
        skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
 
@@ -522,12 +561,35 @@ usage: skepd --data-dir <DIR> [--bind <ADDR>] [--port <PORT>]
                      {STORE_DIR}/, and the change feed's files — commits.log,
                      the four index files feed-index.log, feed-offsets.log,
                      feed-masked.log and feed-streams.log, and
-                     feed-attest.log; created if absent, recovered if
-                     populated. Created owner-only — the directory 0700
+                     feed-attest.log; recovered where a board stands there,
+                     and refused where none does unless --create is given.
+                     Created owner-only — the directory 0700
                      and every file in it 0600, set at creation whatever
                      the umask — and a directory other users of this
                      machine can read is refused at start: chmod 700 it
                      and start again
+  --create           begin a new board where none stands: the directory
+                     created if absent, the journal begun at genesis. A
+                     start without it on a directory holding no journal
+                     segment is refused (exit 2) — a mistyped path, a
+                     volume not mounted — and a start with it on a
+                     directory holding a board is refused too; give it to
+                     the first start alone
+  --cut-damaged-tail
+                     accept, for this one start, the cut of a journal tail
+                     the open refuses as damage (env:
+                     SKEPD_CUT_DAMAGED_TAIL=true|false): an intact commit
+                     marker committing nothing, a frame that does not
+                     decode, or more bytes past the last committed marker
+                     than one interrupted append leaves — a write the
+                     board acknowledged may be among them, so without the
+                     flag the open refuses, naming the frame and the two
+                     acts (restore the segment from a copy, or start once
+                     with this flag). Under it the open keeps every byte of
+                     the tail beside the journal (seg-<n>.wal.cut-<byte>),
+                     cuts it, hands out no position the tail claimed, and
+                     says the cut as a failure. A start that needs no cut
+                     says so; never keep the flag in a unit file
   --port <PORT>      TCP port on the address --bind names (env: SKEPD_PORT;
                      default {DEFAULT_PORT}; 0 picks an ephemeral port)
   --bind <ADDR>      the address to listen on (env: SKEPD_BIND; default
@@ -737,6 +799,15 @@ struct Args {
     node_prefix: Option<NodePrefix>,
     /// Where `node_prefix` came from, which line 19 names (§1.1 row 19).
     node_prefix_source: Source,
+    /// `--cut-damaged-tail` / `SKEPD_CUT_DAMAGED_TAIL`: the damaged tail's
+    /// cut, accepted for this one start.
+    cut_damaged_tail: bool,
+    /// `--create`: begin a board where none stands.
+    ///
+    /// A flag and no variable: it is given to one start, the first, and a
+    /// variable in a unit's environment would stand at every start, which
+    /// the refusal of `--create` on a standing board would then meet.
+    create: bool,
 }
 
 /// One setting as the parse resolves it, with the arm that set it.
@@ -951,6 +1022,11 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     // daemon refuses enrollment of a tag-3 key unless this setting allows
     // it"); the default is `AuthOptions`'.
     let mut allow_preview_keys = false;
+    // The damaged tail's acceptance, seeded from its variable; the flag
+    // sets it as every flag beats its variable.
+    let mut cut_damaged_tail: Option<bool> = from_env(SKEPD_CUT_DAMAGED_TAIL)?;
+    // Whether the start was told to begin a board, which no variable seeds.
+    let mut create = false;
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -977,6 +1053,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             "--uploads" => uploads.set_by_flag(true),
             "--no-uploads" => uploads.set_by_flag(false),
             "--allow-preview-keys" => allow_preview_keys = true,
+            "--cut-damaged-tail" => cut_damaged_tail = Some(true),
+            "--create" => create = true,
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
                 origins.push_by_flag(
@@ -1048,7 +1126,46 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         blocked_prefixes,
         node_prefix: node_prefix.value,
         node_prefix_source: node_prefix.source,
+        cut_damaged_tail: cut_damaged_tail.unwrap_or(false),
+        create,
     }))
+}
+
+/// Judges the data directory against `--create`, before anything is touched.
+///
+/// The binary begins a board only under the word, and refuses the word on a
+/// board that stands (`operations.md` §3.1 step 2): a start on a directory
+/// holding no journal segment — a mistyped path, a volume not mounted over
+/// its mount point, an empty directory — is a usage refusal without
+/// `--create`, since the open would otherwise make and serve an empty board
+/// there, and `--create` on a directory holding a board is one too. Judged
+/// by the kernel's own test of a segment's name ([`tools::board_stands`]),
+/// read-only, so nothing is created under either refusal. A directory that
+/// does not stand holds no board.
+///
+/// # Errors
+///
+/// `Ok(Err(message))` is the usage refusal, exit 2; `Err` the directory's
+/// read failing other than for its absence — a permission, a device —
+/// which is no answer about the board, exit 1.
+fn judge_the_board(data_dir: &Path, create: bool) -> io::Result<Result<(), String>> {
+    let stands = match tools::board_stands(data_dir) {
+        Ok(stands) => stands,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e),
+    };
+    Ok(match (stands, create) {
+        (true, true) => Err(format!(
+            "--create: a board stands at {} already; start it without --create",
+            data_dir.display()
+        )),
+        (false, false) => Err(format!(
+            "no board at {}: no journal segment stands there; pass --create to begin one there, \
+             or name the board's directory",
+            data_dir.display()
+        )),
+        _ => Ok(()),
+    })
 }
 
 fn main() {
@@ -1095,6 +1212,23 @@ fn main() {
             exit(2);
         }
     };
+    // The board, before the bind: whether a journal stands where the start
+    // points is decidable by one listing, so a start on a directory holding
+    // no board is refused here without `--create` — a usage refusal, exit
+    // 2, nothing created, no port held — and `--create` on a standing board
+    // the same way; a directory the process cannot read is the read's own
+    // failure, exit 1, and no answer about the board.
+    match judge_the_board(&args.data_dir, args.create) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            refuse(format_args!("{}", usage_refusal(&e, io::stderr().is_terminal())));
+            exit(2);
+        }
+        Err(e) => {
+            refuse(format_args!("skepd: {e}"));
+            exit(1);
+        }
+    }
     // The bind, first: a port another process holds is decidable before any
     // byte of the journal is read, so it is refused here — at once, exit 1,
     // with no `kernel.lock` taken and nothing created under the data
@@ -1178,7 +1312,14 @@ fn main() {
     let mut media = MediaOptions::default();
     media.uploads = args.uploads;
     media.uploads_source = args.uploads_source;
-    let daemon = match Daemon::open_configured(&args.data_dir, opts, media) {
+    // The start's own words (`operations.md` §3.1): the damaged tail's cut
+    // accepted for this start alone, and whether the start was told to
+    // begin a board — judged above, so the open's beginning is the one the
+    // operator asked for.
+    let mut start = StartOptions::default();
+    start.cut_damaged_tail = args.cut_damaged_tail;
+    start.create = args.create;
+    let daemon = match Daemon::open_started(&args.data_dir, opts, media, start) {
         Ok(d) => d,
         Err(e) => {
             refuse_once_drained(format_args!("skepd: {e}"));

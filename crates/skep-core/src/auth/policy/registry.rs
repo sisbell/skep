@@ -45,9 +45,9 @@ use skep_engine::World;
 /// carries a `sig` (REG-1.14's first two, the deposit class's third and
 /// fourth members). The five other body-bearing rows and the three
 /// link-alone rows answer no kind here: a declared `insert` under one of
-/// them is refused `published_target` at M5's door, as a declaration under
-/// any type outside the deposit class is, and a bare `make_link` typed one
-/// is an ordinary link write on the plain path.
+/// them into a published document is refused `published_target` at M5's
+/// door, as a declaration under any type outside the deposit class is, and
+/// a bare `make_link` typed one is an ordinary link write on the plain path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RegistryKind {
     Binding,
@@ -167,10 +167,11 @@ pub fn deposits_registry_link(op: &Op) -> bool {
 ///
 /// Every one marshals as `code: registry_refused, detail: token(),
 /// disposition: disposition()` (`codec/marshal.rs`'s
-/// `registry_refused_reply`, through `server/reply.rs`'s `registry_refused`)
-/// — the credential family's shape under a code of its own, so a client
-/// tells the two families apart; no token of the credential family is
-/// renamed, the tokens this sequence shares with it are spelled through it.
+/// `registry_refused_reply`, through `registry_refused` in skepd's
+/// `server/reply.rs`) — the credential family's shape under a code of its
+/// own, so a client tells the two families apart; no token of the
+/// credential family is renamed, the tokens this sequence shares with it
+/// are spelled through it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistryRefusal {
     /// At or below the claim: token `claim_first`, the pre-claim gate's own.
@@ -207,9 +208,11 @@ pub enum RegistryRefusal {
     MalformedRecord(skep_registry::ParseRefusal),
     /// No `sig` at all (§4.5 (4)).
     ///
-    /// The fence with no population, as the credential's: a sig-less
-    /// record-kind atom is refused at its `insert`. Token
-    /// `attestation_required`, `Reorder`.
+    /// It is the credential's fence, which the insert's own gate narrows: a
+    /// sig-less atom that parses as a record of its declared kind is refused
+    /// at its `insert` above the claim, so an atom this reaches was inserted
+    /// below the claim, declared under another kind, or placed past the
+    /// check. Token `attestation_required`, `Reorder`.
     AttestationRequired,
     /// The trial's causes over the record's `sig`, each with its class.
     ///
@@ -329,14 +332,16 @@ fn deposit_of(op: &Op) -> Option<RegistryDeposit<'_>> {
 ///    the form's fault; bytes past the read's own cap are the parser's.
 /// 4. No `sig` → `attestation_required`.
 /// 5. The trial — the blob, the frame, the candidates and the trial, the
-///    credential record grade's own steps (`verify_record_sig`): the
-///    `record` frame over the home's account (ω over the home), the home,
-///    the type address and the target as stored, the `replaces` and lineage
-///    rows empty, the sig-less canonical projection the parser's; the
-///    candidates the set that opens the home's account, anchor grade false
-///    (no rule names an anchor grade for a registry record). The system
-///    account's doc 1 refuses here — `1.1.0.1` holds no key set, so
-///    `attestation_invalid:not_enrolled_at_position` (SO-I2 (g)(iv)).
+///    credential record grade's own steps (`verify_record_sig`), each fault
+///    answered `attestation_invalid:<cause>`: the `record` frame over the
+///    home's account (ω over the home), the home, the type address and the
+///    target as stored, the `replaces` and lineage rows empty, the sig-less
+///    canonical projection the parser's; the candidates the set that opens
+///    the home's account, anchor grade false (no rule names an anchor grade
+///    for a registry record). The system account's doc 1 refuses here —
+///    `1.1.0.1` holds no key set, so
+///    `attestation_invalid:not_enrolled_at_position` (SO-I2 (g)(iv)); a home
+///    with no owner, a premise broken, answers the same, fail-closed.
 ///
 /// # Panics
 ///

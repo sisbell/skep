@@ -21,10 +21,11 @@ use super::prefix::NodePrefix;
 /// set it affirmatively false, AUTH-4.57 (i)), the configured origins
 /// (AUTH-4.7: configure what the board is actually reachable at), the
 /// blocked-prefix supply, the node prefix, and the one dev setting —
-/// `allow_preview_keys` (AUTH-1.44), default off; and beside the flag and
-/// the prefix where each came from (`local_trust_source`,
-/// `node_prefix_source`), so the open's report names each setting with its
-/// source (`operations.md` §1, the open's report; §1.1 rows 19 and m14).
+/// `allow_preview_keys` (AUTH-1.44), default off; and beside the flag, the
+/// configured origins and the prefix where each came from
+/// (`local_trust_source`, `configured_source`, `node_prefix_source`), so
+/// the open's report names each setting with its source (`operations.md`
+/// §1, the open's report; §1.1 rows 19 and m14).
 ///
 /// `#[non_exhaustive]`, paired with the [`Default`] below: a caller starts
 /// from the defaults and sets what it means to change, so a knob added
@@ -166,14 +167,14 @@ impl Default for AuthOptions {
 
 /// The resolved configuration the auth surface reads.
 ///
-/// It is the options plus the bound port. The port exists only once it is
-/// bound: `serve` sets it once the listener exists; a socket-free embedder
-/// that wants origin-set behavior calls `skepd::Daemon::bind_auth_port`
-/// itself. Until set there is no port and so no loopback defaults — origin
-/// membership then admits only what an explicit `--origin` names, which is
-/// the honest degenerate for a daemon that is not serving, and which
-/// [`AuthConfig::port`] says in its type rather than through a sentinel
-/// every reader has to carve around.
+/// It is the options, less the supply file's path, plus the bound port. The
+/// port exists only once it is bound: `serve` sets it once the listener
+/// exists; a socket-free embedder that wants origin-set behavior calls
+/// `skepd::Daemon::bind_auth_port` itself. Until set there is no port and
+/// so no loopback defaults — origin membership then admits only what an
+/// explicit `--origin` names, which is the honest degenerate for a daemon
+/// that is not serving, and which [`AuthConfig::port`] says in its type
+/// rather than through a sentinel every reader has to carve around.
 ///
 /// Beside the members the blocked-prefix list (AUTH-1.44): daemon config as
 /// `configured` is, never board state — in no record, journal, sidecar or
@@ -185,8 +186,7 @@ impl Default for AuthOptions {
 /// is: a fresh one is a reconfigure and restart (REG-1.70), so it sits
 /// behind no lock, and every install of the list reads the one in force.
 pub struct AuthConfig {
-    /// The `--local-trust` flag: bare loopback binds stay honored once
-    /// claimed.
+    /// The `--local-trust` flag: bare loopback binds stay honored once claimed.
     pub local_trust: bool,
     /// [`AuthOptions::local_trust_source`], as supplied.
     ///
@@ -282,8 +282,7 @@ impl AuthConfig {
     /// Returns the board's mode at a snapshot whose claim is `claimed`.
     ///
     /// It is [`Mode::of`] over this config, for the sites outside this module
-    /// that say the mode on the operator stream and can name the words but
-    /// not the type.
+    /// that say the mode on the operator stream.
     pub fn mode(&self, claimed: bool) -> Mode {
         Mode::of(self, claimed)
     }
@@ -308,8 +307,9 @@ impl AuthConfig {
     /// `(the default)`, so a stale variable's origin is told from the
     /// flag's. Either source reads `no source named` where a caller set a
     /// value that is not the default and named no source. The one line that
-    /// names a mistyped `--origin` on an `Enforcing` board, where every
-    /// signed session is otherwise refused in silence.
+    /// names every configured origin, a mistyped `--origin` on an `Enforcing`
+    /// board among them, where every signed session is otherwise refused in
+    /// silence.
     pub fn auth_line(&self, claimed: bool) -> String {
         let defaults = AuthOptions::default();
         let (flag, variable) = if self.local_trust {
@@ -344,13 +344,12 @@ impl AuthConfig {
 
     /// Returns whether the config is `ClaimedPermissive` when `claimed`.
     ///
-    /// `claimed` is the claim of the snapshot asked about. This is the one bit
-    /// the standing line re-says once an hour while it stands
-    /// (`operations.md` §1, the rates, `CLAIMED-PERMISSIVE`), read as
-    /// [`Mode::of`] reads the pair rather than as the conjunction that
-    /// computes it. A method and not a `Mode` at the caller because this
-    /// module is private to the session layer: the daemon's tick can reach
-    /// the config it holds and no type of this file's.
+    /// `claimed` is the claim of the snapshot asked about. This is the bit
+    /// the standing line's `CLAIMED-PERMISSIVE` clause re-says once an hour
+    /// while it stands (`operations.md` §1, the rates), read as [`Mode::of`]
+    /// reads the pair rather than as the conjunction that computes it. A
+    /// method on the config the daemon's tick holds; this module is private
+    /// to the session layer, and `auth` re-exports [`Mode`] beside the config.
     pub fn claimed_permissive(&self, claimed: bool) -> bool {
         Mode::of(self, claimed) == Mode::ClaimedPermissive
     }

@@ -1,7 +1,7 @@
 //! The one concrete [`Codec`]: JSON frames ↔ M10's typed `Request`/`Response`.
 //!
 //! The wire conventions are a cross-client contract, specified for client
-//! authors in `skep/docs/wire.md` and pinned by the tests in
+//! authors in `skep/docs/wire.md` and pinned by the tests in skepd's
 //! `tests/it/wire_doc.rs` (the doc's examples are asserted, not decorative).
 //! The rules the whole file hangs on:
 //!
@@ -10,11 +10,10 @@
 //!   are parse failures, never ignored (the never-silent contract applied to
 //!   client typos).
 //! * `make_link`'s three endset slots are two-form (wire v5): a V-spec array
-//!   (content-resolved, byte-identical to v4 — existing frames mean exactly
-//!   what they meant) or
-//!   `{"addrs": [addresses…]}` — the names recorded verbatim, no resolution;
-//!   the addrs-object encoding is identical to `edit_link`'s successor `ty`
-//!   addrs form.
+//!   (content-resolved, byte-identical to v4 — a v4 frame means under v5
+//!   exactly what it means under v4) or `{"addrs": [addresses…]}` — the
+//!   names recorded verbatim, no resolution; the addrs-object encoding is
+//!   identical to `edit_link`'s successor `ty` addrs form.
 //! * Tumblers and addresses are dotted-decimal strings (`"1.1.0.1.0.2"`);
 //!   spans are `{"start": …, "width": …}` objects; unbounded ℕ values ride
 //!   as decimal strings (T0 admits magnitudes no JSON number can carry),
@@ -24,11 +23,12 @@
 //! * Content values carry granularity explicitly (wire v2): the per-byte
 //!   write forms (`"str"`, `{"hex"}`) mint one single-byte value per byte —
 //!   the substrate's text discipline, under which V-span widths measure
-//!   exact bytes — while `{"atom"}`/`{"atom_hex"}` mint ONE composite value
-//!   whose interior is permanently unaddressable. Deliveries render maximal
-//!   per-byte runs as one `content`/`hex` item and every composite value as
-//!   its own `atom`/`atom_hex` item, so the marshal is injective across
-//!   granularity: two distinct position-value sequences never render alike.
+//!   exact bytes — while `{"atom"}`/`{"atom_hex"}` mint *one* composite value
+//!   whose interior is permanently unaddressable. A `delivery` renders
+//!   maximal per-byte runs as one `content`/`hex` item and every composite
+//!   value as its own `atom`/`atom_hex` item, so the marshal is injective
+//!   across granularity: two distinct position-value sequences never render
+//!   alike.
 //! * Marshaling is deterministic: every object is built through [`obj`],
 //!   which sorts keys, so two marshals of one response are byte-equal and
 //!   the canonical form never depends on serde_json's map backend.
@@ -36,7 +36,8 @@
 //!   defined encoding: a client that cannot decode a rejection has been
 //!   silently failed.
 //!
-//! What `marshal.rs` renders is the OPERATION CHANNEL: M10's `Response`s, the
+//! What `marshal.rs` renders is the operation channel: M10's `Response`s, the
+//! canonical request encoding [`JsonCodec::marshal_request`] writes, the
 //! daemon-originated rejections ([`credential_refused_reply`],
 //! [`registry_refused_reply`]), and the `key_set` row. The transport's own
 //! shapes — `/health`, `/session`, `/challenge`, `/changes` and its entries,
@@ -72,43 +73,47 @@ pub use marshal::{credential_refused_reply, key_set_reply, op_name, registry_ref
 pub(crate) use marshal::j_attest;
 use marshal::{j_response, req_pairs};
 
-/// The most elements one wire array may carry, applied at [`p_list`] — so
-/// every attacker-sized list on the request surface (span regions, spec and
-/// region lists, address lists, v-spec lists, `rearrange` cuts, and the
-/// query endsets of the ftt family) meets it at one door.
+/// The most elements one wire array may carry, applied at [`p_list`].
 ///
-/// NOT a round number: it is M7's published per-slot budget
+/// Every attacker-sized list on the request surface (span regions, spec and
+/// region lists, address lists, v-spec lists, `rearrange` cuts, the shot
+/// runs of `reinstate` and `publish`, `retrieve_i`'s spans, `emit`'s type
+/// endset, and the query endsets of the ftt family) meets it there, at one
+/// door — save `insert`'s `values`, whose minted values [`MAX_INSERT_VALUES`]
+/// bounds instead.
+///
+/// Not a round number: it is M7's published per-slot budget
 /// ([`MAX_SLOT_SPANS`]), whose argument transfers verbatim. That argument
-/// is that a span's LIVE cost is not bounded by the wire bytes that carry
+/// is that a span's live cost is not bounded by the wire bytes that carry
 /// it — an address is ~19 wire bytes and the span it becomes is two
 /// multi-component `BigUint` tumblers, order half a kilobyte — so a list
 /// bounded only by the request body names hundreds of thousands of spans.
-/// A QUERY endset is built the same way and then costs more, not less: M7
+/// A query endset is built the same way and then costs more, not less: M7
 /// answers a descriptor's first constraint from its coverage index at one
 /// probe per query span, and tests every later constraint's spans against
 /// every link the first finds, so a query's span count multiplies the links
 /// it reaches rather than one stored value.
 ///
 /// Reading the two budgets as one number is the point: a query slot larger
-/// than the largest slot that can be STORED cannot discriminate anything a
+/// than the largest slot that can be *stored* cannot discriminate anything a
 /// smaller one does not, so the cap costs no expressible question. The
 /// refusal rides the ordinary parse channel — an over-cap frame is
 /// `unparseable`/`malformed` with the count named, exactly as any other
 /// malformed frame is, rather than a new wire vocabulary.
 ///
-/// Applied at [`p_list`], so the cap is per ARRAY. Two ops nest —
+/// Applied at [`p_list`], so the cap is per array. Two ops nest —
 /// `compare`'s two operands and `find_docs_containing`'s `regions` are
-/// lists of regions, each carrying its own span list — so a frame's TOTAL
+/// lists of regions, each carrying its own span list — so a frame's total
 /// span count is the product of two caps and is bounded by
 /// [`crate::limits`]'s request-body cap alone. The budget argument above
 /// transfers to one query slot; it does not price a region set, whose cost
 /// model is M6's rather than M8's. Anyone raising the body cap for a route
 /// that carries these ops owes that number.
 ///
-/// The transferred argument likewise prices a list of SPANS, which become
-/// spans one for one. It does not price a list of V-SPECS — `copy`'s
+/// The transferred argument likewise prices a list of spans, which become
+/// spans one for one. It does not price a list of V-specs — `copy`'s
 /// `specs`, `make_link`'s three slots and `edit_link`'s successor — whose
-/// elements RESOLVE against stored arrangement state: one spec becomes as
+/// elements resolve against stored arrangement state: one spec becomes as
 /// many spans as the source document has runs under it, so a list at this
 /// cap expands by a factor this door cannot see and that grows with the
 /// source's edit history. M7's own
@@ -118,35 +123,38 @@ use marshal::{j_response, req_pairs};
 /// if it is not, are M7's and M5's.
 const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
 
-/// The most values one `insert` frame may mint. Denominated in VALUES and
-/// not in wire bytes, because the per-byte write discipline mints one
-/// [`Val`] per input byte: each is its own `Arc<[u8]>` allocation — order
-/// 32 live bytes after allocator rounding, plus 16 for the fat pointer the
-/// vector holds — so the daemon's 8 MiB body cap bounds the request at
-/// roughly one part in forty of the allocation it commands. That ratio, not
-/// the body size, is what this cap exists to bound.
+/// The most values one `insert` frame may mint.
+///
+/// It is denominated in values and not in wire bytes, because the per-byte
+/// write discipline mints one [`Val`] per input byte: each is its own
+/// `Arc<[u8]>` allocation — order 32 live bytes after allocator rounding,
+/// plus 16 for the fat pointer the vector holds — so the daemon's 8 MiB body
+/// cap bounds the request at roughly one part in forty of the allocation it
+/// commands. That ratio, not the body size, is what this cap exists to
+/// bound.
 ///
 /// The number is M2's transaction budget divided by what one value costs
-/// inside it, at the worst case that holds. An `insert` of N ATOMS commits
+/// inside it, at the worst case that holds. An `insert` of N atoms commits
 /// 2N + 1 records (a mint and a content write per atom, plus one placement),
 /// each content record carrying a multi-component address, so an atom's
 /// encoded share of the transaction runs to order three hundred bytes; a
-/// run of N single-byte values commits TWO records however long (one range
+/// run of N single-byte values commits two records however long (one range
 /// mint and one stretch, about N + 300 bytes), so the per-byte case the cap
-/// was cut for now stages a few hundred kilobytes under it. For small atoms
+/// is cut for stages a few hundred kilobytes under it. For small atoms
 /// the cap does not reach M2's ceiling: 2¹⁸ two-byte atoms are about 3.7 MB
 /// of request, inside the daemon's body cap, and stage about 75 MB past
 /// [`skep_kernel::MAX_TXN_BYTES`] (64 MiB) — there the refusal is M2's,
 /// after the staging, lifting with a smaller request. The cap stays
-/// denominated in values at this number — the point being WHEN it is
+/// denominated in values at this number — the point being *when* it is
 /// enforced for the request shapes it bounds: without it the refusal
 /// arrives from M2 after the codec has allocated and M5 has staged; with
 /// it, a frame that cannot commit is refused before either. Whether the
 /// number moves is the configuration register's question.
 const MAX_INSERT_VALUES: usize = 1 << 18;
 
-/// The most decimal digits one decimal NATURAL may carry on the wire — a
-/// tumbler component, and every natural field alike (a `width`, a
+/// The most decimal digits one decimal natural may carry on the wire.
+///
+/// That is a tumbler component, and every natural field alike (a `width`, a
 /// V-position's `subspace` and `ordinal`, a shot run's `width`, a
 /// `base_extent`): both doors, [`wire_tumbler`] and [`p_nat`], parse a
 /// decimal through [`p_nat_str`], which spends this.
@@ -158,12 +166,13 @@ const MAX_INSERT_VALUES: usize = 1 << 18;
 /// where the codec parses a tumbler". This is that place.
 ///
 /// The budget is the read path's, not storage's. A stored magnitude costs
-/// once; a magnitude in a QUERY span is cloned on every comparison M8's
-/// scan performs — `classify_spans` derives both operands' endpoints, which
-/// copies the start tumbler and computes its reach — so one span carrying a
-/// D-digit component costs order D bytes of allocator traffic per link in
-/// the store, per query span. That is the amplification a digit cap closes.
-/// A natural FIELD meets the same cap through [`p_nat`]: the per-comparison
+/// once; a magnitude in a query span is cloned on every comparison an M8
+/// query makes against it — `classify_spans` derives both operands'
+/// endpoints, which copies the start tumbler and computes its reach — so one
+/// span carrying a D-digit component costs order D bytes of allocator traffic
+/// per stored span it is tested against, per query span. That is the
+/// amplification a digit cap closes.
+/// A natural *field* meets the same cap through [`p_nat`]: the per-comparison
 /// argument above is a tumbler's, and what bounds every decimal alike is the
 /// radix conversion, which [`p_nat_str`] refuses before it runs.
 ///
@@ -175,48 +184,52 @@ const MAX_INSERT_VALUES: usize = 1 << 18;
 /// a component that would take 10^4000 commits to reach cannot be one a
 /// caller needs to name.
 ///
-/// PRIVATE, and that is the point: it is spent at [`p_nat_str`] and nowhere
+/// Private, and that is the point: it is spent at [`p_nat_str`] and nowhere
 /// else — the one decimal parse [`wire_tumbler`] and [`p_nat`] both call —
 /// so a route that admits a tumbler or a natural goes through those doors
 /// rather than reassembling this budget beside another module's grammar.
 const MAX_NAT_DIGITS: usize = 4096;
 
-/// The most components one tumbler may carry on the wire. The same budget
-/// as [`MAX_NAT_DIGITS`] on the other axis: a tumbler's components are
-/// cloned together on every comparison, so depth multiplies exactly as
-/// magnitude does. M3 caps a registered node at 32 components and every
-/// other address is a registered parent extended by separators, a subspace
-/// identifier and an ordinal — four fields at most — so a deep-node
-/// element address is under forty components. 256 leaves that room over
-/// several times without admitting a tumbler whose depth is the request's
-/// only real content. Private for [`MAX_NAT_DIGITS`]'s reason, and spent at
-/// the same door.
+/// The most components one tumbler may carry on the wire.
+///
+/// It is the same budget as [`MAX_NAT_DIGITS`] on the other axis: a
+/// tumbler's components are cloned together on every comparison, so depth
+/// multiplies exactly as magnitude does. M3 caps a registered node at 32
+/// components and every other address is a registered parent extended by
+/// separators, a subspace identifier and an ordinal — four fields at most —
+/// so an element of a document minted in a deep node's account is under forty
+/// components, each sub-account and each version step adding its own fields
+/// to that. 256 leaves that room over several times without admitting a
+/// tumbler whose depth is the request's only real content. Private for
+/// [`MAX_NAT_DIGITS`]'s reason, and spent at the same door.
 const MAX_TUMBLER_COMPONENTS: usize = 256;
 
-/// The largest principal id `delegate` will REGISTER: `2^53 − 1`, the top of
-/// the range a JSON number carries EXACTLY (AUTH-6.36's clause; AUTH-5.20).
-/// Principal ids ride the wire as plain JSON numbers and are `u64`
-/// server-side, and a JavaScript-backed client reads every number as a
-/// double: past this value it ROUNDS, so such a client would hold a DIFFERENT
-/// id from the one the board registered.
+/// The largest principal id `delegate` will register: `2^53 − 1`.
 ///
-/// That was a client's own mistake to avoid while a client only ever met ids
-/// it minted itself (AUTH-5.20's MUST binds the minting hand, and is unmoved).
-/// It is the BOARD's to refuse since the setup act ADOPTS whatever principal
-/// sits at `inc(X, 1)` (AUTH-5.87 op (1); the owner-of-address read,
-/// AUTH-6.37): a squatter's `delegate` of that address under an id `≥ 2^53`
-/// would seat a principal no JavaScript-backed frontend can name — its
+/// It is the top of the range a JSON number carries exactly (AUTH-6.36's
+/// clause; AUTH-5.20). Principal ids ride the wire as plain JSON numbers and
+/// are `u64` server-side, and a JavaScript-backed client reads every number
+/// as a double: past this value it rounds, so such a client would hold a
+/// different id from the one the board registered.
+///
+/// A client that only ever meets ids it minted itself avoids that mistake on
+/// its own (AUTH-5.20's "must" binds the minting hand). It is the board's to
+/// refuse because the setup act adopts whatever principal sits at
+/// `inc(X, 1)` (AUTH-5.87 op (1); the owner-of-address read, AUTH-6.37): a
+/// squatter's `delegate` of that address under an id `≥ 2^53` would seat a
+/// principal no JavaScript-backed frontend can name — its
 /// `GET /challenge?principal=N` and its `POST /session` body would carry the
-/// rounded number, a different principal — and the holder's agent space would
-/// be unopenable from that client on every device, at a cell an adversary
-/// chooses at zero cost. Refused here, no `delegate` off this wire registers
-/// an id a client cannot say back.
+/// rounded number, a different principal — and the holder's agent space
+/// would be unopenable from that client on every device, at a cell an
+/// adversary chooses at zero cost. Refused here, no `delegate` off this wire
+/// registers an id a client cannot say back.
 ///
-/// A PARSE FAULT AND NO NEW TOKEN: spent at [`p_minted_id`], on `delegate`'s
-/// `new_id` alone — the one field that mints an id — and answered as the
-/// ordinary `unparseable` rejection. The fold, M3 and M10 are untouched:
-/// `PrincipalId` stays a `u64`, and an `Op` assembled by hand past this bound
-/// is this codec's caller's to answer for ([`JsonCodec::marshal_request`]).
+/// **A parse fault and no new token.** It is spent at [`p_minted_id`], on
+/// `delegate`'s `new_id` alone — the one field that mints an id — and
+/// answered as the ordinary `unparseable` rejection. The fold, M3 and M10
+/// carry no such bound: `PrincipalId` is a `u64`, and an `Op` assembled by
+/// hand past this bound is this codec's caller's to answer for
+/// ([`JsonCodec::marshal_request`]).
 const MAX_MINTED_PRINCIPAL_ID: u64 = (1 << 53) - 1;
 
 // The most bytes one frame's idempotency `id` may carry is
@@ -231,20 +244,25 @@ const MAX_MINTED_PRINCIPAL_ID: u64 = (1 << 53) - 1;
 pub struct JsonCodec;
 
 impl Codec for JsonCodec {
-    /// M10's seam, reading the frame AS PRESENTED — the round-trip oracle's
-    /// door and every test's, and not the daemon's: a frame's `attest`
-    /// member (admitted on the checked set alone — the ten publish-class
-    /// kinds `in_checked_set` states — under a `SIG_ALGS` row's token)
-    /// rides in
-    /// [`Request::attest`] PARSED AND UNVERIFIED. M10's card makes that
-    /// field the signature the daemon's write-path check ADMITTED, which
-    /// `execute` hands the store and the kernel writes into the commit
-    /// marker as it stands, so a request from this door is one to judge,
-    /// not to execute. The daemon's own routes never execute one: they parse
-    /// through `parse_daemon`, which takes the member out for the check and
-    /// hands `execute` a request whose `attest` that check alone fills. A
+    /// Parses a frame as presented: M10's seam, and not the daemon's.
+    ///
+    /// It is the door the round-trip oracle and tests parse through: a
+    /// frame's `attest` member (admitted on the checked set alone — the ten
+    /// publish-class kinds `in_checked_set` states — under a `SIG_ALGS` row's
+    /// token) rides in [`Request::attest`] parsed and unverified. M10's card
+    /// makes that field the signature the daemon's write-path check
+    /// *admitted*, which `execute` hands the store and the kernel writes into
+    /// the commit marker as it stands, so a request from this door is one to
+    /// judge, not to execute. The daemon's own routes never execute one: they
+    /// parse through `parse_daemon`, which takes the member out for the check
+    /// and hands `execute` a request whose `attest` that check alone fills. A
     /// caller that executes what this returns owes the check itself, or
     /// clears the field.
+    ///
+    /// # Errors
+    ///
+    /// A [`ParseError`] whose detail names the fault: a frame that is not
+    /// JSON, or one the frame grammar refuses.
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError> {
         parse_request(frame).map_err(|e| ParseError { detail: Some(e.0) })
     }
@@ -255,51 +273,52 @@ impl Codec for JsonCodec {
 }
 
 impl JsonCodec {
-    /// The canonical request encoding — the inverse seam `Codec` itself does
-    /// not name (M10 fixes parse only). Clients and the round-trip tests use
-    /// it.
+    /// Returns the canonical request encoding.
     ///
-    /// PRECONDITION: `req` is within the wire caps this codec enforces on
-    /// parse — `MAX_WIRE_LIST` elements per array, `MAX_INSERT_VALUES`
-    /// minted values per `insert`, `MAX_NAT_DIGITS` per decimal natural (a
-    /// tumbler component or a natural field), `MAX_TUMBLER_COMPONENTS` per
-    /// tumbler,
-    /// [`MAX_REQ_ID_BYTES`] per idempotency id,
-    /// `MAX_MINTED_PRINCIPAL_ID` for a `delegate`'s `new_id` — carries no
-    /// zero-byte `Val`, which `marshal::j_atom` renders as `{"atom": ""}` and
-    /// `p_val_form` refuses by design (coarse granularity must be said, and
-    /// a zero-byte atom says nothing), carries an `id`, if any, that is
-    /// UTF-8, which a `ReqId` this codec parsed always is, and carries an
-    /// `attest`, if any, only on an op of the checked set (the ten
+    /// It is the inverse seam `Codec` itself does not name (M10 fixes parse
+    /// only). skepd's fuzz oracle and the round-trip tests use it.
+    ///
+    /// **Precondition.** `req` is within the wire caps this codec enforces on
+    /// parse — `MAX_WIRE_LIST` elements per array but `insert`'s `values`,
+    /// `MAX_INSERT_VALUES` minted values per `insert`, `MAX_NAT_DIGITS` per
+    /// decimal natural (a tumbler component or a natural field),
+    /// `MAX_TUMBLER_COMPONENTS` per tumbler, [`MAX_REQ_ID_BYTES`] per
+    /// idempotency id, `MAX_MINTED_PRINCIPAL_ID` for a `delegate`'s `new_id`
+    /// — carries no zero-byte `Val`, which `marshal::j_atom` renders as
+    /// `{"atom": ""}` and `p_val_form` refuses by design (coarse granularity
+    /// must be said, and a zero-byte atom says nothing), carries an `id`, if
+    /// any, that is UTF-8, which a `ReqId` this codec parsed always is, and
+    /// carries an `attest`, if any, only on an op of the checked set (the ten
     /// publish-class kinds `in_checked_set` states and the parse side admits
-    /// the member on), under a marker tag a
-    /// `SIG_ALGS` row names, which an `Attestation` this codec parsed always
-    /// is. Under all of that, `parse(marshal_request(r))` reproduces `r` and
-    /// re-marshaling the parse is byte-identical.
+    /// the member on), under a marker tag a `SIG_ALGS` row names, which an
+    /// `Attestation` this codec parsed always is. Under all of that,
+    /// `parse(marshal_request(r))` reproduces `r` and re-marshaling the parse
+    /// is byte-identical.
     ///
-    /// Outside it, marshaling SUCCEEDS and yields a frame `parse` refuses:
+    /// Outside it, marshaling succeeds and yields a frame `parse` refuses:
     /// this is the parse side's trust-boundary obligation and this direction
     /// does not re-check it (one check, one owner). The upstream value types
     /// admit every violation — `Endset::from_spans` takes any span count,
     /// T0(a) leaves a component's magnitude unbounded by design and a `Nat`
-    /// field is unbounded by its type, `Val::new`
-    /// takes any bytes, `PrincipalId` is any `u64`, `ReqId`'s field is
-    /// public, and `Request::attest` rides any op under any tag
-    /// `Attestation::new` admits — so a caller assembling a `Request` by hand
-    /// owes the whole precondition. A `Request` this codec produced satisfies
-    /// it by construction, which is what makes the round-trip oracle sound.
+    /// field is unbounded by its type, `Val::new` takes any bytes,
+    /// `PrincipalId` is any `u64`, `ReqId`'s field is public, and
+    /// `Request::attest` rides any op under any tag `Attestation::new` admits
+    /// — so a caller assembling a `Request` by hand owes the whole
+    /// precondition. A `Request` this codec produced satisfies it by
+    /// construction, which is what makes the round-trip oracle sound.
     ///
     /// One normalization survives the precondition rather than being
-    /// excluded by it: `SlotSpec::Spans` over an EMPTY endset marshals as
+    /// excluded by it: `SlotSpec::Spans` over an empty endset marshals as
     /// `[]`, which `p_slotspec` deliberately reads back as
     /// `SlotSpec::Empty` — M8's same constraint under its canonical name. So
-    /// for such an `r` the round trip is EQUAL and not identical, and
-    /// re-marshaling gives `"empty"`. `parse` cannot mint that value, so a
-    /// `Request` this codec produced is again unaffected.
+    /// for such an `r` the round trip is the same query and not an equal
+    /// `Request` (`FourSet`'s `Eq` is representational), and re-marshaling
+    /// gives `"empty"`. `parse` cannot mint that value, so a `Request` this
+    /// codec produced is again unaffected.
     ///
     /// A non-UTF-8 `id` is the one violation of this precondition that
     /// neither round-trips nor is refused: it is rendered lossily rather
-    /// than panicking, and the frame PARSES — to a DIFFERENT `ReqId`. That
+    /// than panicking, and the frame parses — to a *different* `ReqId`. That
     /// matters because `id` is an idempotency key M10 matches exactly: two
     /// distinct non-UTF-8 ids collapse onto one replacement string, so a
     /// retry can hit a memo entry it did not write, or miss the one it did.
@@ -322,10 +341,17 @@ impl JsonCodec {
         to_bytes(&obj(pairs))
     }
 
-    /// The daemon-level parse: the `key_set` frame — served by the daemon's
-    /// own dispatcher because M10 carries no `key_set` row (AUTH-6.18–6.20)
-    /// — or the ordinary M10 frame. One grammar discipline for both:
-    /// internally tagged, unknown fields refused.
+    /// Parses a daemon-level frame: the `key_set` frame or the ordinary one.
+    ///
+    /// The `key_set` frame is served by the daemon's own dispatcher because
+    /// M10 carries no `key_set` row (AUTH-6.18–6.20); the other is the
+    /// ordinary M10 frame. One grammar discipline for both: internally
+    /// tagged, unknown fields refused.
+    ///
+    /// # Errors
+    ///
+    /// A [`ParseError`] whose detail names the fault: `invalid JSON: …` for a
+    /// frame that is not JSON, or the grammar's refusal of either frame.
     pub fn parse_daemon(&self, frame: &[u8]) -> Result<DaemonOp, ParseError> {
         let v: Value = match serde_json::from_slice(frame) {
             Ok(v) => v,
@@ -334,8 +360,14 @@ impl JsonCodec {
         self.parse_daemon_value(v)
     }
 
-    /// [`JsonCodec::parse_daemon`] over an already-decoded value (the
-    /// `/op-at` envelope's frame).
+    /// Parses an already-decoded value as [`JsonCodec::parse_daemon`] does.
+    ///
+    /// The value is the `/op-at` envelope's frame.
+    ///
+    /// # Errors
+    ///
+    /// A [`ParseError`] whose detail names the grammar's refusal of the
+    /// `key_set` frame or of the ordinary frame.
     pub fn parse_daemon_value(&self, v: Value) -> Result<DaemonOp, ParseError> {
         if v.as_object().and_then(|m| m.get("op")).and_then(Value::as_str) == Some("key_set") {
             return parse_key_set(v).map_err(|e| ParseError { detail: Some(e.0) });
@@ -348,31 +380,37 @@ impl JsonCodec {
             .map_err(|e| ParseError { detail: Some(e.0) })
     }
 
-    /// The transport's one never-silent obligation outside M10's dispatch
-    /// (M10 §Codec): a frame that failed to parse still gets exactly one
-    /// response. M10 classifies it — the code and its disposition come from
-    /// the same table every other rejection goes through — and this crate
-    /// marshals it like any other.
+    /// Returns the rejection that answers a frame which failed to parse.
+    ///
+    /// It is the transport's one never-silent obligation outside M10's
+    /// dispatch (M10 §Codec): a frame that failed to parse still gets exactly
+    /// one response. M10 classifies it — the code and its disposition come
+    /// from the same table every other rejection goes through — and this
+    /// crate marshals it like any other.
     pub fn unparseable(&self, e: ParseError) -> Response {
         Response::Rejected(Rejection::unparseable(e))
     }
 }
 
-/// One parsed daemon-level frame: an M10 request, or the `key_set` read the
-/// daemon serves itself (AUTH-6.18–6.20). No `Debug`: both consumers match
-/// rather than print. The request rides boxed — it is an order of magnitude
-/// wider than the other arm, and this enum sits on every dispatch path.
+/// One parsed daemon-level frame: an M10 request or the `key_set` read.
+///
+/// The `key_set` read is the one the daemon serves itself (AUTH-6.18–6.20).
+/// No `Debug`: both consumers match rather than print. The request rides
+/// boxed — it is an order of magnitude wider than the other arm, and this
+/// enum sits on every dispatch path.
 pub enum DaemonOp {
-    /// An M10 request whose `attest` is EMPTY whatever the frame carried,
-    /// and beside it the `attest` member the frame PRESENTED — unverified,
-    /// the write-path check's to judge (signed ops). Split HERE, at the door,
-    /// so that on the daemon's dispatch path `Request::attest` only ever
-    /// holds what M10's own card says it holds: the signature the daemon's
-    /// check ADMITTED, set by the write sequence that ran the check and by
+    /// An M10 request, its `attest` empty, beside the one the frame presented.
+    ///
+    /// The request's `attest` is empty whatever the frame carried, and the
+    /// member the frame *presented* rides beside it — unverified, the
+    /// write-path check's to judge (signed ops). Split here, at the door, so
+    /// that on the daemon's dispatch path `Request::attest` only ever holds
+    /// what M10's own card says it holds: the signature the daemon's check
+    /// *admitted*, set by the write sequence that ran the check and by
     /// nothing else. A route that never judges `presented` then commits with
-    /// the marker slot EMPTY — never with a blob nobody verified, which the
+    /// the marker slot empty — never with a blob nobody verified, which the
     /// kernel writes opaquely and a reader of the journal takes for an
-    /// author's attestation this board ADMITTED.
+    /// author's attestation this board admitted.
     Febe {
         /// The request, its `attest` emptied.
         request: Box<Request>,
@@ -386,9 +424,17 @@ pub enum DaemonOp {
     },
 }
 
-/// `{"op":"key_set","account":"<address>"}` (+ the optional idempotency
-/// `id`, accepted and dropped — reads are never memoized), under the same
-/// field discipline as every other frame.
+/// Parses the `key_set` frame, `{"op":"key_set","account":"<address>"}`.
+///
+/// It takes the optional idempotency `id` too, accepted and dropped — reads
+/// are never memoized — and holds the frame to the same field discipline as
+/// every other frame.
+///
+/// # Errors
+///
+/// A [`PErr`] where the frame is not an object, its `id` is refused
+/// ([`Fields::req_id`]), its `account` is missing or no wire address, or a
+/// field is left unknown.
 fn parse_key_set(v: Value) -> PResult<DaemonOp> {
     let Value::Object(m) = v else {
         return Err(PErr("request frame must be a JSON object".into()));
@@ -408,10 +454,10 @@ fn parse_key_set(v: Value) -> PResult<DaemonOp> {
 /// that it cannot fail is written once and holds everywhere it is used:
 /// wire responses, transport-error bodies, the change feed's pages, the
 /// commit stream's event payloads and the sidecar's own file lines are all
-/// trees built here, out of [`obj`] and the leaf marshalers, which means
-/// string keys only and no foreign `Serialize` impl to fault. The tree is
-/// borrowed: serializing reads it, so a caller that still needs the value
-/// keeps it without a copy.
+/// trees built out of [`obj`] and the leaf marshalers, which means string
+/// keys only and no foreign `Serialize` impl to fault. The tree is borrowed:
+/// serializing reads it, so a caller that still needs the value keeps it
+/// without a copy.
 pub fn to_bytes(v: &Value) -> Vec<u8> {
     let mut out = Vec::with_capacity(128);
     append_bytes(&mut out, v);
@@ -447,8 +493,16 @@ fn parse_request(frame: &[u8]) -> PResult<Request> {
     parse_value(v)
 }
 
-/// The frame grammar over a decoded value — everything past `from_slice`,
-/// so a frame that arrives already decoded meets the identical rules.
+/// Parses a decoded value by the frame grammar: everything past `from_slice`.
+///
+/// So a frame that arrives already decoded meets the identical rules.
+///
+/// # Errors
+///
+/// A [`PErr`], in this order: the value is not an object; its `op` is
+/// missing or no string; its `id` is refused ([`Fields::req_id`]); the op is
+/// unknown or its own fields are refused ([`parse_op`]); its `attest` member
+/// is refused ([`Fields::attest`]); a field is left unknown.
 fn parse_value(v: Value) -> PResult<Request> {
     let Value::Object(m) = v else {
         return Err(PErr("request frame must be a JSON object".into()));
@@ -456,30 +510,39 @@ fn parse_value(v: Value) -> PResult<Request> {
     let mut fields = Fields(m);
     let name = fields.string("op")?;
     // The id is capped where it is minted, and before it is copied: M10
-    // retains it for the life of a memoized write, so its LENGTH is the second
-    // factor in a retention bill nothing downstream bounds (see
-    // [`MAX_REQ_ID_BYTES`]).
+    // retains it for the life of a memoized write, so its length is the
+    // second factor in a retention bill — one the memo bounds again by
+    // declining a longer key (see [`MAX_REQ_ID_BYTES`]).
     let id = fields.req_id()?;
     let op = parse_op(&name, &mut fields)?;
     // The optional `attest` member, admitted on the checked set
-    // [`in_checked_set`] states and on no other op — left
-    // in the map elsewhere, so `finish` refuses it by the unknown-field rule,
-    // as a daemon that predates the member does (the design record §7.3 (ii)).
+    // [`in_checked_set`] states and on no other op — left in the map
+    // elsewhere, so `finish` refuses it by the unknown-field rule, as a
+    // daemon that predates the member does (the design record §7.3 (ii)).
     let attest = fields.attest(op.kind())?;
     fields.finish()?;
     Ok(Request { id, op, attest })
 }
 
-/// `{"alg": <an ALGS token>, "sig": <hex>}` — the wire's `attest` object
-/// (the design record §7.3 (ii)), lifted to the kernel's `Attestation`: the
-/// token to the marker tag its `SIG_ALGS` row names (a token no row carries
-/// is a GRAMMAR failure — the token set is an I2 frozen constant, so an
-/// unknown one is refused as an unknown op is), the hex to the blob (empty
-/// is refused: absence is the member's own — missing, or `null`, which
-/// [`Fields::attest`] reads alike — never an empty blob). The blob's WIDTH
-/// under the tag is the check's to judge, not the grammar's — save the one
-/// width no tag admits: past [`skep_kernel::MAX_SIG_BYTES`] the kernel's own
-/// constructor refuses the blob, and that refusal is the grammar's.
+/// Lifts the wire's `attest` object to the kernel's `Attestation`.
+///
+/// The object is `{"alg": <an ALGS token>, "sig": <hex>}` (the design record
+/// §7.3 (ii)): the token goes to the marker tag its `SIG_ALGS` row names (a
+/// token no row carries is a grammar failure — the token set is an I2
+/// frozen constant, so an unknown one is refused as an unknown op is), the
+/// hex to the blob (empty is refused: absence is the member's own —
+/// missing, or `null`, which [`Fields::attest`] reads alike — never an empty
+/// blob). The blob's *width* under the tag is the check's to judge, not the
+/// grammar's — save the one width no tag admits: past
+/// [`skep_kernel::MAX_SIG_BYTES`] the kernel's own constructor refuses the
+/// blob, and that refusal is the grammar's.
+///
+/// # Errors
+///
+/// A [`PErr`] where the value is no object or carries a key beside `alg`
+/// and `sig`, where `alg` is missing, no string or a token no row carries,
+/// where `sig` is missing or no even-length hex, or where the kernel's
+/// constructor refuses the blob.
 fn p_attest(v: &Value) -> PResult<Attestation> {
     let m = p_obj(v, &["alg", "sig"])?;
     let alg = field(m, "alg", p_string)?;
@@ -489,10 +552,19 @@ fn p_attest(v: &Value) -> PResult<Attestation> {
     Attestation::new(row.tag, sig).map_err(|e| PErr(format!("field 'sig': {e}")))
 }
 
-/// One request-envelope arm per `Op` variant. Field names are the wire
-/// contract (wire.md §Operations); the one Rust-name departure is
-/// `principal_prefix`, whose argument rides as `"principal"` because the
-/// envelope key `"id"` is the idempotency slot.
+/// Parses the op `name` names, one request-envelope arm per `Op` variant.
+///
+/// Field names are the wire contract (wire.md §Operations); the Rust-name
+/// departures are `principal_prefix`, whose argument rides as `"principal"`
+/// because the envelope key `"id"` is the idempotency slot, and `publish`,
+/// whose `shot` rides flattened into the envelope — its base's member as
+/// `"base"` and its extent as `"base_extent"`, beside `"draft"` and
+/// `"runs"`.
+///
+/// # Errors
+///
+/// A [`PErr`] naming an unknown op, or a field of the op's own that is
+/// missing or refused.
 fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
     Ok(match name {
         "create_new_document" => Op::CreateNewDocument {
@@ -566,9 +638,9 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         "follow_link" => Op::FollowLink { a: fields.addr("a")?, slot: fields.usize("slot")? },
         "retrieve_v" => Op::RetrieveV { specs: fields.specs("specs")? },
         // The read by identity and the content-frontier read (AUTH-6.38–6.40;
-        // wire.md §Content & provenance reads) — INTERIM grammar (sm-Q8):
-        // a span is `{"start": <address>, "width": <nat>}`, its document
-        // DERIVED, never named; the frontier read names its `doc`.
+        // wire.md §Content & provenance reads) — an interim grammar: a span
+        // is `{"start": <address>, "width": <nat>}`, its document derived,
+        // never named; the frontier read names its `doc`.
         "retrieve_i" => Op::RetrieveI { spans: fields.ispans("spans")? },
         "content_frontier" => Op::ContentFrontier { doc: fields.addr("doc")? },
         "retrieve_doc_v_span" => Op::RetrieveDocVSpan { doc: fields.addr("doc")? },
@@ -617,27 +689,28 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
     })
 }
 
-/// THE CHECKED SET — the op kinds the write-path check reaches, and so the
-/// ops an ENTRY frame is composed for: the TEN publish-class kinds (the
-/// owner's term, m2, the design record's round 5 rulings 2026-09-26; the
-/// ten cells D24 pins) — `create_new_document`, `fork`, `version`,
+/// Returns whether `kind` is of the checked set.
+///
+/// The checked set is the op kinds the write-path check reaches, and so the
+/// ops an entry frame is composed for: the ten publish-class kinds (the ten
+/// cells signed-ops D24 pins) — `create_new_document`, `fork`, `version`,
 /// `insert`, `publish`, `make_link`, `emit`, `nullify`, `assert_sup`,
 /// `edit_link`. The four other publish-class-capable kinds — `delete`,
 /// `copy`, `reinstate`, `rearrange` — have no cell: the store refuses every
-/// one of them into a published document (`published_target`) and nothing
-/// of their kind commits above the claim, so the gate's fourteen inputs are
-/// the check's ten. The ONE statement of it: the codec admits a request's `attest`
-/// member exactly on these, the check demands and verifies one exactly on
-/// these, and `auth::entry::compose` has an arm exactly for these. The
-/// acting hand ATTESTS; the check admits or refuses, and signs nothing. The
-/// three must agree in both directions — a member the codec admits and the
-/// check never demands is a signature parsed and silently DROPPED, the
-/// commit landing with its marker slot empty; one the check demands and the
-/// codec refuses is a write no signed session can make on a claimed board —
-/// so a widening is one edit here and one arm in `auth::entry::compose`,
-/// whose wildcard stops loudly in every build: a widening that forgets the
-/// arm answers `500 internal_panic` on each such write, and never commits
-/// one with its marker slot empty.
+/// one of them into a published document (`published_target`) and no
+/// publish-class write of their kind commits above the claim, so the gate's
+/// fourteen inputs are the check's ten. This is the daemon's one statement
+/// of it: the codec admits a request's `attest` member exactly on these, the
+/// check demands and verifies one exactly on these, and `auth::entry::compose`
+/// has an arm exactly for these. The acting hand *attests*; the check admits
+/// or refuses, and signs nothing. The three must agree in both directions — a
+/// member the codec admits and the check never demands is a signature
+/// parsed and silently dropped, the commit landing with its marker slot
+/// empty; one the check demands and the codec refuses is a write no signed
+/// session can make on a claimed board — so a widening is one edit here and
+/// one arm in `auth::entry::compose`, whose wildcard stops loudly in every
+/// build: a widening that forgets the arm answers `500 internal_panic` on
+/// each such write, and never commits one with its marker slot empty.
 pub(crate) fn in_checked_set(kind: OpKind) -> bool {
     matches!(
         kind,
@@ -654,8 +727,10 @@ pub(crate) fn in_checked_set(kind: OpKind) -> bool {
     )
 }
 
-/// The request object being consumed: known fields are taken out; anything
-/// left at [`Fields::finish`] is an unknown field and fails the parse.
+/// The request object being consumed, its known fields taken out.
+///
+/// Anything left at [`Fields::finish`] is an unknown field and fails the
+/// parse.
 #[derive(Debug)]
 struct Fields(Map<String, Value>);
 
@@ -664,7 +739,7 @@ impl Fields {
         self.0.remove(k).ok_or_else(|| PErr(format!("missing field '{k}'")))
     }
 
-    /// Absent and explicit `null` are the same absence.
+    /// Takes field `k`, absent and explicit `null` being the same absence.
     fn take_opt(&mut self, k: &'static str) -> Option<Value> {
         match self.0.remove(k) {
             None | Some(Value::Null) => None,
@@ -688,10 +763,16 @@ impl Fields {
         self.field(k, p_string)
     }
 
-    /// The frame's idempotency id, capped BEFORE the copy — the discipline
-    /// [`room`] states and [`hex_values`] follows. A [`MAX_REQ_ID_BYTES`]
-    /// cap enforced after the string has been copied out of the tree copies
-    /// up to a whole request body to refuse 257 bytes.
+    /// Takes the frame's idempotency id, capped *before* the copy.
+    ///
+    /// That is the discipline [`room`] states and [`hex_values`] follows. A
+    /// [`MAX_REQ_ID_BYTES`] cap enforced after the string has been copied out
+    /// of the tree copies up to a whole request body to refuse 257 bytes.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the `id` is no string, or is longer than
+    /// [`MAX_REQ_ID_BYTES`] bytes.
     fn req_id(&mut self) -> PResult<Option<ReqId>> {
         let Some(v) = self.take_opt("id") else { return Ok(None) };
         let s = v.as_str().ok_or_else(|| PErr("field 'id': expected a JSON string".into()))?;
@@ -708,14 +789,20 @@ impl Fields {
         self.field(k, p_u64)
     }
 
-    /// The optional top-level `attest` member — taken on an op of the checked
-    /// set ([`in_checked_set`]), absent and explicit
-    /// `null` alike reading `None`; on any other op it is not taken at all,
-    /// so `finish` refuses it as the unknown field it is there. The checked
-    /// set is ONE statement and it is the codec's — the wire grammar's —
-    /// because what it states is which ops carry `attest` on the wire (M10's
-    /// interface calls it skepd's `JsonCodec`'s); the composer (`auth/entry`)
-    /// and the policy READ it from here.
+    /// Takes the optional top-level `attest` member on a checked-set op.
+    ///
+    /// On an op of the checked set ([`in_checked_set`]) absent and explicit
+    /// `null` alike read `None`; on any other op it is not taken at all, so
+    /// `finish` refuses it as the unknown field it is there. The checked set
+    /// is one statement and it is the codec's — the wire grammar's — because
+    /// what it states is which ops carry `attest` on the wire (M10's interface
+    /// calls it skepd's `JsonCodec`'s); the composer (`auth/entry`) and the
+    /// policy *read* it from here.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the member, on an op of the checked set, is refused
+    /// ([`p_attest`]).
     fn attest(&mut self, kind: OpKind) -> PResult<Option<Attestation>> {
         if !in_checked_set(kind) {
             return Ok(None);
@@ -726,11 +813,16 @@ impl Fields {
         }
     }
 
-    /// `delegate`'s `new_id` — the ONE principal id on the wire that MINTS,
-    /// and so the one held to [`MAX_MINTED_PRINCIPAL_ID`] at this door. Every
-    /// other id field only NAMES a principal: one some `delegate` registered
-    /// is inside the range by this bound, and one nobody registered answers
-    /// absent.
+    /// Takes `delegate`'s `new_id`, the wire's one principal id that *mints*.
+    ///
+    /// So it is the one held to [`MAX_MINTED_PRINCIPAL_ID`] at this door.
+    /// Every other id field only *names* a principal: one some `delegate`
+    /// registered is inside the range by this bound, and one nobody
+    /// registered answers absent.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the field is missing or refused ([`p_minted_id`]).
     fn minted_id(&mut self, k: &'static str) -> PResult<u64> {
         self.field(k, p_minted_id)
     }
@@ -775,8 +867,14 @@ impl Fields {
         self.field(k, |v| p_list(v, p_vspec))
     }
 
-    /// A `reinstate`'s runs: the shot's run form, as one list under the
-    /// wire's list cap.
+    /// Takes a `reinstate`'s runs, in the shot's run form.
+    ///
+    /// They are one list under the wire's list cap.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the field is missing, or its list or a run in it is
+    /// refused ([`p_list`], [`p_shot_run`]).
     fn shot_runs(&mut self, k: &'static str) -> PResult<Vec<ShotRun>> {
         self.field(k, |v| p_list(v, p_shot_run))
     }
@@ -813,10 +911,15 @@ impl Fields {
         self.field(k, p_fourset)
     }
 
-    /// The three-valued publication flag on the minting ops (PUB-8.16):
-    /// `absent | true | false`, with absent and explicit `null` reading the
-    /// same absence (`take_opt`'s rule) → `None`. Any non-boolean value is a
-    /// parse fault, never silently coerced.
+    /// Takes the three-valued publication flag on the minting ops (PUB-8.16).
+    ///
+    /// It is `absent | true | false`, with absent and explicit `null` reading
+    /// the same absence (`take_opt`'s rule) → `None`.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] for any non-boolean value: a parse fault, never silently
+    /// coerced.
     fn published(&mut self) -> PResult<Option<bool>> {
         match self.take_opt("published") {
             None => Ok(None),
@@ -827,18 +930,22 @@ impl Fields {
         }
     }
 
-    /// `insert`'s DEPOSIT DECLARATION (PUB-9.13's DECLARED horn, owner ruling
-    /// 2026-09-05; PUB-2.63): THE FIELD's VALUE IS THE RECORD CLASS's TYPE
-    /// (PUB-2.64; RES-249), an address string, and ABSENT — the field not
-    /// sent — is the one spelling of `Undeclared`, an ordinary edit. So this
-    /// field does not go through [`take_opt`](Self::take_opt): an explicit
-    /// `null` is a declaration with nothing in it, and like the retired
-    /// `true` / `false` and any other non-address it is a parse fault, never
-    /// coerced to either arm. Which types the deposit class holds is not this
-    /// parse's to know: any T4-valid address declares, and M5's door tests it
-    /// (`published_target` for a type the class does not hold). Both arms are
-    /// written out, which is where M5 asks a reader to see which one is
-    /// declared.
+    /// Takes `insert`'s deposit declaration.
+    ///
+    /// It is PUB-9.13's declared horn (PUB-2.63): the field's value is the
+    /// record class's type (PUB-2.64; RES-249), an address string, and absent
+    /// — the field not sent — is the one spelling of `Undeclared`, an ordinary
+    /// edit. So this field does not go through [`take_opt`](Self::take_opt):
+    /// an explicit `null` is a declaration with nothing in it. Which types the
+    /// deposit class holds is not this parse's to know: any T4-valid address
+    /// declares, and M5's door tests it (`published_target` for a type the
+    /// class does not hold). Both arms are written out, which is where M5 asks
+    /// a reader to see which one is declared.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] for that explicit `null` and, like it, for `true` / `false`
+    /// and any other non-address: a parse fault, never coerced to either arm.
     fn deposit(&mut self) -> PResult<Deposit> {
         match self.0.remove("deposit") {
             None => Ok(Deposit::Undeclared),
@@ -848,16 +955,22 @@ impl Fields {
         }
     }
 
-    /// `make_link`'s `replaces` MEMBER (PUB-5.15 (iii), (iv); RES-308): the
-    /// state the record REPLACES, an address string — at the grant, the
-    /// revocation a re-share follows — and ABSENT, the field not sent, is the
-    /// one spelling of the EMPTY state, a first share's. So, as `deposit`,
-    /// this does not go through [`take_opt`](Self::take_opt): an explicit
-    /// `null` would be a member PRESENT with nothing in it, the one shape the
-    /// entry frame's `replaces` row keeps apart from absent — so it is a
-    /// parse fault, never coerced to either. Which address names the key's
-    /// current state is not this parse's to know: any T4-valid address is a
-    /// member, and the grant fold decides what it honors.
+    /// Takes `make_link`'s `replaces` member (PUB-5.15 (iii), (iv); RES-308).
+    ///
+    /// It is the state the record *replaces*, an address string — at the
+    /// grant, the revocation a re-share follows — and absent, the field not
+    /// sent, is the one spelling of the empty state, a first share's. So, as
+    /// `deposit`, this does not go through [`take_opt`](Self::take_opt): an
+    /// explicit `null` would be a member *present* with nothing in it, the one
+    /// shape the entry frame's `replaces` row keeps apart from absent. Which
+    /// address names the key's current state is not this parse's to know: any
+    /// T4-valid address is a member, and the grant fold decides what it
+    /// honors.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] for that explicit `null` — a parse fault, never coerced to
+    /// either — and for any other value that is no wire address.
     fn replaces(&mut self) -> PResult<Option<Address>> {
         match self.0.remove("replaces") {
             None => Ok(None),
@@ -865,13 +978,24 @@ impl Fields {
         }
     }
 
-    /// Absent ≡ null ≡ ⊥ (start of the enumeration).
+    /// Takes the cursor `k`: absent ≡ null ≡ ⊥ (start of the enumeration).
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the cursor is present and no wire address
+    /// ([`Fields::opt_addr`]).
     fn cursor(&mut self, k: &'static str) -> PResult<Option<Address>> {
         self.opt_addr(k)
     }
 
-    /// An optional address field: absent and explicit `null` alike read
-    /// `None`; present, it must parse as an address.
+    /// Takes an optional address field.
+    ///
+    /// Absent and explicit `null` alike read `None`.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where the field is present and does not parse as an
+    /// address.
     fn opt_addr(&mut self, k: &'static str) -> PResult<Option<Address>> {
         match self.take_opt(k) {
             None => Ok(None),
@@ -879,13 +1003,20 @@ impl Fields {
         }
     }
 
-    /// The publish shot's own fields (wire v7.3, PUB-8.1): `base` and
-    /// `base_extent` travel TOGETHER — a base without the extent its copy
-    /// took is a base the composite cannot compose against (PUB-2.42), and
-    /// an extent without a base measures nothing — so either both are
-    /// present or neither is (the birth version, PUB-2.34); `draft` is
-    /// optional; `runs` is the client-rendered arrangement, each run its
+    /// Takes the publish shot's own fields (wire v7.3, PUB-8.1).
+    ///
+    /// `base` and `base_extent` travel together — a base without the extent
+    /// its copy took is a base the composite cannot compose against
+    /// (PUB-2.42), and an extent without a base measures nothing — so either
+    /// both are present or neither is (the birth version, PUB-2.34); `draft`
+    /// is optional; `runs` is the client-rendered arrangement, each run its
     /// origin, its start and its width.
+    ///
+    /// # Errors
+    ///
+    /// A [`PErr`] where `base`, `base_extent` or `draft` is present and
+    /// refused, where one of `base` and `base_extent` comes without the
+    /// other, or where `runs` is missing or refused.
     fn shot(&mut self) -> PResult<Shot> {
         let member = self.opt_addr("base")?;
         let extent = match self.take_opt("base_extent") {
@@ -912,19 +1043,22 @@ impl Fields {
     }
 }
 
-// ── leaf parsers, each through M1's validating constructors ──
+// ── leaf parsers, M1's values each through its validating constructors ──
 
-/// The offending text, bounded — a refusal must not be a copy of the input
-/// it refuses. The wire-supplied strings echoed below are bounded only by
-/// the request body, and a parse fault is wrapped by each enclosing field,
-/// element and region on the way out, so an unbounded echo is copied once
-/// per level and then again into the response.
+/// Returns the offending text, bounded.
 ///
-/// The cut is on a CHARACTER boundary: the argument is arbitrary UTF-8 from
-/// the wire, and a byte-index slice would panic on one. Applied only where
-/// the echoed value is wire-supplied and unbounded; the transport's own
-/// echoes (a path, a query parameter, a header line) are already bounded by
-/// the request-head cap and are left as they are.
+/// A refusal must not be a copy of the input it refuses. The wire-supplied
+/// strings echoed below are bounded only by the request body, and a parse
+/// fault is wrapped by each enclosing field, element and region on the way
+/// out, so an unbounded echo is copied once per level and then again into
+/// the response.
+///
+/// The cut is on a *character* boundary: the argument is arbitrary UTF-8 from
+/// the wire, and a byte-index slice would panic on one. Applied where the
+/// echoed value is wire-supplied and unbounded, and to every key
+/// [`check_keys`] refuses, whatever its source; the transport's own echoes (a
+/// path, a query parameter, a header line) are already bounded by the
+/// request-head cap and are left as they are.
 fn bounded(s: &str) -> String {
     const MAX: usize = 64;
     match s.char_indices().nth(MAX) {
@@ -933,10 +1067,15 @@ fn bounded(s: &str) -> String {
     }
 }
 
-/// A JSON string BORROWED from the tree — for a caller that only reads the
-/// text, so the hex forms decode off the frame's own bytes rather than off a
-/// copy of them. [`p_string`] is this plus the copy, for the callers that
-/// keep the text past `field`'s closure.
+/// Borrows a JSON string from the tree, for a caller that only reads the text.
+///
+/// So the hex forms decode off the frame's own bytes rather than off a copy
+/// of them. [`p_string`] is this plus the copy, for the callers that keep
+/// the text past `field`'s closure.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no string.
 fn p_str(v: &Value) -> PResult<&str> {
     v.as_str().ok_or_else(|| PErr("expected a JSON string".into()))
 }
@@ -953,11 +1092,18 @@ fn p_usize(v: &Value) -> PResult<usize> {
     usize::try_from(p_u64(v)?).map_err(|_| PErr("integer exceeds this platform's usize".into()))
 }
 
-/// A principal id about to be REGISTERED, held to the wire's
-/// exactly-representable range ([`MAX_MINTED_PRINCIPAL_ID`]). A PARSE FAULT
-/// like every other malformed field — the ordinary `unparseable` rejection,
-/// no new code and no new token — so the frame reaches no session gate, no
-/// lock and no store, and nothing commits.
+/// Parses a principal id about to be *registered*.
+///
+/// It is held to the wire's exactly-representable range
+/// ([`MAX_MINTED_PRINCIPAL_ID`]).
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no non-negative integer or is past
+/// [`MAX_MINTED_PRINCIPAL_ID`]: a parse fault like every other malformed
+/// field — the ordinary `unparseable` rejection, no new code and no new
+/// token — so the frame reaches no session gate, no lock and no store, and
+/// nothing commits.
 fn p_minted_id(v: &Value) -> PResult<u64> {
     let id = p_u64(v)?;
     if id > MAX_MINTED_PRINCIPAL_ID {
@@ -969,8 +1115,15 @@ fn p_minted_id(v: &Value) -> PResult<u64> {
     Ok(id)
 }
 
-/// ℕ: canonical decimal string; a non-negative JSON integer is accepted
-/// leniently (canonical output is always the string form).
+/// Parses an ℕ value: canonically a decimal string.
+///
+/// A non-negative JSON integer is accepted leniently (canonical output is
+/// always the string form).
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is neither a string nor a non-negative integer, or
+/// is a string [`p_nat_str`] refuses.
 fn p_nat(v: &Value) -> PResult<Nat> {
     match v {
         Value::Number(_) => p_u64(v).map(Nat::from),
@@ -979,11 +1132,18 @@ fn p_nat(v: &Value) -> PResult<Nat> {
     }
 }
 
-/// One decimal natural — a tumbler component or a natural field. The
-/// [`MAX_NAT_DIGITS`] refusal comes BEFORE the radix conversion, so a
+/// Parses one decimal natural: a tumbler component or a natural field.
+///
+/// The [`MAX_NAT_DIGITS`] refusal comes *before* the radix conversion, so a
 /// hostile digit run is never converted — the conversion is the expensive
 /// half, and refusing after it would pay exactly the cost the cap exists to
 /// avoid.
+///
+/// # Errors
+///
+/// A [`PErr`] where `s` is empty or holds a non-digit, then where it has
+/// more than [`MAX_NAT_DIGITS`] digits, then where the conversion refuses
+/// it.
 fn p_nat_str(s: &str) -> PResult<Nat> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
         return Err(PErr(format!("'{}' is not a decimal natural", bounded(s))));
@@ -997,14 +1157,22 @@ fn p_nat_str(s: &str) -> PResult<Nat> {
     Nat::from_str(s).map_err(|e| PErr(format!("'{}': {e}", bounded(s))))
 }
 
-/// A dotted-decimal tumbler off the wire, under both of this codec's tumbler
-/// caps — THE bounded parse, and what makes `MAX_NAT_DIGITS`'s "this is
-/// that place" true of every wire tumbler rather than of frames alone. A
-/// route that takes one from a query string meets the door a frame's tumbler
-/// meets, instead of reassembling it from this module's two constants and
-/// another module's uncapped grammar. Both caps are applied BEFORE the
-/// component they bound is converted (see `p_nat_str`). `Err` carries the
-/// detail text; a caller wraps it in its own field name.
+/// Parses a dotted-decimal tumbler under both of this codec's tumbler caps.
+///
+/// It is *the* bounded parse off the wire, and what makes
+/// `MAX_NAT_DIGITS`'s "this is that place" true of every wire tumbler rather
+/// than of frames alone. A route that takes one from a query string meets
+/// the door a frame's tumbler meets, instead of reassembling it from this
+/// module's two constants and another module's uncapped grammar. Both caps
+/// are applied before the component they bound is converted (see
+/// `p_nat_str`).
+///
+/// # Errors
+///
+/// `Err` carries the detail text; a caller wraps it in its own field name.
+/// It names more than `MAX_TUMBLER_COMPONENTS` components, then a component
+/// that is no decimal natural or has more than `MAX_NAT_DIGITS` digits, then
+/// a component sequence the tumbler's own constructor refuses.
 pub fn wire_tumbler(s: &str) -> Result<Tumbler, String> {
     let depth = s.split('.').count();
     if depth > MAX_TUMBLER_COMPONENTS {
@@ -1017,46 +1185,75 @@ pub fn wire_tumbler(s: &str) -> Result<Tumbler, String> {
     Tumbler::new(comps).map_err(|e| format!("'{}': {e}", bounded(s)))
 }
 
-/// A dotted-decimal ADDRESS off the wire: [`wire_tumbler`]'s capped parse
-/// refined by M1's `validate` — THE address door, as that function is the
-/// tumbler's, so the two steps that make a wire address are composed once
-/// and a caller adds only the field name its own grammar gives it. `Err`
-/// carries the detail text.
+/// Parses a dotted-decimal address off the wire.
 ///
-/// The UNCAPPED twin is `commits::classify::parse_dotted`, which
-/// refines its own grammar the same way and states why a name that reached
-/// a FILE is already past the budgets a client meets.
+/// It is [`wire_tumbler`]'s capped parse refined by M1's `validate` — *the*
+/// address door, as that function is the tumbler's, so the two steps that
+/// make a wire address are composed once and a caller adds only the field
+/// name its own grammar gives it.
+///
+/// The uncapped twin is `commits::classify::parse_dotted`, which refines its
+/// own grammar the same way and states why a name that reached a *file* is
+/// already past the budgets a client meets.
+///
+/// # Errors
+///
+/// `Err` carries the detail text: [`wire_tumbler`]'s refusals, then
+/// `not a T4-valid address: …` for a tumbler `validate` refuses.
 pub fn wire_address(s: &str) -> Result<Address, String> {
     validate(wire_tumbler(s)?).map_err(|e| format!("not a T4-valid address: {e}"))
 }
 
-/// [`wire_tumbler`] over a JSON string — the frame side's face of the one
-/// bounded parse.
+/// Parses a tumbler from a JSON string, through [`wire_tumbler`].
+///
+/// It is the frame side's face of the one bounded parse.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no string, or [`wire_tumbler`] refuses it.
 fn p_tum(v: &Value) -> PResult<Tumbler> {
     let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
     wire_tumbler(s).map_err(PErr)
 }
 
-/// [`wire_address`] over a JSON string — the frame side's face, as [`p_tum`]
-/// is [`wire_tumbler`]'s. The non-string fault is `p_tum`'s verbatim: the
-/// two faces refuse the same shape for the same reason.
+/// Parses an address from a JSON string, through [`wire_address`].
+///
+/// It is the frame side's face, as [`p_tum`] is [`wire_tumbler`]'s. The
+/// non-string fault is `p_tum`'s verbatim: the two faces refuse the same
+/// shape for the same reason.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no string, or [`wire_address`] refuses it.
 fn p_addr(v: &Value) -> PResult<Address> {
     let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
     wire_address(s).map_err(PErr)
 }
 
-/// Guard which KEYS a sub-object may carry; unknown keys fail like unknown
-/// envelope fields do.
+/// Guards which keys a sub-object may carry.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object, or carries a key outside `allowed`:
+/// unknown keys fail like unknown envelope fields do.
 fn p_obj<'a>(v: &'a Value, allowed: &[&str]) -> PResult<&'a Map<String, Value>> {
     let m = v.as_object().ok_or_else(|| PErr("expected a JSON object".into()))?;
     check_keys(m, allowed).map_err(PErr)?;
     Ok(m)
 }
 
-/// Refuse any key outside `allowed` — THE never-silent device, applied
-/// wherever this crate accepts a JSON object: a client's typo is a named
-/// failure, never a field quietly ignored. Errors as a bare `String` so the
-/// transport envelopes (whose faults are not `ParseError`s) share it.
+/// Refuses any key outside `allowed`: *the* never-silent device.
+///
+/// It is applied wherever this crate accepts a JSON object it did not write
+/// itself, the request envelope aside, whose leftover fields
+/// `Fields::finish` refuses alike: a client's typo is a named failure, never
+/// a field quietly ignored.
+///
+/// # Errors
+///
+/// `unknown field '…'`, naming a key outside `allowed`. It errors as a bare
+/// `String` so the transport envelopes (whose faults are not `ParseError`s)
+/// share it.
 pub fn check_keys(m: &Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
     match m.keys().find(|k| !allowed.contains(&k.as_str())) {
         Some(k) => Err(format!("unknown field '{}'", bounded(k))),
@@ -1076,9 +1273,17 @@ fn field<T>(
     f(need(m, k)?).map_err(|e| PErr(format!("{k}: {e}")))
 }
 
-/// Every list on the request surface, and THE place [`MAX_WIRE_LIST`] is
-/// enforced: the elements are counted before any is parsed, so an
+/// Parses one wire list, *the* place [`MAX_WIRE_LIST`] is enforced.
+///
+/// Every list on the request surface but `insert`'s `values` ([`p_values`])
+/// passes here. The elements are counted before any is parsed, so an
 /// over-length array is refused without building what it asked for.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no array, where it holds more than
+/// [`MAX_WIRE_LIST`] elements, or where `f` refuses an element, the fault
+/// prefixed with the element's index.
 fn p_list<T>(v: &Value, f: impl Fn(&Value) -> PResult<T>) -> PResult<Vec<T>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     if arr.len() > MAX_WIRE_LIST {
@@ -1107,10 +1312,17 @@ fn p_vspec(v: &Value) -> PResult<VSpec> {
     Ok(VSpec { source: field(m, "source", p_addr)?, span: field(m, "span", p_span)? })
 }
 
-/// One run of a publish shot (wire.md §Arrangement, `publish`): the origin
-/// document, the run's start, and its width — through M5's own `Run::new`, so
-/// no zero-width run and no start that is not a full element position
-/// survives the trust boundary.
+/// Parses one run of a publish shot (wire.md §Arrangement, `publish`).
+///
+/// The run is the origin document, the run's start, and its width — through
+/// M5's own `Run::new`, so no zero-width run and no start that is not a full
+/// element position survives the trust boundary.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of `i_start`, `origin` and `width`
+/// alone, where one of the three is missing or refused, or where `Run::new`
+/// refuses the run, its message passed on whole.
 fn p_shot_run(v: &Value) -> PResult<ShotRun> {
     let m = p_obj(v, &["i_start", "origin", "width"])?;
     let origin = field(m, "origin", p_addr)?;
@@ -1122,10 +1334,16 @@ fn p_shot_run(v: &Value) -> PResult<ShotRun> {
     Ok(ShotRun { origin, run })
 }
 
-/// A `make_link` endset slot (wire v5): a V-spec array (content-resolved,
-/// byte-identical to v4) or `{"addrs": [addresses…]}` — the names
-/// recorded verbatim, the same addrs-object encoding as `edit_link`'s
-/// successor `ty`.
+/// Parses a `make_link` endset slot (wire v5).
+///
+/// It is a V-spec array (content-resolved, byte-identical to v4) or
+/// `{"addrs": [addresses…]}` — the names recorded verbatim, the same
+/// addrs-object encoding as `edit_link`'s successor `ty`.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is neither an array nor an object, or where the
+/// array, the object or its `addrs` list is refused.
 fn p_slotarg(v: &Value) -> PResult<SlotArg> {
     match v {
         Value::Array(_) => Ok(SlotArg::Resolve(p_list(v, p_vspec)?)),
@@ -1142,13 +1360,19 @@ fn p_spec(v: &Value) -> PResult<Spec> {
     Ok(Spec { doc: field(m, "doc", p_addr)?, span: field(m, "span", p_span)? })
 }
 
-/// One I-span of `retrieve_i` (wire.md §Content & provenance reads): an
-/// I-address and a width — through M1's address door and the natural's,
-/// so no malformed address survives the trust boundary. Its SHAPE — an
-/// element position at the start, a width of at least one — is M10's own
-/// refusal (`not_content_subspace`, `empty_width`, by the span's index),
-/// not this parse's: a span is well-formed here whatever document it
-/// derives, and what it derives is M10's to judge.
+/// Parses one I-span of `retrieve_i` (wire.md §Content & provenance reads).
+///
+/// It is an I-address and a width — through M1's address door and the
+/// natural's, so no malformed address survives the trust boundary. Its
+/// shape — an element position at the start, a width of at least one — is
+/// M10's own refusal (`not_content_subspace`, `empty_width`, by the span's
+/// index), not this parse's: a span is well-formed here whatever document
+/// it derives, and what it derives is M10's to judge.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of `start` and `width` alone, or where
+/// either is missing or refused.
 fn p_ispan(v: &Value) -> PResult<ISpan> {
     let m = p_obj(v, &["start", "width"])?;
     Ok(ISpan { start: field(m, "start", p_addr)?, width: field(m, "width", p_nat)? })
@@ -1162,14 +1386,20 @@ fn p_region(v: &Value) -> PResult<RegionSpec> {
     })
 }
 
-/// The `values` array of `insert`: each element is one of the four write
-/// forms (wire.md §Content values), contributing zero or more values that
-/// concatenate in order.
+/// Parses the `values` array of `insert`.
 ///
-/// What bounds the whole array is [`MAX_INSERT_VALUES`], which [`p_val_form`]
-/// enforces against this accumulator before each element mints into it — the
-/// array's element count bounds nothing on its own, since one per-byte string
-/// mints one value per byte.
+/// Each element is one of the four write forms (wire.md §Content values),
+/// contributing zero or more values that concatenate in order.
+///
+/// What bounds the values the whole array mints is [`MAX_INSERT_VALUES`],
+/// which [`p_val_form`] enforces against this accumulator before each element
+/// mints into it — the array's element count bounds nothing on its own, since
+/// one per-byte string mints one value per byte.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no array, or where [`p_val_form`] refuses an
+/// element, the fault prefixed with the element's index.
 fn p_values(v: &Value) -> PResult<Vec<Val>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     let mut out = Vec::new();
@@ -1179,15 +1409,22 @@ fn p_values(v: &Value) -> PResult<Vec<Val>> {
     Ok(out)
 }
 
-/// Room for what an element is ABOUT to mint — THE place
-/// [`MAX_INSERT_VALUES`] is enforced, and enforced ahead of the mint rather
-/// than behind it. An element's whole contribution is added in ONE `extend`,
-/// so a check that runs once the element has returned has already paid the
-/// peak the cap exists to prevent: an 8 MiB per-byte string mints 8.4M
-/// [`Val`]s, each its own `Arc` allocation, order 400 MB of live heap, for a
-/// frame that is then refused. Asked in VALUES — the unit the cap counts —
-/// and measured against the accumulator, so an element's own length is
-/// never mistaken for the budget it consumes.
+/// Checks there is room for what an element is *about* to mint.
+///
+/// It is *the* place [`MAX_INSERT_VALUES`] is enforced, and enforced ahead
+/// of the mint rather than behind it. An element's whole contribution is
+/// added in one call — one `extend`, or one `push` for an atom — so a check
+/// that runs once the element has returned has already paid the peak the
+/// cap exists to prevent: an 8 MiB per-byte string mints 8.4M [`Val`]s, each
+/// its own `Arc` allocation, order 400 MB of live heap, for a frame that is
+/// then refused. Asked in values — the unit the cap counts — and measured
+/// against the accumulator, so an element's own length is never mistaken
+/// for the budget it consumes.
+///
+/// # Errors
+///
+/// A [`PErr`] where `out` with `adding` more would pass
+/// [`MAX_INSERT_VALUES`].
 fn room(out: &[Val], adding: usize) -> PResult<()> {
     if out.len().saturating_add(adding) > MAX_INSERT_VALUES {
         return Err(PErr(format!(
@@ -1197,24 +1434,39 @@ fn room(out: &[Val], adding: usize) -> PResult<()> {
     Ok(())
 }
 
-/// The values one hex field will mint, read from the ENCODED text without
-/// copying or decoding it, so [`room`] can refuse before either. A
-/// non-string field needs no room; `field` below reports its own fault.
+/// Returns the values one hex field will mint, read from its encoded text.
+///
+/// It reads the text without copying or decoding it, so [`room`] can refuse
+/// before either. A non-string field needs no room; `field` below reports
+/// its own fault.
+///
+/// # Errors
+///
+/// A [`PErr`] where the field `k` is missing.
 fn hex_values(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
     Ok(need(m, k)?.as_str().map_or(0, |s| s.len() / 2))
 }
 
-/// One element of `values`. The per-byte forms (`"str"`, `{"hex"}`) mint one
-/// single-byte value per byte — the substrate's text discipline, under which
-/// every interior byte stays addressable — and admit the vacuous `""`. The
-/// atom forms (`{"atom"}`, `{"atom_hex"}`) mint ONE composite value of all
-/// the bytes: coarse granularity must be said, never fallen into; a
-/// zero-byte atom is not expressible.
+/// Parses one element of `values` into `out`.
+///
+/// The per-byte forms (`"str"`, `{"hex"}`) mint one single-byte value per
+/// byte — the substrate's text discipline, under which every interior byte
+/// stays addressable — and admit the vacuous `""`. The atom forms
+/// (`{"atom"}`, `{"atom_hex"}`) mint *one* composite value of all the bytes:
+/// coarse granularity must be said, never fallen into; a zero-byte atom is
+/// not expressible.
 ///
 /// Every arm asks [`room`] for what it is about to add before it adds it, so
 /// an over-budget element mints nothing — and on the hex path is never even
-/// decoded. An atom asks for ONE value whatever its byte count, which is
+/// decoded. An atom asks for *one* value whatever its byte count, which is
 /// what a composite value is.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is neither a string nor an object of exactly one of
+/// `hex`, `atom` and `atom_hex`, where [`room`] refuses what it would mint,
+/// where the form's text is no string or no even-length hex, or where an
+/// atom has zero bytes.
 fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
     let m = match v {
         Value::String(s) => {
@@ -1255,7 +1507,7 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
 }
 
 fn p_hex(s: &str) -> PResult<Vec<u8>> {
-    // The odd-length refusal comes FIRST, because `chunks_exact` below
+    // The odd-length refusal comes first, because `chunks_exact` below
     // drops a trailing half-byte in silence — exactly the reading this
     // check exists to refuse.
     if !s.len().is_multiple_of(2) {
@@ -1267,10 +1519,11 @@ fn p_hex(s: &str) -> PResult<Vec<u8>> {
         .collect()
 }
 
-/// Any whole number of bytes of LOWERCASE hex, or `None` —
-/// [`parse_lower_hex`](skep_util::json::parse_lower_hex)'s variable-width
-/// twin under the same case policy: the parse of the attest store's `sig`
-/// (`feed-attest.log`), which this crate reads back only as
+/// Parses any whole number of bytes of lowercase hex, or answers `None`.
+///
+/// It is [`parse_lower_hex`](skep_util::json::parse_lower_hex)'s
+/// variable-width twin under the same case policy: the parse of the attest
+/// store's `sig` (`feed-attest.log`), which this crate reads back only as
 /// [`hex_string`](skep_util::json::hex_string) wrote it. An odd length is
 /// refused ahead of the pairing, so no trailing half-byte is dropped in
 /// silence.
@@ -1284,9 +1537,15 @@ pub(crate) fn parse_lower_hex_bytes(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// One hex character, case FOLDED — the content forms' policy: `{"hex"}`
-/// and `{"atom_hex"}` are decoded to bytes and never framed, so an
-/// uppercase digit means what a lowercase one means.
+/// Parses one hex character, case *folded*: the frame's hex policy.
+///
+/// `{"hex"}`, `{"atom_hex"}` and the `attest` member's `sig` are decoded to
+/// bytes and never framed, so an uppercase digit means what a lowercase one
+/// means.
+///
+/// # Errors
+///
+/// A [`PErr`] naming a character that is no hex digit in either case.
 fn hex_digit(c: u8) -> PResult<u8> {
     hex_nibble(c.to_ascii_lowercase())
         .ok_or_else(|| PErr(format!("invalid hex digit '{}'", c as char)))
@@ -1305,9 +1564,16 @@ fn p_view(v: &Value) -> PResult<View> {
     }
 }
 
-/// A slot constraint: `"any"` (drops out), `"empty"` (annihilates), or a
-/// span array. An empty array IS the empty constraint and normalizes onto
-/// `"empty"` — M8 documents the empty endset as exactly that zero.
+/// Parses a slot constraint: `"any"`, `"empty"`, or a span array.
+///
+/// `"any"` drops out and `"empty"` annihilates. An empty array *is* the
+/// empty constraint and normalizes onto `"empty"` — M8 documents the empty
+/// endset as exactly that zero.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is none of the three, or where the span array is
+/// refused ([`p_list`]).
 fn p_slotspec(v: &Value) -> PResult<SlotSpec> {
     match v {
         Value::String(s) if s == "any" => Ok(SlotSpec::Any),
@@ -1334,10 +1600,18 @@ fn p_fourset(v: &Value) -> PResult<FourSet> {
     })
 }
 
-/// EditLink's successor: content V-specs for from/to; the type slot is
-/// exactly one of `{"addrs": […]}` (address-denoting — the identical
-/// encoding of `make_link`'s addrs form) or `{"resolve": […]}`
-/// (content-resolved), mirroring M10's `SlotArg`.
+/// Parses EditLink's successor: content V-specs, and the type slot.
+///
+/// The V-specs are for from/to; the type slot is exactly one of
+/// `{"addrs": […]}` (address-denoting — the identical encoding of
+/// `make_link`'s addrs form) or `{"resolve": […]}` (content-resolved),
+/// mirroring M10's `SlotArg`.
+///
+/// # Errors
+///
+/// A [`PErr`] where `v` is no object of `from`, `to` and `ty` alone, where
+/// one of the three is missing or refused, or where `ty` holds other than
+/// exactly one of `addrs` and `resolve`.
 fn p_successor(v: &Value) -> PResult<SuccessorSpec> {
     let m = p_obj(v, &["from", "to", "ty"])?;
     Ok(SuccessorSpec {

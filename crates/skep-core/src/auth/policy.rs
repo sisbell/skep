@@ -31,7 +31,9 @@
 //!   bytes into the blob store at all, kept beside the sequences' gates.
 //!
 //! `addr_spans`, the one spelling of a type slot the sequences and the check
-//! read, lives here, where each child sees it without a widening.
+//! read — save the `replaces` fence, which asks its class test of `enc`
+//! itself, and the entry frame, which reads the slot as the store will hold
+//! it — lives here, where each child sees it without a widening.
 
 mod attestation;
 mod credential;
@@ -83,13 +85,14 @@ fn homed_in_doc_one(world: &World, doc: &Address) -> bool {
 
 /// Returns one address-form slot in M7's own deposited form, `enc(addrs)`.
 ///
-/// It is the one spelling, so [`deposits_credential_link`]'s classification
-/// and [`DepositSpans::of`]'s deposit read a type slot through the same
-/// call: two of the three readings the obligation on that classifier rests
-/// on become one, and only the rebuild's (M7's stored slot) stays separate.
-/// The write-path check asks the same classifier of an `insert`'s declared
-/// type through it too (signed-ops D26's record-deposit exemption), so a
-/// type is one slot shape wherever this module classifies one.
+/// It is the one spelling of a slot's spans, so
+/// [`deposits_credential_link`]'s classification and [`DepositSpans::of`]'s
+/// deposit read a type slot through the same call: two of the three
+/// readings the obligation on that classifier rests on become one, and only
+/// the rebuild's (M7's stored slot) stays separate. The write-path check
+/// asks the same classifier of an `insert`'s declared type through it too
+/// (signed-ops D26's record-deposit exemption), so a type is one slot shape
+/// wherever this module classifies one.
 fn addr_spans(addrs: &[Address]) -> Vec<Span> {
     enc(addrs.iter()).spans().cloned().collect()
 }
@@ -179,10 +182,10 @@ fn record_deposit_kind<'s>(ty: impl IntoIterator<Item = &'s Span>) -> Option<Cre
 /// (`World::apply`, AUTH-2.80) will read as credential-typed. All three read
 /// the type slot's spans, and two of the three readings are structural
 /// rather than claimed — this one and [`DepositSpans::of`] both go through
-/// `addr_spans`, the one spelling of `enc(addrs)`. Only the hook's stays a
-/// claim: it reads M7's stored slot, which records `enc` verbatim. And the
-/// three read one set, the engine's one `IDENTITY_TYPES`: every arm here
-/// names the kind through `record_deposit_kind`, which *is* the fold's
+/// `addr_spans`, the one spelling of `enc(addrs)` as spans. Only the hook's
+/// stays a claim: it reads M7's stored slot, which records `enc` verbatim.
+/// And the three read one set, the engine's one `IDENTITY_TYPES`: every arm
+/// here names the kind through `record_deposit_kind`, which *is* the fold's
 /// credential kinds — the equality its card states, and the reason no kind
 /// the fold does not fold joins it by an edit there. The subspace-3
 /// allocation the engine's pins state is what keeps a `Resolve` slot out of
@@ -281,7 +284,7 @@ pub enum CredentialRefusal {
     /// `Genesis` inside; the test reads each key entry's `alg` and decodes
     /// nothing. Tag-3 verification stays compiled in (the frozen-tag rule);
     /// this refuses enrollment alone. Token `preview_key` — AUTH-3.56's row,
-    /// AUTH-6.23's; the face, the row's verbatim: "this is a PREVIEW key, and
+    /// AUTH-6.23's; the face, the row's verbatim: "this is a preview key, and
     /// this board enrolls no preview keys — make a key with a released client
     /// and enroll that".
     PreviewKey,
@@ -307,9 +310,10 @@ pub enum CredentialRefusal {
     /// audit view — the succession pair, the consumption marker, the journal
     /// designation, the rail record, the steward's classification link in a
     /// published home, the `replaces` link a grant is deposited with
-    /// (PUB-5.15) — one code for the class list; the client splits the face by
-    /// the target's type, which the owner can read. Token
-    /// `nullify_audit_view` — the wire's (wire.md §Credential refusals).
+    /// (PUB-5.15), the registry's binding, takedown record and policy link —
+    /// one code for the class list; the client splits the face by the
+    /// target's type, which the owner can read. Token `nullify_audit_view` —
+    /// the wire's (wire.md §Credential refusals).
     NullifyAuditView,
     /// The `replaces` class's sole-writer fence (PUB-5.15).
     ///
@@ -380,23 +384,24 @@ pub enum CredentialRefusal {
     ///
     /// **And the record grade's fence** (§4.5 (4) step 2; 2a): a credential
     /// deposit above the claim whose record carries no `sig` at all, answered
-    /// at the deposit's `make_link` (signed-ops D26) — a fence with no
-    /// population on a conforming daemon: a sig-less record-kind atom is
-    /// refused at its `insert`, [`CredentialRefusal::RecordSigRequired`], so
-    /// the only atom this reaches was deposited past that gate — below the
-    /// claim, or by an operator past the check — and the act that exists is a
+    /// at the deposit's `make_link` (signed-ops D26) — a fence the insert's
+    /// own gate narrows: a sig-less atom that parses as a record of its
+    /// declared kind is refused at its `insert` above the claim,
+    /// [`CredentialRefusal::RecordSigRequired`], so an atom this reaches was
+    /// deposited past that gate — below the claim, declared under another
+    /// kind, or by an operator past the check — and the act that exists is a
     /// new record, composed with its `sig`, inserted and linked.
     AttestationRequired,
     /// The sig-less record atom, refused at `insert` (signed ops; SO-I4; P13).
     ///
     /// An `insert` above the claim declared under a kind of the
-    /// record-deposit set whose one value parses as a record of that kind and
-    /// carries no `sig` member. Decided at the earliest act the fault is
-    /// decidable from — the write-path check's step 2, where the atom's
-    /// bytes are already parsed — so nothing lands and no orphan atom is
-    /// minted: a retry by re-inserting and re-linking is never free, each
-    /// attempt leaving a permanent orphan in a published doc 1. Token
-    /// `record_sig_required` — a spelling this build chose, the
+    /// record-deposit set, or of the registry's, whose one value parses as a
+    /// record of that kind and carries no `sig` member. Decided at the
+    /// earliest act the fault is decidable from — the write-path check's
+    /// step 2, where the atom's bytes are already parsed — so nothing lands
+    /// and no orphan atom is minted: a retry by re-inserting and re-linking
+    /// is never free, each attempt leaving a permanent orphan in a published
+    /// doc 1. Token `record_sig_required` — a spelling this build chose, the
     /// `signed_session_required` pattern — and permanent, the family's: the
     /// same bytes are never admitted, and the act that exists is a
     /// *different* record, the same entries composed with their `sig` over
@@ -412,17 +417,17 @@ pub enum CredentialRefusal {
     /// system account `1.1.0.1`, refused at the credential sequence's
     /// precheck on a claimed board (ahead of the record grade) and on an
     /// unclaimed one (the pre-claim gate's genesis arm), and a declared
-    /// credential-kind `insert` into that account's doc 1 refused at the
-    /// plain path's pre-claim admission. Without it a loopback party on an
-    /// unclaimed board binds a bare session as the system principal, plants a
-    /// genesis in `1.1.0.1.0.1` — the one pre-claim plant `claim_residue`
-    /// cannot see, the account sitting at the genesis floor — and after the
-    /// claim opens signed system sessions whose writes into `H` are A3-exempt
-    /// and poison the head writer's resume. The head writer's own rows are no
-    /// credential deposits and never meet this. Token `system_account_keyless`
-    /// — a spelling this build chose — and permanent, the family's: the
-    /// system account enrols no key, ever; the act that exists is an
-    /// enrolment under an account of one's own.
+    /// credential- or registry-kind `insert` into that account's doc 1
+    /// refused at the plain path's pre-claim admission. Without it a loopback
+    /// party on an unclaimed board binds a bare session as the system
+    /// principal, plants a genesis in `1.1.0.1.0.1` — the one pre-claim plant
+    /// `claim_residue` cannot see, the account sitting at the genesis floor —
+    /// and after the claim opens signed system sessions whose writes into `H`
+    /// are A3-exempt and poison the head writer's resume. The head writer's
+    /// own rows are no credential deposits and never meet this. Token
+    /// `system_account_keyless` — a spelling this build chose — and
+    /// permanent, the family's: the system account enrols no key, ever; the
+    /// act that exists is an enrolment under an account of one's own.
     SystemAccountKeyless,
     /// The write-path check's second refusal (§4.5 (2)).
     ///

@@ -1,112 +1,119 @@
-//! The change feed's PUBLICATION HALF (PUB round 2, lane 3.6): `commits.log`
-//! composed with its four derived sidecars, the per-class mask, the
-//! supplement merge, the universal term, and the two narrowings — with the
-//! attest store (`attest.rs`) beside them, whose slots a page renders. The
-//! wire surface is `GET /changes` (wire.md §The change feed); what this module
-//! owes it is ONE answer — the FEED-CLASS ORACLE (PUB-6.59): for any class,
-//! every page equals the position walk over `(since, head]` with
-//! `readable()` applied per entry and `docs` reduced, masked entries
-//! omitted, `limit`/`last`/`more` over the visible stream (PUB-6.44). Every
-//! structure below is a way of finding the candidates for that walk at a
-//! cost the spec pins (PUB-7.19–7.35); none of them decides the answer,
-//! which is the read predicate's per entry (PUB-7.20).
+//! The change feed's publication half, which answers `GET /changes`.
+//!
+//! It is `commits.log` composed with its four derived sidecars, the
+//! per-class mask, the supplement merge, the universal term, and the two
+//! narrowings — with the attest store (`attest.rs`) beside them, whose slots
+//! a page renders. The wire surface is `GET /changes` (wire.md §The change
+//! feed); what this module owes it is one answer — the feed-class oracle
+//! (PUB-6.59): for any class, every page equals the position walk over
+//! `(since, head]` with `readable()` applied per entry and `docs` reduced,
+//! masked entries omitted, `limit`/`last`/`more` over the visible stream
+//! (PUB-6.44). Every structure below is a way of finding the candidates for
+//! that walk at a cost the spec pins (PUB-7.19–7.35); none of them decides
+//! the answer, which is the read predicate's per entry (PUB-7.20).
 //!
 //! # The mask (PUB-6.44–6.46)
 //!
 //! An entry classifies over its `docs` — the target for arrangement writes,
-//! the HOME for link writes, the MINTED document for mints, and for
-//! `nullify` the record's home AND the target link's home as a set — never
-//! over sources read. It is MASKED iff `docs` is non-empty and none is
-//! readable to the requester; otherwise it is shown with `docs` REDUCED to
+//! the home for link writes, the minted document for mints, and for
+//! `nullify` the record's home and the target link's home as a set — never
+//! over sources read. It is masked iff `docs` is non-empty and none is
+//! readable to the requester; otherwise it is shown with `docs` reduced to
 //! the readable ones. `[]`-docs entries (`delegate`, `register_node`) are
-//! never masked. A masked entry is OMITTED — never present with nulled
-//! fields, which is the reserved rendering of lost testimony. A BARE entry
-//! classifies from the journal (`classify::derived_docs`, computed at the
-//! open that reconstructs it): its class is the journal's, its rendering
-//! stays the nulls.
+//! never masked. A masked entry is omitted — never present with nulled
+//! fields, which is the reserved rendering of lost testimony. A bare entry
+//! classifies from the journal (`classify::derived_docs`, computed by the
+//! walk that reconstructs it, at the open where the index lost its
+//! classification, or at the record step of a write that panicked past its
+//! commit): its class is the journal's, its rendering stays the nulls.
 //!
 //! # The structures (PUB-7.19–7.21)
 //!
 //! `commits.log` (`sidecar.rs`) is the authority for what an entry says.
 //! Beside it, four derived sidecars (`derived.rs`), each appended at commit
 //! and held resident as its twin; and, in their line shape under a class of
-//! its own, the ATTEST STORE ([`AttestStore`], `attest.rs`, which states the
-//! class), whose slot for a position the page renders as the entry's `attest`
-//! member (`CommitMeta::entry`). The five files `commits.log` and the four
-//! derived hold are COMPACTED to the journal's reclaim floor — at open, and
-//! after each checkpoint the daemon's checkpoint thread lands, the floor
-//! moving at a checkpoint and at no other moment ([`Feed::compact_below_reclaim_floor`],
-//! one rewrite for both moments, under this feed's lock); the attest store
-//! never (its class). The four twins:
+//! its own, the attest store ([`AttestStore`], `attest.rs`, which states the
+//! class), whose slot for a position the page renders as the entry's
+//! `attest` member (`CommitMeta::entry`). The five files, `commits.log` and
+//! the four derived, are compacted to the journal's reclaim floor — at open,
+//! and after each checkpoint the daemon's checkpoint thread lands, the floor
+//! moving at a checkpoint and at no other moment (one rewrite for both
+//! moments, the second [`Feed::compact_below_reclaim_floor`]'s, under this
+//! feed's lock); the attest store never (its class). The four twins:
 //!
-//! * the per-document POSITION INDEX (`index`: document → positions, keyed
+//! * the per-document position index (`index`: document → positions, keyed
 //!   by tumbler, so an account's documents and any content-prefix are one
 //!   contiguous key range) — the `under=` narrowing's and the universal
 //!   term's source, with the per-position classification map (`docs`) as
 //!   its inverse;
-//! * the position → OFFSET array (`CommitsLog::offsets`) — position-keyed
+//! * the position → offset array (`CommitsLog::offsets`) — position-keyed
 //!   access into `commits.log`; this build's reader is resident, so
 //!   `CommitsLog::entries` is what answers a position and this array
 //!   answers nothing. The file is what a non-resident reader would seek
 //!   by, and the array is what keeps that file right;
-//! * the MASKED-POSITION BITMAP (`masked`: positions whose docs are
+//! * the masked-position bitmap (`masked`: positions whose docs are
 //!   non-empty and all drafts at commit) and its complement, the
-//!   MATERIALIZED PUBLISHED STREAM (`published`), which a guest page walks
-//!   in O(page). For a position the bitmap does NOT hold it is a skip
+//!   materialized published stream (`published`), which a guest page walks
+//!   in O(page). For a position the bitmap does not hold it is a skip
 //!   accelerator and never the authority: the position is walked and the
 //!   mask decides. For one it holds, it decides candidacy — the field's own
 //!   card states that direction and the invariant it rests on;
-//! * the PER-OWNER-ACCOUNT DRAFT-POSITION STREAMS (`streams`: owner →
+//! * the per-owner-account draft-position streams (`streams`: owner →
 //!   positions naming one of that owner's drafts — every fully-masked
 //!   position plus the straddles).
 //!
 //! # The walk behind the listener (`operations.md` §3.3 step 2; §4 row 16)
 //!
 //! Where `commits.log` was lost or torn, its open records the uncovered
-//! region `(low, head]` as PENDING and the four derived files are rebuilt
-//! for what the log HOLDS, fenced at `low`; the write path then runs the
+//! region `(low, head]` as pending and the four derived files are rebuilt
+//! for what the log holds, fenced at `low`; the write path then runs the
 //! walk on a thread of its own ([`Feed::walk_and_land`]) while the board
-//! serves. Meanwhile a page whose rows would have to come from the region
-//! is refused [`ChangesAnswer::Rebuilding`] (`503 feed_rebuilding`,
+//! serves — at the open instead, where the OS refuses the thread.
+//! Meanwhile a page whose rows would have to come from the region is
+//! refused [`ChangesAnswer::Rebuilding`] (`503 feed_rebuilding`,
 //! retry-class), pages below and above it serving; a write's record enters
-//! the twins and no file ([`Inner::fold_into_maps`]); a checkpoint's
-//! compaction moves the fence in memory and writes nothing. The walk LANDS
-//! under this feed's lock ([`Feed::land`]): the region's classifications
-//! folded into the twins as the record step folds a position; the index,
-//! the bitmap and the streams rewritten whole from the twins, the same
-//! rewrite the open and the checkpoint thread run; then ONE rewrite of
-//! `commits.log` — the walked boundaries bare among the held positions, in
-//! position order, every offset assigned — and last the offset array that
-//! names its lines. So a kill between two of them leaves the region to a
-//! walk behind the listener again, never to a classification before the
-//! board serves; and a derived file whose landing rewrite fails before its
-//! rename, short of the region, takes no further line. The attest store is
-//! untouched, its lines appended as today and its open having served the
-//! region's slots off the kernel's markers.
+//! the twins and none of the five files ([`Inner::fold_into_maps`]); a
+//! checkpoint's compaction moves the fence in memory and writes nothing.
+//! The walk lands under this feed's lock ([`Feed::land`]): the region's
+//! classifications folded into the twins as the record step folds a
+//! position; the index, the bitmap and the streams rewritten whole from the
+//! twins, the same rewrite the open and the checkpoint thread run; then one
+//! rewrite of `commits.log` — the walked boundaries bare among the held
+//! positions, in position order, every offset assigned — and last the
+//! offset array that names its lines. So a kill between two of them leaves
+//! the region to a walk behind the listener again, never to a
+//! classification before the board serves; and a derived file whose
+//! landing rewrite fails before its rename, short of the region, takes no
+//! further line. The attest store's file is untouched, its served window
+//! trimmed with the twins, its lines appended all the same and its open
+//! having made the region's slots resident from its own lines and, above
+//! its coverage, from the kernel's markers.
 //!
 //! # The supplement (PUB-7.22–7.28)
 //!
 //! A principal's page is the K-way merge, deduplicated by position, of: the
-//! published walk; its OWN account's, its ANCESTOR accounts' and its
-//! DESCENDANT owner accounts' streams (the subtree clause runs both ways,
-//! PUB-1.32 as amended — its own and ancestor accounts, the subtrees that
-//! enclose it, by key; the owner accounts beneath it as one key range of
-//! `streams` under its account — PUB-7.24's SUBTREE TERM, the price of the
-//! ancestor read; a node-tier principal opens neither); its grant-selected
-//! ISSUER streams, each under a per-entry containment test against the union
-//! of that issuer's covered prefixes for this principal (an account-depth
-//! grant is the stream whole); and the UNIVERSAL term, derived at serve — the
-//! position index's lists under each live any-principal prefix, enumerated
-//! once per request off the same head snapshot as the rest of the class. The
-//! CLASS is `server.rs`'s to resolve, off ONE head snapshot per request
-//! (PUB-6.40), and arrives here as [`FeedClass`]; this module resolves
-//! nothing itself. Guests never merge the universal term (PUB-5.109).
+//! published walk; its own account's, its ancestor accounts' and its
+//! descendant owner accounts' streams (the subtree clause runs both ways,
+//! PUB-1.32 — its own and ancestor accounts, the subtrees that enclose it,
+//! by key; the owner accounts beneath it as one key range of `streams`
+//! under its account — PUB-7.24's subtree term, the price of the ancestor
+//! read; a node-tier principal opens neither); its grant-selected issuer
+//! streams, each under a per-entry containment test against the union of
+//! that issuer's covered prefixes for this principal (an account-depth
+//! grant, or a union of more than [`MAX_FILTERED_PREFIXES`], is the stream
+//! whole); and the universal term, derived at serve — the position index's
+//! lists under each live any-principal prefix, enumerated once per request
+//! off the same head snapshot as the rest of the class. The class is
+//! resolved off one head snapshot per request (PUB-6.40) — the route pins
+//! it and calls [`FeedClass::of`] — and arrives at the page as
+//! [`FeedClass`]; the page resolves nothing itself. Guests never merge the
+//! universal term (PUB-5.109).
 //!
 //! # The narrowings (PUB-7.31–7.35)
 //!
 //! `under=<address-or-prefix>` serves off the position index with
-//! DOC-GRANULAR SKIPPING — an unreadable document's whole list is skipped on
-//! one test — under the MERGE-OR-WALK rule: merge the lists under the
+//! doc-granular skipping — an unreadable document's whole list is skipped on
+//! one test — under the merge-or-walk rule: merge the lists under the
 //! prefix iff the prefix holds no more documents than the range holds
 //! positions, else walk the visible stream testing the prefix per entry.
 //! `drafts=true` keeps the entries whose reduced docs name a draft. On its
@@ -155,86 +162,98 @@ use crate::limits::{
 };
 use crate::serial::SerialGuard;
 
-/// The most granted prefixes [`Inner::names_under`] scans per candidate
-/// before [`Inner::sources`] stands the filter aside and lets the mask
+/// The most granted prefixes [`Inner::names_under`] scans per candidate.
+///
+/// Past it, [`Inner::sources`] stands the filter aside and lets the mask
 /// decide.
 ///
-/// The filter is a CANDIDATE optimization and never the answer: it only
-/// REMOVES candidates from one source, the merge deduplicates, and
+/// The filter is a candidate optimization and never the answer: it only
+/// removes candidates from one source, the merge deduplicates, and
 /// [`Inner::visible`] decides every candidate that survives — so standing it
 /// aside can only widen a candidate set the mask then judges, and the page
 /// does not move. That is what makes a cap here answer-preserving rather
 /// than a narrowing, and it is weaker than "it drops only what the mask
 /// drops", which [`Inner::names_under`] records as false.
 ///
-/// The budget is the cost of the probe this filter PRECEDES. `World::readable`
+/// The budget is the cost of the probe this filter precedes. `World::readable`
 /// answers the grant clause by testing a document's O(depth) ancestor prefixes
 /// against a prefix-keyed set; this filter walks the issuer's whole granted
 /// union linearly, per candidate. Past the depth bound the linear walk costs
 /// more per candidate than the indexed probe that follows it, so the filter
 /// stops being an optimization and becomes a tax — and the union is a quantity
-/// the ISSUER writes, one prefix per grant, uncapped by the fold, so a holder
+/// the issuer writes, one prefix per grant, uncapped by the fold, so a holder
 /// of thousands of narrow grants would otherwise buy an O(union) scan per
 /// candidate on every page, under the lock [`crate::commits::Commits`]
 /// takes to record a commit. The number is M3's `MAX_PRINCIPAL_COMPONENTS`,
 /// which is that depth bound, taken from M3 so the two cannot part.
 const MAX_FILTERED_PREFIXES: usize = skep_namespace::MAX_PRINCIPAL_COMPONENTS;
 
-/// The requester's FEED CLASS, resolved by the route off ONE head snapshot
-/// (PUB-6.40) and threaded down: the read predicate at the requester's
-/// class, the stream keys its class opens, and the universal term's live
-/// set. The feed evaluates it and resolves nothing of its own.
+/// The requester's feed class, resolved off one head snapshot (PUB-6.40).
+///
+/// The route resolves it and threads it down: the read predicate at the
+/// requester's class, the stream keys its class opens, and the universal
+/// term's live set. The feed evaluates it and resolves nothing of its own.
 pub struct FeedClass<'a> {
-    /// The requester's READER CLASS (`None` is the guest) over the HEAD
-    /// world every field below stands on — the one snapshot the route pinned
-    /// for this request — with the requester's seat looked up at most once
-    /// for the whole request.
+    /// The requester's reader class (`None` is the guest) over the head world.
+    ///
+    /// Every field below stands on that world — the one snapshot the route
+    /// pinned for this request — with the requester's seat looked up at most
+    /// once for the whole request.
     ///
     /// [`FeedClass::of`] builds it from the request's `(world, principal)`
-    /// pair and derives the stream keys below from ITS seat, and
+    /// pair and derives the stream keys below from its seat, and
     /// [`FeedClass::readable`] answers the mask off it, so a class whose mask
     /// and whose stream keys belong to different principals is not
     /// constructible — the keys would open a principal's drafts while the
     /// mask refused all of them, which fails into an emptier page with
     /// nothing to report it.
     reader: ReaderClass<'a>,
-    /// The requester's ENCLOSING SUBTREES — its own account and its ancestor
-    /// accounts, every account whose subtree holds the requester: the subtree
+    /// The requester's enclosing subtrees: its own and its ancestor accounts.
+    ///
+    /// They are every account whose subtree holds the requester: the subtree
     /// clause's first compare (the requester at or beneath the owner,
     /// PUB-1.32) and PUB-7.24's "its own account's, its ancestor accounts'"
-    /// streams, each a draft-stream key, O(depth). Empty for the guest and for
-    /// a node-tier principal. NOT PUB-7.24's SUBTREE TERM, which is the
+    /// streams, each a draft-stream key, O(depth). Empty for the guest and
+    /// for a node-tier principal. Not PUB-7.24's subtree term, which is the
     /// requester's own subtree beneath it — the descendants',
     /// [`FeedClass::descendants_under`].
     enclosing_subtrees: Vec<Address>,
-    /// The requester's own ACCOUNT, as the prefix its DESCENDANT OWNER
-    /// ACCOUNTS' streams lie under (the subtree clause's second compare — the
-    /// requester at or above the owner, PUB-1.32 as amended; PUB-7.24's
-    /// SUBTREE TERM, the price of the ancestor read, as RES-220 names it). A
-    /// PREFIX and never a key list, as the universal term's are: the streams
-    /// are keyed per owner account in tumbler order, so every owner account
-    /// beneath this one is ONE contiguous key range, which [`streams_beneath`]
-    /// enumerates at serve — O(descendant owner accounts), and an account
-    /// beneath it that owns no draft stream costs nothing.
+    /// The requester's own account, as the prefix of its descendants' streams.
     ///
-    /// `None` for the guest and for a NODE-TIER principal, and the second is
+    /// Its descendant owner accounts' streams lie under it (the subtree
+    /// clause's second compare — the requester at or above the owner,
+    /// PUB-1.32; PUB-7.24's subtree term, the price of the ancestor read, as
+    /// RES-220 names it). A prefix and never a key list, as the universal
+    /// term's are: the streams are keyed per owner account in tumbler order,
+    /// so every owner account beneath this one is one contiguous key range,
+    /// which [`streams_beneath`] enumerates at serve — O(descendant owner
+    /// accounts), and an account beneath it that owns no draft stream costs
+    /// nothing.
+    ///
+    /// `None` for the guest and for a node-tier principal, and the second is
     /// the read predicate's principal-0 exclusion, kept here as its twin:
     /// principal 0 is seated at a node, whose prefix contains every owner
     /// account on the board, and it is no account's ancestor for the subtree
     /// clause (PUB-1.32: excluded by name) — so it opens no descendant range.
-    /// The mask would refuse every entry such a range put forward, so what
-    /// the `None` keeps off principal 0's page is the COST, a merge of every
-    /// draft stream there is, and never an answer.
+    /// The mask would admit no entry such a range put forward that the
+    /// published walk, an issuer stream or the universal term does not put
+    /// forward already — a straddle, shown by its published half, or a draft
+    /// a grant opens to principal 0 — so what the `None` keeps off
+    /// principal 0's page is the cost, a merge of every draft stream there
+    /// is, and never an answer.
     descendants_under: Option<Address>,
-    /// The grant-selected issuers (`World::issuers_for`, PUB-7.25) — each an
-    /// issuing account with the union of the content prefixes it granted this
-    /// principal, the issuer being the draft-stream key this clause opens.
-    issuers: Vec<IssuerGrantIndexRow<'a>>,
-    /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22)
-    /// — a key range over the position index, never a stream key. Empty for
-    /// the guest (grants reach principals alone, PUB-5.109).
+    /// The grant-selected issuers (`World::issuers_for`, PUB-7.25).
     ///
-    /// The PREFIX alone, where the engine's row carries the issuing accounts
+    /// Each is an issuing account with the union of the content prefixes it
+    /// granted this principal, the issuer being the draft-stream key this
+    /// clause opens.
+    issuers: Vec<IssuerGrantIndexRow<'a>>,
+    /// The live any-principal prefixes (`World::universal_grants`, PUB-7.22).
+    ///
+    /// Each is a key range over the position index, never a stream key.
+    /// Empty for the guest (grants reach principals alone, PUB-5.109).
+    ///
+    /// The prefix alone, where the engine's row carries the issuing accounts
     /// beside it: this term needs no issuer, because the mask's own grant
     /// clause admits exactly the entries the issuing owner covers, so
     /// [`Inner::visible`] decides every candidate the prefix's index lists
@@ -243,11 +262,12 @@ pub struct FeedClass<'a> {
 }
 
 impl<'a> FeedClass<'a> {
-    /// The whole class one `(world, principal)` pair opens, resolved off ONE
-    /// head snapshot (PUB-6.40): the route pins the snapshot and hands the
-    /// world in, and every field's own rule is stated on the field above —
-    /// which is why the resolution lives here rather than at the route,
-    /// where it would restate them.
+    /// Returns the whole class one `(world, principal)` pair opens.
+    ///
+    /// It is resolved off one head snapshot (PUB-6.40): the route pins the
+    /// snapshot and hands the world in, and every field's own rule is stated
+    /// on the field above — which is why the resolution lives here rather
+    /// than at the route, where it would restate them.
     pub fn of(world: &'a World, principal: Option<PrincipalId>) -> FeedClass<'a> {
         let reader = world.reader_class(principal);
         // The seat the mask resolves, handed out: the stream keys below and
@@ -256,10 +276,10 @@ impl<'a> FeedClass<'a> {
         let enclosing_subtrees: Vec<Address> = std::iter::successors(account.clone(), parent)
             .filter(|a| world.m3().is_registered_account(a))
             .collect();
-        // The grants BORROW the world rather than the account they select on,
+        // The grants borrow the world rather than the account they select on,
         // so this term runs ahead of the one that consumes it.
         let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
-        // An ACCOUNT alone opens the descendant range — the tier test the
+        // An account alone opens the descendant range — the tier test the
         // read predicate makes ahead of its second compare, so principal 0's
         // node seat opens none.
         let descendants_under = account.filter(|a| world.m3().is_registered_account(a));
@@ -278,9 +298,10 @@ impl<'a> FeedClass<'a> {
         }
     }
 
-    /// `readable(principal, ·)` at the head — THE mask (PUB-7.20), which
-    /// [`Inner::visible`] applies per entry and [`Inner::sources`] applies
-    /// per document in the merge arm's skip.
+    /// Returns `readable(principal, ·)` at the head: the mask (PUB-7.20).
+    ///
+    /// [`Inner::visible`] applies it per entry and [`Inner::sources`] applies
+    /// it per document in the merge arm's skip.
     ///
     /// A method over the stored reader class rather than a closure the route
     /// hands in: the answer is a pure function of the `(world, principal)`
@@ -293,28 +314,32 @@ impl<'a> FeedClass<'a> {
     }
 }
 
-/// WHAT ONE COMPACTION OF THE FEED's FILES DID — the answer of
-/// `Feed::compact_below_reclaim_floor`, read by the checkpoint thread for
-/// its landing line: the fence compacted to, or `None` where nothing lay
-/// below the reclaim floor and nothing was written; and, beside the fence,
-/// the files that STOOD — each whose rewrite failed BEFORE its rename, the
-/// old file whole and the next compaction trying again — by name, so the
-/// line is truthful of each file. A file whose rewrite failed PAST its
-/// rename was compacted (the new file is in place) and has said its own
-/// stop; it is none of these. Empty with no fence: nothing was attempted.
+/// What one compaction of the feed's files did.
+///
+/// It is the answer of `Feed::compact_below_reclaim_floor`, read by the
+/// checkpoint thread for its landing line: the fence compacted to, or `None`
+/// where nothing lay below the reclaim floor and nothing was written; and,
+/// beside the fence, the files that stood — each whose rewrite failed before
+/// its rename, the old file whole and the next compaction trying again — by
+/// name, so the line is truthful of each file. A file whose rewrite failed
+/// past its rename was compacted (the new file is in place) and has said its
+/// own stop; it is none of these. Empty with no fence: nothing was attempted.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FeedCompaction {
-    /// The last position dropped — the files are compacted below the
-    /// position after it — or `None` where nothing lay below the floor.
+    /// The last position dropped, or `None` where nothing lay below the floor.
+    ///
+    /// The files are compacted below the position after it.
     pub fence: Option<u64>,
-    /// The files whose rewrite failed before its rename, standing as they
-    /// were, in the order the compaction attempted them.
+    /// The files whose rewrite failed before its rename, standing as they were.
+    ///
+    /// They are in the order the compaction attempted them.
     pub standing: Vec<&'static str>,
     /// The pending region `(low, head]` whose landing the rewrite waits on.
     ///
     /// The walk behind the listener has yet to land it, so the fence moved
-    /// in the resident entries alone and no file was written. `None` where
-    /// the files were rewritten, or nothing lay below the floor.
+    /// in memory alone — the resident entries and the twins trimmed — and no
+    /// file was written. `None` where the files were rewritten, or nothing
+    /// lay below the floor.
     pub deferred: Option<(u64, u64)>,
 }
 
@@ -335,35 +360,39 @@ pub struct AttestStoreFigures {
     pub slots: usize,
 }
 
-/// One `/changes` question — the parsed query string, beside
-/// [`ChangesAnswer`], its answer.
+/// One `/changes` question: the parsed query string.
+///
+/// Its answer is [`ChangesAnswer`].
 #[derive(Clone, Debug)]
 pub struct ChangesQuery {
     /// The fence: positions strictly above it.
     pub since: u64,
-    /// The page cap, over the VISIBLE stream — at least one, BY TYPE. A zero
-    /// cap is not a smaller page: `Feed::page` would break on the first
+    /// The page cap, over the visible stream — at least one, by type.
+    ///
+    /// A zero cap is not a smaller page: `Feed::page` would break on the first
     /// visible candidate and answer `more: true` with `last` echoing `since`,
     /// a client told to poll again at a fence that never advances. The wire's
     /// parser refuses it (`limit: must be 1..=4096`) rather than clamping, and
     /// the type is what makes that the only answer: no constructor, the
     /// parser or a second one, can build a zero cap.
     pub limit: NonZeroUsize,
-    /// `under=`: only entries whose reduced docs name a document under this
-    /// tumbler (PUB-7.31).
+    /// `under=`: the narrowing under one tumbler (PUB-7.31).
+    ///
+    /// It keeps only the entries whose reduced docs name a document under
+    /// this tumbler.
     pub under: Option<Tumbler>,
-    /// `drafts=true`: only entries whose reduced docs name a draft
-    /// (PUB-7.35).
+    /// `drafts=true`: only entries whose reduced docs name a draft (PUB-7.35).
     pub drafts_only: bool,
 }
 
 /// The answer `GET /changes` marshals.
 #[derive(Debug)]
 pub enum ChangesAnswer {
-    /// `since` reaches below what the feed can enumerate
-    /// (`CommitsLog::admits_since`); `floor` is the wire's sense of the
-    /// word (wire.md §Reading history: the oldest position still
-    /// answerable), which is NOT the fence that predicate tests — the
+    /// `since` reaches below what the feed can enumerate.
+    ///
+    /// The test is `CommitsLog::admits_since`; `floor` is the wire's sense of
+    /// the word (wire.md §Reading history: the oldest position still
+    /// answerable), which is not the fence that predicate tests — the
     /// distinction, and the step between the two numbers, are
     /// `CommitsLog::floor`'s, which is what this field is filled from.
     /// Class-invariant, like every position (PUB-6.52's residue).
@@ -377,26 +406,30 @@ pub enum ChangesAnswer {
     /// (PUB-6.44): `{"changes":[…],"last":N,"more":B}`, its keys in the order
     /// [`obj`](skep_util::json::obj) sorts them — `last` the final entry's
     /// position (or `since` echoed when the page is empty), `more` whether a
-    /// visible entry remains past it.
+    /// visible entry remains past it, and true too while the walk's pending
+    /// region lies past it.
     Page {
         /// The page object's bytes, each row marshaled into them once.
         body: Vec<u8>,
     },
-    /// THE PAGE BYTE BUDGET (bu7-2 = reg-H1; SO-I9; P29): the page the query
-    /// asks for, marshaled, would pass [`MAX_CHANGES_PAGE_BYTES`] — so it is
-    /// REFUSED whole, never shortened (PUB-6.44: a page is never short of
-    /// `limit` before the head), with the budget and `fits`, the largest
-    /// `limit` whose page from this `since` stays within it: the rows
-    /// measured before the one that crossed. A `fits` of zero says the first
-    /// row alone passes the budget — no `limit` serves this fence.
+    /// The page byte budget (SO-I9; P29): the page asked for would pass it.
+    ///
+    /// Marshaled, the page the query asks for would pass
+    /// [`MAX_CHANGES_PAGE_BYTES`] — so it is refused whole, never shortened
+    /// (PUB-6.44: a page is never short of `limit` before the head), with the
+    /// budget and `fits`, the largest `limit` whose rows from this `since`
+    /// stay within it, the page object's envelope aside: the rows measured
+    /// before the one that crossed. A `fits` of zero says the first row alone
+    /// passes the budget — no `limit` serves this fence.
     OverBudget {
         /// The page byte budget.
         budget: usize,
-        /// The largest `limit` whose page from this `since` fits the budget.
+        /// The largest `limit` whose rows from this `since` fit the budget.
         fits: usize,
     },
-    /// THE REGION PENDING (`operations.md` §3.3 step 2; §4 row 16): the
-    /// page's rows would have to come from `(low, head]`, the positions a
+    /// The region pending (`operations.md` §3.3 step 2; §4 row 16).
+    ///
+    /// The page's rows would have to come from `(low, head]`, the positions a
     /// lost or torn `commits.log` left uncovered, which the walk behind the
     /// listener has yet to land — refused `503 feed_rebuilding`,
     /// retry-class as `index_rebuilding` is, under its own token. `low` is
@@ -413,8 +446,9 @@ pub enum ChangesAnswer {
     },
 }
 
-/// The feed: `commits.log`, the four derived twins and the attest store,
-/// under one lock.
+/// The feed: `commits.log`, the four derived twins and the attest store.
+///
+/// They sit under one lock.
 pub(super) struct Feed {
     inner: Mutex<Inner>,
     /// The attest store's second handle, its lines' syncs made through it.
@@ -427,85 +461,102 @@ pub(super) struct Feed {
     pub(super) attest_sync_hold: SyncHold,
 }
 
-/// A feed file STOPPED this uptime — `commits.log` or one of the four
-/// derived files, taking no further line — by name, with the position its
-/// stop was set at: the failed append's position, or the fence a rewrite
-/// failed past its rename at (each file's `stopped` field says which). What
-/// the standing line re-says a stopped file by, once an hour while it
-/// stands (`operations.md` §1 THE RATES, `{file} stopped since position
-/// {p}`); the attest store is never among them — its stop halts the write
-/// path, which the halt's own clause carries.
+/// A feed file stopped this uptime, with the position its stop was set at.
+///
+/// The file is `commits.log` or one of the four derived files, taking no
+/// further line, by name; the position is the failed append's; the fence a
+/// derived file's rewrite failed past its rename at, or the last entry a
+/// `commits.log` rewrite failed past its rename wrote; or the region's lower
+/// edge, where a landing's failed rewrite left the file short of the region
+/// (each file's `stopped` field says which). It is what the standing line
+/// re-says a stopped file by, once an hour while it stands (`operations.md`
+/// §1 the rates, `{file} stopped since position {p}`); the attest store is
+/// never among them — its stop halts the write path, which the halt's own
+/// clause carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StoppedFile {
     /// The file's name, as its own lines name it.
     pub name: &'static str,
-    /// The position the stop was set at — an ordering (THE JOINS), the one
-    /// the file's own stop line names.
+    /// The position the stop was set at, which the file's own stop line names.
+    ///
+    /// It is an ordering (`operations.md` §1, the joins).
     pub since: u64,
 }
 
-/// THE ATTEST STORE'S FAILURE (SO-I5 (d)): a line [`AttestStore::record`]
-/// could not make durable — its write or its sync failed, said once on the
-/// operator stream there — answered through [`Feed::record`] to the write
-/// path, which refuses every later write for the uptime on it. The attest
-/// store's alone: a derived file's failed append is reported and fails no
-/// op (P22), so it is never answered as this.
+/// The attest store's failure (SO-I5 (d)): a line it could not make durable.
+///
+/// The line is [`AttestStore::record`]'s — its write failed, said once on
+/// the operator stream there, or its sync, said by
+/// [`AttestStore::sync_failed`] — and the failure is answered through
+/// [`Feed::record`] or [`Feed::record_bare`] to the write path, which refuses
+/// every later write for the uptime on it. The attest store's alone: a
+/// derived file's failed append is reported and fails no op (P22), so it is
+/// never answered as this.
 #[derive(Debug)]
 pub(super) struct AttestStoreFailed;
 
 struct Inner {
     log: CommitsLog,
-    /// Position → its classified docs (positions with docs only) — the
-    /// index's inverse, and what the mask reads per entry.
-    docs: BTreeMap<u64, Vec<Doc>>,
-    /// The position index: document (by tumbler, so a prefix is a range) →
-    /// the address as named, and its positions ASCENDING, which is what
-    /// makes [`at_or_above`]'s `partition_point` meaningful over a list of
-    /// them and what the consecutive-repeat dedup beside each push rests on.
+    /// Position → its classified docs (positions with docs only).
     ///
-    /// TWO construction paths establish it, differently. At [`Feed::open`]
+    /// It is the index's inverse, and what the mask reads per entry.
+    docs: BTreeMap<u64, Vec<Doc>>,
+    /// The position index: document → the address as named, and its positions.
+    ///
+    /// A document is keyed by tumbler, so a prefix is a range; its positions
+    /// are ascending, which is what makes [`at_or_above`]'s `partition_point`
+    /// meaningful over a list of them and what the consecutive-repeat dedup
+    /// beside each push rests on.
+    ///
+    /// Three construction paths establish it, differently. At [`Feed::open`]
     /// the lists are built by iterating [`Inner::docs`], a `BTreeMap`, so
     /// the container supplies the order. At [`Inner::fold_position`] they
-    /// are PUSHED, and the order comes from the write path instead:
+    /// are pushed, and the order comes from the write path instead:
     /// positions are recorded under the serialization guard
     /// ([`crate::commits::Commits::commit_recorded`], which both of the
     /// write path's doors run, executes and records as one operation under
-    /// it), so each push is strictly above every prior one.
+    /// it), so each push is strictly above every prior one. At the walk's
+    /// landing ([`Feed::land`]) the region's positions are pushed after the
+    /// ones recorded above the head while it walked, and
+    /// [`Inner::sort_the_lists`] restores the order.
     index: BTreeMap<Tumbler, (Address, Vec<u64>)>,
     /// The bitmap: positions masked at commit (docs non-empty, all drafts).
     ///
-    /// INVARIANT its use rests on: every member has a non-empty entry in
+    /// The invariant its use rests on: every member has a non-empty entry in
     /// [`Inner::docs`]. [`Inner::fold_position`] establishes it, one
-    /// classification deciding both. The REPLAY does not: this set is seeded
+    /// classification deciding both. The replay does not: this set is seeded
     /// from `feed-masked.log` and `docs` from `feed-index.log`,
     /// independently.
     ///
-    /// Where the two disagree this set DECIDES the GUEST's page, because
+    /// Where the two disagree this set decides the guest's page, because
     /// [`Inner::published`] is exactly its complement and a guest has no
     /// other source: a member the classification has nothing for is excluded
     /// from the published walk and absent from the index (which `docs`
     /// builds), so a guest never sees it — where [`Inner::visible`], reading
-    /// it as a `[]`-docs entry, would show it to every class. A PRINCIPAL
+    /// it as a `[]`-docs entry, would show it to every class. A principal
     /// may still reach it, since the streams are seeded from
     /// `feed-streams.log` rather than from `docs`.
     ///
     /// No live commit produces that disagreement, and the two shapes that
     /// could are edge: a `commits.log` line demoted for malformed names,
-    /// whose entry is then BARE and discloses its position alone either way,
-    /// and an edited file. NOT filtered against `docs` at open on purpose —
+    /// whose entry is then bare and discloses its position alone either way,
+    /// and an edited file. Not filtered against `docs` at open on purpose —
     /// the filter is a change to which entries a class sees, taken off a
     /// file this daemon did not write.
     masked: BTreeSet<u64>,
     /// The materialized published stream: every entry not in `masked`.
     published: BTreeSet<u64>,
     /// Owner account → the positions naming one of its drafts, ascending.
-    /// The ONE position collection built from a FILE's own sequence: `masked`
-    /// and `published` are `BTreeSet`s and [`Inner::index`] takes its replay
-    /// order from `docs`, a `BTreeMap`, while this is pushed — in file order
-    /// at replay, in position order at the record ([`Inner::index`]'s second
-    /// path, and the same guard). [`Feed::open`] sorts the replayed half,
-    /// which is what establishes the invariant [`at_or_above`]'s
-    /// `partition_point` reads.
+    ///
+    /// It is the one position collection built from a file's own sequence:
+    /// `masked` and `published` are `BTreeSet`s and [`Inner::index`] takes
+    /// its replay order from `docs`, a `BTreeMap`, while this is pushed — in
+    /// file order at replay, in position order at the record
+    /// ([`Inner::index`]'s second path, and the same guard), and out of
+    /// order at the walk's landing (its third). [`Feed::open`] sorts the
+    /// replayed half and [`Inner::sort_the_lists`] the landing's, which is
+    /// what establishes the invariant [`at_or_above`]'s `partition_point`
+    /// reads.
     streams: BTreeMap<Address, Vec<u64>>,
     /// The attest store, on its own card ([`AttestStore`]).
     ///
@@ -517,8 +568,10 @@ struct Inner {
     files: Files,
 }
 
-/// The four derived sidecars' files — the ones [`Feed::open`]'s compaction
-/// rewrites; the attest store keeps its own.
+/// The four derived sidecars' files.
+///
+/// They are the ones [`Feed::open`]'s compaction rewrites; the attest store
+/// keeps its own.
 struct Files {
     index: LineFile,
     offsets: LineFile,
@@ -527,53 +580,65 @@ struct Files {
 }
 
 impl Feed {
-    /// Open the feed over `dir`: replay `commits.log` (reconstructing and
-    /// classifying its uncovered tail from the journal), replay the four
-    /// derived sidecars, re-derive each one's missing tail — a recorded
-    /// position's contribution from its own record, a bare position's from
-    /// the journal — and fence each at the head; then open the attest store
-    /// ([`AttestStore::open`]). Runs AFTER M2's load-and-replay and BEFORE
-    /// the first page (PUB-6.40): every classification here reads the
-    /// recovered head's exception set, and the grant fold it stands beside is
-    /// seeded by the same load.
+    /// Opens the feed over `dir`, replaying its files and closing their tails.
     ///
-    /// COST: the `commits.log` replay and walk (`CommitsLog::open` states
-    /// them), plus O(each derived file) to replay it and O(its missing
-    /// tail) to close it — a whole-file loss is one O(journal) rebuild, and a
-    /// bare position outside the index's coverage one world reconstruction,
-    /// a run of them one more for the world below its first and none for the
-    /// head's, which is the open's snapshot ([`BareClassifier`]) — and the
-    /// attest store's own open, whose cost [`AttestStore::open`] states.
-    /// Never a rewrite per restart: a derived file is rewritten only when the
-    /// log compacted under it, when it carries another journal's lines, or
-    /// (the offset array) when its offsets no longer match the log's.
+    /// It replays `commits.log` (recording its uncovered tail as the region
+    /// pending, below), replays the four derived sidecars, re-derives each
+    /// one's missing tail — a recorded position's contribution from its own
+    /// record, a bare position's from the journal — and fences each at the
+    /// head, or at the region's lower edge where one is pending; then opens
+    /// the attest store ([`AttestStore::open`]). Runs after M2's
+    /// load-and-replay and before the first page (PUB-6.40): every
+    /// classification here reads the recovered head's exception set, and the
+    /// grant fold it stands beside is seeded by the same load.
     ///
-    /// THE LINES (`operations.md` §1.1 rows 9, 11, 2), through `lines`, the
-    /// classed door the write path made ahead of this open: a derived file's
-    /// cut, answered by its replay, is said here with the last trusted
+    /// **Cost.** The `commits.log` replay, whose cost `CommitsLog::open`
+    /// states — the walk is not the open's — plus O(each derived file) to
+    /// replay it and O(its missing tail) to close it — a whole-file loss is
+    /// one O(journal) rebuild, and a bare position outside the index's
+    /// coverage one world reconstruction, a run of them one more for the
+    /// world below its first and none for the head's, which is the open's
+    /// snapshot ([`BareClassifier`]) — and the attest store's own open, whose
+    /// cost [`AttestStore::open`] states. Never a rewrite per restart: a
+    /// derived file is rewritten only when the log compacted under it, when
+    /// it carries another journal's lines, while the walk's region is pending
+    /// (below), or (the offset array) when its offsets no longer match the
+    /// log's.
+    ///
+    /// **The lines** (`operations.md` §1.1 rows 9, 11, 2), through `lines`,
+    /// the classed door the write path made ahead of this open: a derived
+    /// file's cut, answered by its replay, is said here with the last trusted
     /// position and that the cut part is re-derived ([`DerivedCutLine`]);
     /// the index file's malformed names are counted and said once with the
     /// first position and how many of them are bare, which no testimony
     /// rescues ([`MalformedNamesLine`]); the classification of the bare
     /// positions the index lost is said ahead of its cost, at the walk's
-    /// cadence while it runs and with its figures once done; the open ends
-    /// on how far back `/changes` answers and how long the open took
-    /// ([`FeedOpenLine`]); and every failure of the open names its file, the
-    /// kind kept — the replays' and the attest store's at their own opens,
-    /// this open's appends, fences and rewrites through one closure per file
-    /// here.
+    /// cadence while it runs and with its figures once done, and the
+    /// journal's refusals of it once, the first in the kernel's words
+    /// ([`ClassificationRefusedLine`]); what the compaction dropped below the
+    /// reclaim floor is said once the derived files follow the log
+    /// ([`OpenCompactionLine`]); and the open ends on how far back `/changes`
+    /// answers and how long the open took ([`FeedOpenLine`]).
     ///
-    /// THE REGION PENDING (the module doc's walk): where the log's open
+    /// **The region pending** (the module doc's walk): where the log's open
     /// found positions it does not cover, the four derived files are
-    /// rebuilt for the entries the log HOLDS and REWRITTEN fenced at the
+    /// rebuilt for the entries the log holds and rewritten fenced at the
     /// region's lower edge — an honest coverage claim, so a crash before
     /// the landing, or a derived rewrite the landing cannot make, leaves no
     /// file claiming over positions it never processed (the derived card's
-    /// GAP rule), the next open re-deriving from that fence — and the
+    /// gap rule), the next open re-deriving from that fence — and the
     /// open's snapshot of the head's world is answered beside the feed, for
     /// the walk to diff from and the landing to classify against (PUB-7.7's
     /// one-snapshot clause: the head's exception set as the open read it);
     /// `None` where the log covers the head.
+    ///
+    /// # Errors
+    ///
+    /// Every failure of the open, which names its file, the kind kept — the
+    /// replays' and the attest store's at their own opens, this open's
+    /// appends, fences and rewrites through one closure per file here. A
+    /// rewrite is fatal either side of its rename, and the first file whose
+    /// rewrite failed is the one answered.
     pub(super) fn open(
         dir: &Path,
         engine: &Engine,
@@ -609,14 +674,15 @@ impl Feed {
         say_derived_cut(lines, STREAMS_FILE, replayed.cut);
 
         // ── the classification map: the index file's entries for positions
-        //    the log holds, then this open's walk, then the index's tail ──
+        //    the log holds, then the index's tail, a recorded position from
+        //    its record and a bare one from the journal ──
         let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
         // The index file's malformed names, counted for one line after the
         // read: the positions met, the bare ones among them, and the first.
         let mut malformed: Option<(usize, usize, u64)> = None;
         for (at, m) in &index_entries {
             let Some(meta) = log.entries().get(at) else { continue };
-            // Counted against what the file CLAIMED, not against what could
+            // Counted against what the file claimed, not against what could
             // be read out of it: an element that is not a string is one
             // malformed name like any other, and dropping it ahead of this
             // count is what would let a short list pass the test below.
@@ -626,13 +692,13 @@ impl Feed {
             let addrs = if addrs.len() == named.len() {
                 addrs
             } else {
-                // A DERIVED record this daemon cannot parse. Never trusted
-                // OVER the authority file — that is the derived layer's
+                // A derived record this daemon cannot parse. Never trusted
+                // over the authority file — that is the derived layer's
                 // whole standing — so a recorded position answers from its
                 // own testimony instead, which `CommitsLog` stands behind
                 // (its entries are checked at its own open); a bare one has
                 // none, and stays unclassified, which is the residue it
-                // already carries. Accepting the SHORT list would mask the
+                // already carries. Accepting the short list would mask the
                 // position by a smaller set than the write touched, and
                 // accepting an empty one would make it a `[]`-docs entry,
                 // which is never masked.
@@ -656,10 +722,10 @@ impl Feed {
             lines.say(Class::Failure, line);
         }
         // The bare positions the index lost are classified from the journal
-        // before the board serves, a world reconstruction each and one below
-        // each run of them ([`BareClassifier`]) — the count said ahead of
-        // paying it, at a cadence while it runs and with its figures once
-        // done, so a slow open is told from a hung one.
+        // before the board serves, a world reconstruction each but the
+        // head's, and one below each run of them ([`BareClassifier`]) — the
+        // count said ahead of paying it, at a cadence while it runs and with
+        // its figures once done, so a slow open is told from a hung one.
         let tail = f_index.first_uncovered()..;
         let mut classifier = BareClassifier::new(engine, &snap, &log);
         let (mut unclassified, mut planned, mut follows_bare) = (0usize, 0usize, false);
@@ -778,10 +844,10 @@ impl Feed {
 
         // ── the per-owner draft streams ──
         //
-        // An owner name this daemon cannot parse is DROPPED here, and that is
+        // An owner name this daemon cannot parse is dropped here, and that is
         // the safe direction: the position leaves that owner's stream, so
         // their supplement is short by it and nothing is unmasked. The index
-        // above cannot be lossy in the same way — a dropped DOCUMENT shortens
+        // above cannot be lossy in the same way — a dropped document shortens
         // the class the mask is computed over — which is why that read
         // refuses a half-record and this one does not.
         let mut streams: BTreeMap<Address, Vec<u64>> = BTreeMap::new();
@@ -800,8 +866,8 @@ impl Feed {
                 }
             }
         }
-        // The replay above pushed in FILE order, which establishes nothing:
-        // this map's lists are ASCENDING by invariant, which is what makes
+        // The replay above pushed in file order, which establishes nothing:
+        // this map's lists are ascending by invariant, which is what makes
         // [`at_or_above`]'s `partition_point` meaningful and what the
         // consecutive-repeat dedup above rests on. `index` takes its order
         // from `docs`, a `BTreeMap`, and `masked` and `published` are
@@ -829,10 +895,11 @@ impl Feed {
 
         // ── the offset array, checked against the log's own replay ──
         //
-        // `!log.rewritten()` is this file's half of COMPACTION as well as its
+        // `!log.rewritten()` is this file's half of compaction as well as its
         // agreement test: a compacted log moved every offset, so the file is
-        // rewritten below — with the other three where the log compacted,
-        // alone where the log stands and its offsets merely disagree.
+        // rewritten below — with the other three where the log compacted or
+        // a region pends, alone where the log stands, no region pends, and
+        // its offsets merely disagree.
         let offsets_agree = !log.rewritten()
             && offset_entries.iter().all(|(at, m)| {
                 m.get(OFFSETS_OFFSET).and_then(Value::as_u64)
@@ -852,16 +919,17 @@ impl Feed {
         let (attest, attest_sync) = AttestStore::open(dir, engine, &log, lines)?;
 
         // ── compaction: the log dropped what the journal reclaimed, so the
-        //    derived files drop it too, rewritten from the twins — the SAME
+        //    derived files drop it too, rewritten from the twins — the same
         //    rewrite the checkpoint thread runs after each checkpoint lands
         //    (`Feed::compact_below_reclaim_floor`), through the same method,
         //    the four files at once; or the offset array alone, where the
-        //    log stands and its offsets disagree; or, THE REGION PENDING,
+        //    log stands and its offsets disagree; or, the region pending,
         //    the four fenced at its lower edge whatever they claimed — a
         //    file fenced at the head over positions it never processed
         //    would read them as contributing nothing at the next open, a
         //    draft write unmasked, where the walk's landing then cannot
-        //    rewrite it. A fifth DERIVED file belongs in that method; the
+        //    rewrite it. A fifth derived file belongs in one of that
+        //    method's two halves, which the walk's landing calls apart; the
         //    attest store is not one, and `Files` does not hold it. Fatal
         //    here, either side of a rename: nothing is served yet — the
         //    bare I/O error wrapped with the file's name, which
@@ -921,19 +989,23 @@ impl Feed {
         self.inner.lock().attest.figures()
     }
 
-    /// THE REGION PENDING, as a read — `CommitsLog::pending_region`, under
-    /// the feed's lock: `(low, head]`, or `None` once the walk has landed.
+    /// Returns the region pending, as a read under the feed's lock.
+    ///
+    /// It is `CommitsLog::pending_region`: `(low, head]`, or `None` where the
+    /// log covered the head at open, or once the walk has landed.
     pub(super) fn pending_region(&self) -> Option<(u64, u64)> {
         self.inner.lock().log.pending_region()
     }
 
-    /// THE WALK BEHIND THE LISTENER — the thread's body, less the catch,
-    /// which the write path puts around it (`operations.md` §3.3 step 2;
-    /// §1.1 m15): the walk over the pending region
-    /// ([`reconstruct`]: the `open:` line, the hold, the `progress:` lines)
-    /// off `kernel` and the open's `snapshot` of the head's world, then the
-    /// landing ([`Feed::land`]). Returns with nothing written where the stop
-    /// was asked before the landing, or where no region is pending.
+    /// Walks the pending region and lands it: the walk behind the listener.
+    ///
+    /// It is the thread's body, less the catch, which the write path puts
+    /// around it (`operations.md` §3.3 step 2; §1.1 m15): the walk over the
+    /// pending region ([`reconstruct`]: the `open:` line, the hold, the
+    /// `progress:` lines) off `kernel` and the open's `snapshot` of the
+    /// head's world, then the landing ([`Feed::land`]). Returns with nothing
+    /// written where the stop was asked before the landing, or where no
+    /// region is pending.
     pub(super) fn walk_and_land(
         &self,
         kernel: &Kernel<World>,
@@ -1003,7 +1075,7 @@ impl Feed {
             inner.fold_into_maps(w.at, docs);
         }
         // The region's positions were pushed after the ones recorded during
-        // the walk, above the head: the lists are ASCENDING by invariant
+        // the walk, above the head: the lists are ascending by invariant
         // (`at_or_above`'s `partition_point` reads it), restored here as
         // the open restores the replayed streams'.
         inner.sort_the_lists();
@@ -1058,16 +1130,16 @@ impl Feed {
     /// oldest entry — the ordinary answer between reclaiming checkpoints — and
     /// nothing is written; and beside the fence, by name, each file that stood.
     ///
-    /// **The disposition** while serving is the record step's own (the settled
-    /// rule for `record`): reported on the operator stream, never failing an
-    /// op. A rewrite that fails before its rename leaves that file whole and
-    /// standing and is said here, the next checkpoint's compaction trying again
-    /// — and that file is named in the answer, so the checkpoint thread's
-    /// landing line is truthful of it; one that fails past its rename stops its
-    /// file for the uptime and is said by the file itself, once — the new file
-    /// is in place, so it is not one that stood — the resident twins are
-    /// trimmed either way and serve this uptime, and the next open re-derives
-    /// (P22).
+    /// **The disposition** while serving is the record step's own (the rule
+    /// [`Feed::record`] states): reported on the operator stream, never
+    /// failing an op. A rewrite that fails before its rename leaves that file
+    /// whole and standing and is said here, the next checkpoint's compaction
+    /// trying again — and that file is named in the answer, so the checkpoint
+    /// thread's landing line is truthful of it; one that fails past its rename
+    /// stops its file for the uptime and is said by the file itself, once —
+    /// the new file is in place, so it is not one that stood — the resident
+    /// twins are trimmed either way and serve this uptime, and the next open
+    /// re-derives (P22).
     ///
     /// **While the walk's region is pending** the rewrite is deferred: the
     /// fence moves in memory — the log's entries and the twins trimmed, so a
@@ -1140,7 +1212,9 @@ impl Feed {
         FeedCompaction { fence: Some(fence), standing, deferred: None }
     }
 
-    /// The test seam behind `skepd::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// The test seam that fails the next rewrite past its rename.
+    ///
+    /// It is behind `skepd::Daemon::fail_the_feeds_next_rewrite_past_rename`:
     /// the next rewrite of each of the five files fails past its rename.
     /// Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
@@ -1153,11 +1227,12 @@ impl Feed {
         inner.files.streams.fail_next_rewrite_past_rename();
     }
 
-    /// THE STOPPED FILES, as a read: of `commits.log` and the four derived
-    /// files, those that take no further line this uptime, each with the
-    /// position its stop was set at ([`StoppedFile`]) — `commits.log` first,
-    /// then the four in their table's order — under the feed's lock and no
-    /// guard. The standing line's read (once an hour while any stands) and
+    /// Returns the stopped files, with the position each stop was set at.
+    ///
+    /// They are, of `commits.log` and the four derived files, those that take
+    /// no further line this uptime ([`StoppedFile`]) — `commits.log` first,
+    /// then the four in their table's order — read under the feed's lock and
+    /// no guard. The standing line's read (once an hour while any stands) and
     /// the test seam `skepd::Daemon::stopped_feed_files`'s.
     pub(super) fn stopped_files(&self) -> Vec<StoppedFile> {
         let inner = self.inner.lock();
@@ -1240,23 +1315,30 @@ impl Feed {
         self.sync_the_attest_line(serial, owed)
     }
 
-    /// THE THIRD ARM's RECORD (`operations.md` §4 row 34): one BARE entry at
-    /// `at` — the position a write committed before it panicked, which the
-    /// write path's door caught — under the same guard and contract as
-    /// [`Feed::record`], between the commit and the re-raise. What the
-    /// recorded row would have carried is lost with the answer, so the entry
-    /// is the walk's own form ([`CommitMeta::Bare`] with the journal's
-    /// answer, `null` for the rest), and its classification the walk's:
-    /// `docs` and `journal` as `classify::derived_journal` read them off the
-    /// two worlds the door held, `docs` classified here against `world` —
-    /// the post-commit head — as a recorded position's are, so the mask, the
-    /// index, the bitmap and the streams take the position as the walk's
-    /// landing would, at the commit rather than at the next open. `attest`
-    /// is the marker slot the write FILLED, where it filled one — the value
-    /// the plain sequence admitted and handed the kernel — mirrored into the
-    /// attest store and synced as every admitted marker is (SO-I5 (d)), the
-    /// store's refusal answered as [`Feed::record`] answers it. Declined
-    /// exactly when the log declines.
+    /// Records the bare entry of a write that panicked past its commit.
+    ///
+    /// It is the record of the panic past the commit (`operations.md` §4 row
+    /// 34): one bare entry at `at` — the position a write committed before it
+    /// panicked, which the write path's door caught — under the same guard
+    /// and contract as [`Feed::record`], between the commit and the re-raise.
+    /// What the recorded row would have carried is lost with the answer, so
+    /// the entry is the walk's own form ([`CommitMeta::Bare`] with the
+    /// journal's answer, `null` for the rest), and its classification the
+    /// walk's: `docs` and `journal` as `classify::derived_journal` read them
+    /// off the two worlds the door held, `docs` classified here against
+    /// `world` — the post-commit head — as a recorded position's are, so the
+    /// mask, the index, the bitmap and the streams take the position as the
+    /// walk's landing would, at the commit rather than at the next open.
+    /// `attest` is the marker slot the write filled, where it filled one —
+    /// the value the plain sequence admitted and handed the kernel — mirrored
+    /// into the attest store and synced as every admitted marker is
+    /// (SO-I5 (d)). Declined exactly when the log declines.
+    ///
+    /// # Errors
+    ///
+    /// The store's refusal, answered as [`Feed::record`] answers it:
+    /// [`AttestStoreFailed`] where the attest store's line could not be
+    /// written or synced.
     pub(super) fn record_bare(
         &self,
         serial: &SerialGuard<'_>,
@@ -1313,16 +1395,23 @@ impl Feed {
         }
     }
 
-    /// The test seam behind `skepd::Daemon::attest_store_synced_through`:
-    /// the coverage the attest store's last successful sync made durable.
-    /// Not a stable API.
+    /// The test seam behind `skepd::Daemon::attest_store_synced_through`.
+    ///
+    /// It answers the coverage the attest store's last successful sync made
+    /// durable. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn attest_store_synced_through(&self) -> u64 {
         self.inner.lock().attest.synced_through()
     }
 
-    /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`:
-    /// the attest store's next write fails at the OS. Not a stable API.
+    /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`.
+    ///
+    /// The attest store's next write fails at the OS. Not a stable API.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`AttestStore::fail_next_write`] does: the read-only
+    /// handle on the file could not be opened.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn fail_the_attest_stores_next_write(&self) {
         self.inner.lock().attest.fail_next_write();
@@ -1342,9 +1431,9 @@ impl Feed {
     /// marshal per row and holds the body and one row's tree at a time, and the
     /// route sends the body as it stands.
     ///
-    /// **The page byte budget** (bu7-2; SO-I9): the rows are measured as they
-    /// are marshaled — each entry's bytes and the comma between entries, the
-    /// page object's own envelope (`changes`, `last`, `more`: under forty
+    /// **The page byte budget** (SO-I9): the rows are measured as they are
+    /// marshaled — each entry's bytes and the comma between entries, the
+    /// page object's own envelope (`changes`, `last`, `more`: at most 55
     /// bytes) aside — and where the sum passes [`MAX_CHANGES_PAGE_BYTES`] the
     /// whole request is refused ([`ChangesAnswer::OverBudget`]), naming the
     /// budget and the rows that fit, never a page shorter than `limit`
@@ -1373,6 +1462,11 @@ impl Feed {
     /// as the refusal or, landed, as rows. A page with `since` at or above
     /// `head` serves from the twins — every position recorded since the open is
     /// in them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a rendered entry is not a JSON object; [`CommitMeta::entry`]
+    /// renders every entry as one, so the `expect` never fires.
     pub(crate) fn page(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         let (rows, more) = {
             let inner = self.inner.lock();
@@ -1412,14 +1506,14 @@ impl Feed {
         let mut body = PAGE_HEAD.to_vec();
         for (before, (at, meta, reduced, whole, slot)) in rows.into_iter().enumerate() {
             let mut entry = meta.entry(at, reduced, slot.as_deref());
-            // THE THIRD ABSENCE (mi7-E2; SO-I5 (e)): a row whose `docs` this
-            // class REDUCES — a straddle, a draft-homed `nullify` of a public
-            // link or an `edit_link` with one home a draft (PUB-6.47) —
-            // carries no `attest`, ABSENT and never `null`: the signature is
-            // a function of the home the row withholds, and served it would
-            // confirm a guess at that home, the confirmation the chain's
-            // salt exists to deny. The verdict there is undeterminable from
-            // this feed; the owner's own page carries the member whole.
+            // The third absence (SO-I5 (e)): a row whose `docs` this class
+            // reduces — a straddle, a draft-homed `nullify` of a public link
+            // or an `edit_link` with one home a draft (PUB-6.47) — carries no
+            // `attest`, absent and never `null`: the signature is a function
+            // of the home the row withholds, and served it would confirm a
+            // guess at that home, the confirmation the chain's salt exists to
+            // deny. The verdict there is undeterminable from this feed; the
+            // owner's own page carries the member whole.
             if !whole {
                 entry.as_object_mut().expect("an entry is an object").remove("attest");
             }
@@ -1440,21 +1534,27 @@ impl Feed {
     /// Returns how many candidate sources `class`'s page merges for `query`.
     ///
     /// It is the width [`Inner::sources`] hands [`Merge`], the term PUB-7.28
-    /// prices a page by: the published walk and one stream per owner account
-    /// the class opens — never one list per visible draft document (PUB-7.24).
+    /// prices a page by: the published walk (absent under `drafts=true`) and
+    /// one stream per owner account the class opens — never one list per
+    /// visible draft document (PUB-7.24) — and one index list per document
+    /// under each universal prefix; an `under=` the merge rule takes is one
+    /// index list per readable document under it instead.
     #[cfg(test)]
     pub(super) fn merge_width(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> usize {
         let start = query.since.saturating_add(1);
         self.inner.lock().sources(class, query, start).len()
     }
 
-    /// The HEAD position's recorded wall-clock time — `CommitsLog::head_time`.
+    /// Returns the head position's recorded wall-clock time.
+    ///
+    /// It is `CommitsLog::head_time`.
     pub(crate) fn head_time(&self) -> Option<u64> {
         self.inner.lock().log.head_time()
     }
 
-    /// Every recorded entry above `position` — `CommitsLog::entries_above`,
-    /// for the head writer's resume.
+    /// Returns every recorded entry above `position`.
+    ///
+    /// It is `CommitsLog::entries_above`, for the head writer's resume.
     pub(crate) fn entries_above(&self, position: u64) -> Vec<(u64, CommitMeta)> {
         self.inner.lock().log.entries_above(position)
     }
@@ -1475,11 +1575,12 @@ fn page_body(mut body: Vec<u8>, last: u64, more: bool) -> Vec<u8> {
     body
 }
 
-/// An open-time failure on a derived file, naming the file — the closure
-/// `BlockedSupply::read` wraps its path with, per file: the kind kept, the
-/// name before the OS's text, so the daemon's `change-feed sidecar: {e}`
-/// reads `change-feed sidecar: feed-index.log: {e}` (`operations.md` §1.1
-/// row 2).
+/// Returns the closure that names a derived file in an open-time failure.
+///
+/// It wraps as `BlockedSupply::read`'s closure wraps its path, one per file:
+/// the kind kept, the name before the OS's text, so the daemon's
+/// `change-feed sidecar: {e}` reads
+/// `change-feed sidecar: feed-index.log: {e}` (`operations.md` §1.1 row 2).
 fn with_file(name: &'static str) -> impl Fn(io::Error) -> io::Error {
     move |e| io::Error::new(e.kind(), format!("{name}: {e}"))
 }
@@ -1596,20 +1697,23 @@ impl SyncHold {
     }
 }
 
-/// Row 9 for a derived file, said where its replay answered a cut: the head,
-/// then this file's case — the cut part is re-derived, by the tail
-/// derivation [`Feed::open`] runs from the last trusted position.
+/// Says row 9 for a derived file where its replay answered a cut.
+///
+/// The line is the head, then this file's case — the cut part is
+/// re-derived, by the tail derivation [`Feed::open`] runs from the last
+/// trusted position.
 fn say_derived_cut(lines: &Lines, name: &'static str, cut: Option<Cut>) {
     if let Some(cut) = cut {
         lines.say(Class::Failure, DerivedCutLine { name, cut });
     }
 }
 
-/// Row 9's words for one of the four derived files (`operations.md` §1.1
-/// row 9): `{file}: trust ends at position {c} (byte {n} of {len}); the {k}
-/// bytes after it are cut; the cut part is re-derived`. A pure value, pinned
-/// by `to_string()` in the unit suite; emitted under `Class::Failure` by
-/// [`say_derived_cut`].
+/// Row 9's words for one of the four derived files.
+///
+/// They are `operations.md` §1.1 row 9's: `{file}: trust ends at position
+/// {c} (byte {n} of {len}); the {k} bytes after it are cut; the cut part is
+/// re-derived`. A pure value, pinned by `to_string()` in the unit suite;
+/// emitted under `Class::Failure` by [`say_derived_cut`].
 struct DerivedCutLine {
     name: &'static str,
     cut: Cut,
@@ -1654,8 +1758,9 @@ impl std::fmt::Display for BareClassificationLine {
 /// The words: `feed-index.log: the bare classification at position {p},
 /// {i} of {n}, {d} ms in` — `{p}` the position last classified, `{i}` how
 /// many are done of the `{n}` the announcing line named, `{d}` since the
-/// classification began. Said every [`FEED_WALK_PROGRESS_BOUNDARIES`]
-/// positions or [`FEED_WALK_PROGRESS_INTERVAL`], whichever comes first: the
+/// classification began. Said as a position's classification ends, once
+/// [`FEED_WALK_PROGRESS_BOUNDARIES`] positions are done since the last or
+/// [`FEED_WALK_PROGRESS_INTERVAL`] has passed, whichever comes first: the
 /// board serves nothing until the open is done, and a world reconstruction
 /// a position can run past a supervisor's start window. A pure value, pinned
 /// by `to_string()` in the unit suite; emitted under `Class::Open` by
@@ -1794,19 +1899,24 @@ impl std::fmt::Display for OpenCompactionLine {
     }
 }
 
-/// What one position's fold into the twins would put on the four files'
-/// lines ([`Inner::fold_into_maps`]): the index record's documents where it
-/// named any, whether the bitmap takes it, the owner streams it enters.
+/// What a position's fold into the twins would put on the files' lines.
+///
+/// It is [`Inner::fold_into_maps`]'s answer, for three of the four files: the
+/// index record's documents where it named any, whether the bitmap takes it,
+/// the owner streams it enters.
 struct Folded {
     docs: Option<Value>,
     masked: bool,
     owners: Option<Value>,
 }
 
-/// One entry as a class sees it ([`Inner::visible`]): its meta, its docs
-/// REDUCED to the ones the class may read, and whether that reduction dropped
-/// none of them — `false` on a straddle row, whose `attest` the page then
-/// withholds (mi7-E2).
+/// One entry as a class sees it ([`Inner::visible`]).
+///
+/// It is its meta, its docs reduced to the ones the class may read, and
+/// whether that reduction dropped none of them — `false` where it dropped
+/// any, as on a straddle row at a class that cannot read its drafts, whose
+/// `attest` the page then withholds (the third absence, which [`Feed::page`]
+/// states).
 struct Visible<'a> {
     meta: &'a CommitMeta,
     reduced: Vec<&'a Doc>,
@@ -1814,9 +1924,10 @@ struct Visible<'a> {
 }
 
 impl Inner {
-    /// Sort every index list and every owner stream and drop the repeats —
-    /// the ASCENDING invariant the two slice-backed sources rest on
-    /// ([`at_or_above`]), established by the open for the replayed streams
+    /// Sorts every index list and every owner stream and drops the repeats.
+    ///
+    /// The order is the ascending invariant the two slice-backed sources rest
+    /// on ([`at_or_above`]), established by the open for the replayed streams
     /// and by the record step's order for a live commit, and re-established
     /// by the walk's landing, which folds the region's positions after the
     /// ones recorded above the head while it walked.
@@ -1833,11 +1944,14 @@ impl Inner {
 
     /// Drops every position at or below `min_since` from the twins.
     ///
-    /// The four twins and the attest store's served window drop them — the
-    /// positions the log has just dropped ([`CommitsLog::compact_to`]),
-    /// unreachable by every route — so the twins and the log name one set of
-    /// positions, a rewrite from the twins writes that set, and no slot stays
-    /// resident for a position no page renders.
+    /// Three of the four twins — the index with the classification map, the
+    /// bitmap with the published stream, the streams — and the attest
+    /// store's served window drop them, the offset array's twin being the
+    /// log's own: the positions the log has just dropped
+    /// ([`CommitsLog::compact_to`], or [`CommitsLog::fold_the_walk`] at the
+    /// walk's landing), unreachable by every route — so the twins and the log
+    /// name one set of positions, a rewrite from the twins writes that set,
+    /// and no slot stays resident for a position no page renders.
     fn drop_at_or_below(&mut self, min_since: u64) {
         self.attest.drop_at_or_below(min_since);
         let keep_from = min_since.saturating_add(1);
@@ -1854,13 +1968,15 @@ impl Inner {
         });
     }
 
-    /// Rewrite the FOUR derived files whole from the twins, each fenced at
-    /// `covered` — the compaction's rewrite, at open and after a checkpoint
-    /// alike: the index, the bitmap and the streams
+    /// Rewrites the four derived files whole from the twins.
+    ///
+    /// Each is fenced at `covered` — the compaction's rewrite, at open and
+    /// after a checkpoint alike: the index, the bitmap and the streams
     /// ([`Inner::rewrite_classified_files`]), then the offset array —
     /// answering each file that failed with how ([`RewriteFail`]), every
     /// file attempted whatever the one before it answered. A fifth derived
-    /// structure owes a line here, beside its fold and its replay.
+    /// structure owes a line in one of its two halves, which the walk's
+    /// landing calls apart ([`Feed::land`]), beside its fold and its replay.
     fn rewrite_derived_files(&mut self, covered: u64) -> Vec<(&'static str, RewriteFail)> {
         let mut failures = self.rewrite_classified_files(covered, None);
         failures.extend(self.rewrite_offsets_file(covered, None));
@@ -1896,12 +2012,13 @@ impl Inner {
         failures
     }
 
-    /// Rewrite the offset array alone from the log's offsets — the open's
-    /// answer where the log stands and the file's offsets disagree with it,
-    /// the fourth file of [`Inner::rewrite_derived_files`], and the walk's
-    /// landing's last file, written after `commits.log` because it names
-    /// that file's lines; `stop_below` as [`Inner::rewrite_classified_files`]
-    /// reads it.
+    /// Rewrites the offset array alone from the log's offsets.
+    ///
+    /// It is the open's answer where the log stands and the file's offsets
+    /// disagree with it, the fourth file of [`Inner::rewrite_derived_files`],
+    /// and the walk's landing's last file, written after `commits.log`
+    /// because it names that file's lines; `stop_below` as
+    /// [`Inner::rewrite_classified_files`] reads it.
     fn rewrite_offsets_file(
         &mut self,
         covered: u64,
@@ -1914,7 +2031,7 @@ impl Inner {
         }
     }
 
-    /// The index file's records, from the classification map.
+    /// Returns the index file's records, from the classification map.
     fn index_records(&self) -> Vec<Value> {
         self.docs
             .iter()
@@ -1922,12 +2039,14 @@ impl Inner {
             .collect()
     }
 
-    /// The bitmap's records, from the masked set.
+    /// Returns the bitmap's records, from the masked set.
     fn masked_records(&self) -> Vec<Value> {
         self.masked.iter().map(|at| derived::record_object(*at, Vec::new())).collect()
     }
 
-    /// The streams file's records, from the classification map's owners.
+    /// Returns the streams file's records.
+    ///
+    /// They come from the classification map's owners.
     fn stream_records(&self) -> Vec<Value> {
         self.docs
             .iter()
@@ -1940,7 +2059,7 @@ impl Inner {
             .collect()
     }
 
-    /// The offset array's records, from the log's offsets.
+    /// Returns the offset array's records, from the log's offsets.
     fn offset_records(&self) -> Vec<Value> {
         self.log
             .offsets()
@@ -1953,11 +2072,13 @@ impl Inner {
 
     /// Folds one classified position into the twins and appends its lines.
     ///
-    /// The four twins take the position and their four files its lines; where
-    /// `attest` is the marker slot this write filled, it is mirrored into the
-    /// attest store ([`AttestStore::record`]) too. This is the one path at
-    /// record time, so a live commit cannot leave a twin and its file
-    /// disagreeing about what a position contributed.
+    /// Three of the four twins take the position here — the offset array's
+    /// takes it at the log's record ([`CommitsLog::record`]), where the line
+    /// is appended — and their four files its lines; where `attest` is the
+    /// marker slot this write filled, it is mirrored into the attest store
+    /// ([`AttestStore::record`]) too. This is the one path at record time, so
+    /// a live commit cannot leave a twin and its file disagreeing about what
+    /// a position contributed.
     ///
     /// It is not the only path that contribution takes, and a fifth derived
     /// structure owes all three: this fold; [`Feed::open`]'s
@@ -2013,13 +2134,16 @@ impl Inner {
         stored
     }
 
-    /// One classified position into the four TWINS and nothing else — the
-    /// maps' half of [`Inner::fold_position`], shared with the walk's
-    /// landing ([`Feed::land`]), which folds the region's positions this way
-    /// and then rewrites the files whole: the index (docs non-empty), the
-    /// bitmap or the published stream, each named draft's owner stream, and
-    /// the classification map. Answers what the files' lines would carry
-    /// ([`Folded`]), so the record step appends exactly what the maps took.
+    /// Folds one classified position into three twins and nothing else.
+    ///
+    /// It is the maps' half of [`Inner::fold_position`], shared with the
+    /// walk's landing ([`Feed::land`]), which folds the region's positions
+    /// this way and then rewrites the files whole: the index (docs
+    /// non-empty), the bitmap or the published stream, each named draft's
+    /// owner stream, and the classification map, the index's inverse — the
+    /// fourth twin, the offset array, being the log's. Answers what the
+    /// files' lines would carry ([`Folded`]), so the record step appends
+    /// exactly what the maps took.
     fn fold_into_maps(&mut self, at: u64, docs: Vec<Doc>) -> Folded {
         let mut folded = Folded { docs: None, masked: false, owners: None };
         if !docs.is_empty() {
@@ -2056,11 +2180,13 @@ impl Inner {
         folded
     }
 
-    /// THE MASK, per entry (PUB-7.20; PUB-6.44–6.45), plus the narrowings'
-    /// per-entry predicates: the entry's meta and its docs REDUCED to the
-    /// requester's readable ones — and whether the reduction kept the record's
-    /// docs WHOLE, which is what decides the row's `attest` (mi7-E2) — or
-    /// `None` when the entry is omitted.
+    /// Applies the mask per entry (PUB-7.20; PUB-6.44–6.45) and the narrowings.
+    ///
+    /// Beside the mask it tests the narrowings' per-entry predicates, and
+    /// answers the entry's meta and its docs reduced to the requester's
+    /// readable ones — and whether the reduction kept the record's docs
+    /// whole, which is what decides the row's `attest` (the third absence,
+    /// which [`Feed::page`] states) — or `None` when the entry is omitted.
     fn visible(&self, class: &FeedClass<'_>, query: &ChangesQuery, at: u64) -> Option<Visible<'_>> {
         let meta = self.log.entries().get(&at)?;
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
@@ -2080,19 +2206,21 @@ impl Inner {
         Some(Visible { meta, reduced, whole })
     }
 
-    /// The candidate sources for `class` and `query`, each an ascending iterator
-    /// of positions at or above `start` — what the merge unions. Exact by
-    /// the mask, and complete by construction in each of the two branches
-    /// this function has, which are complete for different reasons.
+    /// Returns the candidate sources for `class` and `query`.
     ///
-    /// The WALK branch's six source kinds cover every visible position: a
+    /// Each is an ascending iterator of positions at or above `start` — what
+    /// the merge unions. Exact by the mask, and complete by construction in
+    /// each of the two branches this function has, which are complete for
+    /// different reasons.
+    ///
+    /// The walk branch's six source kinds cover every visible position: a
     /// `[]`-docs or published-touching entry is in the published walk; a
     /// draft entry is in its owner's stream, which the subtree clause — by
     /// key for the requester's own and ancestor accounts, by range for the
-    /// owner accounts beneath it — the grant clause or the universal term
-    /// selects.
+    /// owner accounts beneath it — or the grant clause selects, or in the
+    /// index lists the universal term selects.
     ///
-    /// The MERGE branch returns before any of them, from the index alone,
+    /// The merge branch returns before any of them, from the index alone,
     /// and is complete for its own narrower question: a position visible
     /// under `under=` has a reduced doc under that prefix, that doc is
     /// readable (reduction is by the mask) and so survives the skip, and its
@@ -2108,8 +2236,8 @@ impl Inner {
         let mut sources: Vec<Box<dyn Iterator<Item = u64> + 's>> = Vec::new();
         if let Some(under) = &query.under {
             if self.merge_beats_walk(under, start) {
-                // MERGE (PUB-7.32, PUB-7.33): the index lists under the
-                // prefix, an unreadable document's whole list skipped on ONE
+                // Merge (PUB-7.32, PUB-7.33): the index lists under the
+                // prefix, an unreadable document's whole list skipped on one
                 // test — the doc-granular skip.
                 for (doc, positions) in self.under_prefix(under) {
                     if !class.readable(doc) {
@@ -2119,7 +2247,7 @@ impl Inner {
                 }
                 return sources;
             }
-            // WALK: the visible stream below, the prefix tested per entry
+            // Walk: the visible stream below, the prefix tested per entry
             // by `visible`.
         }
         if !query.drafts_only {
@@ -2130,7 +2258,7 @@ impl Inner {
                 sources.push(Box::new(at_or_above(stream, start)));
             }
         }
-        // PUB-7.24's SUBTREE TERM, the DESCENDANT OWNER ACCOUNTS' streams
+        // PUB-7.24's subtree term, the descendant owner accounts' streams
         // (RES-220): the subtree clause runs both ways, so a parent's page
         // carries the draft positions of every owner account beneath its own —
         // which the masked bitmap keeps off the published walk and no key above
@@ -2142,7 +2270,7 @@ impl Inner {
         }
         for IssuerGrantIndexRow { issuer, content_prefixes: prefixes } in &class.issuers {
             let Some(stream) = self.streams.get(*issuer) else { continue };
-            // A grant at the issuer's account depth or wider IS the stream
+            // A grant at the issuer's account depth or wider is the stream
             // (PUB-7.25); narrower prefixes take the per-entry containment
             // test against their union — while that union is small enough
             // for the test to be worth making ([`MAX_FILTERED_PREFIXES`]).
@@ -2157,7 +2285,7 @@ impl Inner {
                 ));
             }
         }
-        // A covered PREFIX, not an issuer account: this keys the position
+        // A covered prefix, not an issuer account: this keys the position
         // index, never `streams`, which the loop above keys by owner.
         for prefix in &class.universal_prefixes {
             // The universal term (PUB-7.22): the live any-principal prefix's
@@ -2170,16 +2298,18 @@ impl Inner {
         sources
     }
 
-    /// Does the entry at `at` name a draft of `issuer` under one of
-    /// `prefixes` — the per-entry containment test of a narrower grant.
+    /// Returns the per-entry containment test of a narrower grant.
     ///
-    /// A CANDIDATE filter and never the answer, and the reason it may be
+    /// It answers whether the entry at `at` names a draft of `issuer` under
+    /// one of `prefixes`.
+    ///
+    /// A candidate filter and never the answer, and the reason it may be
     /// stood aside past [`MAX_FILTERED_PREFIXES`] is weaker than "it drops
     /// only what the mask drops", which is false: an entry naming a
     /// published document beside a draft of this issuer outside the granted
     /// prefixes is dropped here and kept by the mask, and reaches the page
     /// through the published walk. What holds is that this filter only ever
-    /// REMOVES candidates from ONE source, [`Merge`] unions and deduplicates
+    /// removes candidates from one source, [`Merge`] unions and deduplicates
     /// the sources, and [`Inner::visible`] is the authority on every
     /// candidate that survives — so standing it aside can only widen a
     /// candidate set the mask then decides, and no page moves.
@@ -2192,16 +2322,18 @@ impl Inner {
         })
     }
 
-    /// The index lists under `p`: the documents whose key `p` is a prefix of,
-    /// each with its positions. THE one spelling of the fact [`Inner::index`]
-    /// is keyed for — a prefix's documents are one CONTIGUOUS key range under
-    /// M1's ordering, so the enumeration is a `range` from `p` cut at the
-    /// first key `p` does not cover, never a walk of the map.
+    /// Returns the index lists under `p`, each document with its positions.
+    ///
+    /// They are the documents whose key `p` is a prefix of. This is the one
+    /// spelling of the fact [`Inner::index`] is keyed for — a prefix's
+    /// documents are one contiguous key range under M1's ordering, so the
+    /// enumeration is a `range` from `p` cut at the first key `p` does not
+    /// cover, never a walk of the map.
     ///
     /// One home because [`Inner::merge_beats_walk`] prices the set
     /// [`Inner::sources`]' merge branch then enumerates: the two must range
-    /// over the SAME documents, or the rule chooses its branch by counting
-    /// something else. The branch additionally skips the UNREADABLE ones,
+    /// over the same documents, or the rule chooses its branch by counting
+    /// something else. The branch additionally skips the unreadable ones,
     /// which is its own doc-granular skip and stays at the call site; the
     /// cost rule deliberately counts them, and the direction that biases it
     /// is stated there.
@@ -2215,18 +2347,20 @@ impl Inner {
             .map(|(_, (doc, positions))| (doc, positions.as_slice()))
     }
 
-    /// The MERGE-OR-WALK rule (PUB-7.33): merge iff the prefix holds no more
-    /// documents than the range holds positions. Both counts advance
-    /// together and stop at the first to run out, so the rule costs
-    /// O(min(documents, positions)) and needs no rank structure.
+    /// Applies the merge-or-walk rule (PUB-7.33), answering `true` to merge.
+    ///
+    /// Merge iff the prefix holds no more documents than the range holds
+    /// positions. Both counts advance together and stop at the first to run
+    /// out, so the rule costs O(min(documents, positions)) and needs no rank
+    /// structure.
     ///
     /// The documents counted are [`Inner::under_prefix`]'s — the same set
     /// the merge branch enumerates, which is what makes this a price of
-    /// THAT branch rather than of some other set that happens to be nearby.
-    /// It counts the UNREADABLE ones too, which the branch then skips one
+    /// that branch rather than of some other set that happens to be nearby.
+    /// It counts the unreadable ones too, which the branch then skips one
     /// whole list at a time, so the count is an over-estimate of the merge's
     /// real work and never an under-estimate. That biases the rule toward
-    /// the WALK — it can decline a merge that would have been marginally
+    /// the walk — it can decline a merge that would have been marginally
     /// cheaper over the readable subset — and never toward a merge whose
     /// sources outnumber what was measured.
     fn merge_beats_walk(&self, under: &Tumbler, start: u64) -> bool {
@@ -2242,43 +2376,46 @@ impl Inner {
     }
 }
 
-/// A position list from its first member at or above `start` — THE fence,
-/// applied to every slice-backed source. [`Inner::sources`]' contract has
-/// two clauses and this call discharges one of them: the AT-OR-ABOVE half,
-/// which it and `published.range(start..)` discharge and nothing else does,
-/// since [`Inner::visible`] tests the mask and the two narrowings and does
-/// NOT re-test the fence — a source that skipped this would serve positions
-/// at or below `since`, which is a client re-reading its own history on
-/// every poll, with `last` going backwards.
+/// Returns a position list from its first member at or above `start`.
 ///
-/// The ASCENDING half is the collections', each stated on its own field:
+/// It is the fence, applied to every slice-backed source. [`Inner::sources`]'
+/// contract has two clauses and this call discharges one of them: the
+/// at-or-above half, which it and `published.range(start..)` discharge and
+/// nothing else does, since [`Inner::visible`] tests the mask and the two
+/// narrowings and does not re-test the fence — a source that skipped this
+/// would serve positions at or below `since`, which is a client re-reading
+/// its own history on every poll, with `last` going backwards.
+///
+/// The ascending half is the collections', each stated on its own field:
 /// `published` is a `BTreeSet`, and `index` and `streams` are each ordered
-/// at both of their construction paths — by the container at replay (the
-/// index) or by an explicit sort (the streams), and by the write-path
-/// serialization guard's commit order at the record. `partition_point` is
-/// meaningless on an unsorted slice, so this returns an arbitrary suffix
+/// at each of their three construction paths — by the container at replay
+/// (the index) or by an explicit sort (the streams), by the write-path
+/// serialization guard's commit order at the record, and by an explicit
+/// sort at the walk's landing ([`Inner::sort_the_lists`]). `partition_point`
+/// is meaningless on an unsorted slice, so this returns an arbitrary suffix
 /// rather than a fence for a list that lost it.
 fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     let i = positions.partition_point(|&p| p < start);
     positions[i..].iter().copied()
 }
 
-/// The draft streams of the owner accounts STRICTLY beneath `account` —
-/// PUB-7.24's SUBTREE TERM of a principal's supplement, its DESCENDANT OWNER
-/// ACCOUNTS (RES-220 names it). [`Inner::streams`] is keyed by owner account
-/// in tumbler order, so the owner accounts under a prefix are one CONTIGUOUS
-/// key range under M1's ordering — the fact [`Inner::under_prefix`] spells for
-/// the position index — and the enumeration is a `range` opened past
-/// `account` and cut at the first key it does not contain. Never a walk of
-/// the map, and never a walk of M3's accounts: it costs the owner accounts
-/// beneath `account` that HOLD a stream, which is the subtree term exactly,
-/// and an account beneath it that owns no draft is not in the map to be
-/// counted.
+/// Returns the draft streams of the owner accounts strictly beneath `account`.
+///
+/// They are PUB-7.24's subtree term of a principal's supplement, its
+/// descendant owner accounts (RES-220 names it). [`Inner::streams`] is keyed
+/// by owner account in tumbler order, so the owner accounts under a prefix
+/// are one contiguous key range under M1's ordering — the fact
+/// [`Inner::under_prefix`] spells for the position index — and the
+/// enumeration is a `range` opened past `account` and cut at the first key it
+/// does not contain. Never a walk of the map, and never a walk of M3's
+/// accounts: it costs the owner accounts beneath `account` that hold a
+/// stream, which is the subtree term exactly, and an account beneath it that
+/// owns no draft is not in the map to be counted.
 ///
 /// `account`'s own stream is excluded: [`FeedClass::enclosing_subtrees`] keys
 /// it, and the range opens past it so that no stream is merged twice.
 ///
-/// A CANDIDATE source like the rest, and never the answer: a key this range
+/// A candidate source like the rest, and never the answer: a key this range
 /// admits that is no descendant account — reachable only off a
 /// `feed-streams.log` this daemon did not write — puts forward positions
 /// [`Inner::visible`] then judges entry by entry.
@@ -2292,23 +2429,25 @@ fn streams_beneath<'a>(
         .map(|(owner, positions)| (owner, positions.as_slice()))
 }
 
-/// The bitmap's test: docs non-empty and every one a draft. The fact is
-/// class-independent and fixed at mint, so the name says what it IS and
-/// not when it is evaluated — [`Feed::open`] calls it for the derived
+/// Returns the bitmap's test: docs non-empty and every one a draft.
+///
+/// The fact is class-independent and fixed at mint, so the name says what it
+/// is and not when it is evaluated — [`Feed::open`] calls it for the derived
 /// tail, long after the commit.
 ///
-/// It is exactly the mask at the GUEST's class — a guest reads published
+/// It is exactly the mask at the guest's class — a guest reads published
 /// documents alone, so "every named document is a draft" is "none readable
 /// to a guest" — which is why the bitmap's complement is the published
-/// stream a guest page walks in O(page). THE mask, the per-class verdict
+/// stream a guest page walks in O(page). The mask, the per-class verdict
 /// wire.md gives the bare word to, is [`Inner::visible`]'s, computed per
 /// entry against the requester's own predicate (PUB-7.20).
 fn masked_at_commit(docs: &[Doc]) -> bool {
     !docs.is_empty() && docs.iter().all(Doc::is_draft)
 }
 
-/// The owner accounts of an entry's drafts — the streams the position
-/// enters.
+/// Returns the owner accounts of an entry's drafts.
+///
+/// They are the streams the position enters.
 fn owners_of(docs: &[Doc]) -> BTreeSet<Address> {
     docs.iter().filter_map(|d| d.draft_owner.clone()).collect()
 }
@@ -2321,9 +2460,10 @@ fn addr_strings<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Value {
     Value::Array(addrs.into_iter().map(|a| Value::String(a.to_string())).collect())
 }
 
-/// One derived record's array field, as its RAW elements — so a caller
-/// counting what it could read counts against what the FILE CLAIMED.
-/// Handing back strings loses two things at once: a name every caller
+/// Returns one derived record's array field, as its raw elements.
+///
+/// So a caller counting what it could read counts against what the file
+/// claimed. Handing back strings loses two things at once: a name every caller
 /// parses and discards, and an element that is not a string at all, dropped
 /// ahead of the "did every name parse?" test [`Feed::open`]'s docs read
 /// makes of the count.
@@ -2432,9 +2572,10 @@ impl<'a> BareClassifier<'a> {
     }
 }
 
-/// The K-way merge of ascending position sources, deduplicated by
-/// position across the whole merge (PUB-7.26): a min-heap over each
-/// source's head, so a page costs O(log K) per candidate.
+/// The K-way merge of ascending position sources (PUB-7.26).
+///
+/// It is deduplicated by position across the whole merge: a min-heap over
+/// each source's head, so a page costs O(log K) per candidate.
 struct Merge<'a> {
     sources: Vec<Box<dyn Iterator<Item = u64> + 'a>>,
     heap: BinaryHeap<Reverse<(u64, usize)>>,
@@ -2455,7 +2596,7 @@ impl<'a> Merge<'a> {
 impl Iterator for Merge<'_> {
     type Item = u64;
 
-    /// The next position, each emitted exactly once.
+    /// Returns the next position, each emitted exactly once.
     fn next(&mut self) -> Option<u64> {
         let Reverse((at, i)) = self.heap.pop()?;
         if let Some(next_at) = self.sources[i].next() {
@@ -2497,11 +2638,12 @@ mod tests {
         assert_eq!(out, vec![1, 4, 5, 9, 12]);
     }
 
-    /// The descendant range is the owner accounts STRICTLY beneath the
-    /// requester's own, and nothing else: its own stream is keyed beside it
-    /// and never ranged, a sibling's is past the cut, and containment is by
-    /// COMPONENT — `1.0.21` is no account under `1.0.2`, though its text
-    /// extends it.
+    /// The descendant range is the owner accounts strictly beneath.
+    ///
+    /// It holds those beneath the requester's own, and nothing else: its own
+    /// stream is keyed beside it and never ranged, a sibling's is past the
+    /// cut, and containment is by component — `1.0.21` is no account under
+    /// `1.0.2`, though its text extends it.
     #[test]
     fn the_descendant_range_is_the_owner_accounts_strictly_beneath() {
         let a = |s: &str| parse_dotted(s).expect("a test address");
@@ -2523,9 +2665,10 @@ mod tests {
         assert_eq!(positions, [&[3u64][..]]);
     }
 
-    /// A list starts at its first member at or above the fence — the fence
-    /// every slice-backed source is narrowed by, and the reason a page never
-    /// carries a position at or below `since`.
+    /// A list starts at its first member at or above the fence.
+    ///
+    /// The fence is the one every slice-backed source is narrowed by, and the
+    /// reason a page never carries a position at or below `since`.
     #[test]
     fn a_list_starts_at_the_fence() {
         let s = [3u64, 7, 8, 20];
@@ -2535,7 +2678,9 @@ mod tests {
         assert_eq!(at_or_above(&s, 0).count(), 4);
     }
 
-    /// Row 9's words for a derived file: the head with the last trusted
+    /// A derived cut says it is re-derived, and a failure names its file.
+    ///
+    /// Row 9's words for a derived file are the head with the last trusted
     /// position and the bytes, then that the cut part is re-derived — and
     /// the open's failures name their file ahead of the OS's text, the kind
     /// kept.
@@ -2552,12 +2697,14 @@ mod tests {
         assert_eq!(refused.to_string(), "feed-masked.log: no room");
     }
 
-    /// The open's own lines at fixed figures: the bare positions it
-    /// classifies before the board serves — ahead of the cost, while it runs
-    /// and once done — the journal's refusal of that classification in the
-    /// kernel's words, what its compaction dropped below the reclaim floor,
-    /// and, last, how far back `/changes` answers, the region the walk has
-    /// yet to land where one is pending, and how long the open took.
+    /// The open's own lines render at fixed figures.
+    ///
+    /// They are the bare positions it classifies before the board serves —
+    /// ahead of the cost, while it runs and once done — the journal's refusal
+    /// of that classification in the kernel's words, what its compaction
+    /// dropped below the reclaim floor, and, last, how far back `/changes`
+    /// answers, the region the walk has yet to land where one is pending, and
+    /// how long the open took.
     #[test]
     fn the_opens_classification_and_compaction_lines_render_the_ruled_words() {
         assert_eq!(

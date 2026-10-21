@@ -21,7 +21,9 @@ use skep_engine::World;
 /// [`upload_admission`] asks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadRefusal {
-    /// No live session: the guest, at every act of the family.
+    /// No session the request may act under: the guest.
+    ///
+    /// It is the guest's answer at every act of the family.
     Unauthenticated,
     /// The board is unclaimed.
     ///

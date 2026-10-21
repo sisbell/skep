@@ -1,4 +1,4 @@
-//! # skep-core — the daemon's core
+//! skep-core — the daemon's core.
 //!
 //! Who may act on a board (the session layer, [`auth`]), what every write
 //! rides and leaves behind (the commits — the one door, the record, the
@@ -30,7 +30,7 @@ pub mod auth;
 pub mod commits;
 // Layer 2, the leaves — the wire codec: the JSON grammar, parse and marshal.
 pub mod codec;
-// The bounds this crate reads, each `pub`, two of them the daemon's too.
+// The bounds this crate reads, each `pub`, three of them the daemon's too.
 pub mod limits;
 // The write-serialization lock, its guard and its takes.
 pub mod serial;

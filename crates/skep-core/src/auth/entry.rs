@@ -26,10 +26,11 @@
 //!   a cross-owner version);
 //! * `op` — the op-kind token as the wire spells it, which the body's
 //!   [`EntryBody`] carries (`each_body_carries_the_wire_name_of_its_op`
-//!   holds it to the codec's own `op_name`) — and, at a credential deposit's
-//!   `make_link`, the record grade's `record` ([`compose_record`]:
-//!   skep-identity's [`RecordFrame`] over the fold's own reading of the
-//!   link's address — its home, and the home's account by ω);
+//!   holds it to the codec's own `op_name`) — and, at a credential or
+//!   registry record's `make_link`, the record grade's `record`
+//!   ([`compose_record`]: skep-identity's [`RecordFrame`] over the fold's
+//!   own reading of the link's address — its home, and the home's account
+//!   by ω);
 //! * `body` — per op cell: empty for the three mints; the declared type and
 //!   the values for `insert`; for the link writes the stored link's slots as
 //!   the transaction will deposit them (the design record §2.5's slot row):
@@ -47,12 +48,12 @@
 //!   the base (the design record §2.5's cell; signed-ops D25): the runs as
 //!   the commit will place them, M5's own classing (`Shot::address_form`) —
 //!   a run the commit copies in (the trunk's own I-space, the staging
-//!   draft's) by its values, read off the snapshot by M4's `value_at` in run
-//!   order; a window onto another document by its address and width, read
-//!   from nowhere — within [`MAX_SHOT_BODY_BYTES`]; the base the shot's own,
-//!   `Shot::base`'s member and extent as the request named them, empty in
-//!   the birth shape — the member's address read off the request and never
-//!   minted here, so the frame stays position-free.
+//!   draft's) by its values, read off the snapshot by M4's run read
+//!   (`pieces`) in run order; a window onto another document by its address
+//!   and width, read from nowhere — within [`MAX_SHOT_BODY_BYTES`]; the base
+//!   the shot's own, `Shot::base`'s member and extent as the request named
+//!   them, empty in the birth shape — the member's address read off the
+//!   request and never minted here, so the frame stays position-free.
 //!
 //! Eight bodies the daemon does not compose. Each is answered as the
 //! [`ComposeFault`] that names its reason, and no more: what the write is
@@ -201,10 +202,10 @@ pub(super) enum ComposeFault {
     SlotTooLarge,
     /// A V-spec names a source document the principal may not read.
     ///
-    /// The V-spec is a `make_link`'s or an `edit_link`'s, and no slot is
-    /// resolved: the write door refuses it `withheld` naming the source,
-    /// ahead of the store (`consult_write`'s source consult, which judges
-    /// every write that reaches here).
+    /// The V-spec is a `make_link`'s or an `edit_link`'s, and the slot that
+    /// names it is never resolved: the write door refuses it `withheld`
+    /// naming the source, ahead of the store (`consult_write`'s source
+    /// consult, which judges every write that reaches here).
     UnreadableSlotSource,
     /// An `edit_link` whose successor M10's own build refuses.
     ///
@@ -443,19 +444,21 @@ fn every_copied_run_origin_readable(
 /// A copied run's values are pushed one by one and a window as its address
 /// and width, onto a [`PublishBody`] held to [`MAX_SHOT_BODY_BYTES`] over
 /// the shot's base — the member and the extent the request named,
-/// `Shot::base`, which the signer composed from the same request. THE
-/// BODY'S GRAIN STAYS PER VALUE: the values are read by M4's run read, one
-/// lookup per piece, and a piece of a stretch — a run of single-byte values
-/// — pushes ONE ROW PER BYTE, since the body is the entry frame's signed
-/// preimage, composed by the client from the values it inserted and by a
-/// later verifier from the member's runs; a row per piece would spell one
-/// N-byte value where the client spelled N one-byte values, and every
-/// attested per-byte publish would be refused for its signature. The budget
-/// is measured in the body's own layout as each value is read, so nothing
-/// is collected ahead of the build and no body is held past it; a refused
-/// push takes the builder with it, so the shot is refused whole and no body
-/// is finished over the segments before the refusal — the preimage of a
-/// shorter publish.
+/// `Shot::base`, which the signer composed from the same request.
+///
+/// **The body's grain stays per value.** The values are read by M4's run
+/// read, one lookup per piece, and a piece of a stretch — a run of
+/// single-byte values — pushes *one row per byte*, since the body is the
+/// entry frame's signed preimage, composed by the client from the values it
+/// inserted and by a later verifier from the member's runs; a row per piece
+/// would spell one N-byte value where the client spelled N one-byte values,
+/// and every attested per-byte publish would be refused for its signature.
+///
+/// The budget is measured in the body's own layout as each value is read,
+/// so nothing is collected ahead of the build and no body is held past it;
+/// a refused push takes the builder with it, so the shot is refused whole
+/// and no body is finished over the segments before the refusal — the
+/// preimage of a shorter publish.
 ///
 /// **Precondition.** The principal may read every value the shot copies in
 /// ([`every_copied_run_origin_readable`]).
@@ -511,7 +514,7 @@ fn publish_body(
     for segment in segments {
         match segment {
             SegmentRun::Value(run) => {
-                // One row per VALUE (the function's doc): a stretch's piece
+                // One row per *value* (the function's doc): a stretch's piece
                 // one row per byte, a one-byte slice apiece; a value one row.
                 // `covered`, asked after the walk, is the missing value.
                 let mut pieces = content.pieces(run.i_start().tumbler(), run.width());
@@ -557,7 +560,7 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
     }
 }
 
-/// Composes the record frame for a credential deposit's `make_link`.
+/// Composes the record frame for a credential or registry record's `make_link`.
 ///
 /// It is skep-identity's [`RecordFrame`] (signed ops, the record grade, 2a;
 /// the frame merge), every member but `alg`, which is each candidate key's
@@ -576,8 +579,8 @@ fn refused(refusal: PublishRefusal) -> ComposeFault {
 ///   the `replaces` row empty (a credential deposit carries no member,
 ///   `op_shape_refusal` refuses one); the lineage row empty (signed-ops D2:
 ///   at 2a no lineage has forked, so every kind writes the empty group); and
-///   `canonical`, the sig-less canonical record
-///   (`canonical_record(entries, None)`) the caller projected off the atom.
+///   `canonical`, the sig-less canonical record the caller projected off the
+///   atom (`canonical_record(entries, None)` for a credential record).
 ///
 /// Every member is a value the link's address, the atom's bytes and `H.1`
 /// supply, which is what lets a mirror compose the same bytes from
@@ -785,15 +788,15 @@ mod tests {
 
     /// Checks that the publish body's grain is per value, whatever M4 holds.
     ///
-    /// THE PREIMAGE PIN: the body composed over a run M4 holds as ONE stretch
-    /// is byte-equal to the body composed over the same bytes M4 holds as
-    /// one-byte values — one row per byte either way — and both equal the
-    /// body the client composes from the values it inserted, one row apiece.
-    /// A row per piece would spell one N-byte value where the client spelled
-    /// N one-byte values, and every attested per-byte publish would be
-    /// refused for its signature. The two worlds are built through the
-    /// stores' own public doors: M3's mints and M4's two stage doors, under
-    /// the content key, into the head document genesis registers.
+    /// **The preimage pin.** The body composed over a run M4 holds as *one*
+    /// stretch is byte-equal to the body composed over the same bytes M4
+    /// holds as one-byte values — one row per byte either way — and both
+    /// equal the body the client composes from the values it inserted, one
+    /// row apiece. A row per piece would spell one N-byte value where the
+    /// client spelled N one-byte values, and every attested per-byte publish
+    /// would be refused for its signature. The two worlds are built through
+    /// the stores' own public doors: M3's mints and M4's two stage doors,
+    /// under the content key, into the head document genesis registers.
     #[test]
     fn the_publish_body_spells_a_stretch_one_row_per_byte_as_it_spells_values() {
         use std::sync::Arc;
@@ -814,7 +817,7 @@ mod tests {
         let doc = head_document();
         let keys = [M3State::content_lock_key(&doc)];
         // The per-value world: three one-byte values, three mints, three
-        // writes — the form a board written before stretches holds.
+        // writes — the form a board written without stretches holds.
         let values = open();
         let (first_of_values, _) = values
             .kernel()

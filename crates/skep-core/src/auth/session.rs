@@ -144,7 +144,7 @@ impl Nonce {
 /// daemon drains ([`Challenges::edge`]) and says through its classed door,
 /// once per episode. The cap is a memory bound and never an abuse bound
 /// (AUTH-1.48): the pair alters no eviction, and says only that one happened
-/// to a live nonce.
+/// to a live nonce, and the bound in force.
 pub struct Challenges {
     inner: parking_lot::Mutex<ChallengeInner>,
     cap: usize,
@@ -181,9 +181,9 @@ impl Challenges {
     /// time to live has passed, is an admission, the state the second line
     /// says once no live nonce has been evicted for the hold-down. So on a
     /// quiet store the `landing:` comes at the first such mint after the
-    /// hold-down, however late. Neither edge carries the principal, the
-    /// nonce or a count: the daemon's line names the store and the fact
-    /// alone.
+    /// hold-down, however late. Neither edge carries the principal or the
+    /// nonce, and the landing's count of refusals goes unsaid: the daemon's
+    /// lines name the store, the fact and, on the first, the bound in force.
     pub fn issue(
         &self,
         principal: PrincipalId,
@@ -301,8 +301,9 @@ impl Token {
 pub enum Scope {
     /// The full scope, declared by the member's absence.
     Full,
-    /// The content scope, `"scope": "content"`: content-limited at the
-    /// precheck's slot (6).
+    /// The content scope, `"scope": "content"`.
+    ///
+    /// It is content-limited at the precheck's slot (6).
     Content,
 }
 
@@ -463,8 +464,11 @@ pub enum GuestReason {
     NoToken,
     /// The token names no live session.
     Unknown,
-    /// The binding is dead: its account blocked, its key retired, or a bare
-    /// bind the mode refuses.
+    /// The binding is dead.
+    ///
+    /// Its account is blocked, its key is out of the set that authenticates
+    /// it (retired, or the account handed away by a genesis), or it is a
+    /// bare bind the mode refuses.
     BindingDead,
     /// A bare bind this request's peer or origin refuses; the binding lives.
     RequestRefused,
@@ -553,10 +557,10 @@ pub(super) fn key_subject(world: &World, p: PrincipalId) -> Option<Address> {
 /// whose set is not ([`keyed_above`]), else `own` again, whose set is empty
 /// (C-2: the answer is always an address, and the empty set refuses
 /// whatever reads it). [`key_subject`] is this walk from a principal's own
-/// prefix; the record grade's check takes it from a credential deposit's
-/// home account (signed ops; the design record §4.5's table clause (a):
-/// "the home's own set is not the set that opens it" — a hire's genesis is
-/// homed in `X.1`'s doc 1, and `X.1` holds no set of its own), so the
+/// prefix; the record grade's check takes it from a credential or registry
+/// record's home account (signed ops; the design record §4.5's table clause
+/// (a): "the home's own set is not the set that opens it" — a hire's genesis
+/// is homed in `X.1`'s doc 1, and `X.1` holds no set of its own), so the
 /// daemon's session doors and its record verify read one walk and cannot
 /// disagree about whose keys open an account.
 pub(super) fn opening_account(identity: &IdentityState, own: &Address) -> Address {
@@ -578,11 +582,12 @@ pub(super) fn opening_account(identity: &IdentityState, own: &Address) -> Addres
 /// **One walk, three readers.** [`key_subject`] takes it from a principal's
 /// own account, which is what a session there authenticates against, and
 /// the record grade's check takes it, through [`opening_account`], from a
-/// credential deposit's home account. The precheck's slot (6) takes it from
-/// a previewed genesis's subject (AUTH-3.21): the terminus is the `S` the
-/// address test measures a genesis at, "the account AUTH-4.30 (i)'s walk
-/// stops at" — so all three are this one function, and a handoff is told at
-/// exactly the account whose keys open the address it hands away (RES-172).
+/// credential or registry record's home account. The precheck's slot (6)
+/// takes it from a previewed genesis's subject (AUTH-3.21): the terminus is
+/// the `S` the address test measures a genesis at, "the account AUTH-4.30
+/// (i)'s walk stops at" — so all three are this one function, and a
+/// handoff is told at exactly the account whose keys open the address it
+/// hands away (RES-172).
 pub(super) fn keyed_above(identity: &IdentityState, a: &Address) -> Option<Address> {
     std::iter::successors(parent(a), parent)
         .take_while(|above| above.level() == Level::Account)
@@ -893,10 +898,6 @@ fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8]) -> Option<Fingerprint> 
 
 /// Runs the handshake (AUTH-4.36/4.37).
 ///
-/// The signed arm's pinned order — origin set, burn, the account, the block
-/// (step 4b), key subject, key set, payload, `find_signer` — and the bare
-/// arm's one predicate.
-///
 /// The bare arm is untouched by the list (AUTH-4.37; RES-65 item 3's named
 /// residue): a bare bind naming a principal under a listed prefix is
 /// admitted as written — reachable only on loopback, in `Mode::Unclaimed`
@@ -916,9 +917,11 @@ fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8]) -> Option<Fingerprint> 
 ///
 /// # Errors
 ///
-/// Every failure of the credential is the same unit refusal,
-/// [`HandshakeRefusal::Rejected`]; step 4b's is the second value,
-/// [`HandshakeRefusal::Blocked`].
+/// The checks are the signed arm's pinned order — origin set, burn, the
+/// account, the block (step 4b), key subject, key set, payload,
+/// `find_signer` — and the bare arm's one predicate. Every failure of the
+/// credential is the same unit refusal, [`HandshakeRefusal::Rejected`];
+/// step 4b's is the second value, [`HandshakeRefusal::Blocked`].
 pub fn handshake(
     cfg: &AuthConfig,
     challenges: &Challenges,

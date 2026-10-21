@@ -50,14 +50,14 @@ impl Serial {
 
 /// The write-serialization guard's takes and waits, counted from the open.
 ///
-/// Both counts only rise. A take is a write sequence
-/// reaching the serialization point — a commit, or a refusal its admission
-/// gave under the guard; a wait is a take that found another writer holding
-/// it. An arrival finds the guard held about as often as it is held, so the
-/// share of takes that waited is how busy the serialization point is, and a
-/// share that climbs is the write path nearing its limit before the write
-/// pool refuses `write_busy`. The counts are of writes alone, never of a
-/// reader.
+/// Both counts only rise. A take is a write sequence reaching the
+/// serialization point, whether or not it commits — a refusal its admission
+/// gave under the guard is a take too; a wait is a take that found another
+/// writer holding it. An arrival finds the guard held about as often as it
+/// is held, so the share of takes that waited is how busy the serialization
+/// point is, and a share that climbs is the write path nearing its limit
+/// before the write pool refuses `write_busy`. The counts are of writes
+/// alone, never of a reader.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SerialFigures {
     /// The takes of the guard.
@@ -76,16 +76,17 @@ impl SerialFigures {
     }
 }
 
-/// The write-serialization guard, newtyped so a function whose contract is
-/// "under the serialization lock" names it in its arguments — the device
-/// `auth/`'s `LockRead`/[`crate::auth::LockWrite`] already
-/// are. A bare `MutexGuard<'_, ()>` is satisfied by a guard over ANY
-/// `Mutex<()>`, so the parameter would say "some unit lock is held" where
-/// the contract says "this one is" — unambiguous only while the crate holds
-/// exactly one, in a daemon whose body cap already anticipates a second
-/// write path (the media round's blob route) by name.
+/// The write-serialization guard, newtyped so a signature can name it.
 ///
-/// The honest limit is [`crate::commits::Commits::serial_lock`]'s, unchanged: the guard
+/// A function whose contract is "under the serialization lock" names it in
+/// its arguments — the device `auth/`'s
+/// `LockRead`/[`crate::auth::LockWrite`] already are. A bare
+/// `MutexGuard<'_, ()>` is satisfied by a guard over *any* `Mutex<()>`, so
+/// the parameter would say "some unit lock is held" where the contract says
+/// "this one is" — unambiguous only while the crate holds exactly one, in a
+/// daemon whose body cap names a second write path, the blob route.
+///
+/// The honest limit is [`crate::commits::Commits::serial_lock`]'s: the guard
 /// proves the lock is held and proves nothing about where the caller's
 /// snapshot came from.
 ///

@@ -16,13 +16,14 @@
 /// `auth/` has exactly one lock whose guards travel as arguments — each of
 /// its other locks guards one structure's own state and is never named in a
 /// signature — so these guards are unqualified. Where one of them leaves
-/// `auth/` and meets the write-serialization guard (`server/op.rs`), the
-/// binding carries the qualifier: `credential_lock`.
+/// `auth/` and meets the write-serialization guard (skepd's `server/op.rs`),
+/// the binding carries the qualifier: `credential_lock`.
 ///
 /// What the lock *scopes* is a different thing and wears a different word:
-/// the refusal rules it serializes are the gates (`board_state_admission`'s
-/// two — the RES-26 gate once claimed, `pre_claim_gate` before — the
-/// write-path check behind the first, and the precheck's ordered slots),
+/// the refusal rules it serializes are the gates (the plain and registry
+/// admissions' ordered producers — `board_state_admission`'s two among them,
+/// the RES-26 gate once claimed and `pre_claim_gate` before, with the
+/// write-path check behind the first — and the precheck's ordered slots),
 /// which is wire.md's term for a rule that refuses a write.
 pub struct CredentialLock(parking_lot::RwLock<()>);
 

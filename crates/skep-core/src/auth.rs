@@ -10,14 +10,15 @@
 //! presented `attest` over it against the fold's key set before the
 //! transaction (`policy`, behind the RES-26 gate). The hybrid signature's
 //! frozen rules are not here: `skep-signature` is the one crate that links
-//! the signature libraries; skepd calls its verify (AUTH-2.2) and its
+//! the signature libraries; this crate calls its verify (AUTH-2.2) and its
 //! all-halves decode, and builds none of its signer's side — the daemon
 //! itself holds no key and never signs. That signer is handed a seed and
 //! knows nothing of where one is kept, so it too is custody-agnostic.
 //!
 //! Custody-agnostic (R1-kickoff D1): nothing here knows where a private key
 //! lives — the handshake verifies signatures over bytes, deposits commit
-//! records carrying pubkeys, `key_set` reads records.
+//! records carrying pubkeys, `key_set` reads the identity slice those
+//! records fold into.
 //!
 //! The identity fold is the engine's (AUTH-2.79–2.88): the World carries the
 //! key table and the claim as its identity slice, `World::apply` steps it at
@@ -90,9 +91,10 @@ use origin::{bare_origins, signed_origins};
 /// holds and nothing of who asked.
 pub const MAX_LIVE_NONCES: usize = 4096;
 
-/// The auth state's start: the session layer's options, and the
-/// blocked-prefix list read off the start-up supply they name (AUTH-4.70;
-/// RES-115).
+/// The auth state's start: its options and the blocked-prefix list read.
+///
+/// The options are the session layer's, and the list is read off the
+/// start-up supply they name (AUTH-4.70; RES-115).
 ///
 /// It is the one half of the auth state's open that can fail, and a half
 /// that reads no world, so the daemon reads it before its own open touches
@@ -109,8 +111,9 @@ pub struct AuthStart {
 }
 
 impl AuthStart {
-    /// Reads the start-up supply `opts` names; options naming none read
-    /// nothing.
+    /// Reads the start-up supply `opts` names.
+    ///
+    /// Options naming none read nothing.
     ///
     /// # Errors
     ///
@@ -323,7 +326,8 @@ impl AuthState {
     /// the World's slice inside the transaction that commits it, so `after`
     /// already holds the deposit folded, and nothing here can fall behind
     /// the world — a panic between the commit and this tail costs the memo
-    /// entry alone, never a key.
+    /// entry and, at the claim, the flip's tail this answer triggers, never a
+    /// key.
     ///
     /// The flip is a property of the transition, which no read of one state
     /// recovers: a claimant present in `after` was absent in `before` iff

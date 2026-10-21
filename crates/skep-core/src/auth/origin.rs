@@ -1,7 +1,8 @@
 //! Web origins (AUTH-4.1–4.11).
 //!
 //! It holds the canonical form, the two origin sets the handshake and the
-//! bare bind admit from, and the config-lockout warnings.
+//! bare bind admit from, and the config-lockout warnings with the dev
+//! setting's echo beside them.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -152,8 +153,9 @@ impl std::error::Error for NotCanonical {}
 ///
 /// [`Origin::parse`] stands beside it: its `Option` is the predicate form
 /// the session layer uses internally (`Origin::parse(h).is_some_and(…)`),
-/// and `FromStr` is what a generic caller can reach — `main.rs` among them,
-/// through `str::parse`, for each `--origin` and `SKEPD_ORIGIN` element.
+/// and `FromStr` is what a generic caller can reach — skepd's `main.rs`
+/// among them, through `str::parse`, for each `--origin` and `SKEPD_ORIGIN`
+/// element.
 ///
 /// # Errors
 ///
@@ -235,7 +237,9 @@ pub enum Warning {
     ClaimedWithLocalTrust,
     /// The board is claimed with an empty configured origin set.
     ClaimedWithEmptyConfigured,
-    /// Carries the offending configured origin (AUTH-4.10), one arm each.
+    /// A configured loopback-host origin names a port not bound (AUTH-4.10).
+    ///
+    /// It carries the offending configured origin, one arm each.
     ConfiguredLoopbackPortChanged(Origin),
     /// `--allow-preview-keys` is on (AUTH-1.44).
     ///

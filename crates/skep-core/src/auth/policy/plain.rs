@@ -297,8 +297,9 @@ fn first_mint_private_refusal(
 /// an attestation it could only spend on a refusal. And *after* the
 /// destination's registration and ω, as PUB-6.36 puts the destination's
 /// `not_owner` first everywhere: a caller who does not own every home the
-/// write names — an `edit_link` names two — answers `None` here and meets
-/// `execute`'s own `home_not_registered` or `not_owner`, M7's home gate
+/// write names — an `edit_link` names two — answers `None` here and meets,
+/// on a claimed board, `execute`'s own `home_not_registered` or `not_owner`
+/// (on an unclaimed one, the pre-claim gate's `claim_first`), M7's home gate
 /// running ahead of its own fence exactly so. What the refusal discloses is
 /// the op's own shape, to the one caller whose write it is.
 ///
@@ -377,8 +378,8 @@ fn published(world: &World, doc: &Address) -> bool {
 /// off the publish class (signed-ops D1); on the unclaimed board (A5: the
 /// ceremony's own span, where an `attest` a cautious client attached could
 /// verify under no key); on the claimed board where the check stands aside
-/// — outside the checked set, at a credential record deposit's atom
-/// (signed-ops D26: the record's own `sig` is its carrier), at a
+/// — outside the checked set, at a credential or registry record deposit's
+/// atom (signed-ops D26: the record's own `sig` is its carrier), at a
 /// system-owned home (A3); and where the check passes an attested write
 /// through to a store refusal no signature changes (`attestation_check`'s
 /// doc item 6), where nothing commits. The marker slot's producer set is
@@ -484,12 +485,13 @@ fn board_state_admission(
 /// table), which is why that mint is admitted from a bare session.
 fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
     // Registration and ω — the pair that stands ahead of this gate (PUB-6.37,
-    // PUB-6.36 slot 1) on every home and target arm, in one spelling, the
-    // store's own ownership-gate question (M5's
-    // `Caller::passes_ownership_gate`), so an arm that means to take the pair
-    // cannot take half of it: an address failing either falls through to
-    // execute's own code and is never told whether it is published. The three
-    // minting arms below take something else and each says what.
+    // PUB-6.36 slot 1) on every home arm, in one spelling, the store's own
+    // ownership-gate question (M5's `Caller::passes_ownership_gate`), so an
+    // arm that means to take the pair cannot take half of it: an address
+    // failing either falls through to execute's own code and is never told
+    // whether it is published. A `nullify`'s target takes ω alone here, its
+    // document's registration at the read that needs it. The three minting
+    // arms below take something else and each says what.
     let m3 = world.m3();
     let owned = |a: &Address| Caller::Principal(principal).passes_ownership_gate(m3, a);
     let homed = |home: &Address| -> bool { owned(home) && published(world, home) };
@@ -568,8 +570,8 @@ fn publish_class(world: &World, op: &Op, principal: PrincipalId) -> bool {
         // draft-homed record against a published-homed link takes the gate
         // exactly as a published-homed write does; a draft-homed record
         // against a draft-homed target stays a bare-writable draft write.
-        // Registration and ω stand ahead on both addresses (PUB-6.37;
-        // PUB-6.9's target ω beside slot 1's home ω — M7's own v1
+        // Registration and ω stand ahead on the home, and ω on the target
+        // (PUB-6.37; PUB-6.9's target ω beside slot 1's home ω — M7's own v1
         // self-retraction gate, mirrored): a caller owning neither, or the
         // home alone, or naming an unregistered home, falls through to
         // execute's own code and is never told whether either is published.
@@ -661,9 +663,11 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// `mint_home_refusal` and is disjoint from it — the door reads a
 /// `create` with an explicit `false`, mint-first reads a `fork`/`version` —
 /// so their relative order is inert; both stand ahead of the board-state
-/// pair (PUB-6.36 slot 2 before slot 4), which is why an explicit-`false`
-/// home mint answers `mint_home_public` and never the pre-claim
-/// `claim_first`.
+/// pair (PUB-6.36 slot 2 before slot 4), which is why a `fork` or `version`
+/// by a principal whose account holds no document answers
+/// `mint_home_first` and never the pre-claim `claim_first`. An
+/// explicit-`false` home mint answers `mint_home_public` in either order:
+/// the pre-claim gate admits a `create` into an empty account.
 ///
 /// The order is PUB-6.36's write-side order as RES-195 places the
 /// `nullify` cells: mint-first is slot 2; the board-state pair stands in
@@ -676,10 +680,10 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// claim. Post-claim, `publish_class` holds PUB-6.43's `nullify` row, so a
 /// bare owner's retraction of a grant record in its own published doc 1
 /// answers `signed_session_required`, never the grant-typed token — the
-/// cell `nullify_class.rs` pins. Pre-claim: an unclaimed board admits no
-/// `nullify` at all, so the admission gate (PUB-6.35; RES-27) answers
-/// `claim_first` first and no token is reached, for the home's own owner as
-/// for anyone else.
+/// cell skepd's `nullify_class.rs` pins. Pre-claim: an unclaimed board
+/// admits no `nullify` at all, so the admission gate (PUB-6.35; RES-27)
+/// answers `claim_first` first and no token is reached, for the home's own
+/// owner as for anyone else.
 ///
 /// Re-ordering moves no input: all three are pure functions of the same
 /// `(world, op, principal, signer)` — the board-state pair's of the
@@ -693,8 +697,9 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// board-state pair, so a write that can never be admitted is refused as
 /// such before the pair asks its owner to claim, to sign or to attach an
 /// attestation; and it answers the owner of every home the write names
-/// alone, so PUB-6.36's destination `not_owner` still stands first for
-/// everyone else, at `execute`.
+/// alone, so for everyone else PUB-6.36's destination `not_owner` still
+/// stands first, at `execute` — on a claimed board; on an unclaimed one the
+/// pre-claim gate's `claim_first` answers them.
 ///
 /// **Precondition.** `world` must be the snapshot taken under the read guard
 /// for this request; the guard argument each producer takes is that

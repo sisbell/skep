@@ -30,7 +30,7 @@ impl RngCore for OsEntropy {
 
 impl CryptoRng for OsEntropy {}
 
-/// Stops the process where the OS refused its entropy.
+/// Stops the draw where the OS refused its entropy.
 ///
 /// Fail-stop: a board that cannot draw OS entropy must not mint credentials
 /// from anything weaker (AUTH-4.13). The panic's payload is a literal, which

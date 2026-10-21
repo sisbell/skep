@@ -33,19 +33,19 @@ use skep_engine::World;
 /// serialization guard *is* the transaction's base.
 ///
 /// The entry frame the daemon composes for a `publish` reads the copied
-/// runs' values off the snapshot by `value_at` — a second Σ-width walk per
-/// attested shot, off the snapshot and not under M2's applier lock but under
-/// the daemon's serialization lock (the investigation §3.3's price), stopped
-/// at the body's budget — and over the staging draft's runs, before it
-/// starts, at the store's own re-insert budget; a window is spelled by
-/// address and read from nowhere. It reads a value only where the principal
-/// may read it: this check's verdict is answered to the principal, so a
-/// value read on its behalf is a value disclosed to it, and every refusal it
-/// gives a shot with an unreadable copied run is the same whatever that
-/// run's bytes are. A run naming an address with no value cannot commit;
-/// the store's `dangling_source` is that write's answer, so the check passes
-/// it through unattested rather than refusing a signature over bytes nobody
-/// holds.
+/// runs' values off the snapshot by the content store's run read
+/// (`pieces`) — a second Σ-width walk per attested shot, off the snapshot
+/// and not under M2's applier lock but under the daemon's serialization
+/// lock (the investigation §3.3's price), stopped at the body's budget —
+/// and over the staging draft's runs, before it starts, at the store's own
+/// re-insert budget; a window is spelled by address and read from nowhere.
+/// It reads a value only where the principal may read it: this check's
+/// verdict is answered to the principal, so a value read on its behalf is a
+/// value disclosed to it, and every refusal it gives a shot with an
+/// unreadable copied run is the same whatever that run's bytes are. A run
+/// naming an address with no value cannot commit; the store's
+/// `dangling_source` is that write's answer, so the check passes it through
+/// unattested rather than refusing a signature over bytes nobody holds.
 ///
 /// # Errors
 ///
@@ -104,10 +104,10 @@ use skep_engine::World;
 ///    lacks.
 /// 5. (1): no `attest` → `attestation_required`, ahead of the composition
 ///    (the design record §4.5's head; SO-I7 (f), SO-I9 (a)): every unsigned
-///    write of the checked set above the claim is told this one thing
-///    whatever its body names, and pays no walk of a shot's values to be
-///    told it — so an unsigned publish that also names a missing source
-///    answers `attestation_required` before `dangling_source`.
+///    write of the checked set above the claim that reaches this step is
+///    told this one thing whatever its body names, and pays no walk of a
+///    shot's values to be told it — so an unsigned publish that also names a
+///    missing source answers `attestation_required` before `dangling_source`.
 /// 6. The entry frame, composed for an attested write alone, from the op,
 ///    the snapshot and the board term (`crate::auth::entry`) — every member
 ///    but `alg`, which only the presented member names: a `publish` copying
@@ -142,19 +142,19 @@ use skep_engine::World;
 ///    unattested here drops the member it presented — never verified, never
 ///    written — and is one the store or the door refuses, each passing arm's
 ///    premise, so nothing commits unattested; the pairing of each arm with
-///    the refusal it defers to is pinned in `signed_ops.rs`.
+///    the refusal it defers to is pinned in skepd's `signed_ops.rs`.
 /// 7. (2): the member's marker tag names its row (a tag no row names is
 ///    `malformed`), whose token is the entry frame's `alg`; the blob's width
-///    under it; the key set that opens the act's principal as of this base
-///    (AUTH-4.30 (i)'s walk, `key_subject`) — the fold's own set at this
-///    position, the check's table being the daemon's own (the write path
-///    reads the fold's key table, on the equality that above the claim every
-///    credential record the fold honors passed the record grade's check at
-///    this daemon's own write path); the candidates are that set's keys of
-///    the tag's row (A2's empty walk answers `not_enrolled_at_position`,
-///    permanent), `signer`'s first ([`candidates`]); any candidate verifying
-///    both halves over the entry frame admits the presented `attest`, else
-///    `signature`.
+///    under it (a width not the row's is `malformed` too); the key set that
+///    opens the act's principal as of this base (AUTH-4.30 (i)'s walk,
+///    `key_subject`) — the fold's own set at this position, the check's table
+///    being the daemon's own (the write path reads the fold's key table, on
+///    the equality that above the claim every credential record the fold
+///    honors passed the record grade's check at this daemon's own write
+///    path); the candidates are that set's keys of the tag's row (A2's empty
+///    walk answers `not_enrolled_at_position`, permanent), `signer`'s first
+///    ([`candidates`]); any candidate verifying both halves over the entry
+///    frame admits the presented `attest`, else `signature`.
 pub(super) fn attestation_check(
     world: &World,
     op: &Op,
@@ -313,7 +313,8 @@ struct DeclaredRecord<'a> {
 /// link's type and target and the grade the act needs, which the atom's
 /// `insert` does not yet name — its `make_link`, one position later,
 /// verifies the `sig` under the set that opens the home (`credential.rs`'s
-/// `record_grade_check`) or is refused, leaving the atom an orphan no link
+/// `record_grade_check`, or `registry.rs`'s `registry_admission` for a
+/// registry record) or is refused, leaving the atom an orphan no link
 /// names, which a reader renders *undeterminable here* (the design record
 /// §7.3 (i)), its row carrying `key` and no `attest`. Read by step 2 of
 /// [`attestation_check`] alone; the row's `key` does not turn on this

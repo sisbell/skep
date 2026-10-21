@@ -62,8 +62,8 @@ const MAX_ENROLLED_KEYS: usize = 16;
 /// The pre-claim window is the reachable one and the exposure is
 /// permanent: slot (7) is arm-blind, so a bare genesis plant on a claimed
 /// board dies there, while anything seeded before the claim can be retired
-/// only by an anchor session of that account — whose keys the planter
-/// chose.
+/// only by a signed session of that account — an anchor's, for an anchor
+/// key — whose keys the planter chose.
 const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;
 
 /// The most keys slot (4) decodes: one past the cap slot (5) applies.
@@ -99,12 +99,12 @@ const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;
 ///
 /// Panics in a debug build where its precondition fails:
 /// `deposits_credential_link(op)` holds — the credential sequence's route,
-/// this function's one caller (`server/op.rs`'s `credential_sequence`). The
-/// arms read no type slot: every `emit` and every `edit_link` is refused
-/// unconditionally, which is true of a credential-typed one alone, so on
-/// any other op this answers a refusal no rule gives it. The debug assert
-/// is what makes the premise loud where a test can see it; the route is the
-/// one place it is discharged.
+/// this function's one caller (`credential_sequence`, in skepd's
+/// `server/op.rs`). The arms read no type slot: every `emit` and every
+/// `edit_link` is refused unconditionally, which is true of a
+/// credential-typed one alone, so on any other op this answers a refusal no
+/// rule gives it. The debug assert is what makes the premise loud where a
+/// test can see it; the route is the one place it is discharged.
 pub fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
     debug_assert!(
         deposits_credential_link(op),
@@ -182,7 +182,7 @@ pub fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
 /// **Precondition.** `world` must be the snapshot taken under the write
 /// guard for this request — the frontier is read at the claim, off the
 /// snapshot that guard pinned — and the guard argument is that contract's
-/// cheap half, as it is on every other producer in this family.
+/// cheap half, as it is on [`precheck`].
 fn claim_residue_refusal(
     _lock: &LockWrite<'_>,
     world: &World,
@@ -588,11 +588,12 @@ enum RecordKind {
 /// on the equality this very check establishes above the claim: every
 /// record the fold honors there passed it at this daemon's own write path,
 /// so the fold's table and a verifier's filtered table hold one record set.
-/// A record *lifted* into a stranger's doc 1 fails at step 6: the frame
-/// names *that* home and its account, and the `sig` was made over
-/// another's. At or below the claim nothing runs here (A5): the ceremony's
-/// own records go unjudged, `sig` or not, and this function is reached only
-/// from the claimed arm.
+/// A record *lifted* into a stranger's doc 1 fails at step 6 (at step 5
+/// where the stranger's opening set holds no candidate): the frame names
+/// *that* home and its account, and the `sig` was made over another's. At
+/// or below the claim nothing runs here (A5): the ceremony's own records go
+/// unjudged, `sig` or not, and this function is reached only from the
+/// claimed arm.
 ///
 /// **Precondition.** `world` must be the snapshot taken under the write
 /// guard for this request, as `precheck`'s is; `dep` the deposit slot (3)
@@ -639,7 +640,9 @@ enum RecordKind {
 ///    address are both read, ahead of step 3, off what slot (3) established
 ///    — the fold's classify found the home an owner, and its `kind_of` read
 ///    the type slot as the one span `single_address` reads — so an absence
-///    is a premise broken, answered fail-closed and asserted.
+///    is a premise broken, answered fail-closed and asserted: a home with no
+///    owner `attestation_invalid:not_enrolled_at_position`, a type slot that
+///    reads as no address `attestation_invalid:signature`.
 /// 5. The candidates (clause (a), at which state clause (b)): the enrolled
 ///    keys of the set that opens the home's account — [`opening_account`]'s
 ///    walk, the one `key_subject` takes: the home's own set where it is not
@@ -963,7 +966,8 @@ mod tests {
     /// holds no `H.1`, and a retirement whose record carries a well-formed
     /// `sig` passes slots (3)–(6) and meets the record grade with no board
     /// term to compose over. The wire reaches this only through a first head
-    /// the driver refused, which no suite can produce.
+    /// the driver refused, which skepd's suites produce at the test seam
+    /// `refuse_the_next_head_once`.
     #[test]
     fn a_claimed_board_with_no_h1_answers_the_record_grade_board_unavailable() {
         use serde_json::json;

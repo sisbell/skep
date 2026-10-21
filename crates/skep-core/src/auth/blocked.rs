@@ -17,18 +17,18 @@ use crate::codec::{check_keys, wire_address};
 /// than reading it whole first.
 ///
 /// The cap bounds the failure case and not the legitimate one: an entry is
-/// two addresses in the registry's global form under a small JSON wrapper,
-/// under a hundred bytes, so this admits order 90,000 standing takedown
-/// records — four orders of magnitude above a board's plausible list. What
-/// it removes is the unbounded one, which is a path that is *not* a list: a
-/// read-to-end followed by a whole `serde_json::Value` over those bytes, at
-/// the ~20× transient heap this crate prices on
-/// [`crate::limits::MAX_REQUEST_BODY`]. It is paid at
-/// [`super::AuthStart::read`], before the daemon's open touches its data
-/// directory, where the open promises a named refusal rather than a hang;
-/// and at every reissue with the supply's `seen` held at the head of
-/// routing, so every request that arrives meanwhile waits on it, `/health`
-/// and `/session` included.
+/// two addresses — a prefix in the board's local form, a record in the
+/// registry's global form — under a small JSON wrapper, under a hundred
+/// bytes, so this admits order 90,000 standing takedown records — four
+/// orders of magnitude above a board's plausible list. What it removes is
+/// the unbounded one, which is a path that is *not* a list: a read-to-end
+/// followed by a whole `serde_json::Value` over those bytes, at the ~20×
+/// transient heap this crate prices on [`crate::limits::MAX_REQUEST_BODY`].
+/// It is paid at [`super::AuthStart::read`], before the daemon's open
+/// touches its data directory, where the open promises a named refusal
+/// rather than a hang; and at every reissue with the supply's `seen` held at
+/// the head of routing, so every request that arrives meanwhile waits on it,
+/// `/health` and `/session` included.
 ///
 /// The number is a relation to the frame routes' body cap,
 /// [`crate::limits::MAX_REQUEST_BODY`], and moves with it: this file
@@ -112,7 +112,7 @@ enum Comparand {
 pub struct BlockedPrefixes {
     /// The issue as supplied, whole.
     ///
-    /// It is private, and code outside this file reads it only through this
+    /// It is private, and code outside this module reads it only through this
     /// type's methods — whole through [`BlockedPrefixes::issue()`], read-only
     /// — so an entry and its verdict in `inert` are built together and move
     /// together: [`BlockedPrefixes::judged`] states the invariant, and the
@@ -254,7 +254,7 @@ impl BlockedPrefixes {
     /// two have equal length, established by
     /// [`BlockedPrefixes::installed_under`], which maps one from the other,
     /// and by `Default`, which leaves both empty — and kept by there being no
-    /// other writer: both fields are private to this file, and
+    /// other writer: both fields are private to this module, and
     /// [`BlockedPrefixes::issue()`] hands the issue out read-only. A lift is a
     /// fresh issue and a fresh install.
     fn judged(&self) -> impl Iterator<Item = (&BlockedEntry, Option<Comparand>)> {
@@ -278,8 +278,8 @@ impl BlockedPrefixes {
     ///
     /// It is what the claim flip re-judges against the claimant it first
     /// seats ([`super::AuthState::reinstall_blocked_at_claim`]). Read-only is
-    /// what [`BlockedPrefixes::judged`]'s invariant rests on: no file but this
-    /// one can move an entry without its verdict.
+    /// what [`BlockedPrefixes::judged`]'s invariant rests on: no code outside
+    /// this module can move an entry without its verdict.
     pub(super) fn issue(&self) -> &BlockedIssue {
         &self.issue
     }
@@ -412,15 +412,15 @@ pub enum Reissue {
 /// next request after a replace installs the new issue.
 ///
 /// Not the conventional reload signal, deliberately. This daemon has no
-/// signal handling at all (`main.rs`: crash-stop is the shutdown story), a
-/// signal is the process's and a `skepd::Daemon` is a value — several
-/// live in one process wherever the library is embedded, this crate's own
-/// suites included — and a signal says only "look again", which the file's
-/// identity already says without a second channel to keep in step with the
-/// first. What the check buys beside that: the install happens *before* the
-/// request that noticed it resolves its actor, so a reissue is in force at
-/// the first presentation after it, with no window a sleeping watcher
-/// thread would leave.
+/// signal handling at all (skepd's `main.rs`: crash-stop is the shutdown
+/// story), a signal is the process's and a `skepd::Daemon` is a value —
+/// several live in one process wherever the library is embedded, skepd's
+/// own suites included — and a signal says only "look again", which the
+/// file's identity already says without a second channel to keep in step
+/// with the first. What the check buys beside that: the install happens
+/// *before* the request that noticed it resolves its actor, so a reissue is
+/// in force at the first presentation after it, with no window a sleeping
+/// watcher thread would leave.
 ///
 /// **The file** is one JSON object, strict keys, nothing else admitted:
 ///

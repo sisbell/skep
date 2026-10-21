@@ -1,49 +1,51 @@
-//! THE ATTEST STORE (signed ops; the design record §7.3 (i); BW-01,
-//! owner-ruled 2026-09-29) — `feed-attest.log`: the marker slot's signature
-//! per attested position, which `GET /changes` serves as the row's `attest`
-//! member (`CommitMeta::entry`). It rides [`LineFile`]'s line discipline
-//! under a class of its own:
+//! The attest store: the marker slot's signature per attested position.
 //!
-//! One line per ATTESTED position — `alg` the marker's `sig_alg` TAG (the
+//! It is `feed-attest.log` (signed ops; the design record §7.3 (i)), which
+//! `GET /changes` serves as the row's `attest` member (`CommitMeta::entry`).
+//! It rides [`LineFile`]'s line discipline under a class of its own:
+//!
+//! One line per *attested* position — `alg` the marker's `sig_alg` tag (the
 //! wire's token is rendered at serve), `sig` the blob as lowercase hex,
-//! byte-equal to what the request presented — appended AT COMMIT from the
+//! byte-equal to what the request presented — appended at commit from the
 //! value the plain sequence admitted and handed the kernel, under the write
 //! path's serialization lock in the same `record` that appends `commits.log`;
-//! REBUILT on loss or a short tail from the kernel's markers in ONE scan —
+//! rebuilt on loss or a short tail from the kernel's markers in one scan —
 //! `Kernel::boundaries_above` the file's fence, every committed boundary
 //! above it with its slot, from one base (the operations design §3.3 step
-//! 2) — for every served position the journal still answers, ABOVE THE
-//! RECLAIM FLOOR alone — a position the journal refuses `Reclaimed` is
-//! neither rebuilt nor dropped, and its row renders `attest: null` (LOST),
-//! and the list is asked again at the floor the refusal names, for the
-//! positions above it ([`rebuilt_tail`]). Below the floor the checkpoint
-//! body holds no marker, so a line here is an entry signature's ONLY copy at
-//! the origin: there the store is PRIMARY state and not a projection — NEVER
-//! COMPACTED to the journal's retention (where `commits.log` and the four
-//! derived sidecars drop their entries below the floor at open, this file
-//! KEEPS them), neither prunable nor rebuildable, backed up by location with
-//! the board directory as `blobs/` is, its loss served as `null`. The
-//! coverage fence, the foreign-line purge and the stop on a failed append
-//! apply as in the four, and so does the TRUNCATION, which does not stop at
-//! the floor: trust ends at the first line that is torn or does not parse
+//! 2) — for every served position the journal still answers, above the
+//! reclaim floor alone — a position the journal refuses `Reclaimed` is
+//! neither rebuilt nor dropped, and its row renders `attest: null` (lost)
+//! where its line records the marker filled, and the list is asked again at
+//! the floor the refusal names, for the positions above it
+//! ([`rebuilt_tail`]). Below the floor the checkpoint body holds no marker,
+//! so a line here is an entry signature's *only* copy at the origin: there
+//! the store is primary state and not a projection — never compacted to the
+//! journal's retention (where `commits.log` and the four derived sidecars
+//! drop their entries below the floor at open, this file *keeps* them),
+//! neither prunable nor rebuildable, backed up by location with the board
+//! directory as `blobs/` is, its loss served as `null`. The coverage fence,
+//! the foreign-line purge and the stop on a failed append apply as in the
+//! four, and so does the truncation, which does not stop at the floor:
+//! trust ends at the first line that is torn or does not parse
 //! ([`LineFile::open`]), and every line after it is cut — below the floor
 //! too, where each was an entry signature's only copy. A crash tears the
-//! file's newest lines, at the head's end, which the journal still answers and
-//! the open rebuilds; a cut that reaches below the floor is damage to the
-//! file. The open names every cut on the operator stream with the last
-//! trusted position, the reclaim floor at this open and THE SIDE the cut
-//! reached ([`AttestCutLine`]) — REBUILT where every cut line lies above the
-//! floor, LOST between the edge they lie above and the floor otherwise. The
-//! edge is the greatest of what the open can witness: the last trusted
-//! position, the file being position-ordered; the position before the one a
-//! torn line at the file's end names, where its `at` stands whole; and the
-//! board term's, at or below which no write is attested ([`Attested`]). So a
-//! crash's tear reads as rebuilt wherever a witness names its side, and the
-//! board directory's backup is restored on a LOST cut alone. At HEAD no read
-//! serves a below-floor slot (`/changes` answers `410 history_reclaimed`
-//! below the feed's floor): the lines below it are kept for a read that does
-//! not yet exist, the class being the design record's and not this build's
-//! to narrow.
+//! file's newest lines, at the head's end, which the journal still answers
+//! and the open rebuilds; a cut that reaches below the floor is damage to
+//! the file. The open names every cut on the operator stream with the last
+//! trusted position, the reclaim floor at this open and *the side* the cut
+//! reached ([`AttestCutLine`]) — rebuilt where every cut line lies above the
+//! floor and the journal answered the rebuild; otherwise lost, between the
+//! edge they lie above and the floor, or above the floor where the journal
+//! refused the rebuild. The edge is the greatest of what the open can
+//! witness: the last trusted position, the file being position-ordered; the
+//! position before the one a torn line at the file's end names, where its
+//! `at` stands whole; and the board term's, at or below which no write is
+//! attested ([`Attested`]). So a crash's tear reads as rebuilt wherever a
+//! witness names its side, and the board directory's backup is restored on
+//! a lost cut alone. No read serves a below-floor slot (`/changes` answers
+//! `410 history_reclaimed` below the feed's floor): the lines below it are
+//! kept for a read no route of this build serves, the class being the design
+//! record's and not this build's to narrow.
 //!
 //! **Durable before the next commit, and a failed line halts writes**
 //! (SO-I5 (d): no signature the board keeps is lost by a crash, a power loss or
@@ -63,18 +65,19 @@
 //! `/health` probe waits on the fsync — and the line is on disk before any
 //! commit that could take the journal's copy away can begin; the open syncs
 //! what it rebuilt before the first commit, for the same reason. The four
-//! derived files are not synced: what they lose, the next open re-derives. A
-//! write or a sync that fails stops this file as a failed append stops theirs,
-//! and — the file being primary where theirs are projections — it halts the
-//! write path: the record answers [`super::AttestStoreFailed`], and the daemon
-//! refuses every later write until a restart, since any commit could trigger
-//! the checkpoint that deletes the journal copy the lost line depends on. The
-//! restart's open rebuilds the line from the journal, which the halt kept.
+//! derived files' appends are not synced: what they lose, the next open
+//! re-derives. A write or a sync that fails stops this file as a failed
+//! append stops theirs, and — the file being primary where theirs are
+//! projections — it halts the write path: the record answers
+//! [`super::AttestStoreFailed`], and the daemon refuses every later write
+//! until a restart, since any commit could trigger the checkpoint that
+//! deletes the journal copy the lost line depends on. The restart's open
+//! rebuilds the line from the journal, which the halt kept.
 //!
 //! What keeps the class is this card's privacy: [`AttestStore`]'s file is its
 //! own, and nothing rewrites it but [`LineFile::open`]'s purge of the lines
-//! above the head — another journal's — which copies every line of this
-//! journal verbatim, so no other card can compact it.
+//! above the head — another journal's — which copies every entry line of
+//! this journal verbatim, so no other card can compact it.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -96,7 +99,7 @@ use super::derived::{LineFile, OwedSync, SyncHandle};
 use super::{AttestStoreFailed, AttestStoreFigures};
 use crate::codec::parse_lower_hex_bytes;
 
-// The file is named BESIDE the fields its records carry, and both beside the
+// The file is named beside the fields its records carry, and both beside the
 // line's one writer ([`attest_fields`]) and its one reader
 // ([`attest_of_record`]): a write site that spelled a field apart from the
 // read site would write lines that replay as no slot.
@@ -113,19 +116,22 @@ const ATTEST_SIG: &str = "sig";
 /// The slots are resident at one blob (~3.4 KB under tag 1) per attested
 /// position `commits.log` serves, the window above the reclaim floor, trimmed
 /// with the log at every compaction ([`AttestStore::drop_at_or_below`]), so the
-/// journal's retained window bounds them. The file holds more: every line ever
-/// appended, the positions the log compacted away included, where the store is
-/// primary state.
+/// journal's retained window bounds them. The file holds more: every line
+/// appended that no cut or purge has taken, the positions the log compacted
+/// away included, where the store is primary state.
 pub(super) struct AttestStore {
     /// `feed-attest.log`: appended, replayed and fenced, and never compacted.
     file: LineFile,
-    /// Position → the marker slot, for the served positions — behind an
-    /// `Arc`, so a page rendered after the feed's lock is released
-    /// ([`super::Feed::page`]) clones a pointer, never a signature.
+    /// Position → the marker slot, for the served positions.
+    ///
+    /// Each slot sits behind an `Arc`, so a page rendered after the feed's
+    /// lock is released ([`super::Feed::page`]) clones a pointer, never a
+    /// signature.
     served: BTreeMap<u64, Arc<Attestation>>,
-    /// The classed door with the daemon's record ([`Lines`]), a clone held
-    /// from the open as the line files hold theirs: what the halt's line
-    /// (`operations.md` §1.1 row 33) is said through, once.
+    /// The classed door with the daemon's record ([`Lines`]).
+    ///
+    /// It is a clone held from the open as the line files hold theirs: what
+    /// the halt's line (`operations.md` §1.1 row 33) is said through, once.
     lines: Lines,
 }
 
@@ -141,37 +147,38 @@ impl AttestStore {
     /// [`SyncHandle`], duplicated once the replay is done: what the record step
     /// makes each line durable through, off the feed's lock.
     ///
-    /// A line this daemon cannot read (a tag of no signature, a blob of none,
-    /// hex it did not write) is counted and not held — said once per open with
-    /// the count and the first position (`operations.md` §1.1 row 10), the file
-    /// never compacted and the line never rewritten, so each open meets it
-    /// again: the row then renders `attest: null` where its line records the
-    /// marker filled, never an invented slot. A cut the replay made is said
-    /// once the rebuild has run, with the floor and the side it reached
-    /// ([`AttestCutLine`]), the floor the log's open probed
-    /// (`CommitsLog::floor_at_open`, the feed's one probe) — the same refusal
-    /// the rebuild below meets where its fence's base is gone, both the
-    /// kernel's one base selection naming the oldest retained checkpoint — and
-    /// the edge of the board's attested positions read off the head beside it
-    /// ([`Attested`]). The tail is every committed boundary above the file's
-    /// coverage whose slot is filled, listed by `Kernel::boundaries_above` in
-    /// one scan from one base ([`rebuilt_tail`]: the floor arm, and what a
-    /// refusal leaves), kept where the log serves the position — the
-    /// marker-mirroring rebuild, above the floor alone. An empty slot
-    /// contributes nothing; a refusal rebuilds nothing and drops nothing, and
-    /// the fence still closes over it: the journal will not answer it on a
-    /// later open either, and the row's own line says its slot is lost — so the
-    /// refusal is said once, in the kernel's words ([`RebuildRefusedLine`]).
+    /// A served position's line this daemon cannot read (a tag of no
+    /// signature, a blob of none, hex it did not write) is counted and not
+    /// held — said once per open with the count and the first position
+    /// (`operations.md` §1.1 row 10), the file never compacted and the line
+    /// never rewritten, so each open meets it again: the row then renders
+    /// `attest: null` where its line records the marker filled, never an
+    /// invented slot. A cut the replay made is said once the rebuild has run,
+    /// with the floor and the side it reached ([`AttestCutLine`]), the floor
+    /// the log's open probed (`CommitsLog::floor_at_open`, the open's one
+    /// probe) — the same refusal the rebuild below meets where its fence's
+    /// base is gone, both the kernel's one base selection naming the oldest
+    /// retained checkpoint — and the edge of the board's attested positions
+    /// read off the head beside it ([`Attested`]). The tail is every committed
+    /// boundary above the file's coverage whose slot is filled, listed by
+    /// `Kernel::boundaries_above` in one scan from one base ([`rebuilt_tail`]:
+    /// the floor arm, and what a refusal leaves), kept where the log serves
+    /// the position — the marker-mirroring rebuild, above the floor alone. An
+    /// empty slot contributes nothing; a refusal rebuilds nothing and drops
+    /// nothing, and the fence still closes over it: the journal will not
+    /// answer it on a later open either, and the row's own line says its slot
+    /// is lost — so the refusal is said once, in the kernel's words
+    /// ([`RebuildRefusedLine`]).
     ///
-    /// **The open's other lines**: the entry lines past the head the replay
-    /// purged, signatures a copy taken before this open still holds
+    /// **The open's other lines.** It says the entry lines past the head the
+    /// replay purged, signatures a copy taken before this open still holds
     /// ([`ForeignLinesLine`]); a file absent at this open where an attested
     /// position can lie at or below the reclaim floor, every signature it kept
     /// there gone ([`BegunAfreshLine`]); and, last, what the store holds — its
     /// size, never compacted, the slots resident — and what the rebuild wrote
     /// back ([`AttestOpenLine`]).
     ///
-    /// **Cost**: O(the file) to read it, a line at a time — holding one line
+    /// **Cost.** O(the file) to read it, a line at a time — holding one line
     /// and the served window, never the file, which keeps a line for every
     /// attested commit the board ever made — and, for the tail, one
     /// `Kernel::boundaries_above`: the base at or below the fence loaded and
@@ -183,9 +190,9 @@ impl AttestStore {
     /// head, the last commit attested or the board reopened twice — no base is
     /// loaded and no segment read. What it does not pay is a base and a scan
     /// per uncovered position: a whole checkpoint decoded per commit made since
-    /// the last open, which the fence's own motion — at an attested commit and
-    /// at this open's end, never at an unattested commit — made every reopen of
-    /// a board that took only unattested writes pay, a restart measured in
+    /// the last open, which — the fence moving at an attested commit and at
+    /// this open's end, never at an unattested commit — every reopen of a board
+    /// that took only unattested writes would pay, a restart measured in
     /// minutes to hours at a large world. Never a compaction: the store keeps
     /// what the log drops.
     ///
@@ -256,9 +263,10 @@ impl AttestStore {
             lines.say(Class::Failure, RebuildRefusedLine { coverage, head, account });
         }
         // The floor the log's open probed: `None` is a journal that still
-        // answers genesis, so every cut line is rebuilt and an absent file
-        // lost nothing — the floor is genesis, position 0. Beside it, where
-        // an attested position can lie at all, read off the head.
+        // answers genesis, so every cut line lies above the floor, rebuilt
+        // where the journal answered the rebuild, and an absent file lost
+        // nothing — the floor is genesis, position 0. Beside it, where an
+        // attested position can lie at all, read off the head.
         let floor = log.floor_at_open();
         let attested = Attested::of(engine.kernel().snapshot().world());
         if let Some(cut) = replayed.cut {
@@ -297,7 +305,7 @@ impl AttestStore {
     /// its twins (`Inner::drop_at_or_below`), at or below the fence one under
     /// the reclaim floor, where `/changes` answers `410 history_reclaimed` and
     /// no page renders a slot. The file keeps every line: below the floor it
-    /// is primary state (BW-01), and nothing here touches it.
+    /// is primary state, and nothing here touches it.
     pub(super) fn drop_at_or_below(&mut self, fence: u64) {
         self.served = self.served.split_off(&fence.saturating_add(1));
     }
@@ -351,26 +359,35 @@ impl AttestStore {
         self.file.settle(owed);
     }
 
-    /// The test seam behind `skepd::Daemon::attest_store_synced_through`:
-    /// the coverage the file's last successful sync made durable. Not a
-    /// stable API.
+    /// The test seam behind `skepd::Daemon::attest_store_synced_through`.
+    ///
+    /// It answers the coverage the file's last successful sync made durable.
+    /// Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn synced_through(&self) -> u64 {
         self.file.synced()
     }
 
-    /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`:
-    /// the file's next write fails at the OS ([`LineFile::make_unwritable`]).
-    /// A seam whose act failed PANICS here. Not a stable API.
+    /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`.
+    ///
+    /// The file's next write fails at the OS ([`LineFile::make_unwritable`]).
+    /// Not a stable API.
+    ///
+    /// # Panics
+    ///
+    /// A seam whose act failed panics here: the read-only handle on the file
+    /// could not be opened.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn fail_next_write(&mut self) {
         self.file.make_unwritable().expect("the test seam's read-only handle");
     }
 
-    /// The slot the store holds for a served position — `None` where it holds
-    /// none, which `CommitMeta::entry` renders `null` where the position's
-    /// line records the marker filled (LOST) and absent otherwise. A pointer,
-    /// cloned: the page that asks renders it after the feed's lock is gone.
+    /// Returns the slot the store holds for a served position.
+    ///
+    /// It is `None` where the store holds none, which `CommitMeta::entry`
+    /// renders `null` where the position's line records the marker filled
+    /// (lost) and absent otherwise. A pointer, cloned: the page that asks
+    /// renders it after the feed's lock is gone.
     pub(super) fn slot(&self, at: u64) -> Option<Arc<Attestation>> {
         self.served.get(&at).cloned()
     }
@@ -379,9 +396,10 @@ impl AttestStore {
 /// Row 33's words: the line the store could not make durable, and its cost.
 ///
 /// It is `operations.md` §1.1 row 33's line (SO-I5 (d)): the line and what
-/// the halt it answers costs. The words: `feed-attest.log: position {at}'s line is not durable
-/// ({cause}); every later write is refused until a restart, whose open
-/// rebuilds the line from the journal`, `{cause}` as [`IoCause`] words it.
+/// the halt it answers costs. The words: `feed-attest.log: position {at}'s
+/// line is not durable ({cause}); every later write is refused until a
+/// restart, whose open rebuilds the line from the journal`, `{cause}` as
+/// [`IoCause`] words it.
 /// On a full volume it adds `; free room on the volume first: the restart's
 /// open writes the line back and syncs it, and on a full volume it refuses
 /// and reads stop with it`, and for every other cause `; check the volume,
@@ -457,6 +475,7 @@ impl Attested {
 /// Row 9 for the attest store: the cut line's head, then the side it reached.
 ///
 /// It is `operations.md` §1.1 row 9's line (§3.6 step 3; §4 row 17).
+///
 /// **The edge.** Every cut line lies above an edge, the greatest of three
 /// witnesses: the last trusted position, the file being position-ordered;
 /// the position before the one a torn line at the file's end names, where
@@ -502,6 +521,10 @@ impl AttestCutLine {
     }
 
     /// Writes the whole lines the cut took with it, where it took any.
+    ///
+    /// # Errors
+    ///
+    /// The formatter's error, where its write fails.
     fn whole_after(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.cut.whole_after {
             Some(EntryLines { lines, first, last }) => {
@@ -546,9 +569,11 @@ impl std::fmt::Display for AttestCutLine {
     }
 }
 
-/// Row 10's words (`operations.md` §1.1 row 10): `feed-attest.log: {n} slots
+/// Row 10's words: the slots this daemon cannot read, one line per open.
+///
+/// It is `operations.md` §1.1 row 10's line: `feed-attest.log: {n} slots
 /// this daemon cannot read, the first at position {p}; their rows serve
-/// attest: null, the lines kept as written` — one line per open.
+/// attest: null, the lines kept as written`.
 ///
 /// A pure value, pinned by `to_string()` in the unit suite; emitted under
 /// `Class::Failure` by [`AttestStore::open`].
@@ -679,30 +704,32 @@ impl std::fmt::Display for AttestOpenLine {
     }
 }
 
-/// THE TAIL REBUILT (the operations design §3.3 step 2): every committed
-/// boundary above `coverage` — the file's fence — whose marker slot is
-/// filled, in `Seq` order, read in ONE scan: `Kernel::boundaries_above` the
-/// fence, from one base at or below it to the journal's end, where a read
-/// per position loaded a base per position. Empty slots contribute nothing.
-/// A fence at the head asks nothing of the journal: nothing lies above it to
-/// rebuild, so no read is made and no refusal can be met — a kernel that
-/// keeps no journal refuses every history read, an empty range included.
+/// Returns the tail rebuilt (the operations design §3.3 step 2).
 ///
-/// THE FLOOR: where the fence's base is gone — the read refuses `Reclaimed`
-/// naming a `floor`, the oldest retained checkpoint, above the fence — the
-/// list is asked again AT the floor, where the read answers from the base
-/// embodying it (its base may sit at its position, where `attestation_at`'s
-/// must sit below), and every position in `(coverage, floor]` stays as it
-/// was: neither rebuilt nor dropped, its row LOST. A floor at or below the
-/// fence names a base that refused to load, which asking again would meet
-/// again; asked once. Every other refusal — a `Reclaimed` naming no floor,
-/// at-rest damage, I/O — rebuilds nothing, as the per-position read's
-/// refusal did: the fence still closes over the tail, the journal will not
-/// answer it at a later open either, and each row's own line says LOST —
-/// the refusal answered beside the list, in the kernel's words, for the
-/// open to say. No retry: the feed opens before the listener and the
-/// checkpoint thread, so nothing appends or reclaims under this read and
-/// its two transient refusals cannot occur here.
+/// It is every committed boundary above `coverage` — the file's fence —
+/// whose marker slot is filled, in `Seq` order, read in one scan:
+/// `Kernel::boundaries_above` the fence, from one base at or below it to the
+/// journal's end, where a read per position would load a base per position.
+/// Empty slots contribute nothing. A fence at the head asks nothing of the
+/// journal: nothing lies above it to rebuild, so no read is made and no
+/// refusal can be met — a kernel that keeps no journal refuses every history
+/// read, an empty range included.
+///
+/// **The floor.** Where the fence's base is gone — the read refuses
+/// `Reclaimed` naming a `floor`, the oldest retained checkpoint, above the
+/// fence — the list is asked again *at* the floor, where the read answers
+/// from the base embodying it (its base may sit at its position, where
+/// `attestation_at`'s must sit below), and every position in
+/// `(coverage, floor]` stays as it was: neither rebuilt nor dropped, its row
+/// lost. A floor at or below the fence names a base that refused to load,
+/// which asking again would meet again; asked once. Every other refusal — a
+/// `Reclaimed` naming no floor, at-rest damage, I/O — rebuilds nothing: the
+/// fence still closes over the tail, the journal will not answer it at a
+/// later open either, and each row's own line says lost — the refusal
+/// answered beside the list, in the kernel's words, for the open to say. No
+/// retry: the feed opens before the listener and the checkpoint thread, so
+/// nothing appends or reclaims under this read and its two transient
+/// refusals cannot occur here.
 fn rebuilt_tail(engine: &Engine, coverage: u64) -> (Vec<(u64, Attestation)>, Option<String>) {
     let kernel = engine.kernel();
     if coverage >= kernel.current_seq().0 {
@@ -723,10 +750,11 @@ fn rebuilt_tail(engine: &Engine, coverage: u64) -> (Vec<(u64, Attestation)>, Opt
     }
 }
 
-/// One attest-store record's two fields for the marker slot `a`: the tag as
-/// a number, the blob as lowercase hex — the spelling [`attest_of_record`]
-/// reads back, and the one the codec's `j_attest` renders on the wire from
-/// the same value (the token for the tag there).
+/// Returns one attest-store record's two fields for the marker slot `a`.
+///
+/// They are the tag as a number and the blob as lowercase hex — the spelling
+/// [`attest_of_record`] reads back, and the one the codec's `j_attest`
+/// renders on the wire from the same value (the token for the tag there).
 fn attest_fields(a: &Attestation) -> Vec<(&'static str, Value)> {
     vec![
         (ATTEST_ALG, Value::Number(u64::from(a.sig_alg()).into())),
@@ -734,14 +762,15 @@ fn attest_fields(a: &Attestation) -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// The marker slot one replayed attest-store record holds — [`attest_fields`]'s
-/// inverse — or `None` where its spelling is not [`attest_fields`]'s: a tag
-/// past a byte or of no signature (`0`), a blob of no bytes, hex not in
-/// `hex_string`'s own lowercase. It admits EVERY slot `Attestation::new`
-/// admits — a tag no `SIG_ALGS` row names included, as a slot rebuilt from a
-/// marker another build wrote may carry one — so a consumer asks the slot's
-/// row of the table and owns the answer for a tag with none, as the codec's
-/// `j_attest` does.
+/// Returns the marker slot one replayed attest-store record holds, or `None`.
+///
+/// It is [`attest_fields`]'s inverse, `None` where the record's spelling is
+/// not [`attest_fields`]'s: a tag past a byte or of no signature (`0`), a
+/// blob of no bytes, hex not in `hex_string`'s own lowercase. It admits
+/// *every* slot `Attestation::new` admits — a tag no `SIG_ALGS` row names
+/// included, as a slot rebuilt from a marker another build wrote may carry
+/// one — so a consumer asks the slot's row of the table and owns the answer
+/// for a tag with none, as the codec's `j_attest` does.
 fn attest_of_record(m: &Map<String, Value>) -> Option<Attestation> {
     let tag = u8::try_from(m.get(ATTEST_ALG)?.as_u64()?).ok()?;
     let sig = parse_lower_hex_bytes(m.get(ATTEST_SIG)?.as_str()?)?;

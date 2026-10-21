@@ -10,8 +10,8 @@ use super::LockWrite;
 
 /// Per-`(SessionId, ReqId)` memo of marshaled credential acks.
 ///
-/// It is skepd's own, because M10's memo exposes no `recall` accessor in
-/// this workspace (the semantics are the pinned ones): the original ack,
+/// It is the daemon's own, because M10's memo exposes no `recall` accessor
+/// in this workspace (the semantics are the pinned ones): the original ack,
 /// byte-identical, no execution; kind-blind on a hit; uptime-scoped;
 /// consulted inside `credential_lock.write()` before the precheck; purged
 /// with its session. It stores marshaled bytes at execute time (AUTH-7.20's
@@ -64,18 +64,17 @@ impl CredMemo {
     ///
     /// It is the one memo method that does not take the credential write
     /// lock, and by necessity: it is reached from
-    /// `skepd::Daemon::close_binding`, which the resolution path
-    /// calls under the read lock (the plain sequence), under the write lock
-    /// (the credential sequence), and under neither (the route level) — so
-    /// a write guard here would be unsatisfiable from the first and a
-    /// self-deadlock from the second. Of the two interleavings against
-    /// `store`, purge-then-store leaves an entry no live token names —
-    /// benign for the *answer*, since that `SessionId` is gone and nothing
-    /// can recall it, and permanent for *retention*, since this method is
-    /// keyed by session and nothing else removes an entry; and
-    /// store-then-purge merely loses a memoization for a session already
-    /// dead, whose retry resolves Guest and never reaches
-    /// [`CredMemo::recall`].
+    /// `skepd::Daemon::close_binding`, which the resolution path calls under
+    /// the read lock (the plain and registry sequences, and the blob upload's
+    /// finish), under the write lock (the credential sequence), and under
+    /// neither (the route level) — so a write guard here would be
+    /// unsatisfiable from the first and a self-deadlock from the second. Of
+    /// the two interleavings against `store`, purge-then-store leaves an entry
+    /// no live token names — benign for the *answer*, since that `SessionId`
+    /// is gone and nothing can recall it, and permanent for *retention*, since
+    /// this method is keyed by session and nothing else removes an entry; and
+    /// store-then-purge merely loses a memoization for a session already dead,
+    /// whose retry resolves Guest and never reaches [`CredMemo::recall`].
     pub fn purge(&self, sid: SessionId) {
         self.sessions.lock().remove(&sid);
     }

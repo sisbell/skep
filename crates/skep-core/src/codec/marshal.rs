@@ -1,5 +1,7 @@
-//! The codec's MARSHAL side: every shape this crate renders on the
-//! operation channel — M10's `Response`s, the canonical request encoding
+//! The codec's marshal side: the operation channel's shapes and name tables.
+//!
+//! It holds every shape this crate renders on the operation channel —
+//! M10's `Response`s, the canonical request encoding
 //! `JsonCodec::marshal_request` writes, the daemon's own rejections
 //! (`credential_refused_reply`, `registry_refused_reply`, the `key_set` row)
 //! — and the two name tables (`op_name`, `code_name`) both directions spell
@@ -22,28 +24,31 @@ use skep_util::json::{hex_string, obj};
 
 use super::to_bytes;
 
-/// A rejection the DAEMON originates (the `credential_refused` and
-/// `registry_refused` families, and the `key_set` row's `not_an_account`),
-/// byte-shaped exactly as [`j_rejection`] marshals M10's:
-/// `{"code","disposition","op","resp"}` plus the optional `detail`. The
-/// daemon cannot construct M10's
-/// `Rejection` for codes M10 does not carry (the `RejectCode` delta is out
-/// of this round's upstream reach), so the wire shape is built here — one
-/// shape on the wire either way.
+/// A rejection the *daemon* originates, in the wire's one rejection shape.
+///
+/// It is the `credential_refused` and `registry_refused` families, and the
+/// `key_set` row's `not_an_account`, byte-shaped exactly as [`j_rejection`]
+/// marshals M10's: `{"code","disposition","op","resp"}` plus the optional
+/// `detail`. The daemon cannot construct M10's `Rejection` for codes M10
+/// does not carry (the `RejectCode` delta lies upstream), so the wire shape
+/// is built here — one shape on the wire either way.
 ///
 /// One value rather than three adjacent `&str`s: `op` and `code` are the
-/// same type and mean opposite things, so as arguments they sat one
+/// same type and mean opposite things, so as arguments they would sit one
 /// transposition away from a well-formed rejection naming the code as its
 /// op — the same reason `skepd::HttpRequest` is one value rather than
-/// five. `disposition` is typed because [`disposition_name`] is the table
+/// seven. `disposition` is typed because [`disposition_name`] is the table
 /// that spells it, and `code` takes [`code_name`]'s output wherever M10
 /// carries the code.
 struct DaemonRejection<'a> {
-    /// The refused op's wire name: [`op_name`]'s output, or the daemon's
-    /// own name for a row M10 has no `OpKind` for.
+    /// The refused op's wire name.
+    ///
+    /// It is [`op_name`]'s output, or the daemon's own name for a row M10
+    /// has no `OpKind` for.
     op: &'a str,
-    /// [`code_name`]'s output, or a code M10 does not carry
-    /// ([`CREDENTIAL_REFUSED`], [`REGISTRY_REFUSED`]).
+    /// [`code_name`]'s output, or a code M10 does not carry.
+    ///
+    /// Those codes are [`CREDENTIAL_REFUSED`] and [`REGISTRY_REFUSED`].
     code: &'a str,
     disposition: Disposition,
     detail: Option<String>,
@@ -62,18 +67,20 @@ fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
     to_bytes(&obj(pairs))
 }
 
-/// The `key_set` answer (AUTH-6.18–6.20) — the daemon's own
-/// OPERATION-CHANNEL shape, rendered here because this is where that
-/// channel's shapes are rendered (the codec's module doc draws the line,
-/// and the transport's own shapes sit on the other side of it).
+/// Marshals the `key_set` answer (AUTH-6.18–6.20).
+///
+/// It is the daemon's own operation-channel shape, rendered here because
+/// this is where that channel's shapes are rendered (the codec's module doc
+/// draws the line, and the transport's own shapes sit on the other side of
+/// it).
 ///
 /// `set` is [`crate::auth::key_set_of`]'s answer over the world the
 /// route holds, read off that world's own identity slice: `None` is the
-/// not-an-account case and answers the EXISTING code `not_an_account`; a
+/// not-an-account case and answers the existing code `not_an_account`; a
 /// keyless account answers empty lists. Entries ride in the key set's own
 /// fingerprint order.
 ///
-/// `as_of` is a stamp AND a bound: every entry is the account's set AS OF
+/// `as_of` is a stamp *and* a bound: every entry is the account's set as of
 /// that position, since the world the route holds carries its table
 /// (AUTH-2.79) and the caller stamps the answer with that world's own
 /// coordinate — the head snapshot's `seq` on `/op`, the requested position on
@@ -118,22 +125,26 @@ pub fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     ]))
 }
 
-/// One daemon-originated CREDENTIAL refusal, marshaled (AUTH-3.53–3.54):
-/// `code: credential_refused` always; `detail` the machine token the refusal
-/// names itself by; `disposition` the class it names for itself —
-/// `permanent` for the family, the attestation codes' own beside it; and
-/// `op` the refused op's own wire name, lowered from its `OpKind` through
-/// [`op_name`]'s table so no caller holds one to pass on.
+/// Marshals one daemon-originated credential refusal (AUTH-3.53–3.54).
+///
+/// Its fields: `code: credential_refused` always; `detail` the machine token
+/// the refusal names itself by; `disposition` the class it names for itself
+/// — `permanent` for the family, the attestation codes' own and the media
+/// door's `index_rebuilding`, `retry`, beside it; and `op` the refused op's
+/// own wire name, lowered from its `OpKind` through [`op_name`]'s table so
+/// no caller holds one to pass on.
 ///
 /// Here rather than at the route, for [`key_set_reply`]'s reason: this is
-/// the family's WIRE SHAPE and this is where those shapes are rendered. The
-/// CODE is the one field the spec fixes, so choosing it here leaves a caller
-/// the three that vary and leaves `CREDENTIAL_REFUSED`, `DaemonRejection`
-/// and `daemon_rejected` with no reader outside this module.
+/// the family's wire shape and this is where those shapes are rendered. The
+/// `code` is the one field the spec fixes, so choosing it here leaves a
+/// caller the three that vary and leaves `CREDENTIAL_REFUSED`,
+/// `DaemonRejection` and `daemon_rejected` with no reader outside this
+/// module.
 ///
-/// The token rides as an owned `String` — the refusal's own `token()`
-/// answer, moved rather than copied — so this module renders the family's
-/// vocabulary without depending on the type that enumerates it, the
+/// The token rides as an owned `String` — a credential refusal's own
+/// `token()` answer, moved rather than copied, or a media door refusal's
+/// token, copied in by its caller — so this module renders the family's
+/// vocabulary without depending on the types that enumerate it, the
 /// arrangement [`key_set_reply`] has with the identity slice.
 pub fn credential_refused_reply(
     op: OpKind,
@@ -144,21 +155,23 @@ pub fn credential_refused_reply(
         op: op_name(op),
         code: CREDENTIAL_REFUSED,
         // `Permanent` for the whole family but the two attestation codes
-        // (signed ops; the design record §7.3 (iii)): the refusal names its
-        // own class, so the family's uniformity is the producers' and not
-        // this renderer's.
+        // (signed ops; the design record §7.3 (iii)) and the media door's
+        // `index_rebuilding`, `Retry`: the refusal names its own class, so the
+        // family's uniformity is the producers' and not this renderer's.
         disposition,
         detail: Some(token),
     })
 }
 
-/// One REGISTRY-sequence refusal, marshaled (the record grade for registry
-/// records, 2b; wire.md §Registry): the credential family's row under a code
-/// of its own, `REGISTRY_REFUSED`, so a client tells the two families apart
-/// — `detail` the refusal's one token, `disposition` its own class, `op`
-/// lowered through [`op_name`]. Here for [`credential_refused_reply`]'s
-/// reason: the family's wire shape is rendered where every operation-channel
-/// shape is, through `daemon_rejected`.
+/// Marshals one registry-sequence refusal (wire.md §Registry).
+///
+/// The sequence is the record grade for registry records (2b). The refusal
+/// is the credential family's row under a code of its own,
+/// `REGISTRY_REFUSED`, so a client tells the two families apart — `detail`
+/// the refusal's one token, `disposition` its own class, `op` lowered
+/// through [`op_name`]. Here for [`credential_refused_reply`]'s reason: the
+/// family's wire shape is rendered where every operation-channel shape is,
+/// through `daemon_rejected`.
 pub fn registry_refused_reply(
     op: OpKind,
     token: String,
@@ -172,10 +185,12 @@ pub fn registry_refused_reply(
     })
 }
 
-/// [`p_attest`](super::p_attest)'s inverse: the tag back to its token, the
-/// blob to hex — the request's `attest` member, and (wire v7.11) the change
-/// feed's, rendered from the marker slot the attest store mirrors, so the
-/// two are one spelling.
+/// Renders an attestation as the wire's `attest` member.
+///
+/// It is [`p_attest`](super::p_attest)'s inverse: the tag back to its token,
+/// the blob to hex — the request's `attest` member, and (wire v7.11) the
+/// change feed's, rendered from the marker slot the attest store mirrors, so
+/// the two are one spelling.
 pub(crate) fn j_attest(a: &Attestation) -> Value {
     let alg = SigAlgRow::of_tag(a.sig_alg())
         .map_or_else(|| format!("<unknown tag {}>", a.sig_alg()), |row| row.token.to_string());
@@ -184,10 +199,11 @@ pub(crate) fn j_attest(a: &Attestation) -> Value {
 
 // ── marshal (Request → wire, the canonical inverse) ──────────────────────
 
-/// The optional `published` pair on a minting op: emitted only when the flag
-/// is present (PUB-8.16 — absent is the wire default, so a `None` marshals to
-/// no field and `parse ∘ marshal` is a fixpoint). `Some` renders the bare
-/// boolean.
+/// Returns the optional `published` pair on a minting op.
+///
+/// It is emitted only when the flag is present (PUB-8.16 — absent is the
+/// wire default, so a `None` marshals to no field and `parse ∘ marshal` is a
+/// fixpoint). `Some` renders the bare boolean.
 fn published_pair(published: &Option<bool>) -> Vec<(&'static str, Value)> {
     match published {
         Some(b) => vec![("published", Value::Bool(*b))],
@@ -195,8 +211,10 @@ fn published_pair(published: &Option<bool>) -> Vec<(&'static str, Value)> {
     }
 }
 
-/// One arm per `Op` variant; the name comes from the SAME [`op_name`] table
-/// the rejection marshal uses, so the two directions cannot drift.
+/// Returns an op's wire name and member pairs, one arm per `Op` variant.
+///
+/// The name comes from the *same* [`op_name`] table the rejection marshal
+/// uses, so the two directions cannot drift.
 pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
     match op {
         Op::CreateNewDocument { account, published } => {
@@ -224,7 +242,7 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             let mut pairs =
                 vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
             // Canonical: the declaration rides only when made, as the class
-            // type it names (PUB-2.64) — absent IS `Undeclared` on the wire,
+            // type it names (PUB-2.64) — absent *is* `Undeclared` on the wire,
             // so an undeclared insert marshals to no field and
             // `parse ∘ marshal` is a fixpoint.
             match deposit {
@@ -275,7 +293,7 @@ pub(super) fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
                 ("ty", j_slotarg(ty)),
             ];
             // Canonical: the `replaces` member rides only when present —
-            // absent IS the EMPTY state on the wire — so a member-less
+            // absent *is* the empty state on the wire — so a member-less
             // `make_link` marshals to no field and `parse ∘ marshal` is a
             // fixpoint.
             if let Some(named) = replaces {
@@ -409,7 +427,7 @@ pub(super) fn j_response(r: &Response) -> Value {
             ("i_delivery", vec![("items", j_iitems(items)), ("as_of", j_seq(*as_of))])
         }
         // The content-frontier read: `next`, the next unminted content
-        // ordinal, a natural as every count rides.
+        // ordinal, a natural as every ordinal rides.
         Response::Frontier { next, as_of } => {
             ("frontier", vec![("next", j_nat(next)), ("as_of", j_seq(*as_of))])
         }
@@ -427,9 +445,9 @@ pub(super) fn j_response(r: &Response) -> Value {
                 ("as_of", j_seq(*as_of)),
             ],
         ),
-        // The owner-of-address answer (AUTH-6.37): ω UNPROJECTED. `prefix` and
-        // `principal` are two wire keys over ONE optional value — M3's own
-        // registry entry — so they are ALWAYS present and null TOGETHER,
+        // The owner-of-address answer (AUTH-6.37): ω *unprojected*. `prefix`
+        // and `principal` are two wire keys over *one* optional value — M3's
+        // own registry entry — so they are always present and null together,
         // exactly where no registered principal's prefix contains the address
         // asked (`doc_metadata`'s `birth`/`birth_extent` pairing, and for its
         // reason). Allocated iff `prefix` equals the address asked: that test
@@ -483,17 +501,17 @@ pub(super) fn j_response(r: &Response) -> Value {
         // The doc-metadata answer (wire v7.6, PUB-8.12): the trunk document,
         // its publication bit, its owner account, its birth version with
         // that version's base extent, and — the signed-ops design record's
-        // D25, arm (c′) — the SHOT TERMS of the address named. `owner` is a
-        // payload option — null stands only so the shape never invents an
-        // account; a registered document always carries one. `birth` and
-        // `birth_extent` are two wire keys over ONE optional value, so they
+        // D25 — the shot terms of the address named. `owner` is a payload
+        // option — null stands only so the shape never invents an account; a
+        // registered document always carries one. `birth` and
+        // `birth_extent` are two wire keys over *one* optional value, so they
         // are null together while the document has no member yet and carried
         // together once it has. `placed` and `base_extent` are two wire keys
         // over the terms: both null where the address named carries none (a
-        // trunk, a version-minted birth, a pre-terms member); `placed`
-        // carried and `base_extent` null for a member the birth shape minted
-        // — the null IS the birth bit there; both carried otherwise. `source`
-        // (the fork-source design record's arm A) is a payload option over
+        // trunk, a version-minted birth, a member minted without terms);
+        // `placed` carried and `base_extent` null for a member the birth shape
+        // minted — the null *is* the birth bit there; both carried otherwise.
+        // `source` (the fork-source design record) is a payload option over
         // the fork source of the address named: the member or bare document a
         // `version` snapshotted into it, null where no `version` minted it.
         Response::DocMetadata { doc, published, owner, birth, terms, source, as_of } => (
@@ -522,9 +540,9 @@ pub(super) fn j_response(r: &Response) -> Value {
         Response::EditionClaims { claims, as_of } => {
             ("edition_claims", vec![("claims", j_edition_claims(claims)), ("as_of", j_seq(*as_of))])
         }
-        // The any-principal discovery read (PUB-8.47): one row per COVERED
+        // The any-principal discovery read (PUB-8.47): one row per covered
         // content prefix with the issuers who granted it, in prefix order;
-        // `rows` is always present and EMPTY for the guest — an answer.
+        // `rows` is always present and empty for the guest — an answer.
         Response::UniversalGrants { rows, as_of } => {
             ("universal_grants", vec![("rows", j_universal_grants(rows)), ("as_of", j_seq(*as_of))])
         }
@@ -596,9 +614,11 @@ fn j_nat(n: &Nat) -> Value {
     Value::String(n.to_string())
 }
 
-/// Dotted-decimal, zeros explicit, components canonical decimal — M1's own
-/// `Display`, so the wire form and a tumbler's canonical text are ONE
-/// rendering rather than two that must be kept equal. (The conformance
+/// Renders a tumbler in its wire form.
+///
+/// The form is dotted-decimal, zeros explicit, components canonical decimal
+/// — M1's own `Display`, so the wire form and a tumbler's canonical text are
+/// *one* rendering rather than two that must be kept equal. (The conformance
 /// goldens read the same encoding.)
 fn j_tum(t: &Tumbler) -> Value {
     Value::String(t.to_string())
@@ -644,7 +664,9 @@ fn j_vspecs(vs: &[VSpec]) -> Value {
     Value::Array(vs.iter().map(j_vspec).collect())
 }
 
-/// [`p_shot_run`](super::p_shot_run)'s inverse: the origin, the run's start and its width.
+/// Renders a shot run: the origin, the run's start and its width.
+///
+/// It is [`p_shot_run`](super::p_shot_run)'s inverse.
 fn j_shot_run(r: &ShotRun) -> Value {
     obj(vec![
         ("origin", j_addr(&r.origin)),
@@ -657,8 +679,10 @@ fn j_shot_runs(rs: &[ShotRun]) -> Value {
     Value::Array(rs.iter().map(j_shot_run).collect())
 }
 
-/// [`p_slotarg`](super::p_slotarg)'s inverse: the Resolve form is the bare v-spec array
-/// (byte-identical to v4), the Addrs form the tagged object.
+/// Renders a slot argument, [`p_slotarg`](super::p_slotarg)'s inverse.
+///
+/// The Resolve form is the bare v-spec array (byte-identical to v4), the
+/// Addrs form the tagged object.
 fn j_slotarg(s: &SlotArg) -> Value {
     match s {
         SlotArg::Resolve(v) => j_vspecs(v),
@@ -674,7 +698,9 @@ fn j_specs(ss: &[Spec]) -> Value {
     Value::Array(ss.iter().map(j_spec).collect())
 }
 
-/// [`p_ispan`](super::p_ispan)'s inverse: the span's start address and its width.
+/// Renders an I-span: the span's start address and its width.
+///
+/// It is [`p_ispan`](super::p_ispan)'s inverse.
 fn j_ispan(s: &ISpan) -> Value {
     obj(vec![("start", j_addr(&s.start)), ("width", j_nat(&s.width))])
 }
@@ -691,22 +717,23 @@ fn j_regions(rs: &[RegionSpec]) -> Value {
     Value::Array(rs.iter().map(j_region).collect())
 }
 
-/// The canonical rendering of a position-value sequence into wire items —
-/// a request's `values` array or a delivery's `items` array — and the one
-/// place its rule lives: consecutive single-byte values accumulate into a
-/// run rendered as ONE item (UTF-8 judged on the whole run, else
-/// `{"hex"}`); a composite value flushes the run and renders as its own
-/// atom item, never coalesced with a neighbor; a delivery's byte-run item,
-/// M6's `Bytes` — a maximal run of single-byte positions read out of one
-/// stored stretch — feeds the pending run byte by byte, so the wire item is
-/// the same whether the store held the run as one entry or as one value per
-/// byte. Maximal runs are what make the rendering injective — two distinct
-/// position-value sequences never render alike — and what re-canonicalize
-/// the parse-side normalizations (element boundaries between adjacent
-/// per-byte forms, one-byte atoms), so `parse(marshal_request(r))`
-/// reproduces `r`.
+/// The canonical rendering of a position-value sequence into wire items.
 ///
-/// `utf8` is the ONLY thing the two renderings differ by: a request
+/// The items are a request's `values` array or a delivery's `items` array,
+/// and this is the one place the rendering's rule lives: consecutive
+/// single-byte values accumulate into a run rendered as *one* item (UTF-8
+/// judged on the whole run, else `{"hex"}`); a composite value flushes the
+/// run and renders as its own atom item, never coalesced with a neighbor; a
+/// delivery's byte-run item, M6's `Bytes` — a maximal run of single-byte
+/// positions read out of one stored stretch — feeds the pending run byte by
+/// byte, so the wire item is the same whether the store held the run as one
+/// entry or as one value per byte. Maximal runs are what make the rendering
+/// injective — two distinct position-value sequences never render alike —
+/// and what re-canonicalize the parse-side normalizations (element
+/// boundaries between adjacent per-byte forms, one-byte atoms), so
+/// `parse(marshal_request(r))` reproduces `r`.
+///
+/// `utf8` is the only thing the two renderings differ by: a request
 /// `values` element is the bare string, a delivery item is
 /// `{"content": …}`.
 #[derive(Debug)]
@@ -721,8 +748,10 @@ impl ValueItems {
         ValueItems { out: Vec::new(), byte_run: Vec::new(), utf8 }
     }
 
-    /// One position's value: a single-byte value joins the pending run, a
-    /// composite one breaks it and becomes its own atom item.
+    /// Adds one position's value to the items.
+    ///
+    /// A single-byte value joins the pending run, a composite one breaks it
+    /// and becomes its own atom item.
     fn value(&mut self, v: &Val) {
         if let [b] = v.as_bytes() {
             self.byte_run.push(*b);
@@ -732,23 +761,28 @@ impl ValueItems {
         }
     }
 
-    /// A run of single-byte positions, as one delivery item: every byte
-    /// joins the pending run — the run a one-byte value joins — so the item
-    /// rendered is the one the per-value delivery rendered, and a run that
-    /// meets a one-byte value at its edge coalesces with it.
+    /// Adds a run of single-byte positions, one delivery item.
+    ///
+    /// Every byte joins the pending run — the run a one-byte value joins — so
+    /// the item rendered is the one a per-value delivery renders, and a run
+    /// that meets a one-byte value at its edge coalesces with it.
     fn bytes(&mut self, run: &[u8]) {
         self.byte_run.extend_from_slice(run);
     }
 
-    /// A rendered item that is not a content value (a delivery `{"ref"}`):
-    /// it breaks the run, since a run is consecutive by definition.
+    /// Adds a rendered item that is not a content value.
+    ///
+    /// It is a delivery `{"ref"}` or `{"withheld"}`, and it breaks the run,
+    /// since a run is consecutive by definition.
     fn item(&mut self, v: Value) {
         self.flush();
         self.out.push(v);
     }
 
-    /// Emit the pending run, if any: `utf8`'s form when the whole run
-    /// decodes, else `{"hex"}` over its raw bytes.
+    /// Emits the pending run, if any.
+    ///
+    /// The item is `utf8`'s form when the whole run decodes, else `{"hex"}`
+    /// over its raw bytes.
     fn flush(&mut self) {
         if self.byte_run.is_empty() {
             return;
@@ -766,8 +800,10 @@ impl ValueItems {
     }
 }
 
-/// The canonical `values` encoding — [`p_values`](super::p_values)'s inverse, under
-/// [`ValueItems`]' rule with the bare-string run form.
+/// Renders the canonical `values` encoding.
+///
+/// It is [`p_values`](super::p_values)'s inverse, under [`ValueItems`]' rule
+/// with the bare-string run form.
 fn j_values(vs: &[Val]) -> Value {
     let mut out = ValueItems::new(Value::String);
     for v in vs {
@@ -776,9 +812,10 @@ fn j_values(vs: &[Val]) -> Value {
     out.finish()
 }
 
-/// One composite value as its atom item: `{"atom"}` when its bytes are
-/// UTF-8, else `{"atom_hex"}` — exactly one value per item, never coalesced
-/// with its neighbors.
+/// Renders one composite value as its atom item.
+///
+/// The item is `{"atom"}` when its bytes are UTF-8, else `{"atom_hex"}` —
+/// exactly one value per item, never coalesced with its neighbors.
 fn j_atom(v: &Val) -> Value {
     match std::str::from_utf8(v.as_bytes()) {
         Ok(s) => obj(vec![("atom", Value::String(s.to_owned()))]),
@@ -826,9 +863,12 @@ fn j_window(w: &Window) -> Value {
     ])
 }
 
-/// Delivery items — [`ValueItems`]' rule with the `{"content"}` run form,
-/// plus link positions as `{"ref"}`. The item key names the granularity, so
-/// a client always knows which world it is looking at.
+/// Renders a delivery's items.
+///
+/// They follow [`ValueItems`]' rule with the `{"content"}` run form, plus
+/// link positions as `{"ref"}` and withheld runs as `{"withheld"}`. The item
+/// key names the granularity, so a client always knows which world it is
+/// looking at.
 fn j_items(items: &[DeliveryItem]) -> Value {
     let mut out = ValueItems::new(|s| obj(vec![("content", Value::String(s))]));
     for it in items {
@@ -836,10 +876,10 @@ fn j_items(items: &[DeliveryItem]) -> Value {
             DeliveryItem::Content(v) => out.value(v),
             DeliveryItem::Bytes(run) => out.bytes(run),
             DeliveryItem::Ref(a) => out.item(obj(vec![("ref", j_addr(a))])),
-            // The withheld arm (lane 3.3, §4; PUB-6.41): one item per masked
-            // RUN at its own position, `{"withheld": {"origin", "width"}}` —
-            // `out.item` breaks the pending run, so it is never coalesced with
-            // a neighbour (PUB-6.58).
+            // The withheld arm (PUB-6.41): one item per masked *run* at its
+            // own position, `{"withheld": {"origin", "width"}}` — `out.item`
+            // breaks the pending run, so it is never coalesced with a
+            // neighbour (PUB-6.58).
             DeliveryItem::Withheld { origin, width } => out.item(obj(vec![(
                 "withheld",
                 obj(vec![("origin", j_addr(origin)), ("width", j_nat(width))]),
@@ -849,14 +889,21 @@ fn j_items(items: &[DeliveryItem]) -> Value {
     out.finish()
 }
 
-/// The read by identity's items (wire.md §The response envelope,
-/// `i_delivery`): one object per I-position asked, `at` its address and
-/// `value` the value M4 holds there — rendered as the delivery renders ONE
-/// value, [`ValueItems`]' rule over a run of one: `{"content"}` or `{"hex"}`
-/// for a single-byte value, `{"atom"}` or `{"atom_hex"}` for a composite —
-/// or `null`, a payload option, where the position holds none. Never
-/// coalesced across positions: the items are the request's positions, one
-/// each, so a client reads a value at the address it asked.
+/// Renders the items of the read by identity, `i_delivery`.
+///
+/// They are one object per I-position asked (wire.md §The response
+/// envelope): `at` its address and `value` the value M4 holds there —
+/// rendered as the delivery renders *one* value, [`ValueItems`]' rule over
+/// a run of one: `{"content"}` or `{"hex"}` for a single-byte value,
+/// `{"atom"}` or `{"atom_hex"}` for a composite — or `null`, a payload
+/// option, where the position holds none. Never coalesced across positions:
+/// the items are the request's positions, one each, so a client reads a
+/// value at the address it asked.
+///
+/// # Panics
+///
+/// Panics if a value renders as no item, which it cannot: [`ValueItems`]
+/// renders one value as exactly one item.
 fn j_iitems(items: &[IItem]) -> Value {
     Value::Array(
         items
@@ -879,8 +926,9 @@ fn j_iitems(items: &[IItem]) -> Value {
     )
 }
 
-/// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,
-/// 3 = TYPE).
+/// Renders a link as its positional slots, 1-based on the wire as in M7.
+///
+/// The slots are 1 = from, 2 = to, 3 = type.
 fn j_link(l: &Link) -> Value {
     let slots: Vec<Value> = l.slots().map(j_endset).collect();
     obj(vec![("slots", Value::Array(slots))])
@@ -922,9 +970,11 @@ fn j_claims(cs: &[SupClaim]) -> Value {
     Value::Array(cs.iter().map(j_claim).collect())
 }
 
-/// One edition-claim row (wire.md §edition_claims): the claim's address,
-/// its home (the edition), its `to` endset as deposited, and whether it is
-/// active — `false` names a retracted claim the audit view still lists.
+/// Renders one edition-claim row (wire.md §edition_claims).
+///
+/// The row is the claim's address, its home (the edition), its `to` endset
+/// as deposited, and whether it is active — `false` names a retracted claim
+/// the audit view still lists.
 fn j_edition_claim(c: &EditionClaim) -> Value {
     obj(vec![
         ("claim", j_addr(&c.claim)),
@@ -938,12 +988,14 @@ fn j_edition_claims(cs: &[EditionClaim]) -> Value {
     Value::Array(cs.iter().map(j_edition_claim).collect())
 }
 
-/// One row of the any-principal discovery read (wire.md §universal_grants):
-/// the COVERED content prefix — the stored prefix where the registry's
-/// `effective_owner` answers the issuer for it, or the issuer's own account
-/// where the stored prefix is wider (PUB-8.47; RES-298), so every issuer
-/// listed owns it — and the issuing accounts, in address order: the set's
-/// own iteration order, rendered as the list the shape rules.
+/// Renders one row of the any-principal discovery read.
+///
+/// The row (wire.md §universal_grants) is the covered content prefix — the
+/// stored prefix where the registry's `effective_owner` answers the issuer
+/// for it, or the issuer's own account where the stored prefix is wider
+/// (PUB-8.47; RES-298), so every issuer listed owns it — and the issuing
+/// accounts, in address order: the set's own iteration order, rendered as
+/// the list the shape rules.
 fn j_universal_grant(g: &UniversalGrant) -> Value {
     obj(vec![
         ("prefix", j_addr(&g.prefix)),
@@ -955,7 +1007,7 @@ fn j_universal_grants(gs: &[UniversalGrant]) -> Value {
     Value::Array(gs.iter().map(j_universal_grant).collect())
 }
 
-/// One `retrieve_endsets` pair: the 1-based slot and its endset.
+/// Renders one `retrieve_endsets` pair: the 1-based slot and its endset.
 fn j_endset_pair(slot: usize, e: &Endset) -> Value {
     obj(vec![("slot", j_usize(slot)), ("endset", j_endset(e))])
 }
@@ -964,9 +1016,11 @@ fn j_endset_pairs(ps: &[(usize, Endset)]) -> Value {
     Value::Array(ps.iter().map(|(slot, e)| j_endset_pair(*slot, e)).collect())
 }
 
-/// SHOWDELETIONS' two directions, each an address list. The wire keys are
-/// `a_with_b`/`b_with_a` (wire.md §showdeletions), the contracted spelling of
-/// M6's `deleted_from_a_with_b`/`deleted_from_b_with_a`.
+/// Renders `show_deletions`' two directions, each an address list.
+///
+/// The wire keys are `a_with_b`/`b_with_a` (wire.md §showdeletions), the
+/// contracted spelling of M6's
+/// `deleted_from_a_with_b`/`deleted_from_b_with_a`.
 fn j_deletions(d: &Deletions) -> Value {
     obj(vec![
         ("a_with_b", j_addrs(&d.deleted_from_a_with_b)),
@@ -974,8 +1028,10 @@ fn j_deletions(d: &Deletions) -> Value {
     ])
 }
 
-/// FOLLOWLINK's in-band `Result`: the empty span set is a defined answer,
-/// so ⟨⟩ and ⊥ are distinct wire shapes rather than one nullable field.
+/// Renders `follow_link`'s in-band `Result`.
+///
+/// The empty span set is a defined answer, so ⟨⟩ and ⊥ are distinct wire
+/// shapes rather than one nullable field.
 fn j_follow_result(r: &Result<SpanSet, Invalid>) -> Value {
     match r {
         Ok(set) => obj(vec![("ok", j_spanset(set))]),
@@ -996,8 +1052,10 @@ fn j_successor_ty(t: &SlotArg) -> Value {
 
 // ── the two name tables (marshal-side; parse mirrors op_name) ──
 
-/// snake_case of the `OpKind` variant name — the request tag AND the
-/// rejection's `op` field, one table for both.
+/// Returns an `OpKind` variant's name in snake_case, its wire name.
+///
+/// It is the request tag *and* the rejection's `op` field, one table for
+/// both.
 pub fn op_name(k: OpKind) -> &'static str {
     match k {
         OpKind::CreateNewDocument => "create_new_document",
@@ -1068,16 +1126,21 @@ fn fault_name(f: SpanFault) -> &'static str {
     }
 }
 
-/// The rejection codes M10 does not carry, and so the ones this crate spells
-/// by hand rather than through [`code_name`] (wire.md §Credential refusals,
-/// §Registry): AUTH's credential family's, and the registry sequence's. Each
-/// retires the day `RejectCode` grows a variant for it.
+/// The code of AUTH's credential family, spelled by hand.
+///
+/// The rejection codes M10 does not carry are the ones this crate spells by
+/// hand rather than through [`code_name`] (wire.md §Credential refusals,
+/// §Registry): AUTH's credential family's, and the registry sequence's.
+/// Each retires the day `RejectCode` grows a variant for it.
 const CREDENTIAL_REFUSED: &str = "credential_refused";
 /// The registry sequence's code — [`CREDENTIAL_REFUSED`]'s sibling.
 const REGISTRY_REFUSED: &str = "registry_refused";
 
-/// snake_case of every `RejectCode` variant — exhaustive, so a new code
-/// cannot ship without a wire name.
+/// Returns a `RejectCode` variant's wire name, its name in snake_case.
+///
+/// The one variant spelled otherwise is `NotOrdinalVSpan`, whose `VSpan` is
+/// one word (`not_ordinal_vspan`). Exhaustive, so a new code cannot ship
+/// without a wire name.
 fn code_name(c: RejectCode) -> &'static str {
     match c {
         RejectCode::Unauthenticated => "unauthenticated",
@@ -1131,13 +1194,13 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::AlreadySeated => "already_seated",
         RejectCode::NotContentSubspace => "not_content_subspace",
         // The version-chain model's three write-path refusals (PUB-8.2's
-        // routed item; owner ruling D2b) — the wire's own tokens, tabled with
+        // routed item; PUB-kickoff D2b) — the wire's own tokens, tabled with
         // their dispositions and faces in §The version-chain refusals.
         RejectCode::PublishedTarget => "published_target",
         RejectCode::PrivateVersionOfPublished => "private_version_of_published",
         RejectCode::PrivateSourceVersionless => "private_source_versionless",
-        // The publish shot's codes (lane 3.2): `withheld` is PUB-8.4's pinned
-        // token, and the four beside it are the wire's own, tabled with their
+        // The publish shot's codes: `withheld` is PUB-8.4's pinned token, and
+        // the four beside it are the wire's own, tabled with their
         // dispositions in §The publish shot and head-float.
         RejectCode::Withheld => "withheld",
         RejectCode::BadRun => "bad_run",
@@ -1175,10 +1238,11 @@ mod tests {
     use super::*;
     use crate::codec::{p_hex, p_slotspec, p_val_form, p_view};
 
-    /// Value granularity at the leaf: per-byte forms mint one single-byte
-    /// value per byte, atom forms one composite value; the canonical marshal
-    /// coalesces maximal per-byte runs (UTF-8 judged on the whole run) and
-    /// never coalesces atoms.
+    /// Checks value granularity at the leaf.
+    ///
+    /// Per-byte forms mint one single-byte value per byte, atom forms one
+    /// composite value; the canonical marshal coalesces maximal per-byte runs
+    /// (UTF-8 judged on the whole run) and never coalesces atoms.
     #[test]
     fn value_forms_parse_per_byte_and_atoms_marshal_apart() {
         let mut vs: Vec<Val> = Vec::new();
@@ -1212,12 +1276,14 @@ mod tests {
         assert!(p_hex("zz").is_err());
     }
 
-    /// All three documented view values (wire.md §Value encodings:
-    /// `"audit"`, `"active"`, `"default"`). The request fixtures carry only
-    /// two, so the third's parse arm and its marshal arm are watched by
-    /// nothing — and a typo in either makes a frame the document offers a
-    /// client come back `unparseable`, which tells them their frame is
-    /// malformed when the value is one wire.md invited.
+    /// Checks that all three documented view values round-trip.
+    ///
+    /// They are wire.md §Value encodings' `"audit"`, `"active"` and
+    /// `"default"`. The request fixtures carry all three
+    /// (`tests/it/codec_roundtrip.rs`), and this test holds each value's parse
+    /// arm and marshal arm to its documented name: a typo in either makes a
+    /// frame the document offers a client come back `unparseable`, which tells
+    /// them their frame is malformed when the value is one wire.md invited.
     #[test]
     fn every_documented_view_value_round_trips() {
         for name in ["audit", "active", "default"] {
@@ -1230,12 +1296,15 @@ mod tests {
         }
     }
 
-    /// The one parse-side normalization [`JsonCodec::marshal_request`]'s
-    /// precondition names rather than excludes: an empty span array IS the
-    /// empty constraint (M8 documents the empty endset as exactly that
-    /// zero), so it reads back under the canonical name and a
-    /// `SlotSpec::Spans` over an empty endset round-trips EQUAL rather than
-    /// identical. Nothing else pins that the two spellings meet.
+    /// Checks that an empty slot constraint normalizes to its canonical name.
+    ///
+    /// It is the one parse-side normalization
+    /// [`JsonCodec::marshal_request`]'s precondition names rather than
+    /// excludes: an empty span array *is* the empty constraint (M8 documents
+    /// the empty endset as exactly that zero), so it reads back under the
+    /// canonical name and a `SlotSpec::Spans` over an empty endset
+    /// round-trips *equal* rather than identical. Nothing else pins that the
+    /// two spellings meet.
     #[test]
     fn an_empty_slot_constraint_normalizes_onto_its_canonical_name() {
         assert!(

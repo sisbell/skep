@@ -1,5 +1,6 @@
-//! The daemon's write path — the whole ordering protocol on one card: a
-//! write commits, its change-feed record is appended, and its position is
+//! The daemon's write path: the whole ordering protocol on one card.
+//!
+//! A write commits, its change-feed record is appended, and its position is
 //! announced, in that order, under one lock ([`Commits::commit_under`],
 //! which runs inside a guard its caller holds).
 //!
@@ -8,130 +9,136 @@
 //! appended in position order with monotone times, which is the premise
 //! `sidecar.rs` states its invariants on; and every position a `GET /events`
 //! subscriber is told about is one `GET /changes` already carries — at the
-//! classes that may see it: the record is CLASSIFIED against the
-//! post-commit head as it is made (`feed.rs`), which is why this card
-//! holds the engine's store factory and takes a snapshot behind each
-//! execute.
+//! classes that may see it, a region the open left pending aside until the
+//! walk behind the listener lands it (below): the record is classified
+//! against the post-commit head as it is made (`feed.rs`), which is why
+//! this card holds the engine's store factory and takes a snapshot behind
+//! each execute.
 //!
 //! That second guarantee is an induction with both halves held here.
-//! [`Commits::open`] is the BASE CASE: the stream opens at the head the
-//! sidecar has just covered, before any febe exists to commit between the
-//! two, so a connecting subscriber is told [`Commits::announced`] and
-//! that first position is already answerable. `Commits::commit_recorded`
-//! is the STEP, and both doors run it: each announcement happens behind the
-//! record that made its position answerable. Neither half is a rule a caller
-//! remembers, so the two can never come apart in the window between a
-//! commit and its record. Reads never come here and never take the lock.
+//! [`Commits::open`] is the base case: the stream opens at the head the
+//! feed's open has just reached — covered by the sidecar, or the last of a
+//! region pending for the walk behind the listener — before any febe exists
+//! to commit between the two, so a connecting subscriber is told
+//! [`Commits::announced`] and that first position is already answerable, or
+//! refused retry-class (`feed_rebuilding`) until the walk lands its region.
+//! `Commits::commit_recorded` is the step, and both doors run it: each
+//! announcement happens behind the record that made its position
+//! answerable. Neither half is a rule a caller remembers, so the two can
+//! never come apart in the window between a commit and its record. Reads
+//! never come here and never take the lock.
 //!
-//! AND THEN THE HEAD WRITER'S TURN (PUB-6.65). A session write, once recorded
-//! and announced, gives the PUBLISHED HEAD writer (`head.rs`, this card's own
-//! child) its turn under the same guard. When the cadence is due, the writer
-//! commits up to three writes of the daemon's own — the staging draft's
-//! one-time mint, the record's insert, and the publish into `H` — before
-//! [`Commits::commit_under`] returns. So "after `commit_under` returns"
-//! means after this write AND any head it triggered: a caller reading the
-//! world then reads the head's records beside its own, and pays their fsyncs
-//! under whatever locks it holds, the credential write lock included. The
-//! head's own writes take `Commits::commit_recorded`, the protocol
-//! alone; the door is the whole difference between the two. And ONCE, the
-//! head is not the cadence's but the CLAIM's (signed ops, s1): the write that
-//! claims the board is followed, under the same guard and before any later
-//! write is admitted, by the board's first head `H.1`
+//! **And then the head writer's turn** (PUB-6.65). A session write, once
+//! recorded and announced, gives the published head writer (`head.rs`, this
+//! card's own child) its turn under the same guard. When the cadence is due,
+//! the writer commits up to three writes of the daemon's own — the staging
+//! draft's one-time mint, the record's insert, and the publish into `H` —
+//! before [`Commits::commit_under`] returns. So "after `commit_under`
+//! returns" means after this write and any head it triggered: a caller
+//! reading the world then reads the head's records beside its own, and pays
+//! their fsyncs under whatever locks it holds, the credential write lock
+//! included. The head's own writes take `Commits::commit_recorded`, the
+//! protocol alone; the door is the whole difference between the two. And
+//! *once*, the head is not the cadence's but the claim's (signed ops): the
+//! write that claims the board is followed, under the same guard and before
+//! any later write is admitted, by the board's first head `H.1`
 //! ([`Commits::write_first_head`]) — the board term every attested write's
 //! entry frame names — and a daemon that opens a claimed board with no head
 //! writes it there, before it serves. Where the head writer's driver refuses
-//! `H.1`, the refusal is surfaced and the claim stands, the head OWED at the
+//! `H.1`, the refusal is surfaced and the claim stands, the head owed at the
 //! write path's next turn — a refused write's turn included
-//! ([`Commits::take_turn_after_refusal`]; l7-C1), ahead of the cadence's
-//! own triggers — so the board is without a board term for exactly one
-//! write (`head.rs`, WHAT A REFUSAL DOES).
+//! ([`Commits::take_turn_after_refusal`]), ahead of the cadence's own
+//! triggers — so the board is without a board term until a head lands, for
+//! exactly one write where that write's turn lands it (`head.rs`, what a
+//! refusal does).
 //!
-//! AND THE HALT (SO-I5 (d): no signature the board keeps is lost by a
+//! **And the halt** (SO-I5 (d): no signature the board keeps is lost by a
 //! crash, a power loss or a failed write). Below the reclaim floor the
 //! attest store (`feed/attest.rs`) holds an entry signature's only copy, and
 //! the record step syncs each of its lines before it returns. Where one
-//! FAILS — its write or its sync — the commit it records stands and is
-//! acked, and from then on `Commits::commit_recorded` refuses every
-//! commit, a session's and the head writer's alike, for the rest of the
-//! uptime: any commit can trigger the checkpoint that deletes the journal
-//! copy the lost line depends on. The refusal is M10's own for a board that
-//! cannot commit, `poisoned` (`halt`). Reads are served throughout, and the
-//! restart's open rebuilds the line from the journal.
+//! fails — its write or its sync — the commit it records stands and is
+//! acked, and from then on `Commits::commit_recorded` refuses every commit,
+//! a session's and the head writer's alike, for the rest of the uptime: any
+//! commit can trigger the checkpoint that deletes the journal copy the lost
+//! line depends on. The refusal is M10's own for a board that cannot commit,
+//! `poisoned` (`halt`). Reads are served throughout, and the restart's open
+//! rebuilds the line from the journal.
 //!
-//! AND THE PANIC PAST THE COMMIT (`operations.md` §4 row 34; SO-I5 (d)'s
-//! carried-by clause). The kernel propagates a panic that comes AFTER its
-//! commit region — the inline backstop's checkpoint, a world's destructor
-//! — with the transaction committed and installed, the lost-ack case. An
-//! unwind out of `execute` there would leave the position unrecorded and
-//! unannounced: a hole in the feed no later open re-covers, since the
-//! reopen walk starts below the HIGHEST surviving entry, and an attested
-//! write's signature lost with its journal segment. So
-//! `Commits::commit_recorded` holds the kernel's snapshot from before
-//! the execute, runs the execute under a catch, and where the kernel's
-//! position MOVED under the unwind records the boundary as a BARE entry —
-//! the walk's own form, classified off the two worlds in hand, its attest
-//! line from the marker the write admitted — announces it, and re-raises;
-//! where the position did not move (the kernel's guard repaired the unwind
-//! out of its commit region, or the panic came before any commit) nothing
-//! is recorded. Nothing halts, and nothing is said twice: the write answers
-//! the transport's `500 internal_panic` as before, the stream carries the
-//! hook's line once (the re-raise runs no hook), and nothing of the
-//! position is said. The head writer's commits ride the same door, so a
-//! head's commit that panics after its install is recorded the same way.
+//! **And the panic past the commit** (`operations.md` §4 row 34;
+//! SO-I5 (d)'s carried-by clause). The kernel propagates a panic that comes
+//! after its commit region — the inline backstop's checkpoint, a world's
+//! destructor — with the transaction committed and installed, the lost-ack
+//! case. An unwind out of `execute` there would leave the position
+//! unrecorded and unannounced: a hole in the feed no later open re-covers,
+//! since the reopen walk starts above the highest surviving entry, and an
+//! attested write's signature lost with its journal segment. So
+//! `Commits::commit_recorded` holds the kernel's snapshot from before the
+//! execute, runs the execute under a catch, and where the kernel's position
+//! moved under the unwind records the boundary as a bare entry — the walk's
+//! own form, classified off the two worlds in hand, its attest line from the
+//! marker the write admitted — announces it, and re-raises; where the
+//! position did not move (the kernel's guard repaired the unwind out of its
+//! commit region, or the panic came before any commit) nothing is recorded.
+//! Nothing halts for the panic, and nothing is said twice: the write answers
+//! the transport's `500 internal_panic`, the stream carries the hook's line
+//! once (the re-raise runs no hook), and nothing of the position is said.
+//! The head writer's commits ride the same door, so a head's commit that
+//! panics after its install is recorded the same way.
 //!
 //! The read/write partition is M10's own `Op::is_read`. A read is exactly an
 //! `Op` the change feed has nothing to record, so [`write_meta`] answers
 //! `None` for precisely those — an equivalence it asserts against the
 //! partition rather than assumes.
 //!
-//! AND THE CHECKPOINT THREAD's SIGNAL AND COMPACTION. The kernel's cadence
-//! is DEFERRED: a commit that crosses it sets the kernel's due flag and runs
-//! no checkpoint on the committing thread, and the daemon's checkpoint
-//! thread (`server/listen.rs`) runs it off the guard. This card is where the
-//! two meet: after each commit's record step
-//! (`Commits::commit_recorded`) the flag is read and, where it stands,
-//! the thread is woken through [`CheckpointSignal`] — after the record step
-//! and never before it, so a checkpoint the thread begins never runs beside
-//! the attest line of the commit that triggered it (`feed/attest.rs`'s
-//! premise). And after a checkpoint lands the thread compacts the feed's
-//! five files to the journal's reclaim floor through
+//! **And the checkpoint thread's signal and compaction.** The kernel's
+//! cadence is deferred: a commit that crosses it sets the kernel's due flag
+//! and runs no checkpoint on the committing thread — unless the flag already
+//! stood, the last crossing unserviced, when the kernel's backstop runs one
+//! inline — and the daemon's checkpoint thread (`server/listen.rs`) runs it
+//! off the guard. This card is where the two meet: after each commit's
+//! record step (`Commits::commit_recorded`) the flag is read and, where it
+//! stands, the thread is woken through [`CheckpointSignal`] — after the
+//! record step and never before it, so a checkpoint the thread begins never
+//! runs beside the attest line of the commit that triggered it
+//! (`feed/attest.rs`'s premise). And after a checkpoint lands the thread
+//! compacts the feed's five files to the journal's reclaim floor through
 //! [`Commits::compact_feed_below_reclaim_floor`] — the feed's own rewrite,
 //! the one the open runs, under the feed's lock and no guard.
 //!
-//! AND THE WALK BEHIND THE LISTENER (`operations.md` §3.3 step 2; §4 row
-//! 16; §1.1 m15). Where `commits.log` was lost or torn, the feed's open
-//! records the positions it does not cover as a PENDING REGION and
-//! [`Commits::open`] spawns `skepd-feed-walk` — a thread of this card's
-//! own, holding the feed, the kernel's handle and the open's snapshot of
-//! the head's world — which proves and classifies every boundary of the
-//! region while the board serves, says three lines (`open:`, `progress:`
-//! at a cadence, `landing:`), and lands by ONE rewrite under the feed's
-//! lock (`feed::Feed::walk_and_land`). Spawned HERE and not beside the
-//! pruner and the checkpoint thread in `serve`, so an embedder routing by
-//! hand through `Daemon::route` walks too; and STOPPED AND JOINED by this
-//! card's drop, so no thread of the walk's outlives the Daemon that owns
-//! the feed — the thread holds the kernel's handle, and the journal
-//! directory's lock with it, which a reopen of the same directory waits on
-//! — the walk reading the stop before each boundary and before the
-//! landing, so a Daemon dropped mid-walk ends it with nothing written, the
-//! crash-stop shape: the file as the open found it, the next open walking
-//! again. Under the catch (row 41), a panic ends the thread with the
-//! consequence line and the region pending for the uptime, which the
-//! standing line re-says; the OS refusing the thread runs the walk at the
-//! open instead, as the cell index's does, said.
+//! **And the walk behind the listener** (`operations.md` §3.3 step 2; §4
+//! row 16; §1.1 m15). Where `commits.log` was lost or torn, the feed's open
+//! records the positions it does not cover as a pending region and
+//! [`Commits::open`] spawns `skepd-feed-walk` — a thread of this card's own,
+//! holding the feed, the kernel's handle and the open's snapshot of the
+//! head's world — which proves and classifies the region's boundaries, as
+//! far as the journal answers, while the board serves, says three lines
+//! (`open:`, `progress:` at a cadence, `landing:`), and lands by one rewrite
+//! under the feed's lock (`feed::Feed::walk_and_land`). Spawned here and not
+//! beside the pruner and the checkpoint thread in `serve`, so an embedder
+//! routing by hand through `Daemon::route` walks too; and stopped and joined
+//! by this card's drop, so no thread of the walk's outlives the Daemon that
+//! owns the feed — the thread holds the kernel's handle, and the journal
+//! directory's lock with it, which refuses a reopen of the same directory
+//! while it is held — the walk reading the stop before each boundary and
+//! before the landing, so a Daemon dropped mid-walk ends it with nothing
+//! written, the crash-stop shape: the file as the open found it, the next
+//! open walking again. Under the catch (row 41), a panic ends the thread
+//! with the consequence line and the region pending for the uptime, which
+//! the standing line re-says; the OS refusing the thread runs the walk at
+//! the open instead, as the cell index's does, said.
 //!
-//! AND THE CELL INDEX's ENTRY (`media.md` Op inventory 1: "EACH ENTRY IS
-//! ENTERED IN skepd's MEMORY AT EVERY COMMIT THAT MINTS A CELL, whichever
-//! op minted it … before that commit's guard drops"). `Commits::record`
-//! is the one step every commit rides, and it takes the post-commit
-//! snapshot under the guard — so it is where the index is entered: for an
-//! `insert`, the values the ack placed, read off that snapshot at the
-//! addresses the commit minted; for a `publish`, the values the shot
-//! re-inserted as fresh identity under the trunk's content chain. `copy`
-//! and `version` mint no cell and take no entry. Which values a write may
-//! mint a cell at is decided per op by [`write_meta`] (`Minting`), off
-//! the frame, through the index's cheap prefix test, so a prose insert of
-//! a million bytes costs the hook a byte compare apiece and no read.
+//! **And the cell index's entry** (`media.md` Op inventory 1: "each entry is
+//! entered in skepd's memory at every commit that mints a cell, whichever op
+//! minted it … before that commit's guard drops"). `Commits::record` is the
+//! one step every commit rides whose execute returns, and it takes the
+//! post-commit snapshot under the guard — so it is where the index is
+//! entered: for an `insert`, the values the ack placed, read off that
+//! snapshot at the addresses the commit minted; for a `publish`, the values
+//! the shot re-inserted as fresh identity under the trunk's content chain.
+//! `copy` and `version` mint no cell and take no entry. Which values a write
+//! may mint a cell at is decided per op by [`write_meta`] (`Minting`), off
+//! the frame, through the index's cheap prefix test, so a prose insert of a
+//! million bytes costs the hook a byte compare apiece and no read.
 
 use std::fmt;
 use std::io;
@@ -170,25 +177,30 @@ use self::classify::derived_journal;
 use self::head::HeadWriter;
 use crate::limits::STANDING_INTERVAL;
 
-/// What [`Commits::write_first_head`] came to — the three states a claimed
-/// board's first head can be in once the call returns, which its two callers
-/// say on the operator stream: the claim's flip line (`operations.md` §1.1
-/// m14) and the open's line 12. Three and not a `bool`, because "not
-/// written now" is two states the operator reads differently: a head that
-/// already stood — the cadence wrote one before the claim, an hour idle
-/// before the ceremony's last step being enough — leaves the board term
-/// present, and a refusal leaves it OWED, the board answering attested
-/// writes `board_unavailable` for one write (`head.rs`, THE CLAIM'S HEAD,
-/// OWED).
+/// What [`Commits::write_first_head`] came to.
+///
+/// It is one of the three states a claimed board's first head can be in
+/// once the call returns, which the claim's flip line says on the operator
+/// stream (`operations.md` §1.1 m14); the open's line 12 says a head it
+/// wrote. Three and not a `bool`, because "not written now" is two states
+/// the operator reads differently: a head that already stood — the cadence
+/// wrote one before or at the claim, an hour idle before the ceremony's last
+/// step being enough — leaves the board term present, and a refusal leaves
+/// it owed, the board answering attested writes `board_unavailable` until a
+/// head lands, one write where the next turn's head lands (`head.rs`, the
+/// claim's head, owed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FirstHead {
     /// `H.1` landed in this call, naming the committed pair as it stood.
     Written,
-    /// A head already stood, so none was written: the board term is present
-    /// and names a position before this call's.
+    /// A head already stood, so none was written.
+    ///
+    /// The board term is present and names a position before this call's.
     Stood,
-    /// The head writer's driver refused it: surfaced by the head writer, the
-    /// head owed at the write path's next turn.
+    /// The head writer's driver refused it.
+    ///
+    /// It is surfaced by the head writer, the head owed at the write path's
+    /// next turn.
     Refused,
 }
 use self::sidecar::{OpTerms, WalkControl};
@@ -213,140 +225,172 @@ const FEED_WALK_THREAD: &str = "skepd-feed-walk";
 #[cfg(test)]
 static REFUSE_THE_FEED_WALKS_THREAD: AtomicBool = AtomicBool::new(false);
 
-/// The commit stream's wait bound: a subscriber that has heard nothing for
-/// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
-/// as the wire's `:ka` comment, so proxies and clients can detect liveness —
-/// and the daemon detects a dead subscriber by the failed write within one
-/// interval.
+/// The commit stream's wait bound.
+///
+/// A subscriber that has heard nothing for this long is answered
+/// [`StreamStep::Keepalive`], which `server/listen.rs` frames as the wire's
+/// `:ka` comment, so proxies and clients can detect liveness — and the
+/// daemon detects a dead subscriber by the failed write within one interval.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// The write path: the serialization point, the change feed's sidecars
-/// behind it, the commit stream in front of it, and the published head
-/// writer whose turn follows every session write.
+/// The write path.
+///
+/// It is the serialization point, the change feed's sidecars behind it, the
+/// commit stream in front of it, and the published head writer whose turn
+/// follows every session write.
 ///
 /// The delegating methods below are one-line calls into the feed or the
 /// stream, deliberately: what this card buys over holding the two side by
-/// side is EXCLUSIVE ACCESS. `Feed::record` and
-/// `CommitStream::announce` are reachable only from
-/// `Commits::commit_recorded`, whose two callers are
+/// side is exclusive access. `Feed::record` and `CommitStream::announce` are
+/// reachable only from `Commits::commit_recorded`, whose two callers are
 /// [`Commits::commit_under`] and the head writer, this card's own child,
 /// which is what makes the ordering above a property of this type rather
 /// than a rule each handler remembers — `CommitsLog::record`'s caller
 /// contract is discharged by there being nowhere else to fail it. Reaching
 /// the two through here is what that costs.
 ///
-/// What that does NOT buy is the guard's SPAN. [`Commits::serial_lock`]
+/// What that does not buy is the guard's span. [`Commits::serial_lock`]
 /// hands the lock out, so that the snapshot a caller's gates read was taken
 /// under the same guard is that method's contract with its callers, not
 /// this type's — the same shape as `CommitsLog::record`'s, one layer up.
 pub struct Commits {
-    /// The serialization point. M2's applier serializes the commits
-    /// themselves anyway, so this only moves that point up — and buys the
-    /// ordering: a write's sidecar record and its announcement ride behind
-    /// its own commit. A process crash can lose at most the one in-flight
-    /// record (the append is flushed before the lock releases); an OS crash
-    /// can lose more of the un-fsynced tail — either way the reopen walk
-    /// re-covers the gap as bare entries.
+    /// The serialization point.
+    ///
+    /// M2's applier serializes the commits themselves anyway, so this only
+    /// moves that point up — and buys the ordering: a write's sidecar record
+    /// and its announcement ride behind its own commit. A process crash can
+    /// lose at most the one in-flight record (the append is flushed before
+    /// the lock releases), save the records held in memory alone while the
+    /// walk's region pends or the file is stopped; an OS crash can lose more
+    /// of the un-fsynced tail — either way the reopen walk re-covers the gap
+    /// as bare entries.
     serial: Serial,
-    /// The change feed behind `GET /changes` and `/health`'s `head_time`
-    /// (wire v6; class-gated since v7.8) — `commits.log`, the daemon's
-    /// testimony about its own writes, and its four derived sidecars.
-    /// Behind an `Arc` for one sharer, the walk thread (the module doc's
-    /// WALK BEHIND THE LISTENER), which holds it for the walk's length and
-    /// is joined before this card drops.
+    /// The change feed behind `GET /changes` and `/health`'s `head_time`.
+    ///
+    /// It is `commits.log`, the daemon's testimony about its own writes, its
+    /// four derived sidecars (wire v6; their class gate, wire v7.8) and the
+    /// attest store beside them. Behind an `Arc` for one sharer, the walk
+    /// thread (the module doc's walk behind the listener), which holds it for
+    /// the walk's length and is joined before this card drops.
     feed: Arc<Feed>,
-    /// THE WALK THREAD, where the feed's open left a region pending —
-    /// `None` on a board whose log covered the head: its handle, joined at
-    /// the drop, and the state it shares ([`FeedWalk`]).
+    /// The walk thread, where the feed's open left a region pending.
+    ///
+    /// It holds the thread's handle, joined at the drop — none where the OS
+    /// refused the thread and the walk ran at the open — and the state it
+    /// shares ([`FeedWalk`]); `None` on a board whose log covered the head.
     walk: Option<FeedWalk>,
     /// The commit stream behind `GET /events` (wire v4).
     commit_stream: CommitStream,
-    /// The engine's store factory — the kernel behind it is where the
-    /// POST-COMMIT snapshot each record is classified against comes from
-    /// (`Feed::record` takes the head as it stands after the execute, under
-    /// the serialization guard, so it is this commit's own state), and the
-    /// PRE-COMMIT snapshot the door holds across each execute (the module
-    /// doc's PANIC PAST THE COMMIT).
+    /// The engine's store factory.
+    ///
+    /// The kernel behind it is where the post-commit snapshot each record is
+    /// classified against comes from (`Feed::record` takes the head as it
+    /// stands after the execute, under the serialization guard, so it is this
+    /// commit's own state), and the pre-commit snapshot the door holds across
+    /// each execute (the module doc's panic past the commit).
     stores: EngineStores,
-    /// The PUBLISHED HEAD writer (PUB-6.65), this card's own child: given its
-    /// turn by [`Commits::commit_under`] after every session write, it
-    /// writes `H` on the cadence through [`Commits::commit_recorded`], under
-    /// the caller's serialization guard.
+    /// The published head writer (PUB-6.65), this card's own child.
+    ///
+    /// Given its turn by [`Commits::commit_under`] after every session write,
+    /// it writes `H` on the cadence through [`Commits::commit_recorded`],
+    /// under the caller's serialization guard.
     head_writer: HeadWriter,
-    /// THE CELL INDEX — the media gate's, shared: entered by
-    /// [`Commits::record`] at every commit that mints a cell, under the
-    /// serialization guard, before it drops.
+    /// The cell index, the media gate's, shared.
+    ///
+    /// It is entered by [`Commits::record`] at every commit that mints a cell
+    /// and returns from its execute, under the serialization guard, before it
+    /// drops.
     index: Arc<CellIndex>,
-    /// THE HALT (the module doc; SO-I5 (d)): set by [`Commits::record`]
-    /// where the attest store failed a line, and never cleared — every
-    /// commit after it is refused at [`Commits::commit_recorded`]'s door.
-    /// Set and read under the serialization guard at the door, which is
-    /// what orders it there; read OUTSIDE the guard by `/health`'s `writes`
-    /// member and the standing line ([`Commits::halted_at`]), one atomic
-    /// load each, so the store is a release and those loads acquire.
+    /// The halt (the module doc; SO-I5 (d)), never cleared once set.
+    ///
+    /// It is set where the attest store failed a line — by
+    /// [`Commits::record`], or by the record an unwind left — and every
+    /// commit after it is refused at [`Commits::commit_recorded`]'s door. Set
+    /// and read under the serialization guard at the door, which is what
+    /// orders it there; read outside the guard by `/health`'s `writes` member
+    /// and the standing line ([`Commits::halted_at`]), one atomic load each,
+    /// so the store is a release and those loads acquire.
     halted: AtomicBool,
-    /// THE POSITION THE HALT WAS SET AT — the position of the commit whose
-    /// attest line failed, in hand at the one site that sets `halted` and
-    /// written before it — what the standing line re-says the halt by
-    /// (`operations.md` §1 THE RATES: `the write path is halted since
-    /// position {p} (feed-attest.log)`), joining the store's own line, which
-    /// names the same position. Meaningful only while `halted` reads true.
+    /// The position the halt was set at.
+    ///
+    /// It is the position of the commit whose attest line failed, in hand at
+    /// the one site that sets `halted` and written before it — what the
+    /// standing line re-says the halt by (`operations.md` §1 the rates: `the
+    /// write path is halted since position {p} (feed-attest.log)`), joining
+    /// the store's own line, which names the same position. Meaningful only
+    /// while `halted` reads true.
     halted_at: AtomicU64,
-    /// THE KERNEL's HALT LINE's ONCE-FLAG (m10): whether
-    /// [`KernelHaltLine`] has been said this uptime, by either of its two
-    /// sites — [`Commits::commit_recorded`], after every execute that leaves
-    /// the kernel poisoned, and the transport's handler catch after a caught
-    /// panic on a write — both through [`Commits::say_the_kernels_halt_once`].
-    /// Poison does not persist across a restart, and neither does this.
+    /// The kernel's halt line's once-flag (m10).
+    ///
+    /// It is whether [`KernelHaltLine`] has been said this uptime, by either
+    /// of its two sites — [`Commits::commit_recorded`], after every execute
+    /// that leaves the kernel poisoned, and the transport's handler catch
+    /// after a caught panic on a write — both through
+    /// [`Commits::say_the_kernels_halt_once`]. Poison does not persist across
+    /// a restart, and neither does this.
     kernel_halt_said: AtomicBool,
-    /// THE DURABILITY REFUSALS since the last write that landed
-    /// (`operations.md` §1.1 m1; §4 row 1): the I/O kinds already said in
-    /// this stretch, and the refusals counted with the position the first
-    /// would have taken and the moment it was met — each kind's line said
-    /// once per stretch ([`DurabilityRefusedLine`]), a new kind being a new
-    /// condition, and the stretch closed by the next write that lands, said
-    /// once with its length ([`WritesLandAgainLine`]). Set, read and cleared
-    /// under the serialization guard at the door; the lock is what makes it
-    /// `Sync`.
+    /// The durability refusals since the last write that landed.
+    ///
+    /// Per `operations.md` §1.1 m1 (§4 row 1), it holds the I/O kinds already
+    /// said in this stretch, and the refusals counted with the position the
+    /// first would have taken and the moment it was met — each kind's line
+    /// said once per stretch ([`DurabilityRefusedLine`]), a new kind being a
+    /// new condition, and the stretch closed by the next write that lands,
+    /// said once with its length ([`WritesLandAgainLine`]). Set, read and
+    /// cleared under the serialization guard at the door; the lock is what
+    /// makes it `Sync`.
     refused: Mutex<RefusedStretch>,
-    /// THE CLASSED DOOR WITH ITS RECORD ([`Lines`]): every line said from
-    /// this card and the feed beneath it goes through it — the feed files'
-    /// open-time lines (a cut, the unreadable slots, the malformed names),
-    /// the files' once-per-uptime stops and their failed appends, the
-    /// compaction's per-attempt failures, the head writer's refused head
-    /// and its clearing, the kernel's halt and the durability refusals with
-    /// their close — and, under
-    /// the test seam, into the one record the daemon above shares
-    /// (`LinesSaid`), in order with the lines the daemon says itself. Made
-    /// BEFORE the feed opens and handed down, which is what lets a suite pin
-    /// the open's lines in-process; and handed UP once, to the deferred
-    /// unlink's site ([`Commits::lines`]).
+    /// The classed door with its record ([`Lines`]).
+    ///
+    /// Every line said from this card and the feed beneath it goes through
+    /// it, the feed walk hold's notice aside (a test seam's, which goes to
+    /// `notice::emit` directly) — the feed files' open-time lines (a cut, the
+    /// unreadable slots, the malformed names), the files' once-per-uptime
+    /// stops and their failed appends, the compaction's per-attempt failures,
+    /// the head writer's refused head and its clearing, the kernel's halt and
+    /// the durability refusals with their close — and, under the test seam,
+    /// into the one record the daemon above shares (`LinesSaid`), in order
+    /// with the lines the daemon says itself. Made before the feed opens and
+    /// handed down, which is what lets a suite pin the open's lines
+    /// in-process; and handed up once, to the deferred unlink's site
+    /// ([`Commits::lines`]).
     said: Lines,
-    /// THE CHECKPOINT THREAD's SIGNAL (the module doc): raised after the
-    /// record step of a commit whose crossing set the kernel's due flag, or
-    /// whose execute ran a checkpoint inline — the kernel's backstop — and
-    /// moved the inline count; waited on by the thread `serve` spawns,
-    /// stopped at shutdown.
+    /// The checkpoint thread's signal (the module doc).
+    ///
+    /// Raised after the record step of a commit that finds the kernel's due
+    /// flag set, or whose execute ran a checkpoint inline — the kernel's
+    /// backstop — and moved the inline count; waited on by the thread `serve`
+    /// spawns, stopped at shutdown.
     checkpoint_signal: CheckpointSignal,
-    /// THE INLINE COUNT AS THIS CARD LAST SAW IT (m13): the kernel's
-    /// `inline_checkpoints` after the last commit's record step, so the
-    /// next commit's one load beside the due flag's tells a backstop run
-    /// inside its execute from none. Read and moved under the serialization
-    /// guard alone, like `halted`; the atomic is what makes the field
-    /// `Sync`. Zero at open, as the kernel's count is at its open.
+    /// The inline count as this card last saw it (m13).
+    ///
+    /// It is the kernel's `inline_checkpoints` after the last commit's record
+    /// step, so the next commit's one load beside the due flag's tells a
+    /// backstop run inside its execute from none. Read and moved under the
+    /// serialization guard alone, as `halted` is at the door; the atomic is
+    /// what makes the field `Sync`. Zero at open, as the kernel's count is at
+    /// its open.
     inline_runs_seen: AtomicU64,
 }
 
 impl Commits {
-    /// Open the change feed in `data_dir` — `commits.log` replayed and its
+    /// Opens the change feed, the commit stream and the head writer, in order.
+    ///
+    /// The change feed opens in `data_dir` — `commits.log` replayed and its
     /// derived sidecars checked — then the commit stream at the journal's
     /// committed head, then the head writer over the feed just replayed — in
-    /// that order, the first two being the base case of this card's
-    /// guarantee (see the module doc). `index` is the cell index every
-    /// commit from here on enters. Fallible only in the feed — the lock and
-    /// the stream are memory, and the head writer resumes as if no head
-    /// were written where it cannot read one — so the caller's error type
-    /// need name only that.
+    /// that order, the first two being the base case of this card's guarantee
+    /// (see the module doc) — and last the walk behind the listener over any
+    /// region the feed's open left pending, on a thread of its own or, where
+    /// the OS refuses that thread, here, before this returns. `index` is the
+    /// cell index every commit from here on enters.
+    ///
+    /// # Errors
+    ///
+    /// The feed's open's I/O error (`Feed::open`): fallible only in the feed
+    /// — the lock and the stream are memory, and the head writer resumes as
+    /// if no head were written where it cannot read one — so the caller's
+    /// error type need name only that.
     pub fn open(data_dir: &Path, engine: &Engine, index: Arc<CellIndex>) -> io::Result<Commits> {
         // The door first, so the feed's open-time lines stand in the record
         // the daemon will share: a cut, the unreadable slots, the malformed
@@ -354,23 +398,25 @@ impl Commits {
         let said = Lines::new();
         let (feed, pending) = Feed::open(data_dir, engine, &said)?;
         let feed = Arc::new(feed);
-        // Opened AFTER the feed, at the same head, and before any febe
+        // Opened after the feed, at the same head, and before any febe
         // exists to commit between the two: the stream's first announced
-        // position is therefore one `/changes` already carries. That is the
-        // BASE CASE of this card's guarantee, and it is why the two are
-        // sequenced statements — the order is then a fact of the code
-        // rather than of the order two fields happen to be listed in.
+        // position is therefore one `/changes` already carries — or, where
+        // the feed's open left a region pending, one it refuses retry-class
+        // until the walk lands the region. That is the base case of this
+        // card's guarantee, and it is why the two are sequenced statements —
+        // the order is then a fact of the code rather than of the order two
+        // fields happen to be listed in.
         let commit_stream = CommitStream::at(engine.kernel().current_seq());
         // The head writer resumes by reading H's latest member off the engine's
         // recovered root (PUB-6.65's I7 (a)) and its cadence's two counters off
         // the feed opened above — the commits landed since that head, and the
-        // head's own recorded time (the chain's open items, item 2) — BEFORE
-        // the walk thread spawns, so a pending region is one it reads as
-        // pending and resumes off the kernel's seq (`head.rs`), never a race
-        // against the landing. It holds the door, as `commits.log` does: a
-        // refused head and the landing that clears it are lines of its own.
+        // head's own recorded time — before the walk thread spawns, so a
+        // pending region is one it reads as pending and resumes off the
+        // kernel's seq (`head.rs`), never a race against the landing. It holds
+        // the door, as `commits.log` does: a refused head and the landing that
+        // clears it are lines of its own.
         let head_writer = HeadWriter::open(engine.stores(), &feed, &said);
-        // THE WALK, last (the module doc): over the region the feed's open
+        // The walk, last (the module doc): over the region the feed's open
         // left pending, on a thread of its own, the board serving meanwhile.
         let walk = pending.map(|snapshot| {
             FeedWalk::spawn(Arc::clone(&feed), engine.stores(), snapshot, said.clone())
@@ -393,32 +439,37 @@ impl Commits {
         })
     }
 
-    /// The test seam behind `skepd::Daemon::feed_pending_region`: `(low,
-    /// head]`, the positions a lost or torn `commits.log` left uncovered
-    /// that the walk behind the listener has yet to land, or `None` — the
-    /// feed's own read, under its lock and no guard. Not a stable API.
+    /// The test seam behind `skepd::Daemon::feed_pending_region`.
+    ///
+    /// It answers `(low, head]`, the positions a lost or torn `commits.log`
+    /// left uncovered that the walk behind the listener has yet to land, or
+    /// `None` — the feed's own read, under its lock and no guard. Not a
+    /// stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn feed_pending_region(&self) -> Option<(u64, u64)> {
         self.feed.pending_region()
     }
 
-    /// THE WALK's DEATH, as a read (`operations.md` §1 THE RATES; §1.1 row
-    /// 41): the region `(low, head]` the walk thread left uncovered when it
+    /// Returns the walk's death as a read (`operations.md` §1.1 row 41).
+    ///
+    /// It is the region `(low, head]` the walk thread left uncovered when it
     /// ended on a caught panic this uptime, or `None` while it walks, landed
-    /// or never ran — one atomic load, the standing line's clause (`the feed
-    /// walk's thread is gone; positions (low, head] stay uncovered`).
+    /// or never ran — one atomic load, the standing line's clause
+    /// (`operations.md` §1 the rates: `the feed walk's thread is gone;
+    /// positions (low, head] stay uncovered`).
     pub fn feed_walk_gone(&self) -> Option<(u64, u64)> {
         let walk = self.walk.as_ref()?;
         walk.shared.ended.load(Ordering::Acquire).then_some(walk.shared.region)
     }
 
-    /// The test seam behind `skepd::Daemon::set_feed_walk_progress_cadence`:
-    /// the walk's `progress:` line every `boundaries` boundaries or `millis`
-    /// milliseconds, whichever first, in place of the constants' figures —
-    /// read by the walk per boundary, so a walk parked at the hold takes
-    /// the cadence set meanwhile; nothing where no walk runs. Not a stable
-    /// API.
+    /// The test seam behind `skepd::Daemon::set_feed_walk_progress_cadence`.
+    ///
+    /// It sets the walk's `progress:` line every `boundaries` boundaries or
+    /// `millis` milliseconds, whichever first, in place of the constants'
+    /// figures — read by the walk per boundary, so a walk parked at the hold
+    /// takes the cadence set meanwhile; nothing where no walk runs. Not a
+    /// stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn set_feed_walk_progress_cadence(&self, boundaries: u64, millis: u64) {
@@ -428,13 +479,14 @@ impl Commits {
         }
     }
 
-    /// THE HALT AS A READ (op-D10 (a); `operations.md` §1 THE RATES): the
-    /// position the write path halted at — the commit whose attest line
-    /// failed — or `None` while it admits writes. Two atomic loads under no
-    /// lock and no guard, for the two readers outside the door: `/health`'s
-    /// `writes.halted` and the standing line's clause. A `Some` is terminal
-    /// for the uptime, so it is actionable without a race; a `None` is the
-    /// reading of one moment.
+    /// Returns the halt as a read: the position the write path halted at.
+    ///
+    /// It is the commit whose attest line failed, or `None` while the write
+    /// path admits writes (op-D10 (a); `operations.md` §1 the rates). Two
+    /// atomic loads under no lock and no guard, for the two readers outside
+    /// the door: `/health`'s `writes.halted` and the standing line's clause.
+    /// A `Some` is terminal for the uptime, so it is actionable without a
+    /// race; a `None` is the reading of one moment.
     pub fn halted_at(&self) -> Option<Seq> {
         self.halted.load(Ordering::Acquire).then(|| Seq(self.halted_at.load(Ordering::Acquire)))
     }
@@ -519,51 +571,61 @@ impl Commits {
         self.said.say(Class::Landing, WritesLandAgainLine { at, refused, elapsed_ms, since });
     }
 
-    /// THE CLASSED DOOR, for a line of the daemon's whose site lies ABOVE
-    /// this card — the deferred unlink's at `server/blob_routes.rs`, row 37
-    /// and its clearing — so it stands in the one record beside the lines
-    /// said from here and below, in order. The door itself, not its record:
-    /// the site says through it and reads nothing.
+    /// Returns the classed door for a line whose site lies above this card.
+    ///
+    /// The line is the daemon's — the deferred unlink's at
+    /// `server/blob_routes.rs`, row 37 and its clearing — so it stands in the
+    /// one record beside the lines said from here and below, in order. The
+    /// door itself, not its record: the site says through it and reads
+    /// nothing.
     pub fn lines(&self) -> &Lines {
         &self.said
     }
 
-    /// TEST SEAM: the daemon's record of its said lines, which this card
-    /// holds (the `said` field says why) and the daemon shares. Not a stable
-    /// API.
+    /// The test seam: the daemon's record of its said lines.
+    ///
+    /// This card holds it (the `said` field says why) and the daemon shares
+    /// it. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn lines_said(&self) -> &LinesSaid {
         self.said.said()
     }
 
-    /// THE CHECKPOINT THREAD's SIGNAL: what the thread `serve` spawns waits
-    /// on, and what the shutdown stops. Raised by `Commits::commit_recorded`
-    /// after the record step of every commit that finds the kernel's due
-    /// flag set; the thread reads the flag itself and runs the checkpoint.
+    /// Returns the checkpoint thread's signal.
+    ///
+    /// It is what the thread `serve` spawns waits on, and what the shutdown
+    /// stops. Raised by `Commits::commit_recorded` after the record step of
+    /// every commit that finds the kernel's due flag set, or whose execute
+    /// ran the kernel's backstop inline; the thread reads the flag itself and
+    /// runs the checkpoint where it stands.
     pub fn checkpoint_signal(&self) -> &CheckpointSignal {
         &self.checkpoint_signal
     }
 
-    /// COMPACT THE FEED's FIVE FILES to the journal's reclaim floor — what
-    /// the checkpoint thread runs after any checkpoint lands, its own or a
-    /// backstop's, the floor having moved: `commits.log` and the four
-    /// derived files rewritten around the positions the journal reclaimed,
-    /// under the feed's lock and no guard, the attest store untouched. The
+    /// Compacts the feed's five files to the journal's reclaim floor.
+    ///
+    /// It is what the checkpoint thread runs after any checkpoint lands, its
+    /// own or a backstop's: where the floor has moved, `commits.log` and the
+    /// four derived files rewritten around the positions the journal
+    /// reclaimed — in memory alone, the files left to the walk's landing,
+    /// while its region is pending — under the feed's lock and no guard, the
+    /// attest store's file untouched and its resident slots trimmed. The
     /// feed's own rewrite, the one its open runs
     /// (`Feed::compact_below_reclaim_floor` states the disposition, which
     /// fails no op). Answers what it did ([`FeedCompaction`]): the fence
-    /// compacted to, or none where nothing lay below the floor, and the
-    /// files that stood beside it, by name — what the thread's landing line
-    /// says of each file.
+    /// compacted to, or none where nothing lay below the floor, the files
+    /// that stood beside it, by name, and the region a deferred rewrite waits
+    /// on — what the thread's landing line says of each file.
     pub fn compact_feed_below_reclaim_floor(&self, engine: &Engine) -> FeedCompaction {
         self.feed.compact_below_reclaim_floor(engine, &self.said)
     }
 
-    /// The test seam behind `skepd::Daemon::fail_the_feeds_next_rewrite_past_rename`:
-    /// the next compaction's rewrite of each of the feed's five files fails
-    /// past its rename, the stop that arm carries then reachable. Not a
-    /// stable API.
+    /// The test seam that fails the next rewrite past its rename.
+    ///
+    /// It is behind `skepd::Daemon::fail_the_feeds_next_rewrite_past_rename`:
+    /// the next rewrite of each of the feed's five files fails past its
+    /// rename, the stop that arm carries then reachable. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn fail_the_feeds_next_rewrite_past_rename(&self) {
@@ -583,70 +645,82 @@ impl Commits {
         self.feed.attest_store_figures()
     }
 
-    /// THE STOPPED FEED FILES, as a read: of `commits.log` and the four
-    /// derived files, those that take no further line this uptime, each with
-    /// the position its stop was set at ([`StoppedFile`]) — the feed's one
-    /// lock, no guard. The standing line's read, once an hour while any
-    /// stands (`operations.md` §1 THE RATES), and the test seam
-    /// `skepd::Daemon::stopped_feed_files`'s.
+    /// Returns the stopped feed files, as a read.
+    ///
+    /// Of `commits.log` and the four derived files, they are those that take
+    /// no further line this uptime, each with the position its stop was set
+    /// at ([`StoppedFile`]) — the feed's one lock, no guard. The standing
+    /// line's read, once an hour while any stands (`operations.md` §1 the
+    /// rates), and the test seam `skepd::Daemon::stopped_feed_files`'s.
     pub fn stopped_feed_files(&self) -> Vec<StoppedFile> {
         self.feed.stopped_files()
     }
 
-    /// The test seam behind `skepd::Daemon::set_head_writer_clock_millis`:
-    /// fix the head writer's clock, so a test drives the time-bound trigger
-    /// without a `sleep`. Not a stable API.
+    /// The test seam behind `skepd::Daemon::set_head_writer_clock_millis`.
+    ///
+    /// It fixes the head writer's clock, so a test drives the time-bound
+    /// trigger without a `sleep`. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn set_head_writer_clock_millis(&self, millis: u64) {
         self.head_writer.set_clock_millis(millis);
     }
 
-    /// The test seam behind `skepd::Daemon::refuse_the_next_head_once` and
-    /// its `_as` sibling: the head writer's driver refuses the next head it
-    /// is due to write, once, exactly as a driver refusal is handled — the
-    /// refusal's `detail` the given one, or the seam's standing detail under
-    /// `None`. Not a stable API.
+    /// The test seam behind `skepd::Daemon::refuse_the_next_head_once`.
+    ///
+    /// It is behind its `_as` sibling too: the head writer's driver refuses
+    /// the next head it is due to write, once, exactly as a driver refusal is
+    /// handled — the refusal's `detail` the given one, or the seam's standing
+    /// detail under `None`. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn refuse_next_head_once(&self, detail: Option<&str>) {
         self.head_writer.refuse_next_head_once(detail);
     }
 
-    /// The test seam behind `skepd::Daemon::attest_store_synced_through`:
-    /// the coverage the attest store's last successful sync made durable.
-    /// Not a stable API.
+    /// The test seam behind `skepd::Daemon::attest_store_synced_through`.
+    ///
+    /// It answers the coverage the attest store's last successful sync made
+    /// durable. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn attest_store_synced_through(&self) -> u64 {
         self.feed.attest_store_synced_through()
     }
 
-    /// The test seam behind `skepd::Daemon::fail_the_attest_stores_next_write`:
-    /// the attest store's next write fails at the OS, answered as any store
-    /// failure is (the module doc's HALT). Not a stable API.
+    /// The test seam that fails the attest store's next write at the OS.
+    ///
+    /// It is behind `skepd::Daemon::fail_the_attest_stores_next_write`, the
+    /// failure answered as any store failure is (the module doc's halt). Not
+    /// a stable API.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the feed's seam does: the read-only handle on the attest
+    /// store's file could not be opened.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn fail_the_attest_stores_next_write(&self) {
         self.feed.fail_the_attest_stores_next_write();
     }
 
-    /// THE CLAIM'S HEAD (signed ops, s1; RULED 2026-09-25): the board's first
-    /// head `H.1`, written now under the caller's serialization guard through
-    /// the head writer's own door, whatever the cadence says — a no-op on a
-    /// board that has a head. Two callers, both the daemon's: the claim-flip
-    /// tail, under the guard the claim itself committed under, so the head
-    /// names the claim's own position and no write lands between the two;
-    /// and the open, on a claimed board whose journal holds no head — the
-    /// crash window between the claim's transaction and the head's, or an
-    /// `H.1` the head writer's driver refused while serving. The answer is
-    /// one of [`FirstHead`]'s three, READ by both callers: the flip's
-    /// landing line says which (`operations.md` §1.1 m14) and the open says
-    /// a head it wrote (row 12). The head writer answers whether a head
-    /// LANDED; whether a head already STOOD is read here off the world the
-    /// kernel holds after the call (`board_term`), so a refusal — the
-    /// third case — is what is left. Nothing else about a head moves:
-    /// `HeadWriter::write_first_head` states the rule.
+    /// Writes the claim's head, the board's first head `H.1` (signed ops).
+    ///
+    /// It is written now under the caller's serialization guard through the
+    /// head writer's own door, whatever the cadence says — a no-op on a board
+    /// that has a head. Two callers, both the daemon's: the claim-flip tail,
+    /// under the guard the claim itself committed under, so the head names
+    /// the claim's own position and no write lands between the two; and the
+    /// open, on a claimed board whose journal holds no head — the crash
+    /// window between the claim's transaction and the head's, or an `H.1` the
+    /// head writer's driver refused while serving. The answer is one of
+    /// [`FirstHead`]'s three, read by both callers: the flip's landing line
+    /// says which (`operations.md` §1.1 m14) and the open says a head it
+    /// wrote (row 12). The head writer answers whether a head landed; whether
+    /// a head already stood is read here off the world the kernel holds after
+    /// the call (`board_term`), so a refusal — the third case — is what is
+    /// left. Nothing else about a head moves: `HeadWriter::write_first_head`
+    /// states the rule.
     pub fn write_first_head(&self, serial: &SerialGuard<'_>) -> FirstHead {
         if self.head_writer.write_first_head(self, serial) {
             return FirstHead::Written;
@@ -658,28 +732,32 @@ impl Commits {
         }
     }
 
-    /// Take the write-serialization lock ALONE — for the auth write
-    /// sequences, which must take their world snapshot AFTER no further
-    /// commit can intervene (the gates' answers and the execute they gate
-    /// then stand on one committed state). Lock order is fixed at the
-    /// caller: the credential lock first, then this, never inverted.
+    /// Takes the write-serialization lock alone.
     ///
-    /// CALLER CONTRACT, and the half [`Commits`] cannot hold for them:
-    /// take the snapshot the gates read under THIS guard, and run any
-    /// COMMITTING execute through [`Commits::commit_under`] under it. A
-    /// refusal that commits nothing may simply drop the guard, which is
-    /// what every gate arm does; what must not happen is a committing
-    /// `execute` under this guard OUTSIDE `commit_under`, which would
-    /// leave the position unrecorded and unannounced and give the head
-    /// writer no turn. Every execute this crate performs outside the write
-    /// path's two doors commits nothing: the guest reply — under this guard,
-    /// or ahead of it at the credential sequence's first step — runs under
-    /// `SessionId::GUEST`, which M10 never binds, so M10 refuses a write
-    /// under it without committing; and every other is a READ, admitted by
-    /// M10's own partition — `/op`'s through [`write_meta`], whose assertion
-    /// holds it to that partition, and `/op-at`'s by asking it directly.
-    /// Nothing here can check either half, and a snapshot taken outside the
-    /// guard lets a commit land between what a gate read and what it gated.
+    /// It is for the auth write sequences, which must take their world
+    /// snapshot after no further commit can intervene (the gates' answers and
+    /// the execute they gate then stand on one committed state). Lock order
+    /// is fixed at the caller: the credential lock first, then this, never
+    /// inverted.
+    ///
+    /// **Caller contract**, and the half [`Commits`] cannot hold for them:
+    /// take the snapshot the gates read under this guard, and run any
+    /// committing execute through [`Commits::commit_under`] under it. A
+    /// refusal that commits nothing may drop the guard, which every gate arm
+    /// does — an admission's or the media door's refusal once the head writer
+    /// has had its turn ([`Commits::take_turn_after_refusal`]); what must not
+    /// happen is a committing `execute` under this guard outside
+    /// `commit_under`, which would leave the position unrecorded and
+    /// unannounced and give the head writer no turn. Every execute the daemon
+    /// performs outside the write path's two doors commits nothing: the guest
+    /// reply — under this guard, or ahead of it at the credential and registry
+    /// sequences' first step — runs under `SessionId::GUEST`, which M10 never
+    /// binds, so M10 refuses a write under it without committing; and every
+    /// other is a read, admitted by M10's own partition — `/op`'s through
+    /// [`write_meta`], whose assertion holds it to that partition, and
+    /// `/op-at`'s by asking it directly. Nothing here can check either half,
+    /// and a snapshot taken outside the guard lets a commit land between what
+    /// a gate read and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
         self.serial.lock()
     }
@@ -694,20 +772,22 @@ impl Commits {
         self.serial.figures()
     }
 
-    /// One write, whole, under a serialization guard the CALLER already
-    /// holds ([`Commits::serial_lock`]): execute, record the position it
-    /// committed, announce that position, give the published head writer
-    /// its turn, and hand back the answer. The first three are
-    /// `Commits::commit_recorded`'s; the turn is this door's alone, and
-    /// what it adds to "after this returns" is the module doc's to state.
-    /// The guard argument is what keeps the four one operation though the
-    /// lock's scope is the caller's write sequence.
+    /// Runs one write, whole, under a serialization guard the caller holds.
+    ///
+    /// The caller took the guard already ([`Commits::serial_lock`]). The
+    /// write is: execute, record the position it committed, announce that
+    /// position, give the published head writer its turn, and hand back the
+    /// answer. The first three are `Commits::commit_recorded`'s; the turn is
+    /// this door's alone, and what it adds to "after this returns" is the
+    /// module doc's to state. The guard argument is what keeps the four one
+    /// operation though the lock's scope is the caller's write sequence.
     ///
     /// `execute` is a closure so this card stays free of M10's session and
     /// request types: what belongs here is the ordering, not the dispatch.
-    /// It runs exactly once, inside the lock.
+    /// It runs exactly once, inside the lock — or, once the write path has
+    /// halted, never.
     ///
-    /// PRECONDITION: `meta` is [`write_meta`]'s answer for the `Op` that
+    /// **Precondition.** `meta` is [`write_meta`]'s answer for the `Op` that
     /// `execute` runs, attributed to its committer — at this door, the session
     /// `execute` runs it under. Nothing here can check the first half — the
     /// closure is opaque by design, which is what keeps this card free of
@@ -720,6 +800,12 @@ impl Commits {
     /// [`FrameMeta::attributed`] is the only way to reach a [`WriteMeta`], so
     /// a path that forgot to attribute does not compile rather than
     /// testifying `"bare"` for a signed write.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `execute` panics: the door records what the unwind
+    /// committed, if anything, and re-raises it (the module doc's panic past
+    /// the commit).
     pub fn commit_under(
         &self,
         serial: &SerialGuard<'_>,
@@ -727,40 +813,43 @@ impl Commits {
         execute: impl FnOnce() -> Response,
     ) -> Response {
         let resp = self.commit_recorded(serial, meta, execute);
-        // THE HEAD WRITER'S TURN (PUB-6.65), under the same guard. Given after
-        // every write this door runs, a refusal included: whether anything
-        // LANDED is the writer's to decide — the kernel's seq, never the
+        // The head writer's turn (PUB-6.65), under the same guard. Given after
+        // every write this door runs, a refusal included, save one whose
+        // execute panicked, re-raised above before this line: whether anything
+        // landed is the writer's to decide — the kernel's seq, never the
         // answer — so this door hands it nothing to decide it by.
         self.head_writer.take_turn(self, serial);
         resp
     }
 
-    /// THE HEAD WRITER'S TURN after a write the sequence REFUSED ahead of
-    /// the store — an admission refusal, which never reaches
-    /// [`Commits::commit_under`] — under the caller's serialization guard
-    /// (l7-C1; SO-I4 (a)): nothing landed, so the cadence counts nothing and
-    /// evaluates no trigger, and what the turn is for is the one head no
-    /// trigger makes due — the claim's `H.1` where its driver refused it,
-    /// owed until a head lands (`head.rs`, THE CLAIM'S HEAD, OWED). Free
+    /// Gives the head writer its turn after a write refused ahead of the store.
+    ///
+    /// The refusal is the sequence's, an admission refusal, which never
+    /// reaches [`Commits::commit_under`]; the turn runs under the caller's
+    /// serialization guard (SO-I4 (a)): nothing landed, so the cadence counts
+    /// nothing and evaluates no trigger, and what the turn is for is the one
+    /// head no trigger makes due — the claim's `H.1` where its driver refused
+    /// it, owed until a head lands (`head.rs`, the claim's head, owed). Free
     /// where no head is owed: one lock, one look at the state.
     pub fn take_turn_after_refusal(&self, serial: &SerialGuard<'_>) {
         self.head_writer.take_turn(self, serial);
     }
 
-    /// The ordering protocol and NOTHING after it: execute, record the
-    /// position the write committed, announce that position, and hand back
-    /// the answer — [`Commits::commit_under`] less the head writer's turn.
+    /// Runs the ordering protocol and nothing after it.
     ///
-    /// EVERY commit this daemon makes rides this step — `/op`'s through
+    /// The protocol is: execute, record the position the write committed,
+    /// announce that position, and hand back the answer —
+    /// [`Commits::commit_under`] less the head writer's turn.
+    ///
+    /// Every commit this daemon makes rides this step — `/op`'s through
     /// [`Commits::commit_under`], the published head's own directly — and
     /// that is the one premise the commit stream's completeness and
-    /// [`sidecar::CommitsLog::head_time`] rest on: a commit that
-    /// bypassed it would be unrecorded and unannounced, and both would be
-    /// wrong about it in silence. Their docs cite this step rather than
-    /// naming the writers: a writer is covered by passing through it, and by
-    /// nothing else.
+    /// [`sidecar::CommitsLog::head_time`] rest on: a commit that bypassed it
+    /// would be unrecorded and unannounced, and both would be wrong about it
+    /// in silence. Their docs cite this step rather than naming the writers:
+    /// a writer is covered by passing through it, and by nothing else.
     ///
-    /// The head writer's door, and PRIVATE to this module so it stays the
+    /// The head writer's door, and private to this module so it stays the
     /// head writer's alone: a session write through it would commit without
     /// giving the head writer its turn. `execute` runs exactly once, inside
     /// the lock, and [`Commits::commit_under`]'s precondition on `meta` is
@@ -769,44 +858,49 @@ impl Commits {
     /// the first half as the write sequences do, deriving `meta` from the
     /// `Op` whose fields its driver call then runs.
     ///
-    /// Once the write path has HALTED (the module doc; SO-I5 (d)), none of
-    /// it: `execute` never runs, and the answer is M10's `Poisoned`
-    /// (`Halt`), built as M10 builds it, so the bytes are M10's own. Being
-    /// this door's, the refusal follows the write sequence's admission —
-    /// and the credential memo's recall — and precedes M10's whole
-    /// `execute`, its retry memo included: a plain write repeated after its
-    /// ack was lost meets the halt and not its original ack. A guest's
-    /// write never reaches the door, and M10 refuses it `Unauthenticated`,
-    /// committing nothing.
+    /// Once the write path has halted (the module doc; SO-I5 (d)), none of
+    /// it: `execute` never runs, and the answer is M10's `Poisoned` (`Halt`),
+    /// built as M10 builds it, so the bytes are M10's own. Being this door's,
+    /// the refusal follows the write sequence's admission — and the
+    /// credential memo's recall — and precedes M10's whole `execute`, its
+    /// retry memo included: a plain write repeated after its ack was lost
+    /// meets the halt and not its original ack. A guest's write never reaches
+    /// the door, and M10 refuses it `Unauthenticated`, committing nothing.
     ///
-    /// AND THE KERNEL's OWN HALT (m10), told from the write path's by the
-    /// arm it comes through: the attest halt returns above, before
-    /// `execute`, said once at its transition; a kernel that `execute` left
-    /// poisoned — a session write's refusal coded `Poisoned`, or the head
-    /// writer's own commit, whose refusal it answers in its own line — is
-    /// the kernel's, and this door is the first site of the kernel's halt
-    /// line, said once by [`Commits::say_the_kernels_halt_once`], one atomic
-    /// load per write. AND THE DURABILITY REFUSALS (m1): a `Rejected` coded
-    /// `Durability` is the journal refusing the write's append, barrier,
-    /// rotation or salt, said once per I/O kind per stretch by
-    /// [`Commits::say_the_durability_refusal`] — M10's unmarshaled
-    /// `io_kind`, set where it lowers `TxnError::Durability`, telling a full
-    /// volume (`StorageFull`) from every other cause — and the stretch
-    /// closed, said once, by the next write that lands
+    /// **And the kernel's own halt** (m10), told from the write path's by the
+    /// arm it comes through: the attest halt returns above, before `execute`,
+    /// said once at its transition; a kernel that `execute` left poisoned — a
+    /// session write's refusal coded `Poisoned`, or the head writer's own
+    /// commit, whose refusal it answers in its own line — is the kernel's,
+    /// and this door is the first site of the kernel's halt line, said once
+    /// by [`Commits::say_the_kernels_halt_once`], one atomic load per write.
+    ///
+    /// **And the durability refusals** (m1): a `Rejected` coded `Durability`
+    /// is the journal refusing the write's append, barrier, rotation or salt,
+    /// said once per I/O kind per stretch by
+    /// [`Commits::say_the_durability_refusal`] — M10's unmarshaled `io_kind`,
+    /// set where it lowers `TxnError::Durability`, telling a full volume
+    /// (`StorageFull`) from every other cause — and the stretch closed, said
+    /// once, by the next write that lands
     /// ([`Commits::close_the_refused_stretch_where_landed`]). One match on the
     /// answer per write, and on an ack one lock and one look.
     ///
-    /// AND THE PANIC PAST THE COMMIT (the module doc; `operations.md` §4 row
-    /// 34): `execute` runs under a catch, with the kernel's snapshot from
-    /// before it held across it. An unwind is compared against that
-    /// snapshot ([`Commits::record_the_commit_an_unwind_left`]): where the
-    /// kernel's position moved, the write committed before it panicked, and
-    /// the position is recorded as a classified bare entry and announced
-    /// before the panic is re-raised to the transport's catch; where it did
-    /// not, nothing is recorded. The panic is re-raised either way, so the
-    /// answer a caller gets is the catch's `500 internal_panic`, as before.
-    /// COST, per commit: one `ArcSwap` load for the snapshot, held until
+    /// **And the panic past the commit** (the module doc; `operations.md` §4
+    /// row 34): `execute` runs under a catch, with the kernel's snapshot from
+    /// before it held across it. An unwind is compared against that snapshot
+    /// ([`Commits::record_the_commit_an_unwind_left`]): where the kernel's
+    /// position moved, the write committed before it panicked, and the
+    /// position is recorded as a classified bare entry and announced before
+    /// the panic is re-raised to the transport's catch; where it did not,
+    /// nothing is recorded.
+    ///
+    /// **Cost**, per commit: one `ArcSwap` load for the snapshot, held until
     /// this returns.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `execute` panics: the panic is re-raised either way, so
+    /// the answer a caller gets is the catch's `500 internal_panic`.
     fn commit_recorded(
         &self,
         serial: &SerialGuard<'_>,
@@ -817,10 +911,10 @@ impl Commits {
             let halt = Rejection::classified(meta.kind, RejectCode::Poisoned, None);
             return Response::Rejected(halt);
         }
-        // THE HOLD (row 34): the kernel's committed state before the
+        // The hold (row 34): the kernel's committed state before the
         // execute — one `ArcSwap` load — kept until this returns. It buys
         // two things: the compare and the diff the catch below needs, and
-        // the superseded root's destructor MOVED. The kernel releases that
+        // the superseded root's destructor moved. The kernel releases that
         // root as `transact` returns, which is where a world's destructor
         // could surface (the kernel card's second panic site, the lost-ack
         // case); held here, it drops after the record step and the
@@ -828,9 +922,9 @@ impl Commits {
         let pre = self.stores.kernel().snapshot();
         let resp = match catch_unwind(AssertUnwindSafe(execute)) {
             Ok(resp) => resp,
-            // THE THIRD ARM: record what the unwind committed, then let the
-            // panic go on to the transport's catch as it did — the hook ran
-            // at the panic site, and `resume_unwind` runs none.
+            // An unwind: record what it committed, then let the panic go on
+            // to the transport's catch — the hook ran at the panic site, and
+            // `resume_unwind` runs none.
             Err(payload) => {
                 self.record_the_commit_an_unwind_left(serial, meta, &pre);
                 self.say_the_kernels_halt_once();
@@ -855,33 +949,38 @@ impl Commits {
         resp
     }
 
-    /// THE THIRD ARM (`operations.md` §4 row 34; the module doc's PANIC PAST
-    /// THE COMMIT): what [`Commits::commit_recorded`] records when
-    /// `execute` UNWOUND — the kernel's committed position compared against
-    /// `pre`, the snapshot the door took before the execute. UNMOVED,
-    /// nothing committed — the kernel's §3 guard repaired the unwind out of
-    /// its commit region, or the panic came before any commit (a read's
-    /// frame, a refusal, an idempotency replay) — and nothing is recorded.
-    /// MOVED, the write committed and the kernel propagated a later panic
-    /// with the transaction installed, the lost-ack case: the boundary is
-    /// recorded as a BARE entry at the post-commit position — no op, docs,
-    /// testimony or time, since the answer that carried them is lost in the
-    /// unwind, and never invented — CLASSIFIED off the two worlds in hand by
-    /// the walk's own derivation ([`derived_journal`]: the documents the
-    /// commit touched, and the op and the terms the journal names), its
-    /// attest line from the ADMITTED MARKER — `meta.signed`'s value, the one
-    /// the plain sequence's check admitted and the kernel wrote into the
-    /// slot: kept, never re-derived and never dropped (SO-I5 (d)) — folded
-    /// into the feed as a recorded position is ([`Feed::record_bare`]), then
-    /// announced as a recorded commit is and the checkpoint thread woken as
-    /// after any record step. An attest line the store cannot make durable
-    /// halts the write path exactly as it does under [`Commits::record`]:
-    /// the store's own cause, not the panic's. Nothing else moves — no halt
-    /// for the panic, no line of the position's (the hook's line is the
-    /// binary's, said at the panic site; the caller's re-raise runs no
-    /// hook). COST, on this arm alone: one `ArcSwap` load for the post
-    /// snapshot and `derived_journal`'s diff of the two worlds — a
-    /// full-link enumeration per world — under the guard.
+    /// Records the commit an unwinding `execute` left, where it left one.
+    ///
+    /// It is what [`Commits::commit_recorded`] records when `execute` unwound
+    /// (`operations.md` §4 row 34; the module doc's panic past the commit):
+    /// the kernel's committed position compared against `pre`, the snapshot
+    /// the door took before the execute. Unmoved, nothing committed — the
+    /// kernel's §3 guard repaired the unwind out of its commit region, or the
+    /// panic came before any commit (a read's frame, a refusal, an
+    /// idempotency replay) — and nothing is recorded. Moved, the write
+    /// committed and the kernel propagated a later panic with the transaction
+    /// installed, the lost-ack case: the boundary is recorded as a bare entry
+    /// at the post-commit position — no op, docs, testimony or time, since
+    /// the answer that carried them is lost in the unwind, and never invented
+    /// — classified off the two worlds in hand by the walk's own derivation
+    /// ([`derived_journal`]: the documents the commit touched, and the op and
+    /// the terms the journal names), its attest line from the admitted marker
+    /// — `meta.signed`'s value, the one the plain sequence's check admitted
+    /// and the kernel wrote into the slot: kept, never re-derived and never
+    /// dropped (SO-I5 (d)) — folded into the feed as a recorded position is
+    /// ([`Feed::record_bare`]), then announced as a recorded commit is, a
+    /// stretch of durability refusals closed as after any landed write, and
+    /// the checkpoint thread woken as after any record step. An attest line
+    /// the store cannot make durable halts the write path exactly as it does
+    /// under [`Commits::record`]: the store's own cause, not the panic's.
+    /// Nothing else moves — no halt for the panic, no line of the position's
+    /// (the hook's line is the binary's, said at the panic site; the caller's
+    /// re-raise runs no hook).
+    ///
+    /// **Cost**, on this arm alone: one `ArcSwap` load for the post snapshot
+    /// and `derived_journal`'s diff of the two worlds — a full-link
+    /// enumeration per world, and the walks its terms take (`classify.rs`
+    /// states both) — under the guard.
     fn record_the_commit_an_unwind_left(
         &self,
         serial: &SerialGuard<'_>,
@@ -903,28 +1002,32 @@ impl Commits {
             self.halt_at(at);
         }
         // The position is answerable, so it is announced — behind its
-        // record, which is the module doc's STEP — and the volume took it.
+        // record, which is the module doc's step — and the volume took it.
         self.commit_stream.announce(at);
         self.close_the_refused_stretch_where_landed(pre.seq());
         self.wake_the_checkpoint_thread_where_due();
     }
 
-    /// THE HALT, SET (the module doc; SO-I5 (d)): the attest store has said
-    /// it, once — the line's file and position. The position first, then
-    /// the flag that makes it readable: the standing line and `/health`
-    /// read the pair outside the guard.
+    /// Sets the halt at `at` (the module doc; SO-I5 (d)).
+    ///
+    /// The attest store has said it, once — the line's file and position. The
+    /// position first, then the flag that makes it readable: the standing
+    /// line and `/health` read the pair outside the guard.
     fn halt_at(&self, at: Seq) {
         self.halted_at.store(at.0, Ordering::Release);
         self.halted.store(true, Ordering::Release);
     }
 
-    /// THE CHECKPOINT THREAD's WAKE, after a record step (the module doc):
-    /// a crossing inside the execute set the kernel's due flag and ran
-    /// nothing; the thread runs it. One atomic load per commit, and a wake
-    /// only where the flag stands — once per crossing, a second while the
-    /// thread is still on its way coalescing into the one wait. AND THE
-    /// BACKSTOP's (m13): a second atomic load beside the first — the
-    /// kernel's count of checkpoints run INLINE on a committing thread,
+    /// Wakes the checkpoint thread after a record step, where one is due.
+    ///
+    /// A crossing inside the execute set the kernel's due flag and ran
+    /// nothing; the thread runs it (the module doc). One atomic load per
+    /// commit, and a wake only where the flag stands — once per crossing, a
+    /// second while the thread is still on its way coalescing into the one
+    /// wait.
+    ///
+    /// **And the backstop's** (m13): a second atomic load beside the first —
+    /// the kernel's count of checkpoints run inline on a committing thread,
     /// against the count this card last saw — raising the same signal where
     /// it moved, so a checkpoint the backstop ran inside this execute wakes
     /// the thread as a crossing does: the thread finds no flag, reads the
@@ -942,80 +1045,94 @@ impl Commits {
         }
     }
 
-    /// The data behind `GET /changes` at the requester's class — the FEED
-    /// CLASS the route resolved off its one head snapshot, and the query.
+    /// Returns the data behind `GET /changes` at the requester's class.
+    ///
+    /// It reads the `FeedClass` the route resolved off its one head snapshot,
+    /// and the query.
     pub fn changes(&self, class: &FeedClass<'_>, query: &ChangesQuery) -> ChangesAnswer {
         self.feed.page(class, query)
     }
 
-    /// The HEAD position's recorded wall-clock time (`/health`'s
-    /// `head_time`), or `None` when that position's record is bare.
+    /// Returns the head position's recorded wall-clock time, or `None`.
+    ///
+    /// It is `/health`'s `head_time`, `None` where that position's record is
+    /// bare, where nothing is recorded, or where the head lies in the region
+    /// the walk behind the listener has yet to land.
     ///
     /// The feed answers for the head by answering for its last recorded
     /// position, which is the same position because every commit rides
     /// `Commits::commit_recorded`, which records it under the guard it
     /// committed under — a commit whose execute panicked after the kernel
     /// installed it included, recorded bare by the door's catch (the module
-    /// doc's PANIC PAST THE COMMIT), for which this answers `None`. That
-    /// premise is kept HERE; `CommitsLog::head_time` states what relying on
+    /// doc's panic past the commit), for which this answers `None`. That
+    /// premise is kept here; `CommitsLog::head_time` states what relying on
     /// it costs.
     pub fn head_time(&self) -> Option<u64> {
         self.feed.head_time()
     }
 
-    /// What one subscriber does next — see `CommitStream::next`, where the
-    /// receiver names the stream and the bare word is complete.
+    /// Returns what one subscriber does next.
+    ///
+    /// See `CommitStream::next`, where the receiver names the stream and the
+    /// bare word is complete.
     pub fn next_step(&self, last: Seq) -> StreamStep {
         self.commit_stream.next(last)
     }
 
-    /// End every open stream: each subscriber wakes on the broadcast and
-    /// returns [`StreamStep::Shutdown`].
+    /// Ends every open stream.
+    ///
+    /// Each subscriber wakes on the broadcast and returns
+    /// [`StreamStep::Shutdown`].
     pub fn shutdown(&self) {
         self.commit_stream.shutdown();
     }
 
-    /// The last position ANNOUNCED: what a subscriber connecting now is told
-    /// first, and what a test can witness without opening a socket.
+    /// Returns the last position announced.
+    ///
+    /// It is what a subscriber connecting now is told first, and what a test
+    /// can witness without opening a socket.
     ///
     /// Deliberately not the kernel's committed head. Between a write's
     /// commit and its change-feed record — [`Commits::commit_under`] holds
     /// the lock across both — the head names a position `/changes` cannot yet
     /// answer, and a subscriber told that number reads an empty delta and
     /// shows a stale view until the next commit. Announced positions sit
-    /// behind their own records by construction, which is what makes this
-    /// card's guarantee hold for a stream's FIRST event as well as its
-    /// later ones.
+    /// behind their own records by construction — the open's head, where the
+    /// feed's open left a region pending, once the walk lands it — which is
+    /// what makes this card's guarantee hold for a stream's first event as
+    /// well as its later ones.
     pub fn announced(&self) -> Seq {
         self.commit_stream.announced()
     }
 
-    /// Record one write's answer in the feed. What this layer decides,
-    /// over [`Feed::record`]'s own job of appending the lines, is WHETHER
-    /// there is anything to record: an ack carries the committed position,
-    /// while a rejection committed nothing. Runs under the serialization
-    /// lock. EXHAUSTIVE with no `_` arm, like the other `Response` walks in
-    /// this crate: a new answer shape carrying a committed position must
-    /// decide whether the change feed reports it, and fails to compile
-    /// until it does.
+    /// Records one write's answer in the feed.
+    ///
+    /// What this layer decides, over [`Feed::record`]'s own job of appending
+    /// the lines, is whether there is anything to record: an ack carries the
+    /// committed position, while a rejection committed nothing. Runs under
+    /// the serialization lock. Exhaustive with no `_` arm, like the other
+    /// `Response` walks in this crate: a new answer shape carrying a
+    /// committed position must decide whether the change feed reports it,
+    /// and fails to compile until it does.
     ///
     /// Returns the position [`Commits::commit_recorded`] announces, and in
-    /// every case one `/changes` already carries — which is the guarantee,
+    /// every case one `/changes` already carries — or, in a region the open
+    /// left pending, carries once the walk lands it — which is the guarantee,
     /// rather than the narrower "the position whose record this call made".
     /// Three paths reach it: a new commit, whose record this call makes; a
     /// position already recorded this uptime (an idempotency replay), which
     /// the feed declines and which was announced when it was first
-    /// committed; and one at or below the open-time head (`emit`'s
-    /// incumbent ack), which the feed also declines, which the reopen
-    /// walk has already covered, and which the monotone stream ignores
-    /// because it sits at or below the position the stream opened at. A
-    /// failed append is the fourth: the line is lost but the in-memory entry
-    /// is not, so `/changes` answers that position this uptime and answers it
-    /// bare after a restart. A failed ATTEST STORE line is the fifth, and
-    /// HALTS the write path (the module doc; SO-I5 (d)): this commit stands
-    /// and is announced, and every later one is refused.
+    /// committed; and one at or below the open-time head (`emit`'s incumbent
+    /// ack), which the feed also declines, which the file covered at open or
+    /// the walk behind the listener covers once it lands, and which the
+    /// monotone stream ignores because it sits at or below the position the
+    /// stream opened at. A failed append is the fourth: the line is lost but
+    /// the in-memory entry is not, so `/changes` answers that position this
+    /// uptime and answers it bare after a restart. A failed attest store line
+    /// is the fifth, and halts the write path (the module doc; SO-I5 (d)):
+    /// this commit stands and is announced, and every later one is refused.
     ///
-    /// The record is classified against the head AS IT STANDS after the
+    /// The record is classified against the head as it stands after the
     /// execute — this commit's own post-state, since the serialization
     /// guard admits no other commit between the two — so a minted document
     /// is in the exception set the classification reads (PUB-7.7's
@@ -1024,11 +1141,16 @@ impl Commits {
     /// authority file's below it are the same obligation, and each names it
     /// in its arguments.
     ///
-    /// THE CELL INDEX IS ENTERED HERE, off the same post-commit snapshot,
-    /// under the same guard (the module doc) — for a FRESH commit alone,
-    /// the one whose position is the snapshot's own: an idempotency
-    /// replay's memoized ack names an older position, and its cells were
-    /// entered when it first committed.
+    /// **The cell index is entered here**, off the same post-commit snapshot,
+    /// under the same guard (the module doc) — for a fresh commit alone, the
+    /// one whose position is the snapshot's own: an idempotency replay's
+    /// memoized ack names an older position, and its cells were entered when
+    /// it first committed.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build where an op whose documents are minted
+    /// answered an ack other than `AckAddr` (the `Minted` arm's assertion).
     fn record(&self, serial: &SerialGuard<'_>, meta: WriteMeta, resp: &Response) -> Option<Seq> {
         let WriteMeta { kind, docs, testimony, signed, terms, minting } = meta;
         let (at, minted) = match resp {
@@ -1074,7 +1196,7 @@ impl Commits {
             AffectedDocs::Minted => {
                 // The obligation [`AffectedDocs::Minted`] states, made loud.
                 // In release the fallback keeps this walk total and produces
-                // a `docs: []` entry, which `feed`'s mask NEVER masks:
+                // a `docs: []` entry, which `feed`'s mask never masks:
                 // the op, the wall-clock time and the fingerprint of the
                 // signing key of a draft mint, served to every class,
                 // permanently, since nothing re-derives an entry the sidecar
@@ -1116,13 +1238,14 @@ impl Commits {
     }
 }
 
-/// THE STOP OF THE WALK, at this card's drop (the module doc): the thread
-/// told to stop — read before its next boundary and before the landing,
-/// so nothing is written past this — and joined, at most one boundary's
-/// reconstruction or one landing in flight. Last of the daemon's acts: the
-/// server's stop joins the workers, the streams, the pruner and the
-/// checkpoint thread, and the Daemon — this card with it — drops after
-/// them, so the walk is the last thread let go.
+/// The stop of the walk, at this card's drop (the module doc).
+///
+/// The thread is told to stop — read before its next boundary and before the
+/// landing, so nothing is written past this — and joined, at most the list's
+/// one scan, one boundary's reconstruction or one landing in flight. Last of
+/// the daemon's acts: the server's stop joins the workers, the streams, the
+/// pruner and the checkpoint thread, and the Daemon — this card with it —
+/// drops after them, so the walk is the last thread let go.
 impl Drop for Commits {
     fn drop(&mut self) {
         if let Some(walk) = self.walk.take() {
@@ -1134,18 +1257,21 @@ impl Drop for Commits {
     }
 }
 
-/// THE WALK THREAD's HANDLE AND ITS SHARED STATE: the join handle the drop
-/// takes, and the state the thread and this card both read
-/// ([`WalkShared`]).
+/// The walk thread's handle and its shared state.
+///
+/// They are the join handle the drop takes, and the state the thread and
+/// this card both read ([`WalkShared`]).
 struct FeedWalk {
     handle: Mutex<Option<JoinHandle<()>>>,
     shared: Arc<WalkShared>,
 }
 
-/// What the walk thread and the write path share: the region it walks, the
-/// controls (the stop, the `progress:` cadence) and THE LIVENESS FLAG its
-/// catch sets as it ends on a panic — never cleared, since nothing re-spawns
-/// the walk but a restart, which walks again.
+/// What the walk thread and the write path share.
+///
+/// It is the region the thread walks, the controls (the stop, the
+/// `progress:` cadence) and the liveness flag its catch sets as it ends on a
+/// panic — never cleared, since nothing re-spawns the walk but a restart,
+/// which walks again.
 struct WalkShared {
     region: (u64, u64),
     control: WalkControl,
@@ -1153,14 +1279,16 @@ struct WalkShared {
 }
 
 impl FeedWalk {
-    /// Spawn `skepd-feed-walk` over `feed`'s pending region: the walk and
-    /// its landing ([`Feed::walk_and_land`]) under the catch (row 41) — a
-    /// panic that escapes is the hook's prefixed line, then the consequence
-    /// in the operator's terms ([`FeedWalkEndedLine`]) and the flag the
-    /// standing line reads, the region pending for the uptime. Spawned
-    /// fallibly, as the daemon's other threads are: where the OS refuses
-    /// the thread the walk runs HERE, at the open, as the cell index's does
-    /// — the board serves later rather than never covering — said.
+    /// Spawns `skepd-feed-walk` over `feed`'s pending region.
+    ///
+    /// The walk and its landing ([`Feed::walk_and_land`]) run under the catch
+    /// (row 41) — a panic that escapes is the hook's prefixed line, then the
+    /// consequence in the operator's terms ([`FeedWalkEndedLine`]) and the
+    /// flag the standing line reads, the region pending for the uptime.
+    /// Spawned fallibly, as the daemon's other threads are: where the OS
+    /// refuses the thread the walk runs here, at the open, as the cell
+    /// index's does — the board serves later rather than never covering —
+    /// said.
     fn spawn(
         feed: Arc<Feed>,
         stores: EngineStores,
@@ -1223,19 +1351,19 @@ fn payload_text(payload: &(dyn std::any::Any + Send)) -> &'static str {
     payload.downcast_ref::<&'static str>().copied().unwrap_or("a panic")
 }
 
-/// THE WALK THREAD's CONSEQUENCE LINE (`operations.md` §1.1 row 41; §3.3
-/// step 2), the ruled words, then what the dead walk costs every write.
+/// The walk thread's consequence line.
 ///
-/// The words: `the feed walk ended: {payload}; positions ({low}, {head}]
-/// stay uncovered — /changes refuses pages into them until a restart, which
-/// walks again; until that restart commits.log takes no line: every write
-/// since this open is held in memory alone, and the restart's walk
-/// re-covers each as a bare entry, its key and its time lost — restart
-/// soon`. With the region pending for the uptime, `CommitsLog::admit` holds
-/// every write in memory, so the cost grows with each write until the
-/// restart. A pure value, pinned by `to_string()` in the unit suite;
-/// emitted under `Class::Failure` by the thread's catch, once, after the
-/// hook's line has said the panic itself.
+/// It says `operations.md`'s words (§1.1 row 41; §3.3 step 2), then what the
+/// dead walk costs every write. The words: `the feed walk ended: {payload};
+/// positions ({low}, {head}] stay uncovered — /changes refuses pages into
+/// them until a restart, which walks again; until that restart commits.log
+/// takes no line: every write since this open is held in memory alone, and
+/// the restart's walk re-covers each as a bare entry, its key and its time
+/// lost — restart soon`. With the region pending for the uptime,
+/// `CommitsLog::admit` holds every write in memory, so the cost grows with
+/// each write until the restart. A pure value, pinned by `to_string()` in
+/// the unit suite; emitted under `Class::Failure` by the thread's catch,
+/// once, after the hook's line has said the panic itself.
 pub(crate) struct FeedWalkEndedLine {
     pub(crate) payload: &'static str,
     pub(crate) low: u64,
@@ -1255,9 +1383,10 @@ impl fmt::Display for FeedWalkEndedLine {
     }
 }
 
-/// THE WALK THREAD REFUSED by the OS (the pruner's and the checkpoint
-/// thread's form, `operations.md` §1.1 rows 21, 22): the cause, and what
-/// happens instead — the walk runs at the open, the board serving once it
+/// The walk thread refused by the OS: the cause, and what happens instead.
+///
+/// It takes the pruner's and the checkpoint thread's form (`operations.md`
+/// §1.1 rows 21, 22): the walk runs at the open, the board serving once it
 /// lands. A pure value, pinned by `to_string()`; emitted under
 /// `Class::Failure` where `thread::Builder::spawn` refuses.
 pub(crate) struct FeedWalkRefusedLine<'a> {
@@ -1277,9 +1406,10 @@ impl fmt::Display for FeedWalkRefusedLine<'_> {
     }
 }
 
-/// THE KERNEL's HALT LINE (`operations.md` §1.1 m10; §4 row 29), in the
-/// operator stream's words: the position the kernel halted at, its cause,
-/// what is refused and what serves, and the act.
+/// The kernel's halt line (`operations.md` §1.1 m10; §4 row 29).
+///
+/// It is in the operator stream's words: the position the kernel halted at,
+/// its cause, what is refused and what serves, and the act.
 ///
 /// The position is the installed head at the site, an ordering. The cause
 /// is the kernel's own account (`Kernel::poison_cause`): which of the three
@@ -1324,9 +1454,10 @@ impl fmt::Display for KernelHaltLine<'_> {
     }
 }
 
-/// THE DURABILITY REFUSAL's LINE (`operations.md` §1.1 m1; §4 row 1): a
-/// write the journal refused, the position it would have taken and the
-/// kernel's account, what lands and what serves, and the act.
+/// The durability refusal's line (`operations.md` §1.1 m1; §4 row 1).
+///
+/// It names a write the journal refused, the position it would have taken
+/// and the kernel's account, what lands and what serves, and the act.
 ///
 /// A full volume keeps m1's words, the account after the position: `a write
 /// was refused at a full volume at position {p} ({detail}): no write lands
@@ -1348,13 +1479,15 @@ impl fmt::Display for KernelHaltLine<'_> {
 /// beside [`KernelHaltLine`] for its reason: the site is this card's, below
 /// the daemon.
 pub(crate) struct DurabilityRefusedLine<'a> {
-    /// `Kernel::current_seq() + 1` at the site — the first position the
-    /// refused write would have taken.
+    /// `Kernel::current_seq() + 1` at the site.
+    ///
+    /// It is the first position the refused write would have taken.
     pub(crate) at: Seq,
     /// Whether the I/O kind is `StorageFull`, the volume's room.
     pub(crate) full: bool,
-    /// The refusal's detail, the kernel's account: the file, the act and
-    /// the OS's words.
+    /// The refusal's detail, the kernel's account.
+    ///
+    /// It names the file, the act and the OS's words.
     pub(crate) detail: Option<&'a str>,
 }
 
@@ -1379,15 +1512,15 @@ impl fmt::Display for DurabilityRefusedLine<'_> {
     }
 }
 
-/// THE STRETCH's CLOSE (`operations.md` §1.1 m1): writes land again after
-/// durability refusals.
+/// The stretch's close (`operations.md` §1.1 m1).
 ///
-/// The words: `writes land again at position {p}, {n} refused over {d} ms
-/// since position {q}` — `{p}` the position the landed write committed at,
-/// `{n}` the refusals the stretch counted, `{d}` the outage's length, from
-/// the first refusal to this landing, and `{q}` the position the first would
-/// have taken, which its failure line named. A pure value, pinned by
-/// `to_string()` in the unit suite; emitted under `Class::Landing` through
+/// Writes land again after durability refusals. The words: `writes land
+/// again at position {p}, {n} refused over {d} ms since position {q}` —
+/// `{p}` the position the landed write committed at, `{n}` the refusals the
+/// stretch counted, `{d}` the outage's length, from the first refusal to
+/// this landing, and `{q}` the position the first would have taken, which
+/// its failure line named. A pure value, pinned by `to_string()` in the unit
+/// suite; emitted under `Class::Landing` through
 /// [`Commits::close_the_refused_stretch_where_landed`], once per stretch.
 pub(crate) struct WritesLandAgainLine {
     pub(crate) at: Seq,
@@ -1418,17 +1551,19 @@ struct RefusedStretch {
     since: Option<(Seq, Instant)>,
 }
 
-/// THE CLASSED DOOR WITH ITS RECORD — `notice::emit` under a class word
-/// and, under the test seam, the line kept in `LinesSaid`, the one record
-/// the daemon shares: made by [`Commits::open`] BEFORE the feed opens and
-/// handed down to every site below the daemon that says a line — the feed's
-/// open, each line file's and `commits.log`'s rewrite, the attest store's
-/// open — so the open-time lines (a cut, the unreadable slots, the malformed
-/// names) and the uptime lines (a file's stop, the kernel's halt, the
-/// durability refusals) stand in one record, in order, and a suite pins
-/// them in-process.
-/// A clone shares the record; outside the test seam it holds nothing and
-/// the door is `notice::emit` alone.
+/// The classed door with its record.
+///
+/// It is `notice::emit` under a class word and, under the test seam, the
+/// line kept in `LinesSaid`, the one record the daemon shares: made by
+/// [`Commits::open`] before the feed opens and handed down to every site
+/// below the daemon that says a line — the feed's open, each line file's and
+/// `commits.log`'s rewrite, the attest store's open; the feed walk hold's
+/// notice, a test seam's, aside — so the open-time lines (a cut, the
+/// unreadable slots, the malformed names) and the uptime lines (a file's
+/// stop, the kernel's halt, the durability refusals) stand in one record, in
+/// order, and a suite pins them in-process. A clone shares the record;
+/// outside the test seam it holds nothing and the door is `notice::emit`
+/// alone.
 #[derive(Clone)]
 pub struct Lines {
     #[cfg(any(test, feature = "test-hooks"))]
@@ -1436,7 +1571,7 @@ pub struct Lines {
 }
 
 impl Lines {
-    /// A door over a fresh, empty record.
+    /// Returns a door over a fresh, empty record.
     pub(crate) fn new() -> Lines {
         Lines {
             #[cfg(any(test, feature = "test-hooks"))]
@@ -1444,71 +1579,82 @@ impl Lines {
         }
     }
 
-    /// One classed line — `{class}: {what}` into the record, then through
-    /// `notice::emit`, which renders now and writes from its own thread.
+    /// Says one classed line, into the record, then through `notice::emit`.
+    ///
+    /// The record takes `{class}: {what}`; `notice::emit` renders now and
+    /// writes from its own thread.
     pub fn say(&self, class: Class, what: impl fmt::Display) {
         #[cfg(any(test, feature = "test-hooks"))]
         self.said.lock().push(format!("{class}: {what}"));
         notice::emit(class, what);
     }
 
-    /// The record this door writes into, for the daemon to share. Not a
-    /// stable API.
+    /// Returns the record this door writes into, for the daemon to share.
+    ///
+    /// Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn said(&self) -> &LinesSaid {
         &self.said
     }
 }
 
-/// TEST SEAM: the daemon's record of every line said through its classed
-/// door this uptime, each `{class}: {text}`, oldest first — what
-/// `skepd::Daemon::lines_said` answers. Behind an `Arc` and owned by the
-/// write path ([`Commits`]'s `said`, a [`Lines`]), which the daemon above
-/// shares, because lines of the daemon's are said from below it — the feed
-/// files' at their open, their stops, the kernel's halt and the durability
-/// refusals at [`Commits::commit_recorded`] — and a suite pins them in the
-/// one record, in order with the rest. Not a stable API.
+/// The test seam: the daemon's record of its said lines.
+///
+/// It holds every line said through its classed door this uptime, each
+/// `{class}: {text}`, oldest first — what `skepd::Daemon::lines_said`
+/// answers. Behind an `Arc` and owned by the write path ([`Commits`]'s
+/// `said`, a [`Lines`]), which the daemon above shares, because lines of the
+/// daemon's are said from below it — the feed files' at their open, their
+/// stops, the kernel's halt and the durability refusals at
+/// [`Commits::commit_recorded`] — and a suite pins them in the one record,
+/// in order with the rest. Not a stable API.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub type LinesSaid = Arc<Mutex<Vec<String>>>;
 
 // ── the read/write partition, and what a write records ───────────────────
 
-/// HOW a write's entry is SIGNED, as the sequence that admitted it knows
-/// (signed ops; D12): the daemon's own assertion, recorded at commit, of
-/// why the row's `key` is absent — and, for the marker, the value itself,
+/// How a write's entry is signed, as the sequence that admitted it knows.
+///
+/// It is the daemon's own assertion, recorded at commit, of why the row's
+/// `key` is absent (signed-ops D12) — and, for the marker, the value itself,
 /// which the attest store appends in the same `record` call that appends
 /// `commits.log`. `None` is an unsigned entry, whose row serves `key`.
 /// Reaches the feed by the one door [`FrameMeta::attributed`] guards.
 #[derive(Debug)]
 pub enum Signed {
-    /// The marker slot is filled with this — the attestation the plain
-    /// sequence's check ADMITTED and handed the kernel
-    /// (`transact_attested`); the store mirrors it, the wire renders it as
-    /// the row's `attest`.
+    /// The marker slot is filled with this attestation.
+    ///
+    /// It is the one the plain sequence's check admitted and handed the
+    /// kernel (`transact_attested`); the store mirrors it, the wire renders
+    /// it as the row's `attest`.
     Marker(Attestation),
-    /// The entry's signature is its CREDENTIAL record's own `sig` member —
-    /// the deposit's `make_link`, where the record grade VERIFIED it under the
-    /// set that opens its home (lane D's `record_grade_check`; D26: a record
-    /// is judged at its link). The LINK row alone (as7-E2 (a), owner
-    /// 2026-10-01 — e-Q2 re-cut at the atom row): the atom's `insert` is
-    /// admitted unsigned, so its row carries `key`, the daemon's testimony of
-    /// the writing session — one asserted hand for an orphan atom whose link
-    /// never lands, D12's audit diagnostic. Neither row carries `attest`.
+    /// The entry's signature is its record's own `sig` member.
+    ///
+    /// The record is a credential or a registry record, and the entry its
+    /// deposit's `make_link`, where the record grade verified the `sig` under
+    /// the set that opens its home (`record_grade_check` for a credential
+    /// record, the registry admission for a registry one; signed-ops D26: a
+    /// record is judged at its link). The link row alone: the atom's `insert`
+    /// is admitted unsigned, so its row carries `key`, the daemon's testimony
+    /// of the writing session — one asserted hand for an orphan atom whose
+    /// link never lands, signed-ops D12's audit diagnostic. Neither row
+    /// carries `attest`.
     RecordSig,
 }
 
-/// What the change feed will say about one write as far as the FRAME can
-/// tell: the op kind, the affected documents, and which of the op's own
-/// terms its row carries — a `delegate`'s seated principal among them, the
-/// one term the request supplies. Not yet a [`WriteMeta`]: the AUTH testimony
-/// (AUTH-4.48) is the committer's — a session's, or the head writer's own —
-/// which no frame carries, and the entry's signedness is the admitting
-/// sequence's, so [`FrameMeta::attributed`] is the only way to reach a value
-/// either of the write path's doors accepts. A placeholder testimony would
-/// be a wrong answer that looks right — `"bare"` is what a genuine
-/// bare-session write records, and the feed never re-derives an entry it
-/// holds.
+/// What the change feed will say about one write as far as the frame can tell.
+///
+/// It is the op kind, the affected documents, which of the op's own terms
+/// its row carries — a `delegate`'s seated principal among them, the one
+/// term taken from the request — and which content addresses the write may
+/// mint a cell at. Not yet a [`WriteMeta`]: the AUTH testimony (AUTH-4.48)
+/// is the committer's — a session's, or the head writer's own — which no
+/// frame carries, and the entry's signedness is the admitting sequence's, so
+/// [`FrameMeta::attributed`] is the only way to reach a value either of the
+/// write path's doors accepts. A placeholder testimony would be a wrong
+/// answer that looks right — `"bare"` is what a genuine bare-session write
+/// records, and the feed never re-derives an entry it holds.
 #[derive(Debug)]
 pub struct FrameMeta {
     /// The kind of the op the frame carries.
@@ -1521,13 +1667,15 @@ pub struct FrameMeta {
 }
 
 impl FrameMeta {
-    /// Attribute this write to its committer — a session's testimony
+    /// Attributes this write to its committer, and to its signature if any.
+    ///
+    /// The committer is a session's testimony
     /// ([`crate::auth::session::SessionBinding::testimony`] — the
     /// establishing key's fingerprint, or `"bare"`), or the head writer's own
-    /// (`head::SYSTEM_TESTIMONY`), which commits with no session at all —
-    /// and to its SIGNATURE where it has one ([`Signed`]): the marker the
-    /// plain sequence admitted, or the credential record's own `sig`; `None`
-    /// for an unsigned entry, the head writer's own included.
+    /// (`head::SYSTEM_TESTIMONY`), which commits with no session at all. The
+    /// signature ([`Signed`]) is the marker the plain sequence admitted, or a
+    /// credential or registry record's own `sig`; `None` for an unsigned
+    /// entry, the head writer's own included.
     pub fn attributed(self, testimony: String, signed: Option<Signed>) -> WriteMeta {
         WriteMeta {
             kind: self.kind,
@@ -1540,38 +1688,43 @@ impl FrameMeta {
     }
 }
 
-/// WHICH CONTENT ADDRESSES A WRITE MINTS THAT MAY HOLD A CELL — the cell
-/// index's entry at commit, decided per op by [`write_meta`] — every arm
-/// stating it, as it states its documents and its terms — off the frame,
-/// and completed by [`Commits::record`] off the post-commit snapshot.
-/// Two ops mint content from a request's or a draft's values; every other
-/// mints none, `copy` and `version` sharing identity (the media record's
-/// §The publication seam: a copy of a cell mints no baptism).
+/// Which content addresses a write mints that may hold a cell.
+///
+/// It is the cell index's entry at commit, decided per op by [`write_meta`]
+/// — every arm stating it, as it states its documents and its terms — off
+/// the frame, and completed by [`Commits::record`] off the post-commit
+/// snapshot. Two ops mint content from a request's or a draft's values;
+/// every other mints none, `copy` and `version` sharing identity (the media
+/// record's §The publication seam: a copy of a cell mints no baptism).
 #[derive(Debug)]
 enum Minting {
     /// No content value is minted.
     None,
-    /// An `insert`: its values are minted I-adjacent from the ack's address;
+    /// An `insert`: its values are minted I-adjacent from the ack's address.
+    ///
     /// `naming` holds the indices of those whose bytes pass the index's
     /// prefix test — read ahead of the commit, so a prose insert enters
     /// nothing and reads nothing after it.
     Insert { naming: Vec<usize> },
-    /// A `publish`: the shot re-inserts `reinserted` values of the staging
-    /// draft as fresh identity under the trunk's content chain — the count
-    /// the shot's own arithmetic answers, each value read off the
-    /// post-commit snapshot.
+    /// A `publish`: the shot re-inserts `reinserted` values of the draft.
+    ///
+    /// The staging draft's values are re-inserted as fresh identity under the
+    /// trunk's content chain — `reinserted` the count the shot's own
+    /// arithmetic answers, each value read off the post-commit snapshot.
     Publish { reinserted: u64 },
 }
 
-/// What the change feed will say about one write: the op kind, the
-/// affected documents, the committer's testimony, the entry's signedness
-/// and which of the op's own terms its row carries. The frame-derived stage
-/// of a `commits.log` entry — `sidecar::CommitMeta` is the next one,
-/// completed at record time with the committed position, the wall-clock time
-/// and the terms' values, from the ack and the post-commit world.
+/// What the change feed will say about one write.
 ///
-/// Reachable only through [`FrameMeta::attributed`] — a fact of the FIELDS
-/// and not of the call sites: they are private, so `server.rs`, which is
+/// It is the op kind, the affected documents, the committer's testimony,
+/// the entry's signedness, which of the op's own terms its row carries and
+/// which content addresses the write may mint a cell at. The frame-derived
+/// stage of a `commits.log` entry — `sidecar::CommitMeta` is the next one,
+/// completed at record time with the committed position, the wall-clock
+/// time and the terms' values, from the ack and the post-commit world.
+///
+/// Reachable only through [`FrameMeta::attributed`] — a fact of the fields
+/// and not of the call sites: they are private, so `server/op.rs`, which is
 /// where the write sequences live and where a hand-built meta is the thing
 /// to reach for, cannot spell the struct expression. That is what lets
 /// [`Commits::commit_under`] state its precondition about one value.
@@ -1579,12 +1732,13 @@ enum Minting {
 pub struct WriteMeta {
     kind: OpKind,
     docs: AffectedDocs,
-    /// The write's AUTH TESTIMONY (AUTH-4.48; wire.md §The change feed):
-    /// the establishing key's fingerprint hex, `"bare"` for a bare bind, or
-    /// [`head::SYSTEM_TESTIMONY`] for the published head's own writes —
-    /// never an absence, which the wire's `key` field reserves for testimony
-    /// that was LOST. Recorded on every line; served on the wire only where
-    /// `signed` is `None` (D12).
+    /// The write's AUTH testimony (AUTH-4.48; wire.md §The change feed).
+    ///
+    /// It is the establishing key's fingerprint hex, `"bare"` for a bare
+    /// bind, or [`head::SYSTEM_TESTIMONY`] for the published head's own
+    /// writes — never an absence, which the wire's `key` field reserves for
+    /// testimony that was lost. Recorded on every line; served on the wire
+    /// only where `signed` is `None` (signed-ops D12).
     testimony: String,
     /// The entry's signature, where it has one — see [`Signed`].
     signed: Option<Signed>,
@@ -1594,19 +1748,23 @@ pub struct WriteMeta {
     minting: Minting,
 }
 
-/// A write's affected document(s) for the feed (wire.md §The change feed):
-/// the write's target doc; a link write names its home (`edit_link` both
-/// its homes, the successor's `d_s` first; `nullify` its home AND the
-/// target link's home, as a set — PUB-6.46); the MINTED document for
-/// create/fork/version and the minted MEMBER for `publish` (each known only
-/// from the ack); delegate/register_node touch no document.
+/// A write's affected document(s) for the feed (wire.md §The change feed).
+///
+/// They are the write's target doc; a link write names its home
+/// (`edit_link` both its homes, the successor's `d_s` first; `nullify` its
+/// home and the target link's home, as a set — PUB-6.46); the minted
+/// document for create/fork/version and the minted member for `publish`
+/// (each known only from the ack); delegate/register_node touch no
+/// document.
 #[derive(Debug)]
 enum AffectedDocs {
-    /// The documents the frame itself names. Held as ADDRESSES, which is
-    /// what the feed's classification wants — it reads each one against the
-    /// head's exception set — so the rendering belongs at the sidecar's own
-    /// door and not here: text handed down would be parsed straight back,
-    /// and the parse would have nowhere to report a name it could not read.
+    /// The documents the frame itself names.
+    ///
+    /// Held as addresses, which is what the feed's classification wants — it
+    /// reads each one against the head's exception set — so the rendering
+    /// belongs at the sidecar's own door and not here: text handed down would
+    /// be parsed straight back, and the parse would have nowhere to report a
+    /// name it could not read.
     Named(Vec<Address>),
     /// The document the write mints, known only from its ack.
     ///
@@ -1616,41 +1774,50 @@ enum AffectedDocs {
     Minted,
 }
 
-/// Which of the op's own terms (`sidecar::OpTerms`) its row carries — wire.md
-/// §The change feed; r6-2a, AUTH-6.36, D25's d25-S1 — decided per op by
-/// [`write_meta`], beside the documents, and completed at record time
-/// ([`RowTerms::complete`]) from the ack and the post-commit world, as
-/// [`AffectedDocs::Minted`] is. Three ops carry terms; every other op's row
-/// carries none — wire.md's "absent on every other op's row", stated arm by
-/// arm in the table rather than by a default.
+/// Which of the op's own terms (`sidecar::OpTerms`) its row carries.
+///
+/// Per wire.md §The change feed (AUTH-6.36, signed-ops D25), they are
+/// decided per op by [`write_meta`], beside the documents, and completed at
+/// record time ([`RowTerms::complete`]) from the ack and the post-commit
+/// world, as [`AffectedDocs::Minted`] is. Three ops carry terms; every other
+/// op's row carries none — wire.md's "absent on every other op's row",
+/// stated arm by arm in the table rather than by a default.
 #[derive(Debug)]
 enum RowTerms {
     /// The row carries none of the op terms.
     Absent,
-    /// `delegate`'s pair: the principal it seats, from the REQUEST; the
-    /// minted account address, from its `AckAddr`.
+    /// `delegate`'s pair: the principal it seats, from the request.
+    ///
+    /// The minted account address comes from its `AckAddr`.
     Delegate { new_id: u64 },
-    /// `make_link`'s minted link address, from its `AckAddr` — the GRANT
-    /// RECORD's address for a replacing grant; its `replaces` link sits at the
-    /// next.
+    /// `make_link`'s minted link address, from its `AckAddr`.
+    ///
+    /// For a replacing grant it is the grant record's address; its
+    /// `replaces` link sits at the next.
     MakeLink,
-    /// `publish`'s placed count and base extent — the POST-COMMIT world's
-    /// shot terms of the member its `AckAddr` names, the very value
-    /// `doc_metadata` serves for it (M5's `ShotPlace`, folded per member), so
-    /// the row and the member read cannot disagree.
+    /// `publish`'s placed count and base extent.
+    ///
+    /// They are the post-commit world's shot terms of the member its
+    /// `AckAddr` names, the very value `doc_metadata` serves for it (M5's
+    /// `ShotPlace`, folded per member), so the row and the member read
+    /// cannot disagree.
     Publish,
 }
 
 impl RowTerms {
-    /// The row's terms, completed from the ack's minted address and the
-    /// post-commit world — `None` for an op whose row carries none.
+    /// Returns the row's terms, or `None` for an op whose row carries none.
     ///
-    /// A `delegate` or `make_link` that answered no `AckAddr`, or a `publish`
-    /// whose member the fold holds no terms for, records none — the same
-    /// fallback [`Commits::record`]'s `Minted` arm takes for `docs`, and as
-    /// unreachable: each of the three answers `AckAddr`, and M5 journals a
-    /// `ShotPlace` for every shot (lanes B+C). Asserted in debug for the same
-    /// reason that arm asserts.
+    /// They are completed from the ack's minted address and the post-commit
+    /// world. A `delegate` or `make_link` that answered no `AckAddr`, or a
+    /// `publish` whose member the fold holds no terms for, records none — the
+    /// same fallback [`Commits::record`]'s `Minted` arm takes for `docs`, and
+    /// as unreachable: each of the three answers `AckAddr`, and M5 journals a
+    /// `ShotPlace` for every shot.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build where the terms do not resolve: asserted in
+    /// debug for the same reason the `Minted` arm asserts.
     fn complete(self, minted: Option<&Address>, post: &World) -> Option<OpTerms> {
         let terms = match &self {
             RowTerms::Absent => return None,
@@ -1675,13 +1842,15 @@ impl RowTerms {
     }
 }
 
-/// The [`FrameMeta`] of a write `Op` — `None` for reads, which is M10's
-/// read/write partition seen from the change feed's side. EXHAUSTIVE with no
-/// `_` arm: a new `Op` fails to compile here until its change-feed entry is
-/// decided — the documents its row names, the terms it carries and the
-/// content it may mint a cell at, each arm stating all three.
+/// Returns the [`FrameMeta`] of a write `Op`, or `None` for a read.
 ///
-/// OBLIGATION: `Some` for exactly the ops M10 executes as writes. This
+/// That is M10's read/write partition seen from the change feed's side.
+/// Exhaustive with no `_` arm: a new `Op` fails to compile here until its
+/// change-feed entry is decided — the documents its row names, the terms it
+/// carries and the content it may mint a cell at, each arm stating all
+/// three.
+///
+/// **Obligation.** `Some` for exactly the ops M10 executes as writes. This
 /// table answers a second question — which documents a commit touched — so
 /// it is its own match rather than a call to [`Op::is_write`]; the assertion
 /// below is what keeps the two from drifting, since M10 owns the partition
@@ -1689,32 +1858,34 @@ impl RowTerms {
 /// to reach a release build: a write classified here as a read runs outside
 /// [`Commits::commit_under`]'s lock, unrecorded and unannounced —
 /// `/changes` misses that position for the rest of the uptime, `/events`
-/// never announces it, and `sidecar::CommitsLog::head_time`'s
-/// premise that every commit is recorded fails, so `/health` reports an
-/// older position's time AS the head's, the one thing that method's contract
-/// says it does not do. A read classified here as a write is refused from
-/// `/op-at` as `write_at_history`, denying a legitimate historical read.
-/// The two tables agree at 15 writes of 45.
+/// never announces it, and `sidecar::CommitsLog::head_time`'s premise that
+/// every commit is recorded fails, so `/health` reports an older position's
+/// time as the head's, the one thing that method's contract says it does
+/// not do. A read classified here as a write runs on `/op` through a write
+/// sequence, under the serialization lock, rather than as a read; `/op-at`
+/// asks the partition directly and is untouched. The two tables agree at 16
+/// writes of 46.
 ///
-/// SECOND OBLIGATION, and the one no assertion here can reach:
-/// `classify::derived_docs` answers this same question — which
-/// documents a commit touched — from the JOURNAL, for a position whose record
-/// was lost, and the two must agree on the MASK. Precisely: every DRAFT this
-/// table names must appear in that one's answer, and that one's answer must
-/// name nothing this table does not. An op whose effect no witness of
-/// `derived_docs` catches derives an EMPTY class, and an empty class is never
-/// masked, so its draft writes are served to every requester from the restart
-/// that reconstructs them. The compiler forces a new `Op` through this table
-/// and through nothing there. The equivalence is about the MASK alone, so the
-/// narrowings inherit whatever difference remains: a bare position whose
-/// derived class is empty is excluded from an `under=` page where its
-/// recorded twin would match. And a check is possible but not worth its cost
-/// here — [`Commits::commit_under`] would have to hold a pre-commit
-/// snapshot and run `derived_docs` per write, a full link enumeration of two
-/// worlds on the write path even in a debug build — so the pair of inclusions
-/// above is what a test at the wire asserts instead.
+/// **Second obligation**, and the one no assertion here can reach:
+/// `classify::derived_docs` answers this same question — which documents a
+/// commit touched — from the journal, for a position whose record was lost,
+/// and the two must agree on the mask. Precisely: every draft this table
+/// names must appear in that one's answer, and that one's answer must name
+/// nothing this table does not. An op whose effect no witness of
+/// `derived_docs` catches derives an empty class, and an empty class is
+/// never masked, so its draft writes are served to every requester from the
+/// restart that reconstructs them. The compiler forces a new `Op` through
+/// this table and through nothing there. The equivalence is about the mask
+/// alone, so the narrowings inherit whatever difference remains: a bare
+/// position whose derived class is empty is excluded from an `under=` page
+/// where its recorded twin would match. And a check is possible but not
+/// worth its cost here — [`Commits::commit_under`] would have to run
+/// `derived_docs` per write against the pre-commit snapshot its door holds,
+/// a full link enumeration of two worlds on the write path even in a debug
+/// build — so the pair of inclusions above is what a test at the wire
+/// asserts instead.
 ///
-/// THIRD OBLIGATION, the cell index's: `minting` is the index's entry at
+/// **Third obligation**, the cell index's: `minting` is the index's entry at
 /// commit, and the admission side of the same question is the media door's
 /// ([`skep_media::door::media_door`], exhaustive over `Op` for the same
 /// reason). An op the door admits a cell through must state its `Minting`
@@ -1722,6 +1893,11 @@ impl RowTerms {
 /// next open's walk, so within the uptime it counts in no base, and once its
 /// deposit's lease lapses the pruner — whose absent reference is a
 /// permission to unlink (M-I5 (b)) — takes the file a committed cell names.
+///
+/// # Panics
+///
+/// Panics in a debug build where this table and the read/write partition
+/// disagree about `op`.
 pub fn write_meta(op: &Op) -> Option<FrameMeta> {
     let meta = |kind, docs, terms, minting| Some(FrameMeta { kind, docs, terms, minting });
     let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
@@ -1783,14 +1959,14 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::MakeLink { home, .. } => {
             meta(OpKind::MakeLink, one(home), RowTerms::MakeLink, no_cell)
         }
-        // `emit` mints a link too, and its row carries no `link`: r6-2a names
-        // `make_link` alone.
+        // `emit` mints a link too, and its row carries no `link`: wire.md
+        // §The change feed names `make_link` alone.
         Op::Emit { home, .. } => meta(OpKind::Emit, one(home), absent, no_cell),
         Op::Nullify { home, target } => {
-            // The record's home AND the target link's home (PUB-6.46): a
+            // The record's home and the target link's home (PUB-6.46): a
             // retraction lands at its target, so a draft-homed record
             // against a public link shows to a guest as the target's entry.
-            // A SET, each document once — a same-home retraction reduces to
+            // A set, each document once — a same-home retraction reduces to
             // one name identically, and the entry alone distinguishes
             // nothing. `document_of` is address arithmetic (PUB-6.38); a
             // target with no document is not a link a committed nullify
@@ -1857,28 +2033,32 @@ pub fn write_meta(op: &Op) -> Option<FrameMeta> {
 
 // ── the checkpoint thread's signal ───────────────────────────────────────
 
-/// THE CHECKPOINT THREAD's SIGNAL: a pending bit, the stop and THE TICK's
-/// DEADLINE under one mutex, one condvar — the pruner's cadence's shape,
-/// with a wake beside the interval. `Commits::commit_recorded` RAISES it
-/// after the record step of a commit that finds the kernel's due flag set;
-/// the thread `skepd::serve` spawns WAITS on it, runs the
-/// checkpoint and returns to wait; the shutdown STOPS it, so a wait ends at
-/// once and no thread blocks a stop. A wake while no thread waits is kept as
-/// the pending bit, so a crossing is never lost to a thread that was busy;
-/// two wakes before one wait coalesce into one, since the thread reads the
-/// kernel's flag and not a count. Costs one mutex lock per wake and one per
-/// wait — once per crossing of the cadence, never per commit.
+/// The checkpoint thread's signal.
 ///
-/// AND THE TICK (`operations.md` §1 THE RATES; §1.1 m11): the wait is
-/// TIMED — every [`STANDING_INTERVAL`] with neither raise nor stop it
+/// It is a pending bit, the stop and the tick's deadline under one mutex,
+/// one condvar — the pruner's cadence's shape, with a wake beside the
+/// interval. `Commits::commit_recorded` raises it after the record step of a
+/// commit that finds the kernel's due flag set, or whose execute ran the
+/// kernel's backstop inline; the thread `skepd::serve` spawns waits on it,
+/// runs the checkpoint and returns to wait; the shutdown stops it, so a wait
+/// ends at once and no thread blocks a stop. A wake while no thread waits is
+/// kept as the pending bit, so a crossing is never lost to a thread that was
+/// busy; two wakes before one wait coalesce into one, since the thread reads
+/// the kernel's flag and not a count. Costs one mutex lock per wake and one
+/// per wait — once per crossing of the cadence, and per commit only while a
+/// crossing's flag stands unserviced.
+///
+/// **And the tick** (`operations.md` §1 the rates; §1.1 m11): the wait is
+/// timed — every [`STANDING_INTERVAL`] with neither raise nor stop it
 /// answers [`Woken::Tick`], on which the thread says the standing line. The
-/// deadline is HELD IN THE STATE and carried across `Due` wakes, never reset
+/// deadline is held in the state and carried across `Due` wakes, never reset
 /// by one: a board whose crossings wake the thread more often than the
 /// interval still gets one tick per interval, the deadline found passed at
 /// the first wait after it, where a wait timed from each wake would starve
-/// the tick for as long as the crossings came. The stop outranks the tick,
-/// the tick a raise only where the deadline has passed; a raise is answered
-/// first and the tick at the next wait, so neither is lost.
+/// the tick for as long as the crossings came. The stop outranks the tick
+/// and a raise, and a raise outranks a tick whose deadline has passed beside
+/// it; the raise is answered first and the tick at the next wait, so neither
+/// is lost.
 pub struct CheckpointSignal {
     state: Mutex<SignalState>,
     cond: Condvar,
@@ -1887,11 +2067,15 @@ pub struct CheckpointSignal {
 struct SignalState {
     pending: bool,
     stopped: bool,
-    /// The tick's interval — [`STANDING_INTERVAL`], or the figure the test
-    /// seam shortened it to.
+    /// The tick's interval.
+    ///
+    /// It is [`STANDING_INTERVAL`], or the figure the test seam shortened it
+    /// to.
     interval: Duration,
-    /// When the next tick is due: advanced by one interval as each tick is
-    /// answered, and by nothing else.
+    /// When the next tick is due.
+    ///
+    /// It is set one interval past the moment each tick is answered, and
+    /// otherwise moved only by the test seam (`set_tick_interval`).
     tick_due: Instant,
 }
 
@@ -1900,8 +2084,9 @@ struct SignalState {
 pub enum Woken {
     /// The signal was raised: a checkpoint may be due.
     Due,
-    /// The standing interval passed with no raise and no stop: the thread
-    /// says the standing line, where a standing state stands.
+    /// The standing interval passed with no raise and no stop.
+    ///
+    /// The thread says the standing line, where a standing state stands.
     Tick,
     /// The stop was asked.
     Stop,
@@ -1920,15 +2105,19 @@ impl CheckpointSignal {
         }
     }
 
-    /// Raise: the next wait, or the one in progress, answers [`Woken::Due`].
+    /// Raises the signal.
+    ///
+    /// The next wait, or the one in progress, answers [`Woken::Due`], unless
+    /// the stop has been asked.
     pub(crate) fn raise(&self) {
         let mut state = self.state.lock();
         state.pending = true;
         self.cond.notify_one();
     }
 
-    /// Wait for a raise, the tick or the stop — whichever comes first, the
-    /// stop outranking the others once asked, a raise outranking a tick
+    /// Waits for a raise, the tick or the stop, whichever comes first.
+    ///
+    /// The stop outranks the others once asked, a raise outranking a tick
     /// that is due beside it (the tick then answers the next wait). A raise
     /// that came before this wait is answered at once; so is a tick whose
     /// deadline passed while the thread was busy, since the deadline stands
@@ -1953,16 +2142,17 @@ impl CheckpointSignal {
         }
     }
 
-    /// Stop: every wait answers [`Woken::Stop`], now and forever.
+    /// Stops the signal: every wait answers [`Woken::Stop`], now and forever.
     pub fn stop(&self) {
         self.state.lock().stopped = true;
         self.cond.notify_all();
     }
 
-    /// The test seam behind `skepd::Daemon::set_standing_interval_millis`:
-    /// the tick's interval moved to `interval` and the next tick due one
-    /// interval from now, a parked wait woken to take the new deadline — so
-    /// a suite drives the standing line in milliseconds. Not a stable API.
+    /// The test seam behind `skepd::Daemon::set_standing_interval_millis`.
+    ///
+    /// It moves the tick's interval to `interval` and the next tick due one
+    /// interval from now, a parked wait woken to take the new deadline — so a
+    /// suite drives the standing line in milliseconds. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     #[doc(hidden)]
     pub fn set_tick_interval(&self, interval: Duration) {
@@ -1972,9 +2162,10 @@ impl CheckpointSignal {
         self.cond.notify_all();
     }
 
-    /// Whether the stop has been asked — what the thread reads between two
-    /// checkpoints of one servicing, so a run in flight is let finish and no
-    /// further one begins.
+    /// Returns whether the stop has been asked.
+    ///
+    /// It is what the thread reads between two checkpoints of one servicing,
+    /// so a run in flight is let finish and no further one begins.
     pub fn is_stopped(&self) -> bool {
         self.state.lock().stopped
     }
@@ -1982,13 +2173,15 @@ impl CheckpointSignal {
 
 // ── the commit stream (wire v4) ──────────────────────────────────────────
 
-/// The last ANNOUNCED position and the shutdown flag under a mutex, one
-/// condvar. Every committing write announces the position it committed —
-/// every commit rides [`Commits::commit_recorded`], which announces behind
-/// the record it made, so no head advance can be missed; each subscriber
-/// blocks in [`CommitStream::next`] with the keepalive interval as its wait
-/// bound. Shutdown broadcasts on the same condvar, which is what makes
-/// closing open streams immediate rather than a poll away.
+/// The last announced position and the shutdown flag, under one mutex.
+///
+/// One condvar rides beside them. Every committing write announces the
+/// position it committed — every commit rides [`Commits::commit_recorded`],
+/// which announces behind the record it made, so no head advance can be
+/// missed; each subscriber blocks in [`CommitStream::next`] with the
+/// keepalive interval as its wait bound. Shutdown broadcasts on the same
+/// condvar, which is what makes closing open streams immediate rather than a
+/// poll away.
 struct CommitStream {
     state: Mutex<StreamState>,
     cond: Condvar,
@@ -2011,9 +2204,11 @@ pub enum StreamStep {
 }
 
 impl CommitStream {
-    /// A stream whose first announced position is `announced` —
-    /// [`Commits::open`] passes the head the feed has just covered, the
-    /// base case.
+    /// Returns a stream whose first announced position is `announced`.
+    ///
+    /// [`Commits::open`] passes the head the feed's open has just reached —
+    /// covered, or the last of a region pending for the walk behind the
+    /// listener — the base case.
     fn at(announced: Seq) -> CommitStream {
         CommitStream {
             state: Mutex::new(StreamState { announced, shutdown: false }),
@@ -2034,12 +2229,14 @@ impl CommitStream {
         self.cond.notify_all();
     }
 
-    /// The position last announced.
+    /// Returns the position last announced.
     fn announced(&self) -> Seq {
         self.state.lock().announced
     }
 
-    /// Block until the announced position passes `last`, the daemon stops,
+    /// Blocks until the stream has a next step for the subscriber.
+    ///
+    /// That is when the announced position passes `last`, the daemon stops,
     /// or the keepalive interval elapses — whichever comes first. Returning
     /// the last announced position (not a queue of commits) is the
     /// coalescing: a burst of commits between wakes is one step.

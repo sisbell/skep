@@ -39,8 +39,9 @@ use crate::codec::wire_address;
 /// **One door**, where [`super::origin::Origin`] keeps two: that type's
 /// `parse` exists for an internal predicate use
 /// (`Origin::parse(h).is_some_and(…)`) this one has none of, so `str::parse`
-/// is the whole surface — which is also what lets `main.rs`'s `from_env`
-/// carry this setting as it carries the port and the worker count.
+/// is the whole surface — which is also what lets `from_env`, in skepd's
+/// `main.rs`, carry this setting as it carries the port and the worker
+/// count.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NodePrefix(Address);
 

@@ -1,6 +1,8 @@
-//! Segment files (names, listing, reclaim), and what the journal directory
-//! itself needs: its fsync, the modes every entry the kernel makes in it is
-//! born with, and the lock file.
+//! Segment files and what the journal directory itself needs.
+//!
+//! The segment files' names, listing and reclaim; and the directory's fsync,
+//! the modes the directory and every file the kernel makes in it are born
+//! with, and the lock file.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -8,9 +10,12 @@ use std::path::{Path, PathBuf};
 
 use crate::error::at_file;
 
-/// A journal segment file, named by its `firstSeq` (§1). Every operation over
-/// a slice of these reads a neighbour's name as this segment's bound, so the
-/// slice must be ascending by `first_seq` as [`list_segments`] produces it.
+/// A journal segment file, named by its `firstSeq` (§1).
+///
+/// Every operation over a slice of these reads a segment's place in it — a
+/// neighbour's name as a segment's bound, the first as the oldest, the last
+/// as the active one — so the slice must be ascending by `first_seq` as
+/// [`list_segments`] produces it.
 ///
 /// `first_seq` is private to this file: every coverage inference drawn from
 /// segment names is drawn here — by [`inferred_last_seq`], [`scanned_above`],
@@ -28,45 +33,53 @@ pub(crate) struct SegmentMeta {
 }
 
 impl SegmentMeta {
-    /// The file's name in the journal directory, `seg-<firstSeq>.wal` — the
-    /// words an operator's line names the segment by, and never read back
-    /// for its coverage.
+    /// Returns the file's name in the journal directory, `seg-<firstSeq>.wal`.
+    ///
+    /// It is the words an operator's line names the segment by, and is never
+    /// read back for its coverage.
     pub(super) fn name(&self) -> String {
         segment_name(self.first_seq)
     }
 }
 
-/// The one file name a segment beginning at `first_seq` has:
-/// `seg-<firstSeq>.wal` (§1).
+/// Returns the one file name a segment beginning at `first_seq` has (§1).
 ///
-/// Stated as a pair with [`parse_segment_name`], which reads it back by
-/// re-emitting it, because the format and the parse are one agreement: a
-/// change to either that the other does not match makes every segment on disk
-/// invisible to recovery, which reads as an empty journal rather than as a
-/// failure.
+/// It is `seg-<firstSeq>.wal`. Stated as a pair with [`parse_segment_name`],
+/// which reads it back by re-emitting it, because the format and the parse
+/// are one agreement: a change to either that the other does not match makes
+/// every segment on disk invisible to recovery, which reads as an empty
+/// journal rather than as a failure.
 pub(super) fn segment_name(first_seq: u64) -> String {
     format!("seg-{first_seq}.wal")
 }
 
-/// Where a segment beginning at `first_seq` lives (§1).
+/// Returns where a segment beginning at `first_seq` lives (§1).
 pub(crate) fn segment_path(dir: &Path, first_seq: u64) -> PathBuf {
     dir.join(segment_name(first_seq))
 }
 
-/// Read back the `firstSeq` [`segment_name`] wrote — and ONLY the spelling it
-/// writes. `u64::from_str` accepts a leading `+` and any number of leading
-/// zeros, so the round trip is what keeps `seg-01.wal` from claiming a live
-/// segment's `firstSeq`: two entries at one coordinate make
-/// [`inferred_last_seq`] answer `0` for the first of them, and
-/// [`reclaim_below`] deletes on that inference. `None` for any other name — a
-/// checkpoint, the lock file, or something foreign.
+/// Reads back the `firstSeq` [`segment_name`] wrote — only its spelling.
+///
+/// `u64::from_str` accepts a leading `+` and any number of leading zeros, so
+/// the round trip is what keeps `seg-01.wal` from claiming a live segment's
+/// `firstSeq`: two entries at one coordinate make [`inferred_last_seq`]
+/// answer one below that coordinate for the first of them, a segment
+/// covering nothing, and [`reclaim_below`] deletes on that inference. `None`
+/// for any other name — a checkpoint, the lock file, or something foreign.
 fn parse_segment_name(name: &str) -> Option<u64> {
     let first_seq: u64 = name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()?;
     (name == segment_name(first_seq)).then_some(first_seq)
 }
 
-/// All segments in `dir`, ascending by `firstSeq`. Non-segment files
-/// (checkpoints, the lock file) fail the name parse and are skipped.
+/// Returns all segments in `dir`, ascending by `firstSeq`.
+///
+/// Non-segment files (checkpoints, the lock file) fail the name parse and are
+/// skipped.
+///
+/// # Errors
+///
+/// A directory that cannot be listed, or an entry of it that cannot be read,
+/// named `{dir}: list`.
 pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
     let mut segs = Vec::new();
     for entry in fs::read_dir(dir).map_err(at_file(dir.display(), "list"))? {
@@ -84,12 +97,14 @@ pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
     Ok(segs)
 }
 
-/// The `lastSeq` segment `i` covers, inferred from its successor's name
-/// (`firstSeq` − 1). An upper bound — under `TolerateGap` burns the successor
-/// starts above its predecessor's true last `Seq` — so every use of it is
-/// conservative. `None` for the final (active) segment, which has no
-/// successor and therefore no trusted `lastSeq`: it is always scanned, never
-/// range-reclaimed (§1/§6/§7).
+/// Returns the `lastSeq` segment `i` covers, inferred from its successor.
+///
+/// The inference is read off the successor's name (`firstSeq` − 1): an upper
+/// bound — under `TolerateGap` burns the successor starts above its
+/// predecessor's true last `Seq` — so every use of it is conservative. `None`
+/// for the final (active) segment, which has no successor and therefore no
+/// trusted `lastSeq`: it is always scanned, never range-reclaimed
+/// (§1/§6/§7).
 ///
 /// Private for the reason [`SegmentMeta`]'s `first_seq` is: a coverage
 /// inference drawn outside this file is drawn away from the naming rule it
@@ -98,11 +113,13 @@ fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
     segs.get(i + 1).map(|next| next.first_seq.saturating_sub(1))
 }
 
-/// The segments a scan above `s_load` reads, each with its index in `segs`:
-/// every closed segment whose inferred reach lies above the base, and the
-/// active one always (§1/§7). The ONE statement of the skip rule — [`super::scan::scan`]
-/// walks these and [`super::scan::first_sync_word`] probes the first of them, so the probe
-/// looks where the scan will look by construction.
+/// Returns the segments a scan above `s_load` reads, each with its index.
+///
+/// The index is the segment's place in `segs`. They are every closed segment
+/// whose inferred reach lies above the base, and the active one always
+/// (§1/§7). The one statement of the skip rule — [`super::scan::scan`] walks
+/// these and [`super::scan::first_sync_word`] probes the first of them, so
+/// the probe looks where the scan will look by construction.
 pub(super) fn scanned_above(
     segs: &[SegmentMeta],
     s_load: u64,
@@ -112,20 +129,22 @@ pub(super) fn scanned_above(
         .filter(move |&(i, _)| inferred_last_seq(segs, i).is_none_or(|last| last > s_load))
 }
 
-/// Whether the surviving segments still cover `Seq(1)` — whether a fold from
-/// genesis can still reach the present. True for an empty journal (nothing
-/// has been reclaimed yet); false once reclamation has dropped the segment
-/// that began the log, which is what makes genesis unusable as a fallback
-/// base (§6/§7).
+/// Returns whether the surviving segments still cover `Seq(1)`.
+///
+/// That is, whether a fold from genesis can still reach the present. True
+/// for an empty journal (nothing has been reclaimed yet); false once
+/// reclamation has dropped the segment that began the log, which is what
+/// makes genesis unusable as a fallback base (§6/§7).
 pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
     segs.first().is_none_or(|seg| seg.first_seq == 1)
 }
 
-/// Reclaim whole *closed* segments covering nothing above `floor`: the
-/// qualifying segments form a prefix, so the walk stops at the first that
-/// does not qualify, and the active segment never does (§6). Space
+/// Reclaims whole *closed* segments covering nothing above `floor` (§6).
+///
+/// The qualifying segments form a prefix, so the walk stops at the first
+/// that does not qualify, and the active segment never does. Space
 /// reclamation only — never a correctness mechanism; recovery's
-/// `Seq > S_load` filter handles a straddler's leftovers. On return the
+/// `Seq > S_load` filter handles a straddler's leftovers. On `Ok` the
 /// directory durably reflects whatever this call removed, with no case split
 /// on whether that was anything.
 ///
@@ -133,8 +152,14 @@ pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
 /// before its removal, summed — the figure a landing reports as the journal
 /// bytes it reclaimed ([`crate::Kernel::last_reclaimed_bytes`]). `0` where
 /// no segment qualified, so a landing that reclaims nothing says so rather
-/// than nothing. A failure answers the error alone: what it removed before
-/// failing is gone and uncounted, and the next landing's walk starts over.
+/// than nothing.
+///
+/// # Errors
+///
+/// A failure answers the error alone — the listing's, named `{dir}: list`, a
+/// segment's length or removal, named `{segment}: remove`, or the
+/// directory's sync, named `{dir}: sync`: what it removed before failing is
+/// gone, uncounted and not synced, and the next landing's walk starts over.
 pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
     let segs = list_segments(dir)?;
     let mut reclaimed = 0u64;
@@ -152,10 +177,14 @@ pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<u64> {
     Ok(reclaimed)
 }
 
-/// Fsync a directory so entry creations/deletions/renames are durable. On
-/// non-unix targets this is a no-op (v1 targets unix; the design's dir-fsync
-/// obligations are discharged there). A failure names the directory by its
-/// path and the act, `sync`.
+/// Fsyncs a directory so entry creations, deletions and renames are durable.
+///
+/// On non-unix targets this is a no-op (v1 targets unix; the design's
+/// dir-fsync obligations are discharged there).
+///
+/// # Errors
+///
+/// A failure names the directory by its path and the act, `sync`.
 pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -168,21 +197,24 @@ pub(crate) fn fsync_dir(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// THE KERNEL's MODES, owner-only — a directory `0700`, a file `0600` — set
-/// at creation, so the process umask can only tighten them: a reader of the
-/// journal directory holds the board whole, and a umask is the one thing no
-/// caller can be relied on to have set. Every directory and file the kernel
-/// makes is born with them, through [`dir_builder`] and [`file_options`],
-/// its one way to make either (`tests/it/tidy.rs` holds the library's
-/// source to that); a rename carries a file's mode onto its new name, and a
-/// directory or a file that already stands keeps the mode it has — nothing
-/// here chmods. A pin, moved by a ruling and set by no operator, and moved
-/// with its siblings: skep-blobs' own pair (`blobs.rs`), the daemon's
-/// change-feed files (`commits/feed/derived.rs`,
-/// `commits/sidecar.rs`) and its refusal of a standing data directory
-/// another user can read (`main.rs`, `mode & 0o077`). `tests/it/modes.rs`
-/// here, and the daemon's own, hold every entry to these exact bits. On a
-/// non-unix target no mode is set; v1 targets unix.
+/// The mode a directory the kernel makes is born with: owner-only, `0700`.
+///
+/// **The kernel's modes**, owner-only — a directory `0700`, a file `0600` —
+/// are set at creation, so the process umask can only tighten them: a reader
+/// of the journal directory holds the board whole, and a umask is the one
+/// thing no caller can be relied on to have set. Every directory and file the
+/// kernel makes is born with them, through [`dir_builder`] and
+/// [`file_options`], its one way to make either (`tests/it/tidy.rs` holds the
+/// library's source to that); a rename carries a file's mode onto its new
+/// name, and a directory or a file that already stands keeps the mode it has
+/// — nothing here chmods. A pin, which the design moves and no operator sets,
+/// and which moves with its siblings: skep-blobs' own pair (`blobs.rs`), the
+/// daemon's change-feed files (`commits/feed/derived.rs`,
+/// `commits/sidecar.rs`) and its refusal of a standing data directory another
+/// user can read (`main.rs`, `mode & 0o077`). `tests/it/modes.rs` here, and
+/// the daemon's own, hold every entry their runs make — a commit's, and here
+/// a checkpoint's — to these exact bits. On a non-unix target no mode is set;
+/// v1 targets unix.
 #[cfg(unix)]
 const DIR_MODE: u32 = 0o700;
 
@@ -190,8 +222,9 @@ const DIR_MODE: u32 = 0o700;
 #[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
-/// A builder for a directory the kernel makes, born owner-only
-/// (`DIR_MODE`); the caller says whether it makes the parents too.
+/// Returns a builder for a directory the kernel makes, born owner-only.
+///
+/// The mode is `DIR_MODE`; the caller says whether it makes the parents too.
 pub(crate) fn dir_builder() -> fs::DirBuilder {
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
@@ -199,8 +232,9 @@ pub(crate) fn dir_builder() -> fs::DirBuilder {
     builder
 }
 
-/// The options a file the kernel makes is opened with, born owner-only
-/// (`FILE_MODE`); the caller says how it opens.
+/// Returns the options a file the kernel makes is opened with.
+///
+/// The file is born owner-only (`FILE_MODE`); the caller says how it opens.
 pub(crate) fn file_options() -> OpenOptions {
     let mut opts = OpenOptions::new();
     #[cfg(unix)]
@@ -211,20 +245,28 @@ pub(crate) fn file_options() -> OpenOptions {
 /// The lock file's name in the journal directory.
 const LOCK_NAME: &str = "kernel.lock";
 
-/// The words a held lock is refused with, in the act's place: what holds it
-/// and what clears it, since `WouldBlock`'s own words — `Resource temporarily
-/// unavailable` — say neither.
+/// The words a held lock is refused with, in the act's place.
+///
+/// They say what holds it and what clears it, since `WouldBlock`'s own words
+/// — `Resource temporarily unavailable` — say neither.
 const LOCK_HELD: &str = "lock: another process holds it — a second kernel open over this journal \
                          directory, a daemon or a tool; stop it, or open another directory";
 
-/// Take the `open()`-held exclusive advisory lock on the journal directory
-/// (Lifecycle): at most one live kernel — appender *or* recoverer — per
-/// journal. flock semantics, so the lock dies with the process; a second
-/// `open()` fails with the acquisition error (surfaced as `OpenError::Io`),
-/// of kind `WouldBlock` and named as what it is ([`LOCK_HELD`]), so the
-/// refusal says a second process holds the journal rather than that a read
-/// failed. The lock file is born owner-only ([`file_options`]) where this
-/// creates it; one that already stands keeps its mode.
+/// Takes the exclusive advisory lock `open()` holds on the journal directory.
+///
+/// At most one live kernel — appender *or* recoverer — per journal
+/// (Lifecycle). flock semantics, so the lock dies with the process. The lock
+/// file is born owner-only ([`file_options`]) where this creates it; one that
+/// already stands keeps its mode.
+///
+/// # Errors
+///
+/// A second `open()` fails with the acquisition error (surfaced as
+/// `OpenError::Io`), of kind `WouldBlock` and named as what it is
+/// ([`LOCK_HELD`]), so the refusal says a second process holds the journal
+/// rather than that a read failed. A lock file that cannot be opened or
+/// created is named `kernel.lock: open`, and any other refusal of the lock
+/// `kernel.lock: lock`.
 pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
     let f = file_options()
         .create(true)
@@ -250,8 +292,9 @@ mod tests {
         // `seg-01.wal` and `seg-+7.wal` parse as 1 and 7 under a bare
         // `u64::from_str`, so without the round trip they alias live segments'
         // `firstSeq`s. Two entries at one coordinate sort adjacent, which
-        // makes the first one's inferred `lastSeq` 0 — and `reclaim_below`
-        // deletes every segment whose inference is at or below the floor.
+        // makes the first one's inferred `lastSeq` one below that coordinate
+        // — 0 for the pair at 1 — and `reclaim_below` deletes every segment
+        // whose inference is at or below the floor.
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 1), b"").unwrap();
         fs::write(dir.path().join("seg-01.wal"), b"").unwrap();
@@ -271,12 +314,12 @@ mod tests {
 
     #[test]
     fn segments_list_in_first_seq_order_across_a_digit_boundary() {
-        // A closed segment's reach is read off its SUCCESSOR's name; the scan
+        // A closed segment's reach is read off its successor's name; the scan
         // skips on that inference and `reclaim_below` deletes on it. Name
         // order and `firstSeq` order agree while names have one digit — and
-        // `seg-10.wal` sorts BEFORE `seg-9.wal` by name.
+        // `seg-10.wal` sorts before `seg-9.wal` by name.
         let dir = tempdir().unwrap();
-        // Each file a different length, so the bytes reclaimed name WHICH
+        // Each file a different length, so the bytes reclaimed name which
         // files went: seg-1 and seg-9 together, and neither of the others.
         for (first_seq, len) in [(10, 1_000), (1, 10), (100, 10_000), (9, 100)] {
             fs::write(segment_path(dir.path(), first_seq), vec![0u8; len]).unwrap();
@@ -305,11 +348,11 @@ mod tests {
         // The one statement of which segments a scan above a base reads — the
         // scan walks them and the first-sync-word probe opens the first, so the
         // two agree by construction. A closed segment is passed over only when
-        // its inferred reach lies at or below the base; one that STRADDLES the
+        // its inferred reach lies at or below the base; one that straddles the
         // base is read, and the active one always is.
         //
         // Each segment opens with a word of its own, so the probe's answer says
-        // WHICH segment it opened: another format's stamp names a closed one,
+        // which segment it opened: another format's stamp names a closed one,
         // and the empty active one is the scan's to classify.
         let dir = tempdir().unwrap();
         for (first_seq, opening) in [(1, &b"SKJ2"[..]), (5, &b"SKJ3"[..]), (9, &b""[..])] {
@@ -332,12 +375,14 @@ mod tests {
         // seg-1 reaches 4, where seg-5 begins at 5: it straddles a base at 3…
         assert_eq!(read_above(3), vec![(0, 1), (1, 5), (2, 9)], "seg-1 straddles the base");
         assert_eq!(probed(3), foreign(b"SKJ2", "seg-1.wal"));
-        // …and a base at 4 embodies it, so the scan and the probe begin at seg-5.
+        // …and a base at 4 embodies it, so the scan and the probe begin at
+        // seg-5.
         assert_eq!(read_above(4), vec![(1, 5), (2, 9)], "seg-1 ends at the base");
         assert_eq!(probed(4), foreign(b"SKJ3", "seg-5.wal"));
         assert_eq!(read_above(8), vec![(2, 9)], "seg-5 ends at the base");
         assert_eq!(probed(8), FirstSyncWord::Scan);
-        // The active segment has no successor to bound it, so it is always read.
+        // The active segment has no successor to bound it, so it is always
+        // read.
         assert_eq!(read_above(100), vec![(2, 9)], "the active segment is always read");
         assert_eq!(probed(100), FirstSyncWord::Scan);
     }

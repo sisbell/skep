@@ -7,22 +7,22 @@
 //! bit-rot, and a silently-wrong base would defeat the `BadCheckpoint`
 //! fallback chain).
 //!
-//! Layout (`SKC4`): `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE]
-//! [chain_head 32][body_hash 32][body]`, at `checkpoint.<S>`; the fixed temp
-//! name `checkpoint.tmp` is no base — recovery removes it (a crash
+//! Layout (`SKC4`): `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64
+//! LE][chain_head 32][body_hash 32][body]`, at `checkpoint.<S>`; the fixed
+//! temp name `checkpoint.tmp` is no base — recovery removes it (a crash
 //! mid-checkpoint leaves at most a `.tmp` the next open deletes, and a failed
-//! write deletes its own before answering — §6; the name is one of those the
-//! kernel owns in its directory, so the file is the kernel's to delete).
-//! `chain_head` is the commit chain's value at `seq` — the marker that held it
-//! may be reclaimed, and this is where a replay above the base continues the
-//! chain from; `body_hash` is SHA-256 over the body, meaningful because the
-//! body is canonical under `SKC4` — [`crate::WorldState`]'s
+//! write deletes its own, best-effort, before answering — §6; the name is one
+//! of those the kernel owns in its directory, so the file is the kernel's to
+//! delete). `chain_head` is the commit chain's value at `seq` — the marker
+//! that held it may be reclaimed, and this is where a replay above the base
+//! continues the chain from; `body_hash` is SHA-256 over the body, meaningful
+//! because the body is canonical under `SKC4` — [`crate::WorldState`]'s
 //! canonical-encoding obligation, which the engine discharges with every
 //! serialized slice iterating in key order (the encoding report's option
 //! (i)) — so two writes of one world, on two processes or two machines, yield
 //! one byte string, and a published head can name a checkpoint by
-//! `(seq, chain_head, body_hash)`. The CRC stays as the first, cheap bit-rot
-//! check `load` runs before anything else.
+//! `(seq, chain_head, body_hash)`. The CRC is the first, cheap bit-rot check
+//! of the body that `load` runs, before its hash and its decode.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -38,37 +38,37 @@ use crate::error::{at_file, stamp_text, Cause, NO_MIGRATION_REMEDY};
 use crate::journal::{codec, file_options, fsync_dir};
 use crate::{Seam, Seq, Step};
 
-// The trailing numeral is the checkpoint's FORMAT stamp; bumped 1 → 2 at
-// the 2026-08-26 genesis re-baseline (M7's slice no longer carries a sealed
-// type config, so pre-baseline checkpoint bytes are not this format's), and
-// 2 → 3 on 2026-09-23 with the journal's `SKJ3` (QUEUE item 10): the header
-// gained `chain_head` and `body_hash`, and the body went canonical; and 3 → 4
-// on 2026-09-24 with the journal's `SKJ4` (the chain's salt): nothing in the
-// layout moved, but `chain_head` is a value under the salted preimage, which
-// no `SKC3` header's is. NOT bumped on 2026-09-29, when the chain's preimage
-// gained the signature slot's digest and M5's slice a fourth field (the
-// shot terms): a format event by the marker doc's own definition, landed
-// under the same stamps by the owner's no-stamp ruling — no served board
-// exists, dev boards regenerate, and the golden fixture was regenerated once
-// (`tests/golden/`). NOT bumped on 2026-10-15 either, when M4's slice gained
-// the stretch entry (each content entry a tagged value or stretch) and the
-// engine's record its fifth variant: the same ruling renewed, the golden
-// regenerated a second time under the unchanged stamps, the pre-stretch
+// The trailing numeral is the checkpoint's format stamp, which moves with the
+// journal's (`SKJ4`, the chain's salt): the header carries `chain_head` and
+// `body_hash` and the body is canonical, the layout `SKC3`'s, but
+// `chain_head` is a value under the salted preimage, which no `SKC3`
+// header's is; and M7's slice carries no sealed type config, so a body that
+// carries one is not this format's. Two changes stand under the same stamps,
+// each a format event by the marker doc's own definition: the chain's
+// preimage hashes the signature slot's digest and M5's slice holds a fourth
+// field (the shot terms); and M4's slice holds the stretch entry (each
+// content entry a tagged value or stretch) and the engine's record its fifth
+// variant. No served board exists and dev boards regenerate, so the golden
+// fixture is regenerated under the stamps (`tests/golden/`), the pre-stretch
 // golden kept beside it (`tests/golden-prestretch/`). A checkpoint under
 // another stamp is refused at `load` naming the stamp found; one written
-// under this stamp before either day fails at the body's decode — a skipped
-// base whose account `refused_at_decode` tells from damage — or at the
-// chain, as corruption.
+// under this stamp before either change fails at the body's decode — a
+// skipped base whose account `refused_at_decode` tells from damage — or at
+// the chain, as corruption.
 const MAGIC: [u8; 4] = *b"SKC4";
-/// The checkpoint's FORMAT stamp as a caller above the kernel names it — the
-/// daemon's version line, which says at every open which formats the build
-/// reads: `MAGIC`'s four bytes, `SKC4`, read as ASCII the way `load`'s
-/// refusal spells the stamp it found. One value with the header's stamp,
-/// defined from it; re-exported at the crate root beside the journal's.
+/// The checkpoint's format stamp, as a caller above the kernel names it.
+///
+/// That caller is the daemon's version line, which says at every open which
+/// formats the build reads: `MAGIC`'s four bytes, `SKC4`, read as ASCII the
+/// way `load`'s refusal spells the stamp it found. One value with the
+/// header's stamp, defined from it; re-exported at the crate root beside the
+/// journal's.
 pub const CHECKPOINT_FORMAT: [u8; 4] = MAGIC;
-/// The header's fields, at the offsets `write` lays them down and
-/// [`parse_header`] reads them at — one spelling of each, so the two cannot
-/// drift.
+/// The header's fields, at the offsets [`parse_header`] reads them at.
+///
+/// One spelling of each offset for the parse; `write` lays the fields down in
+/// this order without naming the offsets, and the layout test pins the two
+/// together.
 const SEQ_AT: usize = 4;
 const CRC_AT: usize = 12;
 const BODY_LEN_AT: usize = 16;
@@ -76,31 +76,36 @@ const CHAIN_HEAD_AT: usize = 24;
 const BODY_HASH_AT: usize = 56;
 const HEADER_LEN: usize = 88;
 
-/// The refusal a file too short to hold [`HEADER_LEN`] bytes answers with,
-/// whichever reader met it.
+/// The refusal a file too short to hold [`HEADER_LEN`] bytes answers with.
+///
+/// The same whichever reader met it.
 const SHORT_OF_HEADER: &str = "checkpoint is shorter than its own header";
 
-/// SHA-256 over a checkpoint body — the header's `body_hash`.
+/// Returns SHA-256 over a checkpoint body — the header's `body_hash`.
 fn body_hash(body: &[u8]) -> [u8; 32] {
     Sha256::digest(body).into()
 }
 
-/// The `N`-byte field at offset `AT` of a header. The window is checked
-/// against [`HEADER_LEN`] when this is COMPILED, for every field any reader
-/// names, so no read of a header can fail on its bounds — the array type
-/// fixes the header's length, and this fixes each field inside it.
+/// Returns the `N`-byte field at offset `AT` of a header.
+///
+/// The window is checked against [`HEADER_LEN`] when this is compiled, for
+/// every field any reader names, so no read of a header can fail on its
+/// bounds — the array type fixes the header's length, and this fixes each
+/// field inside it.
 fn field<const AT: usize, const N: usize>(header: &[u8; HEADER_LEN]) -> [u8; N] {
     const { assert!(AT + N <= HEADER_LEN, "a header field lies past HEADER_LEN") };
     std::array::from_fn(|i| header[AT + i])
 }
 
-/// A checkpoint header as [`fn@write`] lays it down, read under every check a
-/// header can pass without its body ([`parse_header`], the only site that
-/// makes one): this build's stamp, and a seq agreeing with the file's name.
-/// The body's own checks — its length, checksum and hash — are
-/// [`CheckpointMeta::load`]'s, which alone reads the body. Private to this
-/// module: what a header CLAIMS leaves it as a [`CheckpointHeader`], and the
-/// fields that exist only to check the body never leave it.
+/// A checkpoint header as [`fn@write`] lays it down.
+///
+/// It is read under every check a header can pass without its body
+/// ([`parse_header`], the only site that makes one): this build's stamp, and
+/// a seq agreeing with the file's name. The body's own checks — its length,
+/// checksum and hash — are [`CheckpointMeta::load`]'s, which alone reads the
+/// body. Private to this module: what a header claims leaves it as a
+/// [`CheckpointHeader`] — the body's length inside the file's — and the
+/// checksum, which exists only to check the body, never leaves it.
 #[derive(Debug)]
 struct Header {
     /// CRC32C over the body, as written.
@@ -109,59 +114,66 @@ struct Header {
     body_len: u64,
     /// The commit chain's value at this checkpoint's seq.
     chain_head: [u8; 32],
-    /// SHA-256 over the body — the header's commitment to it, which a party
-    /// holding the file verifies the body by.
+    /// SHA-256 over the body, the header's commitment to it.
+    ///
+    /// A party holding the file verifies the body by it.
     body_hash: [u8; 32],
 }
 
-/// What a checkpoint's `SKC4` header CLAIMS, read without its body: the
-/// coordinate the checkpoint embodies, the commit chain's value there, and
-/// SHA-256 over its canonical body — the three a published head names a base
-/// by ([`crate::Kernel::newest_checkpoint`]) — and the file's length, the
-/// figure a caller sizes a floor or a byte bound by. Only this crate makes
-/// one, and only under every check a header can pass without its body: this
-/// build's stamp, and a seq the file's name agrees with. The body is NOT
-/// verified — its checksum and hash need the body — and `body_hash` is what
-/// a party holding the file verifies it by.
+/// What a checkpoint's `SKC4` header claims, read without its body.
+///
+/// The coordinate the checkpoint embodies, the commit chain's value there,
+/// and SHA-256 over its canonical body — the three a published head names a
+/// base by ([`crate::Kernel::newest_checkpoint`]) — and the file's length,
+/// the figure a caller sizes a floor or a byte bound by. Only this crate
+/// makes one, and outside its unit tests only under every check a header can
+/// pass without its body: this build's stamp, and a seq the file's name
+/// agrees with. The body is not verified — its checksum and hash need the
+/// body — and `body_hash` is what a party holding the file verifies it by.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CheckpointHeader {
-    /// The coordinate the checkpoint embodies — its file name and its header
-    /// agreeing on it.
+    /// The coordinate the checkpoint embodies.
+    ///
+    /// Its file name and its header agree on it.
     pub seq: Seq,
     /// The commit chain's value at `seq`.
     pub chain_head: [u8; 32],
     /// SHA-256 over the checkpoint's canonical body.
     pub body_hash: [u8; 32],
-    /// The file's length in bytes AS THE HEADER CLAIMS IT: the fixed header
-    /// plus the `body_len` it carries — parsed from what the file already
-    /// holds, no field of the layout added for it, so a checkpoint written
-    /// before this member reads the same. The length `load` holds the file
-    /// to, so for every checkpoint that is a base it IS the file's size; a
-    /// header whose claim the file contradicts is no base, and `load` refuses
-    /// it before a byte of its body is read. Saturating at `u64::MAX` for a
-    /// claim no file could hold.
+    /// The file's length in bytes as the header claims it.
+    ///
+    /// The fixed header plus the `body_len` it carries — parsed from what the
+    /// file holds, no field of the layout spent on it, so every `SKC4`
+    /// checkpoint answers it. The length `load` holds the file to, so for
+    /// every checkpoint that is a base it *is* the file's size; a header whose
+    /// claim the file contradicts is no base, and `load` refuses it before a
+    /// byte of its body is read. Saturating at `u64::MAX` for a claim no file
+    /// could hold.
     pub len: u64,
 }
 
-/// The refusal of a checkpoint under another FORMAT STAMP: the stamp found,
-/// against the one this build reads and writes. Its [`fmt::Display`] is the
-/// whole refusal, the ruled remedy last ([`NO_MIGRATION_REMEDY`]) — what an
-/// EXHAUSTED fallback chain says through [`crate::OpenError::BadCheckpoint`]'s
-/// cause, where no base stands in and the board cannot open (PUB-1.2). Typed,
-/// rather than a sentence, for the one reader that must say less:
-/// [`ForeignStamp::fact`] is the refusal without the remedy, which a base the
-/// chain passed over while an older one stood in carries
-/// ([`crate::SkippedBase`]'s `why`) — the board opened whole, and the remedy
-/// for a board that cannot open would have its operator delete one that can.
+/// The refusal of a checkpoint under another format stamp.
+///
+/// The stamp found, against the one this build reads and writes. Its
+/// [`fmt::Display`] is the whole refusal, the remedy last
+/// ([`NO_MIGRATION_REMEDY`]) — what an exhausted fallback chain says through
+/// [`crate::OpenError::BadCheckpoint`]'s cause, where no base stands in and
+/// the board cannot open (PUB-1.2). Typed, rather than a sentence, for the
+/// one reader that must say less: [`ForeignStamp::fact`] is the refusal
+/// without the remedy, which a base the chain passed over while an older one
+/// stood in carries ([`crate::SkippedBase`]'s `why`) — the board opened
+/// whole, and the remedy for a board that cannot open would have its
+/// operator delete one that can.
 #[derive(Debug)]
 pub(crate) struct ForeignStamp {
     found: [u8; 4],
 }
 
 impl ForeignStamp {
-    /// The refusal's FACT: the stamp found and the one this build reads,
-    /// without the remedy.
+    /// Returns the refusal's fact, without the remedy.
+    ///
+    /// The fact is the stamp found and the one this build reads.
     pub(crate) fn fact(&self) -> String {
         format!(
             "checkpoint is not this build's format: it opens with the stamp `{}`, this build \
@@ -180,14 +192,19 @@ impl fmt::Display for ForeignStamp {
 
 impl std::error::Error for ForeignStamp {}
 
-/// The one parse of a checkpoint header, for [`CheckpointMeta::load`] and
-/// [`CheckpointMeta::header`] alike, in the order that makes each check mean
-/// something: the stamp FIRST, so another format's header has none of its
-/// other fields read as this format's — refused by name with the ruled remedy
-/// ([`ForeignStamp`]) — then the seq against `named_seq`, the directory
-/// entry's claim. The name-versus-header cross-check compares two independent
+/// Parses a checkpoint header: the one parse, for every reader of one.
+///
+/// [`CheckpointMeta::load`] and [`CheckpointMeta::header`] read through it
+/// alike. The name-versus-header cross-check compares two independent
 /// sources, which is what makes it a check rather than a tautology: the seq
 /// comes from the directory, the header from the bytes.
+///
+/// # Errors
+///
+/// In the order that makes each check mean something: the stamp first, so
+/// another format's header has none of its other fields read as this
+/// format's — refused by name with the remedy ([`ForeignStamp`]) — then the
+/// seq against `named_seq`, the directory entry's claim, refused naming both.
 fn parse_header(named_seq: u64, bytes: &[u8; HEADER_LEN]) -> Result<Header, LoadRefused> {
     let stamp: [u8; 4] = field::<0, 4>(bytes);
     if stamp != MAGIC {
@@ -210,27 +227,31 @@ fn parse_header(named_seq: u64, bytes: &[u8; HEADER_LEN]) -> Result<Header, Load
     })
 }
 
-/// What a loaded checkpoint hands back: the world, and the commit chain's
-/// value at the coordinate the world embodies, which the scan above it
-/// continues from.
+/// What a loaded checkpoint hands back.
+///
+/// The world, and the commit chain's value at the coordinate the world
+/// embodies, which the scan above it continues from.
 #[derive(Debug)]
 pub(crate) struct Loaded<W> {
     pub world: W,
     pub chain_head: [u8; 32],
 }
 
-/// Why a checkpoint could not stand in as a base (§6). Every refusal is
-/// skipped the same way — the caller falls to the next-older retained base —
-/// so this carries no taxonomy to branch on, only the account that says which
-/// REMEDY, at the one point where that matters: the whole fallback chain
-/// exhausted, with nothing else left to tell an operator. One kind IS told
-/// apart there, by the type the account travels as rather than by a
-/// variant: the serializer's refusal of a body under this build's own stamp
-/// ([`refused_at_decode`]).
+/// Why a checkpoint could not stand in as a base (§6).
+///
+/// Every refusal is skipped the same way — the caller falls to the
+/// next-older retained base — so this carries no taxonomy to branch on, only
+/// the account that says which remedy, at the one point where that matters:
+/// the whole fallback chain exhausted, with nothing else left to tell an
+/// operator. One kind *is* told apart there, by the type the account travels
+/// as rather than by a variant: the serializer's refusal of a body under this
+/// build's own stamp ([`refused_at_decode`]).
 pub(crate) type LoadRefused = Cause;
 
-/// Whether `refused` — a [`LoadRefused`], named on its file or not — is the
-/// serializer's refusal of a checkpoint body under THIS build's own stamp: the
+/// Returns whether `refused` is the serializer's refusal of the body.
+///
+/// `refused` is a [`LoadRefused`], named on its file or not, and the refusal
+/// asked about is of a checkpoint body under *this* build's own stamp: the
 /// header's stamp was this build's, the file's length agreed with the header,
 /// the body passed its checksum and its hash, and the bytes still did not
 /// decode as `W`. [`CheckpointMeta::load`] lets that one refusal travel as
@@ -245,10 +266,9 @@ pub(crate) type LoadRefused = Cause;
 /// What it means for the exhausted fallback chain, where
 /// [`crate::OpenError::BadCheckpoint`] reads it: a newest base this build's
 /// stamp decodes nothing of was written by a build that wrote the same stamp
-/// over another body layout — a development board from before a layout
-/// change landed under the owner's no-stamp ruling — whose one remedy is
-/// the ruled one, `NO_MIGRATION_REMEDY`, never a restore of media that was
-/// never damaged.
+/// over another body layout — a development board written before a layout
+/// change made under that stamp — whose one remedy is `NO_MIGRATION_REMEDY`,
+/// never a restore of media that was never damaged.
 pub(crate) fn refused_at_decode(refused: &(dyn std::error::Error + 'static)) -> bool {
     let mut layer = Some(refused);
     while let Some(account) = layer {
@@ -260,11 +280,12 @@ pub(crate) fn refused_at_decode(refused: &(dyn std::error::Error + 'static)) -> 
     false
 }
 
-/// A checkpoint's refusal NAMED ON ITS FILE — `checkpoint.{seq}: {refusal}`,
-/// the shape every I/O failure on a journal file already has ([`at_file`]) —
-/// made by [`CheckpointMeta::named`] alone. The refusal is this error's
-/// `source`, so a reporter walking the chain reaches the serializer's or the
-/// seed's own account beneath the name.
+/// A checkpoint's refusal named on its file: `checkpoint.{seq}: {refusal}`.
+///
+/// It is the shape every I/O failure on a journal file already has
+/// ([`at_file`]), made by [`CheckpointMeta::named`] alone. The refusal is
+/// this error's `source`, so a reporter walking the chain reaches the
+/// serializer's or the seed's own account beneath the name.
 #[derive(Debug)]
 struct RefusedBase {
     name: String,
@@ -287,8 +308,8 @@ impl std::error::Error for RefusedBase {
 ///
 /// A slice of these must be ascending by `seq`, as [`list`] produces it: every
 /// operation over one reads a position in the slice as an age. [`retain`]
-/// deletes from the FRONT as the oldest, [`crate::replay::select_base`] walks
-/// from the BACK as the newest and reads the front as the oldest base still
+/// deletes from the front as the oldest, [`crate::replay::select_base`] walks
+/// from the back as the newest and reads the front as the oldest base still
 /// derivable ([`crate::replay::Unreachable`]'s floor). An unordered slice makes
 /// all three wrong, and one of them deletes files.
 pub(crate) struct CheckpointMeta {
@@ -296,11 +317,16 @@ pub(crate) struct CheckpointMeta {
     path: PathBuf,
 }
 
-/// Read the [`HEADER_LEN`] bytes a checkpoint file opens with, and nothing
-/// after them — the one read of a header, for [`CheckpointMeta::load`] and
-/// [`CheckpointMeta::header`] alike, so a file too short to hold one answers
-/// [`SHORT_OF_HEADER`] whichever reader met it, and one that cannot be read
-/// names itself, `name` being the file's name in the directory.
+/// Reads the [`HEADER_LEN`] bytes a checkpoint file opens with, and no more.
+///
+/// The one read of a header, for [`CheckpointMeta::load`] and
+/// [`CheckpointMeta::header`] alike; `name` is the file's name in the
+/// directory.
+///
+/// # Errors
+///
+/// A file too short to hold one answers [`SHORT_OF_HEADER`] whichever reader
+/// met it, and one that cannot be read names itself.
 fn read_header(file: &mut File, name: &str) -> Result<[u8; HEADER_LEN], LoadRefused> {
     let mut bytes = [0u8; HEADER_LEN];
     file.read_exact(&mut bytes).map_err(|e| -> LoadRefused {
@@ -314,18 +340,20 @@ fn read_header(file: &mut File, name: &str) -> Result<[u8; HEADER_LEN], LoadRefu
 }
 
 impl CheckpointMeta {
-    /// The file's name in the journal directory, `checkpoint.{seq}` — the
-    /// words a refusal names it by.
+    /// Returns the file's name in the journal directory, `checkpoint.{seq}`.
+    ///
+    /// The words a refusal names it by.
     fn name(&self) -> String {
         checkpoint_name(self.seq)
     }
 
-    /// `refused`, this checkpoint's own refusal, NAMED ON ITS FILE for a
-    /// reader that carries it away from the file it was met at — the
-    /// exhausted fallback chain's cause, which the operator reads as `the
-    /// newest refused: checkpoint.{n}: …` ([`RefusedBase`]). An I/O failure
-    /// travels as it is: [`at_file`] named it at the operation that failed,
-    /// and its kind travels with it.
+    /// Returns `refused`, this checkpoint's own refusal, named on its file.
+    ///
+    /// The name is for a reader that carries the refusal away from the file it
+    /// was met at — the exhausted fallback chain's cause, which the operator
+    /// reads as `the newest refused: checkpoint.{n}: …` ([`RefusedBase`]). An
+    /// I/O failure travels as it is: [`at_file`] named it at the operation
+    /// that failed, and its kind travels with it.
     pub(crate) fn named(&self, refused: LoadRefused) -> LoadRefused {
         if refused.downcast_ref::<io::Error>().is_some() {
             return refused;
@@ -333,37 +361,46 @@ impl CheckpointMeta {
         Box::new(RefusedBase { name: self.name(), refused })
     }
 
-    /// Load and validate this checkpoint, or say why it cannot stand in as a
-    /// base: unreadable, short of its own header, a foreign format stamp, a
-    /// header seq disagreeing with the name, a file whose length disagrees
-    /// with its header's `body_len`, a body failing its checksum or its hash,
-    /// or a body that will not decode as `W`. The caller falls back to the
-    /// next-older retained checkpoint, then genesis-while-reachable (§6/§7) —
-    /// every refusal alike, which is why the account travels as one type
-    /// rather than as a taxonomy nobody branches on.
+    /// Loads and validates this checkpoint as a base.
+    ///
+    /// The caller falls back to the next-older retained checkpoint, then
+    /// genesis-while-reachable (§6/§7) — every refusal alike, which is why the
+    /// account travels as one type rather than as a taxonomy nobody branches
+    /// on.
     ///
     /// The body is read only once the file's length and the header's
     /// `body_len` — two claims, from the directory and from the bytes — agree,
     /// and the read is sized by that agreed figure and held to it: a file
     /// extended past its body, or a header claiming more than the file holds,
-    /// sizes nothing, so the cost of a refused base is its header.
-    ///
-    /// Two of those an operator most needs named. A foreign stamp is a
-    /// checkpoint written under another format, and the account names the
-    /// stamp found, the stamp expected and the ruled remedy
-    /// ([`NO_MIGRATION_REMEDY`]) — the same sentence the journal's own refusal
-    /// renders, so when the fallback chain is exhausted the daemon prints it
-    /// through `BadCheckpoint`'s cause.
-    /// A body that will not decode: the header checksum and hash have passed
-    /// by then, so the bytes ARE the bytes that were written and the refusal
-    /// is not rot — it is a writer/reader skew, a binary on the wrong side of
-    /// a `W` format change, whose remedy is to roll the binary rather than to
-    /// restore the media.
+    /// sizes nothing, so the cost of a base refused for either is its header.
     ///
     /// Its header is the one [`fn@write`] appends, field for field, read
     /// through [`parse_header`] — the parse [`CheckpointMeta::header`] shares;
     /// see [`fn@write`] for what a drifted half costs, which is every retained
-    /// base at once and no signal that it happened.
+    /// base at once, each refused with an account that reads as damage.
+    ///
+    /// # Errors
+    ///
+    /// Says why it cannot stand in as a base, in the order the checks run:
+    /// unreadable, short of its own header, a foreign format stamp, a header
+    /// seq disagreeing with the name, a file whose length disagrees with its
+    /// header's `body_len`, a body larger than this process can reserve, a
+    /// body that reads short of that length (the file shrank beneath the read),
+    /// a body failing its checksum or its hash, or a body that will not decode
+    /// as `W`.
+    ///
+    /// Two of those an operator most needs named. A foreign stamp is a
+    /// checkpoint written under another format, and the account names the
+    /// stamp found, the stamp expected and the remedy
+    /// ([`NO_MIGRATION_REMEDY`]) — the same sentence the journal's own refusal
+    /// renders, so when the fallback chain is exhausted the daemon prints it
+    /// through `BadCheckpoint`'s cause. A body that will not decode: the
+    /// header checksum and hash have passed by then, so the bytes *are* the
+    /// bytes that were written and the refusal is not rot — it is a
+    /// writer/reader skew, a binary on the wrong side of a `W` format change
+    /// or a body another layout wrote under this stamp, and
+    /// [`crate::OpenError::BadCheckpoint`]'s line names [`NO_MIGRATION_REMEDY`]
+    /// after it ([`refused_at_decode`]) rather than a restore of the media.
     pub(crate) fn load<W: DeserializeOwned>(&self) -> Result<Loaded<W>, LoadRefused> {
         let name = self.name();
         let mut file = File::open(&self.path).map_err(at_file(&name, "read"))?;
@@ -405,10 +442,11 @@ impl CheckpointMeta {
         if body_hash(&body) != header.body_hash {
             return Err("checkpoint body failed its header hash (bit-rot or a torn write)".into());
         }
-        // The serializer's refusal becomes the account in place: `bincode::Error`
-        // is already a `Box<ErrorKind>`, so it unsizes into `LoadRefused` here.
-        // `?` alone would compile and box that box again, leaving a cause no
-        // caller could downcast to the serializer's `ErrorKind`.
+        // The serializer's refusal becomes the account in place:
+        // `bincode::Error` is already a `Box<ErrorKind>`, so it unsizes into
+        // `LoadRefused` here. `?` alone would compile and box that box again,
+        // leaving a cause no caller could downcast to the serializer's
+        // `ErrorKind`.
         let world = codec()
             .deserialize(&body)
             .map_err(|skew| -> LoadRefused { skew })?;
@@ -418,14 +456,21 @@ impl CheckpointMeta {
         })
     }
 
-    /// What this checkpoint's header claims ([`CheckpointHeader`]), read
-    /// ALONE — [`HEADER_LEN`] bytes, and nothing after them — under every
-    /// check a header can pass without its body ([`parse_header`]): this
-    /// build's stamp, and a seq agreeing with the file's name. So it costs one
-    /// short read whatever the world's size, where [`CheckpointMeta::load`]
-    /// reads and hashes the whole serialized world. The body is NOT verified:
-    /// its checksum and hash need the body, and `body_hash` is what a party
-    /// holding the file verifies it by.
+    /// Returns what this checkpoint's header claims ([`CheckpointHeader`]).
+    ///
+    /// The header is read alone — [`HEADER_LEN`] bytes, and nothing after
+    /// them — under every check a header can pass without its body
+    /// ([`parse_header`]): this build's stamp, and a seq agreeing with the
+    /// file's name. So it costs one short read whatever the world's size,
+    /// where [`CheckpointMeta::load`] reads and hashes the whole serialized
+    /// world. The body is not verified: its checksum and hash need the body,
+    /// and `body_hash` is what a party holding the file verifies it by.
+    ///
+    /// # Errors
+    ///
+    /// A file that cannot be opened or read, or one short of its header
+    /// ([`SHORT_OF_HEADER`]); then the two checks above, in [`parse_header`]'s
+    /// order.
     pub(crate) fn header(&self) -> Result<CheckpointHeader, LoadRefused> {
         let name = self.name();
         let mut file = File::open(&self.path).map_err(at_file(&name, "read"))?;
@@ -442,7 +487,7 @@ impl CheckpointMeta {
 /// The fixed temp name a checkpoint is built through.
 const TMP_NAME: &str = "checkpoint.tmp";
 
-/// Where the fixed temp name stands in `dir`.
+/// Returns where the fixed temp name stands in `dir`.
 fn tmp_path(dir: &Path) -> PathBuf {
     dir.join(TMP_NAME)
 }
@@ -474,48 +519,59 @@ pub(crate) fn remove_stray_tmp(dir: &Path) -> io::Result<Option<u64>> {
     Ok(Some(len))
 }
 
-/// The one file name the checkpoint embodying `Seq ≤ seq` has:
-/// `checkpoint.<seq>` (§6).
+/// Returns the one file name the checkpoint embodying `Seq ≤ seq` has.
 ///
-/// Stated as a pair with [`parse_checkpoint_name`], which reads it back by
-/// re-emitting it, because the format and the parse are one agreement: a
-/// change to either that the other does not match makes every retained base
-/// invisible, and recovery then falls all the way down its fallback chain to
-/// genesis without a word.
+/// It is `checkpoint.<seq>` (§6). Stated as a pair with
+/// [`parse_checkpoint_name`], which reads it back by re-emitting it, because
+/// the format and the parse are one agreement: a change to either that the
+/// other does not match makes every retained base invisible, and recovery
+/// then falls all the way down its fallback chain without a word of them:
+/// to genesis where it is reachable, and to `BadCheckpoint` with no cause
+/// where it is not.
 fn checkpoint_name(seq: u64) -> String {
     format!("checkpoint.{seq}")
 }
 
-/// Where the checkpoint embodying `Seq ≤ seq` lives (§6).
+/// Returns where the checkpoint embodying `Seq ≤ seq` lives (§6).
 fn checkpoint_path(dir: &Path, seq: u64) -> PathBuf {
     dir.join(checkpoint_name(seq))
 }
 
-/// Read back the seq [`checkpoint_name`] wrote — and ONLY the spelling it
-/// writes. `u64::from_str` accepts a leading `+` and any number of leading
-/// zeros, so the round trip is what keeps `checkpoint.07` from counting as a
-/// second base beside `checkpoint.7`, where [`retain`] counts entries and a
+/// Reads back the seq [`checkpoint_name`] wrote — only the spelling it writes.
+///
+/// `u64::from_str` accepts a leading `+` and any number of leading zeros, so
+/// the round trip is what keeps `checkpoint.07` from counting as a second
+/// base beside `checkpoint.7`, where [`retain`] counts entries and a
 /// configured fallback chain of `N` would silently hold fewer. `None` for any
 /// other name — `checkpoint.tmp` among them, which is why a crash mid-write
-/// leaves at most a file recovery ignores.
+/// leaves at most a file no listing reads as a base, which the next open
+/// removes ([`remove_stray_tmp`]).
 fn parse_checkpoint_name(name: &str) -> Option<u64> {
     let seq: u64 = name.strip_prefix("checkpoint.")?.parse().ok()?;
     (name == checkpoint_name(seq)).then_some(seq)
 }
 
-/// What the NEWEST checkpoint in `dir` claims, by its header alone
-/// ([`CheckpointMeta::header`]) — or `None` where none stands, the directory
-/// cannot be listed, or the header refuses. FAIL-QUIET, for the two readers
-/// that must never fail over it: [`crate::Kernel::newest_checkpoint`], whose
-/// head writer writes `base: null` instead, and [`fn@write`], which sizes a
-/// buffer by the length. [`list`] is ascending by seq (§6), so the last entry
-/// is the newest.
+/// Returns what the newest checkpoint in `dir` claims, by its header alone.
+///
+/// The header is read through [`CheckpointMeta::header`] — or `None` where
+/// none stands, the directory cannot be listed, or the header refuses.
+/// Fail-quiet, for the two readers that must never fail over it:
+/// [`crate::Kernel::newest_checkpoint`], whose head writer writes
+/// `base: null` instead, and [`fn@write`], which sizes a buffer by the
+/// length. [`list`] is ascending by seq (§6), so the last entry is the
+/// newest.
 pub(crate) fn newest_header(dir: &Path) -> Option<CheckpointHeader> {
     list(dir).ok()?.pop()?.header().ok()
 }
 
-/// All checkpoints in `dir`, ascending by seq. `checkpoint.tmp` and foreign
-/// names fail the name parse and are skipped.
+/// Returns all checkpoints in `dir`, ascending by seq.
+///
+/// `checkpoint.tmp` and foreign names fail the name parse and are skipped.
+///
+/// # Errors
+///
+/// A directory that cannot be listed, or an entry of it that cannot be read,
+/// named `{dir}: list`.
 pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     let mut checkpoints = Vec::new();
     for entry in fs::read_dir(dir).map_err(at_file(dir.display(), "list"))? {
@@ -533,39 +589,49 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     Ok(checkpoints)
 }
 
-/// What the checkpoint at `seq` in `dir` claims, by its header alone
-/// ([`CheckpointMeta::header`]) — or `None` where no file of that name
-/// stands, or its header refuses. FAIL-QUIET, as [`newest_header`] is, for
-/// the same kind of reader: [`crate::Kernel::checkpoint_header`], which a
-/// caller sizes by and must never fail over. The file is named directly from
-/// the seq ([`checkpoint_path`]), with no listing: the name and the header
-/// are then the two sources the header parse cross-checks, as they are for a
-/// listed entry.
+/// Returns what the checkpoint at `seq` in `dir` claims, by its header alone.
+///
+/// The header is read through [`CheckpointMeta::header`] — or `None` where
+/// no file of that name stands, or its header refuses. Fail-quiet, as
+/// [`newest_header`] is, for the same kind of reader:
+/// [`crate::Kernel::checkpoint_header`], which a caller sizes by and must
+/// never fail over. The file is named directly from the seq
+/// ([`checkpoint_path`]), with no listing: the name and the header are then
+/// the two sources the header parse cross-checks, as they are for a listed
+/// entry.
 pub(crate) fn header_at(dir: &Path, seq: u64) -> Option<CheckpointHeader> {
     CheckpointMeta { seq, path: checkpoint_path(dir, seq) }.header().ok()
 }
 
-/// Keep the newest `keep` checkpoints THAT LOAD, delete the rest, and fsync
-/// the directory so the unlinks are durable. Answers what it kept and what it
-/// took ([`Retained`]): the oldest kept seq — the journal-reclamation floor
-/// and the `BadCheckpoint` fallback base (§6) — or `None` when no checkpoint
-/// remains, and each checkpoint it removed, by its seq and its length read
-/// before the removal, which a landing reports beside the journal bytes it
-/// reclaimed ([`crate::Kernel::last_removed_checkpoints`]).
+/// Keeps the newest `keep` checkpoints the open did not skip; deletes the rest.
 ///
-/// RETENTION COUNTS THE BASES THAT LOAD. `skipped` names the checkpoints the
-/// open passed over — the seqs the kernel's [`crate::Recovery`] lists as
+/// It fsyncs the directory so the unlinks are durable, and answers what it
+/// kept and what it took ([`Retained`]): the oldest kept seq — the
+/// journal-reclamation floor and the `BadCheckpoint` fallback base (§6) — or
+/// `None` when no checkpoint remains, and each checkpoint it removed, by its
+/// seq and its length read before the removal, which a landing reports
+/// beside the journal bytes it reclaimed
+/// ([`crate::Kernel::last_removed_checkpoints`]).
+///
+/// **Retention counts the bases that load.** `skipped` names the checkpoints
+/// the open passed over — the seqs the kernel's [`crate::Recovery`] lists as
 /// skipped, less any a later checkpoint has written over — and none of them
 /// is counted among the `keep`: every one is removed as excess, whatever its
-/// age, and the newest `keep` of the others are kept. So the first landing
-/// after an open that skipped `B` and loaded from `A` keeps `A` beside the
-/// new base and removes `B`, where counting by name alone would keep `B`,
-/// delete `A` — the one base that loaded — and reclaim the journal below the
-/// base that did not, leaving the board on one loadable base with genesis
-/// gone. No rename aside and no new file name: the diagnosis a kept damaged
-/// file would offer is already in the open's report, which carries why each
-/// skipped base refused. A base that loaded is counted as it always was, so
-/// with nothing skipped this is the rule it was.
+/// age, and the newest `keep` of the others are kept. So, with `keep` at
+/// two, the first landing after an open that skipped `B` and loaded from `A`
+/// keeps `A` beside the new base and removes `B`, where counting by name
+/// alone would keep `B`, delete `A` — the one base that loaded — and reclaim
+/// the journal below the base that did not, leaving the board on one
+/// loadable base with genesis gone. No rename aside and no new file name:
+/// the diagnosis a kept damaged file would offer is already in the open's
+/// report, which carries why each skipped base refused. A base that loaded
+/// is counted, so with nothing skipped this keeps the newest `keep` by seq.
+///
+/// # Errors
+///
+/// A directory that cannot be listed ([`list`]), a checkpoint whose length
+/// cannot be read or whose removal is refused, named
+/// `checkpoint.{seq}: remove`, or a directory that cannot be synced.
 pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Retained> {
     let checkpoints = list(dir)?;
     let loadable = checkpoints.iter().filter(|cp| !skipped.contains(&cp.seq)).count();
@@ -595,38 +661,47 @@ pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Ret
     Ok(retained)
 }
 
-/// What [`retain`] answers: the oldest checkpoint it kept, and every one it
-/// removed.
+/// What [`retain`] answers: the oldest checkpoint kept and every one removed.
 pub(crate) struct Retained {
-    /// The oldest kept seq — the journal-reclamation floor — or `None` when
-    /// no checkpoint remains.
+    /// The oldest kept seq, `None` when no checkpoint remains.
+    ///
+    /// It is the journal-reclamation floor.
     pub(crate) floor: Option<u64>,
-    /// Each checkpoint removed, oldest first, as its seq and its file's
-    /// length in bytes, read before the removal.
+    /// Each checkpoint removed, oldest first, as its seq and its file's length.
+    ///
+    /// The length is in bytes, read before the removal.
     pub(crate) removed: Vec<(u64, u64)>,
 }
 
-/// What a checkpoint write refused. The three are different answers for the
-/// caller — a serializer refuses the same way until `W` itself changes, an
-/// I/O failure before the rename is retryable and left nothing, one after it
-/// left a base — so the distinction travels rather than being flattened here.
+/// What a checkpoint write refused.
+///
+/// The three are different answers for the caller — a serializer refuses the
+/// same way until `W` itself changes, an I/O failure up to the rename is
+/// retryable and left no base, one after it left a base — so the distinction
+/// travels rather than being flattened here.
 #[derive(Debug)]
 pub(crate) enum WriteFail {
-    /// `W`'s own serializer refused, and carries its own account of what it
-    /// could not encode. Nothing was written, not even the temp file: the
-    /// encode precedes the first file operation.
+    /// `W`'s own serializer refused.
+    ///
+    /// It carries its own account of what it could not encode. Nothing was
+    /// written, not even the temp file: the encode precedes the temp file's
+    /// creation.
     Serialize(Cause),
-    /// A file operation BEFORE the rename failed, named by its file and its
-    /// act — `checkpoint.tmp: create`, `write`, `fsync`, or `rename to
-    /// checkpoint.{seq}` — its kind kept. No `checkpoint.tmp` survives it: the
-    /// rename is what publishes a checkpoint, so a failure before it leaves no
-    /// base, and the temp file is removed before this is answered —
-    /// best-effort, its own failure folded into the account (§6).
+    /// A file operation up to and including the rename failed.
+    ///
+    /// It is named by its file and its act — `checkpoint.tmp: create`,
+    /// `write`, `fsync`, or `rename to checkpoint.{seq}` — its kind kept. No
+    /// `checkpoint.tmp` survives it save one whose removal failed: the rename
+    /// is what publishes a checkpoint, so a failure up to it leaves no base,
+    /// and the temp file is removed before this is answered — best-effort,
+    /// its own failure folded into the account (§6).
     Io(io::Error),
-    /// The directory's fsync AFTER the rename failed: the base is on disk,
-    /// whole, under its own name — the rename published it — and what the
-    /// step would have settled is whether its directory entry is durable.
-    /// The caller's step after a landed base ([`crate::LandedStep`]'s first).
+    /// The directory's fsync after the rename failed.
+    ///
+    /// The base is on disk, whole, under its own name — the rename published
+    /// it — and what the step would have settled is whether its directory
+    /// entry is durable. The caller's step after a landed base
+    /// ([`crate::LandedStep`]'s first).
     Landed(io::Error),
 }
 
@@ -636,25 +711,29 @@ impl From<io::Error> for WriteFail {
     }
 }
 
-/// Persist a checkpoint embodying all records with `Seq ≤ seq`: serialize
-/// `world` under [`codec`], then temp → fsync → atomic-rename → dir fsync
-/// (§6). Only authoritative state need survive the round trip — a world may
-/// `#[serde(skip)]` its derived hints and reseed them through
+/// Persists a checkpoint embodying all records with `Seq ≤ seq`.
+///
+/// It serializes `world` under [`codec`], then temp → fsync → atomic-rename
+/// → dir fsync (§6). Only authoritative state need survive the round trip —
+/// a world may `#[serde(skip)]` its derived hints and reseed them through
 /// [`crate::WorldState::rebuild_derived`] at load (§6/§7). `chain_head` is
-/// the commit chain's value at `seq` — the installed root's, which the
-/// transaction that installed it carried in its marker — and rides the
-/// header so a replay above this base continues the chain from it.
+/// the commit chain's value at `seq` — the installed root's: what the
+/// transaction that installed it carried in its marker, or what recovery
+/// derived for the committed head — and rides the header so a replay above
+/// this base continues the chain from it.
 ///
 /// Stated as a pair with [`parse_header`], which reads the header this builds
 /// at [`HEADER_LEN`] for both [`CheckpointMeta::load`] and
 /// [`CheckpointMeta::header`], because the layout and the parse are one
 /// agreement: a field appended here without that constant moving with it
-/// leaves `body_len` disagreeing with the body, and EVERY retained base is
-/// then unloadable — recovery falls silently to genesis where it is
-/// reachable, and refuses with `BadCheckpoint` where it is not. The layout
-/// test is what pins the two together.
+/// panics a debug build's write and, in a release build, leaves `body_len`
+/// disagreeing with the body, and every retained base is then unloadable —
+/// recovery passes each over, said only in its report ([`crate::Recovery`]'s
+/// `skipped`), and falls to genesis where it is reachable, and refuses with
+/// `BadCheckpoint` where it is not. The layout test is what pins the two
+/// together.
 ///
-/// CALLER OBLIGATION — this builds through the FIXED `checkpoint.tmp` in
+/// **Caller obligation.** This builds through the fixed `checkpoint.tmp` in
 /// `dir`, so calls against one directory must be serialized by the caller.
 /// Two concurrent ones interleave into that single file and rename the
 /// mixture into place: `load`'s header checksum catches it, so nothing wrong
@@ -662,8 +741,40 @@ impl From<io::Error> for WriteFail {
 /// `N = 1` retention it is the only one. [`crate::Kernel::checkpoint`]'s
 /// checkpoint mutex is the one place that obligation is discharged.
 ///
-/// A failure past the temp file's creation and before its rename — the
-/// write, the sync or the rename itself — REMOVES the temp file before it is
+/// **One pass over the world.** The body is serialized with the codec's
+/// `serialize_into` into a buffer, never with its `serialize`: bincode 1's
+/// `serialize` walks the value twice, once to size the buffer it then fills,
+/// and `serialize_into` repeats that size pass only under a byte limit, which
+/// [`codec`] sets none of. In the size pass's place the buffer is sized by a
+/// hint: the length the newest checkpoint in `dir` claims, read off its
+/// header alone ([`newest_header`] — one directory listing and one short
+/// read, fail-quiet: none before the first, and the buffer then grows as any
+/// `Vec` does), which the next body outgrows by no more than the world has
+/// grown since that checkpoint. A hint, never a promise: a length the
+/// process cannot reserve is dropped, and the header is built from the
+/// finished body — its checksum, its hash, its length — so the hint is no
+/// part of the bytes.
+///
+/// **The seam** (`test-hooks`): three of the steps below are the write-fault
+/// seam's ([`Step`]) — the temp file's creation, its fsync, and the
+/// directory's fsync after the rename — each hooked through `seam` before it
+/// runs, after every step before it has completed: an armed failure answers
+/// in the step's place, named as the real step's failure is named, and
+/// travels out of the kind armed, as [`WriteFail::Io`] for the two before the
+/// rename, the temp file's removal running for a failure inside the window as
+/// for any, and as [`WriteFail::Landed`] for the directory's fsync, the base
+/// on disk. `seam` is the kernel's, handed by [`crate::Kernel::checkpoint`];
+/// in a build without the feature its hook is a no-op.
+///
+/// # Errors
+///
+/// [`WriteFail::Serialize`] where `W`'s serializer refuses, before the temp
+/// file is created; [`WriteFail::Io`] where a file operation up to and
+/// including the rename fails; [`WriteFail::Landed`] where the directory's
+/// fsync after it fails.
+///
+/// A failure past the temp file's creation and up to its rename — the
+/// write, the sync or the rename itself — removes the temp file before it is
 /// answered: a half-written checkpoint under the fixed name is no base and
 /// would keep its room on the volume, and after a write the volume's room
 /// failed that is exactly the room the next attempt needs. Best-effort: the
@@ -671,30 +782,11 @@ impl From<io::Error> for WriteFail {
 /// never masks it. A crash in the same window leaves the file for the next
 /// open to remove ([`remove_stray_tmp`]).
 ///
-/// ONE PASS over the world. The body is serialized with the codec's
-/// `serialize_into` into a buffer, never with its `serialize`: bincode 1's
-/// `serialize` walks the value twice, once to size the buffer it then fills,
-/// and `serialize_into` repeats that size pass only under a byte limit, which
-/// [`codec`] sets none of. In the size pass's place the buffer is sized by a
-/// HINT: the length the newest checkpoint in `dir` claims, read off its
-/// header alone ([`newest_header`] — one directory listing and one short
-/// read, fail-quiet: none before the first, and the buffer then grows as any
-/// `Vec` does), which the next body outgrows by one window's growth at most.
-/// A hint, never a promise: a length the process cannot reserve is dropped,
-/// and the header is built from the finished body — its checksum, its hash,
-/// its length — so the hint is no part of the bytes.
+/// # Panics
 ///
-/// THE SEAM (`test-hooks`): three of the steps below are the write-fault
-/// seam's ([`Step`]) — the temp file's creation, its fsync, and the
-/// directory's fsync after the rename — each hooked through `seam` BEFORE
-/// it runs, after every step before it has completed: an armed failure
-/// answers in the step's place, named as the real step's failure is named,
-/// and travels out of the kind armed, as [`WriteFail::Io`] for the two before
-/// the rename, the removal above running for a failure inside the window as
-/// for any, and as [`WriteFail::Landed`] for the directory's fsync, the base
-/// on disk; an armed panic unwinds there, and runs no removal. `seam` is the
-/// kernel's, handed by [`crate::Kernel::checkpoint`]; in a build without the
-/// feature its hook is a no-op.
+/// An armed panic at one of the seam's three steps (`test-hooks`) unwinds
+/// there, and runs no removal. Panics in a debug build if the header it lays
+/// down is not [`HEADER_LEN`] bytes long.
 pub(crate) fn write<W: Serialize>(
     dir: &Path,
     seq: u64,
@@ -727,7 +819,7 @@ pub(crate) fn write<W: Serialize>(
     debug_assert_eq!(header.len(), HEADER_LEN);
     // The window the temp file exists in: its creation above succeeded, and
     // the rename below is what publishes it. A failure inside answers with
-    // the file removed.
+    // the file removed, best-effort.
     let published = (|| -> io::Result<()> {
         f.write_all(&header)
             .and_then(|()| f.write_all(&body))

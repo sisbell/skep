@@ -1,51 +1,57 @@
-//! Deriving a world from the journal (§6/§7): choose a base at or below a
-//! boundary, then fold the committed records above it up to that boundary.
+//! Deriving a world from the journal: a base, then the fold above it (§6/§7).
 //!
-//! Recovery and bounded replay are the SAME derivation — they differ only in
-//! their bound (recovery's is §7's `W`, bounded replay's is the requested
-//! boundary) and in what else they do around it (recovery truncates the tail;
-//! bounded replay checks the requested value is a boundary at all). So
-//! the base-selection fallback chain, the `rebuild_derived` seeding and the
-//! fold itself are stated once, here, and each caller supplies its bound and
-//! its own error vocabulary. What makes that fold exactly-once is settled
-//! where the records are — [`crate::journal::ScanOutcome::records_to`] hands
-//! over an ordered, ranged set with no coordinate twice — so this module
-//! applies what it is given.
+//! The derivation chooses a base at or below a boundary, then folds the
+//! committed records above it up to that boundary. Recovery and bounded
+//! replay are the same derivation — they differ only in their bound
+//! (recovery's is §7's `W`, bounded replay's is the requested boundary) and
+//! in what else they do around it (recovery truncates the tail; bounded
+//! replay checks the requested value is a boundary at all). So the
+//! base-selection fallback chain, the `rebuild_derived` seeding and the fold
+//! itself are stated once, here, and each caller supplies its bound and its
+//! own error vocabulary. What makes that fold exactly-once is settled where
+//! the records are — [`crate::journal::ScanOutcome::records_to`] hands over
+//! an ordered, ranged set with no coordinate twice — so this module applies
+//! what it is given.
 
 use crate::checkpoint::{CheckpointMeta, ForeignStamp, LoadRefused, Loaded};
 use crate::error::{Cause, RebuildError};
 use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::{Seq, WorldState};
 
-/// A retained checkpoint the base selection PASSED OVER, and why — what a
-/// journaled open reports beside the start point it resolved from
-/// ([`crate::Recovery`]), so the daemon above this kernel can log the
-/// checkpoints it did NOT start from (the AUTH spec's startup report,
+/// A retained checkpoint the base selection passed over, and why.
+///
+/// It is what a journaled open reports beside the start point it resolved
+/// from ([`crate::Recovery`]), so the daemon above this kernel can log the
+/// checkpoints it did not start from (the AUTH spec's startup report,
 /// AUTH-2.85, AUTH-2.86). The account is the refusal's own sentence,
-/// rendered: a base is skipped the same way whatever refused it — a header
-/// or body that fails its checks, a body that will not decode, or a seed
-/// [`WorldState::rebuild_derived`] refuses — and only the sentence tells the
-/// reader which.
+/// rendered — its fact alone where that sentence ends on a remedy
+/// ([`SkippedBase::why`]): a base is skipped the same way whatever refused it
+/// — a file that could not be read, a header or body that fails its checks,
+/// a body that will not decode, or a seed [`WorldState::rebuild_derived`]
+/// refuses — and only the sentence tells the reader which.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkippedBase {
     /// The checkpoint's coordinate.
     pub seq: Seq,
-    /// Why it could not stand in as a base: the refusal's FACT, never a
-    /// remedy for the board. A base is passed over only where an older one
-    /// stood in, so the board opened whole, and the two refusals that end on
-    /// a remedy — another format's stamp (delete the data directory) and a
-    /// slice the base cannot seed (restore from backup) — are the EXHAUSTED
-    /// chain's remedies, said through [`crate::OpenError::BadCheckpoint`]'s
-    /// cause where no base stands in (PUB-1.2, AUTH-2.88). Here they say
-    /// what refused and nothing an operator of a serving board must undo.
+    /// Why it could not stand in as a base: the refusal's fact.
+    ///
+    /// It is never a remedy for the board. A base is passed over only where
+    /// an older one stood in, so the board opened whole, and the two refusals
+    /// that end on a remedy — another format's stamp (delete the data
+    /// directory) and a slice the base cannot seed (restore from backup) — are
+    /// the exhausted chain's remedies, said through
+    /// [`crate::OpenError::BadCheckpoint`]'s cause where no base stands in
+    /// (PUB-1.2, AUTH-2.88). Here they say what refused and nothing an
+    /// operator of a serving board must undo.
     pub why: String,
 }
 
-/// A refusal's account as a skipped base carries it ([`SkippedBase`]'s
-/// `why`): the fact alone where the refusal ends on the exhausted chain's
-/// remedy — [`ForeignStamp::fact`], [`RebuildError::fact`] — and the
-/// refusal's own sentence for every other, which names no remedy for the
-/// board.
+/// Returns a refusal's account as a skipped base carries it.
+///
+/// It is [`SkippedBase`]'s `why`: the fact alone where the refusal ends on
+/// the exhausted chain's remedy — [`ForeignStamp::fact`],
+/// [`RebuildError::fact`] — and the refusal's own sentence for every other,
+/// which names no remedy for the board.
 fn skip_account(refused: &LoadRefused) -> String {
     if let Some(stamp) = refused.downcast_ref::<ForeignStamp>() {
         return stamp.fact();
@@ -56,21 +62,23 @@ fn skip_account(refused: &LoadRefused) -> String {
     refused.to_string()
 }
 
-/// A base to fold onto: the world embodying every record with
-/// `Seq ≤ s_load`, already seeded through [`WorldState::rebuild_derived`],
-/// the commit chain's value at that coordinate, which the scan above it
-/// verifies the first committed transaction against — and the retained
-/// checkpoints the selection passed over on its way to this one, which the
-/// fold does not read and a journaled open reports.
+/// A base to fold onto, with its chain value and the bases passed over.
+///
+/// It is the world embodying every record with `Seq ≤ s_load`, already
+/// seeded through [`WorldState::rebuild_derived`]; the commit chain's value
+/// at that coordinate, which the scan above it verifies the first committed
+/// transaction against; and the retained checkpoints the selection passed
+/// over on its way to this one, which the fold does not read and a journaled
+/// open reports.
 ///
 /// The three that fold travel together and none is settable from outside
 /// this module, so [`select_base`] is the only site that can mint one. That
 /// is what makes the pairing an invariant rather than a habit: a world at a
 /// coordinate it does not embody folds records it already holds, and since
 /// [`WorldState::apply`] need not be idempotent, that is silent double
-/// application answered `Ok`; and a chain value from anywhere but the base's
-/// own header would judge the first link above the base against the wrong
-/// predecessor.
+/// application answered `Ok`; and a chain value other than the base's own —
+/// its header's, or the chain's genesis value at genesis — would judge the
+/// first link above the base against the wrong predecessor.
 pub(crate) struct Base<W> {
     s_load: u64,
     world: W,
@@ -79,45 +87,58 @@ pub(crate) struct Base<W> {
 }
 
 impl<W> Base<W> {
-    /// The coordinate this base embodies — §7's `S_load`.
+    /// Returns the coordinate this base embodies, §7's `S_load`.
     pub(crate) fn s_load(&self) -> u64 {
         self.s_load
     }
 
-    /// The retained checkpoints above this base that could not stand in,
-    /// newest first — what a journaled open reports ([`crate::Recovery`]).
+    /// Returns the checkpoints above this base that could not stand in.
+    ///
+    /// They are retained checkpoints, newest first, and only those the
+    /// selection tried, none above its ceiling: what a journaled open reports
+    /// ([`crate::Recovery`]).
     pub(crate) fn skipped(&self) -> &[SkippedBase] {
         &self.skipped
     }
 
-    /// The commit chain's value at [`Base::s_load`] — the `SKC4` header's
-    /// `chain_head` this base was loaded with, or [`journal::CHAIN_GENESIS`]
-    /// at genesis: what a boundary that IS the base answers
-    /// ([`crate::Kernel::chain_at`]), and what [`Base::scan`] judges the
-    /// first link above it against.
+    /// Returns the commit chain's value at [`Base::s_load`].
+    ///
+    /// It is the `SKC4` header's `chain_head` this base was loaded with, or
+    /// [`journal::CHAIN_GENESIS`] at genesis: what a boundary that is the base
+    /// answers ([`crate::Kernel::chain_at`]), and what [`Base::scan`] judges
+    /// the first link above it against.
     pub(crate) fn chain(&self) -> [u8; 32] {
         self.chain
     }
 
-    /// The base itself, for a boundary that IS the base and so has nothing
-    /// above it to fold.
+    /// Returns the base's world, for a boundary that is the base.
+    ///
+    /// Such a boundary has nothing above it to fold.
     pub(crate) fn into_world(self) -> W {
         self.world
     }
 
-    /// Scan the journal above THIS base (§7). The base a scan is judged
-    /// against is the base it will be folded onto, by construction: this takes
-    /// no `S_load` a caller could have got from somewhere else, and a scan run
-    /// against a HIGHER base than this one would skip closed segments whose
-    /// records the fold still wants — a world missing records, answered `Ok`.
+    /// Scans the journal above this base (§7).
     ///
-    /// `bound` is the boundary this base will be folded to, when the caller has
-    /// one: the scan then collects only what a fold to it can read. Recovery
-    /// passes `None`, since its own bound is the committed head the scan is
-    /// about to derive. A LOWER bound than the fold's leaves the records
-    /// between them uncollected, which nothing downstream can restore — the
-    /// outcome refuses that pairing ([`ScanOutcome::records_to`]) rather than
-    /// answering a short world.
+    /// The base a scan is judged against is the base its records fold onto,
+    /// by construction: this takes no `S_load` a caller could have got from
+    /// somewhere else, and a scan run against a higher base than this one
+    /// would skip closed segments whose records the fold still wants — a world
+    /// missing records, answered `Ok`.
+    ///
+    /// `bound` is the boundary the caller reads at, when it has one — where a
+    /// fold onto this base would end: the scan then collects no record above
+    /// it. Recovery passes `None`, since its own bound is the committed head
+    /// the scan is about to derive. A lower bound than the fold's leaves the
+    /// records between them uncollected, which nothing downstream can restore
+    /// — the outcome answers that pairing with a panic
+    /// ([`ScanOutcome::records_to`]) rather than with a short world.
+    ///
+    /// # Errors
+    ///
+    /// [`journal::scan`]'s: [`ScanFail::Io`] where a segment cannot be read,
+    /// and [`ScanFail::Unscannable`] where one cannot be taken in within the
+    /// scan's bounds.
     pub(crate) fn scan(
         &self,
         segs: &[SegmentMeta],
@@ -126,38 +147,53 @@ impl<W> Base<W> {
         journal::scan(segs, self.s_load, bound, self.chain)
     }
 
-    /// Scan the journal above THIS base for its committed boundaries — every
-    /// one, each with its signature slot, in one pass — the boundary read's
-    /// door ([`crate::Kernel::boundaries_above`]; §3.3 step 2 of the
-    /// operations design), beside [`Base::scan`] and for its reason: the
-    /// base the first link is judged against, and whose closed segments are
-    /// skipped, is the base this derivation selected, never an `S_load` a
-    /// caller got from somewhere else — and here there is no fold to
-    /// disagree with, so the one thing the door guards is that the
-    /// boundaries answered are the boundaries above the base that was
+    /// Scans the journal above this base for its committed boundaries.
+    ///
+    /// It takes every one, each with its signature slot, in one pass — the
+    /// boundary read's door ([`crate::Kernel::boundaries_above`]; §3.3 step 2
+    /// of the operations design) — beside [`Base::scan`] and for its reason:
+    /// the base the first link is judged against, and whose closed segments
+    /// are skipped, is the base this derivation selected, never an `S_load` a
+    /// caller got from somewhere else — and here there is no fold to disagree
+    /// with, so what the door guards is that the boundaries answered, and the
+    /// chain links judged with them, are those above the base that was
     /// chosen. The scan collects no record ([`journal::scan_boundaries`]);
     /// what it answers is [`ScanOutcome::into_boundaries`], once the at-rest
     /// verdicts have been asked of it as they are asked of [`Base::scan`]'s
     /// outcome.
+    ///
+    /// # Errors
+    ///
+    /// As [`Base::scan`]'s: [`ScanFail::Io`] where a segment cannot be read,
+    /// and [`ScanFail::Unscannable`] where one cannot be taken in within the
+    /// scan's bounds.
     pub(crate) fn scan_boundaries(&self, segs: &[SegmentMeta]) -> Result<ScanOutcome, ScanFail> {
         journal::scan_boundaries(segs, self.s_load, self.chain)
     }
 }
 
-/// No base at or below the requested ceiling remains derivable: no retained
-/// checkpoint there loads, and the journal no longer reaches back to `Seq(1)`
-/// so genesis cannot stand in (§6/§7).
+/// No base at or below the requested ceiling remains derivable (§6/§7).
+///
+/// No retained checkpoint there loads and seeds, and genesis cannot stand
+/// in: the journal does not reach back to `Seq(1)`, or genesis's own seed
+/// refuses.
 pub(crate) struct Unreachable {
-    /// The oldest retained checkpoint's seq when one exists — the oldest
-    /// boundary a base could still be derived at.
+    /// The oldest retained checkpoint's seq when one exists.
+    ///
+    /// It is the oldest boundary a base could still be derived at.
     pub floor: Option<u64>,
-    /// Why the NEWEST base this derivation could have used refused, which is
-    /// the whole of what is left to tell an operator once the fallback chain
-    /// is exhausted: a body that will not decode says roll the binary, a
-    /// failed checksum says restore the media, and a bare refusal says
-    /// neither — named on the base's file, `checkpoint.{n}: …`
-    /// ([`CheckpointMeta::named`]). `None` when no candidate was tried at all
-    /// — no retained checkpoint, or every one of them above the ceiling.
+    /// Why the newest base this derivation could have used refused.
+    ///
+    /// It is the whole of what is left to tell an operator once the fallback
+    /// chain is exhausted: a body that will not decode says delete the data
+    /// directory and start over, the remedy
+    /// [`crate::OpenError::BadCheckpoint`]'s line appends after it, a failed
+    /// checksum says restore the media, and a bare refusal says neither —
+    /// named on the base's file, `checkpoint.{n}: …`
+    /// ([`CheckpointMeta::named`]), save genesis's own refused seed where no
+    /// checkpoint was tried, which is named on no file. `None` when no
+    /// candidate was tried at all — no retained checkpoint, or every one of
+    /// them above the ceiling, and the journal not reaching back to genesis.
     ///
     /// Only an exhausted fallback chain reaches a caller this way; a refusal
     /// the fallback walked past is no failure, and travels instead on the base
@@ -165,23 +201,23 @@ pub(crate) struct Unreachable {
     pub cause: Option<LoadRefused>,
 }
 
-/// Choose the base (§6/§7): the newest checkpoint that loads AND SEEDS — at
-/// or below `ceiling`, the highest coordinate the chosen base may embody,
-/// when one is given — else genesis while it is still reachable.
-/// A checkpoint that refuses at either door — [`CheckpointMeta::load`], or
-/// the seed [`WorldState::rebuild_derived`] runs over what loaded, which
-/// since the AUTH spec's seam delta (AUTH-2.85) may refuse a base written
-/// without a slice it cannot rebuild — is skipped and the next-older
-/// RETAINED one tried, which is what makes the fallback chain real rather
-/// than nominal (AUTH-2.84: a checkpoint that is not a start point is handled
-/// by this existing chain, at startup and for every history read alike); if
-/// nothing stands in, [`Unreachable`] carries why the newest candidate
-/// refused, since by then that account is all an operator has. What the
-/// chain passed over on the way to the base it did choose rides on the base
+/// Chooses the base: the newest checkpoint that loads and seeds, else genesis.
+///
+/// The checkpoint is the newest at or below `ceiling` — the highest
+/// coordinate the chosen base may embody — when one is given, and genesis
+/// stands in while it is still reachable (§6/§7). A checkpoint that refuses
+/// at either door — [`CheckpointMeta::load`], or the seed
+/// [`WorldState::rebuild_derived`] runs over what loaded, which may refuse a
+/// base written without a slice it cannot rebuild (the AUTH spec's seam
+/// delta, AUTH-2.85) — is skipped and the next-older retained one tried,
+/// which is what makes the fallback chain real rather than nominal
+/// (AUTH-2.84: a checkpoint that is not a start point is handled by this
+/// chain, at startup and for every history read alike). What the chain
+/// passed over on the way to the base it did choose rides on the base
 /// ([`Base::skipped`]), for the open to report.
 ///
 /// Whichever base is chosen is seeded through
-/// [`WorldState::rebuild_derived`] BEFORE anything is folded onto it: the
+/// [`WorldState::rebuild_derived`] before anything is folded onto it: the
 /// seed stands in for the fold over `Seq ≤ s_load`, and [`WorldState::apply`]
 /// carries the hints forward across everything above it (§7, seam
 /// contract 2).
@@ -192,17 +228,23 @@ pub(crate) struct Unreachable {
 /// this is the only site that makes a base out of a header.
 ///
 /// `genesis` is borrowed and copied only on the branch that uses it, so the
-/// common case — a checkpoint that loads — costs no copy of a world at all.
-/// A genesis whose own seed refuses is the caller's broken genesis
-/// obligation ([`WorldState::rebuild_derived`]), and is answered as the
-/// exhausted chain it leaves: no base of this journal can stand in.
+/// common case — a checkpoint that loads and seeds — costs no copy of a world
+/// at all.
 ///
-/// `checkpoints` must be ASCENDING by seq, as [`crate::checkpoint::list`]
-/// produces it: this walks it from the back as newest-first and reads its front
-/// as the oldest base still derivable, so an out-of-order slice picks a base
-/// that is not the newest and names a floor that is not the oldest. `segs`
-/// must be ascending by `firstSeq` for [`journal::reaches_genesis`]'s own
-/// reason.
+/// **Precondition.** `checkpoints` must be ascending by seq, as
+/// [`crate::checkpoint::list`] produces it: this walks it from the back as
+/// newest-first and reads its front as the oldest base still derivable, so an
+/// out-of-order slice picks a base that is not the newest and names a floor
+/// that is not the oldest. `segs` must be ascending by `firstSeq` for
+/// [`journal::reaches_genesis`]'s own reason.
+///
+/// # Errors
+///
+/// [`Unreachable`] where nothing stands in, carrying why the newest candidate
+/// refused where one was tried, since by then that account is all an operator
+/// has. A genesis whose own seed refuses is the caller's broken genesis
+/// obligation ([`WorldState::rebuild_derived`]), and is answered as the
+/// exhausted chain it leaves: no base this derivation may use can stand in.
 pub(crate) fn select_base<W: WorldState>(
     checkpoints: &[CheckpointMeta],
     segs: &[SegmentMeta],
@@ -231,7 +273,7 @@ pub(crate) fn select_base<W: WorldState>(
         skipped.push(SkippedBase { seq: Seq(cp.seq), why: skip_account(&refused) });
         // Newest-first, so the first refusal met is the newest base's — the
         // one this derivation most wanted, and the one an operator needs if
-        // nothing below it stands in either. Kept NAMED ON ITS FILE, since by
+        // nothing below it stands in either. Kept named on its file, since by
         // then it is read away from the base that refused: the line says
         // `checkpoint.{n}: …`, where a listing's order would mislead a reader
         // hunting "the newest" by name.
@@ -248,8 +290,9 @@ pub(crate) fn select_base<W: WorldState>(
     Ok(Base { s_load: 0, world, chain: journal::CHAIN_GENESIS, skipped })
 }
 
-/// Why a fold refused: the coordinate naming the damage, and — where there
-/// was one — the account of what could not be read there.
+/// Why a fold refused: the coordinate naming the damage, and its account.
+///
+/// The account, where there was one, is of what could not be read there.
 ///
 /// The two conditions differ in whether an account exists at all. A record
 /// that does not decode has the serializer's own refusal, and that refusal is
@@ -259,38 +302,49 @@ pub(crate) fn select_base<W: WorldState>(
 /// has none: the journal is malformed rather than unreadable, and the
 /// coordinate is the whole of what there is to say.
 pub(crate) struct FoldFail {
-    /// The record's own, readable coordinate — unlike a corrupt run's (see
-    /// [`ScanOutcome::halt_anywhere`]).
+    /// The record's own, readable coordinate, unlike a corrupt run's.
+    ///
+    /// For a corrupt run's, see [`ScanOutcome::halt_anywhere`].
     pub at: u64,
     /// The decode's own account, for the condition that has one.
     pub cause: Option<Cause>,
 }
 
-/// Apply the committed records of `(base.s_load, bound]` onto `base`, one at
-/// a time, decoding each. The order they arrive in is `Seq` order and each
-/// coordinate arrives once, because [`ScanOutcome::records_to`] settles both
-/// — they are facts about the set that scan derived, and it is the element
-/// holding the set (§6/§7). This fold therefore applies what it is handed,
-/// which is what [`WorldState::apply`] not being idempotent requires of it.
+/// Applies the committed records of `(base.s_load, bound]` onto `base`.
 ///
-/// The scan is BORROWED, so its other answers — the tail cut among them —
+/// It applies them one at a time, decoding each. The order they arrive in is
+/// `Seq` order and each coordinate arrives once, because
+/// [`ScanOutcome::records_to`] settles both — they are facts about the set
+/// that scan derived, and it is the element holding the set (§6/§7). This
+/// fold therefore applies what it is handed, which is what
+/// [`WorldState::apply`] not being idempotent requires of it.
+///
+/// The scan is borrowed, so its other answers — the tail cut among them —
 /// outlive the fold. That is what lets a caller refuse on this fold's verdict
 /// before it acts on any of them.
 ///
-/// `scan` must be THIS base's own ([`Base::scan`]). A scan judged against
-/// another base makes its own `(s_load, bound]` range a range over a different
-/// base, and this answers `Ok` with a world missing records; a
-/// [`ScanOutcome`]'s base is private to [`crate::journal`], so nothing here can
-/// check it — [`Base::scan`] is what makes it true by construction.
+/// **Precondition.** `scan` must be this base's own ([`Base::scan`]). A scan
+/// judged against another base makes its own `(s_load, bound]` range a range
+/// over a different base, and this answers `Ok` with a world missing records
+/// — or, against a lower base, with records folded twice; a [`ScanOutcome`]'s
+/// base is private to [`crate::journal`], so nothing here can check it —
+/// [`Base::scan`] is what makes it true by construction.
+///
+/// # Errors
 ///
 /// `Err` is a committed, CRC-intact record that fails to decode as
 /// `W::Record` — corrupt committed data the derived state needs, and the one
 /// refusal only a fold can make, since only a fold names `W::Record` — or a
-/// `Seq` the scan presents TWICE, which is [`ScanOutcome::records_to`]'s
+/// `Seq` the scan presents twice, which is [`ScanOutcome::records_to`]'s
 /// verdict carried out in this caller's vocabulary. [`FoldFail`] carries
 /// which. Halt, never drop, and never twice (§7): folding a coordinate twice
 /// through a fold that need not be idempotent is exactly what recovery may
 /// not do.
+///
+/// # Panics
+///
+/// Panics where `bound` lies above what `scan` collected — a scan bounded
+/// below it, or a boundary scan — as [`ScanOutcome::records_to`] does.
 pub(crate) fn fold_to<W: WorldState>(
     base: Base<W>,
     scan: &ScanOutcome,

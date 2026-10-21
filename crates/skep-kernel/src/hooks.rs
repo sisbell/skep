@@ -28,14 +28,14 @@
 //! (`JournalWriter::with_seam`), and the checkpoint write and the open's tail
 //! cut take it by reference (`checkpoint::write`, `journal::truncate_tail`);
 //! the `Seam` alias in `lib.rs` is the handle. The doors a test arms it
-//! through are [`Kernel`]'s `#[doc(hidden)]` [`fail_the_next`],
-//! [`panic_at_the_next`] and [`armed_steps`], which delegate here, and the
-//! count is read through [`bases_loaded`]. A build without the feature
-//! carries none of it, and the write sites' hook before a step is the no-op
-//! `NoHooks` of `lib.rs`. Like [`SaltSource::Seeded`], a test-time knob the
-//! shipped binary never turns: the kernel still has no logging seam — it
-//! answers facts, and this seam only makes a step fail and counts what the
-//! reads loaded.
+//! through are [`Kernel`]'s `#[doc(hidden)]` [`fail_the_next`] and
+//! [`panic_at_the_next`], and [`armed_steps`] reads what stands; the three
+//! delegate here, and the count is read through [`bases_loaded`]. A build
+//! without the feature carries none of it, and the write sites' hook before a
+//! step is the no-op `NoHooks` of `lib.rs`. Like [`SaltSource::Seeded`], a
+//! test-time knob the shipped binary never turns: the kernel still has no
+//! logging seam — it answers facts, and this seam only makes a step fail or
+//! unwind and counts what the reads loaded.
 //!
 //! [`Kernel`]: crate::Kernel
 //! [`Kernel::base_at_or_below`]: crate::Kernel::base_at_or_below
@@ -55,48 +55,61 @@ use crate::Step;
 /// What an armed step does in the real step's place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Arm {
-    /// Answer an `io::Error` of this kind, naming the kind and the step.
+    /// Answers an `io::Error` of this kind, naming the kind and the step.
     Fail(io::ErrorKind),
-    /// Unwind, naming the step.
+    /// Unwinds, naming the step.
     Panic,
 }
 
-/// The write-fault seam's state: at most one arm per step, each TAKEN by
-/// the first hook that reaches its step. Behind an `Arc` (the `Seam`
-/// alias) so the kernel and its journal appender hold one state: the
-/// kernel's doors arm it, the appender's and the checkpoint write's hooks
-/// fire it. Beside the arms, the one count the seam keeps.
+/// The write-fault seam's state: at most one arm per step.
+///
+/// Each arm is taken by the first hook that reaches its step. Behind an
+/// `Arc` (the `Seam` alias) so the kernel and its journal appender hold one
+/// state: the kernel's doors arm it, the appender's and the checkpoint
+/// write's hooks fire it. Beside the arms, the one count the seam keeps.
 #[derive(Default)]
 pub(crate) struct Hooks {
     armed: Mutex<Vec<(Step, Arm)>>,
-    /// THE BASE-LOAD COUNT: the bases this kernel's history reads have
-    /// loaded since the open, moved by [`Hooks::base_loaded`] at the reads'
-    /// base selection and read by [`Hooks::bases_loaded`]. Monotone.
+    /// The base-load count of this kernel's history reads.
+    ///
+    /// It is the bases they have loaded since the open, moved by
+    /// [`Hooks::base_loaded`] at the reads' base selection and read by
+    /// [`Hooks::bases_loaded`]. Monotone.
     bases_loaded: AtomicU64,
 }
 
 impl Hooks {
-    /// ONE MORE BASE LOADED by a history read — what the reads' base
-    /// selection calls once its base stands: a retained checkpoint's whole
-    /// body decoded and seeded, or genesis cloned and seeded. A candidate
-    /// the fallback chain passed over is not one, nor a selection that
-    /// refused: the count is of bases a read went on to scan from.
+    /// Counts one more base loaded by a history read.
+    ///
+    /// The reads' base selection calls it once its base stands: a retained
+    /// checkpoint's whole body decoded and seeded, or genesis cloned and
+    /// seeded. A candidate the fallback chain passed over is not one, nor a
+    /// selection that refused: the count is of the bases a read's selection
+    /// stood on, whether the read then scans from the base or answers at it.
     pub(crate) fn base_loaded(&self) {
         self.bases_loaded.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The bases this kernel's history reads have loaded since the open.
+    /// Returns the bases this kernel's history reads loaded since the open.
     pub(crate) fn bases_loaded(&self) -> u64 {
         self.bases_loaded.load(Ordering::Relaxed)
     }
 
-    /// The seam's hook before a step — what each write site calls: the arm
-    /// standing at `step`, if one does, is TAKEN, so the next call of the
-    /// same step runs the real step, and fires in the step's place — a
-    /// failure answers its `io::Error`, the message naming the kind and the
-    /// step; a panic unwinds, its message naming the step. No lock of the
-    /// seam's is held while either fires. With no arm standing the answer
-    /// is `Ok(())`, and the step runs.
+    /// Runs the seam's hook before `step`, the call each write site makes.
+    ///
+    /// The arm standing at `step`, if one does, is taken, so the next call of
+    /// the same step runs the real step, and fires in the step's place. No
+    /// lock of the seam's is held while it fires. With no arm standing the
+    /// answer is `Ok(())`, and the step runs.
+    ///
+    /// # Errors
+    ///
+    /// A failure arm standing at `step` answers its `io::Error`, of the kind
+    /// armed, the message naming the kind and the step.
+    ///
+    /// # Panics
+    ///
+    /// A panic arm standing at `step` unwinds, its message naming the step.
     pub(crate) fn before(&self, step: Step) -> io::Result<()> {
         let arm = {
             let mut armed = self.armed.lock();
@@ -112,21 +125,24 @@ impl Hooks {
         }
     }
 
-    /// Arm `step`, replacing any arm standing there: one arm per step.
+    /// Arms `step`, replacing any arm standing there: one arm per step.
     fn arm(&self, step: Step, arm: Arm) {
         let mut armed = self.armed.lock();
         armed.retain(|(at, _)| *at != step);
         armed.push((step, arm));
     }
 
-    /// FAIL the next `step` with an `io::Error` of `kind`, once.
+    /// Arms the next `step` to fail with an `io::Error` of `kind`, once.
     pub(crate) fn fail_the_next(&self, step: Step, kind: io::ErrorKind) {
         self.arm(step, Arm::Fail(kind));
     }
 
-    /// PANIC at the next `step`, once. Only a step that
-    /// [`takes_a_panic_arm`] can be armed so; arming another is a caller's
-    /// bug, answered as one.
+    /// Arms the next `step` to panic, once.
+    ///
+    /// # Panics
+    ///
+    /// Only a step that [`takes_a_panic_arm`] can be armed so; arming another
+    /// is a caller's bug, answered as one.
     pub(crate) fn panic_at_the_next(&self, step: Step) {
         assert!(
             takes_a_panic_arm(step),
@@ -136,8 +152,9 @@ impl Hooks {
         self.arm(step, Arm::Panic);
     }
 
-    /// The steps an arm still stands at, in arming order — empty once every
-    /// arm has fired.
+    /// Returns the steps an arm still stands at, in arming order.
+    ///
+    /// Empty once every arm has fired.
     pub(crate) fn armed_steps(&self) -> Vec<Step> {
         self.armed.lock().iter().map(|(step, _)| *step).collect()
     }
@@ -146,20 +163,19 @@ impl Hooks {
 /// Returns whether `step` takes a panic arm.
 ///
 /// The checkpoint write's three take one — the panic the design's row of a
-/// panic past the commit region names, which the backstop's inline
-/// checkpoint propagates out of `transact` after the commit landed — and so
-/// does the journal's append, the unwind out of the commit region the §3
-/// guard repairs, whose repair the seam can then fail. Not the barrier: its
-/// unwind leaves the appender in the append's own state
+/// panic past the commit region names, which an inline checkpoint, an inline
+/// arm's or the backstop's, propagates out of `transact` after the commit
+/// landed — and so does the journal's append, the unwind out of the commit
+/// region the §3 guard repairs, whose repair the seam can then fail. Not the
+/// barrier: its unwind leaves the appender in the append's own state
 /// (`InFlight::Appending`), and the same repair answers it. Not the repair:
 /// its failure is `truncate_to`'s `Err`, which the failure arm is, and an
-/// unwind out of the repair after an unwind would leave the appender's
-/// length above a partial append with the kernel unpoisoned — a state no
-/// `set_len` produces and no card describes. Not the tail keep's fsync: an
-/// unwind out of an open is the open's caller's, with nothing cut, and the
-/// failure arm is what the keep's card describes. Spelled out variant by
-/// variant, so a step added to [`Step`] says whether it takes one before the
-/// build passes.
+/// unwind out of the repair after an unwind would escape the §3 guard,
+/// leaving the kernel unpoisoned with its repair never run — a state no card
+/// describes. Not the tail keep's fsync: an unwind out of an open is the
+/// open's caller's, with nothing cut, and the failure arm is what the keep's
+/// card describes. Spelled out variant by variant, so a step added to
+/// [`Step`] says whether it takes one before the build passes.
 fn takes_a_panic_arm(step: Step) -> bool {
     match step {
         Step::CheckpointCreate
@@ -233,8 +249,9 @@ mod tests {
         assert_eq!(hooks.armed_steps(), vec![Step::JournalRepair]);
     }
 
-    /// The count starts at zero, moves by one per base loaded, and the
-    /// arms beside it neither move it nor are moved by it.
+    /// Checks the count starts at zero and moves by one per base loaded.
+    ///
+    /// The arms beside it neither move it nor are moved by it.
     #[test]
     fn the_base_load_count_starts_at_zero_and_moves_once_per_load() {
         let hooks = Hooks::default();

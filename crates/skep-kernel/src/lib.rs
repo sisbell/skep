@@ -1,12 +1,13 @@
 //! skep-kernel — M2: Transaction, Journal & Concurrency Kernel.
 //!
 //! The engine's **generic transactional substrate**: every state change becomes
-//! one atomic, totally-ordered, durable, recoverable step (or a composite
-//! committed as one); committed state is served as consistent snapshots;
-//! writers are serialized — while M2 knows nothing about what any change
-//! *means*. It is a WAL + atomic-install + keyed-serialization + snapshot
-//! kernel, dependency-inverted: M2 defines the fold ([`WorldState::apply`]),
-//! the engine implements it, and M2 only calls down through that trait.
+//! one atomic, totally-ordered step, durable and recoverable where journaled
+//! (or a composite committed as one); committed state is served as consistent
+//! snapshots; writers are serialized — while M2 knows nothing about what any
+//! change *means*. It is a WAL + atomic-install + keyed-serialization +
+//! snapshot kernel, dependency-inverted: M2 defines the fold
+//! ([`WorldState::apply`]), the engine implements it, and M2 only calls down
+//! through that trait.
 //!
 //! Spec traceability: doc-comments cite the labels they realize — ASN-0134's
 //! atomic-step model (A0–A7), MIC clauses 1–7, verdict coordinates V0–V2, run
@@ -17,10 +18,10 @@
 //!
 //! The v1 concurrency realization is the **single applier** (§8): one global
 //! applier lock serializes every write, subsuming the [`LockKey`] seam, and the
-//! one commit ordering is **durable-before-visible** (§1): append records →
-//! append commit marker → one records+marker fsync → atomic root install →
-//! return. The `transact`/`snapshot` signatures and the `LockKey` seam are
-//! invariant across the deferred per-key/CAS realizations.
+//! one commit ordering, where journaled, is **durable-before-visible** (§1):
+//! append records → append commit marker → one records+marker fsync → atomic
+//! root install → return. The `transact`/`snapshot` signatures and the
+//! `LockKey` seam are invariant across the deferred per-key/CAS realizations.
 //!
 //! ## Checkpoints, inline or deferred
 //!
@@ -28,57 +29,62 @@
 //! timer. Under its inline arms the crossing commit runs the checkpoint on
 //! its own thread, the result reaching no caller but as the kernel's record
 //! of the run ([`Kernel::last_inline_checkpoint`]); under
-//! [`CheckpointPolicy::Deferred`] it SETS THE DUE FLAG instead
+//! [`CheckpointPolicy::Deferred`] it sets the due flag instead
 //! ([`Kernel::checkpoint_due`], lock-free) and the caller's own thread runs
-//! [`Kernel::checkpoint`] — which clears the flag FIRST, then runs — and
+//! [`Kernel::checkpoint`] — which clears the flag first, then runs — and
 //! reads the result. A crossing that finds the flag already set runs the
-//! checkpoint inline after all, THE BACKSTOP: a caller that services no flag
+//! checkpoint inline after all, the backstop: a caller that services no flag
 //! gets a checkpoint at every second crossing and never an unbounded
-//! window. [`CheckpointPolicy::EitherOf`] crosses on a commit count or a
-//! byte bound, whichever first, and [`Kernel::set_cadence_bytes`] and
+//! window. [`CheckpointPolicy::EitherOf`] crosses when either of its two
+//! policies does, whichever first — a commit count beside a byte bound, the
+//! shape it exists for — and [`Kernel::set_cadence_bytes`] and
 //! [`Kernel::set_cadence_commits`] move the bound and the count in a running
 //! kernel — the two values of a [`KernelConfig`] that move after
 //! [`Kernel::open`] reads it; [`CheckpointHeader::len`] is the figure a
 //! caller sizes the byte bound by — the newest base's through
 //! [`Kernel::newest_checkpoint`], or one base's by its seq through
 //! [`Kernel::checkpoint_header`], the start point's after an open that
-//! skipped a newer base. The fixed
-//! `checkpoint.tmp` is the kernel's to remove: a failed write removes its
-//! own, and [`Kernel::open`] removes one a crash left, reporting its size as
+//! skipped a newer base. The fixed `checkpoint.tmp` is the kernel's to
+//! remove: a failed write removes its own, best-effort, and [`Kernel::open`]
+//! removes one a crash or a failed write left, reporting its size as
 //! [`Kernel::stray_checkpoint_removed`].
 //!
 //! The kernel has no logging seam: it answers facts, and the caller above
-//! says them. A journaled open reports what it did as [`Recovery`] — the
-//! start point, the bases it passed over, the commits it replayed, the tail
-//! it cut with where the cut began, the position an intact marker in it
-//! claimed and the files its bytes were kept in, and the corrupt runs below
-//! the start point it read and passed over; a landing answers the journal
-//! bytes it reclaimed and the checkpoints it removed through
-//! [`Kernel::last_reclaimed_bytes`] and [`Kernel::last_removed_checkpoints`];
-//! the checkpoints `transact` ran inline on a committing thread are counted,
-//! and the last one recorded — the commit that ran it, how long it held that
-//! commit's caller, how it ended ([`Kernel::inline_checkpoints`],
-//! [`Kernel::last_inline_checkpoint`]); and a checkpoint that failed after
-//! its base landed names which step failed — the directory's fsync,
-//! retention or the journal's reclamation — as [`CheckpointError::Landed`]
-//! carrying a [`LandedStep`]. **Retention keeps the bases that load**: the
-//! names an open passed over are passed over by the count of bases to keep
-//! and removed as excess, so the first landing after a skip keeps the base
-//! the open loaded from beside the new one.
+//! says them. A journaled open reports what it found and did as [`Recovery`]
+//! — the start point, the bases it passed over, the commits it replayed, the
+//! tail it cut with where the cut began, the intact frames in it no torn
+//! write leaves, the position an intact marker in it claimed and the files
+//! its bytes were kept in, whether it began a journal where none stood, and
+//! the corrupt runs below the start point it read and passed over; a landing
+//! answers the journal bytes it reclaimed and the checkpoints it removed
+//! through [`Kernel::last_reclaimed_bytes`] and
+//! [`Kernel::last_removed_checkpoints`]; the checkpoints `transact` ran
+//! inline on a committing thread are counted, and the last one recorded —
+//! the commit that ran it, how long it held that commit's caller, how it
+//! ended ([`Kernel::inline_checkpoints`], [`Kernel::last_inline_checkpoint`]);
+//! and a checkpoint that failed after its base landed names which step
+//! failed — the directory's fsync, retention or the journal's reclamation —
+//! as [`CheckpointError::Landed`] carrying a [`LandedStep`]. **Retention
+//! counts every base but those the open skipped**: the names an open passed
+//! over are passed over by the count of bases to keep and removed as excess,
+//! so the first landing after a skip keeps the base the open loaded from
+//! beside the new one, where `retain_checkpoints` is two or more.
 //!
-//! The `test-hooks` feature compiles in the test seam (`hooks.rs`): the
-//! WRITE-FAULT SEAM, under which a test makes the next checkpoint write —
-//! before or past the rename that publishes it — or the next journal
-//! append, barrier or repair fail with a named `io::ErrorKind`
-//! (`StorageFull` for the full volume), or the next checkpoint write
-//! panic, each arm firing once and disarming, through `Kernel`'s
-//! `#[doc(hidden)]` doors `fail_the_next`, `panic_at_the_next` and
-//! `armed_steps`; the open's tail keep hooks it at its copy's fsync, which
-//! only the cut's own unit suite arms. The seam is one kernel's, never the
-//! process's, and a build without the feature carries none of it: the write
-//! sites' hook before a [`Step`] is a no-op there.
+//! The `test-hooks` feature compiles in the test seam (`hooks.rs`). It holds
+//! the write-fault seam, under which a test makes the next checkpoint write —
+//! before or past the rename that publishes it — or the next journal append,
+//! barrier or repair fail with a named `io::ErrorKind` (`StorageFull` for the
+//! full volume), or the next checkpoint write or journal append panic, each
+//! arm firing once and disarming, armed through `Kernel`'s `#[doc(hidden)]`
+//! doors `fail_the_next` and `panic_at_the_next`, with `armed_steps` reading
+//! what stands; and the count of the bases this kernel's history reads have
+//! loaded, read through the door `bases_loaded`. The open's tail keep hooks
+//! the seam at its copy's fsync, which fires only under the cut's own unit
+//! suite: an arm a door places there stands unfired. The seam is one
+//! kernel's, never the process's, and a build without the feature carries
+//! none of it: the write sites' hook before a [`Step`] is a no-op there.
 //!
-//! ## Boundary — deliberately NOT owned here
+//! ## Boundary — deliberately not owned here
 //!
 //! * address, frontier, or coverage-class computation (M1/M3/M7 — keys and
 //!   payloads are opaque; [`LockKey`] order is bytewise, never tumbler order);
@@ -86,7 +92,8 @@
 //!   them at their composite boundaries *through* M2, never by it);
 //! * record semantics — payloads are the engine's `W::Record`, folded blindly;
 //! * the request lifecycle, dispatch, and acknowledgment-to-client (M10 — M2
-//!   keeps only the commit-gate *mechanism*: return after durable install);
+//!   keeps only the commit-gate *mechanism*: return after install, and install
+//!   after durability where journaled);
 //! * derived hints — the stores own them; M2 journals only authoritative
 //!   deltas (§1);
 //! * multi-step (`m ≥ 2`) batch atomicity — M2 offers only the per-`transact`
@@ -104,11 +111,12 @@
 //! crate depends on every store and would cycle). The tags are all M2 can hold:
 //! a `key(home, …) -> LockKey` constructor names M1's `Address`, and M2 carries
 //! no edge to M1. So each store builds its own keys in these spaces through
-//! [`LockKey::new`] — M3's `skep-namespace` chain constructors
+//! [`LockKey::new`] — M3's `skep-namespace` public chain constructors
 //! (`content_lock_key`, `link_lock_key`, `version_lock_key`,
 //! `document_lock_key`) are the ones every other store's writes go through;
-//! its two registry keys (`principals_lock_key`, `nodes_lock_key`) are
-//! private to M3, whose own ops are the only ones that take them.
+//! its account chain's key (`account_lock_key`) and its two registry keys
+//! (`principals_lock_key`, `nodes_lock_key`) are private to M3, whose own ops
+//! are the only ones that take them.
 //!
 //! ## Example
 //!
@@ -155,17 +163,19 @@
 #![deny(missing_docs)]
 
 // The modules in dependency order: each names only modules above it, and the
-// root's own `Seq`, `LockKey` and `WorldState`. The rules that hold across
-// them are in the workspace's ARCHITECTURE.md, §The kernel.
+// root's own `Seq`, `LockKey`, `WorldState`, `Step` and `Seam` — save
+// `error`, which names `checkpoint`'s `refused_at_decode`. The rules that hold
+// across them are in the workspace's ARCHITECTURE.md, §The kernel.
 
 // `KernelConfig` and its knobs, each validating itself; `SaltSource` draws the
 // chain's salt.
 mod config;
-// The four error vocabularies, one per operation, and the stamp renderer both
-// formats share.
+// The four error vocabularies, one per operation, the refusal of a base's
+// seed, and the stamp renderer both formats share.
 mod error;
 // The test seam — `test-hooks` builds only: the write-fault seam's state,
-// its hook before a step, and the arming the kernel's doors delegate to.
+// its hook before a step, and the arming and the base-load count the
+// kernel's doors delegate to.
 #[cfg(feature = "test-hooks")]
 mod hooks;
 // The journal: its on-disk format and the crate's one codec, with the writer,
@@ -195,58 +205,64 @@ use std::fmt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-/// The engine's contract to M2 (dependency-inverted): the engine composes all
-/// store slices into one `World`, implements this trait for it, and
-/// instantiates [`Kernel<World>`]. M2 never names the concrete world — it only
-/// calls down through this trait (Engine Composition Contract).
+/// The engine's contract to M2, dependency-inverted.
 ///
-/// COST OF `Clone` — M2 clones `W` once per [`Kernel::transact`], BEFORE the
-/// closure runs and therefore for rejected and zero-step transactions too, and
-/// it does so while holding the applier lock, so the clone is on the critical
-/// section every other writer in the process waits behind. `Clone` must
-/// therefore be cheap: the design's structurally-shared store slices are a
-/// requirement of this path, and a slice that moves to an eagerly-copied
-/// collection makes every transaction in the system — read-only ones included
-/// — `O(|world|)` under a global lock, which M2 has no way to report.
+/// The engine composes all store slices into one `World`, implements this
+/// trait for it, and instantiates [`Kernel<World>`]. M2 never names the
+/// concrete world — it only calls down through this trait (Engine Composition
+/// Contract).
 ///
-/// DROP OBLIGATION — `W`'s destructor MUST NOT unwind, and M2 cannot check
-/// this. What M2 does fix is WHERE a world's destructor can run: never after
-/// a root's install inside the commit region — [`Kernel::transact`] holds the
-/// superseded root until the call returns, so the install releases only a
-/// reference, and every unwind out of the commit region precedes the
+/// **Cost of `Clone`.** M2 clones `W` once per [`Kernel::transact`] that finds
+/// the kernel unpoisoned, before the closure runs and therefore for rejected
+/// and zero-step transactions too, and it does so while holding the applier
+/// lock, so the clone is on the critical section every other writer in the
+/// process waits behind. `Clone` must therefore be cheap: the design's
+/// structurally-shared store slices are a requirement of this path, and a
+/// slice that moves to an eagerly-copied collection makes every transaction
+/// in the system — read-only ones included — `O(|world|)` under a global
+/// lock, which M2 has no way to report.
+///
+/// **Drop obligation.** `W`'s destructor must not unwind, and M2 cannot check
+/// this. What M2 does fix is *where* a world's destructor can run: never
+/// after a root's install inside the commit region — [`Kernel::transact`]
+/// holds the superseded root until the call returns, so the install releases
+/// only a reference, and every unwind out of the commit region precedes the
 /// install, as the region's repair assumes. So an unwinding destructor
-/// surfaces wherever a world's LAST reference goes: out of a `transact`
+/// surfaces wherever a world's *last* reference goes: out of a `transact`
 /// whose transaction has committed and installed — the superseded root,
 /// released as the call returns — so the caller receives a panic in place of
 /// the `Ok` it was owed, the lost-ack case (§3); out of a `transact` that
 /// installed nothing — a staged world discarded by `f`'s rejection, a
-/// zero-step return, the journal's refusal, or [`Staging::push`] replacing
-/// it — with nothing committed and the kernel as the answer it displaces
-/// would have left it; out of whichever read or [`Kernel::checkpoint`]
-/// releases the last reference to a superseded root, a [`Snapshot`] most
-/// often; and out of [`Kernel::open`], [`Kernel::world_at`],
-/// [`Kernel::chain_at`], [`Kernel::attestation_at`] and
+/// zero-step return, the `Seq` order's refusal or the journal's, or
+/// [`Staging::push`] replacing it — with nothing committed and the kernel as
+/// the answer it displaces would have left it, save where that answer is a
+/// repair's failure: the §3 unwind guard runs the repair again, and only a
+/// second failure halts the kernel, its frames possibly standing; out of
+/// whichever read or [`Kernel::checkpoint`] releases the last reference to a
+/// superseded root, a [`Snapshot`] most often; out of [`Kernel::open`],
+/// [`Kernel::world_at`], [`Kernel::chain_at`], [`Kernel::attestation_at`] and
 /// [`Kernel::boundaries_above`], whose base loads and folds drop worlds of
-/// their own.
+/// their own; and out of the kernel's own drop, which releases its reference
+/// to the installed root and drops the genesis a journaled kernel keeps.
 ///
-/// HOSTILE-INPUT OBLIGATION — `W` is decoded from a checkpoint body, which is
-/// bytes M2 does not trust: the header checksum proves they are the bytes that
-/// were written, and nothing about whether decoding them is safe. So this
-/// type's `Deserialize` must terminate and must not exhaust the stack on any
-/// byte string. The same obligation binds [`Record`], and is written out in
-/// full there. M2 cannot check this.
+/// **Hostile-input obligation.** `W` is decoded from a checkpoint body, which
+/// is bytes M2 does not trust: the header checksum proves they are the bytes
+/// that were written, and nothing about whether decoding them is safe. So
+/// this type's `Deserialize` must terminate and must not exhaust the stack on
+/// any byte string. The same obligation binds [`Record`], and is written out
+/// in full there. M2 cannot check this.
 ///
-/// CANONICAL-ENCODING OBLIGATION — this type's `Serialize`, and [`Record`]'s,
-/// must write ONE byte string per value, on every process and every machine.
-/// M2's codec fixes every integer's width and every field's place; the order
-/// a type's own `Serialize` visits the entries of a map or a set is the
-/// type's, so an authoritative collection serializes in an order that is a
-/// function of its contents — never a hash map's iteration order under a
-/// per-process `RandomState`, which a derived hint may still hold behind
-/// `#[serde(skip)]`. Two promises rest on it, and recovery on neither: a
-/// checkpoint's `body_hash` names the world it embodies
+/// **Canonical-encoding obligation.** This type's `Serialize`, and
+/// [`Record`]'s, must write *one* byte string per value, on every process and
+/// every machine. M2's codec fixes every integer's width and every field's
+/// place; the order a type's own `Serialize` visits the entries of a map or a
+/// set is the type's, so an authoritative collection serializes in an order
+/// that is a function of its contents — never a hash map's iteration order
+/// under a per-process `RandomState`, which a derived hint may still hold
+/// behind `#[serde(skip)]`. Two promises rest on it, and recovery on neither:
+/// a checkpoint's `body_hash` names the world it embodies
 /// ([`CheckpointHeader`]), so two checkpoints of one world at one coordinate
-/// are one file and a replica that derived that world can check a published
+/// carry one body and a replica that derived that world can check a published
 /// base by it; and one op sequence under one [`SaltSource::Seeded`] seed
 /// writes one journal byte for byte, so two replicas of one history agree on
 /// every chain link. Recovery reads back the very bytes it framed, so nothing
@@ -255,50 +271,54 @@ use serde::Serialize;
 ///
 /// [`Record`]: WorldState::Record
 pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
-    /// The engine's central record enum — the union of every store's own
-    /// record type. Opaque to M2: journaled as bytes, folded via [`apply`].
+    /// The engine's central record enum.
     ///
-    /// ROUND-TRIP OBLIGATION — a record is journaled as bytes and replayed by
-    /// decoding those bytes, so [`apply`] must have the same effect on the
+    /// It is the union of every store's own record type. Opaque to M2:
+    /// journaled as bytes, folded via [`apply`].
+    ///
+    /// **Round-trip obligation.** A record is journaled as bytes and replayed
+    /// by decoding those bytes, so [`apply`] must have the same effect on the
     /// decoded record as on the one that was staged: this type's serde must
     /// round-trip everything [`apply`] reads. A `#[serde(skip)]`ped field, a
     /// `#[serde(default)]` whose default differs from what was written, or a
-    /// `Serialize` that normalizes, each make replay fold a DIFFERENT record
+    /// `Serialize` that normalizes, each make replay fold a different record
     /// than the live commit folded — so the recovered world differs from the
     /// acknowledged one by exactly that difference, silently, and
     /// [`Kernel::world_at`] answers a world [`Kernel::snapshot`] never held.
     /// Nothing a record carries that [`apply`] does not read need survive the
     /// round trip. M2 cannot check this.
     ///
-    /// HOSTILE-INPUT OBLIGATION — M2 decodes this type from bytes it does not
-    /// trust: a journal frame is validated by a CRC, which proves the bytes are
-    /// the ones that were written and nothing about whether decoding them is
-    /// safe. So this type's `Deserialize` must terminate and must not exhaust
-    /// the stack on any byte string. Two shapes break that, and NEITHER is
-    /// caught here: a recursive type has no depth limit under this journal's
-    /// codec, and a stack overflow ABORTS rather than unwinding — no error, no
-    /// [`crate::OpenError::Corruption`], and [`Kernel::open`] does not return;
-    /// and a sequence whose element consumes no bytes turns a length prefix
-    /// into an unbounded loop. Bound recursion depth where a value is
-    /// ADMITTED, not where it is decoded — by then the bytes have already been
-    /// accepted. M2 cannot check this.
+    /// **Hostile-input obligation.** M2 decodes this type from bytes it does
+    /// not trust: a journal frame is validated by a CRC, which proves the
+    /// bytes are the ones that were written and nothing about whether
+    /// decoding them is safe. So this type's `Deserialize` must terminate and
+    /// must not exhaust the stack on any byte string. Two shapes break that,
+    /// and neither is caught here: a recursive type has no depth limit under
+    /// this journal's codec, and a stack overflow aborts rather than unwinding
+    /// — no error, no [`crate::OpenError::Corruption`], and [`Kernel::open`]
+    /// does not return; and a sequence whose element consumes no bytes turns
+    /// a length prefix into an unbounded loop. Bound recursion depth where a
+    /// value is admitted, not where it is decoded — by then the bytes have
+    /// already been accepted. M2 cannot check this.
     ///
     /// [`apply`]: WorldState::apply
     type Record: Serialize + DeserializeOwned + Send + Sync + 'static;
 
-    /// The ONE deterministic, total, side-effect-free fold step — drives both
-    /// live commit and replay (ASN-0134 A6: every journal prefix up to a
-    /// committed marker is a canonical reachable state). Folds authoritative
-    /// deltas AND maintains every derived hint incrementally; a hint NOT
-    /// folded here is stale after every live write and after replay
-    /// ([`rebuild_derived`] runs only at load). Deterministic so replay
-    /// reproduces committed state exactly — together with [`Record`]'s
-    /// round-trip obligation, which is what makes the record replay hands
-    /// this method the record that was staged. NOT required to be idempotent
-    /// — recovery applies each committed record exactly once (the checkpoint
-    /// embodies `Seq ≤ S_load`, replay covers `S_load < Seq ≤ W`; §6/§7).
+    /// Returns this world with `record` folded in: the one fold step.
     ///
-    /// WHERE IT RUNS — once per [`Staging::push`], inside the
+    /// Deterministic, total and side-effect-free, it drives both live commit
+    /// and replay (ASN-0134 A6: every journal prefix up to a committed marker
+    /// is a canonical reachable state). Folds authoritative deltas and
+    /// maintains every derived hint incrementally; a hint not folded here is
+    /// stale after every live write and after replay ([`rebuild_derived`]
+    /// runs only at load). Deterministic so replay reproduces committed state
+    /// exactly — together with [`Record`]'s round-trip obligation, which is
+    /// what makes the record replay hands this method the record that was
+    /// staged. Not required to be idempotent — recovery applies each committed
+    /// record exactly once (the checkpoint embodies `Seq ≤ S_load`, replay
+    /// covers `S_load < Seq ≤ W`; §6/§7).
+    ///
+    /// **Where it runs.** Once per [`Staging::push`], inside the
     /// [`Kernel::transact`] closure and therefore on the applier lock's
     /// critical section, and once per replayed record at [`Kernel::open`] and
     /// [`Kernel::world_at`]. So it must be cheap for the reason `Clone` must
@@ -311,40 +331,26 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`rebuild_derived`]: WorldState::rebuild_derived
     fn apply(&self, record: &Self::Record) -> Self;
 
-    /// Seed derived hints from authoritative state, or REFUSE the base. Runs
-    /// once per base a derivation loads — at every journaled
-    /// [`Kernel::open`] and at every history read ([`Kernel::world_at`],
-    /// [`Kernel::chain_at`], [`Kernel::attestation_at`],
-    /// [`Kernel::boundaries_above`]), on whichever base it selects, a
-    /// retained checkpoint or genesis — BEFORE replay, and
-    /// NEVER on a live commit, so it cannot keep any hint current by itself.
-    /// It exists solely to reconstruct hints a checkpoint skip-serialized
-    /// (`#[serde(skip)]`), and to say when it cannot. NOT run under
-    /// [`Durability::InMemory`], which does not load: that mode installs the
-    /// caller's `genesis` value as the root exactly as given. Default
-    /// `Ok(self)`; override iff hints are skipped or a slice can be absent.
+    /// Seeds derived hints from authoritative state, or refuses the base.
     ///
-    /// THE REFUSAL (the AUTH spec's M2 seam delta, AUTH-2.85): an override
-    /// that cannot seed from what the base carries answers
-    /// [`RebuildError`], and the base is NOT A START POINT — `open` and every
-    /// history read pass it over exactly as they pass over a checkpoint that
-    /// does not decode, under the existing fallback chain: the next-older
-    /// retained checkpoint, then genesis while the journal still reaches it,
-    /// and [`OpenError::BadCheckpoint`] or [`HistoryError::Reclaimed`] only
-    /// when the chain is exhausted, carrying the refusal as its `cause`.
-    /// Startup and the history reads run the SAME chain (AUTH-2.84), and a
-    /// journaled `open` reports what it did — the start point and every base
-    /// it passed over — as [`Recovery`], so the caller can say so. Retention
-    /// and the reclaim floor are unchanged by the delta. The error is M2's
-    /// own and slice-agnostic: it names the slice and nothing of what the
-    /// slice means, since this kernel knows nothing about what any change
-    /// means.
+    /// Runs once per base a derivation loads — at every journaled
+    /// [`Kernel::open`] and at every history read that selects a base
+    /// ([`Kernel::world_at`], [`Kernel::chain_at`], [`Kernel::attestation_at`],
+    /// [`Kernel::boundaries_above`]; genesis's slot and the empty range select
+    /// none), on each base it loads, a retained checkpoint or genesis, until
+    /// one seeds — before replay, and never on a live commit, so it cannot
+    /// keep any hint current by itself. It exists solely to reconstruct hints
+    /// a checkpoint skip-serialized (`#[serde(skip)]`), and to say when it
+    /// cannot. Not run under [`Durability::InMemory`], which does not load:
+    /// that mode installs the caller's `genesis` value as the root exactly as
+    /// given. Default `Ok(self)`; override iff hints are skipped or a slice can
+    /// be absent.
     ///
-    /// CONSISTENCY OBLIGATION (§7, seam contract 2): an override MUST seed
+    /// **Consistency obligation** (§7, seam contract 2): an override must seed
     /// exactly the hint state that folding every record with `Seq ≤ S` through
     /// [`apply`] would produce (`S` = the seq of the base selected — a
     /// retained checkpoint's, or `0` for genesis) — or refuse. Recovery and
-    /// [`Kernel::world_at`] run `rebuild_derived` (seeding `Seq ≤ S`) THEN
+    /// [`Kernel::world_at`] run `rebuild_derived` (seeding `Seq ≤ S`) then
     /// replay `Seq > S` through `apply`; if the seed disagrees with the
     /// `apply`-fold it stands in for, the recovered — or the historical —
     /// hint diverges from the live-maintained one and reads go wrong. A
@@ -354,25 +360,47 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// only honest answer there: a guessed seed is exactly the divergence this
     /// obligation forbids. M2 cannot check this.
     ///
-    /// WHAT MAY BE SKIPPED (§6/§7): a checkpoint is a serialized `W` standing
-    /// in for the fold over `Seq ≤ S`, so ONLY state this method can
+    /// **What may be skipped** (§6/§7): a checkpoint is a serialized `W`
+    /// standing in for the fold over `Seq ≤ S`, so only state this method can
     /// reconstruct may be `#[serde(skip)]`ped. Authoritative state must
     /// survive the serde round trip: [`Kernel::world_at`] promises the same
     /// world at a boundary whichever base carries it, and a skipped
     /// authoritative field makes a checkpoint-based derivation differ from a
     /// genesis-based one by exactly that field, silently. A world that skips
-    /// nothing needs no override at all, which is why the default is `Ok(self)`.
-    /// M2 cannot check this either.
+    /// nothing needs no override at all, which is why the default is
+    /// `Ok(self)`. M2 cannot check this either.
     ///
-    /// GENESIS OBLIGATION — the `genesis` handed to [`Kernel::open`] MUST
+    /// **Genesis obligation.** The `genesis` handed to [`Kernel::open`] must
     /// arrive with its derived hints already consistent with its own
-    /// authoritative state, and MUST seed `Ok`, because
+    /// authoritative state, and must seed `Ok`, because
     /// [`Durability::InMemory`] installs it unseeded while a journaled
-    /// `open()` seeds it through this method. A world that relies on that
-    /// seeding is right in one mode and wrong in the other, silently, and both
-    /// modes answer the same coordinate — `Seq(0)` — with different hints; a
-    /// genesis that refuses leaves a journal no base of which can stand in,
-    /// answered as the exhausted chain it is. M2 cannot check this.
+    /// `open()` seeds it through this method where it stands in. A world that
+    /// relies on that seeding is right in one mode and wrong in the other,
+    /// silently, and both modes answer the same coordinate — `Seq(0)` — with
+    /// different hints; a genesis that refuses leaves a derivation that
+    /// reaches it no base to stand in, answered as the exhausted chain it is.
+    /// M2 cannot check this.
+    ///
+    /// # Errors
+    ///
+    /// **The refusal** (the AUTH spec's M2 seam delta, AUTH-2.85): an override
+    /// that cannot seed from what the base carries answers [`RebuildError`],
+    /// and the base is not a start point — `open` and every history read pass
+    /// it over exactly as they pass over a checkpoint that does not decode,
+    /// under the fallback chain: the next-older retained checkpoint, then
+    /// genesis while the journal still reaches it, and
+    /// [`OpenError::BadCheckpoint`] or [`HistoryError::Reclaimed`] only when
+    /// the chain is exhausted, carrying the newest candidate's refusal as its
+    /// `cause`, which is this one where that candidate refused its seed.
+    /// Startup and the history reads run the same chain (AUTH-2.84), and a
+    /// journaled `open` reports what it did — the start point and every base
+    /// it passed over — as [`Recovery`], so the caller can say so. Retention
+    /// counts none of the bases the open passed over — a refused one among
+    /// them — among the bases it keeps, and the first landing removes them,
+    /// save a name a later checkpoint wrote over; the reclaim floor is the
+    /// oldest base kept ([`Kernel::checkpoint`]). The error is M2's own and
+    /// slice-agnostic: it names the slice and nothing of what the slice means,
+    /// since this kernel knows nothing about what any change means.
     ///
     /// [`apply`]: WorldState::apply
     fn rebuild_derived(self) -> Result<Self, RebuildError> {
@@ -380,14 +408,15 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     }
 }
 
-/// M2's per-record linearization coordinate (ASN-0134 A1/A2 — the assignment
-/// of a record's `Seq` under the applier lock is its linearization point).
-/// Monotone always; gap-free under [`BurnedSeqPolicy::Rollback`] (the
-/// default), monotone-only under [`BurnedSeqPolicy::TolerateGap`]
-/// (§1/§3/Invariants). `Copy`, so [`Snapshot::seq`]/[`Kernel::current_seq`]
-/// return it by value.
+/// M2's per-record linearization coordinate (ASN-0134 A1/A2).
 ///
-/// A REFINEMENT of ASN-0134's `𝔼`, not an identity (§2): non-`→_sh` records
+/// The assignment of a record's `Seq` under the applier lock is its
+/// linearization point. Monotone always; gap-free under
+/// [`BurnedSeqPolicy::Rollback`] (the default), monotone-only under
+/// [`BurnedSeqPolicy::TolerateGap`] (§1/§3/Invariants). `Copy`, so
+/// [`Snapshot::seq`]/[`Kernel::current_seq`] return it by value.
+///
+/// A refinement of ASN-0134's `𝔼`, not an identity (§2): non-`→_sh` records
 /// also draw a `Seq`, and for a multi-record composite the externally
 /// observable coordinate is the terminal `last_seq` returned by
 /// [`Kernel::transact`], never an interior `Seq`. No caller derives `idx(σ)`
@@ -400,18 +429,26 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
 pub struct Seq(pub u64);
 
 impl fmt::Display for Seq {
-    /// The bare coordinate, as every error message that names one spells it.
+    /// Writes the bare coordinate.
+    ///
+    /// It is how every error message that names one spells it.
+    ///
+    /// # Errors
+    ///
+    /// The formatter's error, where the sink it writes to refuses the bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-/// Opaque serialization key — the documented serialization seam M3/M7 code
-/// against (MIC clauses 2/5/7). M2 only `Eq`/`Hash`/`Ord`-s the bytes (`Ord`
-/// is bytewise, NOT tumbler order). A key is built by [`LockKey::new`] from a
-/// [`Space`] and the caller's own bytes, so the 1-byte space tag every key
-/// carries is prefixed in one place and distinct key spaces (e.g.
-/// `(home, subspace)` vs coverage-class) never collide.
+/// Opaque serialization key (MIC clauses 2/5/7).
+///
+/// It is the documented serialization seam M3/M7 code against. M2 only
+/// `Eq`/`Hash`/`Ord`-s the bytes (`Ord` is bytewise, not tumbler order). A
+/// key is built by [`LockKey::new`] from a [`Space`] and the caller's own
+/// bytes, so the 1-byte space tag every key carries is prefixed in one place
+/// and distinct key spaces (e.g. `(home, subspace)` vs coverage-class) never
+/// collide.
 ///
 /// Under the v1 single applier the global applier lock subsumes the keys
 /// (§4/§8) — they are the seam, not a live lock table — so the deferred
@@ -420,10 +457,11 @@ impl fmt::Display for Seq {
 pub struct LockKey(Vec<u8>);
 
 impl LockKey {
-    /// A key in `space`, over the caller's own opaque bytes. The 1-byte tag is
-    /// prefixed HERE, so no store can forget it or choose one locally — which
-    /// is what makes the cross-store uniqueness [`Space`] promises structural
-    /// rather than a convention each store re-keeps.
+    /// Returns a key in `space`, over the caller's own opaque bytes.
+    ///
+    /// The 1-byte tag is prefixed here, so no store can forget it or choose
+    /// one locally — which is what makes the cross-store uniqueness [`Space`]
+    /// promises structural rather than a convention each store re-keeps.
     pub fn new(space: Space, bytes: &[u8]) -> LockKey {
         let mut key = Vec::with_capacity(1 + bytes.len());
         key.push(space.tag());
@@ -432,14 +470,15 @@ impl LockKey {
     }
 }
 
-/// The SINGLE CENTRAL lock-key space-tag enum (§4, §Dependencies & seams;
-/// Engine Composition Contract). It names only 1-byte constants — no store
-/// types — so it sits BELOW every store; were it in the engine crate (which
-/// depends on every store) each store would need an edge to the engine: a
-/// compile-time crate cycle. Tags are never chosen per-store, which is what
-/// guarantees CROSS-STORE uniqueness: without it two stores could both pick
+/// The single central lock-key space-tag enum (§4, §Dependencies & seams).
+///
+/// It names only 1-byte constants — no store types — so it sits below every
+/// store; were it in the engine crate (which depends on every store) each
+/// store would need an edge to the engine: a compile-time crate cycle (Engine
+/// Composition Contract). Tags are never chosen per-store, which is what
+/// guarantees cross-store uniqueness: without it two stores could both pick
 /// `0x01` and silently alias M3's `(home,subspace)` keys with M7's
-/// `class_key`s.
+/// coverage-class keys.
 ///
 /// Dormant under the v1 single applier (the global lock subsumes all keys —
 /// §4/§8); load-bearing under the deferred per-key realization.
@@ -447,29 +486,35 @@ impl LockKey {
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Space {
-    /// `(home, subspace)` namespace/frontier keys — entity allocation (M3),
-    /// content writes (M4), placement (M5), link allocation (M7): byte-equal
-    /// by construction because every one of them is built by M3's
-    /// `*_lock_key` constructors over one encoding, so they serialize against
-    /// each other (MIC clause 2 / H0 discipline).
+    /// `(home, subspace)` namespace/frontier keys.
+    ///
+    /// The keys of entity allocation (M3), content writes (M4), placement
+    /// (M5) and link allocation (M7), byte-equal by construction because every
+    /// one of them is built by M3's `*_lock_key` constructors over one
+    /// encoding, so they serialize against each other (MIC clause 2 / H0
+    /// discipline).
     Namespace = 0x01,
-    /// Coverage-class keys — M7's idem=⊤ dedup critical sections (MIC clause
-    /// 7 / G2: read-decide-deposit is one action under this key).
+    /// Coverage-class keys: M7's idem=⊤ dedup critical sections.
+    ///
+    /// MIC clause 7 / G2: read-decide-deposit is one action under this key.
     CoverageClass = 0x02,
-    /// THE principal registry — M3's single global `principals_lock_key`,
-    /// which serializes delegation's id-freshness read; that race is
-    /// CROSS-namespace, so it cannot ride on a namespace key.
+    /// The principal registry: M3's single global `principals_lock_key`.
+    ///
+    /// It serializes delegation's id-freshness read; that race is
+    /// cross-namespace, so it cannot ride on a namespace key.
     Principals = 0x03,
-    /// THE node registry — M3's single global `nodes_lock_key`, which keeps a
-    /// concurrent duplicate `RegisterNode` a typed rejection rather than a
-    /// silent coalesce.
+    /// The node registry: M3's single global `nodes_lock_key`.
+    ///
+    /// It keeps a concurrent duplicate `RegisterNode` a typed rejection
+    /// rather than a silent coalesce.
     Nodes = 0x04,
 }
 
 impl Space {
-    /// The 1-byte tag this space's keys carry, which [`LockKey::new`] writes.
-    /// Public so the assignment is inspectable — the uniqueness the enum
-    /// exists for is a claim about these bytes.
+    /// Returns the 1-byte tag this space's keys carry.
+    ///
+    /// [`LockKey::new`] writes it. Public so the assignment is inspectable —
+    /// the uniqueness the enum exists for is a claim about these bytes.
     pub const fn tag(self) -> u8 {
         self as u8
     }
@@ -485,11 +530,12 @@ impl Space {
 /// publishes it. Three are the journal appender's: the append of a
 /// transaction's frames, the barrier that commits them, and the truncation
 /// that repairs a failed or unwound commit. One is the open's tail cut's:
-/// the fsync of the copy it keeps of a tail that holds an intact frame. The
-/// temp file's creation and the rename themselves — the two a directory
-/// squatting on their names already refuses — are no steps. Named in every
-/// build, so each write site's hook before a step is one call whether the
-/// seam is compiled in or not; without the feature nothing reads it.
+/// the fsync of the copy it keeps of a tail that holds an intact frame no
+/// torn write leaves. The rename itself — which a directory squatting on its
+/// name already refuses, as one squatting on the temp file's name refuses
+/// the creation — is no step. Named in every build, so each write site's
+/// hook before a step is one call whether the seam is compiled in or not;
+/// without the feature nothing reads it.
 ///
 /// Deliberately not `#[non_exhaustive]`: the seam says of every step whether
 /// it takes a panic arm (`hooks.rs`), and a suite outside this crate that
@@ -497,46 +543,53 @@ impl Space {
 /// into a wildcard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Step {
-    /// The checkpoint's temp file's creation, the world already serialized:
-    /// an arm here leaves nothing on disk — the shape a panic in the
-    /// world's own serializer has, which precedes the first file operation.
+    /// The checkpoint's temp file's creation, the world already serialized.
+    ///
+    /// An arm here leaves nothing on disk — the shape a panic in the world's
+    /// own serializer has, which precedes the temp file's creation.
     CheckpointCreate,
-    /// The temp file's fsync, its header and body written: a failure here
-    /// lands no base and removes the temp file before it is answered; a
-    /// panic leaves the temp file whole under the fixed name, for the next
+    /// The temp file's fsync, its header and body written.
+    ///
+    /// A failure here lands no base and removes the temp file, best-effort,
+    /// before it is answered; a panic leaves the temp file whole under the
+    /// fixed name, for the next checkpoint write to write over, or the next
     /// open to remove and report ([`Kernel::stray_checkpoint_removed`]).
     CheckpointSync,
-    /// The directory's fsync after the rename that publishes the
-    /// checkpoint: the base is ON DISK, and a failure here answers
+    /// The directory's fsync after the rename that publishes the checkpoint.
+    ///
+    /// The base is on disk, and a failure here answers
     /// [`CheckpointError::Landed`] over it, naming the step
     /// ([`LandedStep::DirectorySync`]), with retention and reclamation not
     /// run — the landed base that error's card says survives.
     CheckpointDirSync,
-    /// The append of a transaction's frames to the active segment, after
-    /// the rotation and before a byte of the transaction is on disk: a
-    /// failure here is repaired by the truncation and answers
-    /// [`TxnError::Durability`]; a panic here is the unwind out of the
-    /// commit region the §3 guard repairs.
+    /// The append of a transaction's frames to the active segment.
+    ///
+    /// It comes after the rotation and before a byte of the transaction is on
+    /// disk: a failure here is repaired by the truncation and answers
+    /// [`TxnError::Durability`]; a panic here is the unwind out of the commit
+    /// region the §3 guard repairs.
     JournalAppend,
-    /// The barrier — the one fsync of records and marker — the frames
-    /// appended and none of them durable: a failure here is repaired by the
-    /// truncation and answers [`TxnError::Durability`], as the append's
-    /// does.
+    /// The barrier, the one fsync of records and marker.
+    ///
+    /// The frames are appended and none of them durable: a failure here is
+    /// repaired by the truncation and answers [`TxnError::Durability`], as the
+    /// append's does.
     JournalBarrier,
-    /// The truncation back to the pre-transaction mark that repairs a failed
-    /// append or barrier, or an unwind out of the commit region: a failure
-    /// here is the repair's own, and POISONS the kernel
+    /// The truncation back to the pre-transaction mark.
+    ///
+    /// It repairs a failed append or barrier, or an unwind out of the commit
+    /// region: a failure here is the repair's own, and poisons the kernel
     /// ([`TxnError::Poisoned`]).
     JournalRepair,
-    /// The fsync of the copy the open's tail cut keeps of an intact tail.
+    /// The fsync of the copy the open's tail cut keeps.
     ///
     /// The tail holds an intact frame no torn write leaves
     /// ([`Recovery::tail_cut_kept`]); the copy's bytes are written and
-    /// nothing is cut. A failure here removes the copy, cuts nothing and
-    /// fails the open with [`OpenError::Io`]. The step is hooked on the seam
-    /// the open makes, which no door can arm before the open runs, so it
-    /// fires only where the cut's own unit suite hands it a seam of its own;
-    /// an arm a door places here stands unfired.
+    /// nothing is cut. A failure here removes the copy, best-effort, cuts
+    /// nothing and fails the open with [`OpenError::Io`]. The step is hooked
+    /// on the seam the open makes, which no door can arm before the open
+    /// runs, so it fires only where the cut's own unit suite hands it a seam
+    /// of its own; an arm a door places here stands unfired.
     TailKeep,
 }
 
@@ -556,8 +609,9 @@ pub(crate) type Seam = std::sync::Arc<hooks::Hooks>;
 #[cfg(not(feature = "test-hooks"))]
 pub(crate) type Seam = NoHooks;
 
-/// The seam of a build without `test-hooks`: nothing to arm, and a hook
-/// before a step that is nothing. Zero-sized, so the kernel and its
+/// The seam of a build without `test-hooks`, which has nothing to arm.
+///
+/// Its hook before a step is nothing. Zero-sized, so the kernel and its
 /// appender carry nothing of the seam.
 #[cfg(not(feature = "test-hooks"))]
 #[derive(Clone, Default)]
@@ -565,7 +619,11 @@ pub(crate) struct NoHooks;
 
 #[cfg(not(feature = "test-hooks"))]
 impl NoHooks {
-    /// The hook before a step, in a build without the seam: the step runs.
+    /// Runs the hook before a step, in a build without the seam: the step runs.
+    ///
+    /// # Errors
+    ///
+    /// None: the answer is `Ok(())` for every step.
     #[inline]
     pub(crate) fn before(&self, _step: Step) -> std::io::Result<()> {
         Ok(())

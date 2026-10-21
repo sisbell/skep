@@ -1,12 +1,15 @@
-//! The reads M10 COMPOSES rather than forwards — the three publication reads
-//! whose answer no single store computes (PUB round 2, lane 3.4; PUB-8.47) —
-//! and the one card for what they need that no store computes for them:
+//! The reads M10 composes rather than forwards, and what they need.
+//!
+//! They are the three publication reads whose answer no single store
+//! computes (PUB-8.47), and this is the one card for what they need that no
+//! store computes for them:
 //!
 //! * [`Op::DocMetadata`] assembles M3's publication bit, owner and version
 //!   chain with M5's frozen birth extent — [`require_registered_document`] is
 //!   its refusal and [`birth_version`] its chain read — and, for a version
 //!   member the shot minted, M5's shot terms for the address named
-//!   (`M5State::shot_terms`; the signed-ops design record's D25, arm (c′));
+//!   (`M5State::shot_terms`; signed-ops D25), and for a document a `version`
+//!   minted, the fork source it was made from (`M5State::fork_source`);
 //! * [`Op::EditionClaims`] takes the world's edition-claim class and keeps
 //!   the rows whose home the caller reads — [`require_registered_document`]
 //!   is the refusal that bounds it;
@@ -19,13 +22,13 @@
 //! values: no front door, no session, no predicate.
 //!
 //! Each asks its owners' reads rather than respelling them — M3's registry
-//! and ω walk, M5's chain card and birth extents — with ONE exception, and it
+//! and ω walk, M5's chain card and birth extents — with one exception, and it
 //! is the one rule M10 performs on another component's behalf anywhere (the
-//! crate doc names it beside M10's boundary): the fold-filter RE-DERIVES the
-//! grant fold's issuer test (`grant_exists`'s compare) as a projection over
-//! rows. It sits here because the world hands its universal index raw
-//! ([`PublicationWorld::universal_grant_index`]), so the narrowing a client's
-//! answer needs falls to the front door.
+//! crate doc names it beside M10's publication reads): the fold-filter
+//! re-derives the grant fold's issuer test (`grant_exists`'s compare) as a
+//! projection over rows. It sits here because the world hands its universal
+//! index raw ([`PublicationWorld::universal_grant_index`]), so the narrowing
+//! a client's answer needs falls to the front door.
 //!
 //! This module has no test of its own. `birth_version` is tested directly in
 //! `operation/tests.rs`, which builds a version chain through the surface,
@@ -48,27 +51,36 @@ use crate::request::OpKind;
 use crate::response::{BirthVersion, UniversalGrant};
 use crate::world::UniversalIndexRow;
 
-/// The registration refusal M10 ORIGINATES, for the two publication reads that
-/// take a document ([`Op::DocMetadata`], [`Op::EditionClaims`]; the third,
-/// [`Op::UniversalGrants`], takes no argument at all). Every other read's
+/// Refuses `doc` unless it is a registered document (`DocNotRegistered`).
+///
+/// It is the registration refusal M10 originates, for the two publication
+/// reads that take a document ([`Op::DocMetadata`], [`Op::EditionClaims`];
+/// the third, [`Op::UniversalGrants`], takes no argument at all) and for the
+/// content-frontier read ([`Op::ContentFrontier`]). Every other read's
 /// `*NotRegistered` is its store's, raised where the store meets the address;
-/// these two reach no single store that could raise one, so the check is
+/// these three reach no single store that could raise one, so the check is
 /// M10's own and is named as such.
 ///
-/// It is not bookkeeping — each of the two would answer something worse
-/// without it. It is what BOUNDS the edition-claim seam: the world narrows
-/// its `to` range by no level, so an account-tier target would ask after
-/// every document under it and a node-tier one after the store, and
-/// requiring document tier is what confines the lookup to one document's
-/// claims. And it is what keeps the doc-metadata read from FABRICATING a
-/// row for an address no mint produced — ω answers by longest prefix for any
+/// It is not bookkeeping — each of the two publication reads would answer
+/// something worse without it. It is what bounds the edition-claim seam: the
+/// world narrows its `to` range by no level, so an account-tier target would
+/// ask after every document under it and a node-tier one after the store,
+/// and requiring document tier is what confines the lookup to one document's
+/// claims. And it is what keeps the doc-metadata read from fabricating a row
+/// for an address no mint produced — ω answers by longest prefix for any
 /// address under a registered account, and the rest of that row would be a
 /// plausible `false` and `None`, indistinguishable from a real private
 /// unarranged document.
 ///
+/// # Errors
+///
+/// Returns `DocNotRegistered`, under `kind` and with no site, where `doc` is
+/// not a registered document.
+///
 /// [`Op::DocMetadata`]: crate::Op::DocMetadata
 /// [`Op::EditionClaims`]: crate::Op::EditionClaims
 /// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
+/// [`Op::ContentFrontier`]: crate::Op::ContentFrontier
 pub(crate) fn require_registered_document(
     m3: &M3State,
     kind: OpKind,
@@ -81,21 +93,23 @@ pub(crate) fn require_registered_document(
     }
 }
 
-/// The BIRTH VERSION of the document `doc` projects to (PUB-2.15) — `D.1`, the
-/// address its version chain opens at, with the BIRTH CONTENT of what
-/// occupies it (PUB-8.12; PUB-3.19 as RES-276 reads it). A version member
-/// answers its trunk's. `None` while the chain has no member, which is why
-/// the two halves travel as one [`BirthVersion`]: no extent is read for a
-/// document with no member, so the field is absent rather than zero.
+/// Returns the birth version of the document `doc` projects to (PUB-2.15).
 ///
-/// The extent is the content `D.1` was BORN with — the leading runs of its
-/// arrangement at its mint — and NOT its arranged content count: while `D.1`
+/// It is `D.1`, the address its version chain opens at, with the birth
+/// content of what occupies it (PUB-8.12; PUB-3.19 as RES-276 reads it). A
+/// version member answers its trunk's. `None` while the chain has no member,
+/// which is why the two halves travel as one [`BirthVersion`]: no extent is
+/// read for a document with no member, so the field is absent rather than
+/// zero.
+///
+/// The extent is the content `D.1` was born with — the leading runs of its
+/// arrangement at its mint — and not its arranged content count: while `D.1`
 /// is the head a declared deposit appends to its arrangement (PUB-2.66), and
-/// the count follows every one. The owner's ruling D2 (2026-09-17) FREEZES
-/// what is served, so no reader subtracts a remainder: a one-member edition
-/// that took a deposit still answers the extent its claim was written over
-/// (PUB-3.10), and so stays in the selection domain (RES-276) and passes the
-/// fill's edition side (RES-284, RES-286's claimed half).
+/// the count follows every one. R2-kickoff D2 freezes what is served, so no
+/// reader subtracts a remainder: a one-member edition that took a deposit
+/// still answers the extent its claim was written over (PUB-3.10), and so
+/// stays in the selection domain (RES-276) and passes the fill's edition side
+/// (RES-284, RES-286's claimed half).
 ///
 /// Both reads are M5's own, asked rather than respelled: its chain card's
 /// [`birth_version`](skep_arrangement::birth_version) for the member that
@@ -112,8 +126,10 @@ pub(crate) fn birth_version(m3: &M3State, m5: &M5State, doc: &Address) -> Option
     Some(BirthVersion { addr, extent })
 }
 
-/// THE FOLD-FILTER of the any-principal discovery read (PUB-8.47): the
-/// world's [`UniversalIndexRow`]s — the STORED rows of the grant fold's live
+/// Narrows the universal index's stored rows to the served rows (PUB-8.47).
+///
+/// It is the fold-filter of the any-principal discovery read: the world's
+/// [`UniversalIndexRow`]s — the stored rows of the grant fold's live
 /// universal index — narrowed to the [`UniversalGrant`]s a client is served.
 /// It realizes the compare [`Op::UniversalGrants`] states (RES-231, RES-264,
 /// RES-273, RES-298), one branch per arm and each branch labelled with its
@@ -122,15 +138,15 @@ pub(crate) fn birth_version(m3: &M3State, m5: &M5State, doc: &Address) -> Option
 /// the walk the fold's own owner memo is taken by at the mint — against each
 /// issuer of the row.
 ///
-/// Rows GROUP by the served prefix — two stored rows can narrow to one, their
+/// Rows group by the served prefix — two stored rows can narrow to one, their
 /// issuers gathered into the one set the served row carries — and come back
-/// in prefix order, so the ruled shape stands: one row per content prefix
+/// in prefix order, so the served shape stands: one row per content prefix
 /// with the issuers who granted it. That every served row carries exactly
-/// ONE issuer, and that the issuer ω-owns the prefix beside it, rests on the
+/// one issuer, and that the issuer ω-owns the prefix beside it, rests on the
 /// obligation [`UniversalIndexRow`] states — every issuer a registered seat —
 /// which this takes as given and does not check: the wider arm serves the
 /// issuer's own account, and only a seat is its own ω. No read class and no
-/// index (PUB-3.48): the compare is M3's own walk, ONE per stored row off the
+/// index (PUB-3.48): the compare is M3's own walk, one per stored row off the
 /// snapshot the arm holds, so the cost is the index's own size (PUB-7.45)
 /// times that walk. The two widenings RES-298 declines are declined here
 /// too: the wider arm never serves the stored prefix, and the exact arm is

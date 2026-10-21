@@ -1,11 +1,14 @@
-//! The mechanical error lowering (§5): each store error enum implements
-//! [`Lower`] — `self → (RejectCode, Option<FaultSite>)` — under the
-//! nested-error rule: flat variants map to the same-named [`RejectCode`]
-//! leaf; wrapper variants (`Mint`, `Seat`, `Content`) recurse into the leaf
-//! enum's own impl. Neither converter ever returns `Ok` — every upstream
-//! failure becomes a [`Rejection`].
+//! The mechanical error lowering (§5).
 //!
-//! The write path's converter, [`lower_txn`], is also THE DOOR a caller
+//! Each store error enum implements [`Lower`] —
+//! `self → (RejectCode, Option<FaultSite>)` — under the nested-error rule:
+//! flat variants map to the same-named [`RejectCode`] leaf where the union
+//! has one, and otherwise to the leaf their arm names; wrapper variants
+//! (`Mint`, `Seat`, `Content`) recurse into the leaf enum's own impl. Neither
+//! converter ever returns `Ok` — every upstream failure becomes a
+//! [`Rejection`].
+//!
+//! The write path's converter, [`lower_txn`], is also the door a caller
 //! outside the crate lowers through: the daemon's head writer calls the
 //! stores directly, holds the same `TxnError<E>` the dispatch table holds at
 //! its own arms, and renders its refusal as the wire renders a rejection —
@@ -13,10 +16,9 @@
 //! — by lowering it here, through the one table, with the I/O kind set
 //! where the arm is `Durability` (the operations design §1.1 row 38).
 //!
-//! The ownership ruling (2026-08-16): M5's and M7's `NotOwner(Address)`
-//! variants thread the failing document (or target link) into
-//! `FaultSite::addr` — the same address-localization shape M6's
-//! `DocNotRegistered(Address)` established.
+//! M5's and M7's `NotOwner(Address)` variants thread the failing document
+//! (or target link) into `FaultSite::addr` — the same address-localization
+//! shape M6's `DocNotRegistered(Address)` takes.
 
 use skep_arrangement::{
     CopyError, DeleteError, InsertError, PublishError, RearrangeError, ReinstateError, SeatError,
@@ -32,8 +34,10 @@ use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, Origi
 use crate::reject::{FaultSite, RejectCode, Rejection};
 use crate::request::OpKind;
 
-/// One impl per store error enum (mechanical; §5), every one of them in this
-/// file: the table is the ONE lowering, and a store error that gains a
+/// A store error enum's lowering into a code and a site (§5).
+///
+/// One impl per store error enum (mechanical), every one of them in this
+/// file: the table is the one lowering, and a store error that gains a
 /// variant is lowered here, never at a caller.
 ///
 /// Public because [`lower_txn`] is, and a door bounded on a trait its caller
@@ -43,52 +47,57 @@ use crate::request::OpKind;
 /// guard nothing this crate does not publish. What a dependent cannot do is
 /// change how a store error M10 names lowers: those impls are here.
 pub trait Lower {
+    /// Returns the code this error lowers to, and the site that localizes it.
     fn lower(self) -> (RejectCode, Option<FaultSite>);
 }
 
-/// The `NotOwner(Address)` lowering, shared by every ω-gated write enum
-/// (ownership ruling, 2026-08-16): the failing address rides `site.addr`.
+/// Returns the `NotOwner(Address)` lowering, shared by every enum with one.
+///
+/// The failing address rides `site.addr`.
 fn not_owner(a: skep_address::Address) -> (RejectCode, Option<FaultSite>) {
     (RejectCode::NotOwner, Some(FaultSite { addr: Some(a), ..FaultSite::default() }))
 }
 
-/// Lower a read error into a classified [`Rejection`] (§5).
+/// Lowers a read error into a classified [`Rejection`] (§5).
 pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
     let (code, site) = e.lower();
     Rejection::classified(kind, code, site)
 }
 
-/// Lower a write path's `TxnError` into a classified [`Rejection`] (§5): the
-/// store's own typed refusal through its [`Lower`] impl, and M2's four
-/// transaction-level outcomes into M10's own codes.
+/// Lowers a write path's `TxnError` into a classified [`Rejection`] (§5).
 ///
-/// Each of those four says something different about reissuing, and says it
-/// in the disposition, with the cause threaded where an operator needs it.
-/// `Durability` is the one `Retry` — the I/O text rides along, so the hint
-/// has a reason attached, and the I/O KIND rides beside it in
-/// [`Rejection::io_kind`], for the daemon: the barrier's failure, the
-/// rotation's segment creation and the salt's entropy refusal share this
-/// one code, and only the kind tells a full volume from the rest. The two
+/// The store's own typed refusal goes through its [`Lower`] impl, and M2's
+/// four transaction-level outcomes into M10's own codes.
+///
+/// Each of those four says in the disposition what reissuing is worth, with
+/// the cause threaded where an operator needs it. `Durability` is the one
+/// `Retry` — the I/O text rides along, so the hint has a reason attached,
+/// and the I/O kind rides beside it in [`Rejection::io_kind`], for the
+/// daemon: the journal's append and barrier failures, the rotation's segment
+/// creation and the salt's entropy refusal share this one code, and only the
+/// kind tells a full volume from the rest. The two
 /// encoding refusals are both `Permanent`, and each carries its own code
 /// because they ask different things of an operator: `TxnUnencodable` names
-/// records M2's serializer refused (the records are staged by the owning
-/// store, so the same request re-presented stages the same record — nothing
-/// the client can reframe), while `TxnOverBudget` names records that all
-/// encode but overrun the journal's per-transaction budget, and carries the
-/// remedy — split the request. `Poisoned` is `Halt`.
+/// records M2 could not frame — one its serializer refused, or one past the
+/// journal's frame cap (the records are staged by the owning store, so the
+/// same request re-presented stages the same record — nothing the client
+/// can reframe), while `TxnOverBudget` names records that all encode but
+/// overrun the journal's per-transaction budget, and carries the remedy —
+/// split the request. `Poisoned` is `Halt`.
 ///
-/// THE DOOR (the operations design §1.1 row 38): public, so a caller that
-/// drives a store itself — the daemon's head writer, which meets
+/// **The door (the operations design §1.1 row 38).** It is public, so a
+/// caller that drives a store itself — the daemon's head writer, which meets
 /// `TxnError<CreateDocumentError>` at its staging draft's mint and
 /// `TxnError<InsertError>` and `TxnError<PublishError>` at the head atom's
 /// insert and publish — lowers what it holds exactly as the dispatch table
 /// lowers the same error for the front door, under the `OpKind` it names,
 /// and renders the rejection's code and detail rather than the store error's
 /// `Debug`. The `detail` is the error's own words where one is threaded (the
-/// I/O text; M2's encoding account) and the code's standing explanation
-/// otherwise; no arm renders a variant name. One body: this function IS the
-/// lowering the dispatch table calls, so the door and the front door cannot
-/// drift.
+/// I/O text; M2's encoding account), this function's own sentence naming
+/// the encoded size for an over-budget transaction, and the code's standing
+/// explanation otherwise; no arm renders a variant name. One body: this
+/// function is the lowering the dispatch table calls, so the door and the
+/// front door cannot drift.
 pub fn lower_txn<E: Lower>(kind: OpKind, e: TxnError<E>) -> Rejection {
     match e {
         TxnError::Rejected(inner) => {
@@ -170,19 +179,21 @@ impl Lower for RegisterNodeError {
     }
 }
 
-// ───────────────────── M4 (content — named, never called) ─────────────────
+// ───────────── M4 (content — named; its errors arrive wrapped) ────────────
 
 impl Lower for ContentError {
-    /// The flagged wholesale collapse (§5, Open build decision 8): M10 calls
-    /// no M4 function, so M4's error structure is out of scope and every
-    /// `ContentError` lowers to the single `Content` code (disposition
-    /// `Permanent` — a transient content fault is thereby misclassified,
-    /// documented, to revisit if the M4 edge is ratified).
+    /// Lowers every `ContentError` to the single `Content` code (§5).
     ///
-    /// The arm is LIVE: it is reached through `InsertError::Content` and
+    /// It is the flagged wholesale collapse (Open build decision 8): M10 calls
+    /// no M4 function that can refuse, so M4's error structure is out of scope
+    /// (disposition `Permanent` — a transient content fault is thereby
+    /// misclassified, documented, to revisit if the M4 edge is ratified).
+    ///
+    /// The arm is live: it is reached through `InsertError::Content` and
     /// `PublishError::Content` when M5's `insert` or `publish` refuses, so the
-    /// structure the collapse discards is a fault a client can meet, not a
-    /// dead branch.
+    /// structure the collapse discards is a fault a client meets wherever an
+    /// upstream invariant breaks — never in correct operation — and not a dead
+    /// branch.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         (RejectCode::Content, None)
     }
@@ -227,10 +238,9 @@ impl Lower for CopyError {
             CopyError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
             CopyError::EmptySource => (RejectCode::EmptySource, None),
             CopyError::NotOrdinalVSpan => (RejectCode::NotOrdinalVSpan, None),
-            // As-built M5 splits the source-residence guard into its own
-            // variant; the design's RejectCode union carries no same-named
-            // leaf, so it lowers to the shared NotContentSubspace (surfaced
-            // in the build report as upstream drift).
+            // M5 splits the source-residence guard into its own variant; the
+            // design's RejectCode union carries no same-named leaf, so it
+            // lowers to the shared NotContentSubspace.
             CopyError::SourceNotContentSubspace => (RejectCode::NotContentSubspace, None),
             CopyError::DanglingSource => (RejectCode::DanglingSource, None),
             CopyError::TooManyRuns => (RejectCode::TooManyRuns, None),
@@ -240,10 +250,12 @@ impl Lower for CopyError {
 }
 
 impl Lower for ReinstateError {
-    /// The write by identity's verdicts, every one a code the wire already
-    /// carries: the destination's five are COPY's, the per-run four are the
-    /// shot's (`bad_run`, `source_not_registered`, `dangling_source`,
-    /// `too_many_runs`), and `empty_result` is COPY's for an empty list.
+    /// Lowers the write by identity's verdicts to codes COPY and the shot use.
+    ///
+    /// Every one is a code the wire carries for those two: the destination's
+    /// five are COPY's, the per-run four are the shot's (`bad_run`,
+    /// `source_not_registered`, `dangling_source`, `too_many_runs`), and
+    /// `empty_result` is COPY's for an empty list.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             ReinstateError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
@@ -295,10 +307,10 @@ impl Lower for VersionError {
             VersionError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
             VersionError::NotAPrincipal => (RejectCode::NotAPrincipal, None),
             VersionError::NodeTierCrossOwner => (RejectCode::NodeTierCrossOwner, None),
-            // The version-chain model's two `version` refusals (D2b): the
-            // faces are the client's, keyed on the code — and on the flag
-            // the client itself sent, for the versionless one — so nothing
-            // is threaded into the site.
+            // The version-chain model's two `version` refusals (PUB-kickoff
+            // D2b): the faces are the client's, keyed on the code — and on
+            // the flag the client itself sent, for the versionless one — so
+            // nothing is threaded into the site.
             VersionError::PrivateSourceVersionless => (RejectCode::PrivateSourceVersionless, None),
             VersionError::PrivateVersionOfPublished => {
                 (RejectCode::PrivateVersionOfPublished, None)
@@ -318,7 +330,7 @@ impl Lower for PublishError {
             PublishError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
             PublishError::BaseSuperseded => (RejectCode::BaseSuperseded, None),
             PublishError::BaseExtentTooLarge => (RejectCode::BaseExtentTooLarge, None),
-            // ONE code with `version`'s (PUB-2.9): the face is that code's
+            // One code with `version`'s (PUB-2.9): the face is that code's
             // `true` arm, the intent being publication.
             PublishError::PrivateSourceVersionless => (RejectCode::PrivateSourceVersionless, None),
             // PUB-8.4's pinned shape: `site.addr` is the withheld document —
@@ -380,20 +392,19 @@ impl Lower for EmitError {
             EmitError::NotRegistered => (RejectCode::NotRegistered, None),
             EmitError::ShapeViolation => (RejectCode::ShapeViolation, None),
             EmitError::RetractionClass => (RejectCode::RetractionClass, None),
-            // As-built M7 carries the supersession-schema fence
-            // (`[K_sup]` claims write only via assert_sup/editlink) as its
-            // own variant; the design's RejectCode union has no same-named
-            // leaf, so it lowers to DcViolation — the same claim-schema
-            // discipline editlink's DC guard names (surfaced in the build
-            // report as upstream drift). Permanent is right: reissuing
-            // identically cannot succeed — use AssertSup/EditLink.
+            // M7 carries the supersession-schema fence (`[K_sup]` claims
+            // write only via assert_sup/editlink) as its own variant; the
+            // design's RejectCode union has no same-named leaf, so it lowers
+            // to DcViolation — the same claim-schema discipline editlink's DC
+            // guard names. Permanent is right: reissuing identically cannot
+            // succeed — use AssertSup/EditLink.
             EmitError::SupersessionClass => (RejectCode::DcViolation, None),
             // The `replaces` class's fence, as MakeLinkError's lowers it.
             EmitError::ReplacesClass => (RejectCode::DcViolation, None),
             EmitError::NonAddressDenotingType => (RejectCode::NonAddressDenotingType, None),
             // The same per-slot span budget MAKELINK's slots carry, on `to`
-            // — so the same leaf, and permanent for the same reason: no
-            // retry shrinks the list.
+            // and `ty` — so the same leaf, and permanent for the same reason:
+            // no retry shrinks the list.
             EmitError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             EmitError::Mint(m) => m.lower(),
         }
@@ -452,8 +463,9 @@ impl Lower for EditLinkError {
 // ─────────── M6 (retrieval — variant-carried localization) ────────────
 //
 // M6 is the one producer of `operand`, `region` and `fault`, and shares
-// `index` with M10's successor guard and `addr` with every `NotOwner` and
-// `Withheld`; `FaultSite`'s fields name every producer.
+// `index` with M10's successor guard and its read consult's span-shape
+// refusal, and `addr` with every `NotOwner(Address)` and `Withheld`;
+// `FaultSite`'s fields name every producer.
 
 impl Lower for RetrieveError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
@@ -577,8 +589,10 @@ impl Lower for FindError {
 // ────────────────────────────── M8 (discovery) ─────────────────────────────
 
 impl Lower for QueryError {
-    /// Every M8 variant is fieldless (its `DocNotRegistered`, unlike M6's,
-    /// carries no address), so every lowering fills only `code` (§5).
+    /// Fills only `code`, every M8 variant being fieldless (§5).
+    ///
+    /// Its `DocNotRegistered`, unlike M6's multi-document ones, carries no
+    /// address.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         let code = match self {
             QueryError::DocNotRegistered => RejectCode::DocNotRegistered,
@@ -595,8 +609,9 @@ impl Lower for QueryError {
 }
 
 impl Lower for OrphanError {
-    /// The delete-orphan preview's own refusals, fieldless like the rest of
-    /// M8's (§5).
+    /// Lowers the delete-orphan preview's own refusals (§5).
+    ///
+    /// They are fieldless like the rest of M8's.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         let code = match self {
             OrphanError::DocNotRegistered => RejectCode::DocNotRegistered,

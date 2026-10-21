@@ -1,18 +1,20 @@
-//! The retry memo (§7): a bounded, per-uptime, best-effort memo of
-//! committed-write acknowledgments keyed by [`MemoKey`] — the client's
-//! `ReqId` confined to the session that committed under it.
+//! The retry memo (§7) of committed-write acknowledgments.
+//!
+//! A bounded, per-uptime, best-effort memo keyed by [`MemoKey`] — the
+//! client's `ReqId` confined to the session that committed under it.
 //!
 //! A hint, never a guarantee. It is in memory only, so a post-restart retry
 //! re-executes (a duplicate, by design — ASN-0134 §A7); a session's entries
 //! are swept when its binding retires, of those present when the sweep runs
-//! ([`RetryMemo::purge_session`]); and it holds only what a lost
-//! acknowledgment can duplicate: the [`CommittedAck`] of a write that already
-//! committed. Rejections and read answers are not admissible —
+//! ([`RetryMemo::purge_session`]); and it holds acknowledgments alone: the
+//! [`CommittedAck`] of a write that already committed — what a lost
+//! acknowledgment can duplicate — or of one answered with the incumbent it
+//! deduplicated against. Rejections and read answers are not admissible —
 //! the first must re-execute under a Reorder/Retry reissue, the second would
 //! replay a stale snapshot — and the [`CommittedAck`] type is what makes them
 //! inexpressible here rather than merely unwelcome.
 //!
-//! What it deduplicates is a SEQUENTIAL client's reissue — a retry sent after
+//! What it deduplicates is a sequential client's reissue — a retry sent after
 //! the original completed and its acknowledgment was lost. It recognizes a
 //! reissue by session, id and op-kind alone; that the reissue is the same
 //! request is the client's word, which nothing here checks ([`ReqId`] states
@@ -40,12 +42,14 @@ use crate::request::{OpKind, ReqId, MAX_REQ_ID_BYTES};
 use crate::response::CommittedAck;
 use crate::session::SessionId;
 
-/// The memo's key (§7): the client's `ReqId` confined to the session that
-/// committed under it. A `ReqId` is unique only WITHIN its session, so the
-/// session is half the key's identity rather than a field beside it.
+/// The memo's key (§7): a `ReqId` confined to its session.
+///
+/// It is the client's `ReqId` confined to the session that committed under
+/// it. A `ReqId` is unique only within its session, so the session is half
+/// the key's identity rather than a field beside it.
 ///
 /// That confinement is what makes the step-(a) lookup in `execute` — which
-/// runs BEFORE authentication — harmless (§7 item-4): a replay carrying
+/// runs before authentication — harmless (§7 item-4): a replay carrying
 /// another session's `ReqId` builds a different key and simply misses, so no
 /// memoized ack can cross from the principal that committed the write to one
 /// that did not.
@@ -55,23 +59,25 @@ struct MemoKey {
     id: ReqId,
 }
 
-/// A memoized acknowledgment plus the op-kind that produced it. The tag lets
-/// [`RetryMemo::get`] miss on a `ReqId` reused across op-kinds, so a
-/// wrong-shaped ack is never served.
+/// A memoized acknowledgment plus the op-kind that produced it.
+///
+/// The tag lets [`RetryMemo::get`] miss on a `ReqId` reused across op-kinds,
+/// so a wrong-shaped ack is never served.
 #[derive(Clone)]
 struct TaggedAck {
     kind: OpKind,
     ack: CommittedAck,
 }
 
-/// The memo itself (§7). Bounded on both axes: the capacity its constructor
-/// is handed — the design's construction-time knob with no implicit default
-/// (§7, Open build decision 3), so this crate keeps no figure of its own and
-/// the daemon supplies its pin — entries, each keyed by at most
-/// [`MAX_REQ_ID_BYTES`] of client-chosen key, beside one acknowledgment of at
-/// most two store-minted addresses, sized by what they acknowledge. Eviction
-/// is LRU and costs only a re-execution, which is what "best effort" means
-/// here.
+/// The memo itself (§7).
+///
+/// Bounded on both axes: the capacity its constructor is handed — the
+/// design's construction-time knob with no implicit default (§7, Open build
+/// decision 3), so this crate keeps no figure of its own and the daemon
+/// supplies its pin — entries, each keyed by at most [`MAX_REQ_ID_BYTES`] of
+/// client-chosen key, beside one acknowledgment of at most two addresses,
+/// sized by what they acknowledge. Eviction is LRU and costs only a
+/// re-execution, which is what "best effort" means here.
 ///
 /// Non-poisoning lock (§7): a panic while the memo is held must not break
 /// `execute`'s Total contract.
@@ -80,14 +86,17 @@ pub(crate) struct RetryMemo {
 }
 
 impl RetryMemo {
-    /// A memo of `capacity` entries, in the type [`LruCache`] demands — so
-    /// nonzero is proven where the number is written, at the caller that
-    /// chose it, and never re-proven here.
+    /// Returns a memo of `capacity` entries.
+    ///
+    /// The capacity comes in the type [`LruCache`] demands — so nonzero is
+    /// proven where the number is written, at the caller that chose it, and
+    /// never re-proven here.
     pub(crate) fn new(capacity: NonZeroUsize) -> RetryMemo {
         RetryMemo { entries: Mutex::new(LruCache::new(capacity)) }
     }
 
-    /// Memoize one committed-write acknowledgment under this session's key.
+    /// Memoizes one committed-write acknowledgment under this session's key.
+    ///
     /// Takes the `ReqId` because the key keeps it — which is why an id past
     /// [`MAX_REQ_ID_BYTES`] is declined here rather than truncated or
     /// admitted: the key's bytes are the second factor of the memo's key
@@ -106,15 +115,15 @@ impl RetryMemo {
         self.entries.lock().put(MemoKey { session, id }, TaggedAck { kind, ack });
     }
 
-    /// The memoized acknowledgment this session committed under `id` for
-    /// this op-kind. A foreign session misses on the key ([`MemoKey`]); a
-    /// `ReqId` reused across op-kinds misses on the tag. Either way the
-    /// request re-executes.
+    /// Returns the ack this session committed under `id` for this op-kind.
+    ///
+    /// A foreign session misses on the key ([`MemoKey`]); a `ReqId` reused
+    /// across op-kinds misses on the tag. Either way the request re-executes.
     ///
     /// The lookup builds an owned key, so it clones `id` — outside the lock,
-    /// which every write's steps (a) and (d) take — and an id past
-    /// [`MAX_REQ_ID_BYTES`] misses without being cloned at all, since
-    /// [`RetryMemo::put`] never admits one.
+    /// which a write carrying an id takes at step (a) and, once acknowledged,
+    /// at step (d) — and an id past [`MAX_REQ_ID_BYTES`] misses without being
+    /// cloned at all, since [`RetryMemo::put`] never admits one.
     pub(crate) fn get(&self, session: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
         if id.0.len() > MAX_REQ_ID_BYTES {
             return None;
@@ -125,9 +134,10 @@ impl RetryMemo {
         (tagged.kind == kind).then(|| tagged.ack.clone())
     }
 
-    /// Drop the entries this session has committed under as of now — the
-    /// other half of retiring a binding (§6). A linear sweep of the bounded
-    /// memo.
+    /// Drops the entries this session has committed under as of now.
+    ///
+    /// It is the other half of retiring a binding (§6): a linear sweep of the
+    /// bounded memo.
     ///
     /// The sweep sees what the memo holds when it runs. A request already
     /// past its step-(a) lookup in `execute` may [`RetryMemo::put`] its ack
@@ -157,15 +167,21 @@ mod tests {
         validate(t).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
 
-    /// A memo of `capacity` entries — the figure each test chooses, as the
-    /// daemon chooses its own.
+    /// Returns a memo of `capacity` entries.
+    ///
+    /// The figure is the one each test chooses, as the daemon chooses its own.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `capacity` is zero.
     fn memo_of(capacity: usize) -> RetryMemo {
         RetryMemo::new(NonZeroUsize::new(capacity).expect("a test capacity is nonzero"))
     }
 
-    /// §7: the memo round-trips an ack keyed by [`MemoKey`] and op-kind-
-    /// matched — a foreign session or a reused-across-kinds `ReqId` misses —
-    /// and `purge_session` clears one session's entries only.
+    /// §7: the memo round-trips an ack keyed by [`MemoKey`] and op-kind.
+    ///
+    /// The ack is op-kind-matched — a foreign session or a reused-across-kinds
+    /// `ReqId` misses — and `purge_session` clears one session's entries only.
     #[test]
     fn an_entry_is_confined_to_its_session_and_kind_and_dies_with_the_session() {
         let sessions = crate::session::Sessions::new();
@@ -179,7 +195,7 @@ mod tests {
             OpKind::CreateNewDocument,
             CommittedAck::Addr { addr: addr(&[1, 0, 1]), at: Seq(9) },
         );
-        // The SAME id under a second session, deliberately: confinement is
+        // The same id under a second session, deliberately: confinement is
         // what makes the two entries distinct.
         memo.put(
             s2,
@@ -196,7 +212,7 @@ mod tests {
             _ => panic!("expected a memoized Addr ack"),
         }
         // Foreign session: miss on this session's key (cross-principal
-        // confinement, item-4) — the same ReqId under s2 is a DIFFERENT
+        // confinement, item-4) — the same ReqId under s2 is a different
         // entry, and answers s2's own ack.
         assert!(memo.get(s2, &id, OpKind::CreateNewDocument).is_none());
         assert!(memo.get(s2, &id, OpKind::Fork).is_some());
@@ -208,11 +224,12 @@ mod tests {
         assert!(memo.get(s2, &id, OpKind::Fork).is_some());
     }
 
-    /// §7: the memo's OTHER bound. A key is retained for the life of its
-    /// entry, so the key bill is (capacity × key bytes) and both factors are
-    /// bounded here: a key past [`MAX_REQ_ID_BYTES`] is declined, one exactly
-    /// at the bound is memoized, and declining costs a re-execution — the
-    /// same thing eviction costs.
+    /// §7: the memo's other bound.
+    ///
+    /// A key is retained for the life of its entry, so the key bill is
+    /// (capacity × key bytes) and both factors are bounded here: a key past
+    /// [`MAX_REQ_ID_BYTES`] is declined, one exactly at the bound is memoized,
+    /// and declining costs a re-execution — the same thing eviction costs.
     #[test]
     fn an_oversized_key_is_not_memoized() {
         let sessions = crate::session::Sessions::new();
@@ -234,11 +251,12 @@ mod tests {
         );
     }
 
-    /// §7: the lookup holds the same bound. An id past [`MAX_REQ_ID_BYTES`]
-    /// misses before its key is built — so no lookup clones more than the
-    /// bound — and it misses even against an entry planted past `put`'s own
-    /// check, which is what shows the refusal is the lookup's and not merely
-    /// the absence `put` leaves.
+    /// §7: the lookup holds the same bound.
+    ///
+    /// An id past [`MAX_REQ_ID_BYTES`] misses before its key is built — so no
+    /// lookup clones more than the bound — and it misses even against an
+    /// entry planted past `put`'s own check, which is what shows the refusal
+    /// is the lookup's and not merely the absence `put` leaves.
     #[test]
     fn an_oversized_lookup_misses_before_its_key_is_built() {
         let sessions = crate::session::Sessions::new();
@@ -255,12 +273,13 @@ mod tests {
         );
     }
 
-    /// §7 (op-D5): the memo is BOUNDED at the capacity its constructor was
-    /// handed — here two, so the bound is met at the third entry — and what
-    /// it drops when it overflows is the least recently used entry. A
-    /// [`RetryMemo::get`] is a use, so the ack a client just replayed
-    /// outlives one nobody has asked for. The same bound through the front
-    /// door's own constructor is `tests/it/idempotency.rs`'s.
+    /// §7 (op-D5): the memo is bounded at the capacity its constructor took.
+    ///
+    /// Here it is two, so the bound is passed at the third entry, and what it
+    /// drops when it overflows is the least recently used entry. A
+    /// [`RetryMemo::get`] is a use, so the ack a client just replayed outlives
+    /// one nobody has asked for. The same bound through the front door's own
+    /// constructor is `tests/it/idempotency.rs`'s.
     #[test]
     fn the_memo_is_bounded_and_evicts_least_recently_used() {
         let sessions = crate::session::Sessions::new();

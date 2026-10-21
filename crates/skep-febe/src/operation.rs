@@ -1,9 +1,11 @@
-//! The LIFECYCLE: [`OperationSurface`], the state it holds for one uptime,
-//! and its entry ([`OperationSurface::execute`]) — parse → authorize →
-//! linearize → commit-gate → marshal → surface (§1–§4). The lifecycle's order
-//! lives here, with what its gates read: the retry memo, the factory's report
-//! of whether the kernel still accepts writes ([`Stores::is_poisoned`]), and
-//! the session table. The pieces it reads belong to their own cards —
+//! The lifecycle: the surface, the state it holds for one uptime, its entry.
+//!
+//! The surface is [`OperationSurface`] and its entry
+//! [`OperationSurface::execute`] — parse → authorize → linearize →
+//! commit-gate → marshal → surface (§1–§4). The lifecycle's order lives here,
+//! with what its gates read: the retry memo, the factory's report of whether
+//! the kernel still accepts writes ([`Stores::is_poisoned`]), and the session
+//! table. The pieces it reads belong to their own cards —
 //! [`crate::session::Sessions`] for the ephemeral binding (§6),
 //! [`crate::memo::RetryMemo`] for the committed-write retry memo (§7), and
 //! [`crate::publication`] for what the publication reads need that no store
@@ -39,37 +41,44 @@ use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::world::{FebeWorld, Stores};
 
-/// M10's front-door handle (§Public interface). Owns **no** authoritative
-/// substrate state and **no** `im` structure — what it holds for the uptime
-/// is the ephemeral connection state ([`Sessions`]) and a best-effort
-/// committed-write retry memo ([`RetryMemo`]); neither is ever snapshotted or
-/// replayed, which is why this is the one module that legitimately departs
-/// from the `im`-everywhere convention (§Core data model).
+/// M10's front-door handle (§Public interface).
+///
+/// Owns **no** authoritative substrate state and **no** `im` structure —
+/// what it holds for the uptime is the ephemeral connection state
+/// (`Sessions`) and a best-effort committed-write retry memo (`RetryMemo`);
+/// neither is ever snapshotted or replayed, which is why this is the one
+/// module that legitimately departs from the `im`-everywhere convention
+/// (§Core data model).
 pub struct OperationSurface<W: WorldState> {
     /// Borrowed authority: the binary's factory (M2/M3/M5/M7 own real state).
     stores: Box<dyn Stores<W>>,
-    /// Which principal each open session speaks for — retired only by
-    /// [`OperationSurface::close_session`] (§6).
+    /// Which principal each open session speaks for (§6).
+    ///
+    /// A binding is retired only by [`OperationSurface::close_session`].
     sessions: Sessions,
-    /// Hint: the committed-write retry memo (§7). A session's entries are
-    /// swept by [`OperationSurface::close_session`] — those present when the
-    /// sweep runs (§6) — and the whole memo is lost on restart, so a
-    /// post-restart retry re-executes (duplicate, by design — ASN-0134 §A7).
+    /// Hint: the committed-write retry memo (§7).
+    ///
+    /// A session's entries are swept by [`OperationSurface::close_session`] —
+    /// those present when the sweep runs (§6) — and the whole memo is lost on
+    /// restart, so a post-restart retry re-executes (duplicate, by design —
+    /// ASN-0134 §A7).
     memo: RetryMemo,
     /// The supplied [`ReadPredicate`], or `None`: the world's own answers.
     read_predicate: Option<Box<ReadPredicate>>,
 }
 
-/// Lock-free, as the kernel's own `Debug` is: the kernel this surface answers
-/// through — M2's rendering, which reads the installed head and the poison bit
-/// without a lock, so `dbg!` is safe anywhere — and whether a supplied
-/// [`ReadPredicate`] answers in place of the world's, the one fact about a
-/// front door that decides every masked answer and that nothing else shows.
-/// Nothing more: the session table and the retry memo sit behind locks, and
-/// the poison state the poison gate (c) asks is M2's, which the kernel field
-/// already prints. Written out rather than derived, as M5's `Vstream` and M7's
-/// `LinkWriter` are: a derive would bound the impl on `W: Debug`, and the
-/// factory and the predicate are trait objects that carry none.
+/// Formats the surface lock-free, as the kernel's own `Debug` is.
+///
+/// It shows the kernel this surface answers through — M2's rendering, which
+/// reads the installed head and the poison bit without a lock, so `dbg!` is
+/// safe anywhere — and whether a supplied [`ReadPredicate`] answers in place
+/// of the world's, the one fact about a front door that decides every masked
+/// answer and that nothing else shows. Nothing more: the session table and
+/// the retry memo sit behind locks, and the poison state the poison gate (c)
+/// asks is M2's, which the kernel field already prints. Written out rather
+/// than derived, as M5's `Vstream` and M7's `LinkWriter` are: a derive would
+/// bound the impl on `W: Debug`, and the factory and the predicate are trait
+/// objects that carry none.
 impl<W: WorldState> fmt::Debug for OperationSurface<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OperationSurface")
@@ -79,25 +88,27 @@ impl<W: WorldState> fmt::Debug for OperationSurface<W> {
     }
 }
 
-/// The proven-bound write context (§1). Step (b) resolves the principal
-/// BEFORE dispatch, so each ownership-checked write arm names `wc.principal`
-/// (a `PrincipalId`, never an `Option`) — no `.expect()`, no non-local "the
-/// gate guaranteed it" reasoning.
+/// The proven-bound write context (§1).
+///
+/// Step (b) resolves the principal before dispatch, so each
+/// ownership-checked write arm names `wc.principal` (a `PrincipalId`, never
+/// an `Option`) — no `.expect()`, no non-local "the gate guaranteed it"
+/// reasoning.
 struct WriteCtx {
     principal: PrincipalId,
 }
 
 impl WriteCtx {
-    /// The session principal as the stores' caller identity (the ownership
-    /// ruling, as amended 2026-08-16): M10 passes it through verbatim —
-    /// the stores own the mechanism "is this principal the effective owner".
-    /// M10 never constructs `Caller::System`.
+    /// Returns the session principal as the stores' caller identity.
+    ///
+    /// M10 passes it through verbatim — the stores own the mechanism "is this
+    /// principal the effective owner". M10 never constructs `Caller::System`.
     fn caller(&self) -> Caller {
         Caller::Principal(self.principal)
     }
 }
 
-/// A bare `Response::Rejected` for `execute`'s steps (b)/(c) (§1/§5).
+/// Returns a bare `Response::Rejected` for `execute`'s steps (b)/(c) (§1/§5).
 fn reject(kind: OpKind, code: RejectCode) -> Response {
     Response::Rejected(rejection(kind, code))
 }
@@ -107,15 +118,17 @@ where
     W: FebeWorld,
     W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite> + From<ContentStretch>,
 {
-    /// Receive a [`Stores`] factory (built by the binary/engine, wrapping the
-    /// recovered kernel via the store-driver constructors). The binary calls
-    /// `Kernel::open` (M2 recovery), handles `OpenError::{Corruption,
-    /// BadCheckpoint}`, and builds the factory BEFORE constructing us — M10
-    /// holds neither the kernel nor the registry directly (§9). We reach the
-    /// kernel via `stores.kernel()` and acquire each store driver per-op.
+    /// Returns a front door over the [`Stores`] factory the binary built.
+    ///
+    /// The factory is built by the binary/engine, wrapping the recovered
+    /// kernel via the store-driver constructors. The binary calls
+    /// `Kernel::open` (M2 recovery), handles its `OpenError`, and builds the
+    /// factory before constructing us — M10 holds neither the kernel nor the
+    /// registry directly (§9). We reach the kernel via `stores.kernel()` and
+    /// acquire each store driver per-op.
     ///
     /// The retry memo is bounded at `memo_capacity` entries, and the figure
-    /// is the CALLER's: the design's construction-time knob with no implicit
+    /// is the caller's: the design's construction-time knob with no implicit
     /// default (§7, Open build decision 3; the operations design §2.6,
     /// op-D5), so this crate keeps no default and the daemon supplies its
     /// own pin — 1024, carded at its open, never an operator knob, since a
@@ -134,13 +147,14 @@ where
         }
     }
 
-    /// Supply the [`ReadPredicate`] this front door answers through instead of
-    /// its own world's — the transport's HEAD predicate for a historical read
-    /// (PUB-6.48), closed over one head snapshot per request (PUB-6.39). It
-    /// answers everywhere the world's own would, read path and visibility
-    /// class alike; without it the world's own answers, which is what a live
-    /// front door wants. Its obligations are [`ReadPredicate`]'s, and M10
-    /// checks none of them.
+    /// Supplies the [`ReadPredicate`] this front door answers through.
+    ///
+    /// It answers instead of its own world's — the transport's head predicate
+    /// for a historical read (PUB-6.48), closed over one head snapshot per
+    /// request (PUB-6.39). It answers everywhere the world's own would, read
+    /// path and visibility class alike; without it the world's own answers,
+    /// which is what a live front door wants. Its obligations are
+    /// [`ReadPredicate`]'s, and M10 checks none of them.
     ///
     /// Takes the closure and boxes it here, since the box is this front door's
     /// storage rather than the caller's concern — [`ReadPredicate`] names the
@@ -156,20 +170,22 @@ where
 
     // ── session binding (M10-owned, ephemeral — §6) ──
 
-    /// Record the binding and return a fresh `SessionId`, unique among the ids
-    /// every surface in this process mints for the uptime (reset on restart;
-    /// clients re-authenticate) — so it names this binding on THIS surface
-    /// alone, and any other surface, never having opened it, resolves it to no
-    /// principal ([`SessionId`]). The caller (transport) supplies the
-    /// authenticated `PrincipalId`; unforgeability of the id is the
-    /// transport's precondition (§6): it must hold the returned `SessionId` in
-    /// the connection's authenticated state and inject it into
+    /// Records the binding and returns a fresh `SessionId`.
+    ///
+    /// The id is unique among the ids every surface in this process mints for
+    /// the uptime (reset on restart; clients re-authenticate) — so it names
+    /// this binding on this surface alone, and any other surface, never having
+    /// opened it, resolves it to no principal ([`SessionId`]). The caller
+    /// (transport) supplies the authenticated `PrincipalId`; unforgeability of
+    /// the id is the transport's precondition (§6): it must hold the returned
+    /// `SessionId` in the connection's authenticated state and inject it into
     /// [`OperationSurface::execute`], never read one off the wire.
     pub fn open_session(&self, principal: PrincipalId) -> SessionId {
         self.sessions.open(principal)
     }
 
-    /// Retire the binding, then sweep the session's memoized acks (§6/§7).
+    /// Retires the binding, then sweeps the session's memoized acks (§6/§7).
+    ///
     /// The two collaborators are asked in turn, their locks never nested.
     ///
     /// The order is load-bearing, and it is what makes the first half
@@ -177,12 +193,12 @@ where
     /// returns the id resolves to no principal for the rest of the uptime and
     /// no write on it can ever be authorized again.
     ///
-    /// WRITES are the whole of what this REFUSES. Reads take no session gate
+    /// Writes are the whole of what this refuses. Reads take no session gate
     /// ([`OperationSurface::execute`]), so the retired id still reaches
-    /// every read arm and is answered — as the GUEST, since it now resolves
+    /// every read arm and is answered — as the guest, since it now resolves
     /// to no principal and `None` is the guest predicate. Logout therefore
-    /// NARROWS the read surface to the published documents rather than
-    /// closing it; a transport whose logout must REFUSE reads holds that
+    /// narrows the read surface to the published documents rather than
+    /// closing it; a transport whose logout must refuse reads holds that
     /// policy itself. A transport that needs a guest names
     /// [`SessionId::GUEST`] rather than opening a session only to retire it
     /// here, which leaves a live binding wherever the retirement is missed.
@@ -207,24 +223,19 @@ where
         self.memo.purge_session(session);
     }
 
-    /// A session bound to `BOOTSTRAP_PRINCIPAL`, so the first
-    /// `delegate`/`create`/`register_node` can happen. Confinement is
-    /// transport policy (§6): the transport must not expose this beyond
-    /// provisioning — it mints bootstrap authority ungated.
+    /// Opens a session bound to `BOOTSTRAP_PRINCIPAL`.
+    ///
+    /// It is how the first `delegate`/`create`/`register_node` can happen.
+    /// Confinement is transport policy (§6): the transport must not expose
+    /// this beyond provisioning — it mints bootstrap authority ungated.
     pub fn bootstrap_session(&self) -> SessionId {
         self.open_session(BOOTSTRAP_PRINCIPAL)
     }
 
-    /// THE lifecycle entry (§1). Total: always yields a `Response` to send
-    /// (rejections are a `Response` variant). It unwinds only if something it
-    /// calls panics on honest input: M2's kernel; M3's, M5's, M6's, M7's or
-    /// M8's read and write paths; or the world it is assembled over — the read
-    /// predicate, the world's or a supplied [`ReadPredicate`], stated total,
-    /// and the two publication lookups, whose one precondition M10
-    /// discharges. What panic sites those modules hold guard their own
-    /// internal invariants, so no honest request reaches one; M5 states that
-    /// obligation in its own contract (skep-arrangement, §Failure channels),
-    /// and it is written here for the rest.
+    /// Executes one parsed request and returns its answer (§1).
+    ///
+    /// It is the lifecycle entry. Total: always yields a `Response` to send
+    /// (rejections are a `Response` variant).
     ///
     /// Reentrant & `Sync` — the transport may call it concurrently for
     /// pipelined requests (§8), and that concurrency is the caller's to use,
@@ -234,7 +245,7 @@ where
     /// (§7). And a write's door — PUB-6.23's source gate over
     /// [`Op::source_arguments`], PUB-6.6's absence rule over the links
     /// `edit_link` and `assert_sup` name — is judged off a snapshot pinned
-    /// AHEAD of the write's own transaction, so another write that commits
+    /// ahead of the write's own transaction, so another write that commits
     /// between the two can let this one through on a stale judgment or on
     /// none: one that registers the destination of a write the door left to
     /// the store's own gate (whose sources and link arguments the door then
@@ -245,63 +256,69 @@ where
     /// no writer outside the surface register a document or revoke a grant
     /// meanwhile.
     ///
-    /// AUTHORIZATION: `session` is resolved on BOTH paths, for two different
-    /// purposes, and the difference is the one a transport author needs.
+    /// **Authorization.** `session` is resolved on both paths, for two
+    /// different purposes, and the difference is the one a transport author
+    /// needs.
     ///
-    /// * On the WRITE path, at step (b), it resolves a PROVEN-bound principal,
-    ///   and its absence REFUSES: an unbound session is answered
+    /// * On the write path, at step (b), it resolves a proven-bound principal,
+    ///   and its absence refuses: an unbound session is answered
     ///   `Unauthenticated` and no store is reached. That is a gate.
-    /// * On the READ path it resolves an `Option<PrincipalId>` for the read
-    ///   predicate this surface answers, which SHAPES the answer rather than
-    ///   gating the operation. Every read is therefore served against any
-    ///   `SessionId` — bound, retired by
-    ///   [`OperationSurface::close_session`], or never opened, among which
-    ///   [`SessionId::GUEST`] is the one a caller can name and the handle for
-    ///   a request that presents no session — and an id that resolves to no
-    ///   principal is answered as the GUEST, whose predicate admits the
-    ///   published documents alone. That is a mask. Where the predicate does
-    ///   REFUSE (form (1) below), the refusal names a DOCUMENT and never the
-    ///   caller's standing to read at all.
+    /// * On the read path it resolves an `Option<PrincipalId>` for the read
+    ///   predicate this surface answers and for the any-principal read's
+    ///   guest test, which shape the answer rather than gating the operation.
+    ///   Every read is therefore served against any `SessionId` — bound,
+    ///   retired by [`OperationSurface::close_session`], or never opened,
+    ///   among which [`SessionId::GUEST`] is the one a caller can name and the
+    ///   handle for a request that presents no session — and an id that
+    ///   resolves to no principal is answered as the guest, whose predicate
+    ///   admits the published documents alone. That is a mask. Where the
+    ///   predicate does refuse (form (1) below), the refusal names a document
+    ///   and never the caller's standing to read at all.
     ///
-    /// So reads are masked, not gated, and the masking is M6's and M8's,
-    /// driven by the one predicate this surface answers (PUB-6.39). A
-    /// transport that adds its own read gate is adding a SECOND predicate to
-    /// a surface that answers one — two predicates that can disagree about a
-    /// private draft, which is the failure answering ONE exists to prevent.
+    /// So reads are masked, not gated, and the masking is M6's, M8's and this
+    /// surface's own read arms', driven by the one predicate this surface
+    /// answers (PUB-6.39) and, at the any-principal read, by the guest test.
+    /// A transport that adds its own read gate is adding a second predicate
+    /// to a surface that answers one — two predicates that can disagree about
+    /// a private draft, which is the failure answering one exists to prevent.
     ///
-    /// WHAT A MASKED ANSWER LOOKS LIKE, since "masked" does not by itself
-    /// tell a client what it will receive. Four forms, numbered below in the
-    /// order they are given, and one read may carry more than one:
+    /// **What a masked answer looks like.** "Masked" does not by itself tell a
+    /// client what it will receive. Four forms, numbered below in the order
+    /// they are given, and one read may carry more than one:
     ///
-    /// * a `Withheld` REJECTION naming the first unreadable document the
-    ///   request NAMES, in declaration order. Which documents an operation
-    ///   names is [`Op::doc_arguments`], public for this reason.
-    /// * a SILENTLY SMALLER answer, which PUB-6.13 splits in two. The
-    ///   discovery, census, window, endset, orphan, lineage and
-    ///   edition-claim readers drop every row whose HOME the caller may not
-    ///   read; the container family drops every CONTAINER the caller cannot
-    ///   read, at its own identity. Either way a count is a count of what
-    ///   THIS caller may see, and no field reports that anything was dropped.
-    ///   The any-principal read is smaller still for the GUEST: grants reach
-    ///   principals alone (PUB-5.109), so the guest is answered no rows, and
-    ///   an empty answer there says nothing about whether any grant stands.
-    /// * ABSENCE. A link address whose home document the caller may not read
-    ///   answers as an address no link occupies (PUB-6.6), so absence does
-    ///   not distinguish "no link there" from "a link that is not yours to
-    ///   see" — at [`Op::ReadLink`], [`Op::FollowLink`], [`Op::Project`] and
-    ///   [`Op::DiscoverableFrom`], the four ops the rule covers.
-    /// * a WITHHELD ITEM inside a payload, at its own position — RETRIEVEV's
-    ///   delivery, whose runs are masked by origin ([`Op::RetrieveV`]).
+    /// 1. a `Withheld` rejection naming the first unreadable document the
+    ///    request names, in declaration order — or, for the read by identity,
+    ///    the first it derives ([`Op::derived_doc_arguments`]). Which
+    ///    documents an operation names is [`Op::doc_arguments`], public for
+    ///    this reason.
+    /// 2. a silently smaller answer, which PUB-6.13 splits in two. The
+    ///    discovery, census, window, endset, orphan, lineage and
+    ///    edition-claim readers drop every row whose home the caller may not
+    ///    read; the container family drops every container the caller cannot
+    ///    read, at its own identity. Either way a count is a count of what
+    ///    this caller may see, and no field reports that anything was
+    ///    dropped. The any-principal read is smaller still for the guest:
+    ///    grants reach principals alone (PUB-5.109), so the guest is answered
+    ///    no rows, and an empty answer there says nothing about whether any
+    ///    grant stands.
+    /// 3. absence. A link address whose home document the caller may not
+    ///    read answers as an address no link occupies (PUB-6.6), so absence
+    ///    does not distinguish "no link there" from "a link that is not yours
+    ///    to see" — at [`Op::ReadLink`], [`Op::FollowLink`], [`Op::Project`]
+    ///    and [`Op::DiscoverableFrom`], the four reads the rule covers.
+    /// 4. a withheld item inside a payload, at its own position — RETRIEVEV's
+    ///    delivery, whose runs are masked by origin ([`Op::RetrieveV`]).
     ///
     /// What a client may rely on, stated to the width it holds: no read is
-    /// ever refused for want of a BOUND SESSION — that is the gate/mask
+    /// ever refused for want of a bound session — that is the gate/mask
     /// distinction above, and it is why any `SessionId` is served. Forms (2),
     /// (3) and (4) disclose nothing further: no field reports a drop, and
     /// absence does not distinguish "no link" from "not yours to see". Form
-    /// (1) is the informative one, BY DESIGN: a `Withheld` names a REGISTERED
-    /// PRIVATE document (PUB-6.12), never an address no store registered —
+    /// (1) is the informative one, by design: a `Withheld` names a registered
+    /// private document (PUB-6.12), never an address no store registered —
     /// save the one shape [`ReadPredicate`] records.
     ///
+    /// [`Op::derived_doc_arguments`]: crate::Op::derived_doc_arguments
     /// [`Op::doc_arguments`]: crate::Op::doc_arguments
     /// [`Op::source_arguments`]: crate::Op::source_arguments
     /// [`Op::ReadLink`]: crate::Op::ReadLink
@@ -313,26 +330,26 @@ where
     /// The caller's preconditions, none of which this module can check for
     /// itself:
     ///
-    /// * NON-FORGEABILITY (§6): `session` MUST originate in the transport's
-    ///   connection state, never a wire-supplied value. An id another surface
-    ///   minted forges nothing here: this surface never opened it, so it
-    ///   resolves to no principal ([`SessionId`]).
-    /// * SIZE: M10 bounds almost nothing it is handed. [`Codec::parse`]
+    /// * **Non-forgeability (§6).** `session` must originate in the
+    ///   transport's connection state, never a wire-supplied value. An id
+    ///   another surface minted forges nothing here: this surface never opened
+    ///   it, so it resolves to no principal ([`SessionId`]).
+    /// * **Size.** M10 bounds almost nothing it is handed. [`Codec::parse`]
     ///   states exactly what it measures, which operations' work their
     ///   request's size does not bound, and what a route owes; a transport
     ///   discharges this there, and a caller that assembles an [`Op`] and
-    ///   calls HERE has no parser in between and owns the same obligation.
-    /// * IDEMPOTENCY KEY (§7): an `id`, when present, names ONE request. Step
-    ///   (a) matches a memoized acknowledgment by session, id and op-KIND
-    ///   alone, so a different write of the same kind under an id this session
-    ///   already committed under is answered with the earlier write's
+    ///   calls here has no parser in between and owns the same obligation.
+    /// * **Idempotency key (§7).** An `id`, when present, names one request.
+    ///   Step (a) matches a memoized acknowledgment by session, id and
+    ///   op-kind alone, so a different write of the same kind under an id this
+    ///   session already committed under is answered with the earlier write's
     ///   acknowledgment and does not execute ([`ReqId`]).
-    /// * ATTESTATION (signed ops, the design record §5.5): `attest` is set only
-    ///   where the transport's write-path check ADMITTED that signature for
-    ///   this write. M10 verifies nothing and the kernel writes the value
-    ///   opaquely into the commit marker of every transaction its store
-    ///   signs, so an unchecked value reaches the journal as though admitted
-    ///   ([`Request::attest`]).
+    /// * **Attestation (signed ops, the design record §5.5).** `attest` is
+    ///   set only where the transport's write-path check admitted that
+    ///   signature for this write. M10 verifies nothing and the kernel writes
+    ///   the value opaquely into the commit marker of every transaction its
+    ///   store signs, so an unchecked value reaches the journal as though
+    ///   admitted ([`Request::attest`]).
     ///
     /// [`Op`]: crate::Op
     /// [`Codec::parse`]: crate::Codec::parse
@@ -341,36 +358,51 @@ where
     /// Two refusals can hold at once on a write, and the contract names which
     /// speaks: the poison gate (c) — M2's own report, asked through the
     /// factory ([`Stores::is_poisoned`]), so it holds whichever writer
-    /// poisoned the kernel — runs BEFORE the session gate (b), so a write from
+    /// poisoned the kernel — runs before the session gate (b), so a write from
     /// an unbound session against a poisoned kernel answers `Poisoned`/`Halt`
     /// and never `Unauthenticated`. A client is told the engine has stopped
     /// even where its own defect is that it must re-authenticate. The retry
     /// memo (a) precedes both, so a retry of a write that already committed is
-    /// answered from the memo whatever either gate would have said. A READ
+    /// answered from the memo whatever either gate would have said. A read
     /// takes none of the three: no gate, and no memo either, the memo holding
     /// committed-write acknowledgments alone.
+    ///
+    /// # Panics
+    ///
+    /// Unwinds only if something it calls panics on honest input: M2's
+    /// kernel; M3's, M5's, M6's, M7's or M8's read and write paths, or the
+    /// content store's point read; or the world it is assembled over — the
+    /// read predicate, the world's or a supplied [`ReadPredicate`], stated
+    /// total, and the two publication lookups, whose one precondition M10
+    /// discharges. What panic sites those modules hold guard their own
+    /// internal invariants, so no honest request reaches one; M5 states that
+    /// obligation in its own contract (skep-arrangement, §Failure channels),
+    /// and it is written here for the rest.
     pub fn execute(&self, session: SessionId, req: Request) -> Response {
-        // TOTALITY, M10's own half: the locks are non-poisoning (§7); the
-        // step-(b) read/write split hands each write arm a PROVEN-bound
-        // principal, so no dispatch arm unwraps an `Option`; and the one
-        // runtime `expect` asserts what no input reaches — `unjudged_fill`'s
-        // that `[1]` is a nonempty sequence (the memo's capacity arrives
-        // proven nonzero, in the caller's `NonZeroUsize`).
+        // Totality, M10's own half: the locks are non-poisoning (§7); the
+        // step-(b) read/write split hands each write arm a proven-bound
+        // principal, so no dispatch arm unwraps an `Option`; and the three
+        // runtime `expect`s assert what no input reaches — `unjudged_fill`'s
+        // that `[1]` is a nonempty sequence, the read by identity's that a
+        // shifted element ordinal stays a T4-valid address, and the content
+        // frontier's that a registered document's content chain has a next
+        // address (the memo's capacity arrives proven nonzero, in the
+        // caller's `NonZeroUsize`).
         let Request { id, op, attest } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a), then (c), then (b) — that order being the stated precedence
         //     when more than one applies — and all three on the write path
         //     only, since the is_write/is_read split gives each path exactly
         //     the authority it needs (§1). The write path resolves a
-        //     PROVEN-bound principal HERE (the one place it can fail); the
+        //     proven-bound principal here (the one place it can fail); the
         //     read path takes no gate and reads no memo.
         let resp = if op.is_write() {
             // (a) idempotency: a repeated (session, id) whose op-kind matches
             //     returns the memoized committed-write ack, never
-            //     re-executing. Keyed on both — a replay under a DIFFERENT
+            //     re-executing. Keyed on both — a replay under a different
             //     session misses (§7). Asked here rather than of every
             //     request because the memo holds committed-write acks alone,
-            //     so a read's `kind` can never be a key and its lookup could
+            //     so no entry carries a read's `kind` and its lookup could
             //     only take the memo's lock to be told so.
             if let Some(id) = &id {
                 if let Some(ack) = self.memo.get(session, id, kind) {
@@ -391,15 +423,16 @@ where
             self.dispatch_write(WriteCtx { principal }, op, attest.as_ref())
         } else {
             // Reads tolerate an unbound session (§2): the principal is
-            // resolved for the READ PREDICATE — the doc-argument consult, the
-            // per-run withheld arm, the result-set filter — never to GATE the
-            // read. `None` (unbound/guest) builds the guest predicate.
+            // resolved for the read predicate — the doc-argument consult, the
+            // per-run withheld arm, the result-set filter — and for the
+            // any-principal read's guest test, never to gate the read. `None`
+            // (unbound/guest) builds the guest predicate.
             self.dispatch_read(op, self.sessions.principal_of(session))
         }
         .unwrap_or_else(Response::Rejected);
-        // (d) memoize ONLY a committed-write ack. `to_ack` is what decides —
+        // (d) memoize only a committed-write ack. `to_ack` is what decides —
         //     a Rejected and a read answer both yield None, so neither can
-        //     be replayed (a Reorder/Retry reissue MUST re-execute; a memoized
+        //     be replayed (a Reorder/Retry reissue must re-execute; a memoized
         //     read would replay a stale snapshot). The memo holds that small
         //     ack, not the Response (§7). Nested on the id, so a request that
         //     carried none never builds an ack it would then drop.
@@ -411,10 +444,11 @@ where
         resp
     }
 
-    /// The coordinate of the COMMITTED HEAD — the last committed write — on
-    /// the same log every `at` and `as_of` names, and directly comparable with
-    /// either. It never regresses (G0), and asking costs no operation —
-    /// nothing is dispatched, committed or snapshotted.
+    /// Returns the coordinate of the committed head — the last committed write.
+    ///
+    /// It lies on the same log every `at` and `as_of` names, and is directly
+    /// comparable with either. It never regresses (G0), and asking costs no
+    /// operation — nothing is dispatched, committed or snapshotted.
     ///
     /// What a client compares it against is [the two
     /// coordinates](crate#the-two-coordinates).
@@ -422,17 +456,18 @@ where
         self.stores.kernel().current_seq()
     }
 
-    /// The COMMITTED HEAD's coordinate together with the commit chain's value
-    /// AT it — [`log_position`]'s `Seq` beside the quantity
-    /// `Kernel::chain_head` reads — off ONE kernel `Snapshot`, one root
-    /// load: the root carries the two beside each other, so the pair names
-    /// one committed state, and the chain value IS the chain of that
-    /// position. `current_seq()` and `chain_head()` asked separately cannot
-    /// promise that: a commit may land between the two loads. What
-    /// `/health` serves as `log_position` and `chain_head` (QUEUE item 10,
-    /// piece (c)). Like [`log_position`], asking costs no operation and
-    /// takes no lock. The chain is the seed — thirty-two zero bytes — at
-    /// `Seq(0)` and, under `Durability::InMemory`, at every coordinate.
+    /// Returns the committed head's coordinate and the chain's value at it.
+    ///
+    /// It is [`log_position`]'s `Seq` beside the quantity `Kernel::chain_head`
+    /// reads, the commit chain's value at that position — off one kernel
+    /// `Snapshot`, one root load: the root carries the two beside each other,
+    /// so the pair names one committed state, and the chain value is the chain
+    /// of that position. `current_seq()` and `chain_head()` asked separately
+    /// cannot promise that: a commit may land between the two loads. It is
+    /// what `/health` serves as `log_position` and `chain_head`. Like
+    /// [`log_position`], asking costs no operation and takes no lock. The
+    /// chain is the seed — thirty-two zero bytes — at `Seq(0)` and, under
+    /// `Durability::InMemory`, at every coordinate.
     ///
     /// [`log_position`]: OperationSurface::log_position
     pub fn head_coordinate(&self) -> (Seq, [u8; 32]) {

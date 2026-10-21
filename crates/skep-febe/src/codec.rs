@@ -1,7 +1,9 @@
-//! The wire codec seam. The byte format is fixed by no source note (Open
-//! build decision 1): the transport supplies the one concrete impl; M10 fixes
-//! only the typed [`Request`]/[`Response`]/[`Rejection`] targets, and the
-//! rejection a frame that never parsed is given ([`Rejection::unparseable`]).
+//! The wire codec seam.
+//!
+//! The byte format is fixed by no source note (Open build decision 1): the
+//! transport supplies the one concrete impl; M10 fixes only the typed
+//! [`Request`]/[`Response`]/[`Rejection`] targets, and the rejection a frame
+//! that never parsed is given ([`Rejection::unparseable`]).
 
 use std::fmt;
 
@@ -13,7 +15,7 @@ use crate::response::Response;
 ///
 /// A [`Codec::parse`] failure never reaches `OperationSurface::execute`
 /// (which takes an already-parsed [`Request`]), so it has no `Op` and no
-/// `OpKind` from `Op::kind()`. The TRANSPORT surfaces it through M10's
+/// `OpKind` from `Op::kind()`. The transport surfaces it through M10's
 /// never-silent model by wrapping [`Rejection::unparseable`] in
 /// `Response::Rejected` and marshaling that via [`Codec::marshal`] — the one
 /// never-silent obligation outside M10's exhaustive-dispatch enforcement
@@ -24,88 +26,93 @@ use crate::response::Response;
 /// [`Rejection::unparseable`]: crate::Rejection::unparseable
 ///
 /// A marshaled frame carries **no correlation id** (§8). Pairing a reply with
-/// its in-flight request is the TRANSPORT's, by whatever its own envelope
+/// its in-flight request is the transport's, by whatever its own envelope
 /// carries — never by the request's [`ReqId`], which is an optional
 /// idempotency key ([`Request::id`]) and is absent from most requests.
 ///
 /// [`ReqId`]: crate::ReqId
 /// [`Request::id`]: crate::Request::id
 pub trait Codec {
-    /// wire → `Op` (+ id).
+    /// Parses one wire frame into a [`Request`] — `Op`, id and attestation.
     ///
-    /// **The implementer owes the request's SIZE.** Bar one, M10 measures no
+    /// **The implementer owes the request's size.** Bar two, M10 measures no
     /// field of the [`Op`] it is handed: `values`, `specs`, `cuts`, `regions`,
     /// `rho1`/`rho2`, `to`, `n`, the shot's `runs` — each run's `origin`,
     /// `i_start` and `width` — and its `base`'s `extent`, and every tumbler's
-    /// components and magnitudes reach the owning store as presented. The one
-    /// received list M10 measures is EDITLINK's address-form type slot, held
-    /// to M7's span budget before it is encoded; beyond it M10 measures only
-    /// the successor slots it resolves for itself, against M7's two per-slot
-    /// budgets — the spans a slot keeps and the run-list steps its resolution
-    /// walks. So this parser is the only bound on how large a request may be,
-    /// and a costed frame — a maximal COMPARE, an `insert` whose values outrun
-    /// the transaction budget — reaches the store exactly as it arrives.
+    /// components and magnitudes reach the owning store as presented. The two
+    /// received lists M10 measures are EDITLINK's address-form type slot, held
+    /// to M7's span budget before it is encoded, and RETRIEVEI's `spans`,
+    /// whose widths are summed against the delivery budget before the first
+    /// address is expanded; beyond them M10 measures only the successor slots
+    /// it resolves for itself, against M7's two per-slot budgets — the spans a
+    /// slot keeps and the run-list steps its resolution walks. So this parser
+    /// is the only bound on how large a request may be, and a costed frame — a
+    /// maximal COMPARE, an `insert` whose values outrun the transaction budget
+    /// — reaches the store exactly as it arrives.
     ///
-    /// AND FOR SOME OPERATIONS, BOUNDING THE REQUEST'S SIZE DOES NOT BOUND
-    /// ITS WORK. Three shapes break the correspondence between a frame's size
+    /// **For some operations, bounding the request's size does not bound its
+    /// work.** Three shapes break the correspondence between a frame's size
     /// and its cost, each in its own way, and a transport author should know
     /// them before relying on the paragraph above.
     ///
-    /// [`Op::Publish`]'s existence check derives and probes EVERY address of
-    /// EVERY by-reference run, stopping only at the first one M4 does not
-    /// hold, so the quantity is `Σ min(width, the contiguous stored content
-    /// under that run's origin)`. A per-array cap on `runs` is a MULTIPLIER
-    /// on that sum rather than a bound on it, and a per-tumbler digit cap
-    /// bounds how many digits a `width` is written with, not how far it walks
-    /// — one run of eighteen digits outruns any content a store will ever
-    /// hold. Neither of M5's own budgets caps it either: `TooManyValues` sums
-    /// the DRAFT-NATIVE widths and `TooManyRuns` counts placed runs, so the
-    /// by-reference walk falls between them. M5 prices the walk and names
-    /// this layer as the owner of the number: `Vstream::publish`'s COST
-    /// paragraph ends by calling the by-reference runs' `Σ width` one of "the
-    /// numbers a route that carries this op owes". It is spent INSIDE the
-    /// write transaction, under M2's applier lock, so it is paid by every
-    /// other writer in the engine and not by the caller alone. A parser that
-    /// means to bound it caps that sum here; nothing downstream of this parser
-    /// does.
+    /// [`Op::Publish`]'s existence check probes every distinct address the
+    /// supplied runs name, once — their I-extents merged first — stopping
+    /// only at the first one M4 does not hold, so over the by-reference runs
+    /// the quantity is the union they name: the stored content the request
+    /// points at, and not its repetition of it. A per-array cap on `runs`
+    /// bounds how many extents that union merges, not how far each reaches,
+    /// and a per-number digit cap bounds how many digits a `width` is written
+    /// with, not how far it walks — one run of eighteen digits outruns any
+    /// content a store will ever hold. Neither of M5's own budgets caps it
+    /// either: `TooManyValues` sums the draft-native widths and `TooManyRuns`
+    /// counts placed runs, so the by-reference walk falls between them. M5
+    /// prices the walk and names this layer as the owner of the number:
+    /// `Vstream::publish`'s cost paragraph ends by calling the size of the
+    /// union the by-reference runs name one of "the numbers a route that
+    /// carries this op owes". It is spent inside the write transaction, under
+    /// M2's applier lock, so it is paid by every other writer in the engine
+    /// and not by the caller alone. A parser that means to bound it caps the
+    /// runs' widths, summed, here; nothing downstream of this parser does.
     ///
-    /// [`Op::RetrieveV`] delivers one heap item per active V-POSITION of
-    /// every run it names, and a document's V-extent is VIRTUAL: M5 caps the
-    /// RUNS an arrangement stores (`MAX_PLACED_RUNS`) and caps no position
-    /// count, so a `copy` transcluding a document's whole extent onto its own
-    /// tail DOUBLES that extent for one request's cost. The quantity is
-    /// therefore `Σᵢ |specᵢ's span ∩ the arranged extent|`, set by stored
-    /// state a prior request grew geometrically rather than by this request's
-    /// size — so a cap on `specs` bounds the MULTIPLIER and leaves the
-    /// per-spec term, and a SINGLE spec naming one document names a delivery
-    /// no field of the frame prices. M6 holds it: the delivery is refused past
+    /// [`Op::RetrieveV`] delivers every active V-position of every run it
+    /// names — an item per atom or link position, one per maximal run of
+    /// single-byte positions, counted at its width, and one per withheld run
+    /// — and a document's V-extent is virtual: M5 caps the runs one placing
+    /// request places (`MAX_PLACED_RUNS`) and caps no position count, so a
+    /// `copy` transcluding a document's whole extent onto its own tail
+    /// doubles that extent for one request's cost. The quantity is therefore
+    /// `Σᵢ |specᵢ's span ∩ the arranged extent|`, set by stored state a prior
+    /// request grew geometrically rather than by this request's size — so a
+    /// cap on `specs` bounds the multiplier and leaves the per-spec term, and
+    /// a single spec naming one document names a delivery no field of the
+    /// frame prices. M6 holds it: the delivery is refused past
     /// `skep_retrieval::MAX_DELIVERY_ITEMS` items as it is produced, before
     /// the first address past the budget is expanded, and the spec-set's
     /// run-list walk is priced ahead of it (`RejectCode::TooManyItems`). What
-    /// that leaves this layer is what the items RENDER to — each content
+    /// that leaves this layer is what the items render to — each content
     /// item's bytes, which one large value placed at many positions multiplies
     /// — and the delivery it renders arrives bounded and whole, so a
     /// response-size cap here can sum its items' lengths before it builds a
     /// byte of the rendering.
     ///
     /// The FTT descriptor family ([`Op::FindLinksFtt`] and its two siblings)
-    /// has NO FIELD TO CAP. A four-set of `Any` slots constrains nothing M7
+    /// has no field to cap. A four-set of `Any` slots constrains nothing M7
     /// can index, so the matcher materializes an address per active link in
     /// the store: the frame is minimal and uniform and its cost is wholly
     /// stored state. M7 and M8 each document and accept that walk, so a
     /// parser is not being asked to refuse it — only to know that for this
     /// shape it has nothing to measure, and that paging does not avoid it,
-    /// since every page re-materializes the candidate set. The RESPONSE is
+    /// since every page re-materializes the candidate set. The response is
     /// what a transport can still bound: `find_links_ftt` returns the whole
     /// matched set where `window_ftt` pages it.
     ///
     /// [`Op::UniversalGrants`] has that shape unconditionally. It takes no
-    /// argument at all, so its frame is the bare op name, and its cost is the
-    /// grant fold's live universal index — whose size the depositors choose,
-    /// and which grows with the store — times one registry walk per stored
-    /// row, the ω compare the narrowing makes. Nor has it a paged form: the
-    /// whole covered set comes back in one response, which is the one thing
-    /// about it a transport can bound.
+    /// argument at all, so its frame is the bare op name, and its cost for a
+    /// bound principal is the grant fold's live universal index — whose size
+    /// the depositors choose, and which grows with the store — times one
+    /// registry walk per stored row, the ω compare the narrowing makes. Nor
+    /// has it a paged form: the whole covered set comes back in one response,
+    /// which is the one thing about it a transport can bound.
     ///
     /// Shape is not the implementer's: `Address`, `Span` and `Tumbler`
     /// validate in their own constructors (and re-enter them on deserialize),
@@ -114,17 +121,17 @@ pub trait Codec {
     ///
     /// A [`Request`]'s `id` past [`MAX_REQ_ID_BYTES`] is accepted and simply
     /// not memoized, so a retry re-executes and the client is never told. A
-    /// parser that wants it TOLD refuses the id here.
+    /// parser that wants it told refuses the id here.
     ///
     /// The production instance (skepd's `JsonCodec`) enforces a per-array
-    /// element cap, a per-`insert` minted-value cap, and per-tumbler digit and
-    /// component caps. Those numbers are the transport's — each sized against
-    /// its own request-body cap — not M10 policy: a transport with a different
-    /// frame budget owes its own.
+    /// element cap, a per-`insert` minted-value cap, a digit cap per decimal
+    /// number and a component cap per tumbler. Those numbers are the
+    /// transport's, not M10 policy: a transport with a different frame budget
+    /// owes its own.
     ///
-    /// AND THE COMPONENT CAP PRICES WHAT M7 STORES. M7's per-slot budgets are
-    /// COUNTS — spans kept, steps walked — while a span's live size is set by
-    /// its two tumblers' component counts: order half a kilobyte at eight
+    /// **And the component cap prices what M7 stores.** M7's per-slot budgets
+    /// are counts — spans kept, steps walked — while a span's live size is set
+    /// by its two tumblers' component counts: order half a kilobyte at eight
     /// components, ~16–20 KB at 256. A slot M7 accepts is stored, so this
     /// parser's cap on one tumbler's components multiplies the permanent cost
     /// of every link: at 256 components a slot at budget is ~70 MB live and
@@ -135,6 +142,12 @@ pub trait Codec {
     /// [`Op::Publish`], bounded only by how deep a base this parser lets a
     /// request name.
     ///
+    /// # Errors
+    ///
+    /// Returns a [`ParseError`] for a frame that is no [`Request`] — an
+    /// unknown op or a bad argument encoding — and for any frame past a cap
+    /// the implementer enforces.
+    ///
     /// [`Op`]: crate::Op
     /// [`Op::MakeLink`]: crate::Op::MakeLink
     /// [`Op::Publish`]: crate::Op::Publish
@@ -143,26 +156,29 @@ pub trait Codec {
     /// [`Op::UniversalGrants`]: crate::Op::UniversalGrants
     /// [`MAX_REQ_ID_BYTES`]: crate::MAX_REQ_ID_BYTES
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError>;
-    /// Typed response → wire bytes. Total by signature: there is no failure
-    /// channel, so the implementer must be able to encode EVERY [`Response`],
-    /// every `Rejected` among them. The never-silent contract rests on that
-    /// totality — an answer M10 produced and the codec cannot render is a
-    /// silence.
+    /// Marshals a typed response into wire bytes.
+    ///
+    /// Total by signature: there is no failure channel, so the implementer
+    /// must be able to encode every [`Response`], every `Rejected` among them.
+    /// The never-silent contract rests on that totality — an answer M10
+    /// produced and the codec cannot render is a silence.
     fn marshal(&self, resp: &Response) -> Vec<u8>;
 }
 
-/// A frame that failed to parse — unknown op / bad arg encoding. Constructed
-/// by the transport's `Codec` impl; `detail` becomes the `Unparseable`
-/// rejection's own `detail`.
+/// A frame that failed to parse.
 ///
-/// A std error like every other failure in this workspace, so the transport
-/// author writing the one required [`Codec`] impl can `unwrap`, `expect`,
-/// `?` it into a boxed error, and log it with `{}` — the ordinary handling
-/// of a parse failure, none of which is available to a bare struct. A value
-/// besides, with the workspace's value derives: [`Rejection::unparseable`]
-/// consumes one, so a transport that also logs its failure needs to keep a
-/// copy, and a codec test comparing an observed failure against an expected
-/// one needs to compare them.
+/// The failure is an unknown op, a bad argument encoding, or a frame past a
+/// cap the codec enforces. Constructed by the transport's `Codec` impl;
+/// `detail` becomes the `Unparseable` rejection's own `detail`.
+///
+/// A std error, as a [`Rejection`] is, so the transport author writing the
+/// one required [`Codec`] impl can `unwrap`, `expect`, `?` it into a boxed
+/// error, and log it with `{}` — the ordinary handling of a parse failure,
+/// none of which is available to a bare struct. A value besides, with the
+/// workspace's value derives: [`Rejection::unparseable`] consumes one, so a
+/// transport that also logs its failure needs to keep a copy, and a codec
+/// test comparing an observed failure against an expected one needs to
+/// compare them.
 ///
 /// [`Rejection::unparseable`]: crate::Rejection::unparseable
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,14 +196,16 @@ impl fmt::Display for ParseError {
     }
 }
 
-/// No `source`: the codec's own cause arrives as `detail` text, since the
-/// byte format — and so the type of anything that failed inside it — is the
-/// transport's, not M10's.
+/// Has no `source`: the codec's own cause arrives as `detail` text.
+///
+/// That is because the byte format — and so the type of anything that failed
+/// inside it — is the transport's, not M10's.
 impl std::error::Error for ParseError {}
 
 impl Rejection {
-    /// The rejection for a frame that never parsed into an [`Op`] — the one
-    /// rejection M10 cannot raise for itself, since
+    /// Returns the rejection for a frame that never parsed into an [`Op`].
+    ///
+    /// It is the one rejection M10 cannot raise for itself, since
     /// [`OperationSurface::execute`] takes an already-parsed [`Request`] and
     /// so has no `Op` and no `OpKind` from `Op::kind()`. The transport's
     /// [`Codec`] impl calls this on its own `parse` failure and marshals the
@@ -216,8 +234,10 @@ impl Rejection {
 mod tests {
     use super::*;
 
-    /// The parse-failure rejection is classified by the same table as every
-    /// other `Malformed`, and carries the codec's cause when it has one.
+    /// The parse-failure rejection is classified as any other `Malformed` is.
+    ///
+    /// It goes through the same table, and carries the codec's cause when it
+    /// has one.
     #[test]
     fn an_unparseable_frame_is_classified_by_the_same_table() {
         let rej = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
@@ -229,9 +249,10 @@ mod tests {
         assert!(bare.detail.is_none());
     }
 
-    /// A parse failure is a std error, as a rejection is: boxable as
-    /// `Box<dyn Error + Send + Sync>` (C-GOOD-ERR), and rendered with the
-    /// codec's cause when it has one.
+    /// A parse failure is a std error, as a rejection is.
+    ///
+    /// It is boxable as `Box<dyn Error + Send + Sync>` (C-GOOD-ERR), and
+    /// rendered with the codec's cause when it has one.
     #[test]
     fn a_parse_error_is_a_std_error() {
         fn boxed(

@@ -1,14 +1,16 @@
-//! The two static dispatch tables (§1–§4): every [`Op`] handed to the store
-//! or query module that owns it. The write half runs under the proven-bound
-//! [`WriteCtx`] and lowers every store refusal through the `lower` table; the
-//! read half answers off the one snapshot it pins, through the request's one
-//! read predicate. Each table's complement arm rejects the other half's
+//! The two static dispatch tables (§1–§4).
+//!
+//! Between them, every [`Op`] is handed to the store or query module that
+//! owns it. The write half runs under the proven-bound [`WriteCtx`] and
+//! lowers every store refusal through the `lower` table; the read half
+//! answers off the one snapshot it pins, through the request's one read
+//! predicate. Each table's complement arm rejects the other half's
 //! operations `Malformed`, so a new `Op` variant is classified at both before
 //! it compiles.
 
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
-// `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
-// is imported here by name.
+// `m3()`/`m5()`/`links()`/`content()` methods the read arms call, so no
+// accessor trait is imported here by name.
 use skep_address::{ordinal, shift, validate, Nat};
 use skep_arrangement::{published_target, trunk_of, M5Rec};
 use skep_content::{ContentStretch, ContentWrite};
@@ -39,33 +41,44 @@ where
 {
     // ── write dispatch (§1/§3/§4) ──
 
-    /// The static table for the write half: every arm acquires a driver
-    /// per-op from the factory, returns only its post-commit value (A7 is
-    /// upheld structurally — M10 has nothing to put on the wire until the
-    /// driver returns at/after `lin(op)`), classifies `TxnError<E>` through
-    /// the `lower` table, and stamps the committed `Seq`. Exhaustive over `Op`
-    /// with NO `_` wildcard: the complementary (read) half is one explicit
-    /// `|`-list arm rejecting `Malformed` — never a panic — so a newly added
-    /// `Op` variant is a compile-time non-exhaustiveness error here, at
-    /// `is_read`, and at `dispatch_read`.
+    /// Dispatches a write to the store that owns it: the write half's table.
     ///
-    /// The coordinate a driver hands back is `at` in every arm, and
-    /// `committed_at` — the design's own word for it — in the two arms whose
-    /// operation carries an `at` of its own (a `VPos`). Those are the only
-    /// two spellings; a third would make one concept read as two.
+    /// Every arm acquires a driver per-op from the factory, returns only its
+    /// post-commit value (A7 is upheld structurally — M10 has nothing to put
+    /// on the wire until the driver returns at/after `lin(op)`), classifies
+    /// `TxnError<E>` through the `lower` table, and stamps the committed
+    /// `Seq`. Exhaustive over `Op` with no `_` wildcard: the complementary
+    /// (read) half is one explicit `|`-list arm rejecting `Malformed` — never
+    /// a panic — so a newly added `Op` variant is a compile-time
+    /// non-exhaustiveness error here, at `is_read`, and at `dispatch_read`.
     ///
-    /// THE ATTESTATION (signed ops) rides EVERY M3, M5 and M7 driver a write
-    /// acquires — [`Stores::namespace_attested`] on the two document mints,
-    /// [`Stores::vstream_attested`] and [`Stores::linkstore_attested`] — and
-    /// which of a store's transactions it signs is that store's alone, stated
-    /// on its handle's `attest` field: a handle built with a value fills no
-    /// signature slot outside the transactions its store signs. So this table
-    /// holds no copy of the checked set — skepd's name for the writes an
-    /// attestation is admitted on, the ten publish-class kinds — and widening
-    /// it is the stores' and the transport's work. `delegate` and
-    /// `register_node` acquire the plain namespace driver, so there it is
-    /// dropped. Nothing is classified, verified or filtered here: the value
-    /// arrives ADMITTED by the dispatched write path's check, or not at all.
+    /// The coordinate a driver hands back is `committed_at` — the design's own
+    /// word for it — in the three arms whose operation carries an `at` of its
+    /// own (a `VPos`), and `at` in every other arm. Those are the only two
+    /// spellings; a third would make one concept read as two.
+    ///
+    /// **The attestation (signed ops).** It rides every M5 and M7 driver a
+    /// write acquires, and the M3 driver of the two document mints —
+    /// [`Stores::namespace_attested`], [`Stores::vstream_attested`] and
+    /// [`Stores::linkstore_attested`] — and which of a store's transactions it
+    /// signs is that store's alone, stated on its handle's `attest` field: a
+    /// handle built with a value fills no signature slot outside the
+    /// transactions its store signs. So this table holds no copy of the
+    /// checked set — skepd's name for the writes an attestation is admitted
+    /// on, the ten publish-class kinds — and widening it is the stores' and
+    /// the transport's work. `delegate` and `register_node` acquire the plain
+    /// namespace driver, so there it is dropped. Nothing is classified,
+    /// verified or filtered here: the value arrives admitted by the dispatched
+    /// write path's check, or not at all.
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering: the door's refusal
+    /// (`consult_write`'s); for `edit_link`, the successor build's
+    /// ([`successor_link`]'s); then the store's own, lowered through
+    /// [`lower_txn`] beside the kernel's transaction outcomes (`Durability`,
+    /// `TxnUnencodable`, `TxnOverBudget`, `Poisoned`). A read handed here is
+    /// answered `Malformed`.
     ///
     /// [`Stores::namespace_attested`]: crate::Stores::namespace_attested
     /// [`Stores::vstream_attested`]: crate::Stores::vstream_attested
@@ -77,8 +90,8 @@ where
         attest: Option<&Attestation>,
     ) -> Result<Response, Rejection> {
         let kind = op.kind();
-        // ONE snapshot for the door's own pre-dispatch reads (the write side's
-        // consult below, and the EDITLINK successor build) — a PRIOR
+        // One snapshot for the door's own pre-dispatch reads (the write side's
+        // consult below, and the EDITLINK successor build) — a prior
         // snapshot, deliberately not the write transaction's base (§4); the
         // store's own gates re-run against the base they commit on.
         let snap = self.stores.kernel().snapshot();
@@ -86,7 +99,7 @@ where
         // snapshot; where it did not, nothing built from them below may speak
         // ahead of the store.
         let judgment = self.consult_write(&wc, &op, snap.world())?;
-        // THE VISIBILITY CLASS of this write (PUB-6.25), the read predicate's
+        // The visibility class of this write (PUB-6.25), the read predicate's
         // sibling: one value per request, from the same proven-bound
         // principal, lent to whichever store gates this write inside its own
         // transaction. Bound once here, so every such gate is handed the one
@@ -95,10 +108,11 @@ where
         match op {
             // ── namespace writes (→ M3) ──
             // The three-valued publication flag rides the op verbatim
-            // (PUB-8.16); M3's create path resolves the ABSENT arm — the
+            // (PUB-8.16); M3's create path resolves the absent arm — the
             // account's first document born published, every later flagless
-            // one private (PUB-8.21). The explicit-false FIRST-mint refusal
-            // is the DAEMON's door (PUB-8.20, D2c), not this dispatch's.
+            // one private (PUB-8.21). The explicit-false first-mint refusal
+            // is the daemon's door (PUB-8.20, PUB-kickoff D2c), not this
+            // dispatch's.
             Op::CreateNewDocument { account, published } => {
                 let (addr, at) = self
                     .stores
@@ -124,13 +138,11 @@ where
                     self.stores.namespace().register_node(addr).map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // Fork ≠ Version (§3): mints an EMPTY account-tier document,
-            // sharing NO content; the content-sharing fork is Op::Version.
+            // Fork ≠ Version (§3): mints an empty account-tier document,
+            // sharing no content; the content-sharing fork is Op::Version.
             // The three-valued flag (PUB-8.16) rides through verbatim:
             // `Namespace::fork` resolves it at M3's create path exactly as
-            // `create_new_document` does (owner 2026-09-05 — one rule, one
-            // place; the reduction M10 spelled for itself in round 1 is
-            // retired with it).
+            // `create_new_document` does — one rule, one place.
             Op::Fork { published } => {
                 let (addr, at) = self
                     .stores
@@ -140,9 +152,9 @@ where
                 Ok(Response::AckAddr { addr, at })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
-            //    session caller — the ownership ruling, 2026-08-16; the
-            //    version-chain refusals in-store too, D2b) ──
-            // The DEPOSIT DECLARATION rides the op as M5's own value
+            //    session caller; the version-chain refusals in-store too,
+            //    PUB-kickoff D2b) ──
+            // The deposit declaration rides the op as M5's own value
             // (PUB-9.13), class type and all (PUB-2.64), so the exemption is
             // claimed only by the `Deposit::Declared` the client sent: M10
             // converts nothing and tests nothing — the class test is M5's.
@@ -170,7 +182,7 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
-            // THE WRITE BY IDENTITY (the replacement act's record): the
+            // The write by identity (the replacement act's record): the
             // client's I-runs placed as given. Its origins were consulted at
             // the door above, as `copy`'s sources were (`Op::source_arguments`,
             // the distinct origins in run order), so the store takes no
@@ -196,21 +208,20 @@ where
                 let (addr, at) = self
                     .stores
                     .vstream_attested(attest)
-                    // M5 does the owned/cross-owner branch AND resolves the
-                    // three-valued flag: None ⇒ INHERIT published(d_src),
+                    // M5 does the owned/cross-owner branch and resolves the
+                    // three-valued flag: None ⇒ inherit published(d_src),
                     // off its own working state (PUB-8.17/8.18).
                     .version(wc.principal, &d_src, published)
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // The SHOT (PUB-2.33, PUB-8.1): M5's composite decides the
+            // The shot (PUB-2.33, PUB-8.1): M5's composite decides the
             // destination, places the runs by origin and runs the source
-            // gate; what M10 adds is the session's VISIBILITY CLASS
-            // (`visible_to`, lane 3.3b) — the same value the five link writes
-            // lend M7 — which M5 evaluates per ORIGIN over the shot's own
-            // working world, the world in which it has just found each origin
-            // registered (PUB-6.37). The ack is the member's address
-            // (PUB-2.37).
+            // gate; what M10 adds is the session's visibility class
+            // (`visible_to`) — the same value the five link writes lend M7 —
+            // which M5 evaluates per origin over the shot's own working world,
+            // the world in which it has just found each origin registered
+            // (PUB-6.37). The ack is the member's address (PUB-2.37).
             Op::Publish { doc, shot } => {
                 let (addr, at) = self
                     .stores
@@ -219,17 +230,16 @@ where
                     .map_err(|e| lower_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // ── link writes (→ M7; ω-gated in-store on each written home —
-            //    the ownership ruling, 2026-08-16; the value-keyed gates at
-            //    the session principal's VISIBILITY class — lane 3.3b, the
-            //    writer built per write over `visible_to`) ──
+            // ── link writes (→ M7; ω-gated in-store on each written home;
+            //    the value-keyed gates at the session principal's visibility
+            //    class, the writer built per write over `visible_to`) ──
             Op::MakeLink { home, from, to, ty, replaces } => {
-                // M7 handles both slot forms INSIDE its transact: Resolve
+                // M7 handles both slot forms inside its transact: Resolve
                 // V-specs off the txn base, Addrs deposited verbatim. The
                 // `replaces` member (PUB-5.15) picks the composite: absent,
                 // the record alone; present, the record and its `replaces`
-                // link in ONE transaction under the one attestation. The ack
-                // is the RECORD's address either way.
+                // link in one transaction under the one attestation. The ack
+                // is the record's address either way.
                 let writer = self.stores.linkstore_attested(&visibility, attest);
                 let (addr, at) = match replaces {
                     None => writer.makelink(wc.caller(), &home, from, to, ty),
@@ -269,18 +279,18 @@ where
                 Ok(Response::AckAddr { addr, at })
             }
             // The one read-assembled request (§4): the successor's content
-            // V-specs resolve through M5 off a PRIOR snapshot — deliberately
+            // V-specs resolve through M5 off a prior snapshot — deliberately
             // not in editlink's write transaction (recorded I-addresses are
-            // permanent, so d_s's arrangement may move underneath with no
+            // permanent, so a source's arrangement may move underneath with no
             // hazard). One operation ⇒ still one M2 transaction. The
             // visibility class rides the writer as on every link write; the
             // claim's dedup is a guaranteed miss (PUB-6.27), so no ack here
             // can name an address this principal could not read. Where the
             // door judged the write, the successor's sources were consulted
-            // above, BEFORE this build reads their arrangements (PUB-6.38);
+            // above, before this build reads their arrangements (PUB-6.38);
             // where it deferred to the store's own gate they were not, and the
             // build, told so by `judgment`, issues no verdict their
-            // arrangements decide — the store's `not_owner` speaks first.
+            // arrangements decide — the store's home gate speaks first.
             Op::EditLink { original, successor, d_s, d_a } => {
                 let link =
                     successor_link(snap.world().m3(), snap.world().m5(), &successor, judgment)?;
@@ -331,24 +341,27 @@ where
 
     // ── read dispatch (§1/§2) ──
 
-    /// The static table for the read half. THIS function pins the one
-    /// snapshot every arm answers against, and takes `as_of` from it once:
-    /// a read is a single linearization point, M10 reports exactly that
-    /// point (V1), and any multi-constituent verdict discharges MIC clause 6
-    /// by construction (A3/V2) — properties of the pinning, not of each arm
-    /// remembering to do it.
+    /// Dispatches a read to the module that owns it: the read half's table.
+    ///
+    /// This function pins the one snapshot every arm answers against, and
+    /// takes `as_of` from it once: a read is a single linearization point,
+    /// M10 reports exactly that point (V1), and any multi-constituent verdict
+    /// discharges MIC clause 6 by construction (A3/V2) — properties of the
+    /// pinning, not of each arm remembering to do it.
     ///
     /// With the snapshot in hand the arms reach only the snapshot-based
-    /// surfaces: `Query::new` for M6, and M8's `*_on` reads over that same
-    /// snapshot (Conflicts resolved #5), so no answer comes from a position
-    /// other than the one `as_of` names. Reads hold no lock against writers,
-    /// are zero-step (A1), and have no commit-before-ack obligation.
+    /// surfaces: `Query::new` for M6, M8's `*_on` reads over that same
+    /// snapshot (Conflicts resolved #5), and the snapshot's own world for
+    /// every other arm, so no answer comes from a position other than the one
+    /// `as_of` names. Reads hold no lock against writers, are zero-step (A1),
+    /// and have no commit-before-ack obligation.
     ///
     /// No arm takes a session gate. What `principal` (`None` is the guest)
-    /// SHAPES is decided in exactly two places. One is the per-request read
+    /// shapes is decided in exactly two places. One is the per-request read
     /// predicate this function builds once off it, which every masking arm
     /// answers through — and which, at the doc-argument consult below,
-    /// refuses a request naming a document this caller may not read. The
+    /// refuses a request naming — or, reading by identity, deriving — a
+    /// document this caller may not read. The
     /// other is the any-principal arm, which asks the principal itself:
     /// grants reach principals alone (PUB-5.109), so the guest is answered no
     /// rows — the one per-caller rule on this path that is not the predicate,
@@ -358,6 +371,22 @@ where
     ///
     /// Exhaustive over `Op` with the complementary (write) half as one
     /// explicit rejecting |-list — see `dispatch_write`.
+    ///
+    /// # Errors
+    ///
+    /// In this order, the first that holds answering: the doc-argument
+    /// consult's refusal ([`consult_read`]'s); then the arm's own — the read
+    /// by identity's `TooManyItems` where its spans' widths, summed, pass
+    /// `MAX_DELIVERY_ITEMS`; `DocNotRegistered`, raised here, where the
+    /// content-frontier, doc-metadata or edition-claim read names no
+    /// registered document; or the reader's refusal, lowered through
+    /// `lower_read`. A write handed here is answered `Malformed`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the read by identity's shifted element ordinal stops being a
+    /// T4-valid address, or a registered document's content chain answers no
+    /// next address — two states no input reaches.
     pub(super) fn dispatch_read(
         &self,
         op: Op,
@@ -367,19 +396,20 @@ where
         let snap = self.stores.kernel().snapshot();
         let as_of = snap.seq();
         let world = snap.world();
-        // THE read predicate of this request (`readable_by`), bound off THIS
+        // The read predicate of this request (`readable_by`), bound off this
         // read snapshot — or off the supplied `ReadPredicate`, which a
-        // historical front door closes over one HEAD snapshot (PUB-6.48) — and
-        // threaded to every arm below.
+        // historical front door closes over one head snapshot (PUB-6.48) — and
+        // threaded to every arm below that masks.
         let readable = self.readable_by(world, principal);
         // The doc-argument consult (PUB-6.12), off that same predicate and
         // ahead of every arm, so no read validates an argument it may not
-        // describe: the first unreadable NAMED document answers WITHHELD.
+        // describe: the first unreadable named document — then derived one —
+        // answers withheld.
         consult_read(&op, &readable)?;
         match op {
             // ── namespace reads (→ M3, §2): the M3-internal frontier/
-            //    registry values Delegate/CreateNewDocument demand. Total —
-            //    Option<Address>, no fault path.
+            //    registry values Delegate/CreateNewDocument demand, and ω's
+            //    whole entry. Total — an `Option` each, no fault path.
             Op::NextAccountPrefix { parent } => {
                 let addr = world.m3().next_account_prefix(&parent);
                 Ok(Response::MaybeAddr { addr, as_of })
@@ -387,12 +417,12 @@ where
             // Takes an explicit wire id, not the session's bound principal —
             // deliberate (§2): a prefix is public, immutable registry data, so
             // the answer is the same for every caller and the wire id is what
-            // is being asked ABOUT.
+            // is being asked about.
             Op::PrincipalPrefix { id } => {
                 let addr = world.m3().principal_prefix(id).cloned();
                 Ok(Response::MaybeAddr { addr, as_of })
             }
-            // AUTH-6.37: ω's whole entry off ONE walk of M3's registry
+            // AUTH-6.37: ω's whole entry off one walk of M3's registry
             // (`effective_owner_pair`); the two projections composed would
             // walk it twice. `addr` is a registry probe, not a doc-argument, so
             // the consult above passed it by. What the entry means to a caller
@@ -406,7 +436,7 @@ where
             // ── raw link reads (→ M7, §2): no driver handle — straight off
             //    the one snapshot.
             Op::ReadLink { a } => {
-                // A link homed in an unreadable document reads as ABSENT
+                // A link homed in an unreadable document reads as absent
                 // (PUB-6.6): `⊥`, exactly as a never-deposited address.
                 let link = if home_readable(&a, &readable) {
                     world.links().readlink(&a).cloned()
@@ -416,9 +446,9 @@ where
                 Ok(Response::LinkValue { link, as_of })
             }
             // Carries its own Result in-band, deliberately (§2): M7 defines
-            // ⟨⟩ ≠ ⊥ as two ANSWERS of FOLLOWLINK; lowering Invalid to a
+            // ⟨⟩ ≠ ⊥ as two answers of FOLLOWLINK; lowering Invalid to a
             // Rejection would erase an unforgeable distinction. Contrast
-            // Project, where M8's NotALink IS a precondition failure.
+            // Project, where M8's NotALink is a precondition failure.
             Op::FollowLink { a, slot } => {
                 // Absence for an unreadable home (PUB-6.6): `⊥`, the same
                 // `Err(Invalid)` a non-link answers — never ⟨⟩, which is a
@@ -430,10 +460,11 @@ where
                 };
                 Ok(Response::Follow { result, as_of })
             }
-            // ── content/provenance reads (→ M6, §2) ──
+            // ── content/provenance reads (→ M6, §2; the read by identity and
+            //    the frontier read the world directly) ──
             Op::RetrieveV { specs } => {
-                // The delivery masks per RUN through the threaded predicate
-                // (§4, PUB-6.41): each spec's NAMED doc was consulted above; the
+                // The delivery masks per run through the threaded predicate
+                // (PUB-6.41): each spec's named doc was consulted above; the
                 // runs its arrangement windows are masked here, a masked run
                 // emitted as the withheld arm at its own position.
                 let items = Query::new(&snap)
@@ -441,11 +472,11 @@ where
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Delivery { items, as_of })
             }
-            // THE READ BY IDENTITY (AUTH-6.38–6.40; M-I2 (a), (h); ms3-1):
-            // every span's derived document passed the consult above — its
-            // shape too, so each start is an element position and each width
-            // at least one — and what remains is M4's point read per position,
-            // keyed by I-address and blind to arrangement. THE BUDGET FIRST
+            // The read by identity (AUTH-6.38–6.40; M-I2 (a), (h)): every
+            // span's derived document passed the consult above — its shape
+            // too, so each start is an element position and each width at
+            // least one — and what remains is M4's point read per position,
+            // keyed by I-address and blind to arrangement. The budget first
             // (P29): the widths summed are the delivery's size, request
             // arithmetic, refused whole past `MAX_DELIVERY_ITEMS` before the
             // first address is expanded, as RETRIEVEV's delivery is held to the
@@ -484,7 +515,7 @@ where
                 }
                 Ok(Response::IDelivery { items, as_of })
             }
-            // THE CONTENT FRONTIER (AUTH-6.38): `doc` passed the consult
+            // The content frontier (AUTH-6.38): `doc` passed the consult
             // above, so a draft's mint count is told to no reader the draft
             // does not admit; registration is M10's own refusal, as the
             // doc-metadata read's is, since the chain's peek answers nothing
@@ -525,9 +556,9 @@ where
                 Ok(Response::Compare { rep, as_of })
             }
             Op::FindDocsContaining { regions } => {
-                // The container filter (§3): a candidate the reader may not
-                // read is dropped at its identity; the region-spec docs were
-                // consulted above.
+                // The container filter: a candidate the reader may not read is
+                // dropped at its identity; the region-spec docs were consulted
+                // above.
                 let addrs = Query::new(&snap)
                     .find_docs_containing_filtered(&regions, &readable)
                     .map_err(|e| lower_read(kind, e))?;
@@ -539,9 +570,9 @@ where
                 let runs = image_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Runs { runs, as_of })
             }
-            // The result-set family (§3): every reader drops each link whose
-            // HOME the reader may not read, threaded the predicate. `d` was
-            // consulted above; the filter is on the RESULT links' homes.
+            // The result-set family: every reader drops each link whose home
+            // the reader may not read, threaded the predicate. `d` was
+            // consulted above; the filter is on the result links' homes.
             Op::FindLinksV { d, region } => {
                 let addrs = findlinks_v_on(&snap, &d, &region, &readable)
                     .map_err(|e| lower_read(kind, e))?;
@@ -575,12 +606,12 @@ where
                 Ok(Response::Endsets { pairs, as_of })
             }
             // `project` and `discoverable_from`: `d` is in the consult above
-            // (the dual row, PUB-6.8); the ABSENCE of a link `a` homed in an
+            // (the dual row, PUB-6.8); the absence of a link `a` homed in an
             // unreadable document (PUB-6.6) is M8's to answer, through the
             // predicate, and both answer it `NotALink` — which is also what
             // each gives for an address no link occupies, so the two are
             // indistinguishable as the rule requires. An admitted `project`
-            // is UNFILTERED at origin (PUB-6.15); an admitted `a` that is
+            // is unfiltered at origin (PUB-6.15); an admitted `a` that is
             // retracted answers `discoverable_from` `false`.
             Op::Project { a, slot, d } => {
                 let set =
@@ -605,19 +636,18 @@ where
                 let claims = out_claims_on(&snap, &x, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
-            // ── publication reads (lane 3.4, PUB-8.47): answers M10
-            //    COMPOSES; what they need that no store computes is
-            //    `crate::publication`'s ──
+            // ── publication reads (PUB-8.47): answers M10 composes; what
+            //    they need that no store computes is `crate::publication`'s ──
             // PUB-8.12: `doc` passed the consult above, so an unreadable one
             // was answered `withheld` before the registration refusal below
             // could describe it. The argument projects to its trunk (PUB-2.15)
             // and every document field is read off that one address: M5's own
             // `published_target` (the bit every gate keys on), M3's ω, and the
-            // birth version. The SHOT TERMS and the FORK SOURCE are read off
-            // the address NAMED (D25's (c′), and the fork-source record's arm
-            // A, each served as a member read): a version member the shot
-            // minted answers its own terms, a document a `version` minted
-            // answers its own source, and everything else — the trunk
+            // birth version. The shot terms and the fork source are read off
+            // the address named (signed-ops D25, and the fork-source record,
+            // each served as a member read): a version member the shot minted
+            // answers its own terms, a document a `version` minted answers its
+            // own source, and everything else — a trunk no `version` minted
             // included — answers none. The source takes no gate of its own:
             // whoever may read the fork reads the address it was born sharing
             // (the record's decision 2), and nothing else of the source rides

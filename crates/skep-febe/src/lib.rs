@@ -1,9 +1,9 @@
-//! # skep-febe — M10: Operation Surface (FEBE Command Layer)
+//! skep-febe — M10: Operation Surface (FEBE Command Layer).
 //!
 //! The engine's **front door**: each external FEBE request is dispatched to
 //! the store/query module that owns it, gated on commit (ASN-0134 A7),
-//! stamped with its linearization coordinate (`committed_at` on every write
-//! that commits, `as_of` on every read that answers — A1/A2/V1), and every
+//! stamped with its linearization coordinate (`at` on every write that
+//! commits, `as_of` on every read that answers — A1/A2/V1), and every
 //! failure that reaches it surfaces as a *typed, classified, never-silent*
 //! rejection — a durability refusal carrying the I/O kind for the daemon's
 //! eyes alone ([`Rejection::io_kind`]), and the lowering that classifies a
@@ -24,22 +24,22 @@
 //! It is, concretely, a lifecycle wrapper + dispatch table + readability
 //! door + client-model adapter; the door, the largest of the four, is the one
 //! read predicate a request answers through and every rule that predicate
-//! decides (`operation/door.rs` lists them). Cross-family COMPOSITE
+//! decides (`operation/door.rs` lists them). Cross-family composite
 //! orchestration — a write spanning store families committed as one M2
 //! transaction — is latent with zero occupants: the design resolves that no
 //! v1 operation needs one (Conflicts resolved #1). A read spanning store
 //! families needs no transaction and is answered off the one snapshot the
-//! read dispatch pins; M10 composes three, the PUBLICATION READS:
+//! read dispatch pins; M10 composes three, the publication reads:
 //! [`Op::DocMetadata`] (M3's publication bit, owner and chain with M5's
-//! frozen birth extent), [`Op::EditionClaims`] (the world's edition-claim
-//! class under the door's home rule) and [`Op::UniversalGrants`] (the grant
-//! fold's live universal index narrowed by M3's ω). Each says at its arm what
-//! it assembles, and what the three need that no store computes for them is
-//! the `publication` card's. That card holds the one rule M10 performs on
-//! another component's behalf: the any-principal read's fold-filter
-//! RE-DERIVES the grant fold's issuer test as a projection over rows, because
-//! the world hands its universal index raw
-//! ([`PublicationWorld::universal_grant_index`]).
+//! frozen birth extent, shot terms and fork source), [`Op::EditionClaims`]
+//! (the world's edition-claim class under the door's home rule) and
+//! [`Op::UniversalGrants`] (the grant fold's live universal index narrowed
+//! by M3's ω). Each says at its arm what it assembles, and what the three
+//! need that no store computes for them is the `publication` card's. That
+//! card holds the one rule M10 performs on another component's behalf: the
+//! any-principal read's fold-filter re-derives the grant fold's issuer test
+//! as a projection over rows, because the world hands its universal index
+//! raw ([`PublicationWorld::universal_grant_index`]).
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a
@@ -64,17 +64,17 @@
 //!
 //! ## The two coordinates
 //!
-//! Every answer carries one `Seq`, and which one it is says how to use it.
-//! Both are positions on the single kernel a [`Stores`] impl names, so they
-//! are points on one totally ordered, never-regressing log and compare
-//! directly:
+//! Every answer but a rejection carries one `Seq`, and which one it is says
+//! how to use it. Both are positions on the single kernel a [`Stores`] impl
+//! names, so they are points on one totally ordered, never-regressing log and
+//! compare directly:
 //!
-//! * a write's `at` is the coordinate it COMMITTED at (A1/A7) — the operation
+//! * a write's `at` is the coordinate it committed at (A1/A7) — the operation
 //!   is in the log at that position and at every later one; a write answered
 //!   with an incumbent it deduplicated against commits nothing, and its `at`
 //!   is the coordinate of the base it found that incumbent in, where the
 //!   incumbent already stands ([`Response::AckAddr`]);
-//! * a read's `as_of` is the coordinate of the snapshot it ANSWERED from
+//! * a read's `as_of` is the coordinate of the snapshot it answered from
 //!   (A2/V1) — the answer reflects every write committed at or before that
 //!   position, and none after it.
 //!
@@ -91,18 +91,18 @@
 //! coordinate of the committed head without issuing an operation.
 //!
 //! A rejection is the one answer carrying no coordinate — a refused read
-//! reports no position, having answered from none — so a client tracking the
-//! committed head across a refusal asks [`OperationSurface::log_position`] or
-//! reissues.
+//! reports no position, though it pinned a snapshot before it refused — so a
+//! client tracking the committed head across a refusal asks
+//! [`OperationSurface::log_position`] or reissues.
 //!
-//! ## Boundary — deliberately NOT owned here
+//! ## Boundary — deliberately not owned here
 //!
 //! * per-store operation logic (M5/M6/M7/M8) and automation (M9 ⟂ M10);
 //! * ordering, durability, recovery (M2) — the binary calls `Kernel::open`
 //!   and handles `OpenError` before constructing [`OperationSurface`];
 //! * journaled state — M10 names no concrete `World`/`Record` and contributes
 //!   no slice, record, or fold to the engine;
-//! * the wire codec byte format, and the request-SIZE limits that travel with
+//! * the wire codec byte format, and the request-size limits that travel with
 //!   it — [`Codec`] is a seam the transport fills, and its parser is what
 //!   bounds how large a request may be, M10 itself measuring almost nothing
 //!   ([`Codec::parse`] says exactly what); the request↔response correlation
@@ -115,20 +115,22 @@
 //!   retry memo is an in-memory, per-`(SessionId, ReqId)` hint holding
 //!   committed-write acks only (§7), bounded at the capacity
 //!   [`OperationSurface::new`] is handed — the daemon's own pin, no default
-//!   of this crate's. It answers a SEQUENTIAL client's reissue
+//!   of this crate's. It answers a sequential client's reissue
 //!   of a write whose acknowledgment was lost; it is empty after a restart,
 //!   and it offers nothing between concurrent requests, a retry issued while
 //!   its original is still in flight finding no entry and executing;
 //! * the fine-grained ownership check `ω` — the owning store's, passed through
 //!   verbatim (§6); M10 pre-checks only "is there a principal at all", and
 //!   only on the write path. A read is served against any `SessionId`, its
-//!   principal resolved for the read PREDICATE rather than to gate it, so
-//!   reads are masked (by M6 and M8, through that predicate) rather than
-//!   gated — a read is never refused for want of a bound session, though the
-//!   predicate itself refuses a request that NAMES a document the caller may
-//!   not read ([`OperationSurface::execute`] gives the four forms). The one
-//!   place M10 ASKS ω without wording it is the write door's source consult
-//!   (lane 3.3c, PUB-6.36/6.38): it defers to the store wherever the
+//!   principal resolved for the read predicate and for the any-principal
+//!   read's guest test rather than to gate it, so reads are masked (by M6,
+//!   M8 and this crate's own read arms, through that predicate and that test)
+//!   rather than gated — a read is never refused for want of a bound session,
+//!   though the predicate itself refuses a request that names — or, reading
+//!   by identity, derives — a document the caller may not read
+//!   ([`OperationSurface::execute`] gives the four forms). The one place M10
+//!   asks ω of the caller without wording it is the write door's source
+//!   consult (PUB-6.36/6.38): it defers to the store wherever the
 //!   destination's own ownership gate would refuse, through the store's own
 //!   `Caller::passes_ownership_gate` (registration, then ω), so no source is
 //!   judged ahead of the store's registration refusal or its `not_owner`.
@@ -137,22 +139,25 @@
 //!
 //! M10 is generic over `W` (Engine Composition Contract): it names no concrete
 //! `World`/`Record`, reaches upstream state only through the accessor traits
-//! ([`FebeWorld`] names all four) via one pinned snapshot per read, and
+//! ([`FebeWorld`] names all four) via one pinned snapshot per request, and
 //! acquires the three transact-driving store drivers per-op from the injected
 //! [`Stores`] factory. Two capabilities of that world are M10's own seams,
 //! and are two because they answer unrelated questions: [`ReadableWorld`],
-//! the one read predicate the surface answers through, and
-//! [`PublicationWorld`], the two class lookups [`Op::EditionClaims`] and
-//! [`Op::UniversalGrants`] ask.
+//! the world's own read predicate, which the surface answers through unless a
+//! [`ReadPredicate`] is supplied, and [`PublicationWorld`], the two class
+//! lookups [`Op::EditionClaims`] and [`Op::UniversalGrants`] ask.
 //! The whole of that contract — the world, its two capabilities, the rows the
-//! second hands over, and the factory — is written in one module, `world`.
+//! second hands over, and the factory — is written in one module, `world`,
+//! save the read predicate's obligations, which [`ReadPredicate`] states.
 //!
-//! The `M10 → M4` edge names four types and calls no M4
-//! function (design, Conflicts resolved #4): `HasContent` is a [`FebeWorld`]
-//! supertrait and `ContentWrite` the record lift `Vstream::insert`'s bound
-//! requires, `Val` rides in `Op::Insert`'s payload, and `ContentError` is
-//! lowered when M5's insert or publish refuses through `InsertError::Content`
-//! or `PublishError::Content`.
+//! The `M10 → M4` edge (design, Conflicts resolved #4) names five types and
+//! calls M4 in one place alone: `HasContent` is a [`FebeWorld`] supertrait,
+//! `ContentWrite` and `ContentStretch` are the record lifts
+//! `Vstream::insert`'s bound requires, `Val` rides in `Op::Insert`'s payload,
+//! and `ContentError` is lowered when M5's insert or publish refuses through
+//! `InsertError::Content` or `PublishError::Content`; the read by identity's
+//! arm asks the content store's point read, `value_at`, at each position and
+//! owns the piece it lends through `to_val`.
 
 #![forbid(unsafe_code)]
 
@@ -192,7 +197,7 @@ mod publication;
 mod operation;
 
 pub use codec::{Codec, ParseError};
-// THE LOWERING DOOR: the one function the dispatch table lowers a write
+// The lowering door: the one function the dispatch table lowers a write
 // path's `TxnError` through, for a caller that drives a store itself — the
 // daemon's head writer — so its refusal renders as the wire renders a
 // rejection (code and detail, the I/O kind beside them), never as the store
@@ -211,13 +216,13 @@ pub use successor::{successor_link, Judgment};
 pub use world::{FebeWorld, PublicationWorld, ReadableWorld, Stores, UniversalIndexRow};
 
 // Every upstream type or constructor named on the request/response path, plus
-// the two budgets a request is held to, re-exported so a caller of
+// two of the budgets a request is held to, re-exported so a caller of
 // [`OperationSurface::execute`] spells one crate. That is where the line
-// falls: what a CALLER must name to build a `Request` or read a `Response` is
-// nameable from `skep_febe`; what an ASSEMBLER of the engine must name —
+// falls: what a *caller* must name to build a `Request` or read a `Response`
+// is nameable from `skep_febe`; what an *assembler* of the engine must name —
 // `Kernel`, `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four
 // accessor traits — is not, because the binary that implements [`Stores`]
-// holds every crate by construction. A constructor's ERROR type travels with
+// holds every crate by construction. A constructor's error type travels with
 // it: a `Result` whose failure cannot be named is one a caller can only
 // `unwrap`. A re-export claims no ownership: each type's owning module stays
 // authoritative for it, exactly as M8 re-exports M7's slot numbering.
@@ -234,12 +239,13 @@ pub use skep_address::{
 };
 // M5, the publish shot's three request values included: `Op::Publish` is
 // unbuildable without them, and `Run::new`/`RunError` is the one constructor
-// of the runs a shot carries. `Deposit` is the two-state DEPOSIT DECLARATION
+// of the runs a shot carries. `Deposit` is the two-state deposit declaration
 // `Op::Insert` carries, so an insert is unbuildable without it.
 pub use skep_arrangement::{Base, Deposit, Run, RunError, Shot, ShotRun, ShotTerms, VPos, VSpec};
 pub use skep_content::Val; // M4
-                           // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
-                           // descriptor ops are unbuildable without it.
+                           // M8, `SlotSpec` included: every field of a
+                           // `FourSet` is one, so the three descriptor ops
+                           // are unbuildable without it.
 pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 // M2, `AttestationError` included: `Attestation::new` is the one constructor
 // of the value `Request::attest` carries, and its refusal travels with it —
@@ -248,23 +254,26 @@ pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Wind
 // signature", and a blob wider than M2's slot holds.
 pub use skep_kernel::{Attestation, AttestationError, Seq}; // M2
 pub use skep_namespace::PrincipalId; // M3
-                                     // M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
-                                     // collections of `DeliveryItem` and `CorrPair`, and marshaling either answer
-                                     // means naming the element it yields.
+                                     // M6, the two enclosed shapes
+                                     // included: `Delivery` and
+                                     // `CompareReport` are collections of
+                                     // `DeliveryItem` and `CorrPair`, and
+                                     // marshaling either answer means
+                                     // naming the element it yields.
 pub use skep_retrieval::{
     CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, RegionSpec, SpanFault,
     Spec,
 };
 // M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
-// two-form endset slot (the 2026-08-16 amendment) naming `Op::MakeLink`'s
-// three slots and `SuccessorSpec`'s type slot, and `FROM`/`TO`/`TYPE` are the
-// numbering `Op::FollowLink`'s and `Op::Project`'s `slot` index is in — as is
+// two-form endset slot naming `Op::MakeLink`'s three slots and
+// `SuccessorSpec`'s type slot, and `FROM`/`TO`/`TYPE` are the numbering
+// `Op::FollowLink`'s and `Op::Project`'s `slot` index is in — as is
 // [`FaultSite`]'s `slot` — so a caller spells `FROM` rather than a bare `1`
 // whose meaning lives elsewhere. `enc` rides with `Endset::from_spans`: they
-// are the two constructors of one type, one reachable as an inherent method
-// and the other only as a free function, and an address-denoting `Op::Emit`
-// type or `SlotSpec::Spans` needs the second. `MAX_SLOT_SPANS` is here for
-// the reason [`MAX_REQ_ID_BYTES`] is public: they are the two budgets that
+// are two constructors of one type, one reachable as an inherent method and
+// the other only as a free function, and an address-denoting `Op::Emit` type
+// or `SlotSpec::Spans` needs the second. `MAX_SLOT_SPANS` is here for the
+// reason [`MAX_REQ_ID_BYTES`] is public: they are two of the budgets that
 // govern what a request may carry, and a caller that checks both before
 // sending should not have to spell two crates to do it.
 pub use skep_links::{enc, Endset, Invalid, Link, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE};

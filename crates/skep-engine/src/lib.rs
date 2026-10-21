@@ -1,9 +1,9 @@
-//! # skep-engine — the single assembler
+//! skep-engine — the single assembler.
 //!
-//! The one crate allowed to know everything (Engine Composition Contract,
-//! §The model): it defines the one concrete [`World`] (every store's slice),
-//! the one central [`Record`] enum (every store's delta), implements M2's
-//! `WorldState` for `World` (dispatching `apply` into each store's fold),
+//! It is the one crate allowed to know everything (Engine Composition
+//! Contract, §The model): it defines the one concrete [`World`] (every store's
+//! slice), the one central [`Record`] enum (every store's delta), implements
+//! M2's `WorldState` for `World` (dispatching `apply` into each store's fold),
 //! implements every store's accessor trait, and supplies every `From`-lift.
 //! No store crate names `World`/`Record`, so the lib graph stays a DAG by
 //! construction (§Crate-graph consequence); what sits above it, as built, is
@@ -11,10 +11,10 @@
 //! and whose commits drive the kernel and the stores, and `skepd` over it),
 //! the conformance harness (`skep-conformance`, a library, not a binary),
 //! and — dev-only, the edges back through M2 and the media crate that cargo
-//! permits — M2's dirty-crash harness, which judges recovery against this
-//! crate's world dump, and `skep-media`'s unit suites, which judge generic
-//! code against the concrete `World`. Sizing a change to the public surface
-//! means those four.
+//! permits — M2's integration suites, its dirty-crash harness among them,
+//! which judge recovery against this crate's world dump, and `skep-media`'s
+//! unit suites, which judge generic code against the concrete `World`.
+//! Sizing a change to the public surface means those four.
 //!
 //! **The engine re-decides nothing a store decides.** A store's guards,
 //! policies and computations live in that store, and the engine reaches them
@@ -27,21 +27,20 @@
 //!
 //! * **Genesis** ([`World::genesis`], [`Engine::open`]) — the initial world,
 //!   a compiled constant (the reserved type set is format, not
-//!   configuration — owner ruling, 2026-08-26). The type registry is M7's
-//!   module constant rather than any slice's state, so genesis carries none
-//!   of it: every reader asks M7 for the one `Arc<TypeRegistry>`, and
-//!   [`Engine::coordinator`] clones it for M9, which takes an owned one. The
-//!   World leads its checkpoint body with a FORMAT STAMP, the door for a
-//!   World layout change M2's own stamps do not track; [`Engine::open`]
-//!   states what either door's refusal does.
+//!   configuration). The type registry is M7's module constant rather than
+//!   any slice's state, so genesis carries none of it: every reader asks M7
+//!   for the one `Arc<TypeRegistry>`, and [`Engine::coordinator`] clones it
+//!   for M9, which takes an owned one. The World leads its checkpoint body
+//!   with a format stamp, the door for a World layout change M2's own stamps
+//!   do not track; [`Engine::open`] states what either door's refusal does.
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated in one place, with its two
 //!   engine edges pinned by the tests that method names — and, last, the
-//!   identity slice's resolution, the one arm that can REFUSE a base.
+//!   identity slice's resolution, the one arm that can refuse a base.
 //! * **The identity slice** ([`World`]'s `identity`; the `world::identity`
 //!   module; the pins [`types::IDENTITY_TYPES`], [`types::t_enroll`],
 //!   [`types::t_retire`], [`types::t_claim`]) — AUTH's key table and claim,
-//!   `skep-identity`'s pure fold SEATED as a World slice (AUTH-2.79):
+//!   `skep-identity`'s pure fold seated as a World slice (AUTH-2.79):
 //!   stepped by `World::apply` at each credential deposit's commit
 //!   (AUTH-2.80), checkpointed with the world, read through
 //!   `skep_identity::HasIdentity`, and never rebuilt from the deposits —
@@ -51,61 +50,65 @@
 //!   fold reads every fact as of the deposit's own commit (AUTH-2.66).
 //! * **The exception set** ([`World::published`], [`World::owner_account`];
 //!   the `publication` module) — the derived membership index over M3's
-//!   publication bit (PUB-7.5; owner ruling D1, 2026-09-05: ONE publication
-//!   definition), seeded at load and folded on every document-minting
-//!   record (PUB-7.7). The daemon's every publication read answers
-//!   `doc ∉ exception_set` and nothing else, and the set's one enumeration
-//!   ([`World::drafts`]) hands its entries out as [`Draft`] rows.
+//!   publication bit (PUB-7.5; PUB-kickoff D1: one publication definition),
+//!   seeded at load and folded on every document-minting record (PUB-7.7).
+//!   The daemon's publication reads answer `doc ∉ exception_set` and nothing
+//!   else, but for the head writer's search for its staging draft, which
+//!   reads the bit itself; and the set's one enumeration ([`World::drafts`])
+//!   hands its entries out as [`Draft`] rows.
 //! * **The read predicate** ([`World::readable`]; the `readable` module) —
 //!   the one function `readable(doc, principal) = published(doc) ∨ subtree ∨
-//!   grant_exists` (PUB-1.31, lane 3.3, §1), composing the exception set's
-//!   clause, the subtree clause the `readable` module writes over M3's ω memo
-//!   and M3's seat, and the grant fold's probe. Every read surface —
-//!   M6's deliveries and doc-argument consults, M8's result-set filters —
-//!   answers through this one predicate, threaded down as an opaque
-//!   `Fn(&Address) -> bool` (PUB-6.39), and a caller that asks it once per
-//!   row binds one [`ReaderClass`] ([`World::reader_class`]), so the reader's
-//!   seat in M3's principal registry is looked up once rather than per row;
-//!   a write evaluates it over its own transaction's working world — the
-//!   publish shot's source gate on each origin, and every link write at the
-//!   visibility class [`World::visible_to`] maps its caller to (PUB-6.25).
+//!   grant_exists` (PUB-1.31), composing the exception set's clause, the
+//!   subtree clause the `readable` module writes over the exception set's
+//!   memo of M3's ω and M3's seat, and the grant fold's probe. Every read
+//!   surface — M6's deliveries, the front door's doc-argument consults, M8's
+//!   result-set filters — answers through this one predicate, threaded down
+//!   as an opaque `Fn(&Address) -> bool` (PUB-6.39), and a caller that asks
+//!   it once per row binds one [`ReaderClass`] ([`World::reader_class`]), so
+//!   the reader's seat in M3's principal registry is looked up once rather
+//!   than per row; a write evaluates it over its own transaction's working
+//!   world — the publish shot's source gate on each origin, and every link
+//!   write at the visibility class [`World::visible_to`] maps its caller to
+//!   (PUB-6.25).
 //! * **The grant fold** (the `grants` module) — the second derived index the
-//!   predicate rests on: a fold over the LINK slice keyed grantee ×
+//!   predicate rests on: a fold over the link slice keyed grantee ×
 //!   content-prefix, seeded at load and folded on every link deposit
-//!   (PUB-7.7), with NO checkpoint slice. It also publishes its two feed
-//!   enumerations ([`World::universal_grants`], [`World::issuers_for`]; lane
-//!   3.6) — the live ANY-PRINCIPAL set and a grantee's issuers with the
-//!   prefixes their index entries name, as [`UniversalGrantIndexRow`] and
+//!   (PUB-7.7), with no checkpoint slice. It also publishes its two feed
+//!   enumerations ([`World::universal_grants`], [`World::issuers_for`]) — the
+//!   live any-principal set and a grantee's issuers with the prefixes their
+//!   index entries name, as [`UniversalGrantIndexRow`] and
 //!   [`IssuerGrantIndexRow`] rows — the key set the daemon's change feed
 //!   resolves once per request (PUB-7.22, PUB-7.28); M10's any-principal
 //!   discovery read (PUB-8.47) takes the first through
 //!   `PublicationWorld::universal_grant_index`, raw, and narrows it itself.
-//!   What they enumerate is the fold's STORED index — a superset of
-//!   entitlement, one operative grant behind each entry now that PUB-5.15's
+//!   What they enumerate is the fold's stored index — a superset of
+//!   entitlement, one operative grant behind each entry, since PUB-5.15's
 //!   fourth outcome honors a grant only where the state its `replaces` names
 //!   is its key's current one (the `grants` module states both, and the
-//!   shared-entry shortfall that outcome closed).
+//!   shared-entry shortfall that outcome rules out).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
-//!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
-//!   a type address pinned beside the grants class; M10's
-//!   `PublicationWorld::edition_claims` reaches it and applies the home rule.
+//!   class (PUB-8.46), composed from M7's own audit reads over a type address
+//!   pinned beside the grants class; M10's `PublicationWorld::edition_claims`
+//!   reaches it and applies the home rule.
 //! * **The commons type pins** (the public [`types`] module) — every commons
-//!   type address the engine or the daemon keys on as a VALUE, in one ledger:
-//!   the grant, `replaces` and edition classes the two indexes above read,
-//!   the audit-view classes the daemon's write path refuses a `nullify`
-//!   at (PUB-6.30, PUB-6.64; lane 3.5), and the registry's twelve rows —
-//!   `skep-registry`'s table, read through the ledger's readers (REG-1.14,
-//!   REG-1.15). None is a registered M7 type, and genesis seeds nothing at
-//!   any of them: a commons row is a compiled address, never a record.
+//!   type address the engine or the daemon keys on as a value, in one
+//!   ledger: the credential types the identity slice's fold reads, the grant
+//!   and `replaces` classes the grant fold reads, the edition class the
+//!   edition-claim lookup reads, the audit-view classes the daemon's write
+//!   path refuses a `nullify` at (PUB-6.30, PUB-6.64), and the registry's
+//!   twelve rows — `skep-registry`'s table, read through the ledger's
+//!   readers (REG-1.14, REG-1.15). None is a registered M7 type, and genesis
+//!   seeds nothing at any of them: a commons row is a compiled address, never
+//!   a record.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
-//!   deterministic, byte-comparable rendering of the world's AUTHORITATIVE
-//!   state (every store slice, and M3's publication map as a `publication`
-//!   section of its own since v5) beside its DERIVED state (the grant fold's
-//!   operative set as a `grants` section of its own since v5, and the `hints`
-//!   section, the exception set among them), for the conformance and crash
-//!   harnesses — and, since lane 3.4, the same tree post-filtered at a
-//!   READER'S CLASS for the daemon's `/dump`.
+//!   deterministic, byte-comparable rendering of the world's authoritative
+//!   state but the identity slice (every store slice, and M3's publication
+//!   map as a v5 `publication` section of its own) beside its derived state
+//!   (the grant fold's operative set as a v5 `grants` section of its own, and
+//!   the `hints` section, the exception set among them), for the conformance
+//!   and crash harnesses — and the same tree post-filtered at a reader's
+//!   class for the daemon's `/dump`.
 
 #![forbid(unsafe_code)]
 
@@ -137,7 +140,7 @@ pub use publication::Draft;
 pub use readable::ReaderClass;
 pub use world::{Record, World, WORLD_FORMAT};
 
-// The KERNEL types this crate's own public signatures name — `Kernel`,
+// The kernel types this crate's own public signatures name — `Kernel`,
 // `KernelConfig`, `OpenError`, `HistoryError`, `Seq`, and `Recovery`'s
 // `SkippedBase` — and the four a `KernelConfig` is built from, re-exported
 // so a binary can open an engine, pair a reconstructed world with a kernel

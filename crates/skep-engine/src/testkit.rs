@@ -1,15 +1,16 @@
-//! The unit tests' shared fixtures: the in-memory engine every in-crate suite
-//! stands up, the delegated account most of them start from, the address
-//! constructors they spell addresses with, and the published home beside a
-//! private draft that three of them deposit across. Compiled for the crate's
-//! own tests alone.
+//! The unit tests' shared fixtures, compiled for the crate's own tests alone.
+//!
+//! They are the in-memory engine every in-crate suite but the canon's and the
+//! types' stands up, the delegated account most of them start from, the
+//! address constructors they spell addresses with, and the published home
+//! beside a private draft that three of them deposit across.
 //!
 //! `tests/it/common` is this module's twin for the integration suite, and the
 //! two cannot share: an integration test is a separate crate, which reaches
 //! nothing compiled under `#[cfg(test)]` here, and a unit test cannot reach a
 //! file under `tests/`. So each owns its own copy of one small prologue.
 //!
-//! What a fixture MINTS stays that fixture's own where its flags are what its
+//! What a fixture mints stays that fixture's own where its flags are what its
 //! tests are about — a draft doc 1, say. The published home beside a later
 //! draft is here because three suites mint exactly that pair, and each would
 //! otherwise assert it afresh.
@@ -23,10 +24,15 @@ use crate::Engine;
 /// The principal the fixtures delegate to and write as.
 pub(crate) const USER: PrincipalId = PrincipalId(7);
 
-/// An engine over an in-memory kernel: no journal, and [`crate::World::genesis`]
-/// installed as the root exactly as built. The salt source is the seeded one
-/// every fixture uses — consulted by nothing here, since an in-memory kernel
-/// frames no marker to salt.
+/// Returns an engine over an in-memory kernel, with no journal.
+///
+/// [`crate::World::genesis`] is installed as the root exactly as built. The
+/// salt source is the seeded one every fixture uses — consulted by nothing
+/// here, since an in-memory kernel frames no marker to salt.
+///
+/// # Panics
+///
+/// Panics where the in-memory open refuses, which it cannot.
 pub(crate) fn mem_engine() -> Engine {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
@@ -36,18 +42,28 @@ pub(crate) fn mem_engine() -> Engine {
     Engine::open(cfg).expect("in-memory open cannot fail")
 }
 
-/// A T4-valid address from its components.
+/// Returns the T4-valid address with the components `comps`.
+///
+/// # Panics
+///
+/// Panics where `comps` is empty or not T4-valid.
 #[track_caller]
 pub(crate) fn addr(comps: &[u32]) -> Address {
     let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty");
     validate(t).expect("test addresses are T4-valid")
 }
 
-/// An element of `doc`'s subspace `s` at ordinal `n` — NEVER MINTED, which
-/// neither a link slot nor an `emit` member requires. Subspace 1 is a
-/// document's content space, so an element there is a position a projection
-/// can name; subspace 3 is a space nothing ever mints into, so a type slot
-/// filled from it lands in a coverage class of its own.
+/// Returns an element of `doc`'s subspace `s` at ordinal `n`, never minted.
+///
+/// Neither a link slot nor an `emit` member requires it minted. Subspace 1 is
+/// a document's content space, so an element there is a position a
+/// projection can name; subspace 3 is a space nothing ever mints into, so a
+/// type slot filled from it lands in a coverage class of its own.
+///
+/// # Panics
+///
+/// Panics where `s` or `n` is zero, or where `doc` is an element, since the
+/// address is then not T4-valid.
 #[track_caller]
 pub(crate) fn element(doc: &Address, s: u32, n: u32) -> Address {
     let comps =
@@ -55,10 +71,16 @@ pub(crate) fn element(doc: &Address, s: u32, n: u32) -> Address {
     validate(Tumbler::new(comps).expect("nonempty")).expect("an element of a document is T4-valid")
 }
 
-/// A fresh ACCOUNT under the genesis node `[1]`, delegated from π₀ to
-/// `principal` at the prefix M3 names next: peeked off one snapshot and
-/// claimed by the next commit, which nothing else in a single-threaded test
-/// can take first.
+/// Returns a fresh account under the genesis node `[1]`, delegated from π₀.
+///
+/// It is delegated to `principal` at the prefix M3 names next: peeked off one
+/// snapshot and claimed by the next commit, which nothing else in a
+/// single-threaded test can take first.
+///
+/// # Panics
+///
+/// Panics where the genesis node has no delegable next prefix, or where the
+/// delegation is refused.
 #[track_caller]
 pub(crate) fn delegated_account(engine: &Engine, principal: PrincipalId) -> Address {
     let prefix = engine
@@ -75,12 +97,19 @@ pub(crate) fn delegated_account(engine: &Engine, principal: PrincipalId) -> Addr
     account
 }
 
-/// An account of [`USER`]'s with a PUBLISHED home and a PRIVATE draft, and the
-/// in-memory engine that minted them: `(engine, home, draft)`. The account's
-/// first flagless mint is its home (PUB-8.21) and a later one is a draft, and
-/// both states are asserted here, so a suite that deposits ACROSS that
-/// boundary — the dump filter's, the grant fold's, the hint check's — states
-/// only what it deposits.
+/// Returns an account's published home and private draft, with their engine.
+///
+/// The account is [`USER`]'s, and the engine is the in-memory one that
+/// minted both: `(engine, home, draft)`. The account's first flagless mint is
+/// its home (PUB-8.21) and a later one is a draft, and both states are
+/// asserted here, so a suite that deposits across that boundary — the dump
+/// filter's, the grant fold's, the hint check's — states only what it
+/// deposits.
+///
+/// # Panics
+///
+/// Panics where a mint is refused, or where the home does not read published
+/// or the draft does not read private.
 #[track_caller]
 pub(crate) fn a_published_home_and_a_private_draft() -> (Engine, Address, Address) {
     let engine = mem_engine();

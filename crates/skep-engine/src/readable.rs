@@ -1,20 +1,21 @@
-//! THE READ PREDICATE (PUB-1.31, PUB round 2, lane 3.3 §1) — the one
-//! function every read surface in the system answers through, and the
-//! visibility class every write is gated at.
+//! The read predicate (PUB-1.31): the one function every read answers through.
+//!
+//! Every read surface in the system answers through it, and it is the
+//! visibility class the publish shot and every link write are gated at.
 //!
 //! `readable(doc, principal) = published(doc) ∨ subtree ∨ grant_exists(doc,
-//! principal)`: three clauses, composed here and nowhere else. The PUBLISHED
-//! clause is the exception set's (`crate::publication`) and the GRANT clause
-//! the grant fold's (`crate::grants`); the SUBTREE clause is this module's own
+//! principal)`: three clauses, composed here and nowhere else. The published
+//! clause is the exception set's (`crate::publication`) and the grant clause
+//! the grant fold's (`crate::grants`); the subtree clause is this module's own
 //! — `in_owner_subtree`, over two answers of M3's: the owner the exception set
 //! memoized at the mint, and the reader's seat. This module states that
 //! clause, the three clauses' composition and short-circuit order, and the
 //! projection all three share (`trunk_of`: a version member reads as its
 //! document, PUB-2.15).
 //!
-//! The predicate has ONE body, [`ReaderClass::readable`]: the predicate closed
+//! The predicate has one body, [`ReaderClass::readable`]: the predicate closed
 //! over one principal and one world. [`World::readable`] asks it through a
-//! fresh reader class per call, and a caller that consults it once per ROW —
+//! fresh reader class per call, and a caller that consults it once per row —
 //! a result-set filter, a filtered dump, a feed page — binds one reader class
 //! with [`World::reader_class`], so the reader's seat in M3's principal
 //! registry is looked up once rather than once per row.
@@ -39,20 +40,22 @@ use skep_namespace::{prefix_contains, PrincipalId};
 
 use crate::world::World;
 
-/// ONE READER'S CLASS over ONE world: the read predicate closed over one
-/// principal (`None` is the guest), with that principal's SEAT — the prefix
-/// M3's `principal_prefix` answers for it, an account for every principal but
-/// the node-tier principal 0 — looked up at most once for the class's life.
+/// One reader's class: the read predicate closed over one principal and world.
+///
+/// The principal is `None` for the guest. The class holds that principal's
+/// seat — the prefix M3's `principal_prefix` answers for it, an account for
+/// every principal but the node-tier principal 0 — looked up at most once for
+/// the class's life.
 ///
 /// M3 answers a seat by scanning its principal registry, and the seat is the
 /// same for every document one reader asks about, so a caller that consults
 /// the predicate per row binds one class and pays that scan once rather than
-/// once per draft-homed row. What the class holds is the SEAT and never a
+/// once per draft-homed row. What the class holds is the seat and never a
 /// verdict: every document is still judged by its own owner and its own
 /// grants, which `one_reader_class_answers_each_document_by_its_own_owner`
 /// holds.
 ///
-/// The seat is resolved LAZILY, by the first question that reaches the
+/// The seat is resolved lazily, by the first question that reaches the
 /// subtree clause — a published document and every guest question answer
 /// before it — so [`World::readable`], which binds a fresh class per call,
 /// costs a published document no scan at all
@@ -64,8 +67,8 @@ use crate::world::World;
 /// The fields are private: the seat is M3's answer for this class's own
 /// principal and never a caller's, so a class whose seat and principal
 /// disagree is not constructible. `OnceLock` rather than `OnceCell`, so the
-/// class is `Sync` and a closure borrowing it is `Send + Sync` — the bound
-/// M10's readers take a threaded predicate under.
+/// class is `Sync` and a closure borrowing it is `Send + Sync`, though M10's
+/// readers ask neither: each takes a bare `&dyn Fn(&Address) -> bool`.
 #[derive(Clone, Debug)]
 pub struct ReaderClass<'w> {
     world: &'w World,
@@ -73,32 +76,35 @@ pub struct ReaderClass<'w> {
     seat: OnceLock<Option<&'w Address>>,
 }
 
-/// The `Send + Sync` [`ReaderClass`] promises, pinned where a field that
-/// revoked it would fail to compile.
+/// The compile-time pin that [`ReaderClass`] is `Send + Sync`, as it promises.
+///
+/// It sits where a field that revoked the promise would fail to compile.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<ReaderClass<'static>>();
 };
 
 impl World {
-    /// THE read predicate (PUB-1.31): `readable(doc, principal) =
-    /// published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
-    /// principal)` — one function, three clauses, short-circuiting.
+    /// Returns whether `principal` reads `doc`: the read predicate (PUB-1.31).
     ///
-    /// `principal` is `None` for the GUEST (PUB-1.31 with no principal: the
+    /// `readable(doc, principal) = published(doc) ∨ principal ∈
+    /// owner_subtree(doc) ∨ grant_exists(doc, principal)` — one function,
+    /// three clauses, short-circuiting.
+    ///
+    /// `principal` is `None` for the guest (PUB-1.31 with no principal: the
     /// subtree clause has no seat to test, and the grant clause — the
-    /// ANY-PRINCIPAL form included, PUB-5.8, PUB-5.9 — reaches principals
+    /// any-principal form included, PUB-5.8, PUB-5.9 — reaches principals
     /// alone, PUB-5.109): a guest sees a document iff it is published, so
     /// [`World::readable_guest`] is `readable(None, ·)`. Every clause
     /// projects a version member to its document first (`trunk_of`, M5,
     /// PUB-2.15): `1.0.1.0.1.2` reads exactly as `1.0.1.0.1`.
     ///
-    /// That projection is the ONLY one, and it stops at the document tier: an
+    /// That projection is the only one, and it stops at the document tier: an
     /// address of any other tier — an element, an account, a node — is judged
-    /// as ITSELF, and no such address is ever a draft, so it reads READABLE at
-    /// every reader class whatever document it lies in, a MINTED link or
+    /// as itself, and no such address is ever a draft, so it reads readable at
+    /// every reader class whatever document it lies in, a minted link or
     /// content position of a private draft included. So the answer this gives
-    /// is a DOCUMENT's, and a caller asking about a link or a content position
+    /// is a document's, and a caller asking about a link or a content position
     /// owes the projection to the document it lies in — M1's `document_of`,
     /// then this, the composition M5's `trunk_of` names — as M10's
     /// link-address rule (`home_readable`, PUB-6.38), M9's draft boundary and
@@ -107,76 +113,78 @@ impl World {
     /// document's answer
     /// (`an_element_of_a_draft_is_judged_as_itself_not_as_its_document`).
     ///
-    /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
-    ///   projected document. Fail-open (PUB-7.5), in two cases. An address
-    ///   whose TRUNK M3 never registered is absent from the set and so
+    /// * **Published** (PUB-1.31's first clause) — an exception-set miss on
+    ///   the projected document. Fail-open (PUB-7.5), in two cases. An address
+    ///   whose trunk M3 never registered is absent from the set and so
     ///   answers readable here — [`World::published`]'s postcondition — which
     ///   is why every doc-argument consult defers an unregistered document to
     ///   its store's own `*NotRegistered` (M10's `ReadableWorld`
     ///   postcondition, PUB-6.12 — met for every unregistered address but the
-    ///   one shape this bullet ends on). A REGISTERED document M3's
+    ///   one shape this bullet ends on). A registered document M3's
     ///   publication map holds no entry for — reachable only off a slice
     ///   outside M3's fold's totality domain — is absent too, and answers
     ///   readable to every class where M3 answers it private; no registration
     ///   check closes that one, since the document is registered
     ///   (`crate::publication` states the open direction). The miss is asked
     ///   of the trunk and never of `doc`, so the one unregistered address this
-    ///   clause does NOT open is one shaped as a version member of a
+    ///   clause does *not* open is one shaped as a version member of a
     ///   registered draft: it reads as that draft, and is withheld wherever
     ///   the draft is
     ///   (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`).
-    /// * SUBTREE (PUB-1.32 as amended, PUB RES-215; PUB-7.2) — BOTH WAYS: a
+    /// * **Subtree** (PUB-1.32 as amended, PUB RES-215; PUB-7.2) — both ways: a
     ///   principal reads the drafts of the account it is seated at, of every
     ///   account above that and of every account beneath it — its own line of
     ///   ancestry, so a parent reads its sub-accounts' drafts as a sub-account
-    ///   reads its parent's, and SIBLINGS read nothing of each other's. That
-    ///   is a READ and never ω: ownership stays exact-match. A seat that is no
-    ///   ACCOUNT reads no draft this way — THE NODE-TIER PRINCIPAL 0 IS
-    ///   EXCLUDED BY NAME (PUB-1.32), and reads a draft by grant alone. Two
-    ///   prefix compares off the owner the exception set fixed at the mint,
-    ///   never a subtree enumeration; the rule and its tier gate are
+    ///   reads its parent's, and siblings read nothing of each other's. That
+    ///   is a read and never ω: ownership stays exact-match. A seat that is no
+    ///   account reads no draft this way on any state the stores' ops produce,
+    ///   where such a seat is a node — the node-tier principal 0 is excluded
+    ///   by name (PUB-1.32) — and reads a draft by grant alone. Two prefix
+    ///   compares off the owner the exception set fixed at the mint, never a
+    ///   subtree enumeration; the rule and its tier gate are
     ///   `in_owner_subtree`'s (`the_subtree_clause_runs_both_ways`,
     ///   `the_node_tier_principal_reads_no_draft_by_subtree`).
-    /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
-    ///   coverage containment ∩ issuer = doc's ω owner. A principal M3 holds
-    ///   no SEAT for is not thereby the guest: the subtree clause has no seat
-    ///   to test and the principal-exact index has no key to probe, so both
-    ///   fall through, but the ANY-PRINCIPAL grants still reach it — being a
-    ///   principal at all is that tier's whole membership test (PUB-5.8), and
-    ///   an unseated one is still not `None`. The clause is the fold's INDEX
-    ///   probe, and so answers under the index's shared-entry shortfall
+    /// * **Grant** (PUB-5.8, PUB-5.19) — the grant fold, grantee
+    ///   principal-exact, coverage containment ∩ issuer = doc's ω owner. A
+    ///   principal M3 holds no seat for is not thereby the guest: the subtree
+    ///   clause has no seat to test and the principal-exact index has no key
+    ///   to probe, so both fall through, but the any-principal grants still
+    ///   reach it — being a principal at all is that tier's whole membership
+    ///   test (PUB-5.8), and an unseated one is still not `None`. The clause
+    ///   is the fold's index probe, and it answers the operative set exactly:
+    ///   the fold keeps two operative grants off one index entry
     ///   (`crate::grants` states it).
     ///
-    /// COST, per call, uncached, in three terms — and the CALLER chooses the
-    /// first while the STORE chooses the other two, so this figure is not one
-    /// number:
+    /// **Cost.** It is per call, uncached, in three terms — and the caller
+    /// chooses the first while the store chooses the other two, so this
+    /// figure is not one number:
     ///
-    /// * The PROJECTION runs ahead of every clause, so `doc` pays it before
+    /// * The projection runs ahead of every clause, so `doc` pays it before
     ///   anything here can refuse it — an address M3 never registered
     ///   included, which the published clause then answers `true` two lines
     ///   later. `trunk_of` cuts a version member back to its trunk in one
     ///   truncation (M5), copying the kept prefix once and validating it
     ///   once, so the work is linear in the argument's component count. A
-    ///   component is a `Nat` besides, so a copy is an allocation apiece
-    ///   rather than a word. Nothing in this crate bounds that count:
-    ///   `Address` carries no depth limit, and this predicate is answered
-    ///   once per doc-argument of every read a front door admits, so what
-    ///   bounds the term in the live system is the CALLER's — the daemon's
-    ///   wire cap on a tumbler's components, whose budget is written where
-    ///   that number is.
-    /// * The SEAT: past the draft hit, a bound principal's seat is M3's
+    ///   component is a `Nat` besides, so a copy is a big integer's apiece,
+    ///   an allocation for a component past one digit, rather than a word.
+    ///   Nothing in this crate bounds that count: `Address` carries no depth
+    ///   limit, and this predicate is answered once per doc-argument of every
+    ///   read a front door admits, so what bounds the term in the live system
+    ///   is the caller's — the daemon's wire cap on a tumbler's components,
+    ///   whose budget is written where that number is.
+    /// * The seat: past the draft hit, a bound principal's seat is M3's
     ///   `principal_prefix`, a scan of the principal registry in address
-    ///   order — O(|Π|), up to the reader's own entry, and the WHOLE registry
+    ///   order — O(|Π|), up to the reader's own entry, and the whole registry
     ///   for a principal M3 seats nowhere. Π gains an entry for every
     ///   principal M3 seats and loses none, so the term grows with the
     ///   store's history, and it dominates wherever a caller consults per
     ///   row: this method binds a fresh [`ReaderClass`] per call and so pays
-    ///   the scan once per draft-homed CALL, where a caller holding one class
-    ///   from [`World::reader_class`] pays it once per CLASS.
-    /// * The GRANT clause then walks the projected document's ancestors,
+    ///   the scan once per draft-homed call, where a caller holding one class
+    ///   from [`World::reader_class`] pays it once per class.
+    /// * The grant clause then walks the projected document's ancestors,
     ///   `parent` again per level, with one probe of the principal-exact
-    ///   index and one of the ANY-PRINCIPAL index at each. That walk is over
-    ///   a document the exception set HOLDS — it is reached only past a set
+    ///   index and one of the any-principal index at each. That walk is over
+    ///   a document the exception set holds — it is reached only past a set
     ///   hit — so its length is a registered document's depth, which is the
     ///   store's history rather than the request's.
     ///
@@ -186,11 +194,12 @@ impl World {
         self.reader_class(principal).readable(doc)
     }
 
-    /// The read predicate bound to ONE principal over THIS world, as a
-    /// [`ReaderClass`] a caller consults once per row: the same predicate
-    /// [`World::readable`] answers, with the principal's seat looked up once
-    /// for the class rather than once per draft-homed call. `None` is the
-    /// guest.
+    /// Returns the read predicate bound to one principal over this world.
+    ///
+    /// It is a [`ReaderClass`] a caller consults once per row: the same
+    /// predicate [`World::readable`] answers, with the principal's seat looked
+    /// up once for the class rather than once per draft-homed call. `None` is
+    /// the guest.
     ///
     /// The class borrows this world, so it answers about this world alone and
     /// cannot outlive it: one class per reader per snapshot, and none for a
@@ -200,23 +209,26 @@ impl World {
         ReaderClass { world: self, principal, seat: OnceLock::new() }
     }
 
-    /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing
-    /// to it, the ANY-PRINCIPAL form included — PUB-5.8, PUB-5.9, PUB-5.109):
-    /// `readable(None, ·)` — published alone. M9's fires read and write at
-    /// this class (§5) — [`World::visible_to`]'s System arm is its caller —
-    /// and it is the class every unauthenticated read is answered at, which
-    /// M10's guest session and a guest [`ReaderClass`] reach as
-    /// `readable(None, ·)`.
+    /// Returns whether the guest reads `doc`: published alone.
+    ///
+    /// It is `readable(None, ·)`, the guest predicate (PUB-1.31 with no
+    /// principal; a grant opens nothing to it, the any-principal form included
+    /// — PUB-5.8, PUB-5.9, PUB-5.109). M9's fires read and write at this class
+    /// — [`World::visible_to`]'s System arm is its caller — and it is the
+    /// class every unauthenticated read is answered at, which M10's guest
+    /// session and a guest [`ReaderClass`] reach as `readable(None, ·)`.
     pub fn readable_guest(&self, doc: &Address) -> bool {
         self.readable(None, doc)
     }
 
-    /// THE VISIBILITY CLASS A CALLER WRITES AT (PUB round 2, lane 3.3b): the
-    /// predicate a `LinkWriter` is built with when `caller` deposits, so
-    /// M7's value-keyed gates — `emit`'s idempotency, `assert_sup`'s dedup —
-    /// see exactly the incumbents that caller could read (PUB-6.25).
+    /// Returns the visibility class `caller` writes at (PUB-6.25).
     ///
-    /// The mapping keys on whom the caller writes AS, never on whether a
+    /// It is the predicate a `LinkWriter` is built with when `caller`
+    /// deposits, so M7's value-keyed gates — `emit`'s idempotency,
+    /// `assert_sup`'s dedup — see exactly the incumbents that caller could
+    /// read.
+    ///
+    /// The mapping keys on whom the caller writes *as*, never on whether a
     /// session carries it. A principal writes at its own class,
     /// [`World::readable`] over `Some(principal)`, whether a session carries
     /// it — M10's — or an in-process writer acts as it with none: the board's
@@ -224,36 +236,42 @@ impl World {
     /// genesis-seeded system account's principal
     /// (`skep_namespace::SYSTEM_PRINCIPAL`, PUB-6.65), and so at that
     /// principal's class, where its own private staging draft is readable, as
-    /// its publish shot's source consult requires. `Caller::System` — M9's rule
-    /// fires and def writes, the one caller that writes as NO principal —
-    /// writes at GUEST class, [`World::readable_guest`] (PUB-6.28), where every
-    /// draft is withheld, the writer's own included; so a writer that owns
-    /// drafts writes as its principal, never as `Caller::System`, whose ω
+    /// its publish shot's source consult requires. `Caller::System` — M9's
+    /// rule fires and def writes, the one caller that writes as no principal
+    /// — writes at guest class, [`World::readable_guest`] (PUB-6.28), where
+    /// every draft is withheld, the writer's own included; so a writer that
+    /// owns drafts writes as its principal, never as `Caller::System`, whose ω
     /// exemption M5's `Caller` states
     /// (`a_sessionless_writer_that_owns_a_draft_reads_it_at_its_principal_s_class_alone`).
     /// This mapping is the engine's to state: M7 takes a closure and names no
     /// principal, and M10 closes its own over the session's principal. Every
     /// other caller threads it through here — the harnesses, this crate's
-    /// tests, the daemon's head writer, and [`crate::Engine::coordinator`]
-    /// building M9's System-class writers.
+    /// tests, the daemon's head writer and its attestation check on a publish
+    /// shot, and [`crate::Engine::coordinator`] building M9's System-class
+    /// writers — but the media door's shot check, which cannot name `World`
+    /// and rebuilds the same mapping over `skep_febe::ReadableWorld`.
     ///
     /// A write's class binds no [`ReaderClass`], and cannot: M7's value-keyed
-    /// gates and M5's publish shot hand this closure their WORKING world on
+    /// gates and M5's publish shot hand this closure their working world on
     /// every consult, and that is not the world a class would have borrowed.
-    /// So at a PRINCIPAL's class each consult on a draft-homed candidate — per
+    /// So at a principal's class each consult on a draft-homed candidate — per
     /// dedup candidate in M7, per distinct origin document in M5 — pays
     /// [`World::readable`]'s seat scan afresh, inside the store's transaction
     /// and under M2's applier lock, where every waiting writer pays it too.
     ///
-    /// PURE and TOTAL, and both are obligations other crates place on this
-    /// closure without being able to check them. PURE: it captures one `Copy`
-    /// `Caller` and reads nothing but the world handed to it, and the reader
-    /// class it binds per consult dies with the consult. That discharges M7's
-    /// CALLER'S OBLIGATION on a `Visibility` — a pure, deterministic function
-    /// of `(world, doc)`, on which `emit`'s and `assert_sup`'s published
-    /// determinism rests — and M9's purity obligation on the guest predicate
-    /// [`crate::Engine::coordinator`] injects. TOTAL: it answers every address
-    /// of every tier without panicking, as [`World::readable`] does.
+    /// Pure and total, and both are obligations other crates place on this
+    /// closure without being able to check them.
+    ///
+    /// **Pure.** It captures one `Copy` `Caller` and reads nothing but the
+    /// world handed to it, and the reader class it binds per consult dies
+    /// with the consult. That discharges M7's caller's obligation on a
+    /// `Visibility` — a pure, deterministic function of `(world, doc)`, on
+    /// which `emit`'s and `assert_sup`'s published determinism rests — and
+    /// M9's purity obligation on the guest predicate
+    /// [`crate::Engine::coordinator`] injects.
+    ///
+    /// **Total.** It answers every address of every tier without panicking,
+    /// as [`World::readable`] does.
     pub fn visible_to(
         caller: Caller,
     ) -> impl Fn(&World, &Address) -> bool + Copy + Send + Sync + 'static {
@@ -265,16 +283,17 @@ impl World {
 }
 
 impl<'w> ReaderClass<'w> {
-    /// The reader's SEAT — M3's `principal_prefix` answer for this class's own
-    /// principal, `None` for the guest and for a principal M3 seats nowhere:
-    /// an account for every principal but the node-tier principal 0, whose
-    /// seat is the node itself. Resolved in the one cell
-    /// [`ReaderClass::readable`] resolves it in, at most once for the class's
-    /// life, so a caller keying anything else off the reader's seat pays M3's
-    /// registry scan once for both. The guest resolves nothing: it has no
-    /// principal to look up.
+    /// Returns the reader's seat: M3's `principal_prefix` answer for it.
     ///
-    /// The answer borrows the WORLD, not the class, so it outlives the class
+    /// It is the answer for this class's own principal, `None` for the guest
+    /// and for a principal M3 seats nowhere: an account for every principal
+    /// but the node-tier principal 0, whose seat is the node itself. Resolved
+    /// in the one cell [`ReaderClass::readable`] resolves it in, at most once
+    /// for the class's life, so a caller keying anything else off the reader's
+    /// seat pays M3's registry scan once for both. The guest resolves nothing:
+    /// it has no principal to look up.
+    ///
+    /// The answer borrows the world, not the class, so it outlives the class
     /// that resolved it.
     pub fn seat(&self) -> Option<&'w Address> {
         let world = self.world;
@@ -282,10 +301,11 @@ impl<'w> ReaderClass<'w> {
         *self.seat.get_or_init(|| world.namespace.principal_prefix(id))
     }
 
-    /// The read predicate at this reader class — its ONE body. Its clauses,
-    /// its projection and its cost are stated on [`World::readable`], which
-    /// asks this through a fresh class per call; a seat an earlier question
-    /// resolved is reused here, and nothing else is.
+    /// Returns whether this class reads `doc`: the read predicate's one body.
+    ///
+    /// Its clauses, its projection and its cost are stated on
+    /// [`World::readable`], which asks this through a fresh class per call; a
+    /// seat an earlier question resolved is reused here, and nothing else is.
     pub fn readable(&self, doc: &Address) -> bool {
         let world = self.world;
         let trunk = trunk_of(doc);
@@ -297,7 +317,7 @@ impl<'w> ReaderClass<'w> {
         if world.published(&trunk) {
             return true;
         }
-        // A REGISTERED private draft from here: `published` answered `false`,
+        // A registered private draft from here: `published` answered `false`,
         // so `trunk` is a key of the very map `owner_account` reads, in a
         // world that cannot change between the two lines. The `else` exists
         // because the type demands one, and answers fail-closed. Borrowed, as
@@ -310,7 +330,7 @@ impl<'w> ReaderClass<'w> {
         if self.principal.is_none() {
             return false;
         }
-        // `account(principal)` — the principal's SEAT, M3's `principal_prefix`
+        // `account(principal)` — the principal's seat, M3's `principal_prefix`
         // answer, looked up by the first question that reaches here and reused
         // by every later one. It is an account for every principal but the
         // node-tier principal 0, whose seat is the node itself, which is why
@@ -323,49 +343,54 @@ impl<'w> ReaderClass<'w> {
             return true;
         }
         // Grant clause — the fold, grantee exact (no seat ⟹ only the
-        // ANY-PRINCIPAL grants can match, which the fold probes regardless).
+        // any-principal grants can match, which the fold probes regardless).
         world.grants.grant_exists(owner, account, &trunk)
     }
 }
 
-/// The SUBTREE clause (PUB-1.32 as amended, PUB RES-215; PUB-7.2): whether a
-/// principal seated at `seat` reads the drafts owned by account `owner` by
-/// ancestry alone — the clause's whole rule, and the one place it is written.
+/// Returns whether `seat` reads `owner`'s drafts by ancestry alone.
 ///
-/// BOTH WAYS, as two prefix compares off the owner the exception set fixed at
+/// It is the subtree clause (PUB-1.32 as amended, PUB RES-215; PUB-7.2):
+/// whether a principal seated at `seat` reads the drafts owned by account
+/// `owner` by ancestry alone — the clause's whole rule, and the one place it
+/// is written.
+///
+/// Both ways, as two prefix compares off the owner the exception set fixed at
 /// the mint, the second run only where the first fails: the first admits a
-/// seat at or BENEATH the owner, the second a seat at or ABOVE it.
+/// seat at or beneath the owner, the second a seat at or above it.
 ///
-/// Each compare's LEFT operand must be an ACCOUNT, because a node prefix
+/// Each compare's left operand must be an account, because a node prefix
 /// contains every account beneath it, and the two sides discharge that
-/// differently. The OWNER is the first compare's left operand, and its tier
+/// differently. The owner is the first compare's left operand, and its tier
 /// is asserted where the exception set memoizes it (`crate::publication`'s
-/// `owner_account_of`); a node seat never passes that compare, being shorter
-/// than any account prefix. The SEAT is the second compare's left operand,
-/// and its tier is tested here, ahead of that compare, because the seat is
-/// M3's registry answer verbatim and nothing asserts it: principal 0 is
-/// seated at the node `[1]`, and the bare second compare would admit it to
-/// every draft on the board.
+/// `owner_account_of`); a node seat never passes that compare, since a node
+/// holds no zero component and an account prefix holds one. The seat is the
+/// second compare's left operand, and its tier is tested here, ahead of that
+/// compare, because the seat is M3's registry answer verbatim and nothing
+/// asserts it: principal 0 is seated at the node `[1]`, and the bare second
+/// compare would admit it to every draft on the board.
 fn in_owner_subtree(seat: &Address, owner: &Address) -> bool {
     prefix_contains(owner, seat) || (seat.level() == Level::Account && prefix_contains(seat, owner))
 }
 
-/// The read predicate as M10's capability (lane 3.3, §1): M10 is generic over
-/// its world and names no `World`, so it reaches the engine's derived
-/// predicate — published ∨ subtree ∨ grant ([`World::readable`]) — through this
-/// one accessor, off its own read snapshot. The inherent method is the real
-/// one; this is the seam the generic front door calls.
+/// The read predicate as M10's capability: [`World::readable`] behind its seam.
 ///
-/// M10's trait places a POSTCONDITION on this impl: TOTAL over every address,
-/// and an UNREGISTERED one answers READABLE, so a read arm's own
-/// `*NotRegistered` speaks and a WITHHELD answer names only a registered
+/// M10 is generic over its world and names no `World`, so it reaches the
+/// engine's derived predicate — published ∨ subtree ∨ grant
+/// ([`World::readable`]) — through this one accessor, off its own read
+/// snapshot. The inherent method is the real one; this is the seam the
+/// generic front door calls.
+///
+/// M10's trait places a postcondition on this impl: total over every address,
+/// and an unregistered one answers readable, so a read arm's own
+/// `*NotRegistered` speaks and a `withheld` answer names only a registered
 /// private document (PUB-6.12). M10's door is built on it: its doc-argument
 /// consult walks a request's named documents before any registration check,
-/// and answers WITHHELD naming the first one this refuses. The inherent
+/// and answers `withheld` naming the first one this refuses. The inherent
 /// predicate meets it at every tier
 /// (`an_address_no_mint_produced_reads_readable_at_every_reader_class_and_tier`)
-/// for every unregistered address but ONE shape: an address shaped as a
-/// version member of a REGISTERED DRAFT, which the projection reads as that
+/// for every unregistered address but one shape: an address shaped as a
+/// version member of a registered draft, which the projection reads as that
 /// draft (PUB-2.15) and so withholds wherever the draft is withheld
 /// (`a_version_member_shaped_address_under_a_draft_reads_as_the_draft`). On
 /// state the stores' ops produce, that is the projection's only observable
@@ -389,9 +414,10 @@ mod tests {
 
     use super::in_owner_subtree;
 
-    /// The subtree clause over bare addresses, one case per way it answers: a
-    /// seat at the owner, beneath it or above it reads the owner's drafts; a
-    /// sibling's does not; and neither does a NODE seat — principal 0's —
+    /// Checks the subtree clause over bare addresses, one case per answer.
+    ///
+    /// A seat at the owner, beneath it or above it reads the owner's drafts; a
+    /// sibling's does not; and neither does a node seat — principal 0's —
     /// though its prefix contains the owner's, because the second compare runs
     /// for an account-tier seat alone. The integration suite reaches these
     /// cases through whole boards; this is the rule on its own.
@@ -409,14 +435,16 @@ mod tests {
         }
     }
 
-    /// …and the clause as the LAW it is, over every pair a small family makes —
-    /// nodes at the top level and beneath one, accounts at three depths under
-    /// two nodes — against the rule restated symmetrically: a seat reads an
-    /// owner's drafts by ancestry iff the seat is an ACCOUNT and the two lie on
-    /// one line of ancestry, either above the other. The five cases above are
-    /// chosen points, and their node is `[1]`, the one address no deeper node
-    /// shares; a tier gate spelled "not principal 0" passes them all and meets
-    /// `[1.1]` here.
+    /// Checks the subtree clause as the law it is, over a small family's pairs.
+    ///
+    /// The family is nodes at the top level and beneath one, and accounts at
+    /// three depths under two nodes; every pair it makes is checked against
+    /// the rule restated symmetrically: a seat reads an owner's drafts by
+    /// ancestry iff the seat is an account and the two lie on one line of
+    /// ancestry, either above the other. The five cases above are chosen
+    /// points, and their node is `[1]`, the one address no deeper node shares;
+    /// a tier gate spelled "not principal 0" passes them all and meets `[1.1]`
+    /// here.
     #[test]
     fn the_subtree_clause_is_one_line_of_ancestry_from_an_account_seat() {
         let nodes = [addr(&[1]), addr(&[2]), addr(&[1, 1])];
@@ -442,13 +470,15 @@ mod tests {
         }
     }
 
-    /// The seat is looked up LAZILY and at most once: the guest and a
-    /// published document answer before any scan of the principal registry,
-    /// and the first draft a bound principal asks about resolves it to M3's
-    /// own answer, which every later question reuses. Laziness is what lets
-    /// [`World::readable`] bind a fresh class per call and still cost a
-    /// published document no scan; a class that looked its seat up at
-    /// construction would charge one to every call on every published row.
+    /// Checks that a reader class looks its seat up lazily and at most once.
+    ///
+    /// The guest and a published document answer before any scan of the
+    /// principal registry, and the first draft a bound principal asks about
+    /// resolves it to M3's own answer, which every later question reuses.
+    /// Laziness is what lets [`World::readable`] bind a fresh class per call
+    /// and still cost a published document no scan; a class that looked its
+    /// seat up at construction would charge one to every call on every
+    /// published row.
     ///
     /// [`ReaderClass::seat`] answers out of that same cell and fills it where
     /// no draft has yet, so a caller keying anything else off the seat shares
@@ -486,22 +516,24 @@ mod tests {
         assert_eq!(fresh.seat(), Some(&acct), "the accessor resolves M3's own seat");
         assert_eq!(fresh.seat.get(), Some(&Some(&acct)), "…into the cell the predicate reads");
 
-        // …and the seat borrows the WORLD, not the class: the class below is a
+        // …and the seat borrows the world, not the class: the class below is a
         // temporary, dropped at the end of its statement, so this binding
         // compiles only while `seat` answers the world's lifetime.
         let outlived = world.reader_class(Some(USER)).seat();
         assert_eq!(outlived, Some(&acct), "a seat outlives the class that resolved it");
     }
 
-    /// [`World::visible_to`] keys on whom a caller writes AS, never on whether
-    /// a session carries it — so a writer with no session that owns a draft
-    /// reads it only by writing as its principal. The board's own daemon is
-    /// that writer (PUB-6.65): it mints its staging draft under the
+    /// Checks that a writer with no session reads its draft as its principal.
+    ///
+    /// [`World::visible_to`] keys on whom a caller writes *as*, never on
+    /// whether a session carries it — so a writer with no session that owns a
+    /// draft reads it only by writing as its principal. The board's own daemon
+    /// is that writer (PUB-6.65): it mints its staging draft under the
     /// genesis-seeded system account and publishes from it as
-    /// `SYSTEM_PRINCIPAL`, whose class reads the draft, where `Caller::System`'s
-    /// GUEST class withholds it, the writer's own included. A writer that took
-    /// "no session" to mean `Caller::System` would find its own shot's source
-    /// withheld.
+    /// `SYSTEM_PRINCIPAL`, whose class reads the draft, where
+    /// `Caller::System`'s guest class withholds it, the writer's own included.
+    /// A writer that took "no session" to mean `Caller::System` would find its
+    /// own shot's source withheld.
     #[test]
     fn a_sessionless_writer_that_owns_a_draft_reads_it_at_its_principal_s_class_alone() {
         let engine = mem_engine();

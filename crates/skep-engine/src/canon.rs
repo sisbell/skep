@@ -1,40 +1,43 @@
-//! A canonicalizing serde transcode: any `Serialize` value → a [`SerdeTree`]
-//! → deterministic text — and the way back. The one rule that earns its
-//! keep: **map entries are sorted by their rendered (key, value) text**, so a
-//! map whose serde iteration order is instance-specific still renders
-//! byte-identically for equal contents. The maps that need it are the
-//! engine's own derived indexes — the exception set and the grant fold's
-//! operative set, `im::HashMap`s under a per-instance `RandomState`, which
-//! `drafts_tree` and `grants_tree` collect in hash order. The store slices do
-//! not: each serializes in key order at its own `Serialize` (option (i)), and
-//! the sort re-orders their entries by rendered text — the dump's order, not
-//! the checkpoint's.
+//! A canonicalizing serde transcode to deterministic text, and the way back.
 //!
-//! Sequences keep their order, and that is an OBLIGATION on the world's serde
+//! Any `Serialize` value goes to a [`SerdeTree`] and on to deterministic
+//! text. The one rule that earns its keep: **map entries are sorted by their
+//! rendered (key, value) text**, so a map whose serde iteration order is
+//! instance-specific still renders byte-identically for equal contents. The
+//! maps that need it are the engine's own derived indexes — the exception
+//! set and the grant fold's operative set, `im::HashMap`s under a
+//! per-instance `RandomState`, which `drafts_tree` and `grants_tree` collect
+//! in hash order. The store slices do not: each serializes in key order at
+//! its own `Serialize`, and the sort re-orders their entries by rendered text
+//! — the dump's order, not the checkpoint's.
+//!
+//! Sequences keep their order, and that is an obligation on the world's serde
 //! forms rather than a description of them: a collection serialized as a
-//! SEQUENCE must carry an order that is a function of its contents. Every
-//! field satisfies it — maps, the slices' and the derived indexes' alike,
-//! serialize as serde MAPS and are sorted here, and what serializes as a
-//! sequence is `im::Vector`/`OrdSet` or a `Vec` held in genesis order. A
-//! slice that serializes an unordered collection as a sequence breaks the
-//! world dump's determinism clause, and this transcode cannot detect it.
+//! sequence must carry an order that is a function of its contents. Every
+//! field satisfies it — the slices' maps serialize as serde maps, the
+//! derived indexes reach the dump as map nodes its own builders write, and
+//! both are sorted here; what serializes as a sequence is
+//! `im::Vector`/`OrdSet` or a `Vec` whose order is the value's own (a
+//! tumbler's components, a value's bytes). A slice that serializes an
+//! unordered collection as a sequence breaks the world dump's determinism
+//! clause, and this transcode cannot detect it.
 //!
 //! The way back is [`TreeDe`]: a borrowed tree is itself a serde
 //! `Deserializer`, so a value collected off one type's `Serialize` re-enters
-//! through a (possibly different) type's `Deserialize` — the types' own doors,
-//! with their own validation, and no byte format in between. That is how the
-//! dump's per-class filter reads an address back out of a rendered slice, and
-//! how a test corrupts a store slice it has no mutating API for (the
-//! exception set's suite strikes an entry from one of M3's maps this way — a
-//! seat from Π, a document's publication entry): the coupling is to the serde
-//! data model and a field NAME, never to a private layout or to any library's
-//! on-the-wire encoding.
+//! through a (possibly different) type's `Deserialize` — the types' own
+//! doors, with their own validation, and no byte format in between. That is
+//! how the dump's per-class filter reads an address back out of a rendered
+//! slice, and how a test corrupts a store slice it has no mutating API for
+//! (the exception set's suite strikes an entry from one of M3's maps this way
+//! — a seat from Π, a document's publication entry): the coupling is to the
+//! serde data model and a field name, never to a private layout or to any
+//! library's on-the-wire encoding.
 //!
 //! The dump module holds every production caller of this one, which is why
 //! the crate compiles it with the `dump` feature — and for its own tests,
 //! whatever the feature says, because the way back is how those tests reach
 //! the shapes a checkpoint can carry and no op can produce. The deterministic
-//! TEXT is [`SerdeTree`]'s `Display`, and the sort rule that makes it a
+//! text is [`SerdeTree`]'s `Display`, and the sort rule that makes it a
 //! comparable rendering is stated there.
 
 use std::fmt;
@@ -44,14 +47,16 @@ use serde::de::{self, IntoDeserializer, Visitor};
 use serde::ser::{self, Serialize};
 use serde::Deserializer;
 
-/// The serde data model, flattened to the shapes the world's serde forms
-/// actually use, as a value a transcode can collect into. It holds entries
-/// and elements in the order the `Serialize` impl produced them; canonical
-/// order is this type's own `Display`, established as the text is written and
-/// so present wherever this module is compiled — the dump's builds and the
-/// crate's tests.
+/// The serde data model as a value a transcode can collect into.
 ///
-/// So this type is deliberately NOT comparable. Two trees with equal contents
+/// It is the data model flattened onto fewer nodes, with a node for every
+/// shape, those no world form uses among them ([`SerdeTree::Bytes`]). It
+/// holds entries and elements in the order the `Serialize` impl produced
+/// them; canonical order is this type's own `Display`, established as the
+/// text is written and so present wherever this module is compiled — the
+/// dump's builds and the crate's tests.
+///
+/// So this type is deliberately not comparable. Two trees with equal contents
 /// in different collection order are equal only once rendered, and comparing
 /// worlds therefore means comparing renderings: a derived `==` here would
 /// answer the question this transcode exists to answer, and answer it wrong.
@@ -67,53 +72,65 @@ pub(crate) enum SerdeTree {
     F64Bits(u64),
     Char(char),
     Str(String),
-    /// serde's `serialize_bytes`, which no type in the world reaches: serde
-    /// has no byte specialization for `[u8]`, so M4's `Val` transcodes as a
-    /// [`SerdeTree::Seq`] of [`SerdeTree::U64`] — one node per byte — and the
-    /// only way here is a slice that adopts a `serde_bytes` shadow. Worth
-    /// knowing before reading a dump's size off this arm: the content term is
-    /// the sequence's, roughly a node and several digits per byte, and not
-    /// the two hex characters below.
+    /// The `serialize_bytes` node, which no type in the world reaches.
+    ///
+    /// Serde has no byte specialization for `[u8]`, so M4's `Val` transcodes
+    /// as a [`SerdeTree::Seq`] of [`SerdeTree::U64`] — one node per byte —
+    /// and the only way here is a slice that adopts a `serde_bytes` shadow.
+    /// Worth knowing before reading a dump's size off this arm: the content
+    /// term is the sequence's, roughly a node and several digits per byte,
+    /// and not the two hex characters below.
     Bytes(Vec<u8>),
     Null,
     Opt(Box<SerdeTree>),
     Seq(Vec<SerdeTree>),
-    /// Entries as collected; the tree's `Display` sorts them by the rendered
-    /// (key, value) PAIR. The value belongs in the sort key because the order
-    /// must be TOTAL: `sort` is stable, so entries whose keys render alike would
-    /// otherwise keep their collection order and leak back exactly the
-    /// instance-specific iteration this transcode exists to remove.
+    /// Entries as collected; the tree's `Display` sorts them by rendered pair.
+    ///
+    /// The pair is (key, value). The value belongs in the sort key because the
+    /// order must be total: `sort` is stable, so entries whose keys render
+    /// alike would otherwise keep their collection order and leak back exactly
+    /// the instance-specific iteration this transcode exists to remove.
     Map(Vec<(SerdeTree, SerdeTree)>),
-    /// An enum variant (or named wrapper) around its payload.
+    /// An enum variant around its payload.
     Named(&'static str, Box<SerdeTree>),
 }
 
-/// Transcode any serde-serializable value.
+/// Transcodes any serde-serializable value into a [`SerdeTree`].
 ///
-/// The `expect` rests on this, and on nothing weaker: the transcode itself
-/// raises `ser::Error::custom` in one place — a map value arriving before its
-/// key, which serde's own contract forbids — so the only way to an `Err` is a
+/// # Panics
+///
+/// Panics where the value's `Serialize` raises an error. The `expect` rests
+/// on this, and on nothing weaker: the transcode itself raises
+/// `ser::Error::custom` in one place — a map value arriving before its key,
+/// which serde's own contract forbids — so the only way to an `Err` is a
 /// `Serialize` impl in the world's closure raising it. None can today,
-/// because every impl in that closure is a derive or a library's (`im`,
-/// `num-bigint`, serde's `rc` impls) and every serde shadow is spelled
-/// `into`, which cannot fail, rather than `try_into`. A slice that adds a
-/// fallible `serialize_with`, or writes a shadow `try_into` on the serialize
-/// side, is what makes this reachable — and it lands in the world dump, the
-/// oracle every harness compares. Fail-stop is right for an oracle; the point
-/// is that the change which breaks it should land beside this sentence.
+/// because every impl in that closure is a derive, a library's (`im`,
+/// `num-bigint`, serde's `rc` impls) or one of four hand-written ones that
+/// raise nothing of their own — the content slice's two forwards, its map's
+/// `serialize_with`, a `collect_map`, and its key's `Serialize`, its
+/// tumbler's; the format stamp's, one `u64`; and the identity slice's
+/// key-array `with` module, a tuple of bytes — and every serde shadow is
+/// spelled `into`, which cannot fail, rather than `try_into`. A slice that
+/// adds a fallible `serialize_with`, or writes a shadow `try_into` on the
+/// serialize side, is what makes this reachable — and it lands in the world
+/// dump, the oracle every harness compares. Fail-stop is right for an
+/// oracle; the point is that the change which breaks it should land beside
+/// this sentence.
 pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
     v.serialize(TreeSer).expect("canonical transcode is total over the world's serde forms")
 }
 
-/// The deterministic text is the tree's `Display`: maps render `{k: v, …}`
-/// with entries sorted by (rendered key, rendered value), and everything else
-/// renders structurally. Writing through the formatter rather than building
-/// intermediate strings keeps a whole-world render to the allocations the sort
-/// genuinely needs — each map KEY's rendering. A value takes part in the order
-/// only where its key renders alike another's, which no map in the world's
-/// serde forms produces (each is keyed by distinct values of one type), so
-/// only such a run renders its values, once apiece, to order it; every other
-/// value streams straight into the output.
+/// The deterministic text is the tree's `Display`.
+///
+/// Maps render `{k: v, …}` with entries sorted by (rendered key, rendered
+/// value), and everything else renders structurally. Writing through the
+/// formatter rather than building intermediate strings keeps a whole-world
+/// render to the allocations the sort genuinely needs — each map key's
+/// rendering. A value takes part in the order only where its key renders
+/// alike another's, which no map in the world's serde forms produces (each
+/// is keyed by distinct values of one type), so only such a run renders its
+/// values, once apiece, to order it; every other value streams straight into
+/// the output.
 impl fmt::Display for SerdeTree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -176,10 +193,16 @@ impl fmt::Display for SerdeTree {
     }
 }
 
-/// The transcode's error carrier — reachable only via `ser::Error::custom`
-/// from a foreign `Serialize` impl, or via `de::Error::custom` from a
-/// `Deserialize` impl refusing what a tree holds (a serde shadow's
-/// `try_from`, say).
+/// The transcode's error carrier.
+///
+/// The way in raises it via `ser::Error::custom`, from a foreign `Serialize`
+/// impl or from this module's map builder on a value arriving before its
+/// key. The way back raises it via `de::Error::custom`, which serde's other
+/// constructors default to: from a `Deserialize` impl refusing what a tree
+/// holds (a serde shadow's `try_from`, say), from serde's sequence and map
+/// deserializers on an element the visitor left unread, or from this
+/// module's enum readers on a node that is no variant or on a unit variant
+/// whose payload is not empty.
 #[derive(Debug)]
 pub(crate) struct CanonError(String);
 
@@ -218,6 +241,8 @@ impl ser::Serializer for TreeSer {
     type SerializeStruct = StructBuild;
     type SerializeStructVariant = VariantStructBuild;
 
+    /// Returns `false`, the answer the checkpoint's own encoding gives.
+    ///
     /// This transcode walks the same data model M2's checkpoint does —
     /// bincode, which answers `false` — so a `Serialize` impl that branches on
     /// this flag takes the checkpoint's branch here too, and the authoritative
@@ -476,19 +501,23 @@ impl ser::SerializeStructVariant for VariantStructBuild {
 
 // ── the way back: SerdeTree → Deserialize ──
 
-/// A borrowed tree as a serde `Deserializer`: self-describing, so every
-/// `deserialize_*` dispatches on the node it holds and drives the visitor
-/// with it. Integers arrive as the widest form the tree kept (`u64`/`i64`),
-/// which serde's primitive visitors range-check down to the target width —
-/// so a `u32` digit that went in through `serialize_u32` comes back out
-/// through `visit_u64` without this module knowing whose digit it was. That
-/// width-blindness is exactly what a positional byte format could not offer,
-/// and why the way back is a `Deserializer` rather than a re-serialization.
+/// A borrowed tree as a serde `Deserializer`.
+///
+/// It is self-describing, so every `deserialize_*` but the transparent
+/// `deserialize_newtype_struct` dispatches on the node it holds and drives
+/// the visitor with it. Integers arrive as the widest form the tree kept
+/// (`u64`/`i64`, or `u128`/`i128` for the 128-bit widths), which serde's
+/// primitive visitors range-check down to the target width — so a `u32`
+/// digit that went in through `serialize_u32` comes back out through
+/// `visit_u64` without this module knowing whose digit it was. That
+/// width-blindness is exactly what a positional byte format could not
+/// offer, and why the way back is a `Deserializer` rather than a
+/// re-serialization.
 ///
 /// Sequences and maps ride serde's own `SeqDeserializer`/`MapDeserializer`,
 /// which check that the visitor consumed every element. Enum payloads
 /// (`Named`) are answered through [`EnumDe`]. Nothing here is an error path
-/// a WORLD can reach: the trees this deserializes were collected off the
+/// a world can reach: the trees this deserializes were collected off the
 /// world's own `Serialize` impls a moment earlier, so a refusal means a
 /// shadow's `try_from` rejected what its own `into` wrote.
 #[derive(Clone, Copy)]
@@ -504,9 +533,11 @@ impl<'de> IntoDeserializer<'de, CanonError> for TreeDe<'de> {
 impl<'de> Deserializer<'de> for TreeDe<'de> {
     type Error = CanonError;
 
-    /// The way in answered `false` ([`TreeSer`]'s
-    /// [`is_human_readable`](serde::Serializer::is_human_readable)), so
-    /// a `Deserialize` impl that branches reads the branch the tree holds.
+    /// Returns `false`, the answer the way in gave.
+    ///
+    /// The way in is [`TreeSer`]'s
+    /// [`is_human_readable`](serde::Serializer::is_human_readable), so a
+    /// `Deserialize` impl that branches reads the branch the tree holds.
     fn is_human_readable(&self) -> bool {
         false
     }
@@ -602,9 +633,10 @@ impl<'de> de::EnumAccess<'de> for EnumDe<'de> {
     }
 }
 
-/// The payload half of [`EnumDe`], in the shape the variant was collected:
-/// `Unit`, a newtype's inner value, a `Seq` for a tuple variant, a `Map` for
-/// a struct variant.
+/// The payload half of [`EnumDe`], in the shape the variant was collected.
+///
+/// That is `Unit`, a newtype's inner value, a `Seq` for a tuple variant, a
+/// `Map` for a struct variant.
 struct VariantDe<'a>(&'a SerdeTree);
 
 impl<'de> de::VariantAccess<'de> for VariantDe<'de> {

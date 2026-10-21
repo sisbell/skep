@@ -1,21 +1,23 @@
-//! The world-dump surface (behind the `dump` feature): [`WorldDump`] — a
-//! deterministic, byte-comparable rendering of the world's AUTHORITATIVE
-//! state, with its DERIVED state in sections of their own — plus the
-//! hint-faithfulness check the crash/conformance harnesses lean on. The
-//! reduction that turns this rendering into a reader's own is `filter`'s.
+//! The world-dump surface, behind the `dump` feature.
+//!
+//! It is [`WorldDump`] — a deterministic, byte-comparable rendering of the
+//! world's authoritative state but the identity slice, with its derived
+//! state in sections of their own — plus the hint-faithfulness check the
+//! crash/conformance harnesses lean on. The reduction that turns this
+//! rendering into a reader's own is `filter`'s.
 //!
 //! Determinism is the contract: the rendering sorts every map in the tree
 //! (the transcode's one rule), which is what makes the two parts fed by the
 //! engine's own hash-ordered indexes — the hints' `publication.drafts` and
 //! the `grants` section — functions of their contents. The authoritative
-//! section's slices already serialize in key order at their own `Serialize`
-//! (option (i)), and the rest of the hints section is built from the stores'
-//! PUBLIC read surfaces over already-ordered results. Two dumps of equal
-//! worlds are byte-equal.
+//! section's slices already serialize in key order at their own `Serialize`,
+//! and the rest of the hints section is built from the stores' public read
+//! surfaces over already-ordered results. Two dumps of equal worlds are
+//! byte-equal.
 //!
-//! A slice reaches the authoritative section through its SERDE CHECKPOINT
-//! FORM rather than through an enumeration: M4 publishes none and M3's
-//! covers its publication map alone, and M5's and M7's go the same way so
+//! A slice reaches the authoritative section through its serde checkpoint
+//! form rather than through an enumeration: M3's covers its publication map
+//! alone, and M4's (`ContentStore::iter`), M5's and M7's go the same way so
 //! that one seam serves all four. It is the
 //! bytes-level seam M2's checkpoints already depend on, down to serde's
 //! human-readable flag, which the transcode answers the way bincode does — so
@@ -23,37 +25,39 @@
 //! `#[serde(skip)]` field is excluded here exactly as the checkpoint excludes
 //! it.
 //!
-//! The four sections — two AUTHORITATIVE (`authoritative`, `publication`) and
-//! two DERIVED (`grants`, `hints`), the pair a rebuild can move — each stated
-//! in full at the builder that writes it:
+//! The four sections — two authoritative (`authoritative`, `publication`)
+//! and two derived (`grants`, `hints`), the pair a rebuild can move — each
+//! stated in full at the builder that writes it:
 //! * **authoritative** (`authoritative_tree`) — one entry per store slice,
 //!   each the slice's own serde form.
-//! * **publication** (`publication_tree`, v5, PUB round 2, lane 3.4 §3) —
-//!   M3's AUTHORITATIVE publication map projected to its drafts: the state
-//!   the exception set is a derived index over, rendered apart from the
-//!   hints' copy of it (`hints.publication.drafts`, which STAYS — it is the
-//!   faithfulness check's subject, this section the authority it is checked
-//!   against).
-//! * **grants** (`grants_tree`, v5) — the grant fold's OPERATIVE set, each
-//!   grant with the state its `replaces` names (the field PUB-5.15 (iv) added
-//!   under the same banner: dev boards regenerate). The engine keeps no grant
-//!   slice, so this section is derived, and the faithfulness check reaches
-//!   the fold's records through it.
+//! * **publication** (`publication_tree`, v5) — M3's authoritative
+//!   publication map projected to its drafts: the state the exception set is
+//!   a derived index over, rendered apart from the hints' copy of it
+//!   (`hints.publication.drafts`, which the hints keep — it is the
+//!   faithfulness check's subject, checked against a seed over the map this
+//!   section projects).
+//! * **grants** (`grants_tree`, v5) — the grant fold's operative set, each
+//!   grant with the state its `replaces` names (the field PUB-5.15 (iv)
+//!   defines, carried under the v5 banner: dev boards regenerate). The engine
+//!   keeps no grant slice, so this section is derived, and the faithfulness
+//!   check reaches the fold's records through it.
 //! * **hints** (`hints_tree`) — M7's recomputable state through its public
 //!   read surfaces, M9's definition registry projected, and the engine's own
-//!   exception set. What that walk does NOT reach — and so what the
+//!   exception set. What that walk does not reach — and so what the
 //!   faithfulness check does not certify — is that builder's own statement.
 //!
-//! ## The per-class filter (lane 3.4 §4)
+//! ## The per-class filter
 //!
-//! [`Engine::world_dump`] and [`Engine::dump_of`] are the HARNESS-ONLY
-//! unfiltered walk; the daemon's `/dump` is [`Engine::dump_of_visible`], the
-//! same tree post-filtered at a reader's class before a byte is rendered.
-//! What that reduction drops and keeps is the `filter` module's one
-//! statement.
+//! [`Engine::world_dump`] and [`Engine::dump_of`] are the harness-only
+//! unfiltered walk; the daemon's `/dump` is
+//! [`Engine::world_dump_visible_to`] and its `/dump?at=N`
+//! [`Engine::dump_of_visible`], the same tree post-filtered at a reader's
+//! class before a byte is rendered. What that reduction drops and keeps is
+//! the `filter` module's one statement.
 //!
 //! [`Engine::world_dump`]: crate::Engine::world_dump
 //! [`Engine::dump_of`]: crate::Engine::dump_of
+//! [`Engine::world_dump_visible_to`]: crate::Engine::world_dump_visible_to
 //! [`Engine::dump_of_visible`]: crate::Engine::dump_of_visible
 
 mod filter;
@@ -72,44 +76,47 @@ use crate::world::World;
 
 use filter::filter_tree;
 
-/// A deterministic rendering of one world. Byte-equality is the comparison
-/// the harnesses use: two dumps of equal worlds are byte-equal, and a
-/// checkpoint+replay world dumps byte-equal to the live fold it recovers.
-/// `Hash` comes with that equality, for a harness collecting the distinct
-/// dumps across a sweep of crash points.
+/// A deterministic rendering of one world.
 ///
-/// What equal dumps CERTIFY is what this format renders: its two AUTHORITATIVE
-/// sections — every store slice, and M3's publication map projected to its
-/// drafts — and its two DERIVED ones — the grant fold's operative records, and
-/// every family the `hints` section renders. It is not that the worlds
-/// agree: derived structures sit outside the rendering — the grant fold's two
-/// query indexes, which the read predicate's third clause probes, among them
-/// — and [`crate::Engine::check_hints_of`] names every one and gives the
-/// argument that those two indexes cannot in fact diverge; a harness treating
-/// equal dumps as equal worlds is reading past that argument rather than
-/// resting on it.
+/// Byte-equality is the comparison the harnesses use: two dumps of equal
+/// worlds are byte-equal, and a checkpoint+replay world dumps byte-equal to
+/// the live fold it recovers. `Hash` comes with that equality, for a harness
+/// collecting the distinct dumps across a sweep of crash points.
 ///
-/// The text goes out — through `Display`, `as_str`, `as_bytes`,
-/// `into_string` — and none comes in. A dump exists only because an engine
-/// rendered one, which is what makes byte-equality mean the two RENDERINGS
-/// were produced by this format from a world each; a value parsed from
-/// arbitrary text would compare equal to a rendering it was never produced
-/// by, and that is the one comparison a harness must not be able to make.
+/// What equal dumps certify is what this format renders: its two
+/// authoritative sections — every store slice, and M3's publication map
+/// projected to its drafts — and its two derived ones — the grant fold's
+/// operative records, and every family the `hints` section renders. It is
+/// not that the worlds agree: the identity slice sits outside the rendering,
+/// and so do derived structures — the grant fold's two query indexes, which
+/// the read predicate's third clause probes, among them — and
+/// [`crate::Engine::check_hints_of`] names every one of those and gives the
+/// argument that those two indexes cannot in fact diverge; a harness
+/// treating equal dumps as equal worlds is reading past that argument rather
+/// than resting on it.
+///
+/// The text goes out — through `Display`, `AsRef<str>`, `as_str`,
+/// `as_bytes`, `into_string` — and none comes in. A dump exists only because
+/// an engine rendered one, which is what makes byte-equality mean the two
+/// renderings were produced by this format from a world each; a value parsed
+/// from arbitrary text would compare equal to a rendering it was never
+/// produced by, and that is the one comparison a harness must not be able to
+/// make.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldDump(String);
 
 impl WorldDump {
-    /// The rendered text.
+    /// Returns the rendered text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The bytes the harnesses compare.
+    /// Returns the bytes the harnesses compare.
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }
 
-    /// Unwrap the rendering.
+    /// Unwraps the rendering into its `String`.
     pub fn into_string(self) -> String {
         self.0
     }
@@ -127,18 +134,22 @@ impl AsRef<str> for WorldDump {
     }
 }
 
-/// The banner every rendering leads with. v5 (2026-09-06, PUB round 2, lane
-/// 3.4): the root gained the `publication` SECTION (M3's authoritative
-/// publication map, drafts in address order) and the `grants` SECTION (the
-/// grant fold's operative set). v4 (2026-09-05) was the hints section gaining
-/// `publication.drafts`, the exception set; v3 the ghost-tumbler format. The
-/// banner's version moves with the section keys.
+/// The banner every rendering leads with.
+///
+/// v5 is the format this build renders: its root carries the `publication`
+/// section (M3's authoritative publication map, drafts in address order) and
+/// the `grants` section (the grant fold's operative set), which v4's root
+/// lacks. v4's hints section carries `publication.drafts`, the exception
+/// set, which v3's lacks; v3 is the ghost-tumbler format. The banner's
+/// version moves with the section keys.
 const BANNER: &str = "skep-world-dump v5\n";
 
-/// The dump as a TREE, before rendering: the authoritative section, the two
-/// publication-round sections, then the hints section over the shipped
-/// classes. The per-class filter ([`filter_tree`]) runs over this tree, so
-/// the harness-only walk and a reader class's dump are one tree rendered twice.
+/// Returns the dump as a tree, before rendering.
+///
+/// That is the authoritative section, the `publication` and `grants`
+/// sections, then the hints section over the shipped classes. The per-class
+/// filter ([`filter_tree`]) runs over this tree, so the harness-only walk
+/// and a reader class's dump are one tree rendered twice.
 fn dump_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(vec![
         (key("authoritative"), authoritative_tree(world)),
@@ -148,44 +159,50 @@ fn dump_tree(world: &World) -> SerdeTree {
     ])
 }
 
-/// Banner, tree, newline — the one rendering both dumps share, the tree
-/// written by its own deterministic `Display`.
+/// Returns banner, tree, newline: the one rendering both dumps share.
+///
+/// The tree is written by its own deterministic `Display`.
 fn render_dump(root: &SerdeTree) -> WorldDump {
     WorldDump(format!("{BANNER}{root}\n"))
 }
 
-/// Render one world UNFILTERED — the harness-only walk.
+/// Renders one world unfiltered: the harness-only walk.
 fn dump(world: &World) -> WorldDump {
     render_dump(&dump_tree(world))
 }
 
-/// Render one world at a READER'S CLASS: the same tree, post-filtered by the
-/// threaded predicate before a byte is written (lane 3.4 §4), the
-/// supersession edges keyed by the claims asserting them (lane 4.2).
+/// Renders one world at a reader's class.
+///
+/// It is the same tree, post-filtered by the threaded predicate before a
+/// byte is written, the supersession edges keyed by the claims asserting
+/// them.
 fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump {
     render_dump(&filter_tree(dump_tree(world), readable, &world.links))
 }
 
-/// The authoritative section: one entry per store slice, each the slice's own
-/// serde form through the canonicalizing transcode. Every slice is rendered,
-/// so a world differing in any one of them dumps differently — which is what
-/// makes the harnesses' byte comparison an oracle over the whole state.
+/// Returns the authoritative section: one entry per store slice.
+///
+/// Each entry is the slice's own serde form through the canonicalizing
+/// transcode. Every store slice is rendered, so a world differing in any one
+/// of them dumps differently — which is what makes the harnesses' byte
+/// comparison an oracle over the four store slices. The identity slice, the
+/// World's fifth serialized slice, is not rendered here or anywhere in the
+/// dump, so two worlds differing in it alone dump byte-equal.
 ///
 /// What each entry carries is that slice's checkpoint form and nothing else:
 /// M3's four serde fields (the node registry, the principals, the
 /// per-namespace frontier counts and the publication map), M4's content map,
-/// M5's five — its arrangements, whose resident form IS the canonical
+/// M5's five — its arrangements, whose resident form is the canonical
 /// maximally-merged decomposition maintained by M5's fold; its provenance R;
 /// its birth memo, each birth member's content count at its mint, frozen
 /// there and checkpointed because nothing else M5 holds can recompute it,
 /// which the per-class filter keeps whole; its shot terms, kept whole on the
 /// same ground; and its fork sources, each `version`-minted document's
 /// source, kept so the reclaim floor cannot lose it and reduced by the fork's
-/// readability — and M7's link store. M7's
-/// `#[serde(skip)]` hints are thereby excluded, exactly as
-/// this section demands: they are the [`hints_tree`] section's
-/// subject, and rendering them here would compare a derived structure against
-/// itself.
+/// readability — and M7's link store. M7's `#[serde(skip)]` hints are thereby
+/// excluded, exactly as this section demands: they are the [`hints_tree`]
+/// section's subject, and rendering them here would compare a derived
+/// structure against itself.
 ///
 /// These slice keys are the dump's own wire vocabulary, exactly as
 /// [`shipped_label`]'s are: they name each slice for the store it belongs to
@@ -200,26 +217,30 @@ fn authoritative_tree(world: &World) -> SerdeTree {
     ])
 }
 
-/// The two disagreeing dumps, LOCALIZED by both renderings: `Display` and
-/// `Debug` alike name the byte the two first differ at and show a bounded
-/// window of each side around it. Neither writes a dump whole, and that is
-/// what makes this type printable at all — a rendering costs a tree node per
-/// content byte ([`Engine::dump_of`]'s cost), so a world of any size is
-/// megabytes of text and two of them is what a caller would otherwise get on
-/// one line. A caller that wants a whole rendering reads the field.
+/// The two disagreeing dumps, localized by both renderings.
+///
+/// `Display` and `Debug` alike name the byte the two first differ at and
+/// show a bounded window of each side around it. Neither writes a dump
+/// whole, and that is what makes this type printable at all — a rendering
+/// costs a tree node per content byte ([`Engine::dump_of`]'s cost), so a
+/// world of any size is megabytes of text and two of them is what a caller
+/// would otherwise get on one line. A caller that wants a whole rendering
+/// reads the field.
 ///
 /// The two carriers exist because a caller reaches this type through both:
 /// an operator reads `Display`, and `Result::expect`/`unwrap` print `Debug`.
 ///
 /// `#[non_exhaustive]`, because the assembler may find more of a divergence
 /// worth carrying: a receiver reads both fields either way, and nothing
-/// outside this crate can build one, since a [`WorldDump`] exists only
-/// because an engine rendered it.
+/// outside this crate can build one — the attribute forbids it there,
+/// though a caller may hold [`WorldDump`]s, each one an engine rendered.
 ///
 /// [`Engine::dump_of`]: crate::Engine::dump_of
 #[non_exhaustive]
 pub struct HintDivergence {
+    /// The dump of the world as it was handed in.
     pub live: WorldDump,
+    /// The dump of that world's clone after its derived state was rebuilt.
     pub rebuilt: WorldDump,
 }
 
@@ -250,14 +271,16 @@ impl fmt::Debug for HintDivergence {
 
 impl std::error::Error for HintDivergence {}
 
-/// The byte the two renderings first differ at — or, where one is a strict
-/// prefix of the other, the shorter one's length, which is where it ran out.
+/// Returns the byte the two renderings first differ at.
+///
+/// Where one is a strict prefix of the other, it is the shorter one's
+/// length, which is where it ran out.
 fn divergence_offset(live: &str, rebuilt: &str) -> usize {
     let shorter = live.len().min(rebuilt.len());
     live.bytes().zip(rebuilt.bytes()).position(|(x, y)| x != y).unwrap_or(shorter)
 }
 
-/// A char-boundary-safe window around byte `i`, for divergence display.
+/// Returns a char-boundary-safe window around byte `i`, for divergence display.
 fn window(s: &str, i: usize) -> &str {
     let mut start = i.saturating_sub(48).min(s.len());
     while start > 0 && !s.is_char_boundary(start) {
@@ -272,35 +295,40 @@ fn window(s: &str, i: usize) -> &str {
 
 // ── the hints section, from public reads only ──
 
-/// A key — a string node, the one shape a key in this format takes. Every
-/// caller hands a compiled `&str`: the section, slice and field names are
-/// literals, and the family and class names are the format's own tables
-/// ([`SLICE_VIEWS`], [`PREDICATE_PROJECTIONS`], [`shipped_label`]).
+/// Returns a key: a string node, the shape of every key this module writes.
+///
+/// The authoritative section's inner maps keep their stores' own serde forms
+/// as keys. Every caller hands a compiled `&str`: the section, slice and
+/// field names are literals, and the family and class names are the format's
+/// own tables ([`SLICE_VIEWS`], [`PREDICATE_PROJECTIONS`], [`shipped_label`]).
 fn key(s: &str) -> SerdeTree {
     SerdeTree::Str(s.to_owned())
 }
 
-/// A sequence of dotted TUMBLERS, for the one entry whose values are not
-/// addresses: an endset denotes tumblers (`Endset::addrs`), so
-/// [`class_tree`]'s type `key` has none in hand. Everything else the dump
-/// renders as a dotted sequence holds addresses and goes through
-/// [`addr_seq`], which writes the same text — `Address` renders as its own
-/// tumbler — off the validated value rather than off a projection of it.
+/// Returns a sequence of dotted tumblers, for the one non-address entry.
+///
+/// That entry's values are not addresses: an endset denotes tumblers
+/// (`Endset::addrs`), so [`class_tree`]'s type `key` has none in hand.
+/// Everything else the dump renders as a dotted sequence holds addresses and
+/// goes through [`addr_seq`], which writes the same text — `Address` renders
+/// as its own tumbler — off the validated value rather than off a projection
+/// of it.
 fn tum_seq<'a>(tumblers: impl IntoIterator<Item = &'a Tumbler>) -> SerdeTree {
     SerdeTree::Seq(tumblers.into_iter().map(|t| SerdeTree::Str(t.to_string())).collect())
 }
 
-/// A sequence of dotted ADDRESSES.
+/// Returns a sequence of dotted addresses.
 fn addr_seq<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> SerdeTree {
     SerdeTree::Seq(addrs.into_iter().map(|a| SerdeTree::Str(a.to_string())).collect())
 }
 
-/// The dump's own name for a shipped class. Exhaustive by construction, so
-/// the compiler audits the set this section enumerates against `ShippedType`
-/// itself: a sixth shipped class upstream cannot reach the dump unnamed, and
-/// so cannot drop out of the harnesses' oracle in silence. The vocabulary is
-/// the dump's, not M7's — these strings are wire-visible and outlive any
-/// rename of the variant.
+/// Returns the dump's own name for a shipped class.
+///
+/// It is exhaustive by construction, so the compiler audits the set this
+/// section enumerates against `ShippedType` itself: a sixth shipped class
+/// upstream cannot reach the dump unnamed, and so cannot drop out of the
+/// harnesses' oracle in silence. The vocabulary is the dump's, not M7's —
+/// these strings are wire-visible and outlive any rename of the variant.
 fn shipped_label(ty: ShippedType) -> &'static str {
     match ty {
         ShippedType::Retired => "shipped.retired",
@@ -311,11 +339,12 @@ fn shipped_label(ty: ShippedType) -> &'static str {
     }
 }
 
-/// The dump's own name for each VIEW a shipped class's slice is rendered
-/// under, with the view it is read at — [`class_tree`]'s two slice entries, in
-/// the order it writes them.
+/// The dump's own name for each view a shipped class's slice renders under.
 ///
-/// TWO rows and not a total function over `View`: this format renders the
+/// Each comes with the view it is read at — [`class_tree`]'s two slice
+/// entries, in the order it writes them.
+///
+/// Two rows and not a total function over `View`: this format renders the
 /// audit and active slices and no third, so a view M7 has beside them is
 /// absent from a shipped class's submap until a row here says otherwise.
 ///
@@ -328,9 +357,11 @@ fn shipped_label(ty: ShippedType) -> &'static str {
 /// they are wire-visible and outlive any rename of the variant.
 const SLICE_VIEWS: [(&str, View); 2] = [("audit", View::Audit), ("active", View::Active)];
 
-/// M9's definition registry as this format projects it: one hints family per
-/// (shipped class, view), each rendering `LinkState::members` — the SUBJECTS
-/// those tuples denote, never the tuples themselves.
+/// M9's definition registry as this format projects it.
+///
+/// It is one hints family per (shipped class, view), each rendering
+/// `LinkState::members` — the subjects those tuples denote, never the tuples
+/// themselves.
 ///
 /// The family name, the shipped class it is read off and the view it is read
 /// under are one piece of format knowledge, so they are declared together and
@@ -341,7 +372,7 @@ const SLICE_VIEWS: [(&str, View); 2] = [("audit", View::Audit), ("active", View:
 /// declarations could hold without contradicting either.
 ///
 /// The names are the dump's own wire vocabulary, as [`shipped_label`]'s are,
-/// and the ORDER is free: the rendering sorts a map's entries, so the
+/// and the order is free: the rendering sorts a map's entries, so the
 /// section's bytes do not depend on it.
 const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
     ("predicates.defs.audit", ShippedType::PredDef, View::Audit),
@@ -350,8 +381,9 @@ const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
     ("predicates.stable.active", ShippedType::PredStable, View::Active),
 ];
 
-/// One type class's observable projection: the THREE entries a class submap
-/// holds — its key endset, then one typed slice per row of [`SLICE_VIEWS`],
+/// Returns one type class's observable projection: its submap's three entries.
+///
+/// They are its key endset, then one typed slice per row of [`SLICE_VIEWS`],
 /// each already an address-ordered `OrdSet`.
 ///
 /// That entry set is format, and it is the last of the five levels of the
@@ -360,12 +392,14 @@ const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
 /// `key` is a compiled format constant and stays at every reader class. A
 /// fourth entry added here and left out of that statement would be rendered
 /// whole to every reader, which is why
-/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` holds this
-/// set as well as the four above it.
+/// `every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name` holds
+/// this set as well as the four above it.
 ///
-/// `ty` carries M7's stated precondition — address-denoting or
-/// `iextent`-built, else `type_slice` panics naming it — and the one caller
-/// below is inside it: a reserved endset is M7's own.
+/// # Panics
+///
+/// Panics where `ty` breaks M7's stated precondition — address-denoting or
+/// `iextent`-built, else `type_slice` panics naming it. The one caller below
+/// is inside it: a reserved endset is M7's own.
 fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     let mut entries = vec![(key("key"), tum_seq(ty.addrs()))];
     for (label, view) in SLICE_VIEWS {
@@ -374,40 +408,49 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     SerdeTree::Map(entries)
 }
 
-/// The HINTS section: derived state, read through PUBLIC surfaces alone over
-/// already-ordered results — never off a store's private hint — and, with the
-/// `grants` section beside it, the whole of the derived state this format
-/// renders. M7's is most of it (`match_links`, `type_slice`, `members`,
-/// `succs`): the audit and active slices, the nullified LINKS of the audit
-/// slice, the five shipped classes' typed slices, and the supersession forward
-/// edges (the BH2 walk). Beside them, M9's definition registry — which is no
-/// slice of M9's but these M7 tuples — projected one family per row of
-/// [`PREDICATE_PROJECTIONS`]; and the engine's OWN derived index, the
+/// Returns the hints section: derived state, read through public surfaces.
+///
+/// It is read through public surfaces alone over already-ordered results —
+/// never off a store's private hint — and, with the `grants` section beside
+/// it, the whole of the derived state this format renders. M7's is most of
+/// it (`match_links`, `is_nullified`, `type_slice`, `members`, `succs`): the
+/// audit and active slices, the nullified links of the audit slice, the five
+/// shipped classes' typed slices, and the supersession forward edges (the
+/// BH2 walk). Beside them, M9's definition registry — which is no slice of
+/// M9's but these M7 tuples — projected one family per row of
+/// [`PREDICATE_PROJECTIONS`]; and the engine's own derived index, the
 /// exception set (`publication.drafts`: draft document → owner account,
 /// PUB-7.5). M3 and M4 hold no hints of their own, and M5's rebuild is the
 /// identity in v1, so neither store appears.
 ///
-/// THREE of M7's hint families sit outside that reach, which is what bounds
+/// Four of M7's hint families sit outside that reach, which is what bounds
 /// [`crate::Engine::check_hints_of`] to an oracle over what this renders and
 /// nothing more:
 ///
 /// * `dedup` has no public read surface at all.
 /// * `home_frontier` has one, `LinkState::age`, which is that hint less a
-///   link's own ordinal — so its omission is a decision about this FORMAT
+///   link's own ordinal — so its omission is a decision about this format
 ///   rather than a consequence of M7's surface, and closing it would move
 ///   bytes the harnesses pin.
-/// * M7's fold indexes a typed slice for EVERY coverage class while this
+/// * M7's fold indexes a typed slice for every coverage class while this
 ///   section names only the shipped five, so the typed slice an ordinary
 ///   content-typed link lands in is never rendered.
+/// * The spanfilade, the link store's coverage index, answers `stab` and
+///   every constrained `match_links`, and the whole-view scans this section
+///   runs never consult it.
 ///
-/// Each is exercised by M7's own write-path tests instead.
+/// Each is exercised by M7's own tests instead: the first three by its
+/// write-path tests, the spanfilade by an index rebuilt from a decoded
+/// checkpoint held to a scan of the store
+/// (`stab_answers_exactly_what_a_scan_of_the_store_would`).
 ///
-/// `links.nullified` renders the nullified LINKS of the audit slice, which
+/// `links.nullified` renders the nullified links of the audit slice, which
 /// is the whole tombstone set only because `nullify`'s P-tgt gate admits no
 /// target but a resident link or the address the retraction tuple itself will
 /// occupy. M7's fold inserts every denoted to-root of an `[R]` link, so a
 /// root that is not itself a link would sit in the hint and outside this
-/// rendering; `the_nullified_family_is_the_whole_tombstone_set_because_only_links_are_retracted`
+/// rendering;
+/// `the_nullified_family_is_the_whole_tombstone_set_because_only_links_are_retracted`
 /// holds the gate that keeps one out.
 ///
 /// The family names are format, so a family added here is a family the
@@ -446,7 +489,7 @@ fn hints_tree(world: &World) -> SerdeTree {
     entries.push((key("supersession"), SerdeTree::Map(edges)));
 
     // M9's definition registry, projected: `pdef`/`pd_stable` membership
-    // (M9 owns no slice; its registry IS these M7 tuples). One family per row
+    // (M9 owns no slice; its registry is these M7 tuples). One family per row
     // of the format's own table, which the per-class filter reduces off too.
     for (family, ty, view) in PREDICATE_PROJECTIONS {
         entries.push((key(family), addr_seq(&links.members(links.reserved_type(ty), view))));
@@ -460,12 +503,14 @@ fn hints_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(entries)
 }
 
-/// The exception set as a map of dotted addresses, draft → owner account.
-/// The assembler's own derived index rather than a store's — the one the
-/// HINTS section carries; the grant fold is the other, and its home is the
-/// `grants` section ([`grants_tree`]). This index's seed and fold are
-/// `crate::publication`'s, and this rendering is what
-/// [`crate::Engine::check_hints_of`] compares them through.
+/// Returns the exception set as a map of dotted addresses.
+///
+/// Each entry is draft → owner account. It is the assembler's own derived
+/// index rather than a store's — the one the hints section carries; the
+/// grant fold is the other, and its home is the `grants` section
+/// ([`grants_tree`]). This index's seed and fold are `crate::publication`'s,
+/// and this rendering is what [`crate::Engine::check_hints_of`] compares
+/// them through.
 fn drafts_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world
@@ -477,36 +522,38 @@ fn drafts_tree(world: &World) -> SerdeTree {
     )
 }
 
-// ── the two publication-round sections (v5, lane 3.4 §3) ──
+// ── the publication and grants sections (v5) ──
 
-/// The PUBLICATION section: M3's AUTHORITATIVE publication map reduced to its
-/// DRAFT entries — the documents whose minting record journaled `published:
-/// false` — as dotted addresses in address order. Off M3's own enumeration of
-/// that map, `M3State::documents`, the walk the exception set's seed makes;
-/// the hints' `publication.drafts` is the FOLD's copy, and
+/// Returns the publication section: the publication map reduced to drafts.
+///
+/// It is M3's authoritative publication map reduced to its draft entries —
+/// the documents whose minting record journaled `published: false` — as
+/// dotted addresses in address order. Off M3's own enumeration of that map,
+/// `M3State::documents`, the walk the exception set's seed makes; the hints'
+/// `publication.drafts` is the fold's copy, and
 /// [`crate::Engine::check_hints_of`] compares that copy against the seed. A
-/// SEQUENCE — the rendering sorts maps alone — in the map's own address
+/// sequence — the rendering sorts maps alone — in the map's own address
 /// order, which is the order the filter preserves.
 ///
-/// One walk, TWO RULES over it, and the two agree on an invariant of M3's
+/// One walk, two rules over it, and the two agree on an invariant of M3's
 /// rather than on a shared test. This section keeps an entry whose stored
 /// bit is `false`. The seed discards the bits and asks M3 itself, per
-/// ADDRESS, whether it is a registered document and what its bit is — which
+/// address, whether it is a registered document and what its bit is — which
 /// is what keeps the load path's fail-stop off an unregistered address. The
 /// rules coincide because M3 writes the publication entry and the
 /// registration in one fold step, and only for a document-tier mint, so on
-/// any slice M3's fold produced the map's entries ARE the registered
-/// documents. Only an entry for an address M3 does NOT register separates
+/// any slice M3's fold produced the map's entries are the registered
+/// documents. Only an entry for an address M3 does not register separates
 /// them: this section keeps it by its bit, and the seed's re-ask drops it. A
-/// registered document with NO entry is absent from BOTH — neither walk
+/// registered document with no entry is absent from both — neither walk
 /// reaches it — so their agreement cannot witness that shape, which is the
 /// open direction `crate::publication` states.
 ///
-/// This section is a PROJECTION of the map, not the only rendering of it: the
-/// same authoritative map travels whole inside `authoritative.namespace`, as
-/// one of M3's four serde fields. So the per-class filter's reduction of this
-/// section reduces THIS SECTION, and a reader class that cannot open a draft
-/// still reads its bit there.
+/// This section is a projection of the map, not the only rendering of it:
+/// the same authoritative map travels whole inside `authoritative.namespace`,
+/// as one of M3's four serde fields. So the per-class filter's reduction of
+/// this section reduces this section, and a reader class that cannot open a
+/// draft still reads its bit there.
 fn publication_tree(world: &World) -> SerdeTree {
     addr_seq(
         world
@@ -517,25 +564,26 @@ fn publication_tree(world: &World) -> SerdeTree {
     )
 }
 
-/// The GRANTS section: the grant fold's OPERATIVE set — every admitted,
-/// unrevoked grant keyed by the grant link's own address, each entry its
-/// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
-/// `content_prefix` it shares, its `grantee` (`none` for the ANY-PRINCIPAL
-/// form, PUB-5.8) and the state its `replaces` names (`none` for the EMPTY
-/// state — a first share —, else the revocation a re-share follows; PUB-5.15
-/// (iv)). DERIVED — the fold's records, the engine keeping no grant
-/// slice — so [`crate::Engine::check_hints_of`] covers the grant fold's
-/// RECORDS through this section: a seed that admitted a record the fold did
-/// not moves these bytes. It does not cover the fold's two QUERY INDEXES,
-/// which are what `grant_exists` probes and which nothing here renders; that
-/// method states the gap and why it is not a live divergence.
+/// Returns the grants section: the grant fold's operative set.
 ///
-/// The record is DESTRUCTURED WHOLE, so a field added to [`GrantRecord`]
+/// That is every admitted, unrevoked grant keyed by the grant link's own
+/// address, each entry its `home` (the issuer's doc 1), its `issuer` (ω of
+/// the home), the `content_prefix` it shares, its `grantee` (`none` for the
+/// any-principal form, PUB-5.8) and the state its `replaces` names (`none`
+/// for the empty state — a first share —, else the revocation a re-share
+/// follows; PUB-5.15 (iv)). Derived — the fold's records, the engine keeping
+/// no grant slice — so [`crate::Engine::check_hints_of`] covers the grant
+/// fold's records through this section: a seed that admitted a record the
+/// fold did not moves these bytes. It does not cover the fold's two query
+/// indexes, which are what `grant_exists` probes and which nothing here
+/// renders; that method states the gap and why it is not a live divergence.
+///
+/// The record is destructured whole, so a field added to [`GrantRecord`]
 /// fails to compile here until this section accounts for it. That is what
-/// keeps the certificate about whole RECORDS: a field this section never
+/// keeps the certificate about whole records: a field this section never
 /// rendered would be one a seed and a fold could disagree on in silence.
 ///
-/// Collected in the fold's hash order; the rendering sorts. Kept WHOLE by the
+/// Collected in the fold's hash order; the rendering sorts. Kept whole by the
 /// per-class filter: a grant is a published document's record, and the
 /// addresses it names are not secret (PUB-1.13).
 fn grants_tree(world: &World) -> SerdeTree {
@@ -564,58 +612,61 @@ fn grants_tree(world: &World) -> SerdeTree {
     )
 }
 
-/// The dump surface. Every rendering below is a pure function of the world it
-/// is handed and, where there is one, the reader class it is filtered at:
-/// nothing of this handle's own state reaches the text. The receiver is the
-/// engine a caller already holds, and the no-argument methods use it for the
-/// one thing it supplies — pinning the committed snapshot the world is read
-/// off.
+/// The dump surface.
+///
+/// Every rendering below is a pure function of the world it is handed and,
+/// where there is one, the reader class it is filtered at: nothing of this
+/// handle's own state reaches the text. The receiver is the engine a caller
+/// already holds, and the methods that read the committed world use it for
+/// the one thing it supplies — pinning the committed snapshot the world is
+/// read off.
 impl crate::Engine {
-    /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
-    /// §4): the same tree, post-filtered by `readable` before render — what
+    /// Returns [`crate::Engine::dump_of`] at a reader's class.
+    ///
+    /// It is the same tree, post-filtered by `readable` before render — what
     /// the filter drops and keeps is `filter_tree`'s one statement, in
     /// `dump::filter`. The predicate is the threaded one: a world's own reader
-    /// class (`World::reader_class`) for a live dump, or the HEAD's for a
+    /// class (`World::reader_class`) for a live dump, or the head's for a
     /// historical world (`/dump?at=N` — the N-world's state at the reader's
     /// class as the head decides it, PUB-6.48), and the caller closes it over
-    /// ONE snapshot (PUB-6.39). Under the total predicate this is `dump_of`
+    /// one snapshot (PUB-6.39). Under the total predicate this is `dump_of`
     /// byte for byte (the unit test pins it).
     ///
-    /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
-    /// decode — an `Address` deserialize off the tree for the authoritative
-    /// maps (a tumbler decode, then M1's `validate`), a dotted parse for the
-    /// hints and sections — and one predicate
-    /// call, whose own cost is the caller's: a predicate that asks
-    /// `World::readable` per entry pays the reader's registry scan once per
-    /// draft-homed entry at any reader class but the guest's, where one that
-    /// asks a single [`crate::ReaderClass`] pays it once per dump. On top of
-    /// that, FIVE whole-class walks, because two hint families name something
+    /// **Cost.** It is [`crate::Engine::dump_of`]'s plus, per filtered entry,
+    /// one key decode — an `Address` deserialize off the tree for the
+    /// authoritative maps (a tumbler decode, then M1's `validate`), a dotted
+    /// parse for the hints and sections — and one predicate call, whose own
+    /// cost is the caller's: a predicate that asks `World::readable` per
+    /// entry pays the reader's registry scan once per draft-homed entry at
+    /// any reader class but the guest's, where one that asks a single
+    /// [`crate::ReaderClass`] pays it once per dump. On top of that, five
+    /// whole-class walks, because two kinds of hint family name something
     /// other than the link whose deposit put it there and the filter must
     /// recover that link to judge it:
     ///
-    /// * ONE over the supersession class, a `readlink` and an `is_nullified`
+    /// * one over the supersession class, a `readlink` and an `is_nullified`
     ///   per claim, to key each rendered edge by the claims asserting it; and
-    /// * FOUR over the predicate classes — `pred_def` and `pred_stable`, each
+    /// * four over the predicate classes — `pred_def` and `pred_stable`, each
     ///   under both views — a `readlink` per tuple, to key each rendered
     ///   member by the tuples asserting it.
     ///
     /// Each walk costs one `type_slice` and its per-tuple reads, and adds one
     /// predicate call per asserting link at the entries it judges. The two
-    /// walks are bounded differently, and by the STORE rather than by the
-    /// request:
+    /// kinds of walk are bounded differently, and by the store rather than by
+    /// the request:
     ///
     /// * the supersession walk is linear in the supersession class, with one
     ///   denoted address a side per claim — for the reasons `sup_edge_claims`
     ///   in `dump::filter` gives, which name every door of M7's that bound
     ///   rests on; while
-    /// * the predicate walks are linear in the SUM OF SUBJECT-SLOT WIDTHS
+    /// * the predicate walks are linear in the sum of subject-slot widths
     ///   over the two predicate classes, each slot up to
     ///   `skep_links::MAX_SLOT_SPANS` spans. That is `LinkState::members`' own
     ///   bound, which `member_tuples` in `dump::filter` mirrors, and says why
     ///   it must.
     ///
-    /// The filter additionally PARSES a dotted address per entry it judges,
-    /// which is [`crate::Engine::dump_of`]'s magnitude term run backwards: a
+    /// The dotted parse the filter makes per entry it judges is
+    /// [`crate::Engine::dump_of`]'s magnitude term run backwards: a
     /// client-chosen component costs its base conversion on the way out and
     /// again on the way in, and a section this filter reduces is one whose
     /// entries it must decode to reduce.
@@ -625,13 +676,15 @@ impl crate::Engine {
         dump_visible(world, readable)
     }
 
-    /// The committed world at `principal`'s reader class, over ONE snapshot:
-    /// the predicate is ONE [`crate::ReaderClass`] bound off that snapshot for
-    /// the whole dump, so the state dumped and the reader class it is filtered
-    /// at stand on one committed state, and the reader's seat is looked up
-    /// once rather than per filtered entry. `None` is the GUEST (PUB-5.5) —
-    /// published alone, so the publication section renders EMPTY and no
-    /// draft's content, arrangement or link appears.
+    /// Returns the committed world's dump at `principal`'s reader class.
+    ///
+    /// It is taken over one snapshot: the predicate is one
+    /// [`crate::ReaderClass`] bound off that snapshot for the whole dump, so
+    /// the state dumped and the reader class it is filtered at stand on one
+    /// committed state, and the reader's seat is looked up once rather than
+    /// per filtered entry. `None` is the guest (PUB-5.5) — published alone, so
+    /// the publication section renders empty and no draft's content,
+    /// arrangement or link appears.
     pub fn world_dump_visible_to(&self, principal: Option<PrincipalId>) -> WorldDump {
         let snap = self.kernel().snapshot();
         let world = snap.world();
@@ -639,13 +692,14 @@ impl crate::Engine {
         dump_visible(world, &|doc: &Address| reader.readable(doc))
     }
 
-    /// Dump the currently committed world (one pinned snapshot) —
-    /// UNFILTERED, the HARNESS-ONLY walk (lane 3.4 §4): the crash and
-    /// conformance harnesses' oracle, never a wire answer. The daemon's
-    /// `/dump` is [`crate::Engine::world_dump_visible_to`].
+    /// Returns the committed world's dump, unfiltered: the harness-only walk.
     ///
-    /// COST is [`crate::Engine::dump_of`]'s, over a world whose size the
-    /// caller does not choose: this renders whatever the store currently
+    /// It reads one pinned snapshot: the crash and conformance harnesses'
+    /// oracle, never a wire answer. The daemon's `/dump` is
+    /// [`crate::Engine::world_dump_visible_to`].
+    ///
+    /// **Cost.** It is [`crate::Engine::dump_of`]'s, over a world whose size
+    /// the caller does not choose: this renders whatever the store currently
     /// holds, so the figure there is read against the live world and not
     /// against a request.
     pub fn world_dump(&self) -> WorldDump {
@@ -653,69 +707,85 @@ impl crate::Engine {
         self.dump_of(snap.world())
     }
 
-    /// Dump any world — a snapshot of this engine's kernel, a world
-    /// [`crate::Engine::world_at`] reconstructed, or any other — UNFILTERED,
-    /// the harness-only walk; [`crate::Engine::dump_of_visible`] is the same
-    /// world at a reader's class.
+    /// Returns the dump of any world, unfiltered: the harness-only walk.
     ///
-    /// COST, per call, uncached, and linear in the WHOLE world rather than in
-    /// anything the caller names. The authoritative half transcodes every
-    /// slice into an owned value tree before a byte of text is written, and
-    /// the render then materializes each map KEY's rendering as an owned
-    /// `String` to sort by, the values streaming straight into the text, which
-    /// is therefore held once, beside the tree. M3's publication map is read
-    /// TWICE: once inside the authoritative transcode, and once more by
-    /// `publication_tree`, which walks it through M3's own enumeration — one
-    /// entry per REGISTERED DOCUMENT, published or not, and no re-validation.
-    /// The tree costs a node per serialized ELEMENT, and a content byte is an
-    /// element: serde has no byte specialization for `[u8]`, so M4's `Val`
-    /// transcodes as a sequence of integers and not as a blob
-    /// (`a_content_byte_costs_a_whole_tree_node` pins that, because it is the
-    /// term that dominates this figure and it is not what the byte payload
-    /// looks like).
+    /// The world is a snapshot of this engine's kernel, a world
+    /// [`crate::Engine::world_at`] reconstructed, or any other;
+    /// [`crate::Engine::dump_of_visible`] is the same world at a reader's
+    /// class.
+    ///
+    /// **Cost.** It is paid per call, uncached, and linear in the whole world
+    /// rather than in anything the caller names. The authoritative half
+    /// transcodes every store slice into an owned value tree before a byte of
+    /// text is written, and the render then materializes each map key's
+    /// rendering as an owned `String` to sort by, the values streaming
+    /// straight into the text, which is therefore held once, beside the tree.
+    /// M3's publication map is read twice: once inside the authoritative
+    /// transcode, and once more by `publication_tree`, which walks it through
+    /// M3's own enumeration — one entry per registered document, published or
+    /// not, and no re-validation. The tree costs a node per serialized
+    /// element, and a content byte is an element: serde has no byte
+    /// specialization for `[u8]`, so M4's `Val` transcodes as a sequence of
+    /// integers and not as a blob (`a_content_byte_costs_a_whole_tree_node`
+    /// pins that, because it is the term that dominates this figure and it is
+    /// not what the byte payload looks like).
     ///
     /// One term is not a count of anything: a component of a tumbler is a
     /// `Nat`, an arbitrary-precision integer with no magnitude bound, and
-    /// rendering one DOTTED is a base conversion whose work grows faster than
+    /// rendering one dotted is a base conversion whose work grows faster than
     /// the component's digit count. That magnitude is not the store's to
     /// choose. An address reaches a link slot straight off a client's
     /// deposit — `makelink` gates neither slot's addresses against M3, so an
     /// address that was never minted and never will be is stored and later
     /// rendered — and the sections that carry such addresses dotted include
-    /// the `grants` section, which the per-class filter keeps WHOLE. So every
+    /// the `grants` section, which the per-class filter keeps whole. So every
     /// reader class pays this term, the guest included
     /// (`a_grant_names_an_address_the_client_invented` pins the reach).
     ///
-    /// The hints half adds two whole-store link scans
-    /// (`match_links` under the empty constraint set, each lifting every key
-    /// it walks), one `is_nullified` and one `succs` per audit LINK, and two
-    /// typed-slice walks per shipped class. Nothing here is memoized, and peak
-    /// memory is that figure times the number of calls in flight. Admission
-    /// and concurrency are the caller's to gate; this method gates neither.
+    /// The hints half adds two whole-store link scans (`match_links` under the
+    /// empty constraint set, each lifting every key its view admits), one
+    /// `is_nullified` and one `succs` per audit link, two typed-slice walks per
+    /// shipped class, one `members` walk per predicate projection and one walk
+    /// of the exception set; the `grants` section adds one walk of the grant
+    /// fold's operative set. Nothing here is memoized, and peak memory is that
+    /// figure times the number of calls in flight. Admission and concurrency
+    /// are the caller's to gate; this method gates neither.
     pub fn dump_of(&self, world: &World) -> WorldDump {
         dump(world)
     }
 
-    /// Run the hint-faithfulness check against the committed world.
+    /// Runs the hint-faithfulness check against the committed world.
     ///
     /// What `Ok(())` certifies, and which derived structures it leaves
     /// uncertified, is [`crate::Engine::check_hints_of`]'s.
     ///
-    /// COST: [`crate::Engine::check_hints_of`]'s, over the committed world.
+    /// **Cost.** It is [`crate::Engine::check_hints_of`]'s, over the committed
+    /// world.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`HintDivergence`] where [`crate::Engine::check_hints_of`]
+    /// does, over the committed world.
+    ///
+    /// # Panics
+    ///
+    /// Panics where [`crate::Engine::check_hints_of`] does.
     pub fn check_hints(&self) -> Result<(), HintDivergence> {
         let snap = self.kernel().snapshot();
         self.check_hints_of(snap.world())
     }
 
-    /// [`crate::Engine::check_hints`] over any world: dump it, rebuild its
-    /// derived state from scratch through `WorldState::rebuild_derived` — the
-    /// call recovery makes before replay — dump the rebuild, and compare the
-    /// bytes. The rebuild moves derived state alone, so a divergence always
-    /// lies in a DERIVED section — a `hints` family, or the `grants` section's
-    /// records — and never in an authoritative one.
+    /// Runs [`crate::Engine::check_hints`] over any world.
     ///
-    /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
-    /// slices, the nullified LINKS of the audit slice, the shipped classes'
+    /// It dumps the world, rebuilds its derived state from scratch through
+    /// `WorldState::rebuild_derived` — the call recovery makes before replay —
+    /// dumps the rebuild, and compares the bytes. The rebuild moves derived
+    /// state alone, so a divergence always lies in a derived section — a
+    /// `hints` family, or the `grants` section's records — and never in an
+    /// authoritative one.
+    ///
+    /// `Ok(())` certifies exactly what the dump renders: the audit and active
+    /// slices, the nullified links of the audit slice, the shipped classes'
     /// typed slices, the supersession forward edges, the predicate
     /// projections, the exception set and — through the v5 `grants` section —
     /// the grant fold's operative set each agree with a rebuild from
@@ -723,7 +793,7 @@ impl crate::Engine {
     /// document-minting record and the seed over M3's publication map name
     /// the same drafts with the same owners (PUB-7.7's two halves), and for
     /// the grants that the fold over every link deposit and the seed over
-    /// the grants class's typed slice admit the same RECORDS, each naming
+    /// the grants class's typed slice admit the same records, each naming
     /// the same `replaces`. It certifies nothing of the nine derived
     /// structures the dump does not reach, and each of those drives
     /// something a caller can observe:
@@ -735,20 +805,20 @@ impl crate::Engine {
     ///   content-typed links; and the spanfilade, M7's coverage index, drives
     ///   `stab` and with it every region read, every constrained descriptor
     ///   match and `World::edition_claims`.
-    /// * The grant fold's TWO QUERY INDEXES — `by_grantee` and `universal` —
+    /// * The grant fold's two query indexes — `by_grantee` and `universal` —
     ///   drive `grant_exists`, the read predicate's third clause, so a
     ///   mis-derived one is an authorization answer rather than a stale
-    ///   figure. The dump's `grants` section renders the fold's RECORDS and
+    ///   figure. The dump's `grants` section renders the fold's records and
     ///   neither index, so no comparison here reaches them.
-    /// * The grant fold's EARLIER-RECORD SET — `earlier_records` — drives
+    /// * The grant fold's earlier-record set — `earlier_records` — drives
     ///   `classify`'s second outcome: whether a record naming an earlier
     ///   record of its home is a revocation or of neither kind (PUB-5.15).
     ///   The `grants` section renders the operative set and not the
     ///   earlier-record set.
-    /// * The grant fold's PER-KEY POPULATION — `populations` — and its
-    ///   UNPAIRED map — `unpaired` — drive the fourth outcome: whether a
+    /// * The grant fold's per-key population — `populations` — and its
+    ///   unpaired map — `unpaired` — drive the fourth outcome: whether a
     ///   would-be grant names its key's current state, which is what a
-    ///   REPLAYED share is refused by (PUB-5.15 (iv)), and which would-be
+    ///   replayed share is refused by (PUB-5.15 (iv)), and which would-be
     ///   grant a `replaces` link is the pair of. The `grants` section renders
     ///   each operative grant's `replaces` and neither structure.
     ///
@@ -757,14 +827,14 @@ impl crate::Engine {
     /// decoded checkpoint to a scan of the store over every slot, view and
     /// query of a world holding every span shape
     /// (`stab_answers_exactly_what_a_scan_of_the_store_would`). For the two
-    /// grant indexes that is a gap in the CERTIFICATE rather than a live
+    /// grant indexes that is a gap in the certificate rather than a live
     /// divergence, and the argument belongs beside the claim: both halves of
     /// the discipline drive one `grants::fold_one`, and one pair step beside
-    /// it, so an index is a function of the record SEQUENCE alone, and the
+    /// it, so an index is a function of the record sequence alone, and the
     /// halves can only order that sequence differently across homes. Order
-    /// could matter only where two records touch one index entry — one KEY —
+    /// could matter only where two records touch one index entry — one key —
     /// and every record of a key is homed in its issuer's one doc 1, where the
-    /// seed's address order IS the fold's deposit order; the fourth outcome
+    /// seed's address order is the fold's deposit order; the fourth outcome
     /// besides keeps two operative grants off one entry. The same argument
     /// covers a key's population, and the unpaired map is per home. The grant
     /// fold's own suite holds it, and the earlier-record set, the
@@ -773,30 +843,41 @@ impl crate::Engine {
     /// deposit
     /// (`a_rebuilt_grant_fold_equals_the_live_one_after_every_deposit_of_a_generated_history`).
     ///
-    /// For the EXCEPTION SET the certificate has an edge of its own. Its two
+    /// For the exception set the certificate has an edge of its own. Its two
     /// halves enumerate M3's publication map alike — the fold asks the
     /// one address each document-minting record writes an entry for, and the
-    /// seed walks the entries — so a registered document with NO entry is
+    /// seed walks the entries — so a registered document with no entry is
     /// outside both halves and outside what `Ok(())` speaks for. That is the
     /// open direction `crate::publication` states, and no comparison of the
     /// two halves reaches it.
     ///
-    /// PANICS rather than returning `Err` when `world` holds one of the shapes
+    /// **Cost.** Per call, uncached, it is two [`crate::Engine::dump_of`]s
+    /// plus a clone of the world and a whole-links `rebuild_derived` over it —
+    /// so upwards of twice that figure, and both dumps are resident at once
+    /// for the comparison. This is a harness surface: it gates nothing, and it
+    /// should not acquire a caller that does not gate it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HintDivergence`] — the dump of `world` and the dump of its
+    /// rebuild — where the two differ in any byte.
+    ///
+    /// # Panics
+    ///
+    /// Panics rather than returning `Err` when `world` holds one of the shapes
     /// [`crate::Engine::open`] names: the rebuild runs over its clone and
     /// asserts what the stores' rebuilds and the exception set's seed assert.
     /// So this certifies derived state against authoritative state those
     /// assertions accept, and does not grade the authoritative state itself.
-    ///
-    /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
-    /// of the world and a whole-links `rebuild_derived` over it — so upwards
-    /// of twice that figure, and both dumps are resident at once for the
-    /// comparison. This is a harness surface: it gates nothing, and it should
-    /// not acquire a caller that does not gate it.
+    /// It panics too where `world` carries no identity slice over credential
+    /// deposits — a world decoded from a body written without the slice — on
+    /// the rebuild's one refusal.
     pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
         let live = dump(world);
-        // A live world CARRIES its identity slice (the post-load invariant),
-        // so the one refusal the rebuild can answer — a slice-less base over
-        // credential deposits — is unreachable from here.
+        // A live world carries its identity slice (the post-load invariant),
+        // so for one the one refusal the rebuild can answer — a slice-less
+        // base over credential deposits — is unreachable; a world decoded
+        // without the slice over such deposits meets it here.
         let rebuilt = dump(
             &world
                 .clone()

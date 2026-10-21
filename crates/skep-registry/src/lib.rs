@@ -7,8 +7,10 @@
 //! pins (REG-1.14, REG-1.15, REG-1.24) — THE TWO BODIES parsed at the
 //! record grade (REG-1.86 (a)), the binding's and the endpoint's, under ONE
 //! canonical rule (REG-1.86 (h)), THE SEEDING CHECK's three arms (REG-1.28
-//! to REG-1.32), and THE VECTOR SET every parser of the bodies is held to
-//! (`tests/vectors/records.json`).
+//! to REG-1.32), THE VOCABULARY — every link type the build names in the
+//! commons, the one table the daemon seeds the registry document from at
+//! every open and a client reads a type's name by — and THE VECTOR SET every
+//! parser of the bodies is held to (`tests/vectors/records.json`).
 //!
 //! A LEAF: it depends on `skep-address` and `serde_json` and on nothing
 //! else — no engine, no daemon, no signature library — so the daemon's
@@ -28,17 +30,25 @@
 //!   a refusal names — the refusals [`ParseRefusal`], and the cap
 //!   [`MAX_REGISTRY_RECORD_BYTES`];
 //! * `check` — [`seeding_check`] and its refusal [`SeedingRefusal`], run by
-//!   the daemon ahead of every genesis.
+//!   the daemon ahead of every genesis;
+//! * `vocabulary` — THE VOCABULARY, every link type this build names in the
+//!   commons as one table ([`vocabulary()`], a [`Definition`] per row with
+//!   its address, path, name, purpose and endset shape, and the section the
+//!   daemon writes for it, [`Definition::section`]), [`definition_at`], the
+//!   row an address is, and [`defines_type`], the meta-type `3.50` every
+//!   definition link is typed by — what the daemon seeds into the registry
+//!   document at every open, and what a client reads a type's name by.
 //!
 //! The kinds' and subtypes' addresses are commons-map's and are never
 //! decided here; a row that moves is a changed line in the map's table and
-//! the one table in `rows.rs`.
+//! the one table in `rows.rs`, and the vocabulary's row with it.
 
 #![forbid(unsafe_code)]
 
 mod body;
 mod check;
 mod rows;
+mod vocabulary;
 
 pub use body::{
     encode, parse, Binding, Body, BodyKind, Endpoint, Member, Origins, ParseRefusal, Record,
@@ -50,3 +60,4 @@ pub use rows::{
     t_policy_link, t_policy_link_own, t_succession_ground, t_succession_policy, t_successor_of,
     t_takedown_base, t_takedown_lifted, t_takedown_record, Kind, Row, RowOf, Subtype,
 };
+pub use vocabulary::{defines_type, definition_at, vocabulary, Definition};

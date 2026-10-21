@@ -2,7 +2,8 @@
 
 The registry's stable core as values: the twelve commons rows the registry
 allocates, the binding and endpoint bodies under one canonical rule, the
-seeding check, and the vector set every parser of the bodies is held to.
+seeding check, the vocabulary of every link type the build names, and the
+vector set every parser of the bodies is held to.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
@@ -59,6 +60,25 @@ back — is this crate:
   and THE COUNT against the registry range's five ordinals (REG-1.28 to
   REG-1.32). A refusal names its arm, and on one the hand that runs the
   check owes a genesis that does not complete: nothing is written.
+- **The vocabulary** (`vocabulary`, `Definition` with its `section`,
+  `definition_at`, `defines_type`) — every link type this build names in
+  the commons, one table in path order: each row's address under the ghost
+  home document's type subspace `1.1.0.1.0.1.0.3`, its path, its name (one
+  lowercase token — the plan's word, or the code's where the code names a
+  type the plan does not), its purpose in a line and the shape of its
+  endsets. The credential kinds `3.1`–`3.3`, the core set the seeding plan
+  curates (`3.5`–`3.21` with their subtypes, `3.30`, `3.40`–`3.45`),
+  `replaces` `3.12`, the designations `3.22`, `3.27` and `3.28`, the
+  meta-type `defines` `3.50`, the registry's twelve rows named as `rows`
+  names them, the rail record `3.60`, the steward's classification `3.61`,
+  the two media cell kinds `3.88` and `3.89`, the grant `3.90` and the
+  consumption marker `3.91`; nothing at an ordinal nobody allocated. The
+  daemon writes one section (`Definition::section`: the name alone on the
+  first line, then the address, the purpose and the endset shape) and one
+  `defines` link per row into the registry document `1.1.0.1.0.1` at every
+  open — all of them on a fresh board, the missing ones on an upgraded or
+  interrupted one — so a client resolves a type's name by one `find_links_ftt`
+  constrained in `to` and `ty` and one read of the link's `from` span.
 - **The vector set**, `tests/vectors/records.json` — the admitted and
   refused bodies, one JSON array, with each refused body's cause and each
   admitted body's sig-less canonical projection. Every parser of the two
@@ -68,8 +88,9 @@ back — is this crate:
 
 Who reads it: the daemon, whose write path parses a registry record at the
 atom's `insert` and verifies its `sig` at the deposit's `make_link` under
-the set that opens its home, and whose open runs the seeding check ahead of
-every genesis; and the resolver, `skep-resolve`, which parses each record
+the set that opens its home, whose open runs the seeding check ahead of
+every genesis and seeds the vocabulary into the registry document after
+it; and the resolver, `skep-resolve`, which parses each record
 it fetches by this crate's `parse`, folds the registry board's verified
 bindings into the prefix → binding index and reads the current endpoint
 off the active view.

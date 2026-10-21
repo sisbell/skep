@@ -122,7 +122,10 @@ fn the_feed_is_the_mirrors_whole_input() {
         // THE WALK, as the claimant — whose class sees every row above but
         // the system account's two private draft writes.
         let entries = all_entries(port, Some(&signed));
-        let mut want_ats: Vec<u64> = CEREMONY_ATS.to_vec();
+        // The registry seed's rows first — the publish and the links every
+        // class sees — then the ceremony's.
+        let mut want_ats: Vec<u64> = seed_ats();
+        want_ats.extend(CEREMONY_ATS);
         want_ats.push(H1_PUBLISH_AT);
         want_ats.push(delegate_at);
         want_ats.extend(hire_rows.iter().map(at_of));

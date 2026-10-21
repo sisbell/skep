@@ -38,29 +38,44 @@ use skepd::{Seq, Skepd};
 
 mod mirror;
 
+/// The registry seed's rows a guest sees on a fresh board (wire.md
+/// §Registry): the member's publish at `SEED_PUBLISH_AT` — the staging
+/// draft's mint at 1 and the one insert of every type's section at 4 are the
+/// system account's private writes, masked at every class but the system's —
+/// then one `make_link` per type, three records apart, to `SEED_HEAD`.
+const SEED_PUBLISH_AT: u64 = 8;
+
+fn seed_ats() -> Vec<u64> {
+    (SEED_PUBLISH_AT..=SEED_HEAD).step_by(3).collect()
+}
+
 /// The claim link's committed position on a fresh board — the ceremony's
-/// fifth commit (`common::claim_board`): delegate (2 records), the home mint
-/// (1), the one-atom insert (3), the genesis link (3), the claim link (3) —
-/// twelve records. The claim's own step then writes the board's first head
-/// `H.1` above it ([`H1_ATS`]; signed ops, s1), so the board the claim leaves
+/// fifth commit (`common::claim_board`) above the seeded board's head
+/// (`common::SEED_HEAD`): delegate (2 records), the home mint (1), the
+/// one-atom insert (3), the genesis link (3), the claim link (3) — twelve
+/// records. The claim's own step then writes the board's first head `H.1`
+/// above it ([`H1_ATS`]; signed ops, s1), so the board the claim leaves
 /// behind stands at [`CLAIMED_HEAD`], the base every seeded position below
 /// sits on. Lane 3.2 re-pinned wire.md's change-feed examples onto the
-/// ceremony's numbers; the s1 lane onto these.
-const CLAIM_POSITION: u64 = 12;
+/// ceremony's numbers; the s1 lane onto these; the registry seed's lane onto
+/// the seeded board's, every figure derived from the one constant.
+const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 
 /// The ceremony's own commit positions (the record counts above,
 /// cumulative): delegate, the home mint, the record insert, the genesis
 /// link, the claim link.
-const CEREMONY_ATS: [u64; 5] = [2, 3, 6, 9, 12];
+const CEREMONY_ATS: [u64; 5] =
+    [SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12];
 
-/// `H.1`'s three commits, in the claim's own step: the staging draft's mint,
-/// the head record's insert into it, the publish shot into `H`. The first
-/// two write the system account's PRIVATE draft and are masked at every
-/// class but the system's; the publish is public, `key: "system"`.
-const H1_ATS: [u64; 3] = [CLAIM_POSITION + 1, CLAIM_POSITION + 4, CLAIM_POSITION + 8];
+/// `H.1`'s two commits, in the claim's own step: the head record's insert
+/// into the staging draft — which stands from the open's registry seed, so
+/// the claim's head mints none — and the publish shot into `H`. The insert
+/// writes the system account's PRIVATE draft and is masked at every class
+/// but the system's; the publish is public, `key: "system"`.
+const H1_ATS: [u64; 2] = [CLAIM_POSITION + 3, CLAIM_POSITION + 7];
 
 /// `H.1`'s publish — the one head entry every class sees.
-const H1_PUBLISH_AT: u64 = H1_ATS[2];
+const H1_PUBLISH_AT: u64 = H1_ATS[1];
 
 /// The claimed board's head: the ceremony and its `H.1`.
 const CLAIMED_HEAD: u64 = H1_PUBLISH_AT;
@@ -76,11 +91,16 @@ const SEEDED_ATS: [u64; 5] = [
 ];
 
 /// Every committed position a claimed, seeded board's OWNER (principal 1)
-/// sees: the ceremony's five commits, `H.1`'s publish (its draft mint and
-/// insert are the system account's private writes, masked), then the
-/// seeded five.
+/// sees: the registry seed's publish and links, the ceremony's five commits,
+/// `H.1`'s publish (its insert is the system account's private write,
+/// masked), then the seeded five.
 fn all_ats() -> Vec<u64> {
-    CEREMONY_ATS.iter().chain([H1_PUBLISH_AT].iter()).chain(SEEDED_ATS.iter()).copied().collect()
+    seed_ats()
+        .into_iter()
+        .chain(CEREMONY_ATS)
+        .chain([H1_PUBLISH_AT])
+        .chain(SEEDED_ATS)
+        .collect()
 }
 
 /// The scripted flow behind the wire.md examples. Positions are pinned by
@@ -242,33 +262,37 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
 
-    // A fresh world has no recorded commit: head_time is null, honestly.
+    // A fresh board's first commits are the registry seed's, recorded by the
+    // open that made them: head_time is the last one's time, and the feed's
+    // first page from 0 is the seed's rows every class sees.
     let (st, body) = get(port, "/health");
     assert_eq!(st, 200);
-    assert!(json(&body)["head_time"].is_null(), "fresh world: head_time null");
+    assert!(json(&body)["head_time"].is_u64(), "fresh board: the seed's head_time");
+    let v = changes_ok(port, None, "since=0");
+    assert_eq!(entry_ats(&v), seed_ats(), "the seed's publish and links, the draft's writes masked");
 
-    // …and the feed answers the empty page, not a refusal: this is every
-    // client's first poll, and a 410 here would break it before the world
-    // has anything in it to be wrong about.
-    let (st, body) = changes_raw(port, None, "since=0");
-    assert_eq!(st, 200, "a fresh world's feed: {}", String::from_utf8_lossy(&body));
+    // …and from the seed's head the feed answers the empty page, not a
+    // refusal: this is every client's first poll past the seed, and a 410
+    // here would break it before the world has anything in it to be wrong
+    // about.
+    let (st, body) = changes_raw(port, None, &format!("since={SEED_HEAD}"));
+    assert_eq!(st, 200, "a fresh board's feed: {}", String::from_utf8_lossy(&body));
     let v = json(&body);
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(0), Some(false)));
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(SEED_HEAD), Some(false)));
 
     common::claim_board(port);
-    // THE CLAIM WROTE `H.1` (signed ops, s1): the three head entries sit
+    // THE CLAIM WROTE `H.1` (signed ops, s1): the two head entries sit
     // between the claim and the seeded flow — the publish public with
-    // `key: "system"`, the private draft's mint and insert masked from
-    // everyone but the system account — and the examples below page from
-    // above them.
+    // `key: "system"`, the private draft's insert masked from everyone but
+    // the system account — and the examples below page from above them.
     let (st, body) = changes_raw(port, None, &format!("since={CLAIM_POSITION}"));
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     let v = json(&body);
     assert_eq!(entry_ats(&v), vec![H1_PUBLISH_AT], "the guest sees H.1's publish and nothing else of it");
     assert_eq!(v["changes"][0]["op"].as_str(), Some("publish"), "{v}");
     assert_eq!(v["changes"][0]["key"].as_str(), Some("system"), "{v}");
-    assert_eq!(head(port), CLAIMED_HEAD, "the claim and its head: twenty records");
+    assert_eq!(head(port), CLAIMED_HEAD, "the seed, the claim and its head: nineteen records above the seed");
     let doc = seed_flow(port);
     let s1 = open_session(port, 1);
     // The owner's view of its own feed — the seeded document is principal
@@ -483,7 +507,11 @@ fn a_page_past_the_byte_budget_is_refused_whole_and_one_within_it_is_served_whol
     for _ in 0..320 {
         expect_resp(&op(port, Some(&signed), &grant), "ack_addr");
     }
-    let (st, body) = changes_raw(port, None, "since=0&limit=4096");
+    // The pages are read from the seeded board's head: the registry seed's
+    // ninety-odd small rows below it would widen `fits` past the figure the
+    // attested rows alone give.
+    let since = format!("since={SEED_HEAD}");
+    let (st, body) = changes_raw(port, None, &format!("{since}&limit=4096"));
     assert_eq!(st, 400, "the maximal page of attested rows passes the budget: {}", text(&body));
     let face = json(&body);
     assert_eq!(face["error"].as_str(), Some("malformed_changes"), "{face}");
@@ -492,13 +520,13 @@ fn a_page_past_the_byte_budget_is_refused_whole_and_one_within_it_is_served_whol
     assert!((256..320).contains(&fits), "~300 rows of ~6.9 KB fit 2 MiB: {fits}");
     assert!(face["detail"].as_str().is_some_and(|d| d.contains(&BUDGET.to_string()) && d.contains(&fits.to_string())), "{face}");
 
-    let v = changes_ok(port, None, &format!("since=0&limit={fits}"));
+    let v = changes_ok(port, None, &format!("{since}&limit={fits}"));
     assert_eq!(entry_ats(&v).len() as u64, fits, "limit=fits: the page served whole");
     assert_eq!(v["more"].as_bool(), Some(true), "…with more past it");
-    let (st, body) = changes_raw(port, None, &format!("since=0&limit={}", fits + 1));
+    let (st, body) = changes_raw(port, None, &format!("{since}&limit={}", fits + 1));
     assert_eq!(st, 400, "one row more passes the budget: {}", text(&body));
     assert_eq!(json(&body)["fits"].as_u64(), Some(fits), "the same answer");
-    let v = changes_ok(port, None, "since=0");
+    let v = changes_ok(port, None, &since);
     assert_eq!(entry_ats(&v).len(), 256, "the default page of attested rows is served whole");
     sd.shutdown();
 }
@@ -1089,7 +1117,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         // a make_link into principal 1's private draft, so the guest's page
         // omits it exactly as it omitted the recorded entry — a lost
         // sidecar never unmasks a draft write.
-        let g = changes_ok(port, None, "since=0");
+        let g = changes_ok(port, None, &format!("since={SEED_HEAD}"));
         assert_eq!(
             entry_ats(&g),
             [CEREMONY_ATS.as_slice(), &[H1_PUBLISH_AT], &SEEDED_ATS[..2]].concat(),
@@ -1507,13 +1535,16 @@ fn pre_feature_positions_answer_bare_entries() {
 
     // Spawned UNCLAIMED: this fixture's whole point is a pre-feature
     // journal served as-is, and claiming would append the ceremony's
-    // commits after the bare region. Reads are untouched pre-claim.
+    // commits after the bare region. Reads are untouched pre-claim. The
+    // open itself appends the registry seed's commits above the three
+    // (wire.md §Registry), so the pre-feature history is the feed's first
+    // page of three, `more` true.
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
     // Read as the GUEST: every bare position here classifies PUBLISHED from
     // the journal (a delegate, the born-published home's mint, a deposit
     // into it), so the guest's page is the whole pre-feature history.
-    let (st, body) = changes_raw(port, None, "since=0");
+    let (st, body) = changes_raw(port, None, "since=0&limit=3");
     assert_eq!(st, 200);
     // BYTE-EXACT, which wire.md claims of this example alone: a bare
     // position has no recorded time, so there is no field to normalize and
@@ -1523,17 +1554,18 @@ fn pre_feature_positions_answer_bare_entries() {
         serde_json::from_str::<Value>(&doc_changes_block("bare")).expect("doc json"),
         "wire.md 'changes bare' example drifted from the daemon"
     );
-    // Pre-feature commits have no recorded time: head_time is null.
+    // The head is the registry seed's last commit, recorded by this open:
+    // head_time is its time, and the position the three plus the seed's.
     let (st, body) = get(port, "/health");
     assert_eq!(st, 200);
     let health = json(&body);
-    assert!(health["head_time"].is_null());
-    assert_eq!(health["log_position"].as_u64(), Some(6));
+    assert!(health["head_time"].is_u64(), "the seed's commits are recorded: {health}");
+    assert_eq!(health["log_position"].as_u64(), Some(6 + SEED_HEAD));
     // Paging over bare entries behaves like any other page.
     let v = changes_ok(port, None, "since=3&limit=1");
     assert_eq!(entry_ats(&v), vec![6]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(6), Some(false)));
-    let v = changes_ok(port, None, "since=6");
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(6), Some(true)));
+    let v = changes_ok(port, None, &format!("since={}", 6 + SEED_HEAD));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     sd.shutdown();
 }

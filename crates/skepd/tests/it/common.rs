@@ -65,6 +65,18 @@ pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
 pub const T_BINDING: &str = "1.1.0.1.0.1.0.3.55";
 pub const T_ENDPOINT: &str = "1.1.0.1.0.1.0.3.56";
 
+/// THE SEEDED BOARD's HEAD: the committed position a fresh board stands at
+/// once its first open has seeded the link-type registry (wire.md §Registry;
+/// `skep-core`'s `commits/registry.rs`) and before any client writes — the
+/// staging draft's mint (1 record), the one insert of every type's section
+/// (3), the one publish of the member that holds them (4), then one
+/// `defines` link per type of `skep-registry`'s vocabulary (3 each): `8 + 3
+/// × the vocabulary's size`. The ONE constant every position pin of a fresh
+/// board derives from — the ceremony's five commits land at `SEED_HEAD + 2`,
+/// `+ 3`, `+ 6`, `+ 9`, `+ 12` — held equal to what a fresh board counts by
+/// `vocabulary.rs`'s own test; a type the table gains moves it by three.
+pub const SEED_HEAD: u64 = 332;
+
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key
 /// seeds so a reopened board verifies against the same keys.

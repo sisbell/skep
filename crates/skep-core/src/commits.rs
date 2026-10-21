@@ -52,6 +52,18 @@
 //! exactly one write where that write's turn lands it (`head.rs`, what a
 //! refusal does).
 //!
+//! **And the registry seed** (commons-seeding §1 to §4; `registry.rs`, this
+//! card's other child). At every open, after this card opens and before the
+//! listener binds, the daemon seeds the link-type registry document
+//! `1.1.0.1.0.1` with what it lacks — one named section and one `defines`
+//! link for every type the build knows, every row on a fresh board and the
+//! missing ones on an upgraded or interrupted one — as the system principal,
+//! through the head writer's own helpers and the one staging draft it keeps,
+//! each commit riding `Commits::commit_recorded` as a head's does: recorded
+//! with the system testimony, announced, and giving the head writer no turn
+//! ([`Commits::seed_registry`]). A driver refusal ends the seed for that
+//! open, said once, and the board serves on; the next open finishes it.
+//!
 //! **And the halt** (SO-I5 (d): no signature the board keeps is lost by a
 //! crash, a power loss or a failed write). Below the reclaim floor the
 //! attest store (`feed/attest.rs`) holds an entry signature's only copy, and
@@ -168,10 +180,24 @@ mod sidecar;
 // The published head writer, which commits through this module's own door.
 mod head;
 
+// The link-type registry's seed, which commits through the head writer's
+// helpers at every open.
+mod registry;
+
 pub use feed::{
     AttestStoreFigures, ChangesAnswer, ChangesQuery, FeedClass, FeedCompaction, StoppedFile,
 };
 pub(crate) use head::board_term;
+pub use registry::Seeded;
+
+// The registry seed's test seams, for the daemon's suites: a row hidden
+// from a board's seed, every row lifted, and a refusal of the seed's n-th
+// commit.
+#[cfg(any(test, feature = "test-hooks"))]
+#[doc(hidden)]
+pub use registry::{
+    hide_a_type_from_the_seed, refuse_the_seeds_commit_once, unhide_every_type_from_the_seed,
+};
 
 use self::classify::derived_journal;
 use self::head::HeadWriter;
@@ -371,6 +397,15 @@ pub struct Commits {
     /// what makes the field `Sync`. Zero at open, as the kernel's count is at
     /// its open.
     inline_runs_seen: AtomicU64,
+    /// The data directory this card opened in.
+    ///
+    /// It is what the registry seed's test seams key a board by
+    /// (`registry.rs`): the seed runs inside the open, before any daemon
+    /// exists to arm a hook on, and one test process opens many boards at
+    /// once, so a seam armed for one directory touches no other board's
+    /// seed. Read by nothing in a production build.
+    #[cfg_attr(not(any(test, feature = "test-hooks")), allow(dead_code))]
+    data_dir: std::path::PathBuf,
 }
 
 impl Commits {
@@ -436,6 +471,7 @@ impl Commits {
             said,
             checkpoint_signal: CheckpointSignal::new(),
             inline_runs_seen: AtomicU64::new(0),
+            data_dir: data_dir.to_path_buf(),
         })
     }
 
@@ -842,7 +878,8 @@ impl Commits {
     /// [`Commits::commit_under`] less the head writer's turn.
     ///
     /// Every commit this daemon makes rides this step — `/op`'s through
-    /// [`Commits::commit_under`], the published head's own directly — and
+    /// [`Commits::commit_under`], the published head's own and the registry
+    /// seed's directly — and
     /// that is the one premise the commit stream's completeness and
     /// [`sidecar::CommitsLog::head_time`] rest on: a commit that bypassed it
     /// would be unrecorded and unannounced, and both would be wrong about it
@@ -850,13 +887,14 @@ impl Commits {
     /// a writer is covered by passing through it, and by nothing else.
     ///
     /// The head writer's door, and private to this module so it stays the
-    /// head writer's alone: a session write through it would commit without
-    /// giving the head writer its turn. `execute` runs exactly once, inside
-    /// the lock, and [`Commits::commit_under`]'s precondition on `meta` is
-    /// this door's, its committer the head writer itself — no session, so its
-    /// writes are attributed to [`head::SYSTEM_TESTIMONY`], and it discharges
-    /// the first half as the write sequences do, deriving `meta` from the
-    /// `Op` whose fields its driver call then runs.
+    /// system principal's alone — the head writer's, and the registry seed's
+    /// through the head writer's helpers: a session write through it would
+    /// commit without giving the head writer its turn. `execute` runs exactly
+    /// once, inside the lock, and [`Commits::commit_under`]'s precondition on
+    /// `meta` is this door's, its committer the head writer itself — no
+    /// session, so its writes are attributed to [`head::SYSTEM_TESTIMONY`],
+    /// and it discharges the first half as the write sequences do, deriving
+    /// `meta` from the `Op` whose fields its driver call then runs.
     ///
     /// Once the write path has halted (the module doc; SO-I5 (d)), none of
     /// it: `execute` never runs, and the answer is M10's `Poisoned` (`Halt`),

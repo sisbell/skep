@@ -1395,6 +1395,32 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        open: kept files beside the journal and the logs: {n} — {names}; each holds bytes an open cut as damage: copy them off the volume, and remove them once the writes they held are accounted for
        ```
 
+       Then the link-type registry (wire §Registry): what the registry
+       document `1.1.0.1.0.1` lacks of the build's vocabulary — a named
+       section and a `defines` link per link type — is written now, as
+       the system account's principal, before anything is served, and
+       said where anything was written: every type on a fresh board, the
+       types a later build added on a board that stands, and nothing on
+       a board that holds them all, which says nothing here:
+
+       ```
+       open: link-type registry 1.1.0.1.0.1: {written} of {total} types written, {stood} stood, in {ms} ms
+       ```
+
+       Where the journal refuses one of the seed's commits the seed
+       stops there, said once, the board serves on, and the next open
+       writes the rest — `{op}` the commit the refusal met
+       (`create_new_document` for the staging draft's mint, `insert` for
+       the sections, `publish` for the member, `make_link` for a type's
+       link), the type by its address and its name, the cause as a
+       client would read it. Not the `registry seeding:` refusal below,
+       which is the compiled check's and ends the start; this never
+       refuses the open:
+
+       ```
+       failure: link-type registry: the {op} for the type {address} ({name}) was refused ({cause}); {n} of {total} types stand, the rest wait for the next open; the board serves
+       ```
+
    12. On a claimed board whose journal holds no head, the board's
        first head, written now:
 

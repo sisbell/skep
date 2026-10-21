@@ -28,7 +28,7 @@ use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
 
 use common::{
     acked_at, claim_board, get, json, op, op_at, open_session, spawn_unclaimed,
-    CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
+    CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL, SEED_HEAD,
 };
 
 /// The chain's genesis seed — thirty-two zero bytes — as `/health` renders
@@ -123,25 +123,29 @@ fn is_lock_contention(err: &(dyn std::error::Error + 'static)) -> bool {
 /// - (iv) a bounded read (`/op-at`, `/changes`) moves neither member;
 /// - (v) two probes with no commit between them are equal.
 ///
-/// And the fresh world first: the seed, sixty-four `0`s, at position 0 —
-/// never `null`.
+/// And the fresh board first: its open seeded the link-type registry, so it
+/// stands at `SEED_HEAD` with a chain value off the genesis seed — rendered,
+/// never `null`; the seed itself, sixty-four `0`s, is position 0's, which
+/// `chain_at.rs` pins through `/chain?at=0`.
 #[test]
 fn health_serves_the_chain_head_of_the_position_beside_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
 
-    // A FRESH WORLD: nothing committed, the root at Seq(0) carries the
-    // seed — rendered, not null.
+    // A FRESH BOARD: the registry seed's commits alone, the root at
+    // `SEED_HEAD` carrying a chain the seed's commits moved off the genesis
+    // value — rendered, not null.
     let fresh = probe(port);
-    assert_eq!(fresh, (0, GENESIS_HEX.to_string()), "a fresh world answers the seed at 0");
+    assert_eq!(fresh.0, SEED_HEAD, "a fresh board stands at the registry seed's head");
+    assert_ne!(fresh.1, GENESIS_HEX, "the seed's commits moved the chain off the genesis value");
     assert_eq!(probe(port), fresh, "(v) no commit between two probes: equal");
 
-    // The ceremony commits several: the chain leaves the seed.
+    // The ceremony commits several: the chain moves again.
     claim_board(port);
     let claimed = probe(port);
-    assert!(claimed.0 > 0, "the ceremony committed: {claimed:?}");
-    assert_ne!(claimed.1, GENESIS_HEX, "the chain moved off the seed");
+    assert!(claimed.0 > fresh.0, "the ceremony committed: {claimed:?}");
+    assert_ne!(claimed.1, fresh.1, "the chain moved with the ceremony");
     assert_eq!(probe(port), claimed, "(v) no commit between two probes: equal");
 
     // (iii) ONE committed op: the position advances by one, and the chain
@@ -161,11 +165,12 @@ fn health_serves_the_chain_head_of_the_position_beside_it() {
     assert_eq!(probe(port), after, "(v) no commit between two probes: equal");
 
     // (iv) Bounded reads move neither member: a historical read at a
-    // ceremony position, and a guest page of the feed.
+    // ceremony position — the delegate's, two records above the seeded
+    // board's head — and a guest page of the feed.
     let (st, v) = op_at(
         port,
         None,
-        2,
+        SEED_HEAD + 2,
         &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     assert_eq!(st, 200, "{v}");

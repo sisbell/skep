@@ -793,7 +793,10 @@ test, computed and never stored;
 as addresses, origins a non-empty list, each kind's `type` string read off
 its row — their one parser under the canonical rule, their encoder and the
 cap; `check.rs` the seeding check's three arms and the refusal that names
-the arm.
+the arm; `vocabulary.rs` the one table of every link type the build names
+in the commons — each row's address, path, name, purpose and endset shape,
+and the section the daemon writes for it — which the daemon's open seeds
+the registry document from and a client reads a type's name by.
 
 Rules that hold across its files:
 
@@ -805,7 +808,12 @@ Rules that hold across its files:
   table's: the ledger's own `successor-of`, by the ledger's tests, and the
   insert door's deposit class in `skep-arrangement`, which spells the
   binding `3.55` and the endpoint `3.56`, by the daemon's suite
-  (`skepd/tests/it/deposit_class.rs`).
+  (`skepd/tests/it/deposit_class.rs`). The vocabulary's table holds every
+  registry row at `rows.rs`'s address, by the unit suite beside it, and
+  every other pin the workspace holds in code — the engine's ledger, the
+  link store's `replaces`, the media crate's cell kinds, the client's and
+  the command's — by the daemon's suite (`skepd/tests/it/vocabulary.rs`),
+  which reads the sources no crate of the daemon's links.
 - **The canonical rule is the parser.** `body::parse` answers a record
   only where the bytes are the encoder's re-encoding of what they spell,
   `sig` included; it checks the FORM of every member and never a member's
@@ -2864,7 +2872,16 @@ it:
    detail through M10's own lowering and never a type name, a memo under
    the writer's state lock holding the last cause said, and cleared by one
    `landing:` line naming the landed position and the first refused one
-   when a head next lands). Beneath it, and reachable only from it:
+   when a head next lands) and the link-type registry's seed
+   (`commits/registry.rs`, which writes through the head writer's helpers
+   and the one staging draft they share: at every open, as the system
+   principal, one named section and one `defines` link into the registry
+   document `1.1.0.1.0.1` for every type of `skep-registry`'s vocabulary
+   the board lacks — every type on a fresh board, the missing ones on an
+   upgraded or interrupted one, a refused commit said once and the open
+   going on). The head writer and the seed are the only writers under the
+   system account, and the staging draft `1.1.0.1.0.3` the one document
+   either mints. Beneath them, and reachable only from them:
    - `commits/feed.rs` — the change feed, and the one compaction of its
      five files to the journal's reclaim floor, run at open and by the
      daemon's checkpoint thread after any landing, its own or a backstop's,
@@ -2936,11 +2953,15 @@ Rules that hold across its files:
 - **The test seam is a feature.** `test-hooks` (default off) compiles in
   the feed walk's hold, its notice and its panic arm, the walk's pending
   region and progress cadence, the head writer's clock and its one
-  refusal, the feed's and the attest store's failure arms and the attest
-  store's sync mark, the lines said and the checkpoint signal's tick, and
-  forwards nothing; the daemon's hooks (`server/hooks.rs`) are the doors a
-  suite reaches them through, and `scripts/gate-full.sh` builds the
-  library and its docs without it.
+  refusal, the registry seed's three (a type hidden from a board's seed,
+  every type lifted, a refusal of the seed's n-th commit — keyed by the
+  board's directory, since the seed runs inside the open before any
+  daemon exists to arm a hook on), the feed's and the attest store's
+  failure arms and the attest store's sync mark, the lines said and the
+  checkpoint signal's tick, and forwards nothing; the daemon's hooks
+  (`server/hooks.rs`) are the doors a suite reaches most of them through,
+  the seed's reached as the commits' own `pub` seams, and
+  `scripts/gate-full.sh` builds the library and its docs without it.
 
 Its unit suites sit beside their code: `auth/blocked/tests.rs`,
 `auth/session/tests.rs` (which opens a real engine), the inline suites of

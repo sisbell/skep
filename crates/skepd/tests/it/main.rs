@@ -66,6 +66,7 @@ mod transport;
 mod universal_grants;
 mod vectors;
 mod version_chain;
+mod vocabulary;
 mod volume;
 mod wire_doc;
 mod write_pool;

@@ -2,7 +2,8 @@
 //!
 //! Who may act on a board (the session layer, [`auth`]), what every write
 //! rides and leaves behind (the commits — the one door, the record, the
-//! feed, the published head — [`commits`]) and the wire's JSON grammar
+//! feed, the published head, the link-type registry's seed — [`commits`])
+//! and the wire's JSON grammar
 //! ([`codec`]): the collaborators `skepd` composes behind its router, and
 //! nothing of the transport. The routes, the replies, the history service,
 //! the operator's tools and the process are `skepd`'s, the crate over this
@@ -26,7 +27,8 @@
 pub mod auth;
 // Layer 1 — the commits: the one door every write rides (commit, record,
 // announce, under one guard), the record `commits.log`, the change feed and
-// its five files, the attest store, and the published head writer.
+// its five files, the attest store, the published head writer and the
+// link-type registry's seed at every open.
 pub mod commits;
 // Layer 2, the leaves — the wire codec: the JSON grammar, parse and marshal.
 pub mod codec;

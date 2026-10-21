@@ -148,6 +148,17 @@
 //! M3/M5, never constructing `Caller::System`; every ω check passes because
 //! the system account owns `H` and its draft, and nothing in the engine is
 //! widened.
+//!
+//! **The door's other user.** The link-type registry's seed (`registry.rs`,
+//! this module's sibling) writes the registry document `1.1.0.1.0.1` at every
+//! open as the same principal with the same testimony, through the same
+//! helpers — [`HeadWriter::ensure_draft`], [`HeadWriter::commit_insert`],
+//! [`HeadWriter::commit_publish`] and [`HeadWriter::run_commit`], each
+//! `pub(super)` for it — and reuses the one staging draft: the system
+//! principal mints no other document, whichever of the two mints the draft
+//! first, and row 40's line is the fence for both. A refused commit of the
+//! seed's is the seed's to say, so the helpers take who says a refusal
+//! ([`Refused`]) rather than row 38's position.
 
 use std::io;
 use std::time::Instant;
@@ -492,6 +503,16 @@ impl HeadRecord {
     }
 }
 
+/// Who says a refused commit of the system principal's, and how.
+///
+/// It is handed to [`HeadWriter::run_commit`] and the three helpers over it
+/// with the op refused, as the wire names it, and the cause as the wire
+/// renders a rejection ([`render_cause`]): the head writer's own is row 38's
+/// memo, [`HeadWriter::say_the_refusal_once`] with the position the head
+/// would have named; the registry seed's is its own line, naming the type
+/// whose commit the refusal met.
+pub(super) type Refused<'a> = &'a dyn Fn(&'static str, String);
+
 /// A head that is due: the decision the turn reaches under the state lock.
 ///
 /// [`HeadWriter::take_turn`] reaches it under the state lock and then acts on
@@ -815,7 +836,8 @@ impl HeadWriter {
         // The position the head names — what row 38's line names where any
         // of its commits is refused.
         let position = record.position;
-        let Some(draft) = self.ensure_draft(wp, serial, position) else {
+        let refused = |act: &'static str, cause: String| self.say_the_refusal_once(position, act, cause);
+        let Some(draft) = self.ensure_draft(wp, serial, &refused) else {
             return false;
         };
         let bytes = record.to_bytes();
@@ -826,7 +848,7 @@ impl HeadWriter {
             snap.world().m5().content_count(&draft) + Nat::from(1u32)
         };
         let Some(atom_start) =
-            self.commit_insert(wp, serial, &draft, next_ordinal, bytes, position)
+            self.commit_insert(wp, serial, &draft, next_ordinal, vec![Val::new(bytes)], &refused)
         else {
             return false;
         };
@@ -863,7 +885,20 @@ impl HeadWriter {
             draft: Some(draft.clone()),
             runs: vec![ShotRun { origin: draft, run }],
         };
-        self.commit_publish(wp, serial, h, shot, position).is_some()
+        self.commit_publish(wp, serial, h, shot, &refused).is_some()
+    }
+
+    /// Takes the system principal's own commits off the cadence's count.
+    ///
+    /// It is the look the writer takes after its own head's commits (the
+    /// seq refresh [`HeadWriter::write_head_if_due`] ends with), offered to
+    /// the registry seed for the same reason: the seed's commits at the open
+    /// are the system principal's, not a session's, and the next write's turn
+    /// would otherwise find the seq past the writer's last look and count
+    /// them as that write's landing — one early count, which this refresh
+    /// spares. Under the state lock, held for the one store.
+    pub(super) fn mark_own_commits_seen(&self) {
+        self.state.lock().last_seen_position = self.stores.kernel().snapshot().seq().0;
     }
 
     /// Returns the staging draft, minting it now where none is held.
@@ -872,12 +907,14 @@ impl HeadWriter {
     /// else minted now under the system account (a private document,
     /// `published: false`) — once for the life of the board where the mint
     /// lands at [`staging_draft_address`], since every later open finds it
-    /// there ([`find_staging_draft`]).
-    fn ensure_draft(
+    /// there ([`find_staging_draft`]). The registry seed takes it too, so
+    /// whichever of the two writes first mints it, and the other finds it
+    /// held. A refusal of the mint is `refused`'s to say.
+    pub(super) fn ensure_draft(
         &self,
         wp: &Commits,
         serial: &SerialGuard<'_>,
-        position: u64,
+        refused: Refused<'_>,
     ) -> Option<Address> {
         // Read in a statement of its own, so the state guard drops at the `;`:
         // an `if let` keeps its scrutinee's temporaries alive through its
@@ -891,7 +928,7 @@ impl HeadWriter {
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
         // The refusal lowered as the front door lowers the same error for a
         // `create_new_document` (`lower_txn`, M10's one table).
-        let draft = self.run_commit(wp, serial, meta, position, move || {
+        let draft = self.run_commit(wp, serial, meta, refused, move || {
             self.stores
                 .namespace()
                 .create_new_document(SYSTEM_PRINCIPAL, &account, Some(false))
@@ -912,19 +949,26 @@ impl HeadWriter {
         Some(draft)
     }
 
-    fn commit_insert(
+    /// Commits one `insert` of `values` into `draft` at `ordinal`, as the
+    /// system principal, through [`HeadWriter::run_commit`].
+    ///
+    /// The head's record is one atom; the registry seed's sections are
+    /// per-byte values, as prose is. Answers the first minted I-address, the
+    /// values I-adjacent from it, or `None` where the driver refused, which
+    /// `refused` has said.
+    pub(super) fn commit_insert(
         &self,
         wp: &Commits,
         serial: &SerialGuard<'_>,
         draft: &Address,
         ordinal: Nat,
-        bytes: Vec<u8>,
-        position: u64,
+        values: Vec<Val>,
+        refused: Refused<'_>,
     ) -> Option<Address> {
         let op = Op::Insert {
             doc: draft.clone(),
             at: VPos::content(ordinal),
-            values: vec![Val::new(bytes)],
+            values,
             deposit: Deposit::Undeclared,
         };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
@@ -932,7 +976,7 @@ impl HeadWriter {
             return None;
         };
         // The refusal lowered as the front door lowers an `insert`'s.
-        self.run_commit(wp, serial, meta, position, move || {
+        self.run_commit(wp, serial, meta, refused, move || {
             self.stores
                 .vstream()
                 .insert(Caller::Principal(SYSTEM_PRINCIPAL), &doc, at, values, deposit)
@@ -940,15 +984,21 @@ impl HeadWriter {
         })
     }
 
-    fn commit_publish(
+    /// Commits one publish `shot` into `doc`'s chain, as the system
+    /// principal, through [`HeadWriter::run_commit`].
+    ///
+    /// `doc` is `H` for a head, the registry document for the seed. Answers
+    /// the member minted, or `None` where the driver refused, which `refused`
+    /// has said.
+    pub(super) fn commit_publish(
         &self,
         wp: &Commits,
         serial: &SerialGuard<'_>,
-        h: Address,
+        doc: Address,
         shot: Shot,
-        position: u64,
+        refused: Refused<'_>,
     ) -> Option<Address> {
-        let op = Op::Publish { doc: h, shot };
+        let op = Op::Publish { doc, shot };
         let meta = write_meta(&op)?.attributed(SYSTEM_TESTIMONY.to_string(), None);
         let Op::Publish { doc, shot } = op else {
             return None;
@@ -958,7 +1008,7 @@ impl HeadWriter {
         // withheld. The refusal lowered as the front door lowers a
         // `publish`'s.
         let visibility = World::visible_to(Caller::Principal(SYSTEM_PRINCIPAL));
-        self.run_commit(wp, serial, meta, position, move || {
+        self.run_commit(wp, serial, meta, refused, move || {
             self.stores
                 .vstream()
                 .publish(
@@ -971,7 +1021,8 @@ impl HeadWriter {
         })
     }
 
-    /// Runs one head commit through the head writer's door.
+    /// Runs one commit of the system principal's through the head writer's
+    /// door.
     ///
     /// The door is [`Commits::commit_recorded`] — recorded and announced like
     /// any write, giving the head writer no turn — and the commit runs as the
@@ -982,18 +1033,20 @@ impl HeadWriter {
     /// driver refusal is a [`Rejection`] — the store's error lowered through
     /// M10's one table under the op's own kind, so it reads as the wire's
     /// refusal of the same op would — met inside the closure, where it is in
-    /// hand, said once per commit and cause with `position`, the one the head
-    /// would have named, and the op refused
-    /// ([`HeadWriter::say_the_refusal_once`]), and answered with a
-    /// non-committing `Response` (recorded nowhere), so the head is skipped
-    /// and the triggering write is untouched. The test seam's refusal is
-    /// taken here too, ahead of the driver, so it rides the same path.
-    fn run_commit(
+    /// hand, handed to `refused` with the op refused and the cause as the
+    /// wire renders it — the head's row 38 memo, said once per commit and
+    /// cause with the position the head would have named
+    /// ([`HeadWriter::say_the_refusal_once`]), or the registry seed's own
+    /// line — and answered with a non-committing `Response` (recorded
+    /// nowhere), so the head or the seed's row is skipped and the triggering
+    /// write is untouched. The test seam's refusal is taken here too, ahead
+    /// of the driver, so it rides the same path.
+    pub(super) fn run_commit(
         &self,
         wp: &Commits,
         serial: &SerialGuard<'_>,
         meta: WriteMeta,
-        position: u64,
+        refused: Refused<'_>,
         run: impl FnOnce() -> Result<(Address, Seq), Rejection>,
     ) -> Option<Address> {
         let kind = meta.kind;
@@ -1005,7 +1058,7 @@ impl HeadWriter {
             match outcome {
                 Ok((addr, at)) => Response::AckAddr { addr, at },
                 Err(refusal) => {
-                    self.say_the_refusal_once(position, op_name(kind), render_cause(&refusal));
+                    refused(op_name(kind), render_cause(&refusal));
                     // A no-op answer `record` returns None for: nothing
                     // recorded, nothing announced. Dropped below, never on
                     // the wire.
@@ -1059,8 +1112,9 @@ impl HeadWriter {
 /// `StorageFull` says the operator's words, `the volume is full`, ahead of
 /// the OS's text, as the checkpoint's failure line says them. Never a
 /// `Debug` rendering: the inner errors are the stores', whose `Display` the
-/// daemon cannot assume and whose `Debug` names a variant.
-fn render_cause(refusal: &Rejection) -> String {
+/// daemon cannot assume and whose `Debug` names a variant. The registry
+/// seed's line renders its cause through this too, so the two spell one way.
+pub(super) fn render_cause(refusal: &Rejection) -> String {
     let code = wire_code(refusal);
     let full = refusal.io_kind == Some(io::ErrorKind::StorageFull);
     match (&refusal.detail, full) {
@@ -1284,18 +1338,19 @@ pub(crate) fn board_term(world: &World) -> Option<BoardTerm> {
 
 /// Returns the staging draft's address: doc 3 of the system account.
 ///
-/// It is `1.1.0.1.0.3`: the seed registers doc 1 and doc 2
+/// It is `1.1.0.1.0.3`: genesis registers doc 1 and doc 2
 /// ([`skep_namespace::M3State::genesis`]), the system principal holds no key
-/// and has no session, so the head writer is the only writer under the
-/// account and its first mint lands here by the document chain's frontier.
-/// Pinned so a reopened writer can find the draft (resume by reading) instead
-/// of minting a new private document per uptime.
+/// and has no session, so the head writer and the registry seed — which
+/// share this one draft through [`HeadWriter::ensure_draft`] — are the only
+/// writers under the account, and the first mint of either lands here by the
+/// document chain's frontier. Pinned so a reopened writer can find the draft
+/// (resume by reading) instead of minting a new private document per uptime.
 ///
 /// # Panics
 ///
 /// Panics if `1.1.0.1.0.3` is not a nonempty, T4-valid address; it is one,
 /// so neither `expect` fires.
-fn staging_draft_address() -> Address {
+pub(super) fn staging_draft_address() -> Address {
     let t = Tumbler::new([1u32, 1, 0, 1, 0, 3].into_iter().map(Nat::from))
         .expect("a six-component sequence is nonempty");
     validate(t).expect("the staging draft 1.1.0.1.0.3 is T4-valid by construction")

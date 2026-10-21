@@ -51,7 +51,7 @@ use skepd::{bind, serve_bound, AuthOptions, Daemon, Origin, Skepd, DEFAULT_WORKE
 
 use crate::common::{
     acked_addr, acked_at, expect_resp, get, http, json, op, open_session, spawn, Sse,
-    CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL,
+    CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL, SEED_HEAD,
 };
 
 /// The tests here hold the walk one at a time (the module doc).
@@ -62,9 +62,10 @@ static HOLD: Mutex<()> = Mutex::new(());
 /// gets.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// The claimed board's head as the claim leaves it: the ceremony's five
-/// commits and `H.1`'s three, the publish at 20 (`changes.rs` pins them).
-const CLAIMED_HEAD: u64 = 20;
+/// The claimed board's head as the claim leaves it: the registry seed's
+/// commits (`common::SEED_HEAD`), the ceremony's five and `H.1`'s two, the
+/// publish nineteen records above the seed (`changes.rs` pins them).
+const CLAIMED_HEAD: u64 = SEED_HEAD + 19;
 
 /// The hold, taken for a test's span and RELEASED at its end, pass or
 /// fail, so a red leaves no later walk parked.
@@ -495,28 +496,44 @@ fn the_three_lines_come_at_the_cadence() {
     sd.shutdown();
 }
 
+/// The positions every class sees at or below the claimed head, off the one
+/// constant: the registry seed's publish at 8 and its links three records
+/// apart to `SEED_HEAD` (the draft's mint at 1 and the sections' insert at 4
+/// are the system account's private writes, masked at every class but the
+/// system's), the ceremony's five commits, and `H.1`'s publish, the claimed
+/// head itself (`changes.rs` pins them).
+fn public_ats_through_the_claimed_head() -> Vec<u64> {
+    (8..=SEED_HEAD)
+        .step_by(3)
+        .chain([SEED_HEAD + 2, SEED_HEAD + 3, SEED_HEAD + 6, SEED_HEAD + 9, SEED_HEAD + 12])
+        .chain([CLAIMED_HEAD])
+        .collect()
+}
+
 /// T6 — THE RANGE, NOT THE START (§3.3 step 2: "a page starting below the
 /// region would otherwise silently skip its positions"). THE ARITHMETIC
 /// PINNED: `low` is COVERED and `head` the last of the region, UNCOVERED;
 /// a page with `since < head` is refused unless its `limit` ROWS all lie
 /// at or below `low`, and a served page below the region says `more:
-/// true`. With `low = 24` and `head = 30` on the owner's feed (positions
-/// 2, 3, 6, 9, 12, 20, 21–30): `since=20&limit=10` → 503; `since=20&limit=3`
-/// → 200 with 21, 22, 23; `since=30` → 200, empty; `since=29` → 503;
-/// `since=23&limit=1` → 200 with 24, the fence itself; `since=24&limit=1`
-/// → 503; and on the GUEST's sparse feed (2, 3, 6, 9, 12, 20 at or below
-/// `low`) `since=0&limit=8` → 503 where the position range `(0, 8]` alone
-/// would have served it and then run past the region, `since=0&limit=6` →
-/// 200 with the six and `more: true`. After the landing the guest's
-/// `since=0&limit=8` serves the six with `more: false`: the over-claim was
-/// the safe one.
+/// true`. With `low` four mints above the claimed head `C` and `head` ten,
+/// on the owner's feed (the public positions through `C`, then `C+1`–`C+10`):
+/// `since=C&limit=10` → 503; `since=C&limit=3` → 200 with the first three
+/// mints; `since=head` → 200, empty; `since=head-1` → 503;
+/// `since=low-1&limit=1` → 200 with `low`, the fence itself;
+/// `since=low&limit=1` → 503; a page from 0 of exactly the owner's rows
+/// through `low` → 200 and `more: true`; and on the GUEST's sparse feed
+/// (the public positions through `C` alone at or below `low`) a page from 0
+/// one row longer than them → 503 where the position range alone would have
+/// served it and then run past the region, the page of exactly them → 200
+/// and `more: true`. After the landing the guest's longer page serves them
+/// with `more: false`: the over-claim was the safe one.
 #[test]
 fn a_page_is_refused_by_its_rows_not_its_since_alone() {
     let _held = hold();
     let dir = tempfile::tempdir().expect("tempdir");
     let (head, _, _) = seeded_board(dir.path(), 10);
-    assert_eq!(head, 30, "ten mints above the claimed head of 20");
-    let low = 24;
+    assert_eq!(head, CLAIMED_HEAD + 10, "ten mints above the claimed head");
+    let low = CLAIMED_HEAD + 4;
     tear_to(dir.path(), low);
 
     let sd = spawn_holding_the_walk(dir.path());
@@ -535,24 +552,34 @@ fn a_page_is_refused_by_its_rows_not_its_since_alone() {
         assert_eq!(v["more"].as_bool(), Some(more), "{query}: {v}");
         assert_eq!(v["last"].as_u64(), Some(want.last().copied().unwrap_or(0)), "{query}: {v}");
     };
-    refused(Some(&owner), "since=20&limit=10");
-    served(Some(&owner), "since=20&limit=3", &[21, 22, 23], true);
-    let (st, v) = changes(port, Some(&owner), "since=30");
+    let c = CLAIMED_HEAD;
+    refused(Some(&owner), &format!("since={c}&limit=10"));
+    served(Some(&owner), &format!("since={c}&limit=3"), &[c + 1, c + 2, c + 3], true);
+    let (st, v) = changes(port, Some(&owner), &format!("since={head}"));
     assert_eq!((st, positions(&v).len(), v["more"].as_bool()), (200, 0, Some(false)), "{v}");
-    refused(Some(&owner), "since=29");
-    served(Some(&owner), "since=23&limit=1", &[24], true);
-    refused(Some(&owner), "since=24&limit=1");
-    served(Some(&owner), "since=0&limit=10", &[2, 3, 6, 9, 12, 20, 21, 22, 23, 24], true);
-    // THE SPARSE CLASS: the guest sees six positions at or below `low`.
-    refused(None, "since=0&limit=8");
-    served(None, "since=0&limit=6", &[2, 3, 6, 9, 12, 20], true);
-    refused(None, "since=20&limit=1");
+    refused(Some(&owner), &format!("since={}", head - 1));
+    served(Some(&owner), &format!("since={}&limit=1", low - 1), &[low], true);
+    refused(Some(&owner), &format!("since={low}&limit=1"));
+    let owners_through_low: Vec<u64> =
+        public_ats_through_the_claimed_head().into_iter().chain(c + 1..=low).collect();
+    served(
+        Some(&owner),
+        &format!("since=0&limit={}", owners_through_low.len()),
+        &owners_through_low,
+        true,
+    );
+    // THE SPARSE CLASS: the guest sees the public positions through the
+    // claimed head at or below `low`, and none of the owner's mints.
+    let guests = public_ats_through_the_claimed_head();
+    refused(None, &format!("since=0&limit={}", guests.len() + 1));
+    served(None, &format!("since=0&limit={}", guests.len()), &guests, true);
+    refused(None, &format!("since={c}&limit=1"));
 
     release_and_land(&sd);
-    let (st, v) = changes(port, None, "since=0&limit=8");
-    assert_eq!((st, positions(&v), v["more"].as_bool()), (200, vec![2, 3, 6, 9, 12, 20], Some(false)), "{v}");
-    let (st, v) = changes(port, Some(&owner), "since=20&limit=10");
-    assert_eq!((st, positions(&v)), (200, (21..=30).collect::<Vec<_>>()), "{v}");
+    let (st, v) = changes(port, None, &format!("since=0&limit={}", guests.len() + 1));
+    assert_eq!((st, positions(&v), v["more"].as_bool()), (200, guests, Some(false)), "{v}");
+    let (st, v) = changes(port, Some(&owner), &format!("since={c}&limit=10"));
+    assert_eq!((st, positions(&v)), (200, (c + 1..=head).collect::<Vec<_>>()), "{v}");
     sd.shutdown();
 }
 

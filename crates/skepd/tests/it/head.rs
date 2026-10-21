@@ -28,7 +28,7 @@ use common::{
     acked_addr, acked_at, assert_withheld, board_term, ceremony_before_the_claim, claim_frame, claimed,
     device_key, doc_metadata, expect_resp, get, head_position, http, json, op, op_as_written,
     open_session, open_signed_session, spawn, spawn_seeded, spawn_unclaimed, typed_link_frame,
-    verdict, Sse, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, T_GRANT,
+    verdict, Sse, CLAIMANT_ACCOUNT, CLAIMANT_DOC1, CLAIMANT_PRINCIPAL, SEED_HEAD, T_GRANT,
 };
 use serde_json::Value;
 use skep_kernel::Step;
@@ -1033,10 +1033,14 @@ fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
         sd.shutdown();
         (first_head_cost, later_head_cost, mint_cost)
     };
+    // The staging draft is minted by the open's registry seed, before the
+    // claim: the claim's `H.1` finds it and costs what a later head costs —
+    // the atom's insert and the publish shot — and never a document mint
+    // more.
+    assert!(mint_cost > 0, "a document mint moves the position");
     assert_eq!(
-        later_head_cost + mint_cost,
-        first_head_cost,
-        "the claim's H.1 minted the draft; the next head on the same uptime reused it"
+        later_head_cost, first_head_cost,
+        "the open's seed minted the draft; the claim's H.1 and the next head both reused it"
     );
 
     // The second uptime's head: the same, the draft found at open.
@@ -1417,9 +1421,10 @@ fn the_head_writers_turn_after_the_claim_can_write_a_head_and_the_claim_still_co
 /// ONE, AT THE CLAIM'S OWN POSITION, AND THE CADENCE COUNTS FROM IT. A board
 /// `spawn` claims has its first head at the claim's ack — `H.1` naming the
 /// claim link's position, `prev` null, `base` null — and no `H.2`; the head's
-/// three commits (the staging draft's mint, the record's insert, the publish
-/// shot: eight records) are the whole distance from the claim to the live
-/// head; and with the clock frozen and no checkpoint taken, the 64th commit
+/// two commits (the record's insert into the staging draft the open's
+/// registry seed minted, the publish shot: seven records) are the whole
+/// distance from the claim to the live head; and with the clock frozen and
+/// no checkpoint taken, the 64th commit
 /// after the claim writes `H.2` naming itself, with `prev` the claim's head —
 /// the count trigger resumed at zero by the claim's head, not by anything a
 /// test forced.
@@ -1436,7 +1441,7 @@ fn the_claim_writes_exactly_one_head_at_its_own_position_and_the_cadence_counts_
     assert_eq!(expect_latest_head(port), h1, "the latest head IS H.1");
     assert!(head_record(port, &head_member(2)).is_none(), "exactly one head");
     let (live, _) = health(port);
-    assert_eq!(live, CLAIM_POSITION + H1_RECORDS, "the head's three commits above the claim, and nothing else");
+    assert_eq!(live, CLAIM_POSITION + H1_RECORDS, "the head's two commits above the claim, and nothing else");
 
     // The cadence from H.1: the clock frozen at the claim's own reading (so
     // trigger (c) cannot fire), no checkpoint (so (b) cannot) — only the
@@ -1501,19 +1506,19 @@ fn a_refused_first_head_is_written_at_the_next_turn_a_refused_writes_own_include
     assert_eq!(head_position(port), claim_at, "the refused head landed nothing");
     // ROW 38 ON THE STREAM (H4): the refused `H.1` said ONCE, naming the
     // claim's position — the one the head would have named — the head's
-    // commit the refusal met, the staging draft's first mint, as the wire
-    // names its op, and the seam's refusal as the wire renders a rejection,
-    // the code and the detail, then what no head standing costs and when it
-    // is tried again; no clearing yet, no head having landed.
+    // commit the refusal met — the record's insert, the staging draft
+    // standing from the open's registry seed — as the wire names its op,
+    // and the seam's refusal as the wire renders a rejection, the code and
+    // the detail, then what no head standing costs and when it is tried
+    // again; no clearing yet, no head having landed.
     let head_lines = |sd: &Skepd| -> Vec<String> {
         sd.daemon().lines_said().into_iter().filter(|l| l.contains("head writer:")).collect()
     };
     let refused = format!(
-        "failure: head writer: the head at position {claim_at} was refused at its \
-         create_new_document (durability: the test seam's refusal); no head written this cycle; \
-         no head stands yet, so a claimed board refuses every attested write \
-         attestation_invalid:board_unavailable until one lands — tried again at every write's \
-         turn"
+        "failure: head writer: the head at position {claim_at} was refused at its insert \
+         (durability: the test seam's refusal); no head written this cycle; no head stands yet, \
+         so a claimed board refuses every attested write attestation_invalid:board_unavailable \
+         until one lands — tried again at every write's turn"
     );
     assert_eq!(head_lines(&sd), std::slice::from_ref(&refused), "the refused H.1, said once with its position");
 
@@ -1828,22 +1833,24 @@ fn board_under(dir: &Path, seed: Option<u64>) -> Board {
     Board { trigger, live_head, chains, bytes }
 }
 
-/// The claim link's position on a fresh board — the ceremony's fifth commit
-/// (wire.md §A first board: positions 2, 3, 6, 9, 12) — and `H.1`'s records
-/// above it: the staging draft's mint (1), the head record's insert (3), the
-/// publish shot into `H` (4). `H.1` is the claim's own (signed ops, s1).
-const CLAIM_POSITION: u64 = 12;
-const H1_RECORDS: u64 = 8;
+/// The claim link's position on a fresh board — the ceremony's fifth commit,
+/// twelve records above the seeded board's head (`common::SEED_HEAD`;
+/// wire.md §A first board) — and `H.1`'s records above it: the head record's
+/// insert (3) and the publish shot into `H` (4); the staging draft stands
+/// from the open's registry seed, so the claim's head mints none. `H.1` is
+/// the claim's own (signed ops, s1).
+const CLAIM_POSITION: u64 = SEED_HEAD + 12;
+const H1_RECORDS: u64 = 7;
 
-/// THE POSITIONS, pinned: the head names the triggering commit — the
-/// ceremony's commits (12), the claim's own `H.1` (8 records: 20), three
-/// creates and the fourth (24) — and the live head is that plus the head's own
-/// insert and publish (31; the staging draft was minted at `H.1`). The salt
-/// adds no record and moves no coordinate: the same ops produced 16 and 24 at
-/// `d77bfa4`, before it, and again after it, until s1 (2026-09-25) moved the
-/// first head into the claim's own step — the one re-pin, by `H.1`'s eight
-/// records ahead of the creates, the forced head being `H.2` with the draft
-/// already minted. A position moving here is a STOP, not a number to update.
+/// THE POSITIONS, pinned off the one constant: the head names the triggering
+/// commit — the seed's commits, the ceremony's (12 records), the claim's own
+/// `H.1` (7), three creates and the fourth — and the live head is that plus
+/// the head's own insert and publish (7 more). The salt adds no record and
+/// moves no coordinate: the same ops produced 16 and 24 at `d77bfa4`, before
+/// it, and again after it, until s1 (2026-09-25) moved the first head into
+/// the claim's own step and the registry seed (2026-10-21) put the seed's
+/// commits and the draft's mint ahead of the ceremony — the two re-pins. A
+/// position moving here otherwise is a STOP, not a number to update.
 const TRIGGER_POSITION: u64 = CLAIM_POSITION + H1_RECORDS + 4;
 const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + 7;
 

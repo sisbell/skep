@@ -173,6 +173,24 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     classed("cell index: the walk failed (", Class::Failure);
     // The blocked list's absence, a line of the report like the rest.
     classed("no --blocked-prefixes (or SKEPD_BLOCKED_PREFIXES):", Class::Open);
+    // The link-type registry's seed: its `open:` line where it wrote, after
+    // the kept files' listing and before the first head's landing, and the
+    // seed's own failure line after it — neither the compiled check's
+    // `registry seeding:` refusal, which ends the start.
+    classed("link-type registry 1.1.0.1.0.1: {written} of {total} types written", Class::Open);
+    classed("link-type registry: the {op} for the type {address} ({name}) was refused", Class::Failure);
+    assert!(
+        at("kept files beside the journal and the logs:") < at("link-type registry 1.1.0.1.0.1:"),
+        "the seed's line follows the kept files' listing"
+    );
+    assert!(
+        at("link-type registry 1.1.0.1.0.1:") < at("link-type registry: the {op} for the type"),
+        "the seed's failure line follows its open line"
+    );
+    assert!(
+        at("link-type registry: the {op} for the type") < at("H.1 written at open"),
+        "the seed's lines precede the first head's landing"
+    );
 }
 
 /// §3 START, STEP 3's LEAD — EVERY LINE OF THE OPEN CARRIES A CLASS WORD: the

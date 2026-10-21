@@ -206,7 +206,7 @@ fn the_kernels_halt_is_said_when_the_head_writers_own_commit_poisons_it() {
     );
     let said = sd.daemon().lines_said();
     let row_38 = format!(
-        "failure: head writer: the head at position {at} was refused at its create_new_document \
+        "failure: head writer: the head at position {at} was refused at its insert \
          (poisoned)"
     );
     let refused = said.iter().position(|l| l.starts_with(&row_38));

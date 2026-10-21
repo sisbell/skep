@@ -1552,11 +1552,12 @@ fn the_head_writers_own_commits_land_unsigned_beside_an_attested_write() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let h1 = board_term(port).expect("H.1");
-    assert_eq!(h1.log_position, 12, "H.1 names the claim's own position");
-    // The head's three commits: the staging draft's mint, the record's
-    // insert, the shot into H — all above the claim, all unsigned.
+    assert_eq!(h1.log_position, SEED_HEAD + 12, "H.1 names the claim's own position");
+    // The head's two commits: the record's insert and the shot into H —
+    // the staging draft stands from the registry seed — both above the
+    // claim, both unsigned.
     let head = head_position(port);
-    assert!(head > 12, "the head's commits landed above the claim");
+    assert!(head > SEED_HEAD + 12, "the head's commits landed above the claim");
     assert_eq!(filled_slots(&sd, 1, head), Vec::<u64>::new(), "no slot filled yet");
     // A signed write with the hour passed, so the head writer's turn after it
     // writes the second head — the cadence's (trigger (c)), through the clock

@@ -808,8 +808,10 @@ fn the_version_line_names_the_build_and_the_three_formats_it_reads() {
 /// word on the stream itself is pinned by the child-process suite
 /// (`tests/it/open.rs`), which reads `open:` on the binary's stderr. The
 /// tail cut's failure arm, said under its own class, is the one line of the
-/// report beside the door. And the version line is said FIRST, before the
-/// directory's.
+/// report beside the door; the registry seed's `open:` line is the other,
+/// said through the write path's classed door so it stands in the record the
+/// suites read beside the seed's own failure line (its own test, below). And
+/// the version line is said FIRST, before the directory's.
 #[test]
 fn the_opens_own_lines_go_through_the_classed_door() {
     let source = include_str!("../server.rs");
@@ -973,6 +975,58 @@ fn the_flips_line_names_the_account_the_position_the_mode_and_each_head_arm() {
         at(FirstHead::Refused, "CLAIMED-PERMISSIVE"),
         "board claimed by 1.0.1 at position 42: the mode is now CLAIMED-PERMISSIVE; H.1 owed — \
          the head writer refused it"
+    );
+}
+
+/// THE REGISTRY SEED's LINE at fixed figures — a fresh board's, every type
+/// written; an upgraded board's, the one type a later build added; and a
+/// seed a refusal cut short, the rows before it — the registry document, the
+/// counts and the duration in the stream's one spelling. Said through the
+/// write path's classed door under `open:` where the seed wrote, which the
+/// integration suite pins (`tests/it/vocabulary.rs`) and `open.rs` reads off
+/// the binary's stderr; a reopen that writes nothing says nothing.
+#[test]
+fn the_registry_seeds_line_names_the_document_the_counts_and_the_duration() {
+    let line = |written, stood, total, duration_ms| {
+        RegistrySeededLine { seeded: &Seeded { written, stood, refused: None }, total, duration_ms }
+            .to_string()
+    };
+    assert_eq!(
+        line(94, 0, 94, 812),
+        "link-type registry 1.1.0.1.0.1: 94 of 94 types written, 0 stood, in 812 ms"
+    );
+    assert_eq!(
+        line(1, 93, 94, 40),
+        "link-type registry 1.1.0.1.0.1: 1 of 94 types written, 93 stood, in 40 ms"
+    );
+    assert_eq!(
+        line(2, 0, 94, 61),
+        "link-type registry 1.1.0.1.0.1: 2 of 94 types written, 0 stood, in 61 ms"
+    );
+    // Its site: after the kept files' line and before the write path's
+    // ordering is given to any session — inside `open_under`, through the
+    // write path's door, said only where the seed wrote.
+    let source = include_str!("../server.rs");
+    let start = source.find("fn open_under(").expect("open_under");
+    let end =
+        source[start..].find("fn write_the_claims_head_if_owed(").expect("the next fn") + start;
+    let open_under = &source[start..end];
+    let seed = open_under.find("commits.seed_registry(&serial)").expect("the seed runs in the open");
+    assert!(
+        open_under.find("say_open_line(KeptFilesLine {").expect("the kept files' line") < seed,
+        "the seed runs after the kept files' line"
+    );
+    assert!(
+        seed < open_under.find("OperationSurface::new(").expect("the surface"),
+        "the seed runs before the operation surface is assembled"
+    );
+    assert!(
+        open_under.contains("commits.lines().say(Class::Open, RegistrySeededLine {"),
+        "the line goes through the write path's classed door under the open's class"
+    );
+    assert!(
+        open_under.contains("if seeded.written > 0 {"),
+        "the line is said where the seed wrote, and a reopen says nothing"
     );
 }
 

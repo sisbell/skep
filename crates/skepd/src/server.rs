@@ -247,7 +247,10 @@ use crate::tools;
 use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
-use skep_core::commits::{AttestStoreFigures, Commits, FeedCompaction, FirstHead, StoppedFile};
+use skep_core::commits::{
+    AttestStoreFigures, Commits, FeedCompaction, FirstHead, Seeded, StoppedFile,
+};
+use skep_namespace::ghost_home_document;
 use skep_core::serial::SerialFigures;
 use actor::Resolved;
 use reply::{class_varying, refuse, with_signal, TransportError};
@@ -849,18 +852,25 @@ impl Daemon {
     /// Opens the one world at `data_dir`, by genesis or recovery.
     ///
     /// It replays the commit-metadata sidecar and assembles the operation
-    /// surface. A command on the journal beyond genesis and recovery, on one
-    /// kind of board: a claimed board whose head writer resumes no head from
-    /// `H` — the crash window between the claim and its head, a claim whose
-    /// `H.1` the head writer's driver refused while serving, or a board
+    /// surface. Two commands on the journal beyond genesis and recovery, both
+    /// the daemon's own as the system account's principal. On every board,
+    /// the link-type registry's seed (`skep-core`'s `commits/registry.rs`):
+    /// what the registry document `1.1.0.1.0.1` lacks of the vocabulary is
+    /// written before this returns — every type on a fresh board (the staging
+    /// draft's mint, one insert of every section, one publish, one `defines`
+    /// link per type), the types a later build added on a board that stands,
+    /// nothing on a board that holds them all — so a fresh board's
+    /// [`Daemon::log_position`] stands past genesis at its first open. And on
+    /// one kind of board: a claimed board whose head writer resumes no head
+    /// from `H` — the crash window between the claim and its head, a claim
+    /// whose `H.1` the head writer's driver refused while serving, or a board
     /// claimed under a build that wrote no head at the claim — has `H.1`
     /// written before this returns (`Daemon::write_the_claims_head_if_owed`;
-    /// signed ops): up to three commits of the daemon's own, as the system
-    /// account's principal (the staging draft's one-time mint, the record's
-    /// insert, the publish into `H`), so [`Daemon::log_position`] can stand
-    /// past the recovered head. A refusal there fails nothing: the head
-    /// writer surfaces it on the operator stream, the open returns `Ok`, and
-    /// the board answers attested writes
+    /// signed ops): up to three commits (the staging draft's mint where the
+    /// seed has not made it, the record's insert, the publish into `H`). A
+    /// refusal of either fails nothing: it is surfaced on the operator
+    /// stream, the open returns `Ok`, the seed's rest waits for the next open
+    /// and the board answers attested writes
     /// `attestation_invalid:board_unavailable` until a head lands.
     ///
     /// Two steps here cost more than O(1) in the data dir beyond the
@@ -1294,6 +1304,29 @@ impl Daemon {
         };
         if !kept_files.is_empty() {
             say_open_line(KeptFilesLine { kept: &kept_files });
+        }
+        // The link-type registry's seed (commons-seeding §1 to §4;
+        // `skep-core`'s `commits/registry.rs`): what the registry document
+        // `1.1.0.1.0.1` lacks of the vocabulary — one named section and one
+        // `defines` link per type — written now, as the system principal
+        // through the head writer's door, under the write path's own guard
+        // and before anything is served: every row on a fresh board, the
+        // missing ones on an upgraded or interrupted one, nothing on a board
+        // that holds them all. Said where it wrote, as the open's report,
+        // through the write path's classed door rather than the report's
+        // own, so the line stands in the one record the suites read beside
+        // the seed's own failure line (said once by the seed where a driver
+        // refused a row; the open goes on either way). The compiled seeding
+        // check above is another thing: it refuses the open; this never does.
+        let began = Instant::now();
+        let seeded = {
+            let serial = commits.serial_lock();
+            commits.seed_registry(&serial)
+        };
+        if seeded.written > 0 {
+            let total = skep_registry::vocabulary().len();
+            let duration_ms = began.elapsed().as_millis();
+            commits.lines().say(Class::Open, RegistrySeededLine { seeded: &seeded, total, duration_ms });
         }
         // The read predicate (PUB-1.31; PUB-6.39's one-per-request shape).
         // The live front door is given no consult: M10 answers
@@ -4051,6 +4084,43 @@ impl fmt::Display for HeadAtOpenLine {
             "the board is claimed and its journal held no head: H.1 written at open at position \
              {} in {} ms, naming the committed pair at position {}",
             self.landed, self.duration_ms, self.named
+        )
+    }
+}
+
+/// The link-type registry's line at an open that wrote into it.
+///
+/// It is the open's report of the seed (commons-seeding §1 to §4;
+/// `skep-core`'s `commits/registry.rs`), in the operator stream's words: the
+/// registry document, how many of the vocabulary's types this open wrote a
+/// section and a `defines` link for, how many stood already, and how long
+/// the seed held the write path's lock — `link-type registry {doc}:
+/// {written} of {total} types written, {stood} stood, in {ms} ms`. On a
+/// fresh board every type is written and none stood; on a board a later
+/// build opens, the types it adds alone; on a reopen nothing is written and
+/// the line is not said. Where a driver refused a row the seed's own failure
+/// line precedes it, naming the type, and the written count is the rows
+/// before it. A pure value the unit suite pins by `to_string()`; emitted
+/// under `Class::Open` through the write path's classed door, so it stands
+/// in the record beside the seed's failure line.
+struct RegistrySeededLine<'a> {
+    seeded: &'a Seeded,
+    /// The vocabulary's size: the rows the board holds once the seed is whole.
+    total: usize,
+    /// The seed's whole, whole milliseconds, under the write path's lock.
+    duration_ms: u128,
+}
+
+impl fmt::Display for RegistrySeededLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "link-type registry {}: {} of {} types written, {} stood, in {} ms",
+            ghost_home_document(),
+            self.seeded.written,
+            self.total,
+            self.seeded.stood,
+            self.duration_ms
         )
     }
 }

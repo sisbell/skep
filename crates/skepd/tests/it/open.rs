@@ -872,22 +872,25 @@ fn the_open_says_its_directory_first_and_its_recovery_with_the_kernels_figures()
         first.stderr.seen.join("\n")
     );
     // N commits over the wire: the delegate, the home's mint, three inserts
-    // — five, as the feed testifies.
+    // — five above the registry seed's head, as the feed testifies.
     let (home, session) = delegate_a_home(first.port);
     insert_into_the_home(first.port, &session, &home, 1, 3);
-    let commits = commits_above(first.port, 0);
+    let commits = commits_above(first.port, crate::common::SEED_HEAD);
     assert_eq!(commits.len(), 5, "the five commits made: {commits:?}");
     let killed_at = head_position(first.port);
     first.child.kill();
 
-    // SECOND LIFE: the same board, no checkpoint — genesis, N replayed, and
-    // the head the first life was killed at.
+    // SECOND LIFE: the same board, no checkpoint — genesis, N replayed
+    // beside the seed's own commits (the staging draft's mint, the sections'
+    // insert, the member's publish, a link per type), and the head the first
+    // life was killed at.
+    let seed_commits = 3 + skep_registry::vocabulary().len() as u64;
     let mut second = serve_and_read_the_open(&dir, &[]);
     assert_eq!(second.data_dir_line, format!("data-dir {}", dir.display()));
     let (base, head, replayed, _) = recovered_figures(&second.recovered_line);
     assert_eq!(
         (base.as_str(), replayed),
-        ("genesis", commits.len() as u64),
+        ("genesis", seed_commits + commits.len() as u64),
         "FINDING (m7): the landing's count is not the commits the open replayed: {}",
         second.recovered_line
     );
@@ -1864,7 +1867,11 @@ fn a_start_begins_a_board_only_under_create_and_refuses_the_word_on_a_standing_b
     let fresh = tmp.path().join("fresh");
     assert!(!fresh.exists());
     let sd = spawn_unclaimed(&fresh);
-    assert_eq!(sd.daemon().log_position(), skepd::Seq(0), "begun at genesis");
+    assert_eq!(
+        sd.daemon().log_position(),
+        skepd::Seq(crate::common::SEED_HEAD),
+        "begun at genesis, and seeded: the registry's commits alone stand"
+    );
     sd.shutdown();
     assert!(fresh.join("seg-1.wal").exists(), "the library's open began a board unasked");
 }
@@ -2152,4 +2159,57 @@ fn a_link_under_blobs_is_refused_before_the_engines_open_touches_the_directory()
     );
     assert!(dir.join("checkpoint.tmp").exists(), "the stray stands: the kernel's open never ran");
     assert_eq!(crate::tools::tree(&dir), before, "FINDING (P13): the refused start wrote");
+}
+
+/// THE REGISTRY SEED's LINE OFF THE BINARY (R8; `RUNBOOK.md` §3 step 3,
+/// item 11's end): a fresh board's stderr carries ONE `open:` line for the
+/// link-type registry — every type of the vocabulary written, none stood,
+/// its duration in milliseconds — class word first, after the change feed's
+/// own report and before the `auth:` line, where the runbook lists it; and a
+/// reopen of the seeded board, which writes nothing, carries none.
+#[test]
+fn a_fresh_boards_stderr_carries_the_registry_seeds_line_once_and_a_reopens_none() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data");
+    let total = skep_registry::vocabulary().len();
+    let prefix = format!("link-type registry 1.1.0.1.0.1: {total} of {total} types written, 0 stood, in ");
+    {
+        let mut served = serve_and_read_the_open(&dir, &[]);
+        let seeded = await_said(&mut served.stderr, "open", "link-type registry ");
+        assert!(
+            seeded.starts_with(&prefix) && seeded.ends_with(" ms"),
+            "the seed's line, every type written: {seeded:?}"
+        );
+        await_said(&mut served.stderr, "open", "auth: ");
+        let seen = &served.stderr.seen;
+        let at = |prefix: &str| {
+            seen.iter()
+                .position(|l| said(l, "open", prefix))
+                .unwrap_or_else(|| panic!("no `open: {prefix}…` line:\n{}", seen.join("\n")))
+        };
+        assert!(
+            at("the change feed answers") < at("link-type registry "),
+            "the seed's line follows the change feed's report:\n{}",
+            seen.join("\n")
+        );
+        assert!(
+            at("link-type registry ") < at("auth: "),
+            "the seed's line precedes the configuration's:\n{}",
+            seen.join("\n")
+        );
+        assert_eq!(
+            seen.iter().filter(|l| l.contains("link-type registry")).count(),
+            1,
+            "said once, and no failure line:\n{}",
+            seen.join("\n")
+        );
+    }
+    wait_for_the_lock(&dir);
+    let mut served = serve_and_read_the_open(&dir, &[]);
+    await_said(&mut served.stderr, "open", "auth: ");
+    assert!(
+        served.stderr.seen.iter().all(|l| !l.contains("link-type registry")),
+        "a reopen of a seeded board writes nothing and says nothing of it:\n{}",
+        served.stderr.seen.join("\n")
+    );
 }

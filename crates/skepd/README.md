@@ -65,10 +65,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   this one, whose README lists its surface: the session layer — who may
   act, and what a credential write may do — the commits — the one door
   every write rides, the change feed and its files, the published head's
-  cadence — and the deterministic JSON codec, key-sorted marshalling so
-  wire bytes never depend on map iteration order. The daemon's part is
-  the router that composes them and the files they write, which are the
-  daemon's own.
+  cadence, the link-type registry's seed — and the deterministic JSON
+  codec, key-sorted marshalling so wire bytes never depend on map
+  iteration order. The daemon's part is the router that composes them and
+  the files they write, which are the daemon's own; and the open's one
+  act on every board's content: the seed, run after the change feed opens
+  and before the listener binds, which writes into the registry document
+  `1.1.0.1.0.1`, as the system account's principal, a named section and a
+  `defines` link for every link type of [skep-registry](../skep-registry)'s
+  vocabulary the board lacks — all of them on a fresh board, the missing
+  ones on an upgraded or interrupted one — said as one `open:` line where
+  it wrote, so a guest resolves any type's name by one `find_links_ftt`.
 - **Durability is configuration** — fsync policy and checkpoint
   cadence are chosen here, not baked into the kernel: a checkpoint every
   1024 commits or a byte bound — a quarter of the newest checkpoint's
@@ -110,7 +117,8 @@ registry record, the binding and the endpoint of
 in the credential or the registry sequence at the record's `make_link`
 under the key set that opens the record's home — a record carrying none
 is refused at its own `insert`, before it lands. The open runs the
-registry's seeding check ahead of every genesis. Build the shipped
+registry's seeding check ahead of every genesis, and seeds the registry
+document with the vocabulary after the change feed opens. Build the shipped
 binary with `-p skepd` — Cargo unifies features across one invocation,
 and a `--workspace` build that compiles the test suites turns the signer
 on for everything it builds.

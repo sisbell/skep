@@ -982,14 +982,14 @@ fn key_set_reads_head_and_history_identically() {
         "/op-at",
         None,
         format!(
-            r#"{{"at":2,"frame":{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}}}"#
+            r#"{{"at":{at},"frame":{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}}}"#, at = crate::common::SEED_HEAD + 2
         )
         .as_bytes(),
     );
     assert_eq!(st, 200);
     let v = json(&body);
     assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
-    assert_eq!(v["as_of"].as_u64(), Some(2));
+    assert_eq!(v["as_of"].as_u64(), Some(crate::common::SEED_HEAD + 2));
     assert_eq!(v["enrolled"].as_array().expect("enrolled").len(), 0);
     sd.shutdown();
 }

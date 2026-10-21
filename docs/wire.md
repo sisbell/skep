@@ -3401,8 +3401,22 @@ prefix (REG-1.20), each subtype its own wire type at the type slot
 (REG-1.21). A kind that reads ONE way carries its deposits on its bare
 ordinal; a kind that reads more than one way carries NONE there, every
 reading a row under it (REG-1.18). The rows are PINS — compiled addresses
-the daemon keys on, as the credential types are — and genesis seeds no
-record at any of them.
+the daemon keys on, as the credential types are. Nothing is ever minted AT
+a type's address — subspace 3 stays ghost — but every board NAMES every
+type the build knows: at every open the daemon writes into the registry
+document `1.1.0.1.0.1`, as the system account's principal, one section per
+type as content of a published member (the name alone on its first line,
+then the type's address, its purpose and its endset shape) and one
+`defines` link, typed `1.1.0.1.0.1.0.3.50`, in the document's link subspace
+2, FROM that section TO the type's address — all of them on a fresh board,
+the missing ones on an upgraded or interrupted one, never two for a type
+that has one — so a guest resolves `3.13` to `citation` by one lookup
+(§Link discovery reads). The vocabulary is `skep-registry`'s one table:
+the twelve rows here, the credential kinds, the core set the seeding plan
+curates, `replaces`, the designations, the grant and its consumption
+marker, the rail record, the steward's classification and the two media
+cell kinds. A fresh board's first commits are therefore the seed's (§The
+change feed), each testifying `"system"`.
 
 | Address | Row | Deposits |
 | --- | --- | --- |
@@ -4019,6 +4033,29 @@ bounded by the reconstruction permit its whole answer already holds. The
 count is a daemon constant this document names; raising it is a
 configuration question, not a change to this contract.
 
+**The name of a type** (the link-type registry, §Registry). Every type
+the build knows has one `defines` link in the registry document
+`1.1.0.1.0.1`, typed `1.1.0.1.0.1.0.3.50` — `defines`, the meta-type, the
+first type seeded and the type of its own definition — FROM the type's
+section in that document's latest member TO the type's address. A client
+resolves a type `T` by one `find_links_ftt` constrained in TWO slots — the
+type's unit span in `to` and the meta-type's in `ty`, `home` and `from`
+`"any"` — served from the coverage index and no class scan, then reads the
+answered link's `from` span: `project` the link's slot 1 into
+`1.1.0.1.0.1` and `retrieve_v` the span there, or `read_link` and
+`retrieve_i` the I-span as stored; the first line of the text is the name
+(§A first board shows the exchange). A unit span is the address as `start`
+and a width of as many components, zeros then `1`; a type's span covers
+its subtypes' (L10: hierarchy is prefix), so the answer for a type with
+subtypes carries their links too, and the client keeps the link whose
+stored `to` is `T`'s own span. Both reads answer a guest. The lookup for
+`3.13`:
+
+<!-- wire: request find_links_ftt -->
+```json
+{"op":"find_links_ftt","q":{"from":"any","home":"any","to":[{"start":"1.1.0.1.0.1.0.3.13","width":"0.0.0.0.0.0.0.0.1"}],"ty":[{"start":"1.1.0.1.0.1.0.3.50","width":"0.0.0.0.0.0.0.0.1"}]}}
+```
+
 Routed, not yet in the protocol: a POSITION FENCE on this query —
 answer only records committed past a caller-supplied position, so a
 polling consumer fetches only what is new to it — is reserved as a
@@ -4352,11 +4389,12 @@ the position alone):
 <!-- wire: sse commit_event -->
 ```
 event: commit
-data: {"log_position":13}
+data: {"log_position":352}
 ```
 
-A worked exchange — connect, receive the initial head (12), then a write
-elsewhere commits at 13:
+A worked exchange on a board the registry seed and the claim ceremony
+have left at 351 (§The change feed) — connect, receive the initial head
+(351), then a write elsewhere commits at 352:
 
 ```
 GET /events HTTP/1.1
@@ -4370,12 +4408,12 @@ Content-Type: text/event-stream
 Cache-Control: no-cache
 
 event: commit
-data: {"log_position":12}
+data: {"log_position":351}
 
 :ka
 
 event: commit
-data: {"log_position":13}
+data: {"log_position":352}
 ```
 
 Rules:
@@ -4629,36 +4667,44 @@ history — place them by position, never surface them as new activity.
 
 The examples below are produced by this flow on a fresh board, asserted
 against live daemon bytes (the `time` values are illustrative — the one
-normalized field). A fresh board's first five commits are the claim
-ceremony's own (§A first board): positions 2, 3, 6, 9, 12 — the
-delegate, the home mint, the record insert, the genesis link, the claim
-link — and the claim's own step then writes the board's first head `H.1`
-(§The other endpoints, the published head document): the system
-account's staging-draft mint at 13, the head record's insert at 16, the
-publish into `H` at 20 — the publish a public entry with `key: "system"`,
-the two before it writes into the system account's private draft, masked
-at every class but the system's. The flow behind the examples then runs
-on that base, from bare sessions (CLAIMED-PERMISSIVE, so every `key`
-reads `"bare"`, and no entry is signed, so no row carries `attest`):
-`delegate` commits at position 22 — its row carrying the minted pair —,
-the home mint at 23, a second — private — document at 24 (the account's
-doc 1 is born published, where bare writes are gated by design, so the
-flow's content goes to a draft document), a two-byte `insert` at 27 (one
-range mint, one stretch, one placement), `make_link` at 30 — its row
-carrying the minted link's address. The feed past the ceremony and its
-head, `GET /changes?since=20`, read AS PRINCIPAL 1 — the owner of the
-private document, whose class sees every one of these:
+normalized field). A fresh board's first commits are the link-type
+registry's seed (§Registry), the board's own daemon's at its first open:
+the system account's staging-draft mint at 1 and the one insert of every
+type's section into it at 4 — writes into the system account's private
+draft, masked at every class but the system's — then the publish of the
+member that holds the sections into `1.1.0.1.0.1` at 8 and one `defines`
+link per type, three records apart, to 332, each a public entry with
+`key: "system"`, so a fresh board stands at 332 before any client writes.
+The claim ceremony's five commits follow (§A first board): positions 334,
+335, 338, 341, 344 — the delegate, the home mint, the record insert, the
+genesis link, the claim link — and the claim's own step then writes the
+board's first head `H.1` (§The other endpoints, the published head
+document): the head record's insert into the staging draft at 347 — the
+draft stands from the seed, so the claim's head mints none — and the
+publish into `H` at 351, the publish a public entry with `key: "system"`,
+the insert masked at every class but the system's. The flow behind the
+examples then runs on that base, from bare sessions (CLAIMED-PERMISSIVE,
+so every `key` reads `"bare"`, and no entry is signed, so no row carries
+`attest`): `delegate` commits at position 353 — its row carrying the
+minted pair —, the home mint at 354, a second — private — document at 355
+(the account's doc 1 is born published, where bare writes are gated by
+design, so the flow's content goes to a draft document), a two-byte
+`insert` at 358 (one range mint, one stretch, one placement), `make_link`
+at 361 — its row carrying the minted link's address. The feed past the
+seed, the ceremony and its head, `GET /changes?since=351`, read AS
+PRINCIPAL 1 — the owner of the private document, whose class sees every
+one of these:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":27,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":30,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":30,"more":false}
+{"changes":[{"at":353,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":354,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":355,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":358,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":361,"docs":["1.0.2.0.2"],"key":"bare","link":"1.0.2.0.2.0.2.1","op":"make_link","time":1786838400047}],"last":361,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=20&limit=2`:
+The first page of the same feed, `GET /changes?since=351&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":true}
+{"changes":[{"at":353,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":354,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":354,"more":true}
 ```
 
 The same feed read as the GUEST (no token): the private document's
@@ -4667,7 +4713,7 @@ position and `more` false, since nothing visible remains:
 
 <!-- wire: changes feed_guest -->
 ```json
-{"changes":[{"at":22,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":23,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":23,"more":false}
+{"changes":[{"at":353,"docs":[],"key":"bare","new_id":1,"new_prefix":"1.0.2","op":"delegate","time":1786838400000},{"at":354,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":354,"more":false}
 ```
 
 A SIGNED entry's row, for contrast — a grant link deposited into the
@@ -4689,11 +4735,14 @@ metadata field `null` — the op's own terms included, its op being unknown
 `attest` is served where the store still holds the slot, and is otherwise
 absent. A pre-feature data dir holding three writes (a delegate at 2, a
 mint at 3, an insert at 6 — written by the engine directly, before any
-daemon; all in the published world, so every class sees them), byte-exact:
+daemon; all in the published world, so every class sees them), then
+opened by this daemon, whose open seeds the link-type registry above them
+(§Registry): the first page of three, `GET /changes?since=0&limit=3`,
+byte-exact, `more` true for the seed's rows past it:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":false}
+{"changes":[{"at":2,"docs":null,"key":null,"new_id":1,"new_prefix":"1.0.1","op":"delegate","time":null},{"at":3,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null},{"at":6,"base_extent":null,"docs":null,"key":null,"link":null,"new_id":null,"new_prefix":null,"op":null,"placed":null,"time":null}],"last":6,"more":true}
 ```
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar
@@ -4965,6 +5014,20 @@ POST /session          {"principal": 900, "nonce": <that>, "origin": <a configur
 POST /op   (signed)    {"op": "make_link", "home": <doc 1>,
                         "from": {"addrs": ["<account>"]}, "to": {"addrs": []},
                         "ty":   {"addrs": ["1.1.0.1.0.1.0.3.3"]}}       # T_claim — the board flips claimed
+```
+
+And the board names its link types to anyone, from its first open
+(§Registry; §Link discovery reads) — a guest, no session:
+
+```
+POST /op               {"op": "find_links_ftt", "q": {"from": "any", "home": "any",
+                        "to": [{"start": "1.1.0.1.0.1.0.3.13", "width": "0.0.0.0.0.0.0.0.1"}],
+                        "ty": [{"start": "1.1.0.1.0.1.0.3.50", "width": "0.0.0.0.0.0.0.0.1"}]}}
+                                                                  # → {"addrs": ["1.1.0.1.0.1.0.2.<k>"]}: citation's one defines link
+POST /op               {"op": "project", "a": "1.1.0.1.0.1.0.2.<k>", "slot": 1, "d": "1.1.0.1.0.1"}
+                                                                  # → its from span in the registry document's latest member
+POST /op               {"op": "retrieve_v", "specs": [{"doc": "1.1.0.1.0.1", "span": <that>}]}
+                                                                  # → the section: "citation" on its first line
 ```
 
 Then ordinary work — remembering that doc 1 is born published, so on

@@ -52,7 +52,7 @@ use common::{
     claim_frame, claimed, create_frame, device_key, expect_resp, get, head_position, json, op,
     open_session, open_signed_session, seeded_bytes, spawn_configured, spawn_unclaimed,
     typed_link_frame, verdict, WalkUnheld, BLOB_UPLOAD, CLAIMANT_ACCOUNT, CLAIMANT_DOC1,
-    CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, T_ENROLL, T_GRANT,
+    CLAIMANT_PRINCIPAL, HEAD_MEMBER_1, SEED_HEAD, T_ENROLL, T_GRANT,
 };
 use serde_json::Value;
 use skep_blobs::Step;
@@ -531,6 +531,9 @@ fn f_sidecar_mutilation_never_touches_the_world() {
     let head = *acks.last().expect("acks");
     let sidecar = |dir: &Path| dir.join("commits.log");
     let sidecar_len = fs::metadata(sidecar(&fixture)).expect("commits.log").len();
+    // The committed positions a guest's feed enumerates: the registry seed's
+    // publish and links (the draft's two writes masked), then the acks.
+    let committed: Vec<u64> = seed_rows().into_iter().chain(acks.iter().copied()).collect();
 
     // The world-intact judge: recovery byte-identical (as_of included) and
     // `/changes` still enumerating exactly the committed positions.
@@ -546,7 +549,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         let entries = changes_entries(&d);
         let positions: Vec<u64> = entries.iter().map(|(at, _)| *at).collect();
         assert_eq!(
-            positions, acks,
+            positions, committed,
             "FINDING (F, {ctx}): /changes does not enumerate exactly the committed positions"
         );
         d
@@ -581,7 +584,8 @@ fn f_sidecar_mutilation_never_touches_the_world() {
             last["key"].is_null() && last["time"].is_null() && last["docs"].is_null(),
             "torn tail: the lost entry {last_at} must answer bare/null, never invented: {last}"
         );
-        let (first_at, first) = entries.first().expect("entries");
+        let (first_at, first) =
+            entries.iter().find(|(at, _)| *at == acks[0]).expect("the delegate's entry");
         assert_eq!(
             first["op"].as_str(),
             Some("delegate"),
@@ -658,7 +662,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         let claimed: Vec<u64> = entries.iter().map(|(at, _)| *at).collect();
         assert_eq!(
             claimed,
-            acks[..acks.len() - 1].to_vec(),
+            committed[..committed.len() - 1].to_vec(),
             "FINDING (F): /changes claims positions the recovered world lacks"
         );
         assert_eq!(read_text(&d, &doc, 4), "abcd", "the surviving prefix reads back");
@@ -757,6 +761,14 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
     );
     let admitted = acked_at(&v);
     assert!(admitted > head, "a write is admitted while the walk is held");
+    // The write's turn writes a head too: with the region pending, the head
+    // writer resumed its count off the kernel's seq (`head.rs`, the pending
+    // region's over-count — early, never late), and the registry seed's
+    // records alone pass the count bound, so the first write makes a head
+    // due — its insert into the staging draft and its publish into `H`, the
+    // head of the board at the kill, both in the region the walk re-covers.
+    let at_the_kill = head_position(port);
+    assert_eq!(at_the_kill, admitted + 7, "the head's insert and publish after the write");
     let (st, body) = get(port, &format!("/changes?since={low}"));
     assert_eq!((st, json(&body)["error"].as_str()), (503, Some("feed_rebuilding")), "{}", String::from_utf8_lossy(&body));
     child.kill();
@@ -770,19 +782,19 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
     // The reopen walks again from `low` and lands; the write is bare.
     let d = timed_daemon_open(&fixture, "F′ the reopen after the kill");
     let said = d.lines_said();
-    // The region at the reopen: the torn position and the write admitted
-    // under the kill, both above `low`.
-    let uncovered = acks.iter().filter(|&&p| p > low).count() + 1;
+    // The region at the reopen: the torn position, the write admitted under
+    // the kill and the head's two commits, all above `low`.
+    let uncovered = acks.iter().filter(|&&p| p > low).count() + 3;
     assert!(
         said.iter().any(|l| {
-            l == &format!("open: commits.log covers to position {low}; walking {uncovered} boundaries to position {admitted}")
+            l == &format!("open: commits.log covers to position {low}; walking {uncovered} boundaries to position {at_the_kill}")
         }),
-        "the walk again from low, over the region and the write:\n{}",
+        "the walk again from low, over the region, the write and the head:\n{}",
         said.join("\n")
     );
     assert!(
         said.iter().any(|l| l.starts_with(&format!(
-            "landing: commits.log re-covered positions ({low}, {admitted}]: {uncovered} boundaries \
+            "landing: commits.log re-covered positions ({low}, {at_the_kill}]: {uncovered} boundaries \
              walked, 0 of them unclassifiable and served to every class, in "
         ))),
         "landed:\n{}",
@@ -790,16 +802,27 @@ fn f_a_kill_mid_walk_leaves_the_sidecar_unchanged_and_the_next_open_walks_again(
     );
     let entries = changes_entries(&d);
     let positions: Vec<u64> = entries.iter().map(|(at, _)| *at).collect();
-    let mut want = acks.clone();
-    want.push(admitted);
+    let mut want = seed_rows();
+    want.extend(acks.iter().copied());
+    // The write, then the head's publish; the head's insert into the system
+    // account's private draft is masked, classified from the journal.
+    want.extend([admitted, at_the_kill]);
     assert_eq!(positions, want, "every position, the write admitted under the kill among them");
-    let (_, last) = entries.last().expect("the write");
+    let (_, write) = entries.iter().find(|(at, _)| *at == admitted).expect("the write");
     assert!(
-        last["docs"].is_null() && last["key"].is_null() && last["time"].is_null(),
-        "the write admitted before the kill is BARE at the reopen — its record was never written: {last}"
+        write["docs"].is_null() && write["key"].is_null() && write["time"].is_null(),
+        "the write admitted before the kill is BARE at the reopen — its record was never written: {write}"
     );
-    let (_, first) = entries.first().expect("entries");
+    let (_, first) = entries.iter().find(|(at, _)| *at == acks[0]).expect("the delegate's entry");
     assert_eq!(first["op"].as_str(), Some("delegate"), "the intact prefix keeps its metadata: {first}");
+}
+
+/// The registry seed's rows a guest's feed shows on a fresh board: the
+/// member's publish at 8, then one `make_link` per type three records apart
+/// to `SEED_HEAD` — the draft's mint and the sections' insert being the
+/// system account's private writes, masked (`changes.rs` pins them).
+fn seed_rows() -> Vec<u64> {
+    (8..=SEED_HEAD).step_by(3).collect()
 }
 
 // ── G. Disk exhaustion (best-effort, dedicated tiny volume) ──────────────
@@ -987,12 +1010,14 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
 const CLAIM_CRASH_DIR: &str = "SKEP_HAZARD_CLAIM_CRASH_DIR";
 
 /// The claim link's committed position on a fresh board — the ceremony's
-/// fifth commit (wire.md §A first board: positions 2, 3, 6, 9, 12).
-const CLAIM_POSITION: u64 = 12;
+/// fifth commit, twelve records above the seeded board's head
+/// (`common::SEED_HEAD`; wire.md §A first board).
+const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 
-/// `H.1`'s records above the claim: the staging draft's mint (1), the head
-/// record's insert (3), the publish shot into `H` (4).
-const H1_RECORDS: u64 = 8;
+/// `H.1`'s records above the claim: the head record's insert (3) and the
+/// publish shot into `H` (4) — the staging draft stands from the open's
+/// registry seed, so the claim's head mints none.
+const H1_RECORDS: u64 = 7;
 
 /// The kernel below the daemon's door, opened to LOOK and write nothing: a
 /// manual checkpoint policy, the production retention, the salt unused by a
@@ -1047,7 +1072,7 @@ fn claim_crash_child(dir: &Path) -> ! {
 /// it judges the data dir twice: BELOW THE DOOR the journal's head is the
 /// claim's own position — the claim landed, no head did; THROUGH THE DOOR
 /// the board is claimed, `H.1` stands at the claim's position with the
-/// head's eight records above it and `prev` null, the open's one line about
+/// head's seven records above it and `prev` null, the open's one line about
 /// it naming the position the head landed at and the pair it names, and —
 /// served — the board takes an attested write at once, its slot filled. A
 /// third open writes nothing and says nothing: the repair is owed once.
@@ -1127,7 +1152,7 @@ fn h_a_crash_between_the_claim_and_its_head_reopens_with_h1() {
     assert_eq!(
         head_position(port),
         CLAIM_POSITION + H1_RECORDS,
-        "FINDING (H): the open did not write H.1's eight records above the claim"
+        "FINDING (H): the open did not write H.1's seven records above the claim"
     );
     let h1 = board_term(port).expect("FINDING (H): no H.1 after the reopen");
     assert_eq!(h1.log_position, CLAIM_POSITION, "H.1 names the claim's own position");

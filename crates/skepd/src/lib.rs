@@ -37,8 +37,12 @@
 //!   published head writer: `H` = `1.1.0.1.0.2` written as a new published
 //!   version on the write path's own cadence, as the system account's
 //!   principal with no session, its commits testifying `"system"` on
-//!   `/changes` (wire.md §The other endpoints). Its `README.md` lists the
-//!   surface this crate takes.
+//!   `/changes` (wire.md §The other endpoints) — and, through the same door
+//!   at every open, the link-type registry's seed: the registry document
+//!   `1.1.0.1.0.1` given a named section and a `defines` link for every
+//!   link type the build knows that it lacks (wire.md §Registry), so any
+//!   board names its types to a guest. Its `README.md` lists the surface
+//!   this crate takes.
 //! * `skep-media` — the media door and, beside the write path, the daemon's
 //!   media resource, a crate of its own this daemon instantiates at its
 //!   `World`: the blob store `skep-blobs` opened under `blobs/` in the data

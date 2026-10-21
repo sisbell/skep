@@ -61,7 +61,7 @@ fn history_reclaimed_on_the_daemon_keeps_the_file_and_resumes_from_the_floor() {
     consumer.poll().unwrap();
     let fresh = fx.draft(&token, CLAIMANT, "written after the floor rose");
     consumer.poll().unwrap();
-    assert!(consumer.search(Who::Guest, "before", &SearchOpts::default()).unwrap().hits.is_empty(), "drafts are no guest's: the published index holds doc 1 and the heads alone");
+    assert!(consumer.search(Who::Guest, "floor", &SearchOpts::default()).unwrap().hits.is_empty(), "drafts are no guest's: the published index holds doc 1 and the heads alone");
     consumer.close().unwrap();
     let resumed = Index::load(&mut &std::fs::read(&file).unwrap()[..], Class::Guest).unwrap().1;
     assert_eq!(resumed.floor, Some(floor), "the file states its completeness");

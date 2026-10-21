@@ -53,7 +53,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   naming the kept file; the walk run at the open under the same catch as
   its thread), `serial_lock`,
   `serial_figures`, `commit_under`, `take_turn_after_refusal`,
-  `write_first_head` (`FirstHead`), `changes` (`ChangesQuery`,
+  `write_first_head` (`FirstHead`), `seed_registry` (`Seeded`: the rows
+  `written`, the rows that `stood`, the type `refused`) — the link-type
+  registry's seed the daemon runs at every open: one named section and one
+  `defines` link into `1.1.0.1.0.1` for every type of `skep-registry`'s
+  vocabulary the board lacks, as the system principal through the head
+  writer's door and its one staging draft, a refusal said once and the
+  open going on — `changes` (`ChangesQuery`,
   `ChangesAnswer`, `FeedClass` with `of`), `head_time`, `next_step`
   (`StreamStep`), `announced`, `halted_at`, `say_the_kernels_halt_once`,
   `feed_walk_gone`, `compact_feed_below_reclaim_floor` (`FeedCompaction`),
@@ -82,9 +88,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The test seam** (`test-hooks`, default off; every item of it
   `#[doc(hidden)]`) — the feed walk's hold, its notice and its panic arm,
   the walk's pending region and progress cadence, the head writer's clock
-  and its one refusal, the feed's and the attest store's failure arms and
-  the attest store's sync mark, the lines said, the checkpoint signal's
-  tick. Forwards nothing.
+  and its one refusal, the registry seed's three (a type hidden from a
+  board's seed, every type lifted, a refusal of the seed's n-th commit),
+  the feed's and the attest store's failure arms and the attest store's
+  sync mark, the lines said, the checkpoint signal's tick. Forwards
+  nothing.
 
 Its modules, each with a line saying what it holds, are declared in
 `src/lib.rs`; the rules that hold across its files, in the workspace's

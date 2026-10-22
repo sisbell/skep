@@ -248,7 +248,7 @@ use skep_core::limits::{EDGE_HOLD_DOWN, MAX_REQUEST_BODY};
 #[cfg(any(test, feature = "test-hooks"))]
 use skep_core::commits::LinesSaid;
 use skep_core::commits::{
-    AttestStoreFigures, Commits, FeedCompaction, FirstHead, Seeded, StoppedFile,
+    AttestStoreFigures, Commits, FeedCompaction, FeedPending, FirstHead, Seeded, StoppedFile,
 };
 use skep_namespace::ghost_home_document;
 use skep_core::serial::SerialFigures;
@@ -2573,14 +2573,16 @@ impl fmt::Display for Reclaimed {
 /// happens. It renders `the cadence's byte bound {b}, the media floor in
 /// force {F}, the volume's free space {f}; {resident}; {guard}; the change
 /// feed's files {compacted below position {p} in {d} ms | wait on the walk's
-/// landing over positions ({low}, {head}] for their rewrite, the resident
-/// entries trimmed below position {p} in {d} ms | hold nothing below the
-/// reclaim floor}; feed-attest.log {bytes} bytes, {s} slots resident` — the
-/// middle arm while the walk behind the listener has a region pending, when
-/// the fence moved in memory alone and no file was written; `unread` for the
-/// free space where the host refused the read, its cause said by the floor's
-/// own line and the standing line; `size unread` for the bytes where the
-/// file's metadata did not answer.
+/// landing over {what} for their rewrite, the resident entries trimmed
+/// below position {p} in {d} ms | hold nothing below the reclaim floor};
+/// feed-attest.log {bytes} bytes, {s} slots resident` — the middle arm while
+/// the walk behind the listener has anything pending, when the fence moved
+/// in memory alone and no file was written, `{what}` the region, the bare
+/// positions the index lost, or both (`FeedPending`'s words: `positions
+/// ({low}, {head}]`, `{n} bare positions the index lost`, the two joined by
+/// `and`); `unread` for the free space where the host refused the read, its
+/// cause said by the floor's own line and the standing line; `size unread`
+/// for the bytes where the file's metadata did not answer.
 struct AfterLanding {
     /// The cadence's byte bound in force after the re-read.
     bytes_bound: u64,
@@ -2625,10 +2627,10 @@ impl fmt::Display for AfterLanding {
         write!(f, "; {}; {}; the change feed's files ", self.resident, self.guard)?;
         let below = |fence: u64| fence.saturating_add(1);
         match (self.compaction.fence, self.compaction.deferred) {
-            (Some(fence), Some((low, head))) => write!(
+            (Some(fence), Some(pending)) => write!(
                 f,
-                "wait on the walk's landing over positions ({low}, {head}] for their rewrite, the \
-                 resident entries trimmed below position {} in {} ms",
+                "wait on the walk's landing over {pending} for their rewrite, the resident \
+                 entries trimmed below position {} in {} ms",
                 below(fence),
                 self.compaction_ms
             )?,
@@ -3824,8 +3826,9 @@ impl fmt::Display for JournalDamageSite<'_> {
 /// which the next open reads, by its site — [`JournalDamageSite`]; RUNBOOK
 /// §2); `{file} stopped since position {p}` once per stopped file;
 /// `the pruner's thread is gone`; `the feed walk's thread is gone;
-/// positions ({low}, {head}] stay uncovered` (the walk behind the listener
-/// dead on a caught panic, its region pending for the uptime —
+/// positions ({low}, {head}] stay uncovered` and, or instead, `; {n} bare
+/// positions the index lost stay unsorted` (the walk behind the listener
+/// dead on a caught panic, what it left pending for the uptime —
 /// `operations.md` §3.3 step 2; row 41); `the cell index failed to
 /// build`; `deposits refused at the floor (free space {f} below the floor
 /// in force {F})`, or `… (free space unread: {cause})` where the host
@@ -3857,10 +3860,11 @@ pub(super) struct StandingLine {
     pub(super) stopped_files: Vec<StoppedFile>,
     /// The pruner's liveness flag.
     pub(super) pruner_gone: bool,
-    /// The feed walk's liveness flag, with the region it left uncovered.
+    /// The feed walk's liveness flag, with what it left unlanded.
     ///
-    /// It is `Commits::feed_walk_gone`'s read.
-    pub(super) feed_walk_gone: Option<(u64, u64)>,
+    /// It is `Commits::feed_walk_gone`'s read: the region it left uncovered,
+    /// the bare positions the index lost it left unsorted, or both.
+    pub(super) feed_walk_gone: Option<FeedPending>,
     /// The cell index's failed state, the media gate's read.
     ///
     /// It is `MediaGate::index_failed`'s.
@@ -3929,10 +3933,18 @@ impl fmt::Display for StandingLine {
         if self.pruner_gone {
             clauses.push("the pruner's thread is gone".to_string());
         }
-        if let Some((low, head)) = self.feed_walk_gone {
-            clauses.push(format!(
-                "the feed walk's thread is gone; positions ({low}, {head}] stay uncovered"
-            ));
+        if let Some(pending) = self.feed_walk_gone {
+            let mut clause = "the feed walk's thread is gone".to_string();
+            if let Some((low, head)) = pending.region {
+                clause.push_str(&format!("; positions ({low}, {head}] stay uncovered"));
+            }
+            if let Some(set) = pending.unsorted {
+                clause.push_str(&format!(
+                    "; {} bare positions the index lost stay unsorted",
+                    set.count
+                ));
+            }
+            clauses.push(clause);
         }
         if self.index_failed {
             clauses.push("the cell index failed to build".to_string());

@@ -1560,12 +1560,9 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
          was; feed-attest.log 20700 bytes, 3 slots resident; 2 checkpoints ran inline on a \
          writer since position 3100"
     );
+    let region = FeedPending { region: Some((4000, 4200)), unsorted: None };
     let deferred = AfterLanding {
-        compaction: FeedCompaction {
-            fence: Some(4095),
-            standing: vec![],
-            deferred: Some((4000, 4200)),
-        },
+        compaction: FeedCompaction { fence: Some(4095), standing: vec![], deferred: Some(region) },
         ..after_a_landing(None)
     };
     assert_eq!(
@@ -1575,6 +1572,41 @@ fn the_landing_line_carries_row_25s_figures_in_its_words() {
              rewrite, the resident entries trimmed below position 4096 in 38 ms{ATTEST_FIGURES}"
         ),
         "the walk pending: no file written, the region named"
+    );
+    let set = Some(skep_core::commits::Unsorted { count: 12, first: 4_101, last: 4_190 });
+    let both = AfterLanding {
+        compaction: FeedCompaction {
+            fence: Some(4095),
+            standing: vec![],
+            deferred: Some(FeedPending { region: Some((4000, 4200)), unsorted: set }),
+        },
+        ..after_a_landing(None)
+    };
+    assert_eq!(
+        both.to_string(),
+        format!(
+            "{AFTER_A_LANDING}wait on the walk's landing over positions (4000, 4200] and 12 bare \
+             positions the index lost for their rewrite, the resident entries trimmed below \
+             position 4096 in 38 ms{ATTEST_FIGURES}"
+        ),
+        "the region and the set pending: both named"
+    );
+    let unsorted = AfterLanding {
+        compaction: FeedCompaction {
+            fence: Some(4095),
+            standing: vec![],
+            deferred: Some(FeedPending { region: None, unsorted: set }),
+        },
+        ..after_a_landing(None)
+    };
+    assert_eq!(
+        unsorted.to_string(),
+        format!(
+            "{AFTER_A_LANDING}wait on the walk's landing over 12 bare positions the index lost \
+             for their rewrite, the resident entries trimmed below position 4096 in 38 \
+             ms{ATTEST_FIGURES}"
+        ),
+        "the set alone pending: no file written, the set named"
     );
     let quiet = LandingLine {
         position: Seq(7),
@@ -1927,7 +1959,7 @@ fn the_standing_line_carries_each_clause_in_the_rates_words_and_order() {
             StoppedFile { name: "feed-index.log", since: 12 },
         ],
         pruner_gone: true,
-        feed_walk_gone: Some((20, 48)),
+        feed_walk_gone: Some(FeedPending { region: Some((20, 48)), unsorted: None }),
         index_failed: true,
         floor: Some(FloorBinding { free_space: Ok(1000), floor: 268_435_456 }),
         unread_deposit: Some(UnreadDeposit {
@@ -2095,7 +2127,7 @@ fn runbook_lists_the_standing_line_as_the_binary_writes_it() {
         history_damaged: Some("at position 9001".to_string()),
         stopped_files: vec![StoppedFile { name: "{file}", since: 9001 }],
         pruner_gone: true,
-        feed_walk_gone: Some((9002, 9003)),
+        feed_walk_gone: Some(FeedPending { region: Some((9002, 9003)), unsorted: None }),
         index_failed: true,
         floor: Some(FloorBinding { free_space: Ok(9004), floor: 9005 }),
         unread_deposit: Some(UnreadDeposit {

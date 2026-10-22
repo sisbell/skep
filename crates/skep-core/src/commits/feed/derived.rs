@@ -678,6 +678,34 @@ impl LineFile {
         Ok(())
     }
 
+    /// Appends the coverage fence and reports a failed write rather than
+    /// returning it.
+    ///
+    /// It is the walk's disposition for the index file it appends as it
+    /// sorts the bare positions the index lost (`Feed::land_sorted`): the
+    /// position is sorted whatever this file does, so a failed fence is
+    /// reported through the classed door in [`LineFile::append_or_report`]'s
+    /// words, naming the fence's position, and stops the file at it — a file
+    /// whose claim cannot be raised takes no further line, and the next open
+    /// re-derives above its fence. A stopped file takes nothing and says
+    /// nothing, as [`LineFile::fence`] does.
+    pub(crate) fn fence_or_report(&mut self, covered: u64) {
+        if let Err(e) = self.fence(covered) {
+            self.stopped = Some(covered);
+            let cause = IoCause(&e);
+            self.lines.say(
+                Class::Failure,
+                format_args!(
+                    "{} append failed at position {covered}: {cause}; this file takes no further \
+                     line until a restart, whose open re-derives it — the board serves from \
+                     memory, and nothing is lost{}",
+                    self.name,
+                    cause.before_the_restart()
+                ),
+            );
+        }
+    }
+
     /// Rewrites the whole file as `records` behind a fence at `covered`.
     ///
     /// It goes through a temp file renamed over the original — the compaction

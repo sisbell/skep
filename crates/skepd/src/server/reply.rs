@@ -13,6 +13,7 @@ use skep_core::auth::session::HandshakeRefusal;
 use skep_core::codec::{
     credential_refused_reply, op_name, registry_refused_reply, to_bytes, JsonCodec,
 };
+use skep_core::commits::FeedPending;
 use crate::history::Unavailable;
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
@@ -473,12 +474,17 @@ pub(super) enum TransportError {
     FetchBusy,
     /// The refusal of the walk behind the listener.
     ///
-    /// A lost or torn `commits.log` left a region of positions uncovered
-    /// (`operations.md` §3.3 step 2; §4 row 16), which the write path's walk
-    /// thread re-covers while the board serves, and this `/changes` page's
-    /// rows would have to come from it. Retry-class, `index_rebuilding`'s
-    /// shape under its own token: pages below and above the region serve,
-    /// `/events` is untouched, and the landing's one rewrite clears it.
+    /// A lost or torn `commits.log` left a region of positions uncovered, or
+    /// a lost or cut `feed-index.log` left bare positions of the log
+    /// unclassified (`operations.md` §3.3 step 2; §4 row 16), which the write
+    /// path's walk thread re-covers and sorts while the board serves, and
+    /// this `/changes` page would reach one of them. Retry-class,
+    /// `index_rebuilding`'s shape under its own token: pages below and above
+    /// the pending positions serve, `/events` is untouched, and the landing
+    /// clears it — a position sorted serving as soon as it lands. Served
+    /// instead, the page would skip the set's positions in silence or, off
+    /// the index files that stand, carry rows a class may not see: an issuer
+    /// stream taken whole past the filter's bound, a straddle's `attest`.
     FeedRebuilding,
 }
 
@@ -974,7 +980,49 @@ pub(super) enum FeedWalk {
     Gone,
 }
 
-/// Returns the `503 feed_rebuilding` refusal.
+/// Returns the `503 feed_rebuilding` refusal for what the walk has yet to land.
+///
+/// It takes what pends ([`FeedPending`]): the region alone, which answers as
+/// [`refuse_feed_rebuilding`] does; the bare positions a lost or cut
+/// `feed-index.log` left unsorted, whose `detail` names their count and the
+/// first of them — `the change feed is being rebuilt behind the listener:
+/// {n} bare positions whose classification feed-index.log lost are not yet
+/// sorted, the first at position {p}, and this page reaches into them; pages
+/// below and above serve; retry shortly`; or both, the region's words then
+/// the set's. The dead walk's arm ([`FeedWalk::Gone`]) says the rebuild
+/// ended at this start and that what pends stays so until a restart, with
+/// no retry hint, as the region's door does. Still `error` and `detail`
+/// alone: no member for the region or the set rides the wire.
+pub(super) fn refuse_feed_rebuilding_over(pending: FeedPending, walk: FeedWalk) -> Reply {
+    let what = match (pending.region, pending.unsorted) {
+        (Some((low, head)), None) => return refuse_feed_rebuilding(low, head, walk),
+        (Some((low, head)), Some(set)) => format!(
+            "positions above {low} through {head} are not yet covered and {} bare positions \
+             below them, whose classification feed-index.log lost, are not yet sorted",
+            set.count
+        ),
+        (None, Some(set)) => format!(
+            "{} bare positions whose classification feed-index.log lost are not yet sorted, the \
+             first at position {}",
+            set.count, set.first
+        ),
+        (None, None) => "nothing is left to land".to_string(),
+    };
+    let detail = match walk {
+        FeedWalk::Walking => format!(
+            "the change feed is being rebuilt behind the listener: {what}, and this page reaches \
+             into them; pages below and above serve; retry shortly"
+        ),
+        FeedWalk::Gone => format!(
+            "the change feed's rebuild behind the listener ended at this start: {what}, and stay \
+             so until a restart, which walks and sorts them again; this page reaches into them; \
+             pages below and above serve; no retry succeeds before the restart"
+        ),
+    };
+    refuse(TransportError::FeedRebuilding, Some(&detail))
+}
+
+/// Returns the `503 feed_rebuilding` refusal for a pending region.
 ///
 /// The page's rows would come from the positions a lost or torn
 /// `commits.log` left uncovered (`operations.md` §3.3 step 2; §4 row 16),
@@ -987,6 +1035,8 @@ pub(super) enum FeedWalk {
 /// detail says so, names the restart and gives no retry hint —
 /// `index_failed`'s voice (PATTERNS P10) under this token, so a client that
 /// retries retry-class refusals is told no retry succeeds before a restart.
+/// The region's arm of [`refuse_feed_rebuilding_over`], the door the route
+/// takes.
 pub(super) fn refuse_feed_rebuilding(low: u64, head: u64, walk: FeedWalk) -> Reply {
     let detail = match walk {
         FeedWalk::Walking => format!(

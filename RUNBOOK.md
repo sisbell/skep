@@ -731,6 +731,17 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
 
    Put back `commits.log` from the copy, whole, and start again.
 
+   A copy with no `feed-index.log`, or one cut short, loses nothing:
+   the index is a projection of `commits.log` and the journal. The
+   open re-derives a recorded position's entry from its own record at
+   once, and the bare positions — the walk's own, their records
+   lost with `commits.log` — are sorted from the journal behind the
+   listener, a world reconstruction each, the board serving and
+   `/changes` refusing `503 feed_rebuilding` for a page that would
+   reach one until it lands (Restart, step 3). Nothing to put back:
+   where the copy holds a `feed-index.log`, restoring it beside
+   `commits.log` spares the sort.
+
    A copy taken while the daemon ran may hold lines past its own
    journal's head. The open drops them, keeping them first beside
    the file as `{file}.cut-{byte}`, and says so for the two files
@@ -1329,33 +1340,31 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
        file holds past the journal's head are dropped, `commits.log`'s
        and `feed-attest.log`'s said (Restore, step 5). Where the
        open's compaction dropped entries below the journal's reclaim
-       floor, and before the open classifies, from the journal, the
-       positions `feed-index.log` lost — a world reconstruction each
-       and one below each run of them, before the board serves, the
-       count said ahead of paying it:
+       floor:
 
        ```
        open: the change feed's files compacted below the reclaim floor at position {floor}: {n} entries dropped
-       open: feed-index.log covers to position {covered}: {n} bare positions are classified from the journal before the board serves, {r} world reconstructions in all
        ```
 
-       While that classification runs, a line every 1,000 positions
-       or ten seconds, whichever comes first — a slow open told from a
-       hung one — and one when it is done, with the reconstructions
-       the journal answered: its `{ms}` over its `{k}` bounds what one
-       costs on this board, the figure to size the next such open by:
+       The bare positions `feed-index.log` lost — the positions
+       `commits.log` holds bare above the index's coverage, a world
+       reconstruction each and one below each run of them — are not
+       classified by the open: it serves at once, and the walk thread
+       sorts them behind the listener, saying its three lines as it
+       does for a lost `commits.log` (Restart, step 3), `/changes`
+       answering `503 feed_rebuilding` for a page that would reach one
+       until it lands. The open's last line names what waits on the
+       walk — `positions ({covered}, {head}]`, `{n} bare positions the
+       index lost`, or both — beside how far back the feed answers:
 
        ```
-       open: feed-index.log: the bare classification at position {position}, {i} of {n}, {ms} ms in
-       open: feed-index.log: {c} of {n} bare positions classified from the journal, {k} world reconstructions, in {ms} ms
+       open: the change feed answers from position {floor} to position {head}: commits.log {n} entries, {b} of them bare; {what} wait on the walk, in {ms} ms
        ```
 
-       Where the journal refuses that classification, each position
-       is served to every class; where it refuses `feed-attest.log`'s
-       rebuild, the second (Restore, step 5):
+       Where the journal refuses `feed-attest.log`'s rebuild (Restore,
+       step 5):
 
        ```
-       failure: feed-index.log: the journal refused to classify {n} bare positions, the first at position {position} ({account}): each is served to every class, its position alone
        failure: feed-attest.log: the journal refused the rebuild above position {covered} ({account}): …
        ```
 
@@ -1829,12 +1838,13 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    upload's creation and resume, and the listing of one's deposits,
    are answered `503 index_rebuilding`.
 
-3. **Where `commits.log` was lost or torn**, the open re-covers the
-   positions the file no longer holds by walking the journal behind
-   the listener: reads are served and writes accepted meanwhile.
-   `GET /changes` answers `503 feed_rebuilding` for a page that
-   reaches into the positions not yet covered; `/events` is
-   untouched. A torn file is cut first, said as a `failure:` line,
+3. **Where `commits.log` was lost or torn, or `feed-index.log` was**,
+   the open re-covers the positions the log no longer holds, and sorts
+   the bare positions the index no longer classifies, by walking the
+   journal behind the listener: reads are served and writes accepted
+   meanwhile. `GET /changes` answers `503 feed_rebuilding` for a page
+   that reaches into the positions not yet covered or not yet sorted;
+   `/events` is untouched. A torn file is cut first, said as a `failure:` line,
    and a damaged one — a whole line that does not read — is kept
    beside the file before the cut (Start, step 3, item 11). An
    absent one is said first too, by the
@@ -1879,16 +1889,47 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    positions again; every write since this open then comes back as a
    bare entry, its key and its time lost.
 
+   Where `feed-index.log` was lost or cut, the bare positions it no
+   longer classifies — those `commits.log` holds bare above the
+   index's coverage, a lost sidecar's walked positions among them —
+   are the same thread's: it says three lines of its own, before or
+   beside the log's — while it sorts, a line every 1,000 positions or
+   ten seconds, whichever comes first — and lands each position as it
+   is sorted, so a restart part-way keeps the progress and the next
+   open pends the rest; `{r}` counts the world reconstructions it will pay,
+   one a position and one below each run of them, and the landing's
+   `{ms}` over its `{k}` bounds what one costs on this board, the
+   figure to size the next such sort by:
+
+   ```
+   open: feed-index.log covers to position {covered}: {n} bare positions are classified from the journal behind the listener, {r} world reconstructions in all
+   progress: feed-index.log: the bare classification at position {position}, {i} of {n}, {ms} ms in
+   landing: feed-index.log: {c} of {n} bare positions classified from the journal, {k} world reconstructions, in {ms} ms; the landing held the change feed's lock {ms} ms
+   ```
+
+   Until a position lands, a `/changes` page that would reach it is
+   refused `503 feed_rebuilding`; the sorted positions on either side
+   of it serve, and a write made meanwhile takes its line in
+   `commits.log` and in no index file until the landing, which
+   rewrites the four whole — nothing is lost, and nothing comes back
+   bare. Where the journal refuses a position's classification, that
+   position is served to every class, its position alone, said once
+   after the sort:
+
+   ```
+   failure: feed-index.log: the journal refused to classify {n} bare positions, the first at position {position} ({account}): each is served to every class, its position alone
+   ```
+
    A landing rewrite that fails before its rename is said once per
    file, and the file takes no further line. `commits.log` stands as
    the open found it, so the next open walks the positions again; an
-   index file stands fenced below them, so the next open classifies
-   them from the journal before the board serves, a world
-   reconstruction a position and one below the first:
+   index file stands fenced where it was, short of what the walk
+   landed, so the next open re-derives above its fence, sorting the
+   bare positions behind the listener as above:
 
    ```
    failure: commits.log: the walk's landing rewrite failed before its rename: {error}; the file stands as it was and takes no further line, so the next open walks again from position {covered}; every write since this open is held in memory alone, its key and its time lost at that open — restart soon
-   failure: {file}: the walk's landing rewrite failed before its rename: {error}; the file stands fenced below the region at position {covered} and takes no further line, so the next open re-derives it — the board serves from memory, and nothing is lost
+   failure: {file}: the walk's landing rewrite failed before its rename: {error}; the file stands fenced at position {fence}, short of what the walk landed, and takes no further line, so the next open re-derives above it — the board serves from memory, and nothing is lost
    ```
 
    Each goes on with the act owed before that restart, as a stopped
@@ -1902,17 +1943,20 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
    walk's `landing:` line come first, after making room where the
    volume is full; neither halt stops the walk.
 
-   Where the walk's thread dies, the positions stay uncovered until
-   a restart:
+   Where the walk's thread dies, the positions stay uncovered, and the
+   bare positions the index lost unsorted, until a restart:
 
    ```
    failure: the feed walk ended: {cause}; positions ({low}, {head}] stay uncovered — /changes refuses pages into them until a restart, which walks again; until that restart commits.log takes no line: every write since this open is held in memory alone, and the restart's walk re-covers each as a bare entry, its key and its time lost — restart soon
+   failure: the feed walk ended: {cause}; {n} bare positions the index lost stay unsorted — /changes refuses pages reaching them until a restart, which sorts them again; until that restart the change feed's index files take no line: every write since this open enters the feed's memory alone, which the restart's open re-derives from commits.log — restart soon
    ```
 
-   Restart soon, as the line says: every write meanwhile is held in
-   memory alone, as after `commits.log`'s stop (The full volume, step
-   5). `{cause}` is the panic's words where the code wrote them, else
-   `a panic`.
+   Restart soon, as the first line says: every write meanwhile is held
+   in memory alone, as after `commits.log`'s stop (The full volume,
+   step 5); under the second alone nothing is lost, `commits.log`
+   taking every line, and the restart sorts what is left. Where both
+   pended, the first line names the set after the region. `{cause}` is
+   the panic's words where the code wrote them, else `a panic`.
 
 4. **Read the report as at a start.** A restart under a new
    `--node-prefix` moves the blocked-prefix list's off-board test,

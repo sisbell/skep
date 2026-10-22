@@ -840,19 +840,20 @@ fn wait_for_the_index(sd: &Skepd) {
 }
 
 /// THE FEED WALK's LANDING: where `commits.log` was lost or torn, the open
-/// leaves the positions it did not cover PENDING and the write path's walk
-/// re-covers them behind the listener (`operations.md` §3.3 step 2), a
-/// `/changes` page into the region refused `feed_rebuilding` until the
-/// landing's one rewrite. Every spawn here waits for it, bounded, as it
-/// waits for the index's walk, so a suite that reopens a board whose
-/// testimony it tore, lost or wrote without a daemon reads the landed feed
-/// and never the refusal; the walk suite (`feed_walk.rs`), whose subject is
-/// the window itself, spawns its own daemon under the walk's hold and
-/// waits at its own moment. Returns at once on a board whose log covered
-/// its head.
+/// leaves the positions it did not cover PENDING, and where `feed-index.log`
+/// was lost or cut, the bare positions it no longer classifies; the write
+/// path's walk re-covers and sorts them behind the listener
+/// (`operations.md` §3.3 step 2), a `/changes` page reaching one refused
+/// `feed_rebuilding` until the landing. Every spawn here waits for it,
+/// bounded, as it waits for the index's walk, so a suite that reopens a
+/// board whose testimony or index it tore, lost or wrote without a daemon
+/// reads the landed feed and never the refusal; the walk suite
+/// (`feed_walk.rs`), whose subject is the window itself, spawns its own
+/// daemon under the walk's hold and waits at its own moment. Returns at once
+/// on a board whose files covered its head.
 fn wait_for_the_feed_walk(sd: &Skepd) {
     let deadline = Instant::now() + Duration::from_secs(60);
-    while sd.daemon().feed_pending_region().is_some() {
+    while sd.daemon().feed_walk_pending() {
         assert!(Instant::now() < deadline, "the feed walk did not land within 60 s");
         std::thread::sleep(Duration::from_millis(5));
     }

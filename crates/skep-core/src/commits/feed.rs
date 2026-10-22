@@ -64,30 +64,48 @@
 //!
 //! # The walk behind the listener (`operations.md` §3.3 step 2; §4 row 16)
 //!
-//! Where `commits.log` was lost or torn, its open records the uncovered
-//! region `(low, head]` as pending and the four derived files are rebuilt
-//! for what the log holds, fenced at `low`; the write path then runs the
-//! walk on a thread of its own ([`Feed::walk_and_land`]) while the board
-//! serves — at the open instead, where the OS refuses the thread.
-//! Meanwhile a page whose rows would have to come from the region is
-//! refused [`ChangesAnswer::Rebuilding`] (`503 feed_rebuilding`,
-//! retry-class), pages below and above it serving; a write's record enters
-//! the twins and none of the five files ([`Inner::fold_into_maps`]); a
-//! checkpoint's compaction moves the fence in memory and writes nothing.
-//! The walk lands under this feed's lock ([`Feed::land`]): the region's
-//! classifications folded into the twins as the record step folds a
-//! position; the index, the bitmap and the streams rewritten whole from the
-//! twins, the same rewrite the open and the checkpoint thread run; then one
-//! rewrite of `commits.log` — the walked boundaries bare among the held
-//! positions, in position order, every offset assigned — and last the
-//! offset array that names its lines. So a kill between two of them leaves
-//! the region to a walk behind the listener again, never to a
+//! Two losses leave the walk work, and the open serves ahead of both. Where
+//! `commits.log` was lost or torn, its open records the uncovered region
+//! `(low, head]` as pending ([`FeedPending::region`]). Where `feed-index.log`
+//! was lost or cut, the bare positions it no longer classifies — those the
+//! log holds bare above the index's coverage, a set at or below the log's
+//! coverage and no contiguous region — are recorded as pending too
+//! ([`FeedPending::unsorted`]; [`Inner::unsorted`]), each owing a world
+//! reconstruction the open does not pay. The four derived files are rebuilt
+//! for what is classified and rewritten fenced short of every pending
+//! position — the region's lower edge, the first unsorted position less one,
+//! whichever is lower — and the write path then runs the walk on a thread of
+//! its own ([`Feed::walk_and_land`]) while the board serves — at the open
+//! instead, where the OS refuses the thread. Meanwhile a page whose rows
+//! would reach a pending position is refused [`ChangesAnswer::Rebuilding`]
+//! (`503 feed_rebuilding`, retry-class), pages below and above serving —
+//! served, such a page would skip the set's positions in silence or, read
+//! off the files that stand, carry rows a class may not see: an issuer
+//! stream taken whole past [`MAX_FILTERED_PREFIXES`], a straddle's `attest`
+//! — so the refusal is the one answer; a write's record enters the twins
+//! and, the region pending, none of the five files, the set pending, the
+//! log alone ([`Inner::fold_position`]); a checkpoint's compaction moves the
+//! fence in memory and writes nothing. The walk sorts the set first, in one
+//! pass with the region's walk where both pend: each position classified
+//! from the journal off the world below it and its own, carried forward
+//! along a run ([`BareClassifier`]), and landed as it is sorted
+//! ([`Feed::land_sorted`]) — folded into the twins, the index file appended
+//! up to it, so a kill mid-sort keeps the progress and the next open pends
+//! the rest. Then the landing under this feed's lock ([`Feed::land`]): the
+//! region's classifications folded into the twins as the record step folds
+//! a position; the index, the bitmap and the streams rewritten whole from
+//! the twins, the same rewrite the open and the checkpoint thread run; then
+//! one rewrite of `commits.log` — the walked boundaries bare among the held
+//! positions, in position order, every offset assigned — where a region
+//! pended, or where a compaction deferred its rewrite to this landing; and
+//! last the offset array that names its lines. So a kill between two of
+//! them leaves the region to a walk behind the listener again, never to a
 //! classification before the board serves; and a derived file whose
-//! landing rewrite fails before its rename, short of the region, takes no
-//! further line. The attest store's file is untouched, its served window
-//! trimmed with the twins, its lines appended all the same and its open
-//! having made the region's slots resident from its own lines and, above
-//! its coverage, from the kernel's markers.
+//! landing rewrite fails before its rename, short of what the walk landed,
+//! takes no further line. The attest store's file is untouched, its served
+//! window trimmed with the twins, its lines appended all the same and its
+//! open having made the region's slots resident from its own lines and,
+//! above its coverage, from the kernel's markers.
 //!
 //! # The supplement (PUB-7.22–7.28)
 //!
@@ -149,17 +167,18 @@ use self::derived::{
     LineFile, OwedSync, SyncHandle, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE,
     OFFSETS_OFFSET, STREAMS_FILE, STREAMS_OWNERS,
 };
+#[cfg(any(test, feature = "test-hooks"))]
+use super::sidecar::{fire_the_feed_walks_fault, FEED_WALK_HOLD};
 use super::sidecar::{
-    reclaim_floor, reclaim_floor_of, reconstruct, Carrier, CommitMeta, CommitsLog, Cut, CutHead,
-    IoCause, JournalTerms, MalformedCase, MalformedNamesLine, OpTerms, ProgressCadence, Recorded,
-    RewriteFail, WalkControl, WalkLandingLine, WalkOutcome,
+    list_boundaries, reclaim_floor, reclaim_floor_of, reconstruct, Carrier, CommitMeta, CommitsLog,
+    Cut, CutHead, FeedPending, IoCause, JournalTerms, MalformedCase, MalformedNamesLine, OpTerms,
+    ProgressCadence, Recorded, RewriteFail, Unsorted, WalkControl, WalkLandingLine, WalkOpenLine,
+    WalkOutcome, WalkRefusedLine,
 };
 use super::classify::{classify, derived_docs, parse_dotted, Doc};
 use super::{Lines, Signed};
 use crate::codec::append_bytes;
-use crate::limits::{
-    FEED_WALK_PROGRESS_BOUNDARIES, FEED_WALK_PROGRESS_INTERVAL, MAX_CHANGES_PAGE_BYTES,
-};
+use crate::limits::MAX_CHANGES_PAGE_BYTES;
 use crate::serial::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate.
@@ -334,13 +353,14 @@ pub struct FeedCompaction {
     ///
     /// They are in the order the compaction attempted them.
     pub standing: Vec<&'static str>,
-    /// The pending region `(low, head]` whose landing the rewrite waits on.
+    /// What the walk has yet to land, whose landing the rewrite waits on.
     ///
-    /// The walk behind the listener has yet to land it, so the fence moved
-    /// in memory alone — the resident entries and the twins trimmed — and no
-    /// file was written. `None` where the files were rewritten, or nothing
-    /// lay below the floor.
-    pub deferred: Option<(u64, u64)>,
+    /// The walk behind the listener has yet to land the region, the bare
+    /// positions the index lost, or both, so the fence moved in memory alone
+    /// — the resident entries and the twins trimmed — and no file was
+    /// written. `None` where the files were rewritten, or nothing lay below
+    /// the floor.
+    pub deferred: Option<FeedPending>,
 }
 
 /// What `feed-attest.log` holds, as one read of it answers.
@@ -427,22 +447,21 @@ pub enum ChangesAnswer {
         /// The largest `limit` whose rows from this `since` fit the budget.
         fits: usize,
     },
-    /// The region pending (`operations.md` §3.3 step 2; §4 row 16).
+    /// The walk pending (`operations.md` §3.3 step 2; §4 row 16).
     ///
-    /// The page's rows would have to come from `(low, head]`, the positions a
-    /// lost or torn `commits.log` left uncovered, which the walk behind the
-    /// listener has yet to land — refused `503 feed_rebuilding`,
-    /// retry-class as `index_rebuilding` is, under its own token. `low` is
-    /// covered, `head` the last of the region; the route words them and
-    /// carries no member for them. `Feed::page` states the test: not
-    /// only a `since` inside the region — a page starting below it whose
-    /// `limit` rows are not all at or below `low` would otherwise skip its
-    /// positions in silence.
+    /// The page would reach a position the walk behind the listener has yet
+    /// to land: one of `(low, head]`, the positions a lost or torn
+    /// `commits.log` left uncovered, or a bare position `feed-index.log`
+    /// lost, unsorted — refused `503 feed_rebuilding`, retry-class as
+    /// `index_rebuilding` is, under its own token. What pends rides as
+    /// figures ([`FeedPending`]); the route words them and carries no member
+    /// for them. `Feed::page` states the test: not only a `since` at a
+    /// pending position — a page starting below one whose `limit` rows are
+    /// not all below it would otherwise skip positions in silence.
     Rebuilding {
-        /// The last covered position below the region.
-        low: u64,
-        /// The last position of the region.
-        head: u64,
+        /// What the walk has yet to land, as the open read it less what has
+        /// landed since.
+        pending: FeedPending,
     },
 }
 
@@ -505,20 +524,20 @@ struct Inner {
     ///
     /// A document is keyed by tumbler, so a prefix is a range; its positions
     /// are ascending, which is what makes [`at_or_above`]'s `partition_point`
-    /// meaningful over a list of them and what the consecutive-repeat dedup
-    /// beside each push rests on.
+    /// meaningful over a list of them.
     ///
-    /// Three construction paths establish it, differently. At [`Feed::open`]
-    /// the lists are built by iterating [`Inner::docs`], a `BTreeMap`, so
-    /// the container supplies the order. At [`Inner::fold_position`] they
-    /// are pushed, and the order comes from the write path instead:
-    /// positions are recorded under the serialization guard
+    /// Three construction paths establish it. At [`Feed::open`] the lists
+    /// are built by iterating [`Inner::docs`], a `BTreeMap`, so the
+    /// container supplies the order. At [`Inner::fold_position`] they are
+    /// pushed, and the order comes from the write path: positions are
+    /// recorded under the serialization guard
     /// ([`crate::commits::Commits::commit_recorded`], which both of the
     /// write path's doors run, executes and records as one operation under
     /// it), so each push is strictly above every prior one. At the walk's
-    /// landing ([`Feed::land`]) the region's positions are pushed after the
-    /// ones recorded above the head while it walked, and
-    /// [`Inner::sort_the_lists`] restores the order.
+    /// landings ([`Feed::land_sorted`], [`Feed::land`]) a position lands
+    /// below the ones recorded above the head while the walk ran, and
+    /// [`push_in_order`] places it ahead of them, each list holding a
+    /// position once.
     index: BTreeMap<Tumbler, (Address, Vec<u64>)>,
     /// The bitmap: positions masked at commit (docs non-empty, all drafts).
     ///
@@ -552,12 +571,39 @@ struct Inner {
     /// `masked` and `published` are `BTreeSet`s and [`Inner::index`] takes
     /// its replay order from `docs`, a `BTreeMap`, while this is pushed — in
     /// file order at replay, in position order at the record
-    /// ([`Inner::index`]'s second path, and the same guard), and out of
-    /// order at the walk's landing (its third). [`Feed::open`] sorts the
-    /// replayed half and [`Inner::sort_the_lists`] the landing's, which is
+    /// ([`Inner::index`]'s second path, and the same guard), and below the
+    /// window's positions at the walk's landings (its third, through
+    /// [`push_in_order`]). [`Feed::open`] sorts the replayed half, which is
     /// what establishes the invariant [`at_or_above`]'s `partition_point`
     /// reads.
     streams: BTreeMap<Address, Vec<u64>>,
+    /// The bare positions `feed-index.log` lost that the walk has yet to sort.
+    ///
+    /// They are the positions the log holds bare above the index file's
+    /// coverage that no surviving index record classifies — each at or below
+    /// the log's coverage, a set and no region, read at [`Feed::open`] and
+    /// never classified there — the module doc's second pending state. While
+    /// a position stands here it is in no twin: not in [`Inner::docs`],
+    /// [`Inner::masked`], [`Inner::published`] or [`Inner::streams`], and
+    /// [`Inner::visible`] shows it to no class; a page that would reach it
+    /// is refused ([`Inner::first_pending_above`]); the four files take no
+    /// line ([`Inner::fold_position`]), fenced below its first member. The
+    /// walk sorts them ascending and each leaves as it lands
+    /// ([`Feed::land_sorted`]); a compaction drops the ones the journal
+    /// reclaimed ([`Inner::drop_at_or_below`]).
+    unsorted: BTreeSet<u64>,
+    /// Whether the walk has yet to land what the open left pending.
+    ///
+    /// Set at [`Feed::open`] where a region or a set pends, cleared at the
+    /// end of [`Feed::land`], once the four files are rewritten whole. It
+    /// outlasts the set: the last position sorted leaves the set before the
+    /// landing's rewrite, and a line a file took in that window — the four
+    /// standing fenced below the set — would raise its claim over the
+    /// positions sorted since, so the record step appends to no file while
+    /// this stands ([`Inner::fold_position`]), a compaction writes nothing
+    /// ([`Inner::pends`]), and a suite that waits on the landing waits on
+    /// this (`Feed::walk_pending`).
+    landing_owed: bool,
     /// The attest store, on its own card ([`AttestStore`]).
     ///
     /// Its class keeps it out of `files` and out of every rewrite here; its
@@ -584,26 +630,27 @@ impl Feed {
     ///
     /// It replays `commits.log` (recording its uncovered tail as the region
     /// pending, below), replays the four derived sidecars, re-derives each
-    /// one's missing tail — a recorded position's contribution from its own
-    /// record, a bare position's from the journal — and fences each at the
-    /// head, or at the region's lower edge where one is pending; then opens
-    /// the attest store ([`AttestStore::open`]). Runs after M2's
-    /// load-and-replay and before the first page (PUB-6.40): every
-    /// classification here reads the recovered head's exception set, and the
-    /// grant fold it stands beside is seeded by the same load.
+    /// one's missing tail from `commits.log` — a recorded position's
+    /// contribution from its own record; a bare position the index no longer
+    /// classifies is the walk's, recorded as pending (below), never
+    /// classified here — and fences each at the head, or short of the first
+    /// pending position where any pends; then opens the attest store
+    /// ([`AttestStore::open`]). Runs after M2's load-and-replay and before
+    /// the first page (PUB-6.40): every classification here reads the
+    /// recovered head's exception set, and the grant fold it stands beside
+    /// is seeded by the same load.
     ///
     /// **Cost.** The `commits.log` replay, whose cost `CommitsLog::open`
-    /// states — the walk is not the open's — plus O(each derived file) to
-    /// replay it and O(its missing tail) to close it — a whole-file loss is
-    /// one O(journal) rebuild, and a bare position outside the index's
-    /// coverage one world reconstruction, a run of them one more for the
-    /// world below its first and none for the head's, which is the open's
-    /// snapshot ([`BareClassifier`]) — and the attest store's own open, whose
-    /// cost [`AttestStore::open`] states. Never a rewrite per restart: a
-    /// derived file is rewritten only when the log compacted under it, when
-    /// it carries another journal's lines, while the walk's region is pending
-    /// (below), or (the offset array) when its offsets no longer match the
-    /// log's.
+    /// states — the walk is not the open's, nor is any world reconstruction:
+    /// a bare position the index lost is sorted behind the listener — plus
+    /// O(each derived file) to replay it and O(its missing tail) to close
+    /// it, a whole-file loss being one O(the log) rebuild of what the log's
+    /// records classify, and the attest store's own open, whose cost
+    /// [`AttestStore::open`] states. Never a rewrite per restart: a derived
+    /// file is rewritten only when the log compacted under it, when it
+    /// carries another journal's lines, while the walk has a region or a set
+    /// pending (below), or (the offset array) when its offsets no longer
+    /// match the log's.
     ///
     /// **The lines** (`operations.md` §1.1 rows 9, 11, 2), through `lines`,
     /// the classed door the write path made ahead of this open: a derived
@@ -611,26 +658,28 @@ impl Feed {
     /// position and that the cut part is re-derived ([`DerivedCutLine`]);
     /// the index file's malformed names are counted and said once with the
     /// first position and how many of them are bare, which no testimony
-    /// rescues ([`MalformedNamesLine`]); the classification of the bare
-    /// positions the index lost is said ahead of its cost, at the walk's
-    /// cadence while it runs and with its figures once done, and the
-    /// journal's refusals of it once, the first in the kernel's words
-    /// ([`ClassificationRefusedLine`]); what the compaction dropped below the
-    /// reclaim floor is said once the derived files follow the log
+    /// rescues ([`MalformedNamesLine`]); what the compaction dropped below
+    /// the reclaim floor is said once the derived files follow the log
     /// ([`OpenCompactionLine`]); and the open ends on how far back `/changes`
-    /// answers and how long the open took ([`FeedOpenLine`]).
+    /// answers, what waits on the walk, and how long the open took
+    /// ([`FeedOpenLine`]). The bare positions the index lost are the walk
+    /// thread's to say (`operations.md` §1.1 m15; [`Feed::walk_and_land`]).
     ///
-    /// **The region pending** (the module doc's walk): where the log's open
-    /// found positions it does not cover, the four derived files are
-    /// rebuilt for the entries the log holds and rewritten fenced at the
-    /// region's lower edge — an honest coverage claim, so a crash before
-    /// the landing, or a derived rewrite the landing cannot make, leaves no
-    /// file claiming over positions it never processed (the derived card's
-    /// gap rule), the next open re-deriving from that fence — and the
+    /// **What pends** (the module doc's walk): where the log's open found
+    /// positions it does not cover, or the index's replay left bare positions
+    /// of the log's unclassified, the four derived files are rebuilt for
+    /// what is classified and rewritten fenced short of the first pending
+    /// position — the region's lower edge or the first unsorted position
+    /// less one, whichever is lower: an honest coverage claim, so a crash
+    /// before the landing, or a derived rewrite the landing cannot make,
+    /// leaves no file claiming over positions it never processed (the
+    /// derived card's gap rule), the next open re-deriving from that fence —
+    /// the set's positions enter no twin ([`Inner::unsorted`]), and the
     /// open's snapshot of the head's world is answered beside the feed, for
-    /// the walk to diff from and the landing to classify against (PUB-7.7's
+    /// the walk to diff from and the landings to classify against (PUB-7.7's
     /// one-snapshot clause: the head's exception set as the open read it);
-    /// `None` where the log covers the head.
+    /// `None` where the log covers the head and the index every bare
+    /// position it holds.
     ///
     /// # Errors
     ///
@@ -648,9 +697,6 @@ impl Feed {
         let log = CommitsLog::open(dir, engine, lines)?;
         let head = log.open_head();
         let pending = log.pending_region();
-        // The coverage the open closes the four files at: the head, or the
-        // region's lower edge where the walk has the rest to land.
-        let covered = pending.map_or(head, |(low, _)| low);
         let snap = engine.kernel().snapshot();
         let world = snap.world();
 
@@ -721,97 +767,49 @@ impl Feed {
             let line = MalformedNamesLine { file: INDEX_FILE, positions, first, case };
             lines.say(Class::Failure, line);
         }
-        // The bare positions the index lost are classified from the journal
-        // before the board serves, a world reconstruction each but the
-        // head's, and one below each run of them ([`BareClassifier`]) — the
-        // count said ahead of paying it, at a cadence while it runs and with
-        // its figures once done, so a slow open is told from a hung one.
-        let tail = f_index.first_uncovered()..;
-        let mut classifier = BareClassifier::new(engine, &snap, &log);
-        let (mut unclassified, mut planned, mut follows_bare) = (0usize, 0usize, false);
-        for (at, meta) in log.entries().range(tail.clone()) {
-            let bare = matches!(meta, CommitMeta::Bare { .. }) && !docs.contains_key(at);
-            if bare {
-                unclassified += 1;
-                planned += classifier.planned(*at, follows_bare);
+        // The index's tail: a recorded position is classified from its own
+        // record here — every name reads, `CommitsLog` having demoted the
+        // recorded positions whose did not — and a bare one the index lost
+        // is the walk's, the set it sorts behind the listener (the module
+        // doc), a world reconstruction each that the open does not pay.
+        let mut unsorted: BTreeSet<u64> = BTreeSet::new();
+        for (&at, meta) in log.entries().range(f_index.first_uncovered()..) {
+            if docs.contains_key(&at) {
+                continue;
             }
-            follows_bare = bare;
-        }
-        if unclassified > 0 {
-            let line = BareClassificationLine {
-                coverage: f_index.coverage(),
-                positions: unclassified,
-                reconstructions: planned,
-            };
-            lines.say(Class::Open, line);
-        }
-        let classifying = Instant::now();
-        let mut cadence = ProgressCadence::new();
-        let mut attempted = 0usize;
-        // The journal's refusals of that classification: counted, the first
-        // kept in the kernel's words, said once after the walk.
-        let mut refused: Option<(usize, u64, String)> = None;
-        for (&at, meta) in log.entries().range(tail) {
-            if let std::collections::btree_map::Entry::Vacant(vacant) = docs.entry(at) {
-                let addrs: Vec<Address> = match meta {
-                    // Every name reads: `CommitsLog` demoted the recorded
-                    // positions whose did not, so this parse drops nothing.
-                    CommitMeta::Recorded { docs: strings, .. } => {
-                        strings.iter().filter_map(|s| parse_dotted(s)).collect()
+            match meta {
+                CommitMeta::Recorded { docs: strings, .. } => {
+                    let addrs: Vec<Address> =
+                        strings.iter().filter_map(|s| parse_dotted(s)).collect();
+                    if !addrs.is_empty() {
+                        docs.insert(at, classify(world, addrs));
                     }
-                    // A bare position the index lost: the journal answers,
-                    // off the worlds the classifier rebuilds or carries
-                    // forward from the position before.
-                    CommitMeta::Bare { .. } => {
-                        attempted += 1;
-                        let addrs = match classifier.classify(at) {
-                            Ok(addrs) => addrs,
-                            Err(e) => {
-                                refused = Some(match refused {
-                                    None => (1, at, e.to_string()),
-                                    Some((n, first, account)) => (n + 1, first, account),
-                                });
-                                Vec::new()
-                            }
-                        };
-                        let every = FEED_WALK_PROGRESS_BOUNDARIES;
-                        if cadence.due(attempted, every, FEED_WALK_PROGRESS_INTERVAL) {
-                            let elapsed_ms = classifying.elapsed().as_millis();
-                            let progress = BareClassifyingLine {
-                                position: at,
-                                done: attempted,
-                                of: unclassified,
-                                elapsed_ms,
-                            };
-                            lines.say(Class::Open, progress);
-                        }
-                        addrs
-                    }
-                };
-                if !addrs.is_empty() {
-                    vacant.insert(classify(world, addrs));
+                }
+                CommitMeta::Bare { .. } => {
+                    unsorted.insert(at);
                 }
             }
-            if let Some(ds) = docs.get(&at) {
+        }
+        // The coverage the open closes the four files at: the head; the
+        // region's lower edge where the walk has the rest to land; and
+        // short of the first unsorted position where the set pends,
+        // whichever is lower — no file claims over a position the walk has
+        // yet to land.
+        let covered = pending.map_or(head, |(low, _)| low);
+        let covered =
+            unsorted.first().map_or(covered, |&first| covered.min(first.saturating_sub(1)));
+        // The four files are rewritten whole below where the log compacted
+        // under them or anything pends; else each takes its tail's lines and
+        // its fence here.
+        let rewriting = log.rewritten() || pending.is_some() || !unsorted.is_empty();
+        if !rewriting {
+            for (&at, ds) in docs.range(f_index.first_uncovered()..) {
                 f_index
                     .append(at, vec![(INDEX_DOCS, doc_strings(ds))])
                     .map_err(with_file(INDEX_FILE))?;
             }
+            f_index.fence(covered).map_err(with_file(INDEX_FILE))?;
         }
-        let reconstructions = classifier.finish();
-        if attempted > 0 {
-            let line = BareClassifiedLine {
-                classified: attempted - refused.as_ref().map_or(0, |(n, ..)| *n),
-                of: attempted,
-                reconstructions,
-                elapsed_ms: classifying.elapsed().as_millis(),
-            };
-            lines.say(Class::Open, line);
-        }
-        if let Some((positions, first, account)) = refused {
-            lines.say(Class::Failure, ClassificationRefusedLine { positions, first, account });
-        }
-        f_index.fence(covered).map_err(with_file(INDEX_FILE))?;
 
         // ── the position index twin, from the classification map ──
         let mut index: BTreeMap<Tumbler, (Address, Vec<u64>)> = BTreeMap::new();
@@ -827,20 +825,35 @@ impl Feed {
         }
 
         // ── the bitmap, and its complement ──
+        //
+        // An unsorted position enters neither: it is in no twin until the
+        // walk lands it ([`Inner::unsorted`]), whatever a file that stood
+        // claimed of it.
         let mut masked: BTreeSet<u64> = masked_entries
             .iter()
             .map(|(at, _)| *at)
-            .filter(|at| log.entries().contains_key(at))
+            .filter(|at| log.entries().contains_key(at) && !unsorted.contains(at))
             .collect();
         for (&at, _) in log.entries().range(f_masked.first_uncovered()..) {
+            if unsorted.contains(&at) {
+                continue;
+            }
             if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
-                f_masked.append(at, vec![]).map_err(with_file(MASKED_FILE))?;
+                if !rewriting {
+                    f_masked.append(at, vec![]).map_err(with_file(MASKED_FILE))?;
+                }
             }
         }
-        f_masked.fence(covered).map_err(with_file(MASKED_FILE))?;
-        let published: BTreeSet<u64> =
-            log.entries().keys().copied().filter(|at| !masked.contains(at)).collect();
+        if !rewriting {
+            f_masked.fence(covered).map_err(with_file(MASKED_FILE))?;
+        }
+        let published: BTreeSet<u64> = log
+            .entries()
+            .keys()
+            .copied()
+            .filter(|at| !masked.contains(at) && !unsorted.contains(at))
+            .collect();
 
         // ── the per-owner draft streams ──
         //
@@ -852,7 +865,7 @@ impl Feed {
         // refuses a half-record and this one does not.
         let mut streams: BTreeMap<Address, Vec<u64>> = BTreeMap::new();
         for (at, m) in &stream_entries {
-            if !log.entries().contains_key(at) {
+            if !log.entries().contains_key(at) || unsorted.contains(at) {
                 continue;
             }
             for owner in elements_of(m.get(STREAMS_OWNERS))
@@ -881,31 +894,38 @@ impl Feed {
             positions.dedup();
         }
         for (&at, _) in log.entries().range(f_streams.first_uncovered()..) {
+            if unsorted.contains(&at) {
+                continue;
+            }
             let owners = owners_of(docs.get(&at).map(Vec::as_slice).unwrap_or(&[]));
             if !owners.is_empty() {
                 for owner in &owners {
                     streams.entry(owner.clone()).or_default().push(at);
                 }
-                f_streams
-                    .append(at, vec![(STREAMS_OWNERS, addr_strings(&owners))])
-                    .map_err(with_file(STREAMS_FILE))?;
+                if !rewriting {
+                    f_streams
+                        .append(at, vec![(STREAMS_OWNERS, addr_strings(&owners))])
+                        .map_err(with_file(STREAMS_FILE))?;
+                }
             }
         }
-        f_streams.fence(covered).map_err(with_file(STREAMS_FILE))?;
+        if !rewriting {
+            f_streams.fence(covered).map_err(with_file(STREAMS_FILE))?;
+        }
 
         // ── the offset array, checked against the log's own replay ──
         //
         // `!log.rewritten()` is this file's half of compaction as well as its
         // agreement test: a compacted log moved every offset, so the file is
         // rewritten below — with the other three where the log compacted or
-        // a region pends, alone where the log stands, no region pends, and
-        // its offsets merely disagree.
+        // anything pends, alone where the log stands, nothing pends, and its
+        // offsets merely disagree.
         let offsets_agree = !log.rewritten()
             && offset_entries.iter().all(|(at, m)| {
                 m.get(OFFSETS_OFFSET).and_then(Value::as_u64)
                     == log.offsets().get(at).map(|o| o.0)
             });
-        if offsets_agree {
+        if offsets_agree && !rewriting {
             for (&at, &offset) in log.offsets().range(f_offsets.first_uncovered()..) {
                 f_offsets
                     .append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])
@@ -923,18 +943,18 @@ impl Feed {
         //    rewrite the checkpoint thread runs after each checkpoint lands
         //    (`Feed::compact_below_reclaim_floor`), through the same method,
         //    the four files at once; or the offset array alone, where the
-        //    log stands and its offsets disagree; or, the region pending,
-        //    the four fenced at its lower edge whatever they claimed — a
-        //    file fenced at the head over positions it never processed
-        //    would read them as contributing nothing at the next open, a
-        //    draft write unmasked, where the walk's landing then cannot
-        //    rewrite it. A fifth derived file belongs in one of that
-        //    method's two halves, which the walk's landing calls apart; the
-        //    attest store is not one, and `Files` does not hold it. Fatal
-        //    here, either side of a rename: nothing is served yet — the
-        //    bare I/O error wrapped with the file's name, which
-        //    `RewriteFail::into_io` does not carry. ──
-        let compacted = log.rewritten();
+        //    log stands and its offsets disagree; or, anything pending, the
+        //    four fenced short of the first pending position whatever they
+        //    claimed, each record above that fence left out — a file fenced
+        //    over positions it never processed would read them as
+        //    contributing nothing at the next open, a draft write unmasked,
+        //    where the walk's landing then cannot rewrite it. A fifth derived
+        //    file belongs in one of that method's two halves, which the
+        //    walk's landing calls apart; the attest store is not one, and
+        //    `Files` does not hold it. Fatal here, either side of a rename:
+        //    nothing is served yet — the bare I/O error wrapped with the
+        //    file's name, which `RewriteFail::into_io` does not carry. ──
+        let landing_owed = pending.is_some() || !unsorted.is_empty();
         let mut inner = Inner {
             log,
             docs,
@@ -942,6 +962,8 @@ impl Feed {
             masked,
             published,
             streams,
+            unsorted,
+            landing_owed,
             attest,
             files: Files {
                 index: f_index,
@@ -950,19 +972,20 @@ impl Feed {
                 streams: f_streams,
             },
         };
-        let failures = if compacted || pending.is_some() {
+        let failures = if rewriting {
             inner.rewrite_derived_files(covered)
         } else if !offsets_agree {
-            inner.rewrite_offsets_file(covered, None)
+            inner.rewrite_offsets_file(covered, false)
         } else {
             Vec::new()
         };
-        if let Some((name, failed)) = failures.into_iter().next() {
-            return Err(with_file(name)(failed.into_io()));
+        if let Some(unwritten) = failures.into_iter().next() {
+            return Err(with_file(unwritten.name)(unwritten.failed.into_io()));
         }
         if let Some((floor, dropped)) = inner.log.compacted_at_open() {
             lines.say(Class::Open, OpenCompactionLine { floor, dropped });
         }
+        let pending = inner.pending();
         let entries = inner.log.entries();
         let reach = FeedOpenLine {
             floor: inner.log.floor(),
@@ -979,7 +1002,7 @@ impl Feed {
             #[cfg(test)]
             attest_sync_hold: SyncHold::new(),
         };
-        Ok((feed, pending.map(|_| snap)))
+        Ok((feed, (!pending.is_empty()).then_some(snap)))
     }
 
     /// Returns what the attest store holds ([`AttestStoreFigures`]).
@@ -997,15 +1020,61 @@ impl Feed {
         self.inner.lock().log.pending_region()
     }
 
-    /// Walks the pending region and lands it: the walk behind the listener.
+    /// Returns what the walk has yet to land, as figures, under the feed's lock.
+    ///
+    /// It is the region and the bare positions the index lost that stand
+    /// unsorted ([`FeedPending`]), as they stand now: the set shrinks as the
+    /// walk lands each position ([`Feed::land_sorted`]), and a compaction
+    /// drops what the journal reclaimed. Empty once everything has landed.
+    pub(super) fn pending(&self) -> FeedPending {
+        self.inner.lock().pending()
+    }
+
+    /// The test seam behind `skepd::Daemon::feed_pending_set`.
+    ///
+    /// It answers the bare positions the index lost that the walk has yet to
+    /// sort, ascending — the feed's own read, under its lock and no guard.
+    /// Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn pending_set(&self) -> Vec<u64> {
+        self.inner.lock().unsorted.iter().copied().collect()
+    }
+
+    /// The test seam behind `skepd::Daemon::feed_walk_pending`.
+    ///
+    /// It answers whether the walk has yet to land what the open left
+    /// pending — the region, the set, or the landing's own rewrite of the
+    /// files once every position is sorted ([`Inner::landing_owed`]) — the
+    /// feed's own read, under its lock and no guard: what a suite waits on
+    /// before it reads the landed files. Not a stable API.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(super) fn walk_pending(&self) -> bool {
+        self.inner.lock().pends()
+    }
+
+    /// Walks what pends and lands it: the walk behind the listener.
     ///
     /// It is the thread's body, less the catch, which the write path puts
-    /// around it (`operations.md` §3.3 step 2; §1.1 m15): the walk over the
-    /// pending region ([`reconstruct`]: the `open:` line, the hold, the
-    /// `progress:` lines) off `kernel` and the open's `snapshot` of the
-    /// head's world, then the landing ([`Feed::land`]). Returns with nothing
-    /// written where the stop was asked before the landing, or where no
-    /// region is pending.
+    /// around it (`operations.md` §3.3 step 2; §1.1 m15). What pends is read
+    /// once under the lock — the region, and the set with the entry below
+    /// each of its positions ([`ToSort`]). Then the `open:` lines: the
+    /// region's with the count of the kernel's one scan ([`list_boundaries`];
+    /// [`WalkOpenLine`]) and the journal's refusal of the list where it met
+    /// one ([`WalkRefusedLine`]); the set's with its count and the world
+    /// reconstructions it will pay ([`BareClassificationLine`]). Then the
+    /// hold and the fault (test seams), after the lines and before the first
+    /// position or boundary. Then the sort of the set ([`Feed::sort`]), each
+    /// position landed as it is sorted, and the walk over the region
+    /// ([`reconstruct`]: the `progress:` lines) off `kernel` and the open's
+    /// `snapshot` of the head's world — one pass where both pend — and the
+    /// landing ([`Feed::land`]). Returns with nothing further written where
+    /// the stop was asked before the landing, or where nothing pends.
+    ///
+    /// # Panics
+    ///
+    /// Panics where the walk's fault is armed (a test seam): after the hold
+    /// and before the first position or boundary, so a suite drives the
+    /// thread's catch.
     pub(super) fn walk_and_land(
         &self,
         kernel: &Kernel<World>,
@@ -1013,51 +1082,240 @@ impl Feed {
         control: &WalkControl,
         lines: &Lines,
     ) {
-        let Some((low, head)) = self.pending_region() else { return };
-        let Some(outcome) = reconstruct(kernel, snapshot.world(), low, head, lines, control) else {
-            return;
+        let started = Instant::now();
+        let (region, to_sort, index_coverage) = {
+            let inner = self.inner.lock();
+            let to_sort: Vec<ToSort> = inner
+                .unsorted
+                .iter()
+                .map(|&at| ToSort {
+                    at,
+                    below: inner.log.entries().range(..at).next_back().map_or(0, |(k, _)| *k),
+                })
+                .collect();
+            (inner.log.pending_region(), to_sort, inner.files.index.coverage())
         };
-        self.land(outcome, kernel, snapshot.world(), control, lines);
+        if region.is_none() && to_sort.is_empty() {
+            // Nothing left to walk — a compaction dropped the set before the
+            // walk read it — and the landing still owed: the files rewritten
+            // whole, the record step freed.
+            self.land(None, None, kernel, snapshot.world(), control, lines);
+            return;
+        }
+        // The region's list, one scan, said ahead of the hold with the
+        // journal's refusal of the list where it met one.
+        let listing = region.map(|(low, head)| {
+            let listing = list_boundaries(kernel, low, head);
+            let boundaries = listing.boundaries.len();
+            lines.say(Class::Open, WalkOpenLine { covered: low, boundaries, head });
+            if let Some(refusal) = &listing.refusal {
+                let fence = listing.min_since.unwrap_or(low);
+                lines.say(Class::Failure, WalkRefusedLine { refusal, fence });
+            }
+            listing
+        });
+        // The set's count, said ahead of its cost: a world reconstruction a
+        // position, one more below each run of them, none at the head
+        // ([`BareClassifier`] carries a run's worlds forward).
+        if !to_sort.is_empty() {
+            let head = snapshot.seq().0;
+            let mut planned = 0usize;
+            let mut sorted_before: Option<u64> = None;
+            for item in &to_sort {
+                let follows_a_run = sorted_before == Some(item.below);
+                planned += usize::from(!follows_a_run) + usize::from(item.at != head);
+                sorted_before = Some(item.at);
+            }
+            let line = BareClassificationLine {
+                coverage: index_coverage,
+                positions: to_sort.len(),
+                reconstructions: planned,
+            };
+            lines.say(Class::Open, line);
+        }
+        #[cfg(any(test, feature = "test-hooks"))]
+        {
+            FEED_WALK_HOLD.wait_at(0, control);
+            if control.stopped() {
+                return;
+            }
+            fire_the_feed_walks_fault();
+        }
+        let sorted = if to_sort.is_empty() {
+            None
+        } else {
+            match self.sort(kernel, snapshot, &to_sort, control, lines) {
+                Some(figures) => Some(figures),
+                None => return,
+            }
+        };
+        let outcome = match listing {
+            Some(listing) => {
+                match reconstruct(kernel, snapshot.world(), listing, started, lines, control) {
+                    Some(outcome) => Some(outcome),
+                    None => return,
+                }
+            }
+            None => None,
+        };
+        self.land(outcome, sorted, kernel, snapshot.world(), control, lines);
+    }
+
+    /// Sorts the bare positions the index lost, landing each as it is sorted.
+    ///
+    /// Each position is classified from the journal off the world at the
+    /// entry below it and its own ([`BareClassifier`]: a run of them shares
+    /// its worlds, so the run costs one reconstruction a position and one
+    /// below its first, and the head's world is the open's `snapshot`), and
+    /// landed at once under the feed's lock ([`Feed::land_sorted`]) — the
+    /// twins take it, the index file is appended up to it — so a kill
+    /// mid-sort keeps every position sorted so far and the next open pends
+    /// the rest. The `progress:` line comes at the cadence
+    /// ([`BareClassifyingLine`]: every so many positions or so long,
+    /// whichever first, the figures `control` holds); the journal's refusals
+    /// are counted and said once after the pass, the first in the kernel's
+    /// words ([`ClassificationRefusedLine`]), each refused position landed
+    /// unclassified — served to every class, its position alone, the module
+    /// doc's residue. A position a compaction dropped from the set meanwhile
+    /// — the journal reclaimed it — is passed over, neither classified nor
+    /// counted. Answers the figures the landing line says ([`SortFigures`]);
+    /// `None` where the stop was asked, the positions landed so far
+    /// standing. The hold (a test seam) parks the walk after the k-th
+    /// position where armed for it.
+    fn sort(
+        &self,
+        kernel: &Kernel<World>,
+        snapshot: &Snapshot<World>,
+        to_sort: &[ToSort],
+        control: &WalkControl,
+        lines: &Lines,
+    ) -> Option<SortFigures> {
+        let started = Instant::now();
+        let mut classifier = BareClassifier::new(kernel, snapshot);
+        let mut cadence = ProgressCadence::new();
+        let mut refused: Option<(usize, u64, String)> = None;
+        let mut attempted = 0usize;
+        let mut items = to_sort.iter().peekable();
+        while let Some(item) = items.next() {
+            if control.stopped() {
+                return None;
+            }
+            if !self.inner.lock().unsorted.contains(&item.at) {
+                continue;
+            }
+            attempted += 1;
+            let docs = match classifier.classify(item.at, item.below) {
+                Ok(addrs) => Some(addrs),
+                Err(e) => {
+                    refused = Some(match refused {
+                        None => (1, item.at, e.to_string()),
+                        Some((n, first, account)) => (n + 1, first, account),
+                    });
+                    None
+                }
+            };
+            self.land_sorted(item.at, docs, snapshot.world());
+            let (every, interval) = control.cadence();
+            if cadence.due(attempted, every, interval) {
+                let progress = BareClassifyingLine {
+                    position: item.at,
+                    done: attempted,
+                    of: to_sort.len(),
+                    elapsed_ms: started.elapsed().as_millis(),
+                };
+                lines.say(Class::Progress, progress);
+            }
+            // The hold after the k-th position, where a next one stands.
+            #[cfg(any(test, feature = "test-hooks"))]
+            if items.peek().is_some() {
+                FEED_WALK_HOLD.wait_at(attempted as u64, control);
+                if control.stopped() {
+                    return None;
+                }
+            }
+        }
+        let refusals = refused.as_ref().map_or(0, |(n, ..)| *n);
+        if let Some((positions, first, account)) = refused {
+            lines.say(Class::Failure, ClassificationRefusedLine { positions, first, account });
+        }
+        Some(SortFigures {
+            of: attempted,
+            refused: refusals,
+            reconstructions: classifier.finish(),
+            elapsed_ms: started.elapsed().as_millis(),
+        })
+    }
+
+    /// Lands one sorted position: into the twins, and the index file up to it.
+    ///
+    /// Under the feed's lock: the position leaves the set; its classification
+    /// against `world` — the open's head, PUB-7.7's one snapshot — enters the
+    /// twins as the record step folds a position ([`Inner::fold_into_maps`];
+    /// a position the journal refused enters with no document, the published
+    /// walk's, its position alone); and the index file takes every classified
+    /// position from its coverage up to this one
+    /// ([`Inner::append_the_index_through`]), which is the progress a kill
+    /// keeps: the set is sorted ascending, so the file's claim never passes an
+    /// unsorted position, and the next open pends what lies above its
+    /// coverage. The other three files wait on the landing, fenced below the
+    /// set. A position a compaction dropped meanwhile lands nothing.
+    fn land_sorted(&self, at: u64, docs: Option<Vec<Address>>, world: &World) {
+        let mut inner = self.inner.lock();
+        if !inner.unsorted.remove(&at) {
+            return;
+        }
+        let docs = docs.map(|addrs| classify(world, addrs)).unwrap_or_default();
+        inner.fold_into_maps(at, docs);
+        inner.append_the_index_through(at);
     }
 
     /// Lands the walk under this feed's lock, the five files written in order.
     ///
     /// The lock is the record step's and the page's, so a write's record and
     /// a page wait on it for the rewrites' length and never see a half-landed
-    /// feed. The walk's classifications are folded into the twins as the
+    /// feed. The region's classifications are folded into the twins as the
     /// record step folds a position ([`Inner::fold_into_maps`]), classified
     /// against `world` — the open's head, PUB-7.7's one snapshot — and into
     /// `commits.log`'s resident entries behind the fence as the floor stands
     /// at the landing ([`CommitsLog::fold_the_walk`]: a checkpoint that
     /// landed during the walk moved it, its compaction deferred to this
-    /// landing), the twins trimmed to the same fence. Then the files, each
-    /// whole, in the order that keeps a kill between any two inside the walk
-    /// behind the listener (`operations.md` §3.3 step 2): the index, the
-    /// bitmap and the streams from the twins, fenced at the last position the
-    /// log holds ([`Inner::rewrite_classified_files`]); then `commits.log`
-    /// ([`CommitsLog::write_the_landing`]); then the offset array, which names
-    /// the lines that rewrite placed. Killed before `commits.log`'s rewrite,
-    /// the file stands as the open found it, so the next open's region pends
-    /// again and the three are fenced back at its lower edge; killed after
-    /// it, the three cover the region, so that open classifies nothing from
-    /// the journal before it serves. The attest store's file is untouched;
-    /// the `landing:` line is said last.
+    /// landing), the twins trimmed to the same fence; the set's positions
+    /// landed as they were sorted ([`Feed::land_sorted`]). Then the files,
+    /// each whole, in the order that keeps a kill between any two inside the
+    /// walk behind the listener (`operations.md` §3.3 step 2): the index,
+    /// the bitmap and the streams from the twins, fenced at the last position
+    /// the log holds ([`Inner::rewrite_classified_files`]); then
+    /// `commits.log` — the region's landing
+    /// ([`CommitsLog::write_the_landing`]) where one pended, else the
+    /// compaction a landing owed where one deferred its rewrite while the set
+    /// pended ([`CommitsLog::rewrite_the_owed`]), the file otherwise standing
+    /// complete, every line appended as it was recorded; then the offset
+    /// array, which names the lines that rewrite placed. Killed before
+    /// `commits.log`'s rewrite, the file stands as the open found it, so the
+    /// next open's region pends again and the three are fenced back at its
+    /// lower edge; killed after it, the three cover the region, so that open
+    /// classifies nothing from the journal before it serves. The attest
+    /// store's file is untouched; the `landing:` lines are said last — the
+    /// region's ([`WalkLandingLine`]), then the set's
+    /// ([`BareClassifiedLine`]).
     ///
     /// A rewrite that fails is said and fails no op. Before its rename a
-    /// derived file stands whole and fenced at the region's lower edge,
-    /// short of the region and of every write held while it pended, so it is
-    /// stopped there ([`LineFile::stop_at`]): a later append would raise its
-    /// coverage claim over the gap, and a position at or below a claim with
-    /// no record is a `[]`-docs entry, which no mask withholds. The next open
-    /// re-derives that file, classifying the region's bare positions from the
-    /// journal before it serves, a world reconstruction each and one below
-    /// the first ([`BareClassifier`]). `commits.log` stops at the same edge
-    /// ([`CommitsLog::write_the_landing`] says why). Past its rename a file
-    /// is in place and has said its own stop. A stop asked while the walk ran
-    /// writes nothing.
+    /// derived file stands whole and fenced where it was — the region's lower
+    /// edge, the first unsorted position less one, or, the index's, the last
+    /// position the sort appended — short of what the walk landed and of
+    /// every write recorded while it pended, so it is stopped there
+    /// ([`LineFile::stop_at`]): a later append would raise its coverage claim
+    /// over the gap, and a position at or below a claim with no record is a
+    /// `[]`-docs entry, which no mask withholds. The next open re-derives
+    /// that file above its fence, sorting the region's bare positions behind
+    /// the listener. `commits.log` stops at the region's lower edge
+    /// ([`CommitsLog::write_the_landing`] says why); the compaction a landing
+    /// owed is left owed. Past its rename a file is in place and has said its
+    /// own stop. A stop asked while the walk ran writes nothing.
     fn land(
         &self,
-        outcome: WalkOutcome,
+        outcome: Option<WalkOutcome>,
+        sorted: Option<SortFigures>,
         kernel: &Kernel<World>,
         world: &World,
         control: &WalkControl,
@@ -1070,48 +1328,87 @@ impl Feed {
         if control.stop.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
-        for w in &outcome.boundaries {
-            let docs = w.docs.as_ref().map(|addrs| classify(world, addrs.clone())).unwrap_or_default();
-            inner.fold_into_maps(w.at, docs);
-        }
-        // The region's positions were pushed after the ones recorded during
-        // the walk, above the head: the lists are ascending by invariant
-        // (`at_or_above`'s `partition_point` reads it), restored here as
-        // the open restores the replayed streams'.
-        inner.sort_the_lists();
-        let Some(((low, head), fence)) =
+        // The region's half: its boundaries into the twins, each placed
+        // below the positions recorded during the walk, and into the log's
+        // resident entries behind the fence as it stands at the landing.
+        let region = outcome.as_ref().and_then(|outcome| {
+            for w in &outcome.boundaries {
+                let docs =
+                    w.docs.as_ref().map(|addrs| classify(world, addrs.clone())).unwrap_or_default();
+                inner.fold_into_maps(w.at, docs);
+            }
             inner.log.fold_the_walk(&outcome.boundaries, outcome.min_since, floor_fence)
-        else {
-            return;
-        };
-        inner.drop_at_or_below(fence);
-        let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
-        let classified = inner.rewrite_classified_files(covered, Some(low));
-        say_the_landings_refusals(lines, low, classified);
+        });
+        if let Some((_, fence)) = region {
+            inner.drop_at_or_below(fence);
+        }
+        let covered = inner
+            .log
+            .entries()
+            .keys()
+            .next_back()
+            .copied()
+            .or(region.map(|(_, fence)| fence))
+            .unwrap_or_else(|| inner.files.index.coverage());
+        let classified = inner.rewrite_classified_files(covered, true);
+        say_the_landings_refusals(lines, classified);
         #[cfg(test)]
         if CUT_THE_NEXT_LANDING.swap(false, std::sync::atomic::Ordering::AcqRel) {
             return;
         }
-        // Said at the log: before its rename as the landing's own refusal,
-        // past it as the file's stop. The resident entries are complete
-        // either way.
-        let landed = inner.log.write_the_landing(low);
-        let in_memory_alone = matches!(landed, Err(RewriteFail::BeforeRename(_)));
-        let offsets = inner.rewrite_offsets_file(covered, Some(low));
-        say_the_landings_refusals(lines, low, offsets);
-        lines.say(
-            Class::Landing,
-            WalkLandingLine {
-                low,
-                head,
-                walked: outcome.boundaries.len(),
-                unclassified: outcome.unclassified(),
-                elapsed_ms: outcome.started.elapsed().as_millis(),
-                held_ms: held.elapsed().as_millis(),
-                fence: (fence > low).then_some(fence),
-                in_memory_alone,
-            },
-        );
+        // The log: the region's landing, said at the log — before its rename
+        // as the landing's own refusal, past it as the file's stop — or, no
+        // region pending, the rewrite a compaction left to this landing where
+        // one did. The resident entries are complete either way.
+        let in_memory_alone = match region {
+            Some(((low, _), _)) => {
+                matches!(inner.log.write_the_landing(low), Err(RewriteFail::BeforeRename(_)))
+            }
+            None => {
+                if let Err(RewriteFail::BeforeRename(e)) = inner.log.rewrite_the_owed() {
+                    lines.say(
+                        Class::Failure,
+                        format_args!(
+                            "commits.log: the compaction the walk's landing owed failed before its \
+                             rename: {}; the file stands as it was, holding lines below the fence, \
+                             and the next checkpoint's compaction tries again",
+                            IoCause(&e)
+                        ),
+                    );
+                }
+                false
+            }
+        };
+        let offsets = inner.rewrite_offsets_file(covered, true);
+        say_the_landings_refusals(lines, offsets);
+        inner.landing_owed = false;
+        if let (Some(outcome), Some(((low, head), fence))) = (&outcome, region) {
+            lines.say(
+                Class::Landing,
+                WalkLandingLine {
+                    low,
+                    head,
+                    walked: outcome.boundaries.len(),
+                    unclassified: outcome.unclassified(),
+                    elapsed_ms: outcome.started.elapsed().as_millis(),
+                    held_ms: held.elapsed().as_millis(),
+                    fence: (fence > low).then_some(fence),
+                    in_memory_alone,
+                },
+            );
+        }
+        if let Some(sort) = sorted {
+            lines.say(
+                Class::Landing,
+                BareClassifiedLine {
+                    classified: sort.classified(),
+                    of: sort.of,
+                    reconstructions: sort.reconstructions,
+                    elapsed_ms: sort.elapsed_ms,
+                    held_ms: held.elapsed().as_millis(),
+                },
+            );
+        }
     }
 
     /// Compacts the five files to the journal's reclaim floor, while serving.
@@ -1141,16 +1438,19 @@ impl Feed {
     /// twins are trimmed either way and serve this uptime, and the next open
     /// re-derives (P22).
     ///
-    /// **While the walk's region is pending** the rewrite is deferred: the
-    /// fence moves in memory — the log's entries and the twins trimmed, so a
-    /// page below it answers 410 at once, as `/op-at` does — and no file is
-    /// written, the twins lacking the region the files must carry; the
-    /// landing's one rewrite writes the fence, which it reads from the floor
-    /// again then ([`Feed::land`]). The deferral's record is that fence:
-    /// `commits.log`'s `min_since` ahead of the line its file holds until the
-    /// landing. The answer names the fence and the region the files' rewrite
-    /// waits on (`deferred`), and no file standing, so the checkpoint thread's
-    /// line says the files were not written.
+    /// **While the walk has anything pending** — the region, the bare
+    /// positions the index lost, or both — the rewrite is deferred: the fence
+    /// moves in memory — the log's entries and the twins trimmed, the
+    /// unsorted positions the journal reclaimed dropped with them, so a page
+    /// below it answers 410 at once, as `/op-at` does — and no file is
+    /// written, the twins lacking what the files must carry; the landing's
+    /// rewrite writes the fence, which it reads from the floor again then
+    /// ([`Feed::land`]), `commits.log`'s among them
+    /// ([`CommitsLog::compact_in_memory`]). The deferral's record is that
+    /// fence: `commits.log`'s `min_since` ahead of the line its file holds
+    /// until the landing. The answer names the fence and what the files'
+    /// rewrite waits on (`deferred`), and no file standing, so the checkpoint
+    /// thread's line says the files were not written.
     ///
     /// **The lines** (`operations.md` §1.1 rows 27 and 28) go through `lines`,
     /// the write path's classed door, handed at the call as the walk's landing
@@ -1169,44 +1469,54 @@ impl Feed {
         let fence = floor.saturating_sub(1);
         let mut inner = self.inner.lock();
         let mut standing = Vec::new();
-        let dropped = match inner.log.compact_to(fence) {
-            Ok(dropped) => dropped,
-            // The file said its own stop; the entries are trimmed all the
-            // same, and the twins follow them below.
-            Err(RewriteFail::PastRename(_)) => true,
-            Err(before) => {
-                lines.say(
-                    Class::Failure,
-                    format_args!(
-                        "commits.log compaction below the reclaim floor at position {floor} \
-                         failed {before}; the file stands as it was, and the next checkpoint's \
-                         compaction tries again"
-                    ),
-                );
-                standing.push("commits.log");
-                true
+        let pends = inner.pends();
+        let pending = inner.pending();
+        let dropped = if !pends {
+            match inner.log.compact_to(fence) {
+                Ok(dropped) => dropped,
+                // The file said its own stop; the entries are trimmed all the
+                // same, and the twins follow them below.
+                Err(RewriteFail::PastRename(_)) => true,
+                Err(before) => {
+                    lines.say(
+                        Class::Failure,
+                        format_args!(
+                            "commits.log compaction below the reclaim floor at position {floor} \
+                             failed {before}; the file stands as it was, and the next \
+                             checkpoint's compaction tries again"
+                        ),
+                    );
+                    standing.push("commits.log");
+                    true
+                }
             }
+        } else {
+            // The walk pending: the fence moves in memory alone, the log's
+            // rewrite owed to the landing with the derived files' (the
+            // deferral above).
+            inner.log.compact_in_memory(fence)
         };
         if !dropped {
             return FeedCompaction::default();
         }
         inner.drop_at_or_below(fence);
-        if let Some(region) = inner.log.pending_region() {
-            return FeedCompaction { fence: Some(fence), standing, deferred: Some(region) };
+        if pends {
+            return FeedCompaction { fence: Some(fence), standing, deferred: Some(pending) };
         }
         let covered = inner.log.entries().keys().next_back().copied().unwrap_or(fence);
-        for (name, failed) in inner.rewrite_derived_files(covered) {
-            if let RewriteFail::BeforeRename(e) = failed {
+        for unwritten in inner.rewrite_derived_files(covered) {
+            if let RewriteFail::BeforeRename(e) = unwritten.failed {
                 lines.say(
                     Class::Failure,
                     format_args!(
-                        "{name} compaction below the reclaim floor at position {floor} failed \
+                        "{} compaction below the reclaim floor at position {floor} failed \
                          before its rename: {}; the file stands as it was, and the next \
                          checkpoint's compaction tries again",
+                        unwritten.name,
                         IoCause(&e)
                     ),
                 );
-                standing.push(name);
+                standing.push(unwritten.name);
             }
         }
         FeedCompaction { fence: Some(fence), standing, deferred: None }
@@ -1442,26 +1752,30 @@ impl Feed {
     /// the daemon the render of at most the budget's worth of rows and one
     /// more.
     ///
-    /// **The region pending** (`operations.md` §3.3 step 2: "for any page whose
+    /// **The walk pending** (`operations.md` §3.3 step 2: "for any page whose
     /// range reaches into the uncovered region, not only a `since` inside it —
     /// a page starting below the region would otherwise silently skip its
     /// positions"): after the reclaimed check and before the merge serves a
-    /// row, where `(low, head]` is pending and `since < head`, the page is
-    /// refused [`ChangesAnswer::Rebuilding`] unless its `limit` rows all lie at
-    /// or below `low` — the merge walked up to `low` and no further, since the
-    /// twins hold nothing of the region and the next candidate past `low` would
-    /// be a position recorded above the head, the region skipped between. The
-    /// arithmetic, pinned by the walk suite: `low` is covered (a page's last
-    /// row may be it), `head` uncovered (the last of the region); a page
-    /// refused by the position test `since + limit > low` is refused here too,
-    /// since fewer than `limit` positions, hence rows, lie in `(since, low]`,
-    /// and a page that test would serve over sparse positions — fewer than
-    /// `limit` rows below `low`, the merge then reaching past the region — is
-    /// refused as well. A page served below the region answers `more: true`:
-    /// the region holds positions this class may see, which the next page meets
-    /// as the refusal or, landed, as rows. A page with `since` at or above
-    /// `head` serves from the twins — every position recorded since the open is
-    /// in them.
+    /// row, where a position above `since` waits on the walk — the first of
+    /// the region's above it, or the first unsorted position above it,
+    /// whichever is lower ([`Inner::first_pending_above`]) — the page is
+    /// refused [`ChangesAnswer::Rebuilding`] unless its `limit` rows all lie
+    /// below that position — the merge walked up to it and no further, since
+    /// the twins hold nothing of the region or the set and the next candidate
+    /// past it would be a position above, the pending one skipped between.
+    /// The arithmetic, pinned by the walk suite: the region's `low` is
+    /// covered (a page's last row may be it), `head` uncovered (the last of
+    /// the region); a page refused by the position test `since + limit > low`
+    /// is refused here too, since fewer than `limit` positions, hence rows,
+    /// lie in `(since, low]`, and a page that test would serve over sparse
+    /// positions — fewer than `limit` rows below `low`, the merge then
+    /// reaching past the region — is refused as well; an unsorted position is
+    /// its own fence, the sorted positions on either side of it serving. A
+    /// page served below a pending position answers `more: true`: the walk
+    /// holds positions this class may see, which the next page meets as the
+    /// refusal or, landed, as rows. A page with `since` at or above the last
+    /// pending position serves from the twins — every position recorded since
+    /// the open is in them.
     ///
     /// # Panics
     ///
@@ -1477,11 +1791,11 @@ impl Feed {
                 let body = page_body(PAGE_HEAD.to_vec(), query.since, false);
                 return ChangesAnswer::Page { body };
             };
-            let region = inner.log.pending_region().filter(|&(_, head)| query.since < head);
+            let reach = inner.first_pending_above(query.since);
             let mut rows = Vec::new();
             let mut more = false;
             for at in Merge::new(inner.sources(class, query, start)) {
-                if region.is_some_and(|(low, _)| at > low) {
+                if reach.is_some_and(|pending| at >= pending) {
                     break;
                 }
                 let Some(Visible { meta, reduced, whole }) = inner.visible(class, query, at) else {
@@ -1494,9 +1808,9 @@ impl Feed {
                 let reduced: Vec<String> = reduced.iter().map(|d| d.addr.to_string()).collect();
                 rows.push((at, meta.clone(), reduced, whole, inner.attest.slot(at)));
             }
-            if let Some((low, head)) = region {
+            if reach.is_some() {
                 if rows.len() < query.limit.get() {
-                    return ChangesAnswer::Rebuilding { low, head };
+                    return ChangesAnswer::Rebuilding { pending: inner.pending() };
                 }
                 more = true;
             }
@@ -1587,25 +1901,26 @@ fn with_file(name: &'static str) -> impl Fn(io::Error) -> io::Error {
 
 /// Says each derived file the walk's landing left unrewritten.
 ///
-/// Each failed before its rename and stands fenced at the region's lower
-/// edge `low`, stopped there (`Feed::land`); a failure past the rename the
-/// file has said itself. The line says the stop, what serves and the act
-/// owed before the restart whose open re-derives the file: `{file}: the
-/// walk's landing rewrite failed before its rename: {cause}; the file stands
-/// fenced below the region at position {low} and takes no further line, so
-/// the next open re-derives it — the board serves from memory, and nothing
-/// is lost`, then [`IoCause::before_the_restart`]'s clause.
-fn say_the_landings_refusals(lines: &Lines, low: u64, failures: Vec<(&'static str, RewriteFail)>) {
-    for (name, failed) in failures {
+/// Each failed before its rename and stands fenced where it was, short of
+/// what the walk landed, stopped there (`Feed::land`); a failure past the
+/// rename the file has said itself. The line says the stop, what serves and
+/// the act owed before the restart whose open re-derives the file: `{file}:
+/// the walk's landing rewrite failed before its rename: {cause}; the file
+/// stands fenced at position {fence}, short of what the walk landed, and
+/// takes no further line, so the next open re-derives above it — the board
+/// serves from memory, and nothing is lost`, then
+/// [`IoCause::before_the_restart`]'s clause.
+fn say_the_landings_refusals(lines: &Lines, failures: Vec<Unwritten>) {
+    for Unwritten { name, failed, fence } in failures {
         if let RewriteFail::BeforeRename(e) = failed {
             let cause = IoCause(&e);
             lines.say(
                 Class::Failure,
                 format_args!(
                     "{name}: the walk's landing rewrite failed before its rename: {cause}; the \
-                     file stands fenced below the region at position {low} and takes no further \
-                     line, so the next open re-derives it — the board serves from memory, and \
-                     nothing is lost{}",
+                     file stands fenced at position {fence}, short of what the walk landed, and \
+                     takes no further line, so the next open re-derives above it — the board \
+                     serves from memory, and nothing is lost{}",
                     cause.before_the_restart()
                 ),
             );
@@ -1613,27 +1928,37 @@ fn say_the_landings_refusals(lines: &Lines, low: u64, failures: Vec<(&'static st
     }
 }
 
+/// A derived file whose rewrite failed, as the rewrites answer it.
+///
+/// It is the file by name, how its rewrite failed ([`RewriteFail`]: on which
+/// side of its rename) and the fence it stands at — its coverage after the
+/// failure, which the walk's landing stops it at and names.
+struct Unwritten {
+    name: &'static str,
+    failed: RewriteFail,
+    fence: u64,
+}
+
 /// Rewrites one derived file whole, stopping it where a landing left it short.
 ///
-/// The rewrite is [`LineFile::rewrite`]'s, fenced at `covered`. Where
-/// `stop_below` names the walk's region's lower edge and the rewrite failed
-/// before its rename, the file stands fenced at that edge, short of the
-/// region, and is stopped there ([`LineFile::stop_at`]).
-///
-/// # Errors
-///
-/// The rewrite's failure, either side of its rename.
+/// The rewrite is [`LineFile::rewrite`]'s, fenced at `covered`. Where `stop`
+/// — the walk's landing's — and the rewrite failed before its rename, the
+/// file stands fenced where it was, short of what the walk landed, and is
+/// stopped there ([`LineFile::stop_at`]); a compaction's rewrite stops
+/// nothing, the next compaction trying again. Answers the failure, with the
+/// fence the file stands at ([`Unwritten`]).
 fn rewrite_or_stop(
     file: &mut LineFile,
+    name: &'static str,
     records: Vec<Value>,
     covered: u64,
-    stop_below: Option<u64>,
-) -> Result<(), RewriteFail> {
-    let rewritten = file.rewrite(records, covered);
-    if let (Err(RewriteFail::BeforeRename(_)), Some(low)) = (&rewritten, stop_below) {
-        file.stop_at(low);
+    stop: bool,
+) -> Option<Unwritten> {
+    let failed = file.rewrite(records, covered).err()?;
+    if stop && matches!(failed, RewriteFail::BeforeRename(_)) {
+        file.stop_at(file.coverage());
     }
-    rewritten
+    Some(Unwritten { name, failed, fence: file.coverage() })
 }
 
 /// The test seam: the next walk's landing ends between its rewrites, once.
@@ -1725,16 +2050,18 @@ impl std::fmt::Display for DerivedCutLine {
     }
 }
 
-/// The open's line ahead of the bare positions it classifies.
+/// The walk's `open:` line for the bare positions the index lost (m15).
 ///
-/// The positions are classified from the journal before the board serves.
-/// The words: `feed-index.log covers to position {c}: {n} bare positions
-/// are classified from the journal before the board serves, {r} world
-/// reconstructions in all` — the cost said ahead of paying it: one a
-/// position, one more below each run of them and none at the head
-/// ([`BareClassifier::planned`]), exact where the journal answers and an
-/// upper bound where it refuses. A pure value, pinned by `to_string()` in
-/// the unit suite; emitted under `Class::Open` by [`Feed::open`].
+/// The positions are classified from the journal behind the listener, the
+/// board serving. The words: `feed-index.log covers to position {c}: {n}
+/// bare positions are classified from the journal behind the listener, {r}
+/// world reconstructions in all` — `{c}` the index file's coverage as the
+/// open left it, below the first of them; the cost said ahead of paying it:
+/// one reconstruction a position, one more below each run of them and none
+/// at the head ([`BareClassifier`] carries a run's worlds), exact where the
+/// journal answers and an upper bound where it refuses. A pure value, pinned
+/// by `to_string()` in the unit suite; emitted under `Class::Open` by
+/// [`Feed::walk_and_land`] at the walk's start, ahead of the hold.
 struct BareClassificationLine {
     coverage: u64,
     positions: usize,
@@ -1747,25 +2074,25 @@ impl std::fmt::Display for BareClassificationLine {
         write!(
             f,
             "{INDEX_FILE} covers to position {}: {} bare positions are classified from the \
-             journal before the board serves, {} world reconstructions in all",
+             journal behind the listener, {} world reconstructions in all",
             self.coverage, self.positions, self.reconstructions
         )
     }
 }
 
-/// The open's bare classification while it runs, at the walk's cadence.
+/// The walk's `progress:` line while it sorts the set (m15).
 ///
 /// The words: `feed-index.log: the bare classification at position {p},
-/// {i} of {n}, {d} ms in` — `{p}` the position last classified, `{i}` how
-/// many are done of the `{n}` the announcing line named, `{d}` since the
-/// classification began. Said as a position's classification ends, once
-/// [`FEED_WALK_PROGRESS_BOUNDARIES`] positions are done since the last or
-/// [`FEED_WALK_PROGRESS_INTERVAL`] has passed, whichever comes first: the
-/// board serves nothing until the open is done, and a world reconstruction
-/// a position can run past a supervisor's start window. A pure value, pinned
-/// by `to_string()` in the unit suite; emitted under `Class::Open` by
-/// [`Feed::open`] — the open's own line, the `progress:` class being the
-/// walk thread's.
+/// {i} of {n}, {d} ms in` — `{p}` the position last sorted, `{i}` how many
+/// are done of the `{n}` the `open:` line named, `{d}` since the sort began.
+/// Said as a position lands, once the cadence's count of positions is done
+/// since the last line or its interval has passed, whichever comes first —
+/// the shipped figures `FEED_WALK_PROGRESS_BOUNDARIES` and
+/// `FEED_WALK_PROGRESS_INTERVAL`, or the test seam's
+/// ([`WalkControl`]) — the walk's tell from a hang: a world reconstruction a
+/// position can run for seconds at a large world. A pure value, pinned by
+/// `to_string()` in the unit suite; emitted under `Class::Progress` by
+/// [`Feed::sort`].
 struct BareClassifyingLine {
     position: u64,
     done: usize,
@@ -1783,20 +2110,24 @@ impl std::fmt::Display for BareClassifyingLine {
     }
 }
 
-/// The open's bare classification, done.
+/// The walk's `landing:` line for the set it sorted (m15).
 ///
 /// The words: `feed-index.log: {c} of {n} bare positions classified from the
-/// journal, {k} world reconstructions, in {d} ms` — `{k}` the reconstructions
-/// the journal answered, so `{d}` over `{k}` bounds what one costs on this
-/// board; the positions the journal refused said beside it
-/// ([`ClassificationRefusedLine`]). A pure value, pinned by `to_string()` in
-/// the unit suite; emitted under `Class::Open` by [`Feed::open`].
+/// journal, {k} world reconstructions, in {d} ms; the landing held the
+/// change feed's lock {r} ms` — `{k}` the reconstructions the journal
+/// answered, so `{d}` over `{k}` bounds what one costs on this board, the
+/// figure to size the next such sort by; `{r}` the landing's own span under
+/// the lock every write's record and every page waits on; the positions the
+/// journal refused said beside it ([`ClassificationRefusedLine`]). A pure
+/// value, pinned by `to_string()` in the unit suite; emitted under
+/// `Class::Landing` by [`Feed::land`].
 struct BareClassifiedLine {
     classified: usize,
     of: usize,
     /// The world reconstructions the journal answered.
     reconstructions: usize,
     elapsed_ms: u128,
+    held_ms: u128,
 }
 
 impl std::fmt::Display for BareClassifiedLine {
@@ -1804,30 +2135,63 @@ impl std::fmt::Display for BareClassifiedLine {
         write!(
             f,
             "{INDEX_FILE}: {} of {} bare positions classified from the journal, {} world \
-             reconstructions, in {} ms",
-            self.classified, self.of, self.reconstructions, self.elapsed_ms
+             reconstructions, in {} ms; the landing held the change feed's lock {} ms",
+            self.classified, self.of, self.reconstructions, self.elapsed_ms, self.held_ms
         )
     }
+}
+
+/// What the sort of the bare positions the index lost came to.
+///
+/// It is what the set's `landing:` line says ([`BareClassifiedLine`]): the
+/// positions attempted — the set as the walk started — how many the journal
+/// refused, the world reconstructions it answered, and the sort's span.
+struct SortFigures {
+    of: usize,
+    refused: usize,
+    reconstructions: usize,
+    elapsed_ms: u128,
+}
+
+impl SortFigures {
+    /// Returns how many positions the journal classified.
+    fn classified(&self) -> usize {
+        self.of - self.refused
+    }
+}
+
+/// One bare position the index lost, as the walk sorts it.
+///
+/// `below` is the entry below it in the log — the position whose world the
+/// classification diffs from, genesis where none stands — read off the log
+/// under the feed's lock as the walk starts, and stable while it runs: no
+/// entry enters the log below the head but the region's own, which lie
+/// above every position here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ToSort {
+    at: u64,
+    below: u64,
 }
 
 /// The feed's open, done: how far back `/changes` answers, and the cost.
 ///
 /// The words: `the change feed answers from position {f} to position {h}:
-/// commits.log {n} entries, {b} of them bare[; positions ({low}, {head}]
-/// wait on the walk], in {d} ms` — `{f}` the oldest position still
-/// answerable, the `floor` a `410 history_reclaimed` names; the bare
-/// entries those whose testimony is lost; the region the walk behind the
-/// listener has yet to land, where one is pending; and the open's whole
-/// span. A feed that answers no position — no entry, no region pending —
-/// says `the change feed answers no position yet, the head at position {h},
-/// in {d} ms`. A pure value, pinned by `to_string()` in the unit suite;
+/// commits.log {n} entries, {b} of them bare[; {what} wait on the walk], in
+/// {d} ms` — `{f}` the oldest position still answerable, the `floor` a `410
+/// history_reclaimed` names; the bare entries those whose testimony is lost;
+/// what the walk behind the listener has yet to land, where anything pends
+/// ([`FeedPending`]'s words: `positions ({low}, {head}]`, `{n} bare
+/// positions the index lost`, or the two joined by `and`); and the open's
+/// whole span. A feed that answers no position — no entry, nothing pending
+/// — says `the change feed answers no position yet, the head at position
+/// {h}, in {d} ms`. A pure value, pinned by `to_string()` in the unit suite;
 /// emitted under `Class::Open` by [`Feed::open`], last.
 struct FeedOpenLine {
     floor: Option<u64>,
     head: u64,
     entries: usize,
     bare: usize,
-    pending: Option<(u64, u64)>,
+    pending: FeedPending,
     elapsed_ms: u128,
 }
 
@@ -1846,20 +2210,21 @@ impl std::fmt::Display for FeedOpenLine {
              entries, {} of them bare",
             self.head, self.entries, self.bare
         )?;
-        if let Some((low, head)) = self.pending {
-            write!(f, "; positions ({low}, {head}] wait on the walk")?;
+        if !self.pending.is_empty() {
+            write!(f, "; {} wait on the walk", self.pending)?;
         }
         write!(f, ", in {} ms", self.elapsed_ms)
     }
 }
 
-/// The journal's refusals of the open's bare classification, said once.
+/// The journal's refusals of the walk's bare classification, said once.
 ///
 /// The words: `feed-index.log: the journal refused to classify {n} bare
 /// positions, the first at position {p} ({account}): each is served to
 /// every class, its position alone` — `{account}` the first refusal's, in
 /// the kernel's words. A pure value, pinned by `to_string()` in the unit
-/// suite; emitted under `Class::Failure` by [`Feed::open`].
+/// suite; emitted under `Class::Failure` by [`Feed::sort`], once after the
+/// pass.
 struct ClassificationRefusedLine {
     positions: usize,
     first: u64,
@@ -1924,40 +2289,89 @@ struct Visible<'a> {
 }
 
 impl Inner {
-    /// Sorts every index list and every owner stream and drops the repeats.
+    /// Returns what the walk has yet to land, as figures ([`FeedPending`]).
     ///
-    /// The order is the ascending invariant the two slice-backed sources rest
-    /// on ([`at_or_above`]), established by the open for the replayed streams
-    /// and by the record step's order for a live commit, and re-established
-    /// by the walk's landing, which folds the region's positions after the
-    /// ones recorded above the head while it walked.
-    fn sort_the_lists(&mut self) {
-        for (_, positions) in self.index.values_mut() {
-            positions.sort_unstable();
-            positions.dedup();
+    /// It is the log's region and the set as it stands: how many positions,
+    /// the lowest and the highest.
+    fn pending(&self) -> FeedPending {
+        let unsorted = match (self.unsorted.first(), self.unsorted.last()) {
+            (Some(&first), Some(&last)) => {
+                Some(Unsorted { count: self.unsorted.len(), first, last })
+            }
+            _ => None,
+        };
+        FeedPending { region: self.log.pending_region(), unsorted }
+    }
+
+    /// Returns whether the walk has yet to land anything.
+    ///
+    /// It is the region, the set, or the landing's own rewrite once every
+    /// position is sorted ([`Inner::landing_owed`]) — what the record step's
+    /// appends and a compaction's rewrites wait on.
+    fn pends(&self) -> bool {
+        self.landing_owed || self.log.pending_region().is_some() || !self.unsorted.is_empty()
+    }
+
+    /// Returns the first position above `since` the walk has yet to land.
+    ///
+    /// It is the page's reach test ([`Feed::page`]): the lower of the
+    /// region's first position above `since` — `max(low, since) + 1`, where
+    /// `since` lies below the region's head — and the first unsorted
+    /// position above `since`; `None` where no pending position lies above
+    /// `since`, the page serving from the twins.
+    fn first_pending_above(&self, since: u64) -> Option<u64> {
+        let region = self
+            .log
+            .pending_region()
+            .filter(|&(_, head)| since < head)
+            .map(|(low, _)| low.max(since).saturating_add(1));
+        let unsorted = self.unsorted.range(since.saturating_add(1)..).next().copied();
+        match (region, unsorted) {
+            (Some(r), Some(u)) => Some(r.min(u)),
+            (r, u) => r.or(u),
         }
-        for positions in self.streams.values_mut() {
-            positions.sort_unstable();
-            positions.dedup();
+    }
+
+    /// Appends the index file's records up to `at`, the position just sorted.
+    ///
+    /// It is the progress a kill keeps ([`Feed::land_sorted`]): every
+    /// classified position from the file's coverage up to `at` takes its
+    /// record, in order — the recorded positions the open classified from
+    /// their records among them, so no position below the claim lacks its
+    /// record — and the file is fenced at `at` where no record raised its
+    /// coverage to it, so a position the journal classified empty is not
+    /// sorted twice. A stopped file takes nothing ([`LineFile::append`]).
+    fn append_the_index_through(&mut self, at: u64) {
+        let from = self.files.index.first_uncovered();
+        let records: Vec<(u64, Value)> =
+            self.docs.range(from..=at).map(|(p, ds)| (*p, doc_strings(ds))).collect();
+        for (p, docs) in records {
+            self.files.index.append_or_report(p, vec![(INDEX_DOCS, docs)]);
+        }
+        if self.files.index.coverage() < at {
+            self.files.index.fence_or_report(at);
         }
     }
 
     /// Drops every position at or below `min_since` from the twins.
     ///
     /// Three of the four twins — the index with the classification map, the
-    /// bitmap with the published stream, the streams — and the attest
-    /// store's served window drop them, the offset array's twin being the
-    /// log's own: the positions the log has just dropped
-    /// ([`CommitsLog::compact_to`], or [`CommitsLog::fold_the_walk`] at the
-    /// walk's landing), unreachable by every route — so the twins and the log
-    /// name one set of positions, a rewrite from the twins writes that set,
-    /// and no slot stays resident for a position no page renders.
+    /// bitmap with the published stream, the streams — the unsorted set and
+    /// the attest store's served window drop them, the offset array's twin
+    /// being the log's own: the positions the log has just dropped
+    /// ([`CommitsLog::compact_to`], [`CommitsLog::compact_in_memory`], or
+    /// [`CommitsLog::fold_the_walk`] at the walk's landing), unreachable by
+    /// every route — so the twins and the log name one set of positions, a
+    /// rewrite from the twins writes that set, no slot stays resident for a
+    /// position no page renders, and the walk sorts no position the journal
+    /// reclaimed.
     fn drop_at_or_below(&mut self, min_since: u64) {
         self.attest.drop_at_or_below(min_since);
         let keep_from = min_since.saturating_add(1);
         self.docs = self.docs.split_off(&keep_from);
         self.masked = self.masked.split_off(&keep_from);
         self.published = self.published.split_off(&keep_from);
+        self.unsorted = self.unsorted.split_off(&keep_from);
         self.index.retain(|_, (_, positions)| {
             positions.retain(|&at| at > min_since);
             !positions.is_empty()
@@ -1973,42 +2387,43 @@ impl Inner {
     /// Each is fenced at `covered` — the compaction's rewrite, at open and
     /// after a checkpoint alike: the index, the bitmap and the streams
     /// ([`Inner::rewrite_classified_files`]), then the offset array —
-    /// answering each file that failed with how ([`RewriteFail`]), every
-    /// file attempted whatever the one before it answered. A fifth derived
+    /// answering each file that failed with how ([`Unwritten`]), every file
+    /// attempted whatever the one before it answered. A fifth derived
     /// structure owes a line in one of its two halves, which the walk's
     /// landing calls apart ([`Feed::land`]), beside its fold and its replay.
-    fn rewrite_derived_files(&mut self, covered: u64) -> Vec<(&'static str, RewriteFail)> {
-        let mut failures = self.rewrite_classified_files(covered, None);
-        failures.extend(self.rewrite_offsets_file(covered, None));
+    fn rewrite_derived_files(&mut self, covered: u64) -> Vec<Unwritten> {
+        let mut failures = self.rewrite_classified_files(covered, false);
+        failures.extend(self.rewrite_offsets_file(covered, false));
         failures
     }
 
     /// Rewrites the index, the bitmap and the streams whole from the twins.
     ///
-    /// Each is fenced at `covered`, each attempted whatever the one before it
-    /// answered, and each that failed is answered with how. `stop_below` is
-    /// the walk's landing's (`Feed::land`): the region's lower edge, where a
-    /// file whose rewrite failed before its rename is stopped
-    /// ([`rewrite_or_stop`]).
-    fn rewrite_classified_files(
-        &mut self,
-        covered: u64,
-        stop_below: Option<u64>,
-    ) -> Vec<(&'static str, RewriteFail)> {
+    /// Each is fenced at `covered` and holds no record above it, each
+    /// attempted whatever the one before it answered, and each that failed is
+    /// answered with how. `stop` is the walk's landing's (`Feed::land`): a
+    /// file whose rewrite failed before its rename is stopped at the fence it
+    /// stands at ([`rewrite_or_stop`]).
+    fn rewrite_classified_files(&mut self, covered: u64, stop: bool) -> Vec<Unwritten> {
         let mut failures = Vec::new();
-        let records = self.index_records();
-        if let Err(failed) = rewrite_or_stop(&mut self.files.index, records, covered, stop_below) {
-            failures.push((INDEX_FILE, failed));
-        }
-        let records = self.masked_records();
-        if let Err(failed) = rewrite_or_stop(&mut self.files.masked, records, covered, stop_below) {
-            failures.push((MASKED_FILE, failed));
-        }
-        let records = self.stream_records();
-        if let Err(failed) = rewrite_or_stop(&mut self.files.streams, records, covered, stop_below)
-        {
-            failures.push((STREAMS_FILE, failed));
-        }
+        let records = self.index_records(covered);
+        failures.extend(rewrite_or_stop(&mut self.files.index, INDEX_FILE, records, covered, stop));
+        let records = self.masked_records(covered);
+        failures.extend(rewrite_or_stop(
+            &mut self.files.masked,
+            MASKED_FILE,
+            records,
+            covered,
+            stop,
+        ));
+        let records = self.stream_records(covered);
+        failures.extend(rewrite_or_stop(
+            &mut self.files.streams,
+            STREAMS_FILE,
+            records,
+            covered,
+            stop,
+        ));
         failures
     }
 
@@ -2017,39 +2432,39 @@ impl Inner {
     /// It is the open's answer where the log stands and the file's offsets
     /// disagree with it, the fourth file of [`Inner::rewrite_derived_files`],
     /// and the walk's landing's last file, written after `commits.log`
-    /// because it names that file's lines; `stop_below` as
+    /// because it names that file's lines; `stop` as
     /// [`Inner::rewrite_classified_files`] reads it.
-    fn rewrite_offsets_file(
-        &mut self,
-        covered: u64,
-        stop_below: Option<u64>,
-    ) -> Vec<(&'static str, RewriteFail)> {
-        let records = self.offset_records();
-        match rewrite_or_stop(&mut self.files.offsets, records, covered, stop_below) {
-            Ok(()) => Vec::new(),
-            Err(failed) => vec![(OFFSETS_FILE, failed)],
-        }
+    fn rewrite_offsets_file(&mut self, covered: u64, stop: bool) -> Vec<Unwritten> {
+        let records = self.offset_records(covered);
+        rewrite_or_stop(&mut self.files.offsets, OFFSETS_FILE, records, covered, stop)
+            .into_iter()
+            .collect()
     }
 
-    /// Returns the index file's records, from the classification map.
-    fn index_records(&self) -> Vec<Value> {
+    /// Returns the index file's records at or below `covered`.
+    ///
+    /// They come from the classification map; a record above the fence is
+    /// left out, since a file's coverage is the higher of its fence and its
+    /// highest record ([`LineFile::open`]), and a claim past an unsorted
+    /// position would read it as contributing nothing at the next open.
+    fn index_records(&self, covered: u64) -> Vec<Value> {
         self.docs
-            .iter()
+            .range(..=covered)
             .map(|(at, ds)| derived::record_object(*at, vec![(INDEX_DOCS, doc_strings(ds))]))
             .collect()
     }
 
-    /// Returns the bitmap's records, from the masked set.
-    fn masked_records(&self) -> Vec<Value> {
-        self.masked.iter().map(|at| derived::record_object(*at, Vec::new())).collect()
+    /// Returns the bitmap's records at or below `covered`, from the masked set.
+    fn masked_records(&self, covered: u64) -> Vec<Value> {
+        self.masked.range(..=covered).map(|at| derived::record_object(*at, Vec::new())).collect()
     }
 
-    /// Returns the streams file's records.
+    /// Returns the streams file's records at or below `covered`.
     ///
     /// They come from the classification map's owners.
-    fn stream_records(&self) -> Vec<Value> {
+    fn stream_records(&self, covered: u64) -> Vec<Value> {
         self.docs
-            .iter()
+            .range(..=covered)
             .filter_map(|(at, ds)| {
                 let owners = owners_of(ds);
                 (!owners.is_empty()).then(|| {
@@ -2059,11 +2474,13 @@ impl Inner {
             .collect()
     }
 
-    /// Returns the offset array's records, from the log's offsets.
-    fn offset_records(&self) -> Vec<Value> {
+    /// Returns the offset array's records at or below `covered`.
+    ///
+    /// They come from the log's offsets.
+    fn offset_records(&self, covered: u64) -> Vec<Value> {
         self.log
             .offsets()
-            .iter()
+            .range(..=covered)
             .map(|(at, o)| {
                 derived::record_object(*at, vec![(OFFSETS_OFFSET, Value::Number(o.0.into()))])
             })
@@ -2101,7 +2518,13 @@ impl Inner {
     /// array's line would carry does not exist until the landing's rewrite
     /// assigns it, and the landing rewrites the four files whole from the
     /// twins, this position among them; the attest store's line is appended and
-    /// its sync owed all the same, the store's file being its own.
+    /// its sync owed all the same, the store's file being its own. **While the
+    /// bare positions the index lost are pending**, and until the landing has
+    /// rewritten the files ([`Inner::landing_owed`]), the log took the line
+    /// and the four files take none, for the same reason: each is fenced
+    /// below the set, and a line above it would raise the file's claim over
+    /// positions the walk has yet to land, or sorted since, which the next
+    /// open would read as contributing nothing — a draft write unmasked.
     ///
     /// # Errors
     ///
@@ -2119,6 +2542,9 @@ impl Inner {
         let Recorded::Appended(offset) = recorded else {
             return stored;
         };
+        if self.landing_owed {
+            return stored;
+        }
         self.files
             .offsets
             .append_or_report(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))]);
@@ -2152,9 +2578,7 @@ impl Inner {
                     .index
                     .entry(d.addr.tumbler().clone())
                     .or_insert_with(|| (d.addr.clone(), Vec::new()));
-                if list.1.last() != Some(&at) {
-                    list.1.push(at);
-                }
+                push_in_order(&mut list.1, at);
             }
             folded.docs = Some(doc_strings(&docs));
         }
@@ -2167,10 +2591,7 @@ impl Inner {
         let owners = owners_of(&docs);
         if !owners.is_empty() {
             for owner in &owners {
-                let stream = self.streams.entry(owner.clone()).or_default();
-                if stream.last() != Some(&at) {
-                    stream.push(at);
-                }
+                push_in_order(self.streams.entry(owner.clone()).or_default(), at);
             }
             folded.owners = Some(addr_strings(&owners));
         }
@@ -2186,8 +2607,15 @@ impl Inner {
     /// answers the entry's meta and its docs reduced to the requester's
     /// readable ones — and whether the reduction kept the record's docs
     /// whole, which is what decides the row's `attest` (the third absence,
-    /// which [`Feed::page`] states) — or `None` when the entry is omitted.
+    /// which [`Feed::page`] states) — or `None` when the entry is omitted. A
+    /// position the walk has yet to sort ([`Inner::unsorted`]) is omitted at
+    /// every class: its class is unknown until the journal answers, and the
+    /// page's reach test keeps it off every merge, so this is the guard
+    /// behind that test and never the answer a page is built on.
     fn visible(&self, class: &FeedClass<'_>, query: &ChangesQuery, at: u64) -> Option<Visible<'_>> {
+        if self.unsorted.contains(&at) {
+            return None;
+        }
         let meta = self.log.entries().get(&at)?;
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
         let reduced: Vec<&Doc> = docs.iter().filter(|d| class.readable(&d.addr)).collect();
@@ -2390,13 +2818,34 @@ impl Inner {
 /// `published` is a `BTreeSet`, and `index` and `streams` are each ordered
 /// at each of their three construction paths — by the container at replay
 /// (the index) or by an explicit sort (the streams), by the write-path
-/// serialization guard's commit order at the record, and by an explicit
-/// sort at the walk's landing ([`Inner::sort_the_lists`]). `partition_point`
-/// is meaningless on an unsorted slice, so this returns an arbitrary suffix
-/// rather than a fence for a list that lost it.
+/// serialization guard's commit order at the record, and by placement at
+/// the walk's landings ([`push_in_order`]). `partition_point` is meaningless
+/// on an unsorted slice, so this returns an arbitrary suffix rather than a
+/// fence for a list that lost it.
 fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     let i = positions.partition_point(|&p| p < start);
     positions[i..].iter().copied()
+}
+
+/// Places `at` in an ascending position list, once.
+///
+/// It is the one way a position enters an index list or an owner stream
+/// after the open ([`Inner::fold_into_maps`]): a push where `at` lies above
+/// the list's last — the record step's case, every commit above the one
+/// before — and an insert at its place where it does not — the walk's
+/// landings, which place a position the open found unsorted or uncovered
+/// below the ones recorded while the walk ran, at most the window's length
+/// of moves. A position the list holds is not repeated.
+fn push_in_order(list: &mut Vec<u64>, at: u64) {
+    match list.last() {
+        Some(&last) if last < at => list.push(at),
+        Some(&last) if last == at => {}
+        _ => {
+            if let Err(i) = list.binary_search(&at) {
+                list.insert(i, at);
+            }
+        }
+    }
 }
 
 /// Returns the draft streams of the owner accounts strictly beneath `account`.
@@ -2479,26 +2928,25 @@ fn elements_of(v: Option<&Value>) -> &[Value] {
     v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
 
-/// The open's classification of the bare positions the index lost.
+/// The walk's classification of the bare positions the index lost.
 ///
 /// A lost sidecar never unmasks a draft write (PUB-6.45), so each such
 /// position is classified from the journal: its documents are the diff of
 /// the world at the entry below it — the previous entry, or genesis — and
 /// its own ([`derived_docs`]), each world rebuilt by a history read
-/// (`Engine::world_at`), one base loaded and the journal above it folded,
+/// (`Kernel::world_at`), one base loaded and the journal above it folded,
 /// nothing memoized. A run of consecutive bare positions, which is what a
 /// walk's landing writes, shares its worlds: the world at one is the world
 /// below the next, so it is carried forward, and the run costs one
-/// reconstruction a position and one below its first, the walk's own count
-/// ([`reconstruct`]); the head's own world is the open's snapshot, never
-/// rebuilt. A carried world is spent only where the position's previous
-/// entry is the one it was rebuilt at, and dropped ahead of any other
-/// rebuild, so at most two rebuilt worlds are held at once.
+/// reconstruction a position and one below its first, the region's walk's
+/// own count ([`reconstruct`]); the head's own world is the open's snapshot,
+/// never rebuilt. A carried world is spent only where the position's
+/// previous entry is the one it was rebuilt at, and dropped ahead of any
+/// other rebuild, so at most two rebuilt worlds are held at once.
 struct BareClassifier<'a> {
-    engine: &'a Engine,
+    kernel: &'a Kernel<World>,
     /// The open's snapshot of the head, whose world is the head's own.
     head: &'a Snapshot<World>,
-    log: &'a CommitsLog,
     /// The world at the bare position last classified, with its position.
     carried: Option<(u64, World)>,
     /// The world reconstructions the journal answered.
@@ -2506,26 +2954,14 @@ struct BareClassifier<'a> {
 }
 
 impl<'a> BareClassifier<'a> {
-    fn new(
-        engine: &'a Engine,
-        head: &'a Snapshot<World>,
-        log: &'a CommitsLog,
-    ) -> BareClassifier<'a> {
-        BareClassifier { engine, head, log, carried: None, reconstructions: 0 }
-    }
-
-    /// Returns the world reconstructions classifying `at` pays.
-    ///
-    /// It is the count where the journal answers: one for the bare
-    /// position's own world, none at the head, and one for the world below
-    /// it unless `follows_bare` — the entry before it a bare position
-    /// classified in the same pass, whose world [`BareClassifier::classify`]
-    /// carries forward.
-    fn planned(&self, at: u64, follows_bare: bool) -> usize {
-        usize::from(!follows_bare) + usize::from(at != self.head.seq().0)
+    fn new(kernel: &'a Kernel<World>, head: &'a Snapshot<World>) -> BareClassifier<'a> {
+        BareClassifier { kernel, head, carried: None, reconstructions: 0 }
     }
 
     /// Returns the documents the commit at the bare position `at` touched.
+    ///
+    /// `below` is the entry below `at` in the log, genesis where none stands
+    /// ([`ToSort`]).
     ///
     /// # Errors
     ///
@@ -2534,13 +2970,12 @@ impl<'a> BareClassifier<'a> {
     /// class, and the caller says the refusal. The world at `at` is not
     /// asked for where the world below it was refused, and no world is
     /// carried past a refusal.
-    fn classify(&mut self, at: u64) -> Result<Vec<Address>, HistoryError> {
-        let prev = self.log.entries().range(..at).next_back().map_or(0, |(k, _)| *k);
+    fn classify(&mut self, at: u64, below: u64) -> Result<Vec<Address>, HistoryError> {
         let below = match self.carried.take() {
-            Some((carried, world)) if carried == prev => world,
+            Some((carried, world)) if carried == below => world,
             stale => {
                 drop(stale);
-                self.rebuild(prev)?
+                self.rebuild(below)?
             }
         };
         if at == self.head.seq().0 {
@@ -2559,7 +2994,7 @@ impl<'a> BareClassifier<'a> {
     /// The journal's refusal of the world (reclaimed, corrupt, I/O), which
     /// is not counted.
     fn rebuild(&mut self, at: u64) -> Result<World, HistoryError> {
-        let world = self.engine.world_at(Seq(at))?;
+        let world = self.kernel.world_at(Seq(at))?;
         self.reconstructions += 1;
         Ok(world)
     }
@@ -2619,160 +3054,4 @@ impl Iterator for Merge<'_> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The merge unions its sources in order and emits each position once.
-    #[test]
-    fn the_merge_dedups_by_position_across_every_source() {
-        let a = [1u64, 4, 9];
-        let b = [4u64, 5, 9, 12];
-        let c: [u64; 0] = [];
-        let sources: Vec<Box<dyn Iterator<Item = u64> + '_>> = vec![
-            Box::new(a.iter().copied()),
-            Box::new(b.iter().copied()),
-            Box::new(c.iter().copied()),
-            Box::new(a.iter().copied()),
-        ];
-        let out: Vec<u64> = Merge::new(sources).collect();
-        assert_eq!(out, vec![1, 4, 5, 9, 12]);
-    }
-
-    /// The descendant range is the owner accounts strictly beneath.
-    ///
-    /// It holds those beneath the requester's own, and nothing else: its own
-    /// stream is keyed beside it and never ranged, a sibling's is past the
-    /// cut, and containment is by component — `1.0.21` is no account under
-    /// `1.0.2`, though its text extends it.
-    #[test]
-    fn the_descendant_range_is_the_owner_accounts_strictly_beneath() {
-        let a = |s: &str| parse_dotted(s).expect("a test address");
-        let streams: BTreeMap<Address, Vec<u64>> =
-            ["1.0.2", "1.0.2.1", "1.0.2.1.1", "1.0.2.2", "1.0.3", "1.0.21"]
-                .iter()
-                .zip(1u64..)
-                .map(|(owner, at)| (a(owner), vec![at]))
-                .collect();
-        let beneath = |account: &str| -> Vec<String> {
-            streams_beneath(&streams, &a(account)).map(|(owner, _)| owner.to_string()).collect()
-        };
-        assert_eq!(beneath("1.0.2"), ["1.0.2.1", "1.0.2.1.1", "1.0.2.2"]);
-        assert_eq!(beneath("1.0.2.1"), ["1.0.2.1.1"], "the middle of a chain ranges what is below it");
-        assert!(beneath("1.0.2.2").is_empty() && beneath("1.0.3").is_empty(), "a leaf ranges nothing");
-        // The range hands back each stream it admits, not merely its key.
-        let middle = a("1.0.2.1");
-        let positions: Vec<&[u64]> = streams_beneath(&streams, &middle).map(|(_, p)| p).collect();
-        assert_eq!(positions, [&[3u64][..]]);
-    }
-
-    /// A list starts at its first member at or above the fence.
-    ///
-    /// The fence is the one every slice-backed source is narrowed by, and the
-    /// reason a page never carries a position at or below `since`.
-    #[test]
-    fn a_list_starts_at_the_fence() {
-        let s = [3u64, 7, 8, 20];
-        assert_eq!(at_or_above(&s, 8).collect::<Vec<_>>(), vec![8, 20]);
-        assert_eq!(at_or_above(&s, 9).collect::<Vec<_>>(), vec![20]);
-        assert_eq!(at_or_above(&s, 21).count(), 0);
-        assert_eq!(at_or_above(&s, 0).count(), 4);
-    }
-
-    /// A derived cut says it is re-derived, and a failure names its file.
-    ///
-    /// Row 9's words for a derived file are the head with the last trusted
-    /// position and the bytes, then that the cut part is re-derived — and
-    /// the open's failures name their file ahead of the OS's text, the kind
-    /// kept.
-    #[test]
-    fn a_derived_cut_says_it_is_re_derived_and_a_failure_names_its_file() {
-        let cut = Cut { valid_end: 120, len: 131, trusted: 32, first: Some(33), whole_after: None };
-        assert_eq!(
-            DerivedCutLine { name: INDEX_FILE, cut }.to_string(),
-            "feed-index.log: trust ends at position 32 (byte 120 of 131); the 11 bytes after it \
-             are cut; the cut part is re-derived"
-        );
-        let refused = with_file(MASKED_FILE)(io::Error::new(io::ErrorKind::StorageFull, "no room"));
-        assert_eq!(refused.kind(), io::ErrorKind::StorageFull, "the kind is kept");
-        assert_eq!(refused.to_string(), "feed-masked.log: no room");
-    }
-
-    /// The open's own lines render at fixed figures.
-    ///
-    /// They are the bare positions it classifies before the board serves —
-    /// ahead of the cost, while it runs and once done — the journal's refusal
-    /// of that classification in the kernel's words, what its compaction
-    /// dropped below the reclaim floor, and, last, how far back `/changes`
-    /// answers, the region the walk has yet to land where one is pending, and
-    /// how long the open took.
-    #[test]
-    fn the_opens_classification_and_compaction_lines_render_the_ruled_words() {
-        assert_eq!(
-            BareClassificationLine { coverage: 12, positions: 3, reconstructions: 4 }.to_string(),
-            "feed-index.log covers to position 12: 3 bare positions are classified from the \
-             journal before the board serves, 4 world reconstructions in all"
-        );
-        assert_eq!(
-            BareClassifyingLine { position: 2_040, done: 1_000, of: 3_000, elapsed_ms: 9_800 }
-                .to_string(),
-            "feed-index.log: the bare classification at position 2040, 1000 of 3000, 9800 ms in"
-        );
-        let classified = BareClassifiedLine {
-            classified: 2_999,
-            of: 3_000,
-            reconstructions: 3_000,
-            elapsed_ms: 29_400,
-        };
-        assert_eq!(
-            classified.to_string(),
-            "feed-index.log: 2999 of 3000 bare positions classified from the journal, 3000 world \
-             reconstructions, in 29400 ms"
-        );
-        let reach = |pending| FeedOpenLine {
-            floor: Some(2_049),
-            head: 3_100,
-            entries: 1_052,
-            bare: 6,
-            pending,
-            elapsed_ms: 41,
-        };
-        assert_eq!(
-            reach(None).to_string(),
-            "the change feed answers from position 2049 to position 3100: commits.log 1052 \
-             entries, 6 of them bare, in 41 ms"
-        );
-        assert_eq!(
-            reach(Some((3_000, 3_100))).to_string(),
-            "the change feed answers from position 2049 to position 3100: commits.log 1052 \
-             entries, 6 of them bare; positions (3000, 3100] wait on the walk, in 41 ms"
-        );
-        let empty = FeedOpenLine {
-            floor: None,
-            head: 0,
-            entries: 0,
-            bare: 0,
-            pending: None,
-            elapsed_ms: 2,
-        };
-        assert_eq!(
-            empty.to_string(),
-            "the change feed answers no position yet, the head at position 0, in 2 ms"
-        );
-        let refused = ClassificationRefusedLine {
-            positions: 3,
-            first: 13,
-            account: "journal corrupt at rest".into(),
-        };
-        assert_eq!(
-            refused.to_string(),
-            "feed-index.log: the journal refused to classify 3 bare positions, the first at \
-             position 13 (journal corrupt at rest): each is served to every class, its position \
-             alone"
-        );
-        assert_eq!(
-            OpenCompactionLine { floor: 2049, dropped: 7 }.to_string(),
-            "the change feed's files compacted below the reclaim floor at position 2049: 7 \
-             entries dropped"
-        );
-    }
-}
+mod tests;

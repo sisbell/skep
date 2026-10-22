@@ -68,8 +68,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   cadence, the link-type registry's seed — and the deterministic JSON
   codec, key-sorted marshalling so wire bytes never depend on map
   iteration order. The daemon's part is the router that composes them and
-  the files they write, which are the daemon's own; and the open's one
-  act on every board's content: the seed, run after the change feed opens
+  the files they write, which are the daemon's own — a lost or torn
+  `commits.log`, and a lost `feed-index.log`, are made good behind the
+  listener by the core's walk thread while the board serves, `/changes`
+  answering `503 feed_rebuilding` for a page that would reach a position
+  the walk has yet to land, and nothing else waiting on it; and the open's
+  one act on every board's content: the seed, run after the change feed opens
   and before the listener binds, which writes into the registry document
   `1.1.0.1.0.1`, as the system account's principal, a named section and a
   `defines` link for every link type of [skep-registry](../skep-registry)'s

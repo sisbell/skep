@@ -62,7 +62,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   open going on — `changes` (`ChangesQuery`,
   `ChangesAnswer`, `FeedClass` with `of`), `head_time`, `next_step`
   (`StreamStep`), `announced`, `halted_at`, `say_the_kernels_halt_once`,
-  `feed_walk_gone`, `compact_feed_below_reclaim_floor` (`FeedCompaction`),
+  `feed_walk_gone` (`FeedPending` with `is_empty`, what the walk behind the
+  listener has yet to land: the region a lost or torn `commits.log` left
+  uncovered, and the bare positions a lost `feed-index.log` left unsorted,
+  counted as `Unsorted`), `compact_feed_below_reclaim_floor`
+  (`FeedCompaction`),
   `stopped_feed_files` (`StoppedFile`), `attest_store_figures`
   (`AttestStoreFigures`), what the never compacted `feed-attest.log` holds
   on disk and in memory, `checkpoint_signal`
@@ -86,13 +90,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the routes hold across the door, and `SerialFigures` (`since`), its
   takes and waits, which the daemon's landing line says.
 - **The test seam** (`test-hooks`, default off; every item of it
-  `#[doc(hidden)]`) — the feed walk's hold, its notice and its panic arm,
-  the walk's pending region and progress cadence, the head writer's clock
-  and its one refusal, the registry seed's three (a type hidden from a
-  board's seed, every type lifted, a refusal of the seed's n-th commit),
-  the feed's and the attest store's failure arms and the attest store's
-  sync mark, the lines said, the checkpoint signal's tick. Forwards
-  nothing.
+  `#[doc(hidden)]`) — the feed walk's hold (before its first position, or
+  after so many of a lost index's positions sorted), its notice and its
+  panic arm, the walk's pending region and pending set, whether it has
+  landed, and its progress cadence, the head writer's clock and its one
+  refusal, the registry seed's three (a type hidden from a board's seed,
+  every type lifted, a refusal of the seed's n-th commit), the feed's and
+  the attest store's failure arms and the attest store's sync mark, the
+  lines said, the checkpoint signal's tick. Forwards nothing.
 
 Its modules, each with a line saying what it holds, are declared in
 `src/lib.rs`; the rules that hold across its files, in the workspace's

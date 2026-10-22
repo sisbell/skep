@@ -567,19 +567,20 @@ impl Daemon {
 
     /// Holds every feed walk started from here on, in this process.
     ///
-    /// **Test hook** (the same standing). Every walk of a lost or torn
-    /// `commits.log`'s region parks after its `open:` line and before its
-    /// first boundary, writing [`Daemon::FEED_WALK_HOLD_NOTICE`], until
-    /// [`Daemon::release_the_feed_walk`]. Armed *before* a daemon opens, so
-    /// a suite serves requests against a daemon whose region is pending: the
-    /// refusal on a page into it, every other request served, a write
-    /// admitted, the landing at the release. A process-wide seam, since the
-    /// walk starts inside the open; a child binary arms it by the variable
-    /// `SKEPD_TEST_FEED_WALK_HOLD`, which `main.rs` reads under `test-hooks`.
-    /// A held walk is one the stop ends: the walk parks in timed waits and
-    /// reads the stop between them, so a daemon dropped while its walk is
-    /// held joins it at once, nothing written, the region walked again at
-    /// the next open.
+    /// **Test hook** (the same standing). Every walk — of a lost or torn
+    /// `commits.log`'s region, of the bare positions a lost `feed-index.log`
+    /// left unsorted, or both — parks after its `open:` lines and before its
+    /// first position or boundary, writing [`Daemon::FEED_WALK_HOLD_NOTICE`],
+    /// until [`Daemon::release_the_feed_walk`]. Armed *before* a daemon
+    /// opens, so a suite serves requests against a daemon whose region or
+    /// set is pending: the refusal on a page reaching it, every other request
+    /// served, a write admitted, the landing at the release. A process-wide
+    /// seam, since the walk starts inside the open; a child binary arms it
+    /// by the variable `SKEPD_TEST_FEED_WALK_HOLD`, which `main.rs` reads
+    /// under `test-hooks`. A held walk is one the stop ends: the walk parks
+    /// in timed waits and reads the stop between them, so a daemon dropped
+    /// while its walk is held joins it at once, nothing written, the region
+    /// walked and the set sorted again at the next open.
     #[doc(hidden)]
     pub fn hold_the_feed_walk() {
         skep_core::commits::FEED_WALK_HOLD.hold();
@@ -599,11 +600,56 @@ impl Daemon {
     /// or torn `commits.log` left uncovered that the walk behind the
     /// listener has yet to land, `low` covered and `head` the last of the
     /// region; `None` once the landing wrote it (or where the log covered
-    /// the head). It is what a suite waits on before it reads a feed the
-    /// walk is landing, and pins a page's refusal against.
+    /// the head). It is what a suite pins a page's refusal against; the
+    /// landing itself a suite waits on through
+    /// [`Daemon::feed_walk_pending`].
     #[doc(hidden)]
     pub fn feed_pending_region(&self) -> Option<(u64, u64)> {
         self.commits.feed_pending_region()
+    }
+
+    /// Returns the bare positions a lost index left unsorted, ascending.
+    ///
+    /// **Test hook** (the same standing). They are the positions
+    /// `commits.log` holds bare above `feed-index.log`'s coverage that the
+    /// walk behind the listener has yet to classify — the sibling of
+    /// [`Daemon::feed_pending_region`] for the set the ruling adds: what a
+    /// suite pins the open's pending set against, and watches shrink as the
+    /// walk sorts and lands each position. Empty once every position has
+    /// landed, or where the index covered them all.
+    #[doc(hidden)]
+    pub fn feed_pending_set(&self) -> Vec<u64> {
+        self.commits.feed_pending_set()
+    }
+
+    /// Returns whether the feed walk has yet to land what the open left.
+    ///
+    /// **Test hook** (the same standing). True while the region or the set
+    /// pends, and until the landing has rewritten the four index files once
+    /// every position is sorted — the last position sorted leaves the set
+    /// before that rewrite, so the set's emptiness alone is no landing. What
+    /// a suite waits on before it reads the landed files (`common::spawn`
+    /// waits on it); false where the open left nothing pending.
+    #[doc(hidden)]
+    pub fn feed_walk_pending(&self) -> bool {
+        self.commits.feed_walk_pending()
+    }
+
+    /// Holds every feed walk started from here on after `k` positions sorted.
+    ///
+    /// **Test hook** (the same standing). The walk sorts and lands `k` of
+    /// the bare positions a lost index left unsorted — each folded into the
+    /// feed's memory and appended to `feed-index.log` as it is sorted — then
+    /// parks, writing [`Daemon::FEED_WALK_HOLD_NOTICE`], until
+    /// [`Daemon::release_the_feed_walk`]. A daemon stopped while it parks
+    /// leaves the files a kill after `k` positions leaves — the index
+    /// appended through the k-th, the other three fenced below the set — so
+    /// a suite judges the next open's progress: `n − k` pending, none sorted
+    /// twice. Armed before the open, as [`Daemon::hold_the_feed_walk`] is; a
+    /// walk whose set holds no more than `k` never parks, landing everything.
+    #[doc(hidden)]
+    pub fn hold_the_feed_walk_after_sorting(k: u64) {
+        skep_core::commits::FEED_WALK_HOLD.hold_after_sorting(k);
     }
 
     /// Arms a panic of the feed walk's thread, before its first boundary.

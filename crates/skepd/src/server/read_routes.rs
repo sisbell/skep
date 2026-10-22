@@ -13,9 +13,8 @@ use skep_util::notice::Class;
 
 use super::actor::Resolved;
 use super::reply::{
-    op_answer, refuse, refuse_feed_rebuilding, refuse_over_budget, refuse_reclaimed,
-    refuse_unavailable, FeedWalk, Reply,
-    TransportError,
+    op_answer, refuse, refuse_feed_rebuilding_over, refuse_over_budget, refuse_reclaimed,
+    refuse_unavailable, FeedWalk, Reply, TransportError,
 };
 use super::request::{at_most_once, query_pairs, sole_param};
 use super::{Daemon, HistoryDamageLine, JournalDamageSite};
@@ -283,16 +282,18 @@ impl Daemon {
             // and the largest `limit` that fits from this fence.
             ChangesAnswer::OverBudget { budget, fits } => refuse_over_budget(budget, fits),
             // The walk behind the listener (`operations.md` §3.3 step 2):
-            // the page's rows would come from the region a lost or torn
-            // `commits.log` left uncovered — refused retry-class until the
-            // walk lands it, and, where the walk's thread has died, refused
-            // with the restart named, since no landing comes this uptime.
-            ChangesAnswer::Rebuilding { low, head } => {
+            // the page would reach a position the walk has yet to land — the
+            // region a lost or torn `commits.log` left uncovered, a bare
+            // position a lost `feed-index.log` left unsorted — refused
+            // retry-class until the walk lands it, and, where the walk's
+            // thread has died, refused with the restart named, since no
+            // landing comes this uptime.
+            ChangesAnswer::Rebuilding { pending } => {
                 let walk = match self.commits.feed_walk_gone() {
                     Some(_) => FeedWalk::Gone,
                     None => FeedWalk::Walking,
                 };
-                refuse_feed_rebuilding(low, head, walk)
+                refuse_feed_rebuilding_over(pending, walk)
             }
             // The page object as the feed marshaled it, sent as it stands.
             ChangesAnswer::Page { body } => Reply::bodied(200, "application/json", body),

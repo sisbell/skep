@@ -87,8 +87,8 @@ use skep_util::notice::{Class, Moment};
 use skepd::tools::{self, HoleCheck};
 
 use crate::common::{
-    acked_addr, claim_board, expect_resp, get, head_position, json, op, open_session,
-    parse_response, spawn_unclaimed, T_ENROLL,
+    acked_addr, acked_at, claim_board, expect_resp, get, head_position, json, op, open_session,
+    parse_response, spawn, spawn_unclaimed, CLAIMANT_ACCOUNT, CLAIMANT_PRINCIPAL, T_ENROLL,
 };
 
 /// THE WORKER FAULT's VARIABLE — the binary's test door (`main.rs`, read
@@ -2212,4 +2212,160 @@ fn a_fresh_boards_stderr_carries_the_registry_seeds_line_once_and_a_reopens_none
         "a reopen of a seeded board writes nothing and says nothing of it:\n{}",
         served.stderr.seen.join("\n")
     );
+}
+
+/// Returns the epoch milliseconds of a line's head time.
+///
+/// The head's time is `YYYY-MM-DDTHH:MM:SS.mmmZ`, the stream's one spelling
+/// of a moment (`skep_util::notice`), read back so a line's moment can be
+/// set against a moment this test took off the same clock. Days from the
+/// civil date by Howard Hinnant's algorithm.
+fn epoch_millis_of(line: &str) -> u64 {
+    let time = line
+        .strip_prefix("skepd: ")
+        .and_then(|rest| rest.split(' ').next())
+        .unwrap_or_else(|| panic!("a timed line: {line:?}"));
+    let digits = |from: usize, to: usize| -> u64 {
+        time[from..to].parse().unwrap_or_else(|_| panic!("a figure in {time:?}"))
+    };
+    let (y, m, d) = (digits(0, 4) as i64, digits(5, 7) as i64, digits(8, 10) as i64);
+    let (h, min, s, ms) = (digits(11, 13), digits(14, 16), digits(17, 19), digits(20, 23));
+    let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    (days as u64 * 86_400 + h * 3_600 + min * 60 + s) * 1_000 + ms
+}
+
+/// THE WALK THREAD's THREE LINES FOR A LOST INDEX (`operations.md` §1.1 m15;
+/// #461, the owner's D8 (a)), off the REAL BINARY's stderr, in RUNBOOK's
+/// order (§5 step 3): a board of a thousand one-record commits, its
+/// `commits.log` rewritten as a walk's landing writes it — every position
+/// the owner's feed shows, as a bare line — and its `feed-index.log` lost.
+/// The binary serves at once: its serving line read, `/health` answers 200
+/// at a moment before the sort's `landing:` line is written, by the stream's
+/// own clock. Its stderr carries, in order, `open: feed-index.log covers to
+/// position 0: {n} bare positions are classified from the journal behind the
+/// listener, {r} world reconstructions in all` — `{n}` every bare entry of
+/// the log, past a thousand, `{r}` the same, one run to the head — a
+/// `progress:` line at the cadence, its `{i} of {n}` within the count, and
+/// `landing: feed-index.log: {n} of {n} bare positions classified from the
+/// journal, {k} world reconstructions, in {ms} ms; the landing held the
+/// change feed's lock {ms} ms` — each under the class the door spells. A
+/// sort of a thousand positions runs a minute or two on this machine, so
+/// the landing is waited for under a bound of its own.
+#[test]
+fn a_lost_index_says_the_walks_three_lines_in_order_and_the_binary_serves_first() {
+    // The board's directory is the kernel's to create, owner-only: the
+    // binary refuses one other users of this machine can read.
+    let base = tempfile::tempdir().expect("tempdir");
+    let dir = base.path().join("board");
+    let dir = dir.as_path();
+    let positions: Vec<u64> = {
+        let sd = spawn(dir);
+        let port = sd.port();
+        let owner = open_session(port, CLAIMANT_PRINCIPAL);
+        let mint = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+        for _ in 0..1_000 {
+            acked_at(&op(port, Some(&owner), &mint));
+        }
+        let (st, body) =
+            crate::common::http(port, "GET", "/changes?since=0&limit=4096", Some(&owner), b"");
+        assert_eq!(st, 200);
+        let positions = json(&body)["changes"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["at"].as_u64().expect("at"))
+            .collect();
+        sd.shutdown();
+        positions
+    };
+    let bare = positions.len();
+    assert!(bare > 1_000, "every position bare, past the cadence's thousand: {bare}");
+    // Every position bare — the log as a walk's landing writes it, each
+    // owner-visible position a bare line — and the index lost.
+    let mut log = String::from("{\"min_since\":0}\n");
+    for at in &positions {
+        log.push_str(&format!("{{\"at\":{at}}}\n"));
+    }
+    fs::write(dir.join("commits.log"), log).expect("the bare log");
+    fs::remove_file(dir.join("feed-index.log")).expect("lose the index");
+    wait_for_the_lock(dir);
+
+    let workers = skepd::MIN_WORKERS.to_string();
+    let mut cmd = skepd(dir, &["--port", "0", "--workers", &workers]);
+    let mut child = Spawned::launch(&mut cmd);
+    let mut stderr = Stderr::of(&mut child.child);
+    // The feed's open line first: a refused open closes the stream, and
+    // the wait then names what it said.
+    stderr
+        .wait_for("the feed's open line", PATIENCE, |l| said(l, "open", "the change feed answers"));
+    let port = serving_port(&mut child.child, PATIENCE);
+    let (st, _) = get_health_retrying_the_connect(port, PATIENCE);
+    assert_eq!(st, 200, "the board serves while the sort runs");
+    let health_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock")
+        .as_millis() as u64;
+    let landing = stderr.wait_for("the sort's landing", Duration::from_secs(300), |l| {
+        said(l, "landing", "feed-index.log: ")
+    });
+    assert!(
+        epoch_millis_of(&landing) >= health_at,
+        "FINDING (D8 (a)): the landing was written before /health answered: {landing}"
+    );
+    let seen = &stderr.seen;
+    let at = |class: &str, prefix: &str| {
+        seen.iter()
+            .position(|l| said(l, class, prefix))
+            .unwrap_or_else(|| panic!("no `{class}: {prefix}…` line:\n{}", seen.join("\n")))
+    };
+    let open_at = at("open", "feed-index.log covers to position ");
+    let progress_at = at("progress", "feed-index.log: the bare classification at position ");
+    let landing_at = at("landing", "feed-index.log: ");
+    assert!(
+        open_at < progress_at && progress_at < landing_at,
+        "the three lines in RUNBOOK's order:\n{}",
+        seen.join("\n")
+    );
+    // The index's coverage as the open left it: fenced below the first
+    // unsorted position, the first row the owner's feed showed.
+    let open = after_the_head(&seen[open_at], "open").expect("the open's head");
+    let (covered, rest) = open
+        .strip_prefix("feed-index.log covers to position ")
+        .and_then(|r| r.split_once(": "))
+        .unwrap_or_else(|| panic!("{open:?}"));
+    assert_eq!(covered.parse::<u64>().ok(), Some(positions[0] - 1), "{open:?}");
+    let (n, rest) = rest
+        .split_once(" bare positions are classified from the journal behind the listener, ")
+        .unwrap_or_else(|| panic!("{open:?}"));
+    let n: usize = n.parse().expect("a count");
+    assert_eq!(n, bare, "the open line counts every bare position the index lost");
+    let r: usize = rest
+        .strip_suffix(" world reconstructions in all")
+        .and_then(|r| r.parse().ok())
+        .unwrap_or_else(|| panic!("{open:?}"));
+    assert_eq!(
+        r, bare,
+        "one run to the head: a reconstruction a position, one below it, none at the head"
+    );
+    let progress = after_the_head(&seen[progress_at], "progress").expect("the progress head");
+    let (_, rest) = progress.split_once(", ").unwrap_or_else(|| panic!("{progress:?}"));
+    let (i, rest) = rest.split_once(" of ").unwrap_or_else(|| panic!("{progress:?}"));
+    let (of, ms) = rest.split_once(", ").unwrap_or_else(|| panic!("{progress:?}"));
+    let (i, of): (usize, usize) = (i.parse().expect("done"), of.parse().expect("of"));
+    assert!(i >= 1 && i <= of && of == bare && ms.ends_with(" ms in"), "{progress:?}");
+    let landed = after_the_head(&landing, "landing").expect("the landing head");
+    assert!(
+        landed.starts_with(&format!(
+            "feed-index.log: {bare} of {bare} bare positions classified from the journal, {bare} \
+             world reconstructions, in "
+        )) && landed.contains(" ms; the landing held the change feed's lock ")
+            && landed.ends_with(" ms"),
+        "{landed:?}"
+    );
+    child.kill();
 }

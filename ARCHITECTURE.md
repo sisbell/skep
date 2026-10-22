@@ -2888,13 +2888,18 @@ it:
      its answer naming each file that stood; beneath it,
      `commits/feed/derived.rs` keeps the feed's derived index files — a
      torn tail is cut at open and said with the last trusted position, the
-     bytes and that the cut part is re-derived — `commits.log`'s own cut
-     part by a walk BEHIND THE LISTENER on a thread of the commits' own,
-     reads served and writes admitted meanwhile, `/changes` refusing pages
-     into the uncovered region `feed_rebuilding` until ONE rewrite lands
-     it; malformed names and unreadable slots are said once per open with
-     a count and the first position; a rewrite that fails past its rename
-     stops its file for the uptime, said once per uptime — and
+     bytes and that the cut part is re-derived: a recorded position's
+     entry from its own record at the open, a bare position's — one the
+     index lost, a world reconstruction each — by the walk BEHIND THE
+     LISTENER, the same thread of the commits' own that re-covers
+     `commits.log`'s cut part, reads served and writes admitted meanwhile,
+     `/changes` refusing `feed_rebuilding` for a page that would reach the
+     uncovered region or an unsorted position until the walk lands it —
+     the region by ONE rewrite, the set a position at a time as each is
+     sorted, so a kill keeps the progress; malformed names and unreadable
+     slots are said once per open with a count and the first position; a
+     rewrite that fails past its rename stops its file for the uptime,
+     said once per uptime — and
      `commits/feed/attest.rs` the attest store, the marker slot mirrored
      per attested commit, never compacted, its missing tail rebuilt at open
      in one scan of the kernel's markers above the store's fence;
@@ -3389,7 +3394,9 @@ imports it.
   signed — the feed's derived index files, projections of that testimony
   and the journal, rebuilt from them on loss, `commits.log`'s own
   uncovered region walked from the journal behind the listener and landed
-  by one rewrite, pages into it refused `feed_rebuilding` meanwhile —
+  by one rewrite, and the bare positions a lost `feed-index.log` left
+  unclassified sorted by the same thread, each landed as it is sorted,
+  pages reaching either refused `feed_rebuilding` meanwhile —
   `commits.log` and the four
   compact to the journal's reclaim floor at open and after each checkpoint
   the checkpoint thread lands, the floor moving then and at no other

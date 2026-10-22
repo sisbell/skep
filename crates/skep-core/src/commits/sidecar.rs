@@ -684,6 +684,17 @@ pub(super) struct CommitsLog {
     /// page whose rows would have to come from it. Read outside this file
     /// through [`CommitsLog::pending_region`].
     pending: Option<(u64, u64)>,
+    /// Whether a compaction moved the fence in memory and left the file.
+    ///
+    /// It is set where a compaction dropped entries with its rewrite
+    /// deferred — the region pending ([`CommitsLog::compact_inner`]), or the
+    /// bare positions the index lost pending, which the feed tells this log
+    /// by calling [`CommitsLog::compact_in_memory`] — and cleared by the
+    /// next rewrite that reaches its rename, the walk's landing's among them
+    /// ([`CommitsLog::rewrite_the_owed`]); until then the file holds lines
+    /// the fence has passed, which the next open's own compaction would drop
+    /// again.
+    rewrite_owed: bool,
     /// Monotone clamp for recorded wall-clock times.
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
@@ -950,6 +961,7 @@ impl CommitsLog {
             compacted_at_open: None,
             floor_at_open,
             pending: None,
+            rewrite_owed: false,
             last_time: 0,
             len,
             lines: lines.clone(),
@@ -1127,6 +1139,44 @@ impl CommitsLog {
         self.compact_inner(min_since, false)
     }
 
+    /// Compacts to the fence in memory alone, the file left to the landing.
+    ///
+    /// It is [`CommitsLog::compact_to`] with its rewrite deferred whatever
+    /// this log has pending: the feed calls it while the bare positions the
+    /// index lost are pending, a state this log does not hold
+    /// (`Feed::compact_below_reclaim_floor`), so that compaction writes no
+    /// feed file at all; the walk's landing then rewrites the file where any
+    /// entry was dropped ([`CommitsLog::rewrite_the_owed`]). `true` when
+    /// anything was dropped.
+    pub(super) fn compact_in_memory(&mut self, min_since: u64) -> bool {
+        let dropped = self.trim_to(min_since, false);
+        if dropped {
+            self.rewrite_owed = true;
+        }
+        dropped
+    }
+
+    /// Rewrites the file where a compaction left its rewrite to a landing.
+    ///
+    /// It is the walk's landing's call where no region pended — the sort of
+    /// the bare positions the index lost alone — so a compaction deferred
+    /// while the set pended ([`CommitsLog::compact_in_memory`]) reaches the
+    /// file; `Ok(false)` where none is owed, nothing written.
+    ///
+    /// # Errors
+    ///
+    /// The rewrite's failure ([`RewriteFail`]): before its rename the file
+    /// stands whole as it was and the rewrite stays owed, the next
+    /// compacting landing trying again; past its rename the file's own stop
+    /// ([`CommitsLog::rewrite_whole`]), the new file in place.
+    pub(super) fn rewrite_the_owed(&mut self) -> Result<bool, RewriteFail> {
+        if !self.rewrite_owed {
+            return Ok(false);
+        }
+        self.rewrite_whole()?;
+        Ok(true)
+    }
+
     /// Compacts as [`CommitsLog::compact_to`] does, with the open's one extra.
     ///
     /// `force` writes the file even where nothing is dropped — a fence that
@@ -1138,28 +1188,41 @@ impl CommitsLog {
     ///
     /// **While the walk's region is pending** the rewrite is deferred to the
     /// landing ([`CommitsLog::write_the_landing`]): the fence moves and the
-    /// entries at or below it are dropped, in memory, and the file — which
-    /// the landing rewrites whole behind the fence as it then stands — takes
-    /// nothing. The open's own compaction runs before the region is
-    /// recorded, so it writes.
+    /// entries at or below it are dropped, in memory ([`CommitsLog::trim_to`]),
+    /// and the file — which the landing rewrites whole behind the fence as it
+    /// then stands — takes nothing. The open's own compaction runs before the
+    /// region is recorded, so it writes.
     ///
     /// # Errors
     ///
     /// The rewrite's failure ([`RewriteFail`]), as [`CommitsLog::compact_to`]
     /// answers it; none while the region is pending, the rewrite deferred.
     fn compact_inner(&mut self, min_since: u64, force: bool) -> Result<bool, RewriteFail> {
-        let fence = min_since.max(self.min_since);
-        let drops = self.entries.keys().next().is_some_and(|&oldest| oldest <= fence);
-        self.min_since = fence;
-        if !force && !drops {
+        if !self.trim_to(min_since, force) {
             return Ok(false);
         }
-        self.entries = self.entries.split_off(&fence.saturating_add(1));
         if self.pending.is_some() {
+            self.rewrite_owed = true;
             return Ok(true);
         }
         self.rewrite_whole()?;
         Ok(true)
+    }
+
+    /// Moves the fence and drops the entries at or below it, in memory.
+    ///
+    /// It is every compaction's first half: the fence advances to the greater
+    /// of `min_since` and the one in force, never receding, and answers
+    /// whether the file is owed a rewrite — an entry dropped, or `force`.
+    fn trim_to(&mut self, min_since: u64, force: bool) -> bool {
+        let fence = min_since.max(self.min_since);
+        let drops = self.entries.keys().next().is_some_and(|&oldest| oldest <= fence);
+        self.min_since = fence;
+        if !force && !drops {
+            return false;
+        }
+        self.entries = self.entries.split_off(&fence.saturating_add(1));
+        true
     }
 
     /// Rewrites the whole file from the resident entries ([`rewrite`]).
@@ -1185,15 +1248,18 @@ impl CommitsLog {
                 self.offsets = offsets;
                 self.len = len;
                 self.rewritten = true;
+                self.rewrite_owed = false;
             }
             Err(RewriteFail::PastRename(e)) => {
                 // Said where the stop is set, not where it is set again: a
                 // stopped log is rewritten at the next compacting landing,
                 // its stop moving to that rewrite's last entry in silence.
+                // The new file is in place, so no rewrite is owed.
                 let first = self.stopped.is_none();
                 let last = self.entries.keys().next_back().copied().unwrap_or(self.min_since);
                 self.stopped = Some(last);
                 self.rewritten = true;
+                self.rewrite_owed = false;
                 if first {
                     self.lines.say(
                         Class::Failure,
@@ -1945,8 +2011,8 @@ pub(super) fn say_a_compact_twin(lines: &Lines, dir: &Path, name: &'static str) 
 /// kernel's one scan listed above it at or below `{h}`, the head at open —
 /// or, where the journal refused below it, those from the floor up, or the
 /// head alone. A pure value, pinned by `to_string()` in the unit suite;
-/// emitted under `Class::Open` by [`reconstruct`] at the walk's start,
-/// before any boundary is proved.
+/// emitted under `Class::Open` by the feed's `walk_and_land` at the walk's
+/// start, before any boundary is proved and ahead of the hold.
 pub(super) struct WalkOpenLine {
     pub covered: u64,
     pub boundaries: usize,
@@ -2066,10 +2132,11 @@ impl std::fmt::Display for WalkLandingLine {
 /// From the landing on that fence is the file's first line, which every
 /// later open reads and none lowers, so the act that re-covers the
 /// positions puts back, beside the segment, a `commits.log` that holds no
-/// such line. Said once per walk, by [`reconstruct`], where the first
-/// refusal is met: damage at rest is news while the walk still runs, and a
-/// walk of the retained window can run for hours. A pure value, pinned by
-/// `to_string()`; emitted under `Class::Failure`.
+/// such line. Said once per walk, where the first refusal is met — the
+/// list's by the feed's `walk_and_land`, right after the walk's first line;
+/// a boundary's by [`reconstruct`]: damage at rest is news while the walk
+/// still runs, and a walk of the retained window can run for hours. A pure
+/// value, pinned by `to_string()`; emitted under `Class::Failure`.
 pub(super) struct WalkRefusedLine<'a> {
     pub refusal: &'a WalkRefusal,
     pub fence: u64,
@@ -2149,12 +2216,14 @@ impl WalkControl {
     }
 
     /// Returns whether the stop has been asked.
-    fn stopped(&self) -> bool {
+    pub(super) fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
 
-    /// Returns the cadence in force: the boundary count and the interval.
-    fn cadence(&self) -> (u64, Duration) {
+    /// Returns the cadence in force: the step count and the interval.
+    ///
+    /// The region's walk counts boundaries by it, the set's sort positions.
+    pub(super) fn cadence(&self) -> (u64, Duration) {
         (
             self.progress_boundaries.load(Ordering::Relaxed).max(1),
             Duration::from_millis(self.progress_millis.load(Ordering::Relaxed)),
@@ -2165,9 +2234,10 @@ impl WalkControl {
 /// The cadence a long act's progress lines are said at.
 ///
 /// A line is due every so many steps or so long, whichever comes first —
-/// the walk's cadence (m15) and the open's classification of the bare
-/// positions `feed-index.log` lost, each handing in its figures at every
-/// step, so a cadence moved while the act runs is the one it keeps.
+/// the walk's cadence (m15), over the region's boundaries and over the bare
+/// positions `feed-index.log` lost that it sorts, each handing in its
+/// figures at every step, so a cadence moved while the act runs is the one
+/// it keeps.
 pub(super) struct ProgressCadence {
     /// The steps done and the moment, at the last line said.
     said: (usize, Instant),
@@ -2193,7 +2263,73 @@ impl ProgressCadence {
     }
 }
 
-/// What one walk came to ([`reconstruct`]).
+/// What the walk behind the listener has yet to land, as figures.
+///
+/// It is the feed's two pending states read together (`operations.md` §3.3
+/// step 2; §4 row 16): the region `(low, head]` a lost or torn `commits.log`
+/// left uncovered, and the bare positions `feed-index.log` lost — each at or
+/// below the log's coverage, a set and no contiguous region — that the walk
+/// has yet to classify ([`Unsorted`]). `Copy`, so the lines that name the
+/// walk's work, the standing line's clause, a checkpoint's landing line and
+/// a page's refusal carry it; the set's positions themselves stay the
+/// feed's. Empty where the log covers the head and the index classifies
+/// every bare position it holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FeedPending {
+    /// The region `(low, head]`, `low` covered and `head` the last of it.
+    pub region: Option<(u64, u64)>,
+    /// The bare positions the index lost that the walk has yet to sort.
+    pub unsorted: Option<Unsorted>,
+}
+
+impl FeedPending {
+    /// Returns whether nothing pends: no region, no unsorted position.
+    pub fn is_empty(&self) -> bool {
+        self.region.is_none() && self.unsorted.is_none()
+    }
+}
+
+/// The walk's work as a line names it.
+///
+/// The words: `positions ({low}, {head}]` for the region, `{n} bare
+/// positions the index lost` for the set, and the two joined by `and` where
+/// both pend; nothing where nothing does. The feed's open line, the dead
+/// walk's lines and the daemon's checkpoint landing line read it.
+impl std::fmt::Display for FeedPending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.region, self.unsorted) {
+            (Some((low, head)), Some(set)) => {
+                write!(
+                    f,
+                    "positions ({low}, {head}] and {} bare positions the index lost",
+                    set.count
+                )
+            }
+            (Some((low, head)), None) => write!(f, "positions ({low}, {head}]"),
+            (None, Some(set)) => write!(f, "{} bare positions the index lost", set.count),
+            (None, None) => Ok(()),
+        }
+    }
+}
+
+/// The bare positions `feed-index.log` lost, counted.
+///
+/// They are the positions the log holds bare above the index's coverage
+/// that no surviving index record classifies, which the walk behind the
+/// listener sorts from the journal — a world reconstruction a position and
+/// one below each run of them — and lands; a page that would reach one is
+/// refused meanwhile. The count, and the lowest and highest of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unsorted {
+    /// How many positions wait on the sort.
+    pub count: usize,
+    /// The lowest of them.
+    pub first: u64,
+    /// The highest of them.
+    pub last: u64,
+}
+
+/// What one walk of the region came to ([`reconstruct`]).
 ///
 /// It holds the boundaries proved, each with its classification, in
 /// position order; the smallest `since` the feed can honor from here on
@@ -2238,17 +2374,20 @@ pub(super) struct WalkRefusal {
 /// it kills. `skepd::Daemon::FEED_WALK_HOLD_NOTICE` re-exports it.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
-pub const FEED_WALK_HOLD_NOTICE: &str =
-    "test seam: held before the feed walk's first boundary; kill this process";
+pub const FEED_WALK_HOLD_NOTICE: &str = "test seam: the feed walk is held; kill this process";
 
 /// The test seam: a hold on the feed walk, armed before a daemon opens.
 ///
-/// A suite can serve requests against a daemon whose region is pending and
-/// release the walk at its own moment — the cell index walk's hold's form.
+/// A suite can serve requests against a daemon whose region or whose set is
+/// pending and release the walk at its own moment — the cell index walk's
+/// hold's form — or park the walk after it has sorted so many of the set's
+/// positions, the state a kill mid-sort leaves.
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub struct FeedWalkHold {
-    held: Mutex<bool>,
+    /// The step the walk parks at: `0` before its first position or
+    /// boundary, `k` after the k-th position sorted; `None` released.
+    held: Mutex<Option<u64>>,
     released: Condvar,
 }
 
@@ -2259,17 +2398,30 @@ pub struct FeedWalkHold {
 #[cfg(any(test, feature = "test-hooks"))]
 #[doc(hidden)]
 pub static FEED_WALK_HOLD: FeedWalkHold =
-    FeedWalkHold { held: Mutex::new(false), released: Condvar::new() };
+    FeedWalkHold { held: Mutex::new(None), released: Condvar::new() };
 
 #[cfg(any(test, feature = "test-hooks"))]
 impl FeedWalkHold {
     /// Arms the hold for every walk started from here on.
     ///
-    /// Each parks before its first boundary, after its `open:` line, writing
-    /// [`FEED_WALK_HOLD_NOTICE`].
+    /// Each parks before its first position or boundary, after its `open:`
+    /// lines, writing [`FEED_WALK_HOLD_NOTICE`].
     #[doc(hidden)]
     pub fn hold(&self) {
-        *self.held.lock() = true;
+        *self.held.lock() = Some(0);
+    }
+
+    /// Arms the hold after the k-th position of the set is sorted.
+    ///
+    /// Every walk started from here on parks once it has sorted and landed
+    /// `k` of the bare positions the index lost — writing
+    /// [`FEED_WALK_HOLD_NOTICE`] — and before the next; a walk whose set
+    /// holds no more than `k` never parks, landing everything. The daemon
+    /// dropped while it parks leaves the files a kill after `k` positions
+    /// leaves.
+    #[doc(hidden)]
+    pub fn hold_after_sorting(&self, k: u64) {
+        *self.held.lock() = Some(k);
     }
 
     /// Releases the hold.
@@ -2277,21 +2429,23 @@ impl FeedWalkHold {
     /// Every parked walk proceeds, and later walks never park.
     #[doc(hidden)]
     pub fn release(&self) {
-        *self.held.lock() = false;
+        *self.held.lock() = None;
         self.released.notify_all();
     }
 
-    /// Parks the walk while the hold is armed, writing the notice as it parks.
+    /// Parks the walk at `step` while the hold is armed for it.
     ///
     /// It is the walk's side, in timed waits, so the stop reaches a held
     /// walk: a Daemon dropped while its walk parks here ends the walk,
-    /// nothing written.
-    fn wait(&self, control: &WalkControl) {
+    /// nothing further written. The notice is written as it parks. The
+    /// feed's `walk_and_land` calls it at step `0` ahead of the first
+    /// position or boundary, and after each position of the set it lands.
+    pub(super) fn wait_at(&self, step: u64, control: &WalkControl) {
         let mut held = self.held.lock();
-        if *held {
+        if *held == Some(step) {
             skep_util::notice::emit(Class::Failure, FEED_WALK_HOLD_NOTICE);
         }
-        while *held && !control.stopped() {
+        while *held == Some(step) && !control.stopped() {
             self.released.wait_for(&mut held, Duration::from_millis(50));
         }
     }
@@ -2301,8 +2455,8 @@ impl FeedWalkHold {
 ///
 /// It is behind `skepd::Daemon::panic_the_feed_walk` — process-wide, armed
 /// before the open or while the walk is held, fired once after the hold and
-/// before the first boundary, and disarmed as it fires: the shape the walk
-/// thread's death has, which its catch contains.
+/// before the first position or boundary, and disarmed as it fires: the
+/// shape the walk thread's death has, which its catch contains.
 #[cfg(any(test, feature = "test-hooks"))]
 static FEED_WALK_FAULT: AtomicBool = AtomicBool::new(false);
 
@@ -2315,13 +2469,16 @@ pub fn arm_the_feed_walks_fault() {
 
 /// Fires the walk's side of its panic seam, where armed.
 ///
+/// The feed's `walk_and_land` fires it after the hold and before the first
+/// position or boundary.
+///
 /// # Panics
 ///
 /// Panics where the seam is armed: a panic whose payload is a literal, so
 /// the binary's hook carries it, located at the caller's site.
 #[cfg(any(test, feature = "test-hooks"))]
 #[track_caller]
-fn fire_the_feed_walks_fault() {
+pub(super) fn fire_the_feed_walks_fault() {
     if FEED_WALK_FAULT.swap(false, Ordering::AcqRel) {
         panic!("the test seam's fault in the feed walk");
     }
@@ -2539,24 +2696,42 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines
     }
 }
 
-/// Walks `(low, head]` (`operations.md` §3.3 step 2; §1.1 m15).
+/// What the kernel's one scan listed for the walk ([`list_boundaries`]).
 ///
-/// It enumerates the committed boundaries in `(low, head]` in one scan of
-/// the kernel's markers (`Kernel::boundaries_above`, every boundary above
-/// `low` from one base — the attest store's seam, here a list), says the
-/// `open:` line with their count, and proves each one ascending by the
-/// kernel's bounded replay — an `Ok` `world_at` proves a boundary —
-/// classifying each from the journal on the way up: the walk holds the world
-/// at the boundary below and diffs the two (`derived_journal`) for the
-/// documents that commit touched and the terms its row can answer.
-/// Ascending, so the `progress:` line's `{p}` climbs to `{h}`: the lowest
-/// boundary's predecessor is `low` itself where `low` is a boundary —
-/// genesis, or the last recorded position — and where it is a fence (a
-/// previous walk's stopping point, or a compaction's below the reclaim
-/// floor) its world refuses and the boundary above it is unclassifiable
-/// (`docs: None`); the head's world is `head_world`, the open's own snapshot
-/// (no replay), since the live root moves past the head while the board
-/// serves.
+/// It is the region `(low, head]` it was made for; the boundaries to prove,
+/// ascending; the smallest `since` the feed honors from here on where the
+/// scan refused below `low` ([`CommitsLog::min_since`]'s number); and the
+/// refusal itself where the list was refused, which the caller says where
+/// it meets it ([`WalkRefusedLine`]), ahead of the first boundary.
+pub(super) struct Listing {
+    /// The region's lower edge, covered.
+    pub low: u64,
+    /// The region's last position, the head at open.
+    pub head: u64,
+    pub boundaries: Vec<u64>,
+    pub min_since: Option<u64>,
+    pub refusal: Option<WalkRefusal>,
+}
+
+/// Walks `(low, head]`, listed (`operations.md` §3.3 step 2; §1.1 m15).
+///
+/// `listing` is the kernel's one scan ([`list_boundaries`]), which the
+/// caller took to say the walk's `open:` line with the count and the list's
+/// refusal where it met one — the feed's `walk_and_land`, which holds the
+/// walk and sorts the bare positions the index lost ahead of this. It proves
+/// each boundary ascending by the kernel's bounded replay — an `Ok`
+/// `world_at` proves a boundary — classifying each from the journal on the
+/// way up: the walk holds the world at the boundary below and diffs the two
+/// (`derived_journal`) for the documents that commit touched and the terms
+/// its row can answer. Ascending, so the `progress:` line's `{p}` climbs to
+/// `{h}`: the lowest boundary's predecessor is `low` itself where `low` is a
+/// boundary — genesis, or the last recorded position — and where it is a
+/// fence (a previous walk's stopping point, or a compaction's below the
+/// reclaim floor) its world refuses and the boundary above it is
+/// unclassifiable (`docs: None`); the head's world is `head_world`, the
+/// open's own snapshot (no replay), since the live root moves past the head
+/// while the board serves. `started` is the walk thread's start, which the
+/// `progress:` lines' and the landing line's durations are measured from.
 ///
 /// Answers the boundaries proved (ascending, each with its classification)
 /// and, where the journal stopped answering, the smallest `since` the feed
@@ -2571,47 +2746,22 @@ fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>, lines: &Lines
 /// compaction; any other refusal (corrupt, I/O, a listed boundary the
 /// replay will not prove) — the feed reaches down to the boundary above
 /// it and no further, the first such refusal said where it is met, in the
-/// kernel's words, with the fence as it then stands ([`WalkRefusedLine`]).
-/// `None` where the stop was asked before the walk completed: nothing is
-/// landed.
-///
-/// **The hold and the fault** (test seams): the walk parks after its
-/// `open:` line — and the list's own refusal, where it met one — and before
-/// its first boundary while the hold is armed, so a suite serves against a
-/// pending region or kills a child at the notice.
-///
-/// # Panics
-///
-/// Panics where the fault is armed: the walk fires its panic arm there,
-/// after the hold and before its first boundary, so a suite drives the
-/// thread's catch.
+/// kernel's words, with the fence as it then stands ([`WalkRefusedLine`]),
+/// where the list's own was not. `None` where the stop was asked before the
+/// walk completed: nothing is landed.
 pub(super) fn reconstruct(
     kernel: &Kernel<World>,
     head_world: &World,
-    low: u64,
-    head: u64,
+    listing: Listing,
+    started: Instant,
     lines: &Lines,
     control: &WalkControl,
 ) -> Option<WalkOutcome> {
-    let started = Instant::now();
-    let (listed, mut min_since, list_refusal) = list_boundaries(kernel, low, head);
-    lines.say(Class::Open, WalkOpenLine { covered: low, boundaries: listed.len(), head });
-    // The journal's first refusal, said where it is met: the list's, here;
-    // else the first boundary's that moves the fence, below, a mid-walk
-    // reclamation aside.
+    let Listing { low, head, boundaries: listed, mut min_since, refusal: list_refusal } = listing;
+    // The journal's first refusal, said where it is met: the list's, by the
+    // caller; else the first boundary's that moves the fence, below, a
+    // mid-walk reclamation aside.
     let mut refusal_said = list_refusal.is_some();
-    if let Some(refusal) = &list_refusal {
-        let fence = min_since.unwrap_or(low);
-        lines.say(Class::Failure, WalkRefusedLine { refusal, fence });
-    }
-    #[cfg(any(test, feature = "test-hooks"))]
-    {
-        FEED_WALK_HOLD.wait(control);
-        if control.stopped() {
-            return None;
-        }
-        fire_the_feed_walks_fault();
-    }
     // The journal's two answers off the two worlds, or — with no world
     // below — unclassifiable, and no term.
     let classify = |at: u64, below: Option<&World>, upper: &World| match below {
@@ -2686,38 +2836,42 @@ pub(super) fn reconstruct(
 
 /// Lists the boundaries the walk proves, `(low, head]` ascending.
 ///
-/// They are read in one scan. Where the scan refused below `low`, it answers
-/// the fence the feed honors from there too: `Reclaimed` naming a floor
-/// above `low` is the base below `low` gone, so the list is asked again at
-/// the floor, a second scan — the floor's own boundary, which the base
-/// embodying it answers, leads the list — and the fence is one below it; a
-/// refusal naming no floor, at-rest damage, or the list at the floor refused
-/// in turn leaves the head alone to prove, the fence one below it, and that
-/// refusal is answered beside them ([`WalkRefusal`]). A floor past the head
-/// names an empty list: everything the region held is reclaimed.
-fn list_boundaries(
-    kernel: &Kernel<World>,
-    low: u64,
-    head: u64,
-) -> (Vec<u64>, Option<u64>, Option<WalkRefusal>) {
+/// They are read in one scan of the kernel's markers
+/// (`Kernel::boundaries_above`, every boundary above `low` from one base —
+/// the attest store's seam, here a list). Where the scan refused below
+/// `low`, it answers the fence the feed honors from there too: `Reclaimed`
+/// naming a floor above `low` is the base below `low` gone, so the list is
+/// asked again at the floor, a second scan — the floor's own boundary, which
+/// the base embodying it answers, leads the list — and the fence is one
+/// below it; a refusal naming no floor, at-rest damage, or the list at the
+/// floor refused in turn leaves the head alone to prove, the fence one below
+/// it, and that refusal is answered beside them ([`WalkRefusal`]). A floor
+/// past the head names an empty list: everything the region held is
+/// reclaimed. The feed's `walk_and_land` takes it ahead of the walk's
+/// `open:` line, whose count is the list's, and hands it to
+/// [`reconstruct`].
+pub(super) fn list_boundaries(kernel: &Kernel<World>, low: u64, head: u64) -> Listing {
     let at_or_below_head = |list: Vec<(Seq, Option<Attestation>)>| -> Vec<u64> {
         list.into_iter().map(|(seq, _)| seq.0).filter(|&at| at > low && at <= head).collect()
     };
+    let listing = |boundaries: Vec<u64>, min_since: Option<u64>, refusal: Option<WalkRefusal>| {
+        Listing { low, head, boundaries, min_since, refusal }
+    };
     let refused = |at: u64, e: HistoryError| {
         let refusal = WalkRefusal { at, list: true, account: e.to_string() };
-        (vec![head], Some(head.saturating_sub(1)), Some(refusal))
+        listing(vec![head], Some(head.saturating_sub(1)), Some(refusal))
     };
     match kernel.boundaries_above(Seq(low)) {
-        Ok(list) => (at_or_below_head(list), None, None),
+        Ok(list) => listing(at_or_below_head(list), None, None),
         Err(HistoryError::Reclaimed { floor: Some(floor), .. }) if floor.0 > low => {
             if floor.0 > head {
-                return (Vec::new(), Some(floor.0 - 1), None);
+                return listing(Vec::new(), Some(floor.0 - 1), None);
             }
             match kernel.boundaries_above(floor) {
                 Ok(above) => {
                     let mut list = vec![floor.0];
                     list.extend(at_or_below_head(above));
-                    (list, Some(floor.0 - 1), None)
+                    listing(list, Some(floor.0 - 1), None)
                 }
                 Err(e) => refused(floor.0, e),
             }
@@ -3013,6 +3167,7 @@ impl CommitsLog {
             compacted_at_open: None,
             floor_at_open: None,
             pending: None,
+            rewrite_owed: false,
             last_time: 0,
             len: 0,
             lines: Lines::new(),
@@ -3049,6 +3204,7 @@ impl CommitsLog {
             compacted_at_open: None,
             floor_at_open: None,
             pending: Some((low, head)),
+            rewrite_owed: false,
             last_time: 0,
             len,
             lines: Lines::new(),

@@ -281,18 +281,42 @@ fn the_checkpoint_signal_keeps_a_raise_coalesces_a_burst_and_stops_every_wait_fo
 /// with the position the refused write would have taken — and the door it
 /// goes through keeps it in the record under its class word.
 /// THE WALK THREAD's TWO LINES at fixed inputs: the catch's consequence
-/// (row 41) with the payload and the region, and the OS's refusal of the
-/// thread with the cause and what runs instead.
+/// (row 41) with the payload and what the walk left — the region, the bare
+/// positions the index lost, or both — and the OS's refusal of the thread
+/// with the cause and what runs instead.
 #[test]
 fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
+    let region = FeedPending { region: Some((24, 30)), unsorted: None };
+    let set = Some(Unsorted { count: 5, first: 3, last: 19 });
+    let payload = "the test seam's fault in the feed walk";
     assert_eq!(
-        FeedWalkEndedLine { payload: "the test seam's fault in the feed walk", low: 24, head: 30 }
-            .to_string(),
+        FeedWalkEndedLine { payload, pending: region }.to_string(),
         "the feed walk ended: the test seam's fault in the feed walk; positions (24, 30] stay \
          uncovered — /changes refuses pages into them until a restart, which walks again; until \
          that restart commits.log takes no line: every write since this open is held in memory \
          alone, and the restart's walk re-covers each as a bare entry, its key and its time lost \
          — restart soon"
+    );
+    assert_eq!(
+        FeedWalkEndedLine {
+            payload,
+            pending: FeedPending { region: Some((24, 30)), unsorted: set }
+        }
+        .to_string(),
+        "the feed walk ended: the test seam's fault in the feed walk; positions (24, 30] stay \
+         uncovered and 5 bare positions the index lost stay unsorted — /changes refuses pages \
+         into them until a restart, which walks again; until that restart commits.log takes no \
+         line: every write since this open is held in memory alone, and the restart's walk \
+         re-covers each as a bare entry, its key and its time lost — restart soon"
+    );
+    assert_eq!(
+        FeedWalkEndedLine { payload, pending: FeedPending { region: None, unsorted: set } }
+            .to_string(),
+        "the feed walk ended: the test seam's fault in the feed walk; 5 bare positions the index \
+         lost stay unsorted — /changes refuses pages reaching them until a restart, which sorts \
+         them again; until that restart the change feed's index files take no line: every write \
+         since this open enters the feed's memory alone, which the restart's open re-derives \
+         from commits.log — restart soon"
     );
     // A formatted payload's text may have been made from a record's values,
     // so only a literal rides the line.
@@ -302,9 +326,16 @@ fn the_feed_walks_catch_and_refusal_lines_render_the_ruled_words() {
     assert_eq!(payload_text(formatted.as_ref()), "a panic", "a formatted payload never rides");
     let e = io::Error::other("Resource temporarily unavailable");
     assert_eq!(
-        FeedWalkRefusedLine { error: &e, low: 24, head: 30 }.to_string(),
+        FeedWalkRefusedLine { error: &e, pending: region }.to_string(),
         "the feed walk: the OS refused its thread (Resource temporarily unavailable); positions \
          (24, 30] are walked at the open instead, the board serving once the walk lands"
+    );
+    assert_eq!(
+        FeedWalkRefusedLine { error: &e, pending: FeedPending { region: None, unsorted: set } }
+            .to_string(),
+        "the feed walk: the OS refused its thread (Resource temporarily unavailable); 5 bare \
+         positions the index lost are walked at the open instead, the board serving once the \
+         walk lands"
     );
 }
 
@@ -811,15 +842,18 @@ fn the_head_writers_row_40_goes_through_the_classed_door() {
 ///
 /// A kernel that keeps no journal refuses every history read, so one open
 /// over commits the feed never saw meets all three: the bare positions the
-/// index lost (`commits.log` holds two, `feed-index.log` nothing), the attest
-/// store's rebuild above its empty file, and the walk of the region the log
-/// does not cover. Each is said once in the kernel's words, the walk's where
-/// it meets it, with the fence the refusal moved — and `/changes` answers 410
-/// below that fence once the walk lands, as the line says. The open closes
-/// with what it classified and how far back the feed answers. A second open
-/// over what the first wrote has nothing uncovered and says none of the
-/// three; its report names the attest store's size and its slots, the
-/// figures `Commits::attest_store_figures` reads.
+/// index lost (`commits.log` holds two, `feed-index.log` nothing), which the
+/// walk thread sorts behind the listener, the attest store's rebuild above
+/// its empty file, and the walk of the region the log does not cover — the
+/// sort and the walk one pass of the one thread. Each is said once in the
+/// kernel's words, the walk's where it meets it, with the fence the refusal
+/// moved — and `/changes` answers 410 below that fence once the walk lands,
+/// as the line says. The walk's `open:` and `landing:` lines for the set
+/// bracket the sort, and the open closes with how far back the feed answers
+/// and what waits on the walk. A second open over what the first wrote has
+/// nothing uncovered and says none of the three; its report names the attest
+/// store's size and its slots, the figures `Commits::attest_store_figures`
+/// reads.
 #[test]
 fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     use skep_kernel::{CheckpointPolicy, Durability, HistoryError, KernelConfig, SaltSource};
@@ -845,7 +879,7 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     std::fs::write(dir.path().join("commits.log"), "{\"at\":1}\n{\"at\":2}\n").expect("the log");
     let wp = Commits::open(dir.path(), &engine, Arc::new(CellIndex::new())).expect("open");
     let deadline = Instant::now() + Duration::from_secs(30);
-    while wp.feed_pending_region().is_some() {
+    while wp.feed_walk_pending() {
         assert!(Instant::now() < deadline, "the walk lands");
         thread::sleep(Duration::from_millis(5));
     }
@@ -855,7 +889,7 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     let all = said.join("\n");
     for line in [
         "open: feed-index.log covers to position 0: 2 bare positions are classified from the \
-         journal before the board serves, 3 world reconstructions in all"
+         journal behind the listener, 3 world reconstructions in all"
             .to_string(),
         format!(
             "failure: feed-index.log: the journal refused to classify 2 bare positions, the \
@@ -878,19 +912,24 @@ fn every_journal_refusal_the_feeds_open_meets_is_said_in_the_kernels_words() {
     ] {
         assert_eq!(said.iter().filter(|l| **l == line).count(), 1, "{line}\n--\n{all}");
     }
-    // The open's own closing lines: what it classified — no reconstruction
-    // answered — and how far back the feed answers with the region the walk
-    // has yet to land.
-    let classified = "open: feed-index.log: 0 of 2 bare positions classified from the journal, 0 \
-                      world reconstructions, in ";
+    // The walk's landing line for the set — no reconstruction answered — and
+    // the open's own closing line: how far back the feed answers, with the
+    // region and the set the walk has yet to land.
+    let classified = "landing: feed-index.log: 0 of 2 bare positions classified from the \
+                      journal, 0 world reconstructions, in ";
     let reach = format!(
         "open: the change feed answers from position 1 to position {head}: commits.log 2 \
-         entries, 2 of them bare; positions (2, {head}] wait on the walk, in "
+         entries, 2 of them bare; positions (2, {head}] and 2 bare positions the index lost wait \
+         on the walk, in "
     );
-    for (prefix, what) in [(classified, "the classification"), (reach.as_str(), "the feed")] {
+    for (prefix, what) in [(classified, "the sort's landing"), (reach.as_str(), "the feed")] {
         let found = said.iter().filter(|l| l.starts_with(prefix) && l.ends_with(" ms")).count();
         assert_eq!(found, 1, "{what}'s closing line, once:\n{all}");
     }
+    assert!(
+        !all.contains("before the board serves"),
+        "nothing is classified before the board serves:\n{all}"
+    );
     let landing = format!(
         "landing: commits.log re-covered positions (2, {head}]: 1 boundaries walked, 1 of them \
          unclassifiable and served to every class, in "
@@ -1124,9 +1163,10 @@ fn served(answer: ChangesAnswer) -> std::collections::BTreeMap<u64, serde_json::
 /// first, a draft minted while the walk is held, a directory on the index's
 /// and the bitmap's temp names, the landing, and a draft minted after it.
 /// Each refusal is said once with the fence the file stands at, and both
-/// files are stopped since it; the next open classifies the region from the
-/// journal, the guest's page from the fence carries none of the drafts, and
-/// the owner's names each recorded draft by its document.
+/// files are stopped since it; the next open pends the region's bare
+/// positions, which the walk sorts behind the listener — its `open:` line
+/// naming them — and, landed, the guest's page from the fence carries none
+/// of the drafts and the owner's names each recorded draft by its document.
 #[test]
 fn a_derived_file_whose_landing_rewrite_fails_takes_no_line_after_it() {
     use skep_namespace::SYSTEM_PRINCIPAL;
@@ -1151,10 +1191,10 @@ fn a_derived_file_whose_landing_rewrite_fails_takes_no_line_after_it() {
     let said = wp.lines_said().lock().clone();
     let all = said.join("\n");
     let tail = format!(
-        "; the file stands fenced below the region at position {low} and takes no further line, \
-         so the next open re-derives it — the board serves from memory, and nothing is lost; \
-         check the volume, its device and the board user's quota before that restart: its open \
-         writes this file"
+        "; the file stands fenced at position {low}, short of what the walk landed, and takes no \
+         further line, so the next open re-derives above it — the board serves from memory, and \
+         nothing is lost; check the volume, its device and the board user's quota before that \
+         restart: its open writes this file"
     );
     for name in ["feed-index.log", "feed-masked.log"] {
         let head =
@@ -1176,12 +1216,22 @@ fn a_derived_file_whose_landing_rewrite_fails_takes_no_line_after_it() {
         std::fs::remove_dir(obstacle).expect("the obstacle goes");
     }
     let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(
+        wp.feed_pending_set(),
+        [board[1], board[2], board[3]],
+        "the next open pends the region's bare positions, which the stopped index never took"
+    );
+    wait_until("the sort's landing", || !wp.feed_walk_pending());
     let classifying = format!(
         "open: feed-index.log covers to position {low}: 3 bare positions are classified from the \
-         journal before the board serves, 4 world reconstructions in all"
+         journal behind the listener, 4 world reconstructions in all"
     );
     let said = wp.lines_said().lock().clone();
-    assert!(said.contains(&classifying), "the next open re-derives:\n{}", said.join("\n"));
+    assert!(
+        said.contains(&classifying),
+        "the walk sorts them behind the listener:\n{}",
+        said.join("\n")
+    );
     let snap = engine.kernel().snapshot();
     let guest = served(page_from(&wp, &FeedClass::of(snap.world(), None), low));
     assert!(guest.is_empty(), "no draft reaches the guest: {guest:?}");
@@ -1328,15 +1378,12 @@ fn a_panic_in_the_walk_run_at_the_open_is_caught_and_the_open_goes_on() {
     let wp = open_the_write_path(dir.path(), &engine);
     assert!(!REFUSE_THE_FEED_WALKS_THREAD.load(Ordering::Acquire), "the seam fired once");
     assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends for the uptime");
-    assert_eq!(wp.feed_walk_gone(), Some((low, head)), "the flag the standing line reads");
+    let pending = FeedPending { region: Some((low, head)), unsorted: None };
+    assert_eq!(wp.feed_walk_gone(), Some(pending), "the flag the standing line reads");
     let said = wp.lines_said().lock().clone();
     let all = said.join("\n");
-    let ended = FeedWalkEndedLine {
-        payload: "the test seam's fault in the feed walk",
-        low,
-        head,
-    }
-    .to_string();
+    let ended = FeedWalkEndedLine { payload: "the test seam's fault in the feed walk", pending }
+        .to_string();
     assert_eq!(
         said.iter().filter(|l| **l == format!("failure: {ended}")).count(),
         1,
@@ -1354,11 +1401,11 @@ fn a_panic_in_the_walk_run_at_the_open_is_caught_and_the_open_goes_on() {
 /// them, so a kill between the two leaves `commits.log` as the open found it
 /// and the next open walks the region again behind the listener. The other
 /// order would leave the log whole over derived files fenced below the
-/// region, and the next open would classify every bare position of it, a
-/// world reconstruction each, before the board serves. The seam ends the
+/// region, and the next open would find every bare position of it unsorted,
+/// a world reconstruction each for the walk thread. The seam ends the
 /// landing between its rewrites, leaving the files as a kill there leaves
 /// them; opened again with the walk held, the region pends from its lower
-/// edge, no bare position is classified at the open, and the walk lands it.
+/// edge, no bare position is left for the sort, and the walk lands it.
 #[test]
 fn a_landing_cut_between_its_rewrites_leaves_the_region_to_walk_again() {
     let _walks = one_walk_at_a_time();
@@ -1373,10 +1420,11 @@ fn a_landing_cut_between_its_rewrites_leaves_the_region_to_walk_again() {
     FEED_WALK_HOLD.hold();
     let wp = open_the_write_path(dir.path(), &engine);
     assert_eq!(wp.feed_pending_region(), Some((low, head)), "the region pends from its edge");
+    assert!(wp.feed_pending_set().is_empty(), "no bare position is left for the sort");
     let said = wp.lines_said().lock().clone();
     assert!(
         !said.iter().any(|l| l.contains("bare positions are classified from the journal")),
-        "no bare position is classified at the open:\n{}",
+        "no sort is announced:\n{}",
         said.join("\n")
     );
     FEED_WALK_HOLD.release();
@@ -1783,19 +1831,21 @@ fn the_walk_loads_one_base_per_boundary_it_proves() {
     );
 }
 
-/// Checks that the open rebuilds each bare position's world once.
+/// Checks that the walk rebuilds each bare position's world once.
 ///
-/// Where `feed-index.log` is lost, the open classifies every bare position
-/// from the journal before the board serves (PUB-6.45). A run of them is
-/// what a walk's landing writes, and the world at one is the world below the
-/// next, so the open carries it forward as the walk does: the run costs one
-/// reconstruction a position and one below its first, and the head's world
-/// is the open's snapshot. Over eight draft mints with `commits.log` torn
-/// back to the second, the walk lands six bare positions; with the index
-/// lost, the reopen loads the floor probe's base and six for the run — the
-/// seven the walk loads for the same six — classifies each position as the
-/// walk did, and says the six it will pay ahead of paying them and the six
-/// it paid once done.
+/// Where `feed-index.log` is lost, the walk thread classifies every bare
+/// position from the journal behind the listener (PUB-6.45), the open
+/// paying no reconstruction. A run of them is what a walk's landing writes,
+/// and the world at one is the world below the next, so the sort carries it
+/// forward as the region's walk does: the run costs one reconstruction a
+/// position and one below its first, and the head's world is the open's
+/// snapshot. Over eight draft mints with `commits.log` torn back to the
+/// second, the walk lands six bare positions; with the index lost, the
+/// reopen loads the floor probe's base alone and returns at once with the
+/// six pending; the sort then loads six for the run — the seven the region's
+/// walk loads for the same six, less the landing's probe — classifies each
+/// position as the walk did, and says the six it will pay ahead of paying
+/// them and the six it paid once done, the landing's probe one more base.
 #[test]
 fn a_lost_feed_index_reconstructs_each_bare_position_once() {
     let _walks = one_walk_at_a_time();
@@ -1826,21 +1876,280 @@ fn a_lost_feed_index_reconstructs_each_bare_position_once() {
     );
     std::fs::remove_file(&index_path).expect("lose the index");
     let before = engine.kernel().bases_loaded();
+    FEED_WALK_HOLD.hold();
     let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(engine.kernel().bases_loaded() - before, 1, "the open pays the floor probe alone");
+    assert_eq!(wp.feed_pending_set(), board[2..], "the six pend for the walk");
+    FEED_WALK_HOLD.release();
+    wait_until("the sort's landing", || !wp.feed_walk_pending());
     assert_eq!(
         engine.kernel().bases_loaded() - before,
-        1 + 6,
-        "the floor probe, then the world below the run and one a bare position but the head"
+        1 + 6 + 1,
+        "the open's probe; the world below the run and one a bare position but the head; the \
+         landing's probe"
     );
     assert_eq!(index(), walked, "each position classified as the walk classified it");
     let said = wp.lines_said().lock().clone();
     let all = said.join("\n");
-    let planned = "open: feed-index.log covers to position 0: 6 bare positions are classified \
-                   from the journal before the board serves, 6 world reconstructions in all";
-    let found = said.iter().filter(|l| l.as_str() == planned).count();
+    // The index's coverage as the open left it: rewritten fenced below the
+    // first unsorted position, at the second mint.
+    let planned = format!(
+        "open: feed-index.log covers to position {}: 6 bare positions are classified from the \
+         journal behind the listener, 6 world reconstructions in all",
+        board[1]
+    );
+    let found = said.iter().filter(|l| **l == planned).count();
     assert_eq!(found, 1, "the reconstructions counted ahead of paying them:\n{all}");
-    let paid = "open: feed-index.log: 6 of 6 bare positions classified from the journal, 6 \
+    let paid = "landing: feed-index.log: 6 of 6 bare positions classified from the journal, 6 \
                 world reconstructions, in ";
     let found = said.iter().filter(|l| l.starts_with(paid) && l.ends_with(" ms")).count();
     assert_eq!(found, 1, "the reconstructions paid:\n{all}");
+}
+
+/// Checks that a lost index is sorted behind the listener, the open serving.
+///
+/// Over eight draft mints with `commits.log` torn back to the second and
+/// walked, the index lost: the reopen returns at once with the six bare
+/// positions pending and the four files fenced below the first of them —
+/// the walk held. A page that would reach an unsorted position is refused
+/// as the region's pages are, naming the set; a page whose rows all lie
+/// below the first unsorted position serves with `more: true`; a page from
+/// the head serves. A draft minted while the set pends takes its line in
+/// `commits.log` and in no index file. Released, the walk lands: the pages
+/// equal a never-lost board's, the write among them, every index file
+/// covering the head and agreeing with the twins.
+#[test]
+fn a_lost_feed_index_is_sorted_behind_the_listener_and_pages_reaching_it_wait() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let board: Vec<u64> = (0..8).map(|_| mint_a_draft(&wp, &stores).1).collect();
+    drop(wp);
+    tear_to(dir.path(), board[1]);
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let snap = engine.kernel().snapshot();
+    let owner = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    let before = page_object(page_from(&wp, &owner, 0));
+    drop(wp);
+    std::fs::remove_file(dir.path().join("feed-index.log")).expect("lose the index");
+    let log_before = std::fs::read(dir.path().join("commits.log")).expect("commits.log");
+
+    FEED_WALK_HOLD.hold();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(wp.feed_pending_set(), board[2..], "every bare position the index lost pends");
+    assert_eq!(wp.feed_pending_region(), None, "the log covers the head");
+    let coverage = |name: &str| -> u64 {
+        std::fs::read_to_string(dir.path().join(name))
+            .expect(name)
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a line is JSON"))
+            .filter_map(|r| r.get("covered").or(r.get("at"))?.as_u64())
+            .max()
+            .unwrap_or(0)
+    };
+    for name in ["feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"] {
+        assert_eq!(coverage(name), board[1], "{name} is fenced below the set");
+    }
+    let snap = engine.kernel().snapshot();
+    let owner = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    let limit = |n: usize| std::num::NonZeroUsize::new(n).expect("non-zero");
+    let page = |since: u64, n: usize| {
+        wp.changes(
+            &owner,
+            &ChangesQuery { since, limit: limit(n), under: None, drafts_only: false },
+        )
+    };
+    let refused = |answer: ChangesAnswer| match answer {
+        ChangesAnswer::Rebuilding { pending } => pending,
+        other => panic!("refused, naming the set: {other:?}"),
+    };
+    let pending = refused(page(board[1], 1));
+    assert_eq!(
+        pending,
+        FeedPending {
+            region: None,
+            unsorted: Some(Unsorted { count: 6, first: board[2], last: board[7] }),
+        },
+        "a page reaching the first unsorted position is refused, the set named"
+    );
+    refused(page(0, 3));
+    let below = page_object(page(0, 2));
+    assert_eq!(
+        below["changes"].as_array().expect("rows").len(),
+        2,
+        "a page whose rows lie below the set serves"
+    );
+    assert_eq!(below["more"], serde_json::Value::Bool(true), "and says more follows");
+    let above = page_object(page(board[7], 4));
+    assert!(above["changes"].as_array().expect("rows").is_empty(), "from the head: nothing yet");
+
+    // A write while the set pends: the log takes its line, no index file does.
+    let (held_doc, held_at) = mint_a_draft(&wp, &stores);
+    let log_now = std::fs::read(dir.path().join("commits.log")).expect("commits.log");
+    assert!(log_now.len() > log_before.len(), "commits.log keeps appending");
+    for name in ["feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"] {
+        assert_eq!(coverage(name), board[1], "{name} takes no line while the set pends");
+    }
+    let served = served(page(board[7], 4));
+    assert_eq!(served.keys().copied().collect::<Vec<_>>(), [held_at], "served from memory");
+
+    FEED_WALK_HOLD.release();
+    wait_until("the sort's landing", || !wp.feed_walk_pending());
+    let after = page_object(page(0, 4096));
+    let before_rows = before["changes"].as_array().expect("rows");
+    let after_rows = after["changes"].as_array().expect("rows");
+    assert_eq!(&after_rows[..before_rows.len()], before_rows.as_slice(), "as never lost");
+    let last = after_rows.last().expect("the write");
+    assert_eq!(last["at"].as_u64(), Some(held_at));
+    assert_eq!(last["docs"], serde_json::json!([held_doc.to_string()]), "the write, whole");
+    for name in ["feed-index.log", "feed-offsets.log", "feed-masked.log", "feed-streams.log"] {
+        assert_eq!(coverage(name), held_at, "{name} covers the head after the landing");
+    }
+    let said = wp.lines_said().lock().clone();
+    assert!(
+        said.iter().any(|l| l.starts_with("landing: feed-index.log: 6 of 6 bare positions")),
+        "the landing line:\n{}",
+        said.join("\n")
+    );
+}
+
+/// Checks that a kill mid-sort keeps the positions sorted so far.
+///
+/// Over the same board, the hold armed after the third position: the walk
+/// sorts three and parks, each landed and appended to the index as it was
+/// sorted; the write path dropped there — the stop ends the walk with
+/// nothing further written, a kill's shape — and reopened with the walk
+/// held, the next open pends the three left and never the three sorted,
+/// pays no reconstruction itself, and the released walk lands the rest: the
+/// pages equal the never-lost board's, and each position's index record
+/// stands once.
+#[test]
+fn a_kill_mid_sort_keeps_the_positions_sorted_so_far() {
+    use skep_namespace::SYSTEM_PRINCIPAL;
+
+    let _walks = one_walk_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let board: Vec<u64> = (0..8).map(|_| mint_a_draft(&wp, &stores).1).collect();
+    drop(wp);
+    tear_to(dir.path(), board[1]);
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("the walk's landing", || wp.feed_pending_region().is_none());
+    let snap = engine.kernel().snapshot();
+    let owner = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    let before = served(page_from(&wp, &owner, 0));
+    drop(wp);
+    let index_path = dir.path().join("feed-index.log");
+    std::fs::remove_file(&index_path).expect("lose the index");
+
+    FEED_WALK_HOLD.hold_after_sorting(3);
+    let wp = open_the_write_path(dir.path(), &engine);
+    wait_until("three sorted", || wp.feed_pending_set() == board[5..]);
+    let index_ats = || -> Vec<u64> {
+        std::fs::read_to_string(&index_path)
+            .expect("feed-index.log")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a line is JSON"))
+            .filter_map(|r| r.get("at")?.as_u64())
+            .collect()
+    };
+    assert_eq!(
+        index_ats(),
+        board[..5],
+        "the two recorded positions the open wrote, then each sorted position appended as it \
+         was sorted"
+    );
+    drop(wp);
+    FEED_WALK_HOLD.release();
+
+    FEED_WALK_HOLD.hold();
+    let probes = engine.kernel().bases_loaded();
+    let wp = open_the_write_path(dir.path(), &engine);
+    assert_eq!(engine.kernel().bases_loaded() - probes, 1, "the open pays its floor probe alone");
+    assert_eq!(wp.feed_pending_set(), board[5..], "the three left pend, the three sorted do not");
+    FEED_WALK_HOLD.release();
+    wait_until("the sort's landing", || !wp.feed_walk_pending());
+    let snap = engine.kernel().snapshot();
+    let owner = FeedClass::of(snap.world(), Some(SYSTEM_PRINCIPAL));
+    assert_eq!(served(page_from(&wp, &owner, 0)), before, "the pages as never lost");
+    let ats = index_ats();
+    let mut once = ats.clone();
+    once.sort_unstable();
+    once.dedup();
+    assert_eq!(ats, once, "each position's record stands once: {ats:?}");
+    assert_eq!(ats, board, "every position classified, the bare ones among them");
+    let said = wp.lines_said().lock().clone();
+    assert!(
+        said.iter().any(|l| l.starts_with("landing: feed-index.log: 3 of 3 bare positions")),
+        "the second open's walk lands the three left:\n{}",
+        said.join("\n")
+    );
+}
+
+/// MEASUREMENT (#461), run by hand: the open over a lost `feed-index.log`.
+///
+/// Seeds `SKEP_MEASURE_N` draft mints (256 by default — the gate re-admits
+/// every ignored test, so the default is a smoke run; the figures of record
+/// were taken at 4,096), a checkpoint by hand every 1,024 as the daemon's
+/// cadence takes one; writes every position bare into `commits.log`, as a
+/// walk's landing writes them; loses the index; and times the open — which
+/// returns at once — then the walk's sort behind the listener until nothing
+/// pends. Prints the figures and the lines said.
+#[test]
+#[ignore = "measurement - run by hand"]
+fn measure_the_open_over_a_lost_feed_index() {
+    let _walks = one_walk_at_a_time();
+    let n: usize =
+        std::env::var("SKEP_MEASURE_N").ok().and_then(|s| s.parse().ok()).unwrap_or(256);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let engine = fsync_engine(dir.path());
+    let stores = engine.stores();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let seeding = Instant::now();
+    let mut positions = Vec::with_capacity(n);
+    for i in 1..=n {
+        positions.push(mint_a_draft(&wp, &stores).1);
+        if i % 1024 == 0 {
+            engine.kernel().checkpoint().expect("a checkpoint lands");
+        }
+    }
+    let seeded = seeding.elapsed();
+    drop(wp);
+    let mut log = String::from("{\"min_since\":0}\n");
+    for at in &positions {
+        log.push_str(&format!("{{\"at\":{at}}}\n"));
+    }
+    std::fs::write(dir.path().join("commits.log"), log).expect("the bare log");
+    let index = dir.path().join("feed-index.log");
+    if index.exists() {
+        std::fs::remove_file(&index).expect("lose the index");
+    }
+    let opening = Instant::now();
+    let wp = open_the_write_path(dir.path(), &engine);
+    let opened = opening.elapsed();
+    let pending = wp.feed_pending_set().len();
+    let walking = Instant::now();
+    let deadline = Instant::now() + Duration::from_secs(7_200);
+    while wp.feed_walk_pending() {
+        assert!(Instant::now() < deadline, "the walk lands within two hours");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let walked = walking.elapsed();
+    let said = wp.lines_said().lock().clone();
+    println!(
+        "MEASURE after n={n} seeded={seeded:?} ({:.2} ms per commit) open={opened:?} \
+         pending_at_open={pending} walk={walked:?} ({:.2} ms per position)",
+        seeded.as_secs_f64() * 1000.0 / n as f64,
+        walked.as_secs_f64() * 1000.0 / pending.max(1) as f64
+    );
+    for l in &said {
+        println!("  {l}");
+    }
 }

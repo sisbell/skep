@@ -1062,6 +1062,17 @@ pub(super) fn refuse_feed_rebuilding(low: u64, head: u64, walk: FeedWalk) -> Rep
 /// `history_busy` is the one retry-class error: the position may be
 /// perfectly good and the daemon momentarily saturated.
 ///
+/// **The I/O arm answers one fixed sentence.** The kernel's account of a
+/// failed read names the file and the OS's words, and at the journal
+/// directory's own acts — the listing every history read takes before it
+/// selects a base — the directory by its absolute path (`skep-kernel`'s
+/// `FileFailure`). A guest may ask every history read, and every answer is
+/// readable cross-origin (wire.md §Cross-origin access), so that account is
+/// the operator's alone:
+/// [`Daemon::refuse_history`](super::Daemon::refuse_history) says it on the
+/// operator stream where it is the journal's damage, and a client is
+/// answered what failed, never where on the host or what the OS said.
+///
 /// It is also the *first* refusal: the reconstruction permit is taken before
 /// the journal sees `at`, so under saturation a position beyond the head,
 /// between commits, or long reclaimed is answered `history_busy` — retry
@@ -1093,7 +1104,11 @@ pub(super) fn refuse_unavailable(e: Unavailable) -> Reply {
             TransportError::NoJournal,
             Some("this daemon holds no journal; history is unavailable"),
         ),
-        HistoryError::Io(err) => refuse(TransportError::HistoryIo, Some(&err.to_string())),
+        // One fixed sentence, never the kernel's account: the card says why.
+        HistoryError::Io(_) => refuse(
+            TransportError::HistoryIo,
+            Some("reading the journal for this position failed"),
+        ),
         HistoryError::Corruption { at, .. } => refuse(
             TransportError::HistoryCorrupt,
             Some(&format!("journal corrupt at rest; next intact frame at {}", at.0)),

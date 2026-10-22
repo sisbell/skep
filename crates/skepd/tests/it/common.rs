@@ -2036,3 +2036,42 @@ pub fn copy_board(src: &Path, dst: &Path) {
         }
     }
 }
+
+/// A directory made unreadable for the guard's life: mode `0300`.
+///
+/// The directory is searched and written but never read, and its mode is
+/// restored as the guard drops, a failing claim's unwind included, so no
+/// directory under the temp dir is left unreadable. Under it the directory's
+/// own open fails — its listing, and its open for an fsync — while every
+/// file in it still opens by name: the pruner suite fails a compaction past
+/// its rename this way, and the history suite a history read's listing of
+/// the journal directory. A privileged process reads it all the same, so a
+/// claim that needs the refusal first checks that the listing fails.
+#[cfg(unix)]
+pub struct Unreadable<'a> {
+    dir: &'a Path,
+    mode: std::fs::Permissions,
+}
+
+#[cfg(unix)]
+impl<'a> Unreadable<'a> {
+    /// Returns the guard over `dir`, its mode set to `0300`.
+    ///
+    /// # Panics
+    ///
+    /// Panics where `dir`'s metadata cannot be read or its mode set.
+    pub fn new(dir: &'a Path) -> Unreadable<'a> {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir).expect("the directory").permissions();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o300))
+            .expect("the mode set");
+        Unreadable { dir, mode }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Unreadable<'_> {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(self.dir, self.mode.clone());
+    }
+}

@@ -111,10 +111,12 @@ impl Daemon {
 
     /// Answers a refused historical read, saying the journal's damage once.
     ///
-    /// The reply is [`refuse_unavailable`]'s, the reader's answer unchanged.
-    /// Beside it, where the refusal is the journal's damage
-    /// ([`Unavailable::journal_damage`]), the first such refusal of this
-    /// uptime says [`HistoryDamageLine`] under `Class::Failure` and keeps
+    /// The reply is [`refuse_unavailable`]'s, the reader's answer unchanged —
+    /// for an I/O failure one fixed sentence, the kernel's account of the
+    /// failure never sent to a reader. That account is the operator's: where
+    /// the refusal is the journal's damage ([`Unavailable::journal_damage`]),
+    /// the first such refusal of this uptime says [`HistoryDamageLine`],
+    /// which carries it, under `Class::Failure` and keeps
     /// the damage's site ([`JournalDamageSite`]) for the standing line, which
     /// re-says it by that site: a history read scans the journal from its
     /// base to its end, so it is the first reader to meet damage in a segment

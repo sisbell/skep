@@ -446,35 +446,6 @@ fn without_the_pass_duration(line: &str) -> String {
     rest.to_string()
 }
 
-/// `dir` made UNREADABLE — mode `0300`, searched and written but never read
-/// — for the guard's life, its mode restored as the guard drops, a failing
-/// claim's unwind included, so no directory under the temp dir is left
-/// unreadable. The jsonl suite's own injection: a compaction's twin is
-/// created and renamed over the log, and the directory's open for its fsync
-/// fails, so the compaction fails PAST its rename and the log stops.
-#[cfg(unix)]
-struct Unreadable<'a> {
-    dir: &'a Path,
-    mode: fs::Permissions,
-}
-
-#[cfg(unix)]
-impl<'a> Unreadable<'a> {
-    fn new(dir: &'a Path) -> Unreadable<'a> {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(dir).expect("the directory").permissions();
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o300)).expect("the mode set");
-        Unreadable { dir, mode }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for Unreadable<'_> {
-    fn drop(&mut self) {
-        let _ = fs::set_permissions(self.dir, self.mode.clone());
-    }
-}
-
 /// Checks that a failed step never skips the compaction that lifts a stop.
 ///
 /// `operations.md` §4 row 5; §1.1 row 35: every step runs past another's

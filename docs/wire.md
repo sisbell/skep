@@ -876,7 +876,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
 | 503    | `write_busy`                | all write permits are in use — a write on `/op` past the write permit pool, refused before the credential lock and the guard are taken, nothing committed (§The model); carries `op`; retry shortly |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
-| 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
+| 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption; a history read's `history_io` carries one fixed `detail`, naming nothing on the daemon's host — no path, no file, no OS words |
 | 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
 
 ### Determinism

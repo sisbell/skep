@@ -27,11 +27,10 @@ fn refusals_pair_their_status_with_their_name() {
 /// [`crate::fuzz_support::TRANSPORT_ERRORS`] is: one read out of the
 /// code under test would agree with whatever that code says.
 ///
-/// Four of these — `internal_panic`, `history_io`, `history_corrupt`,
-/// `no_journal` — are reachable from no test in the tree (three need
-/// at-rest journal damage, one cannot arise under this daemon's
-/// `Fsync` configuration), so their spelling and their status are
-/// watched here and nowhere else.
+/// One of these — `no_journal` — cannot arise under this daemon's `Fsync`
+/// configuration, so its spelling and its status are watched here and
+/// nowhere else; `internal_panic`, `history_io` and `history_corrupt` are
+/// answered at the wire as well (`tests/it/open.rs`, `tests/it/history.rs`).
 #[test]
 fn every_transport_error_pairs_its_documented_name_with_its_documented_status() {
     let table: Vec<(TransportError, &'static str, u16)> = vec![
@@ -245,6 +244,34 @@ fn feed_rebuilding_names_the_retry_while_the_walk_runs_and_the_restart_once_it_d
     let gone = detail(FeedWalk::Gone);
     assert!(gone.contains("until a restart") && !gone.contains("retry shortly"), "{gone}");
     assert!(gone.contains("no retry succeeds before the restart"), "{gone}");
+}
+
+/// Checks that a history read's I/O failure answers one fixed detail.
+///
+/// The detail is the same whatever the kernel's account: a listing of the
+/// journal directory, which names the directory by its absolute path; a
+/// segment's read, which names the file and the OS's words; a segment a
+/// reclamation removed. The client is answered `500 history_io` and the
+/// sentence alone, byte for byte; the account is the operator's
+/// (`Daemon::refuse_history`).
+#[test]
+fn a_history_reads_io_failure_answers_one_fixed_detail_whatever_the_kernels_account() {
+    use std::io::{Error, ErrorKind};
+    for account in [
+        Error::new(
+            ErrorKind::PermissionDenied,
+            "/srv/skep/board: list: Permission denied (os error 13)",
+        ),
+        Error::other("seg-3.wal: read: Input/output error (os error 5)"),
+        Error::from(ErrorKind::NotFound),
+    ] {
+        let r = refuse_unavailable(Unavailable::Journal(HistoryError::Io(account)));
+        assert_eq!(r.status, 500);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            r#"{"detail":"reading the journal for this position failed","error":"history_io"}"#
+        );
+    }
 }
 
 /// The body and the type naming it travel together: a bodiless reply

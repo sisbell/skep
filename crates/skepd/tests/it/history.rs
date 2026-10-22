@@ -1025,3 +1025,78 @@ fn journal_damage_a_checkpoint_lands_above_is_passed_over_by_the_next_open() {
     assert_eq!(head_of(sd.port()), head, "nothing acknowledged is lost");
     sd.shutdown();
 }
+
+/// Checks that a history read's I/O failure names no path to its client.
+///
+/// The data directory is made unreadable while the board serves, so every
+/// history read's listing of the journal directory fails, and the kernel's
+/// account of the failure names the directory by its absolute path
+/// (`{path}: list: …`). A guest's `/chain?at=0`, the owner's `/op-at` and,
+/// in `observe` builds, `/dump?at` each answer `500 history_io` with the one
+/// fixed detail and no byte of the path. The operator stream says one
+/// `failure: history:` line carrying the account, the path included, and no
+/// second at the later reads; a read at the head and a write serve on,
+/// neither listing the directory.
+#[cfg(unix)]
+#[test]
+fn a_history_reads_io_failure_carries_no_path_to_its_client_and_its_account_to_the_operator() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let scenario = seed(port);
+    let path = dir.path().display().to_string();
+    let expected =
+        r#"{"detail":"reading the journal for this position failed","error":"history_io"}"#;
+    let unreadable = Unreadable::new(dir.path());
+    if std::fs::read_dir(dir.path()).is_ok() {
+        // A privileged process lists a mode-0300 directory: the listing the
+        // claim needs to fail does not, and nothing is judged.
+        drop(unreadable);
+        eprintln!("a privileged process lists the directory: the claim is not run");
+        sd.shutdown();
+        return;
+    }
+    let text = |body: &[u8]| String::from_utf8_lossy(body).to_string();
+    let (st, body) = get(port, "/chain?at=0");
+    assert_eq!(
+        (st, text(&body).as_str()),
+        (500, expected),
+        "FINDING (#422): the guest's answer carries the kernel's account"
+    );
+    let read = retrieve(&scenario.doc1, 5);
+    let (st, body) = op_at_raw(port, Some(&scenario.token), scenario.at_i1, &read);
+    assert_eq!((st, text(&body).as_str()), (500, expected), "the owner's /op-at");
+    #[cfg(feature = "observe")]
+    {
+        let (st, body) = get(port, &format!("/dump?at={}", scenario.at_i1));
+        assert_eq!((st, text(&body).as_str()), (500, expected), "a /dump?at");
+    }
+
+    // The account is the operator's: one line, the path and the act in it.
+    let said: Vec<String> = sd
+        .daemon()
+        .lines_said()
+        .into_iter()
+        .filter(|l| l.starts_with("failure: history: "))
+        .collect();
+    assert_eq!(said.len(), 1, "said once for the uptime: {said:?}");
+    assert!(
+        said[0].starts_with(&format!("failure: history: history read I/O failure: {path}: list: ")),
+        "the operator's line carries the kernel's account: {said:?}"
+    );
+
+    // Neither a read at the head nor the write path lists the directory.
+    let v = op(port, Some(&scenario.token), &retrieve(&scenario.doc1, 3));
+    assert_eq!(v["resp"].as_str(), Some("delivery"), "a read at the head serves: {v}");
+    let v = op(
+        port,
+        Some(&scenario.token),
+        &format!(
+            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
+            scenario.doc2
+        ),
+    );
+    assert!(v["at"].is_u64(), "a write serves: {v}");
+    drop(unreadable);
+    sd.shutdown();
+}

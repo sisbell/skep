@@ -29,6 +29,7 @@ use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::net::Ipv4Addr;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -55,9 +56,9 @@ use skep_util::source::Source;
 // programs' defaults are written to meet it — `skep-mcp`'s `SKEPD_URL`,
 // `skep-dev serve --own`'s `--port` — and their suites read it there.
 use skepd::{
-    bind, serve_bound, tools, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, StartOptions,
-    DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT, DEFAULT_WORKERS, DESIGNATION,
-    MIN_WORKERS, STORE_DIR,
+    bind, serve_bound, tools, AuthOptions, Daemon, JournalReclamation, MediaOptions, NodePrefix,
+    Origin, StartOptions, DEFAULT_LIMIT_FLOOR_BYTES, DEFAULT_LIMIT_SHARE, DEFAULT_PORT,
+    DEFAULT_WORKERS, DESIGNATION, MIN_WORKERS, STORE_DIR,
 };
 
 /// The bind's default: the loopback address (AUTH-4.57 (a)).
@@ -106,6 +107,28 @@ const SKEPD_UPLOADS: EnvSetting = EnvSetting { var: "SKEPD_UPLOADS", expected: "
 /// cut unasked.
 const SKEPD_CUT_DAMAGED_TAIL: EnvSetting =
     EnvSetting { var: "SKEPD_CUT_DAMAGED_TAIL", expected: "true or false" };
+/// The checkpoint cadence's variable (`--checkpoint-every`): a commit count.
+///
+/// A checkpoint every this many commits; `0` parses as a count and is
+/// refused after the flag loop, where the worker floor is held, so the
+/// variable meets the same refusal as the flag. One of the three checkpoint
+/// settings, each read at every start and persisted nowhere, the default
+/// where neither its flag nor its variable is given.
+const SKEPD_CHECKPOINT_EVERY: EnvSetting =
+    EnvSetting { var: "SKEPD_CHECKPOINT_EVERY", expected: "a count" };
+/// The retained count's variable (`--retain-checkpoints`): a count.
+///
+/// The newest this many checkpoints are kept; `0` is refused as the
+/// cadence's is.
+const SKEPD_RETAIN_CHECKPOINTS: EnvSetting =
+    EnvSetting { var: "SKEPD_RETAIN_CHECKPOINTS", expected: "a count" };
+/// The journal reclamation's variable (`--reclaim-journal`): one of two words.
+///
+/// `below-oldest-checkpoint` or `never`, [`JournalReclamation`]'s own
+/// spellings, which its `FromStr` reads; any other word is refused at the
+/// parse naming both.
+const SKEPD_RECLAIM_JOURNAL: EnvSetting =
+    EnvSetting { var: "SKEPD_RECLAIM_JOURNAL", expected: JournalReclamation::ADMITTED };
 
 /// The data dir's variable, a bare name rather than an [`EnvSetting`].
 ///
@@ -476,7 +499,7 @@ const NODE_PREFIX_FORM: &str =
 /// help's `SKEPD_` names to it, so a setting the help documents and this
 /// list omits fails there, and one the parse reads and this list omits is
 /// refused the first time anyone sets it.
-const VARIABLES: [&str; 10] = [
+const VARIABLES: [&str; 13] = [
     SKEPD_DATA_DIR,
     SKEPD_PORT.var,
     SKEPD_BIND.var,
@@ -487,6 +510,9 @@ const VARIABLES: [&str; 10] = [
     SKEPD_BLOCKED_PREFIXES,
     SKEPD_NODE_PREFIX.var,
     SKEPD_CUT_DAMAGED_TAIL.var,
+    SKEPD_CHECKPOINT_EVERY.var,
+    SKEPD_RETAIN_CHECKPOINTS.var,
+    SKEPD_RECLAIM_JOURNAL.var,
 ];
 
 /// The `SKEPD_` variables another program of the workspace reads.
@@ -542,10 +568,13 @@ fn refuse_unknown_variables() -> Result<(), String> {
 ///
 /// So the program cannot describe a default it does not use, wherever a
 /// constant supplies the default — and the local-trust pair's default arm
-/// is read off `AuthOptions::default()`, the setting's one home.
+/// is read off `AuthOptions::default()`, the setting's one home, as the
+/// three checkpoint settings' defaults are read off
+/// `StartOptions::default()`, theirs.
 fn usage() -> String {
     let local_trust_default =
         if AuthOptions::default().local_trust { "--local-trust" } else { "--no-local-trust" };
+    let start = StartOptions::default();
     format!(
         "\
 usage: skepd --data-dir <DIR> [--create] [--bind <ADDR>] [--port <PORT>]
@@ -553,6 +582,8 @@ usage: skepd --data-dir <DIR> [--create] [--bind <ADDR>] [--port <PORT>]
              [--allow-preview-keys] [--uploads | --no-uploads]
              [--origin <ORIGIN>]... [--blocked-prefixes <FILE>]
              [--node-prefix <PREFIX>] [--cut-damaged-tail]
+             [--checkpoint-every <COMMITS>] [--retain-checkpoints <N>]
+             [--reclaim-journal <POLICY>]
        skepd inventory --data-dir <DIR> [--no-rehash]
        skepd pull --data-dir <DIR> [--hash <HEX>] <FILE>
 
@@ -598,6 +629,33 @@ usage: skepd --data-dir <DIR> [--create] [--bind <ADDR>] [--port <PORT>]
   --workers <N>      request worker threads (env: SKEPD_WORKERS; default \
 {DEFAULT_WORKERS};
                      minimum {MIN_WORKERS})
+  --checkpoint-every <COMMITS>
+                     a checkpoint every this many commits (env:
+                     SKEPD_CHECKPOINT_EVERY; default {checkpoint_every}), or
+                     sooner where the journal's byte bound crosses first — a
+                     quarter of the newest checkpoint's size, never below
+                     24 MiB, which no setting moves. 0 is refused. With
+                     --retain-checkpoints it sets how far behind the head
+                     the oldest kept checkpoint stands — the oldest moment a
+                     history read can rebuild where the journal is reclaimed
+                     below it
+  --retain-checkpoints <N>
+                     keep the newest N checkpoints, each a whole copy of the
+                     board on the volume (env: SKEPD_RETAIN_CHECKPOINTS;
+                     default {retain_checkpoints}); the oldest is where the
+                     open falls back to when a newer one refuses. 0 is
+                     refused
+  --reclaim-journal <POLICY>
+                     what a checkpoint's landing does to the journal below
+                     the oldest kept checkpoint (env: SKEPD_RECLAIM_JOURNAL;
+                     default {reclaim_journal}): below-oldest-checkpoint
+                     reclaims it, so a history read below the oldest kept
+                     checkpoint answers 410 history_reclaimed; never keeps
+                     every journal segment since genesis while the usual
+                     checkpoints stand, so every past state stays readable
+                     at the journal's cost on disk. Read at every start,
+                     like the two above: a board run under never and
+                     restarted without it reclaims at its next landing
   --local-trust      honor bare (unsigned) loopback sessions after the
                      board is claimed
   --no-local-trust   refuse every bare session once the board is claimed
@@ -697,7 +755,10 @@ port, no session — and write no log line of the daemon's:
                      held to that hash and the journal left unopened, the
                      form that runs beside a serving daemon
 
-The wire protocol is specified in skep/docs/wire.md."
+The wire protocol is specified in skep/docs/wire.md.",
+        checkpoint_every = start.checkpoint_every,
+        retain_checkpoints = start.retain_checkpoints,
+        reclaim_journal = start.reclaim_journal,
     )
 }
 
@@ -802,6 +863,23 @@ struct Args {
     /// `--cut-damaged-tail` / `SKEPD_CUT_DAMAGED_TAIL`: the damaged tail's
     /// cut, accepted for this one start.
     cut_damaged_tail: bool,
+    /// `--checkpoint-every` / `SKEPD_CHECKPOINT_EVERY`: the cadence's count.
+    ///
+    /// A checkpoint every this many commits; the default is
+    /// `StartOptions`' own, read there and restated nowhere here. Zero is
+    /// refused after the flag loop, beside the worker floor.
+    checkpoint_every: NonZeroU64,
+    /// `--retain-checkpoints` / `SKEPD_RETAIN_CHECKPOINTS`: the kept count.
+    ///
+    /// The newest this many checkpoints stand; zero is refused as the
+    /// cadence's is.
+    retain_checkpoints: NonZeroUsize,
+    /// `--reclaim-journal` / `SKEPD_RECLAIM_JOURNAL`: the journal's reclamation.
+    ///
+    /// Below the oldest kept checkpoint, or never; the word parsed by
+    /// `JournalReclamation`'s own `FromStr`, so the flag, the variable and
+    /// the help spell it once.
+    reclaim_journal: JournalReclamation,
     /// `--create`: begin a board where none stands.
     ///
     /// A flag and no variable: it is given to one start, the first, and a
@@ -979,10 +1057,12 @@ fn parse_tool(mut it: impl Iterator<Item = String>, tool: Tool) -> Result<Option
 ///
 /// In order, each as its message: a `SKEPD_` variable the daemon does not
 /// read ([`refuse_unknown_variables`]); then a variable that is not text or
-/// does not parse; then, as the arguments are read, a flag with no value, a
-/// flag value that does not parse, `--version` past the first argument, or
-/// an unknown argument; then a worker count under [`MIN_WORKERS`]; then a
-/// missing data directory.
+/// does not parse — a reclamation word that is neither of the two among
+/// them; then, as the arguments are read, a flag with no value, a flag
+/// value that does not parse, `--version` past the first argument, or an
+/// unknown argument; then a worker count under [`MIN_WORKERS`], a checkpoint
+/// cadence of zero commits and a retained count of zero, each named with
+/// what the setting admits; then a missing data directory.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     refuse_unknown_variables()?;
     let mut data_dir = std::env::var_os(SKEPD_DATA_DIR).map(PathBuf::from);
@@ -1025,6 +1105,15 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     // The damaged tail's acceptance, seeded from its variable; the flag
     // sets it as every flag beats its variable.
     let mut cut_damaged_tail: Option<bool> = from_env(SKEPD_CUT_DAMAGED_TAIL)?;
+    // The three checkpoint settings, seeded from their variables; each flag
+    // sets its own as every flag beats its variable. The two counts are
+    // read as plain counts here and held to `1` or more after the loop,
+    // beside the worker floor, so a zero from the flag and a zero from the
+    // variable meet one refusal; the reclamation's word is read by the
+    // setting's own `FromStr`, which names both words it admits.
+    let mut checkpoint_every: Option<u64> = from_env(SKEPD_CHECKPOINT_EVERY)?;
+    let mut retain_checkpoints: Option<usize> = from_env(SKEPD_RETAIN_CHECKPOINTS)?;
+    let mut reclaim_journal: Option<JournalReclamation> = from_env(SKEPD_RECLAIM_JOURNAL)?;
     // Whether the start was told to begin a board, which no variable seeds.
     let mut create = false;
     let mut it = argv;
@@ -1054,6 +1143,24 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             "--no-uploads" => uploads.set_by_flag(false),
             "--allow-preview-keys" => allow_preview_keys = true,
             "--cut-damaged-tail" => cut_damaged_tail = Some(true),
+            "--checkpoint-every" => {
+                let v = it.next().ok_or("--checkpoint-every needs a value")?;
+                checkpoint_every = Some(
+                    v.parse().map_err(|_| format!("--checkpoint-every: '{v}' is not a count"))?,
+                );
+            }
+            "--retain-checkpoints" => {
+                let v = it.next().ok_or("--retain-checkpoints needs a value")?;
+                retain_checkpoints = Some(
+                    v.parse().map_err(|_| format!("--retain-checkpoints: '{v}' is not a count"))?,
+                );
+            }
+            "--reclaim-journal" => {
+                let v = it.next().ok_or("--reclaim-journal needs a value")?;
+                reclaim_journal = Some(v.parse::<JournalReclamation>().map_err(|()| {
+                    format!("--reclaim-journal: '{v}' is not {}", JournalReclamation::ADMITTED)
+                })?);
+            }
             "--create" => create = true,
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
@@ -1103,6 +1210,30 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
              /health, /session or a write"
         ));
     }
+    // The two checkpoint counts, refused at zero by the same arm, for the
+    // flag and the variable alike: a cadence of zero commits is no cadence
+    // — the kernel refuses it at the open as a configuration it does not
+    // offer — and a board keeping no checkpoint has no base to recover
+    // from. Never repaired to one: a count silently raised would teach a
+    // caller its zero was fine. The defaults are `StartOptions`' own, so
+    // the refusal names the figure the help names.
+    let defaults = StartOptions::default();
+    let checkpoint_every = checkpoint_every.unwrap_or(defaults.checkpoint_every.get());
+    let Some(checkpoint_every) = NonZeroU64::new(checkpoint_every) else {
+        return Err(format!(
+            "--checkpoint-every: 0 is refused — a checkpoint after every zero commits is no \
+             cadence; give a count of 1 or more, or leave it unset for the default {}",
+            defaults.checkpoint_every
+        ));
+    };
+    let retain_checkpoints = retain_checkpoints.unwrap_or(defaults.retain_checkpoints.get());
+    let Some(retain_checkpoints) = NonZeroUsize::new(retain_checkpoints) else {
+        return Err(format!(
+            "--retain-checkpoints: 0 is refused — a board keeping no checkpoint has no base to \
+             recover from; give a count of 1 or more, or leave it unset for the default {}",
+            defaults.retain_checkpoints
+        ));
+    };
     Ok(Some(Args {
         data_dir: data_dir
             .ok_or_else(|| format!("--data-dir (or {SKEPD_DATA_DIR}) is required"))?,
@@ -1127,6 +1258,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         node_prefix: node_prefix.value,
         node_prefix_source: node_prefix.source,
         cut_damaged_tail: cut_damaged_tail.unwrap_or(false),
+        checkpoint_every,
+        retain_checkpoints,
+        // The reclaiming arm unless the flag or the variable said `never`.
+        reclaim_journal: reclaim_journal.unwrap_or(defaults.reclaim_journal),
         create,
     }))
 }
@@ -1313,12 +1448,17 @@ fn main() {
     media.uploads = args.uploads;
     media.uploads_source = args.uploads_source;
     // The start's own words (`operations.md` §3.1): the damaged tail's cut
-    // accepted for this start alone, and whether the start was told to
-    // begin a board — judged above, so the open's beginning is the one the
-    // operator asked for.
+    // accepted for this start alone, whether the start was told to begin a
+    // board — judged above, so the open's beginning is the one the operator
+    // asked for — and the three checkpoint settings, each the flag's or the
+    // variable's where one was given and the default otherwise, which the
+    // open says on one line and the kernel reads once.
     let mut start = StartOptions::default();
     start.cut_damaged_tail = args.cut_damaged_tail;
     start.create = args.create;
+    start.checkpoint_every = args.checkpoint_every;
+    start.retain_checkpoints = args.retain_checkpoints;
+    start.reclaim_journal = args.reclaim_journal;
     let daemon = match Daemon::open_started(&args.data_dir, opts, media, start) {
         Ok(d) => d,
         Err(e) => {

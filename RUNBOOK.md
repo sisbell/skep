@@ -369,9 +369,10 @@ apart.
      needs the room to do it.
    - The checkpoint's failure: make room, and nothing more. The
      next attempt comes by itself at the cadence's next crossing:
-     after another 1,024 commits, or another quarter of the newest
-     checkpoint's size in journal bytes (never less than 24 MiB),
-     whichever comes first.
+     after another `--checkpoint-every` commits (1,024 by default;
+     Start, step 2), or another quarter of the newest checkpoint's
+     size in journal bytes (never less than 24 MiB), whichever
+     comes first.
    - The write refused at a full volume: make room. The next write
      succeeds by itself, and no restart is owed: one before room
      stands runs its open into the full volume (step 4).
@@ -438,14 +439,17 @@ apart.
    ```
 
    `{reclaimed}` reads `{bytes} journal bytes reclaimed` or
-   `nothing reclaimed`. `{free}` reads `unread` where the host
+   `nothing reclaimed` — every landing's reading under
+   `--reclaim-journal never`, which keeps the journal whole (Start,
+   step 2). `{free}` reads `unread` where the host
    refused the read; the floor's line and the standing line name its
    cause (step 1). Where the landing's retention removed a
    checkpoint, the clause after it names each file and its length:
-   `; checkpoint.{n} removed ({bytes} bytes)`. The daemon keeps two;
-   the one removed is the older past them, or a checkpoint the open
-   passed over (Start, step 3, item 5), whose file this is the last
-   word on. Further on, `the write guard taken {n} times since
+   `; checkpoint.{n} removed ({bytes} bytes)`. The daemon keeps the
+   count `--retain-checkpoints` names, two by default (Start, step
+   2); the one removed is the oldest past them, or a checkpoint the
+   open passed over (Start, step 3, item 5), whose file this is the
+   last word on. Further on, `the write guard taken {n} times since
    position {position}, {n} of them after a wait` counts the writes
    that reached the write path's serialization point since the line
    before, and those that found another write holding it: the share
@@ -971,6 +975,37 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
      worker, at the memory figure above; where the line comes with a
      `/health` that hangs on the volume (step 6), more workers park
      as the rest did.
+   - `--checkpoint-every <COMMITS>` (`SKEPD_CHECKPOINT_EVERY`): a
+     checkpoint every this many commits, or sooner where the
+     journal's byte bound crosses first (a quarter of the newest
+     checkpoint's size, never below 24 MiB, which no setting moves).
+     Default 1,024; 0 is refused, exit 2. With the next setting it
+     decides how far behind the head the oldest kept checkpoint
+     stands: the oldest moment `/op-at` can rebuild where the
+     journal is reclaimed below it, and the most a walk behind the
+     listener re-covers of a lost `commits.log` (step 3, item 11).
+     Each checkpoint is a whole copy of the board, written on the
+     daemon's own thread: a smaller count costs more writes and
+     holds a shorter history on disk.
+   - `--retain-checkpoints <N>` (`SKEPD_RETAIN_CHECKPOINTS`): keep
+     the newest N checkpoints, each a whole copy of the board on the
+     volume. Default 2; 0 is refused, exit 2. The oldest is where the
+     open falls back to when a newer one refuses (step 3, item 5),
+     and the floor the journal is reclaimed below, where it is.
+   - `--reclaim-journal <POLICY>` (`SKEPD_RECLAIM_JOURNAL`): what a
+     checkpoint's landing does to the journal below the oldest kept
+     checkpoint. `below-oldest-checkpoint`, the default, reclaims
+     it, so a history read below that checkpoint answers `410
+     history_reclaimed` (the floor is the oldest moment still
+     readable); `never` keeps every journal segment since genesis
+     while the usual checkpoints stand, so every past state stays
+     readable at the journal's cost on disk (The full volume, step
+     7), a read far below the oldest checkpoint folding from genesis
+     through the kept journal. Any other word is refused, exit 2.
+     The three are read at every start and kept nowhere, so a board
+     run under `never` and restarted without the word reclaims at
+     its next landing; the open names the three in force (step 3,
+     item 4).
    - `--local-trust` or `--no-local-trust`
      (`SKEPD_LOCAL_TRUST=true|false`): whether bare, unsigned
      sessions from this machine are honoured once the board is
@@ -1056,8 +1091,26 @@ checkpoint left to stand in, are answered in Upgrade, steps 3 and 4.
       `no optional feature`: step 1's build reads `observe`, and a
       binary you run never names `test-hooks` (step 1).
 
-   4. The directory, before anything is read from it:
-      `open: data-dir {path}`.
+   4. The directory, before anything is read from it, then the three
+      checkpoint settings this start runs under (step 2) — the
+      cadence's count, the checkpoints kept and the journal's
+      reclamation, each the flag's or the variable's where one was
+      given and the default otherwise — said once the blocked-prefix
+      list has been read and before the engine opens under them, so
+      a start the engine refuses shows what it was refused under,
+      and a start the list refuses (step 2) says the version, the
+      directory and the refusal alone:
+
+      ```
+      open: data-dir {path}
+      open: checkpoint settings: a checkpoint every {n} commits (--checkpoint-every), {k} retained (--retain-checkpoints), the journal reclaimed below the oldest retained checkpoint (--reclaim-journal below-oldest-checkpoint); read at this start alone, each the default where neither its flag nor its variable was given
+      ```
+
+      Under `--reclaim-journal never` the reclamation clause reads
+      `the journal kept whole, never reclaimed (--reclaim-journal
+      never)`. A board that ran under `never` and comes up without
+      the word reads the default here, and reclaims at its next
+      landing.
 
    5. Each retained checkpoint the open passed over:
 

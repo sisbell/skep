@@ -22,8 +22,8 @@ use std::path::Path;
 use crate::mutilate::FRAME_MAGIC;
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
-    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
-    Seq, Step, TxnError, WorldState,
+    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim,
+    SaltSource, Seq, Step, TxnError, WorldState,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,6 +194,7 @@ fn cfg_retain(dir: &Path, retain: usize) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -373,6 +374,7 @@ fn the_position_folded_is_the_journals_own_commit_position_live_and_derived() {
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::TolerateGap,
             cut_damaged_tail: false,
         },

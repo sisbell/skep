@@ -595,7 +595,9 @@ pub enum LandedStep {
     Retention,
     /// The journal's reclamation below the oldest kept base.
     ///
-    /// An unreclaimed segment is space, and nothing else is left undone.
+    /// The step [`crate::Reclaim::BelowOldestRetained`] takes and
+    /// [`crate::Reclaim::Never`] does not. An unreclaimed segment is space,
+    /// and nothing else is left undone.
     Reclamation,
 }
 
@@ -756,10 +758,14 @@ pub enum HistoryError {
     /// retained checkpoint there loads and seeds (a base whose
     /// [`crate::WorldState::rebuild_derived`] refuses is passed over as one
     /// that does not load, AUTH-2.85), and the journal below the oldest
-    /// retained checkpoint has been reclaimed (§6), so genesis is unreachable
-    /// — or genesis's own seed refuses. `floor` names the oldest boundary a
-    /// base could still be derived at, when a checkpoint exists to derive it
-    /// from.
+    /// retained checkpoint has been reclaimed — by a landing under
+    /// [`crate::Reclaim::BelowOldestRetained`], this open's or an earlier
+    /// one's (§6) — so genesis is unreachable — or genesis's own seed
+    /// refuses. Where the journal still reaches genesis, as it does at every
+    /// landing under [`crate::Reclaim::Never`], a boundary below the oldest
+    /// retained checkpoint is answered by the fold from genesis and never
+    /// refused this way. `floor` names the oldest boundary a base could
+    /// still be derived at, when a checkpoint exists to derive it from.
     Reclaimed {
         /// The oldest retained checkpoint's seq.
         ///

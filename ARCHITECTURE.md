@@ -431,8 +431,16 @@ Rules that hold across its files:
   the names the open's `Recovery` lists as skipped when it counts the newest
   `retain_checkpoints` bases to keep, and removes them as excess, so the
   first landing after a skip keeps the base the open loaded from beside the
-  new one; the reclamation floor is the oldest base kept, and a base
-  `Kernel::checkpoint` writes over a skipped name is counted again.
+  new one; the reclamation floor, where the configuration reclaims the
+  journal at all, is the oldest base kept, and a base `Kernel::checkpoint`
+  writes over a skipped name is counted again.
+- **Retention and reclamation are two policies.** `Durability::Fsync`
+  carries `retain_checkpoints`, how many bases stand, and `reclaim`
+  (`Reclaim`), whether a landing reclaims the journal below the oldest of
+  them: `BelowOldestRetained` reclaims the closed segments wholly below it,
+  `Never` keeps every segment since genesis while the usual bases stand,
+  so a history read below the oldest base folds from genesis through the
+  kept journal. Both are read once at the open and persisted nowhere.
 - **One skip rule.** `segment::scanned_above` decides which segments a
   scan reads; the scan walks it and the format probe opens its first.
 - **One codec.** Every byte the kernel writes goes through
@@ -2968,8 +2976,11 @@ Rules that hold across its files:
   to one that is, or to genesis while the journal reaches it, and replays.
   So at its FIRST OPEN under a build that writes the slice, a board whose
   journal still reaches genesis replays from genesis — correct, once,
-  slower — and a board past genesis-reachability (two retained
-  checkpoints of 1,024 commits) refuses to serve until regenerated or
+  slower — and a board past genesis-reachability (by default two retained
+  checkpoints of 1,024 commits, the journal reclaimed below the older —
+  the start's three settings, `--checkpoint-every`, `--retain-checkpoints`
+  and `--reclaim-journal`, move the reach, and `never` keeps the journal
+  whole) refuses to serve until regenerated or
   restored: dev boards regenerate, a served board is the owner's call. A
   slice-less checkpoint with no credential deposit loads as the empty
   table, which is the true one.
@@ -3158,7 +3169,11 @@ the store's install — nothing above their own layer.
    says what the board lost (no pass until a restart) and sets a liveness
    flag the standing line reads — THE CHECKPOINT THREAD — the kernel's
    deferred trigger serviced off the write path's guard: the checkpoint
-   every 1024 commits or the byte bound, whichever first, its result on
+   every `--checkpoint-every` commits (1024 by default) or the byte bound,
+   whichever first, the newest `--retain-checkpoints` kept (two by default)
+   and the journal below the oldest reclaimed unless `--reclaim-journal
+   never` keeps it whole — the three the start's `StartOptions` carry, read
+   once at the open and said there on one line — its result on
    the operator stream — a landing's figures, a failure said per attempt
    — and after ANY landing, its own or one the kernel's backstop ran
    inline on a writer (the write path raising the thread's signal where

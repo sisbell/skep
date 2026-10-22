@@ -123,6 +123,25 @@ fn runbook_lists_the_tail_cut_and_classes_the_opens_lines() {
     };
     classed("checkpoint.tmp found (", Class::Open);
     classed("journal tail cut (", Class::Open);
+    // The three checkpoint settings in force, after the directory's line
+    // and before the recovery's landing, where the open says them — the
+    // words the unit suite pins at the default settings (`server/tests.rs`).
+    classed("checkpoint settings: a checkpoint every {n} commits", Class::Open);
+    assert!(
+        at("open: data-dir {path}") < at("checkpoint settings: a checkpoint every {n} commits")
+            && at("checkpoint settings: a checkpoint every {n} commits")
+                < at("open: recovered from "),
+        "the settings' line follows the directory's and precedes the recovery's landing"
+    );
+    assert!(
+        list.contains(
+            "open: checkpoint settings: a checkpoint every {n} commits (--checkpoint-every), {k} \
+             retained (--retain-checkpoints), the journal reclaimed below the oldest retained \
+             checkpoint (--reclaim-journal below-oldest-checkpoint); read at this start alone, \
+             each the default where neither its flag nor its variable was given"
+        ) && list.contains("`the journal kept whole, never reclaimed (--reclaim-journal\n      never)`"),
+        "step 3 quotes the settings' line and its other arm:\n{list}"
+    );
     // …and the tail cut's second arm, quoted after the first: a cut that
     // may have taken an acknowledged write is the failure it is.
     classed("of its frames intact on disk", Class::Failure);

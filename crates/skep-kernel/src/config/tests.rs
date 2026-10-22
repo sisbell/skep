@@ -4,6 +4,7 @@ fn fsync_mode(burned_seq: BurnedSeqPolicy) -> Durability {
     Durability::Fsync {
         journal_path: PathBuf::from("/tmp/skep-kernel-config-test"),
         retain_checkpoints: 1,
+        reclaim: Reclaim::BelowOldestRetained,
         burned_seq,
         cut_damaged_tail: false,
     }
@@ -35,6 +36,7 @@ fn the_retention_rule_binds_the_journal_and_nothing_else() {
         durability: Durability::Fsync {
             journal_path: PathBuf::from("/tmp/skep-kernel-config-test"),
             retain_checkpoints: 0,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -65,6 +67,7 @@ fn an_empty_journal_path_is_refused_ahead_of_every_other_rule() {
         durability: Durability::Fsync {
             journal_path: PathBuf::from(journal_path),
             retain_checkpoints,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

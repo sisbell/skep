@@ -25,7 +25,9 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use parking_lot::Mutex;
 
 use crate::checkpoint::{self, CheckpointHeader};
-use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use crate::config::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Reclaim, SaltSource,
+};
 use crate::error::{at_file, CheckpointError, LandedStep, OpenError, TxnError};
 use crate::journal::{
     self, Attestation, CommitFail, FirstSyncWord, Journal, JournalWriter, ScanFail, UnwindRepair,
@@ -576,7 +578,8 @@ struct ApplierState {
 /// What a journaled kernel has and an in-memory one does not.
 ///
 /// Where its files live, how many checkpoint bases its `BadCheckpoint`
-/// fallback chain keeps, the Σ₀ its derivations fold onto when no checkpoint
+/// fallback chain keeps and whether a landing reclaims the journal below the
+/// oldest of them, the Σ₀ its derivations fold onto when no checkpoint
 /// covers a boundary, and the `open()`-held exclusion lock it holds for its
 /// lifetime (Lifecycle, §6).
 ///
@@ -591,6 +594,13 @@ struct Journaled<W> {
     /// process's working directory moves a file the kernel touches.
     dir: PathBuf,
     retain_checkpoints: usize,
+    /// Whether a landing reclaims the journal below the oldest kept base.
+    ///
+    /// [`Durability::Fsync`]'s `reclaim`, read once at the open: under
+    /// [`Reclaim::BelowOldestRetained`] [`Kernel::checkpoint`] reclaims the
+    /// closed segments below the oldest base retention kept; under
+    /// [`Reclaim::Never`] it reclaims nothing and every segment stands.
+    reclaim: Reclaim,
     /// Σ₀, the genesis world this kernel was opened under.
     ///
     /// Kept because it is the base every history read falls back to when no
@@ -621,7 +631,8 @@ struct Journaled<W> {
     ///
     /// It is [`Kernel::last_reclaimed_bytes`]'s figure: the lengths of the
     /// segments `reclaim_below` removed, each read before its removal, summed
-    /// — or [`NO_LANDING`] before the first landing of this uptime. Stored by
+    /// — `0` at every landing under [`Reclaim::Never`], which removes none —
+    /// or [`NO_LANDING`] before the first landing of this uptime. Stored by
     /// [`Kernel::checkpoint`] after its reclamation step, read lock-free.
     last_reclaimed: AtomicU64,
     /// The checkpoints the last landing's retention removed.
@@ -973,6 +984,7 @@ impl<W: WorldState> Kernel<W> {
             Durability::Fsync {
                 journal_path,
                 retain_checkpoints,
+                reclaim,
                 cut_damaged_tail,
                 ..
             } => {
@@ -993,6 +1005,7 @@ impl<W: WorldState> Kernel<W> {
                     Some(Journaled {
                         dir,
                         retain_checkpoints: *retain_checkpoints,
+                        reclaim: *reclaim,
                         genesis,
                         recovery: recovered.recovery,
                         stray_checkpoint_removed: recovered.stray_checkpoint_removed,
@@ -1779,7 +1792,8 @@ impl<W: WorldState> Kernel<W> {
     /// the lengths of the closed segments its reclamation removed below the
     /// oldest kept base, each read before its removal and summed. `Some(0)`
     /// where the landing removed no segment — a landing that reclaims
-    /// nothing says so — and `None` before any landing of this uptime, and
+    /// nothing says so, and under [`Reclaim::Never`] every landing says so —
+    /// and `None` before any landing of this uptime, and
     /// under [`Durability::InMemory`], which has no journal to reclaim. A
     /// failed call stores nothing: the figure is a landing's, and a call
     /// that failed before or after its base landed is not one, whatever its
@@ -1977,10 +1991,15 @@ impl<W: WorldState> Kernel<W> {
     ///
     /// It persists a checkpoint embodying all records with `Seq ≤ s`, keeps
     /// the journal's `retain_checkpoints` most recent the open did not pass
-    /// over, and reclaims whole *closed* journal segments lying wholly below
-    /// the oldest retained checkpoint (segment-granular space reclamation,
-    /// never a correctness mechanism — recovery's `Seq > S_load` filter
-    /// handles straddler leftovers; §6). Non-blocking to writers (grabs a
+    /// over, and — under [`Reclaim::BelowOldestRetained`] alone — reclaims
+    /// whole *closed* journal segments lying wholly below the oldest retained
+    /// checkpoint (segment-granular space reclamation, never a correctness
+    /// mechanism — recovery's `Seq > S_load` filter handles straddler
+    /// leftovers; §6). Retention and reclamation are two policies: under
+    /// [`Reclaim::Never`] the bases are kept as under the other arm and the
+    /// journal is left whole, every segment since genesis standing, so a
+    /// history read below the oldest base folds from genesis through it.
+    /// Non-blocking to writers (grabs a
     /// lock-free `Snapshot`, never the applier lock — which is a rule, not an
     /// economy: a closure inside [`Kernel::transact`] may call this while
     /// holding that lock, so reaching for it here would deadlock against a
@@ -2008,13 +2027,14 @@ impl<W: WorldState> Kernel<W> {
     /// removed as excess, whatever their age — so the first landing after an
     /// open that skipped a base keeps the base the open loaded from beside the
     /// new one, where `retain_checkpoints` is two or more, and removes the
-    /// skipped one; the reclamation floor is the oldest base kept.
+    /// skipped one; the reclamation floor, where the journal is reclaimed, is
+    /// the oldest base kept.
     /// A base this call writes over a skipped name is a base again and is
     /// counted. With nothing skipped, the newest `retain_checkpoints` stand.
     ///
-    /// The journal bytes a landing reclaimed, and the checkpoints its
-    /// retention removed, are read after `Ok` through
-    /// [`Kernel::last_reclaimed_bytes`] and
+    /// The journal bytes a landing reclaimed — `0` at every landing under
+    /// [`Reclaim::Never`] — and the checkpoints its retention removed, are
+    /// read after `Ok` through [`Kernel::last_reclaimed_bytes`] and
     /// [`Kernel::last_removed_checkpoints`].
     ///
     /// # Errors
@@ -2024,7 +2044,8 @@ impl<W: WorldState> Kernel<W> {
     /// kernel takes no checkpoint in either mode.
     ///
     /// A failure after the base landed — the rename ran, then the directory's
-    /// fsync, retention or the journal's reclamation failed — is
+    /// fsync, retention or the journal's reclamation failed (the last a step
+    /// [`Reclaim::Never`] never takes) — is
     /// [`CheckpointError::Landed`], naming the step ([`LandedStep`]) and
     /// carrying the cause; an I/O failure before it is
     /// [`CheckpointError::Io`] and leaves no base, as does `W`'s serializer
@@ -2090,12 +2111,18 @@ impl<W: WorldState> Kernel<W> {
         // Every file retention passed over is gone, so nothing stands to
         // pass over at the next landing.
         journaled.skipped_bases.lock().clear();
-        // Reclaim the journal below the oldest kept checkpoint — that floor,
-        // not the newest, is what keeps the BadCheckpoint fallback real (§6)
-        // — and keep what it reclaimed, and the bases retention removed, for
-        // the landing's reader.
-        let reclaimed = journal::reclaim_below(&journaled.dir, s_old)
-            .map_err(landed(LandedStep::Reclamation))?;
+        // Reclamation policy — whether the journal below the bases stands —
+        // applied after retention, under its own arm: below the oldest kept
+        // checkpoint — that floor, not the newest, is what keeps the
+        // BadCheckpoint fallback real (§6) — or not at all, every segment
+        // kept whatever the bases, a landing that reclaimed nothing. Keep
+        // what it reclaimed, and the bases retention removed, for the
+        // landing's reader.
+        let reclaimed = match journaled.reclaim {
+            Reclaim::BelowOldestRetained => journal::reclaim_below(&journaled.dir, s_old)
+                .map_err(landed(LandedStep::Reclamation))?,
+            Reclaim::Never => 0,
+        };
         journaled.last_reclaimed.store(reclaimed.min(NO_LANDING - 1), Ordering::Release);
         let removed = retained.removed.into_iter().map(|(seq, len)| (Seq(seq), len)).collect();
         journaled.last_removed.store(Arc::new(removed));

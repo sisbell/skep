@@ -33,15 +33,19 @@
 //!
 //! **Durability is configuration, not code**: [`Daemon::open`] opens M2's
 //! kernel on a real directory with `Durability::Fsync` (rollback burned-seq
-//! policy), a checkpoint cadence of every 1024 commits or a byte bound,
-//! whichever first — the bound a quarter of the newest checkpoint's size,
-//! the start point's at open, and never below 24 MiB, re-read as each
+//! policy), a checkpoint cadence of every 1024 commits by default or a byte
+//! bound, whichever first — the bound a quarter of the newest checkpoint's
+//! size, the start point's at open, and never below 24 MiB, re-read as each
 //! checkpoint lands — deferred to the daemon's own checkpoint thread
 //! (`server/listen.rs`), which runs the checkpoint off the write path's
 //! guard, says a failure once on the operator stream, and after each
 //! landing reads what the change feed holds for its line; and two retained
-//! checkpoints — genesis on a fresh store, recovery on an existing one,
-//! both inside `Engine::open`. The journal's reclamation bounds the board's
+//! checkpoints by default, the journal reclaimed below the oldest of them —
+//! the cadence's count, the retained count and the reclamation are the
+//! start's three settings ([`StartOptions`]), read once at the open, said
+//! there and persisted nowhere — genesis on a fresh store, recovery on an
+//! existing one, both inside `Engine::open`. The journal's reclamation
+//! bounds the board's
 //! STATES alone: the change feed's files are kept whole from genesis
 //! (wire.md §The change feed, Retention), the daemon holding a window of
 //! recent positions in memory and reading the rest from disk by position,
@@ -207,8 +211,9 @@ mod request;
 mod scan;
 
 use std::fmt;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -222,8 +227,8 @@ use skep_identity::HasIdentity;
 use skep_blobs::{LogRead, Store};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointHeader, CheckpointPolicy, DamagedTail,
-    Durability, InlineCheckpoint, KernelConfig, LandedStep, SaltSource, Seq, CHECKPOINT_FORMAT,
-    JOURNAL_FORMAT,
+    Durability, InlineCheckpoint, KernelConfig, LandedStep, Reclaim, SaltSource, Seq,
+    CHECKPOINT_FORMAT, JOURNAL_FORMAT,
 };
 use skep_media::cell::DESIGNATION;
 use skep_media::gate::{MediaGate, UnreadDeposit, STORE_DIR};
@@ -272,17 +277,21 @@ pub use listen::{
 pub use reply::{Body, Fetch, Reply, Routed};
 pub use request::HttpRequest;
 
-/// The auto-checkpoint cadence's commit half: every N commits.
+/// The auto-checkpoint cadence's commit half by default: every 1,024 commits.
 ///
-/// M2 evaluates it on-commit; the daemon's checkpoint thread runs a
-/// checkpoint on the kernel's due flag, never on a timer. Together with
-/// [`RETAINED_CHECKPOINTS`] this sets the sidecar's reconstruction ceiling
-/// (see `CommitsLog::open`): raising either lengthens the walk behind the
-/// listener on a data dir whose commit metadata is missing. The byte half
-/// beside it — [`CHECKPOINT_BYTES_FLOOR`], [`CHECKPOINT_BYTES_SHARE`] —
-/// crosses first on a board of large commits, where this count alone would
-/// let the journal outrun the floor.
-const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
+/// It is the default of the start's `checkpoint_every`
+/// ([`StartOptions`]; the binary's `--checkpoint-every`), the figure in
+/// force at every start that names none. M2 evaluates the count on-commit;
+/// the daemon's checkpoint thread runs a checkpoint on the kernel's due
+/// flag, never on a timer. Together with the retained count
+/// ([`RETAINED_CHECKPOINTS`] by default) the count in force sets the
+/// sidecar's reconstruction ceiling (see `CommitsLog::open`): raising either
+/// lengthens the walk behind the listener on a data dir whose commit
+/// metadata is missing. The byte half beside it —
+/// [`CHECKPOINT_BYTES_FLOOR`], [`CHECKPOINT_BYTES_SHARE`] — is no setting,
+/// and crosses first on a board of large commits, where this count alone
+/// would let the journal outrun the floor.
+const CHECKPOINT_EVERY_COMMITS: NonZeroU64 = NonZeroU64::new(1024).expect("1024 is nonzero");
 
 /// The cadence's byte bound's floor, 24 MiB.
 ///
@@ -327,12 +336,17 @@ fn cadence_bytes_for(newest_checkpoint_len: Option<u64>) -> NonZeroU64 {
         .expect("the byte bound's floor is a non-zero constant")
 }
 
-/// The retained checkpoints: two.
+/// The retained checkpoints by default: two.
 ///
-/// With two, `BadCheckpoint` recovery can fall back to the older base
-/// instead of a full-journal replay from genesis. The other factor of the
-/// sidecar's reconstruction ceiling — see [`CHECKPOINT_EVERY_COMMITS`].
-const RETAINED_CHECKPOINTS: usize = 2;
+/// It is the default of the start's `retain_checkpoints`
+/// ([`StartOptions`]; the binary's `--retain-checkpoints`), the count in
+/// force at every start that names none. With two, `BadCheckpoint` recovery
+/// can fall back to the older base instead of a full-journal replay from
+/// genesis. The other factor of the sidecar's reconstruction ceiling — see
+/// [`CHECKPOINT_EVERY_COMMITS`]. The count says how many copies of the world
+/// stand; whether the journal below the oldest of them stands too is the
+/// start's third setting, the reclamation ([`JournalReclamation`]).
+const RETAINED_CHECKPOINTS: NonZeroUsize = NonZeroUsize::new(2).expect("2 is nonzero");
 
 /// The retry memo's capacity, 1024 entries.
 ///
@@ -493,10 +507,18 @@ fn damaged_tail_in(e: &EngineError) -> bool {
 /// refuses — threaded into the kernel's own knob (`Durability::Fsync`'s
 /// `cut_damaged_tail`); `create` is `--create`, the word under which the
 /// binary begins a board where none stands, which [`Daemon::open`] does
-/// unasked for an embedder or a test. Built from its defaults and set:
-/// `#[non_exhaustive]`, so a knob added here arrives at its default.
+/// unasked for an embedder or a test; and the three checkpoint settings —
+/// `checkpoint_every` (`--checkpoint-every`, `SKEPD_CHECKPOINT_EVERY`),
+/// `retain_checkpoints` (`--retain-checkpoints`, `SKEPD_RETAIN_CHECKPOINTS`)
+/// and `reclaim_journal` (`--reclaim-journal`, `SKEPD_RECLAIM_JOURNAL`) —
+/// threaded into the kernel's cadence and its journal's two policies, read
+/// once at the open, said there on one line and persisted nowhere: a start
+/// that names none runs at the defaults, so a board run under `never` and
+/// restarted without the word reclaims at its next landing. Built from its
+/// defaults and set: `#[non_exhaustive]`, so a knob added here arrives at
+/// its default, which [`StartOptions::default`] is the one home of.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StartOptions {
     /// Accept the cut of a damaged journal tail at this open.
     ///
@@ -511,6 +533,162 @@ pub struct StartOptions {
     /// this decides the line said of it — the expected landing under the
     /// word, the tell of a wrong directory without it.
     pub create: bool,
+    /// The checkpoint cadence's commit count: a checkpoint every this many.
+    ///
+    /// The commit half of the kernel's cadence (`CheckpointPolicy::EveryN`),
+    /// beside the byte bound no setting moves; `CHECKPOINT_EVERY_COMMITS`,
+    /// 1,024, by default. With `retain_checkpoints` it bounds how far behind
+    /// the head the oldest retained base stands, and so the walk behind the
+    /// listener on a data dir whose commit metadata is missing.
+    pub checkpoint_every: NonZeroU64,
+    /// How many checkpoints a landing keeps: the newest this many.
+    ///
+    /// The kernel's `retain_checkpoints`; `RETAINED_CHECKPOINTS`, two, by
+    /// default. Each is a whole copy of the world on the volume, and the
+    /// oldest is where `BadCheckpoint` recovery falls back to; whether the
+    /// journal below it stands is `reclaim_journal`'s.
+    pub retain_checkpoints: NonZeroUsize,
+    /// Whether a landing reclaims the journal below the oldest kept base.
+    ///
+    /// The kernel's reclamation policy ([`JournalReclamation`]): below the
+    /// oldest checkpoint kept by default, or never, which keeps every segment
+    /// since genesis while the usual bases stand, so a history read below
+    /// the oldest base is served from the kept journal.
+    pub reclaim_journal: JournalReclamation,
+}
+
+impl Default for StartOptions {
+    /// Returns the start every door but the binary's opens under.
+    ///
+    /// No cut accepted, no board asked for, and the three checkpoint
+    /// settings at their defaults — the two constants and the reclaiming
+    /// arm — the one home of those defaults, which the binary's help renders
+    /// from here.
+    fn default() -> StartOptions {
+        StartOptions {
+            cut_damaged_tail: false,
+            create: false,
+            checkpoint_every: CHECKPOINT_EVERY_COMMITS,
+            retain_checkpoints: RETAINED_CHECKPOINTS,
+            reclaim_journal: JournalReclamation::BelowOldestCheckpoint,
+        }
+    }
+}
+
+/// The journal's reclamation, as the start's `--reclaim-journal` names it.
+///
+/// The operator's two words for the kernel's two arms (`Reclaim`): the
+/// start carries the word, the open hands the kernel the arm. Parsed from
+/// and rendered as the word the flag and its variable take, so one spelling
+/// serves the parse, the help and the open's line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JournalReclamation {
+    /// `below-oldest-checkpoint`: reclaim below the oldest kept base.
+    ///
+    /// The default: at every landing the closed journal segments wholly
+    /// below the oldest retained checkpoint are removed, so the journal
+    /// holds the retained window and no more, and a history read below it
+    /// answers `history_reclaimed`.
+    #[default]
+    BelowOldestCheckpoint,
+    /// `never`: reclaim nothing, every segment since genesis kept.
+    ///
+    /// The checkpoints are kept as under the other word; the journal below
+    /// the oldest of them stands too, so a history read there folds from
+    /// genesis through it and every landing's line reads `nothing
+    /// reclaimed`. One start's word: a restart without it reclaims at its
+    /// next landing what this start kept.
+    Never,
+}
+
+impl JournalReclamation {
+    /// The word for the arm that reclaims below the oldest kept base.
+    pub const BELOW_OLDEST_CHECKPOINT: &'static str = "below-oldest-checkpoint";
+    /// The word for the arm that reclaims nothing.
+    pub const NEVER: &'static str = "never";
+    /// What the flag and its variable admit, as a refusal names them.
+    pub const ADMITTED: &'static str = "below-oldest-checkpoint or never";
+
+    /// Returns the kernel's arm for this word.
+    fn kernel(self) -> Reclaim {
+        match self {
+            JournalReclamation::BelowOldestCheckpoint => Reclaim::BelowOldestRetained,
+            JournalReclamation::Never => Reclaim::Never,
+        }
+    }
+}
+
+impl FromStr for JournalReclamation {
+    type Err = ();
+
+    /// Reads the word, exactly as the flag and its variable take it.
+    ///
+    /// # Errors
+    ///
+    /// Any other spelling: the caller names the setting and
+    /// [`JournalReclamation::ADMITTED`].
+    fn from_str(word: &str) -> Result<JournalReclamation, ()> {
+        match word {
+            JournalReclamation::BELOW_OLDEST_CHECKPOINT => {
+                Ok(JournalReclamation::BelowOldestCheckpoint)
+            }
+            JournalReclamation::NEVER => Ok(JournalReclamation::Never),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for JournalReclamation {
+    /// Writes the word the flag takes.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            JournalReclamation::BelowOldestCheckpoint => JournalReclamation::BELOW_OLDEST_CHECKPOINT,
+            JournalReclamation::Never => JournalReclamation::NEVER,
+        })
+    }
+}
+
+/// The open's line for the three checkpoint settings in force.
+///
+/// It is said once per open, after the directory's line and the two
+/// refusals that touch nothing under the directory — the blocked-prefix
+/// list's and the blob store's — and before the engine opens under them
+/// (`operations.md` §3.1 step 3), so a start the engine refuses shows the
+/// settings it was refused under and a start the list refuses says the
+/// version, the directory and the refusal alone. It renders
+/// `checkpoint settings: a checkpoint every {n} commits (--checkpoint-every),
+/// {k} retained (--retain-checkpoints), the journal reclaimed below the
+/// oldest retained checkpoint (--reclaim-journal below-oldest-checkpoint);
+/// read at this start alone, each the default where neither its flag nor
+/// its variable was given`, the reclamation clause `the journal kept whole,
+/// never reclaimed (--reclaim-journal never)` under the other word. A pure
+/// value the unit suite pins by `to_string()`; emitted under `Class::Open`
+/// through [`say_open_line`].
+struct CheckpointSettingsLine<'a> {
+    start: &'a StartOptions,
+}
+
+impl fmt::Display for CheckpointSettingsLine<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "checkpoint settings: a checkpoint every {} commits (--checkpoint-every), {} retained \
+             (--retain-checkpoints), ",
+            self.start.checkpoint_every, self.start.retain_checkpoints
+        )?;
+        match self.start.reclaim_journal {
+            JournalReclamation::BelowOldestCheckpoint => {
+                f.write_str("the journal reclaimed below the oldest retained checkpoint")?
+            }
+            JournalReclamation::Never => f.write_str("the journal kept whole, never reclaimed")?,
+        }
+        write!(
+            f,
+            " (--reclaim-journal {}); read at this start alone, each the default where neither \
+             its flag nor its variable was given",
+            self.start.reclaim_journal
+        )
+    }
 }
 
 /// The error's chain: `source` exposes the cause as a link.
@@ -884,8 +1062,10 @@ impl Daemon {
     /// leaves the uncovered positions pending for a walk behind the
     /// listener, which reconstructs them from the journal while the board
     /// serves — one whole-world replay (plus one world diff, for the
-    /// position's class) each, up to the retained window
-    /// (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
+    /// position's class) each, up to the retained window — the start's
+    /// cadence × its retained count ([`StartOptions`]), 1,024 × 2 by
+    /// default (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`), and
+    /// the whole journal where the start keeps it whole.
     /// `CommitsLog::open` states that bound; `Feed::open` the derived
     /// sidecars' own, O(their files) plus O(any missing tail); and the
     /// attest store's open inside it (`skep-core`'s `commits/feed/attest.rs`'s
@@ -1071,7 +1251,8 @@ impl Daemon {
         // the operator stream that names the directory, which a collector
         // keys on, and the tell that an open has begun where it is long.
         say_open_line(DataDirLine(data_dir));
-        // The cadence: every `CHECKPOINT_EVERY_COMMITS` or the byte bound,
+        // The cadence: every `checkpoint_every` commits (the start's;
+        // `CHECKPOINT_EVERY_COMMITS` by default) or the byte bound,
         // whichever first, deferred — a crossing sets the kernel's due flag
         // and the checkpoint thread runs it off the write path's guard; a
         // second crossing before the thread has serviced the first runs
@@ -1081,14 +1262,20 @@ impl Daemon {
         let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: data_dir.to_path_buf(),
-                retain_checkpoints: RETAINED_CHECKPOINTS,
+                // The start's two journal policies: how many bases stand
+                // (`RETAINED_CHECKPOINTS` by default), and whether the
+                // journal below the oldest of them is reclaimed at a
+                // landing or kept whole — each the kernel's knob, read once
+                // at the open.
+                retain_checkpoints: start.retain_checkpoints.get(),
+                reclaim: start.reclaim_journal.kernel(),
                 burned_seq: BurnedSeqPolicy::Rollback,
                 // The operator's word for this one start, where it was
                 // given: the kernel's knob, read once at the open.
                 cut_damaged_tail: start.cut_damaged_tail,
             },
             checkpoint: CheckpointPolicy::Deferred(Box::new(CheckpointPolicy::EitherOf(
-                Box::new(CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS)),
+                Box::new(CheckpointPolicy::EveryN(start.checkpoint_every.get())),
                 Box::new(CheckpointPolicy::JournalBytes(CHECKPOINT_BYTES_FLOOR)),
             ))),
             salt,
@@ -1137,6 +1324,16 @@ impl Daemon {
                 .iter()
                 .any(|name| std::fs::symlink_metadata(root.join(name)).is_ok())
         };
+        // The three checkpoint settings in force, said before the engine
+        // opens under them and after the two refusals that touch nothing
+        // under the directory (the list's, the store's), so a start those
+        // refuse says the version, the directory and the refusal alone:
+        // the cadence's count, the retained count and the journal's
+        // reclamation — the start's, each the default where the start named
+        // none — so a start the engine refuses shows what it was refused
+        // under, and a board run a month under `never` and restarted
+        // without the word reads here that it reclaims again.
+        say_open_line(CheckpointSettingsLine { start: &start });
         // The engine's open, timed: the daemon's own `Instant` around the
         // call, the figure the recovery's landing carries.
         let began = Instant::now();
@@ -2514,23 +2711,25 @@ struct LandingLine {
 /// What a landing reclaimed: the kernel's figures for a call that landed whole.
 ///
 /// It renders `{bytes} journal bytes reclaimed`, or `nothing reclaimed` at
-/// zero, then each checkpoint file retention removed — `; checkpoint.{n}
-/// removed ({bytes} bytes)`, the rest joined by `, ` — as line 25 and the
-/// backstop's line carry it (`operations.md` §1.1 row 25; m13). The kernel
-/// stores the figures at the end of a call that landed whole and at no other
-/// (`Kernel::last_reclaimed_bytes`), so a line after a base landed and a
-/// later step failed carries none.
+/// zero — every landing's figure where the start keeps the journal whole
+/// (`--reclaim-journal never`) — then each checkpoint file retention removed
+/// — `; checkpoint.{n} removed ({bytes} bytes)`, the rest joined by `, ` —
+/// as line 25 and the backstop's line carry it (`operations.md` §1.1 row
+/// 25; m13). The kernel stores the figures at the end of a call that landed
+/// whole and at no other (`Kernel::last_reclaimed_bytes`), so a line after a
+/// base landed and a later step failed carries none.
 struct Reclaimed {
     /// The journal bytes reclaimed; zero is "nothing reclaimed".
     bytes: u64,
     /// The checkpoint files the landing's retention removed, oldest first.
     ///
     /// Each is named by its position and its length in bytes
-    /// (`Kernel::last_removed_checkpoints`): the oldest base past the two
-    /// kept, and any base the open passed over — the file the open's own
-    /// `SKIPPED` warning named, which this clause names by the same
-    /// `checkpoint.{n}`. Empty where retention removed none, and the clause
-    /// is absent.
+    /// (`Kernel::last_removed_checkpoints`): the oldest base past the
+    /// retained count the start runs under (`StartOptions`'s
+    /// `retain_checkpoints`, two by default), and any base the open passed
+    /// over — the file the open's own `SKIPPED` warning named, which this
+    /// clause names by the same `checkpoint.{n}`. Empty where retention
+    /// removed none, and the clause is absent.
     removed: Vec<(Seq, u64)>,
 }
 

@@ -30,8 +30,8 @@ use skep_identity::{
 };
 use skep_signature::{HybridSigner, Seed as SigningKey};
 use skepd::{
-    embed, embed_seeded, AuthOptions, Daemon, MediaOptions, NodePrefix, Origin, Skepd,
-    DEFAULT_WORKERS,
+    bind, embed, embed_seeded, serve_bound, AuthOptions, Daemon, MediaOptions, NodePrefix,
+    Origin, Skepd, StartOptions, DEFAULT_WORKERS,
 };
 
 mod ops;
@@ -1171,6 +1171,55 @@ pub fn spawn_with_workers(dir: &Path, workers: usize) -> Skepd {
     let _unheld = WalkUnheld::take();
     let sd = embed(dir, 0, unconfigured, MediaOptions::default(), workers)
         .unwrap_or_else(|e| panic!("daemon start (genesis or recover) at {}: {e}", dir.display()));
+    forget_port(sd.port());
+    wait_for_the_index(&sd);
+    wait_for_the_feed_walk(&sd);
+    claim_board(sd.port());
+    sd
+}
+
+/// [`spawn`] under the START's THREE CHECKPOINT SETTINGS — the library's
+/// face of `--checkpoint-every`, `--retain-checkpoints` and
+/// `--reclaim-journal` (`StartOptions`): the cadence's commit count, the
+/// retained count and the journal's reclamation, read once at this open and
+/// persisted nowhere, so a board spawned here and respawned through
+/// [`spawn`] runs at the defaults again. The board is claimed as
+/// [`spawn`]'s is — a reopened claimed board keeps its claim — every other
+/// option the fixtures' default. The one start sequence (`skepd::embed`'s:
+/// the port bound first, the open retried where the journal lock of a
+/// daemon just stopped is not yet re-acquirable, the serve over the bound
+/// port) is run here through the started door, `Daemon::open_started`, the
+/// one door that takes the start's words.
+pub fn spawn_with_checkpoint_settings(dir: &Path, start: StartOptions) -> Skepd {
+    // The walk's fence, from before the open until the index is ready.
+    let _unheld = WalkUnheld::take();
+    let lock_held = |err: &skepd::DaemonError| {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(err);
+        while let Some(e) = source {
+            if let Some(io) = e.downcast_ref::<std::io::Error>() {
+                return io.kind() == ErrorKind::WouldBlock;
+            }
+            source = e.source();
+        }
+        false
+    };
+    let mut attempt = 1;
+    let sd = loop {
+        let listener = bind(0).expect("bind an ephemeral port");
+        let opts = unconfigured(listener.port());
+        match Daemon::open_started(dir, opts, MediaOptions::default(), start) {
+            Ok(daemon) => {
+                break serve_bound(daemon, listener, DEFAULT_WORKERS)
+                    .expect("serve over the bound port");
+            }
+            Err(e) if attempt < 12 && lock_held(&e) => {
+                drop(listener);
+                std::thread::sleep(Duration::from_millis(25));
+                attempt += 1;
+            }
+            Err(e) => panic!("daemon start under {start:?} at {}: {e}", dir.display()),
+        }
+    };
     forget_port(sd.port());
     wait_for_the_index(&sd);
     wait_for_the_feed_walk(&sd);

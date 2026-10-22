@@ -1453,7 +1453,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
 fn pre_feature_positions_answer_bare_entries() {
     use skep_engine::{Engine, KernelConfig};
     use skep_febe::{Codec, OperationSurface, Response, SessionId};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource};
     use skep_namespace::PrincipalId;
     use skepd::JsonCodec;
 
@@ -1463,6 +1463,7 @@ fn pre_feature_positions_answer_bare_entries() {
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 2,
+                reclaim: Reclaim::BelowOldestRetained,
                 burned_seq: BurnedSeqPolicy::Rollback,
                 cut_damaged_tail: false,
             },
@@ -1576,12 +1577,13 @@ fn pre_feature_positions_answer_bare_entries() {
 /// complete, and the reclaim floor lands AT the head.
 fn reclaim_below_the_head(dir: &Path, head: u64) {
     use skep_engine::{Engine, KernelConfig};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource};
 
     let cfg = KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

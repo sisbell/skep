@@ -8,8 +8,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, LockKey, SaltSource,
-    TxnError, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, LockKey, Reclaim,
+    SaltSource, TxnError, WorldState,
 };
 use skep_namespace::{
     HasM3, M3Rec, M3State, MintError, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL,
@@ -88,6 +88,7 @@ pub fn fsync_config(dir: &Path) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

@@ -28,7 +28,9 @@ use skep_arrangement::{Caller, Deposit, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, World};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource, Seq};
+use skep_kernel::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Reclaim, SaltSource, Seq,
+};
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -95,6 +97,7 @@ pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelCon
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

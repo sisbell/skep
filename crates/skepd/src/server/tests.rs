@@ -821,11 +821,19 @@ fn the_opens_own_lines_go_through_the_classed_door() {
     let open_under = &source[start..end];
     assert_eq!(
         open_under.matches("say_open_line(").count(),
-        13,
-        "the thirteen lines — the version, the directory, the recovery, the beginning under \
-         --create and without it, the stray checkpoint.tmp, the tail cut, the flag given to a \
-         start that needed none, the blob logs' torn-line landing, the kept files, the media \
-         limits, the volume's free space, the upload setting — each through the door"
+        14,
+        "the fourteen lines — the version, the directory, the checkpoint settings, the recovery, \
+         the beginning under --create and without it, the stray checkpoint.tmp, the tail cut, \
+         the flag given to a start that needed none, the blob logs' torn-line landing, the kept \
+         files, the media limits, the volume's free space, the upload setting — each through \
+         the door"
+    );
+    assert!(
+        open_under.find("say_open_line(DataDirLine(").expect("the directory's line")
+            < open_under.find("say_open_line(CheckpointSettingsLine {").expect("the settings' line")
+            && open_under.find("say_open_line(CheckpointSettingsLine {").expect("the settings' line")
+                < open_under.find("Engine::open(").expect("the engine's open"),
+        "the settings' line follows the directory's and precedes the engine's open"
     );
     assert!(
         open_under.contains("say_open_line(BeganLine)"),
@@ -864,6 +872,42 @@ fn the_opens_own_lines_go_through_the_classed_door() {
         source[door..door + 160].contains("notice::emit(Class::Open,"),
         "the door emits under Class::Open"
     );
+}
+
+/// THE CHECKPOINT SETTINGS' LINE at fixed settings (RUNBOOK §3 step 3's
+/// item 4): the three in force, each with its flag, the reclamation clause
+/// in its two arms, and the sentence that says they are this start's alone
+/// — the words the runbook quotes, rendered from the start the open took,
+/// the defaults rendering the two constants and the reclaiming word.
+#[test]
+fn the_checkpoint_settings_line_names_the_three_in_force() {
+    let defaults = StartOptions::default();
+    assert_eq!(
+        CheckpointSettingsLine { start: &defaults }.to_string(),
+        "checkpoint settings: a checkpoint every 1024 commits (--checkpoint-every), 2 retained \
+         (--retain-checkpoints), the journal reclaimed below the oldest retained checkpoint \
+         (--reclaim-journal below-oldest-checkpoint); read at this start alone, each the default \
+         where neither its flag nor its variable was given"
+    );
+    let mut never = defaults;
+    never.checkpoint_every = NonZeroU64::new(8).expect("a cadence");
+    never.retain_checkpoints = NonZeroUsize::new(3).expect("a count");
+    never.reclaim_journal = JournalReclamation::Never;
+    assert_eq!(
+        CheckpointSettingsLine { start: &never }.to_string(),
+        "checkpoint settings: a checkpoint every 8 commits (--checkpoint-every), 3 retained \
+         (--retain-checkpoints), the journal kept whole, never reclaimed (--reclaim-journal \
+         never); read at this start alone, each the default where neither its flag nor its \
+         variable was given"
+    );
+    // The word round-trips through the setting's own parse and render, and
+    // the two constants are the defaults the start opens under.
+    for word in [JournalReclamation::BelowOldestCheckpoint, JournalReclamation::Never] {
+        assert_eq!(word.to_string().parse::<JournalReclamation>(), Ok(word));
+    }
+    assert_eq!("often".parse::<JournalReclamation>(), Err(()));
+    assert_eq!(defaults.checkpoint_every, CHECKPOINT_EVERY_COMMITS);
+    assert_eq!(defaults.retain_checkpoints, RETAINED_CHECKPOINTS);
 }
 
 /// THE SERVED PAGE's PARAGRAPH of the module doc says what `GET /` serves:

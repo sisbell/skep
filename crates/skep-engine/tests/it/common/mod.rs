@@ -87,6 +87,7 @@ pub fn fsync_cfg(path: &Path) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: path.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: skep_kernel::Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

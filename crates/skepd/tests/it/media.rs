@@ -32,7 +32,7 @@ use skep_address::{content_subspace, elem_addr, validate, Address, ElemPos, Nat,
 use skep_arrangement::{Caller, Deposit, VPos};
 use skep_content::{HasContent, Val};
 use skep_engine::{Engine, KernelConfig};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource};
 use skep_namespace::{HasM3, PrincipalId};
 
 use crate::common;
@@ -123,6 +123,7 @@ pub(crate) fn seed_pre_fence_draft(dir: &Path, principal: u64, account: &str, by
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -1098,6 +1099,7 @@ fn engine_config(dir: &Path) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

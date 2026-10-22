@@ -50,10 +50,12 @@ use skep_core::limits::EDGE_HOLD_DOWN;
 /// and the chain read behind `/chain?at` spends a permit of this pool for
 /// the span of its call. Each is per call and uncached, and each LOADS A
 /// WHOLE BASE — the newest retained checkpoint at or below the position,
-/// read whole, deserialized and seeded, or genesis — reads every journal
-/// segment above it to the journal's end, and holds the records between the
-/// base and the position before the fold begins (`Kernel::world_at`'s cost
-/// card). A reconstruction folds them and leaves that second world resident
+/// read whole, deserialized and seeded, or genesis, which stands in below
+/// the oldest retained checkpoint while the journal reaches it — reads every
+/// journal segment above it to the journal's end, and holds the records
+/// between the base and the position before the fold begins
+/// (`Kernel::world_at`'s cost card). A reconstruction folds them and leaves
+/// that second world resident
 /// for as long as its answer is being built; the chain read drops it
 /// unfolded (`Kernel::chain_at`'s card). So a permit's peak is one whole
 /// world and a window's records whichever route holds it, and the pool's is
@@ -202,7 +204,11 @@ impl History {
     /// is [`Unavailable::Journal`]. A position no retained checkpoint at or
     /// below it can stand in for — every one slice-less over credential
     /// deposits, the journal below reclaimed — is refused whole as
-    /// `Reclaimed` (AUTH-2.87), never served without its table.
+    /// `Reclaimed` (AUTH-2.87), never served without its table. A position
+    /// below the oldest retained checkpoint is served where the journal
+    /// still reaches it — every such position where the start keeps the
+    /// journal whole (`--reclaim-journal never`) — by the fold from genesis
+    /// through the kept journal, under the same permit as any other.
     pub(crate) fn reconstruct(
         &self,
         engine: &Engine,

@@ -95,7 +95,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   the change feed holds read after each landing for its line — the feed's
   files are kept whole from genesis, the daemon holding a window of recent
   positions in memory and reading the rest from disk by position, so no
-  landing rewrites one. So is the start's word: the binary begins a board only under
+  landing rewrites one. The cadence's count, the checkpoints kept (two by
+  default) and the journal's reclamation below the oldest of them are the
+  operator's three settings — `--checkpoint-every`, `--retain-checkpoints`
+  and `--reclaim-journal`, each with its `SKEPD_` variable, `never` keeping
+  the journal whole so every past state stays readable — read once at the
+  open, said there on one line and persisted nowhere, so a board restarted
+  without a word runs at the default (`StartOptions`). So is the start's
+  word: the binary begins a board only under
   `--create` and refuses a directory holding none without it, and a
   journal tail that is not a crash's halts the open — the kernel's
   refusal, with the flag's spelling after it — until one start passes

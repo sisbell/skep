@@ -10,11 +10,14 @@ use skep_namespace::PrincipalId;
 /// is not the daemon's: `skepd` bounds its cadence by journal bytes as well,
 /// which no test here reaches.
 pub(super) fn fsync_engine(dir: &std::path::Path) -> Engine {
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+    use skep_kernel::{
+        BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Reclaim, SaltSource,
+    };
     Engine::open(KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

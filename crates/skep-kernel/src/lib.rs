@@ -86,7 +86,13 @@
 //! counts every base but those the open skipped**: the names an open passed
 //! over are passed over by the count of bases to keep and removed as excess,
 //! so the first landing after a skip keeps the base the open loaded from
-//! beside the new one, where `retain_checkpoints` is two or more.
+//! beside the new one, where `retain_checkpoints` is two or more. **Retention
+//! and reclamation are two policies** ([`Reclaim`], beside
+//! `retain_checkpoints` on [`Durability::Fsync`]): a landing keeps the bases
+//! under either arm and reclaims the journal below the oldest of them under
+//! [`Reclaim::BelowOldestRetained`] alone; under [`Reclaim::Never`] every
+//! segment since genesis stands and a history read below the oldest base
+//! folds from genesis through it.
 //!
 //! The `test-hooks` feature compiles in the test seam (`hooks.rs`). It holds
 //! the write-fault seam, under which a test makes the next checkpoint write —
@@ -141,8 +147,8 @@
 //! ```no_run
 //! use serde::{Deserialize, Serialize};
 //! use skep_kernel::{
-//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
-//!     WorldState,
+//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim, SaltSource,
+//!     Seq, WorldState,
 //! };
 //!
 //! #[derive(Clone, Serialize, Deserialize)]
@@ -162,6 +168,7 @@
 //!     durability: Durability::Fsync {
 //!         journal_path: "/var/lib/skep/journal".into(),
 //!         retain_checkpoints: 2,
+//!         reclaim: Reclaim::BelowOldestRetained,
 //!         burned_seq: BurnedSeqPolicy::Rollback,
 //!         cut_damaged_tail: false,
 //!     },
@@ -211,7 +218,9 @@ mod replay;
 mod kernel;
 
 pub use checkpoint::{CheckpointHeader, CHECKPOINT_FORMAT};
-pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+pub use config::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Reclaim, SaltSource,
+};
 pub use error::{
     CheckpointError, DamagedTail, DamagedTailTell, HistoryError, LandedStep, OpenError,
     RebuildError, TxnError,
@@ -439,8 +448,9 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// it passed over — as [`Recovery`], so the caller can say so. Retention
     /// counts none of the bases the open passed over — a refused one among
     /// them — among the bases it keeps, and the first landing removes them,
-    /// save a name a later checkpoint wrote over; the reclaim floor is the
-    /// oldest base kept ([`Kernel::checkpoint`]). The error is M2's own and
+    /// save a name a later checkpoint wrote over; the reclaim floor, where
+    /// the journal is reclaimed at all, is the oldest base kept
+    /// ([`Kernel::checkpoint`]). The error is M2's own and
     /// slice-agnostic: it names the slice and nothing of what the slice means,
     /// since this kernel knows nothing about what any change means.
     ///

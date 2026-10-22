@@ -468,6 +468,201 @@ fn the_variable_meets_the_same_floor_as_the_flag() {
     );
 }
 
+/// THE THREE CHECKPOINT SETTINGS (RUNBOOK §3 step 2; `StartOptions`): absent,
+/// each is `StartOptions::default()`'s — the cadence's 1,024, the two
+/// retained, the reclaiming arm — read there and restated nowhere here;
+/// given, each is read as given, the reclamation by its two words alone. A
+/// ZERO for either count is refused after the flag loop, in the arm the
+/// worker floor is held in, naming the setting, why zero is no setting and
+/// the default to leave it at; a word that is neither `below-oldest-checkpoint`
+/// nor `never` is refused at the flag naming both; a count that is no count
+/// is refused as `--workers`'s is. And the help carries the three rows with
+/// their variables, each default rendered from `StartOptions::default()`
+/// and never a literal, and the two words.
+#[test]
+fn the_checkpoint_settings_parse_with_their_defaults_and_refuse_a_zero_or_an_unknown_word() {
+    let defaults = StartOptions::default();
+    let absent = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+    assert_eq!(absent.checkpoint_every, defaults.checkpoint_every, "the cadence's default");
+    assert_eq!(absent.retain_checkpoints, defaults.retain_checkpoints, "the count's default");
+    assert_eq!(absent.reclaim_journal, JournalReclamation::BelowOldestCheckpoint, "reclaiming");
+    assert_eq!((defaults.checkpoint_every.get(), defaults.retain_checkpoints.get()), (1024, 2));
+    let given = parse_args(argv(&[
+        "--data-dir",
+        "/tmp/x",
+        "--checkpoint-every",
+        "8",
+        "--retain-checkpoints",
+        "3",
+        "--reclaim-journal",
+        "never",
+    ]))
+    .expect("valid")
+    .expect("a run");
+    assert_eq!(given.checkpoint_every.get(), 8, "read as given");
+    assert_eq!(given.retain_checkpoints.get(), 3, "read as given");
+    assert_eq!(given.reclaim_journal, JournalReclamation::Never, "read as given");
+    let reclaiming =
+        parse_args(argv(&["--data-dir", "/tmp/x", "--reclaim-journal", "below-oldest-checkpoint"]))
+            .expect("valid")
+            .expect("a run");
+    assert_eq!(reclaiming.reclaim_journal, JournalReclamation::BelowOldestCheckpoint);
+
+    // The zero refusals, in the worker floor's arm, each naming the setting
+    // and the default the help names.
+    let Err(refused) = parse_args(argv(&["--data-dir", "/tmp/x", "--checkpoint-every", "0"])) else {
+        panic!("--checkpoint-every 0 was not refused");
+    };
+    assert_eq!(
+        refused,
+        format!(
+            "--checkpoint-every: 0 is refused — a checkpoint after every zero commits is no \
+             cadence; give a count of 1 or more, or leave it unset for the default {}",
+            defaults.checkpoint_every
+        )
+    );
+    let Err(refused) = parse_args(argv(&["--data-dir", "/tmp/x", "--retain-checkpoints", "0"]))
+    else {
+        panic!("--retain-checkpoints 0 was not refused");
+    };
+    assert_eq!(
+        refused,
+        format!(
+            "--retain-checkpoints: 0 is refused — a board keeping no checkpoint has no base to \
+             recover from; give a count of 1 or more, or leave it unset for the default {}",
+            defaults.retain_checkpoints
+        )
+    );
+    // The word, refused at the flag naming the two admitted.
+    let Err(refused) = parse_args(argv(&["--data-dir", "/tmp/x", "--reclaim-journal", "often"]))
+    else {
+        panic!("--reclaim-journal often was not refused");
+    };
+    assert_eq!(refused, "--reclaim-journal: 'often' is not below-oldest-checkpoint or never");
+    // A count that is no count, and a flag without its value.
+    for bad in [
+        &["--data-dir", "/tmp/x", "--checkpoint-every", "many"][..],
+        &["--data-dir", "/tmp/x", "--retain-checkpoints", "-1"],
+        &["--data-dir", "/tmp/x", "--checkpoint-every"],
+        &["--data-dir", "/tmp/x", "--retain-checkpoints"],
+        &["--data-dir", "/tmp/x", "--reclaim-journal"],
+    ] {
+        assert!(parse_args(argv(bad)).is_err(), "{bad:?} is refused");
+    }
+    // The help: the three rows, their variables, the defaults off the
+    // start's own and the two words.
+    let text = usage();
+    for named in [
+        "\n  --checkpoint-every <COMMITS>",
+        "\n  --retain-checkpoints <N>",
+        "\n  --reclaim-journal <POLICY>",
+        "[--checkpoint-every <COMMITS>] [--retain-checkpoints <N>]",
+        "[--reclaim-journal <POLICY>]",
+        "SKEPD_CHECKPOINT_EVERY",
+        "SKEPD_RETAIN_CHECKPOINTS",
+        "SKEPD_RECLAIM_JOURNAL",
+    ] {
+        assert!(text.contains(named), "the usage carries {named:?}: {text}");
+    }
+    let folded = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    for rendered in [
+        format!("(env: SKEPD_CHECKPOINT_EVERY; default {})", defaults.checkpoint_every),
+        format!("(env: SKEPD_RETAIN_CHECKPOINTS; default {})", defaults.retain_checkpoints),
+        format!("(env: SKEPD_RECLAIM_JOURNAL; default {})", defaults.reclaim_journal),
+        "below-oldest-checkpoint reclaims it".to_string(),
+        "never keeps every journal segment since genesis".to_string(),
+        "Read at every start".to_string(),
+    ] {
+        assert!(folded.contains(&rendered), "the help renders {rendered:?}: {folded}");
+    }
+}
+
+/// THE VARIABLES SEED THE FLAGS AND MEET THE SAME REFUSALS:
+/// `SKEPD_RETAIN_CHECKPOINTS=0` with no flag on the line is refused by the
+/// same arm with the same words as `--retain-checkpoints 0`, and a flag in
+/// range beside it wins; `SKEPD_RECLAIM_JOURNAL=never` and
+/// `SKEPD_CHECKPOINT_EVERY=8` seed the two settings, and each flag beats its
+/// variable; a reclamation word the variable spells wrong is refused naming
+/// the variable and the two words. Judged in children of this test binary,
+/// as the worker variable's claim is, since the environment is process-wide.
+#[test]
+fn the_checkpoint_variables_seed_the_flags_and_meet_the_same_refusals() {
+    const CHILD: &str = "SKEPD_TEST_CHECKPOINT_SETTINGS_CHILD";
+    match std::env::var(CHILD).as_deref() {
+        Ok("zero") => {
+            let defaults = StartOptions::default();
+            let Err(refused) = parse_args(argv(&["--data-dir", "/tmp/x"])) else {
+                panic!("the variable's zero was not refused");
+            };
+            assert_eq!(
+                refused,
+                format!(
+                    "--retain-checkpoints: 0 is refused — a board keeping no checkpoint has no \
+                     base to recover from; give a count of 1 or more, or leave it unset for the \
+                     default {}",
+                    defaults.retain_checkpoints
+                ),
+                "the same arm, the same words"
+            );
+            let a = parse_args(argv(&["--data-dir", "/tmp/x", "--retain-checkpoints", "3"]))
+                .expect("the flag wins over the variable")
+                .expect("a run");
+            assert_eq!(a.retain_checkpoints.get(), 3);
+            return;
+        }
+        Ok("seeded") => {
+            let a = parse_args(argv(&["--data-dir", "/tmp/x"])).expect("valid").expect("a run");
+            assert_eq!(a.checkpoint_every.get(), 8, "the variable seeds the cadence");
+            assert_eq!(a.reclaim_journal, JournalReclamation::Never, "…and the reclamation");
+            let a = parse_args(argv(&[
+                "--data-dir",
+                "/tmp/x",
+                "--checkpoint-every",
+                "16",
+                "--reclaim-journal",
+                "below-oldest-checkpoint",
+            ]))
+            .expect("valid")
+            .expect("a run");
+            assert_eq!(a.checkpoint_every.get(), 16, "the flag beats the variable");
+            assert_eq!(a.reclaim_journal, JournalReclamation::BelowOldestCheckpoint);
+            return;
+        }
+        Ok("word") => {
+            assert_eq!(
+                parse_args(argv(&["--data-dir", "/tmp/x"])).err(),
+                Some("SKEPD_RECLAIM_JOURNAL: 'often' is not below-oldest-checkpoint or never".into())
+            );
+            return;
+        }
+        _ => {}
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    for (arm, set) in [
+        ("zero", &[(SKEPD_RETAIN_CHECKPOINTS.var, "0")][..]),
+        ("seeded", &[(SKEPD_CHECKPOINT_EVERY.var, "8"), (SKEPD_RECLAIM_JOURNAL.var, "never")][..]),
+        ("word", &[(SKEPD_RECLAIM_JOURNAL.var, "often")][..]),
+    ] {
+        let out = std::process::Command::new(&exe)
+            .args([
+                "tests::the_checkpoint_variables_seed_the_flags_and_meet_the_same_refusals",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, arm)
+            .envs(set.iter().copied())
+            .output()
+            .expect("run the child");
+        assert!(
+            out.status.success(),
+            "the {arm} child's claims failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// Checks that `--allow-preview-keys` is off unless given (AUTH-1.44).
 ///
 /// It is a bare flag, seeded by no environment variable, so a served

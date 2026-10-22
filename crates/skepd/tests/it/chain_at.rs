@@ -238,7 +238,7 @@ fn chain_at_serves_the_value_alone_no_salt_and_no_marker_byte() {
 #[test]
 fn chain_at_below_the_retention_floor_is_history_reclaimed() {
     use skep_engine::{Engine, KernelConfig};
-    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource, Seq};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource, Seq};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let (early, head, head_chain) = {
@@ -274,6 +274,7 @@ fn chain_at_below_the_retention_floor_is_history_reclaimed() {
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 1,
+                reclaim: Reclaim::BelowOldestRetained,
                 burned_seq: BurnedSeqPolicy::Rollback,
                 cut_damaged_tail: false,
             },

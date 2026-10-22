@@ -871,7 +871,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 404    | `blob_damaged`              | the fetch's file is not the deposit the cell names — the wrong length, or the wrong bytes under the right name; carries `hash` and `size` (§Media, THE FETCH) |
 | 503    | `fetch_busy`                | all fetch permits are in use; retry shortly (§Media, THE FETCH) |
 | 503    | `upload_busy`               | all upload permits are in use — the blob upload's creation or resume past the upload pool, before any body byte; retry shortly (§Media, THE PERMIT) |
-| 410    | `history_reclaimed`         | the position (`/op-at`) predates retained history, or the `since` fence (`/changes`) lies below the first line the change feed's files hold — a hole an earlier build's compaction or an un-re-coverable lost region left, never the journal's reclamation, which the feed outlives (carries `floor` when known) |
+| 410    | `history_reclaimed`         | the position (`/op-at`) predates retained history — never where the journal is kept whole (`--reclaim-journal never`) — or the `since` fence (`/changes`) lies below the first line the change feed's files hold — a hole an earlier build's compaction or an un-re-coverable lost region left, never the journal's reclamation, which the feed outlives (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`, `/chain?at`) are in use; retry shortly |
 | 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
 | 503    | `write_busy`                | all write permits are in use — a write on `/op` past the write permit pool, refused before the credential lock and the guard are taken, nothing committed (§The model); carries `op`; retry shortly |
@@ -4357,8 +4357,12 @@ other, and a historical class scan (`/op-at` over a `ty`-only four-set)
 is bounded by the reconstruction permit alone. Retention is exactly what
 the journal already provides: the daemon
 retains recent checkpoints and reclaims journal segments below the oldest
-retained one, so a sufficiently old position can stop being derivable.
-Asking for one:
+retained one, so a sufficiently old position can stop being derivable —
+how many it retains, how often it checkpoints and whether it reclaims at
+all are the operator's settings (`--retain-checkpoints`,
+`--checkpoint-every`, `--reclaim-journal`; RUNBOOK §3), and a board run
+under `--reclaim-journal never` keeps its journal whole and answers every
+position. Asking for one the journal has reclaimed:
 
 <!-- wire: error history_reclaimed -->
 ```json

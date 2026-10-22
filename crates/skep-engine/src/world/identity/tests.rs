@@ -21,7 +21,7 @@ use skep_identity::{
 };
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, KernelConfig, OpenError,
-    RebuildError, SaltSource, Seq, WorldState,
+    RebuildError, Reclaim, SaltSource, Seq, WorldState,
 };
 use skep_links::SlotArg;
 
@@ -282,6 +282,7 @@ fn fsync_cfg(dir: &Path, retain: usize) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

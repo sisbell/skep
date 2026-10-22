@@ -13,6 +13,7 @@ mod chain_at;
 mod chain_head;
 mod changes;
 mod checkpoint;
+mod checkpoint_settings;
 mod client;
 mod common;
 mod cors;

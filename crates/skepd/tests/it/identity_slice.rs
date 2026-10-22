@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use skep_engine::{Engine, Seq};
 use skep_identity::{encode_retire, Fingerprint};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, SaltSource};
+use skep_kernel::{
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Reclaim, SaltSource,
+};
 use skep_signature::Seed as SigningKey;
 use skepd::{Daemon, DaemonError, EngineError, OpenError};
 
@@ -517,6 +519,7 @@ fn below_the_floor_is_history_reclaimed_and_a_head_with_no_start_point_refuses_t
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 1,
+                reclaim: Reclaim::BelowOldestRetained,
                 burned_seq: BurnedSeqPolicy::Rollback,
                 cut_damaged_tail: false,
             },

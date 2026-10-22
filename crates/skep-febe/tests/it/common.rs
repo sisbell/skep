@@ -22,8 +22,8 @@ use skep_febe::{
     SuccessorSpec, UniversalGrant, UniversalIndexRow,
 };
 use skep_kernel::{
-    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
-    Seq, WorldState,
+    Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim,
+    SaltSource, Seq, WorldState,
 };
 use skep_links::{enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -306,6 +306,7 @@ pub fn journaled_kernel(dir: &Path) -> Arc<Kernel<World>> {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

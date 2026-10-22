@@ -13,7 +13,7 @@ use skep_arrangement::{
 };
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim, SaltSource, Seq,
     Snapshot, TxnError, WorldState,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -251,6 +251,7 @@ pub fn cfg_fsync(dir: &Path) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

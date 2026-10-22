@@ -92,11 +92,14 @@
 //!   nothing.
 //!
 //! Durability lives in M2 and is *configured* here (`Durability::Fsync`;
-//! checkpoints every 1024 commits or a byte bound — a quarter of the newest
-//! checkpoint's size, never below 24 MiB, re-read as each lands —
+//! checkpoints every 1024 commits by default or a byte bound — a quarter of
+//! the newest checkpoint's size, never below 24 MiB, re-read as each lands —
 //! whichever first, deferred to the daemon's own checkpoint thread, which
-//! runs them off the write path's guard, says a failure once, and compacts
-//! the change feed's files after each landing; two retained): genesis on a
+//! runs them off the write path's guard, says a failure once, and reads what
+//! the change feed holds after each landing; two retained by default, the
+//! journal reclaimed below the oldest — the cadence's count, the retained
+//! count and the reclamation the start's three settings, `never` keeping
+//! the journal whole): genesis on a
 //! fresh data dir, recovery on an existing one. The only files the daemon
 //! writes itself — its core's code writes them, and they are the daemon's
 //! files — are the change feed's: `commits.log` — the wire-v6
@@ -175,8 +178,8 @@ pub use skep_core::auth::{
 pub use skep_core::codec::JsonCodec;
 pub use server::{
     bind, body_cap, embed, serve, serve_bound, Body, Daemon, DaemonError, EmbedError, Fetch,
-    HttpRequest, IndexNotReady, Listener, Peer, Reply, Routed, Skepd, StartOptions, DEFAULT_PORT,
-    DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
+    HttpRequest, IndexNotReady, JournalReclamation, Listener, Peer, Reply, Routed, Skepd,
+    StartOptions, DEFAULT_PORT, DEFAULT_WORKERS, MIN_WORKERS, UNIVERSAL_HEADERS,
 };
 /// Which arm of the parse set a setting, `skep-util`'s, re-exported too.
 ///

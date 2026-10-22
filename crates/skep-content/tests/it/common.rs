@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Piece, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim, SaltSource, Seq,
     TxnError, WorldState,
 };
 
@@ -155,6 +155,7 @@ pub fn cfg_fsync(dir: &Path) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

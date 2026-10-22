@@ -607,11 +607,14 @@ pub(crate) fn header_at(dir: &Path, seq: u64) -> Option<CheckpointHeader> {
 ///
 /// It fsyncs the directory so the unlinks are durable, and answers what it
 /// kept and what it took ([`Retained`]): the oldest kept seq — the
-/// journal-reclamation floor and the `BadCheckpoint` fallback base (§6) — or
+/// `BadCheckpoint` fallback base, and the journal-reclamation floor where
+/// the configuration reclaims the journal at all (`Reclaim`, §6) — or
 /// `None` when no checkpoint remains, and each checkpoint it removed, by its
 /// seq and its length read before the removal, which a landing reports
 /// beside the journal bytes it reclaimed
-/// ([`crate::Kernel::last_removed_checkpoints`]).
+/// ([`crate::Kernel::last_removed_checkpoints`]). Retention alone: whether
+/// the journal below the floor it answers stands is the caller's reclamation
+/// policy, applied after this returns.
 ///
 /// **Retention counts the bases that load.** `skipped` names the checkpoints
 /// the open passed over — the seqs the kernel's [`crate::Recovery`] lists as
@@ -665,7 +668,7 @@ pub(crate) fn retain(dir: &Path, keep: usize, skipped: &[u64]) -> io::Result<Ret
 pub(crate) struct Retained {
     /// The oldest kept seq, `None` when no checkpoint remains.
     ///
-    /// It is the journal-reclamation floor.
+    /// It is the journal-reclamation floor, where the journal is reclaimed.
     pub(crate) floor: Option<u64>,
     /// Each checkpoint removed, oldest first, as its seq and its file's length.
     ///

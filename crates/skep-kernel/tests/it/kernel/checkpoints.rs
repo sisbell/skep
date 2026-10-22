@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::mutilate::{ckpt_file, flip_byte, seg_file};
-use skep_kernel::{CheckpointError, LandedStep};
+use skep_kernel::{CheckpointError, HistoryError, LandedStep, Reclaim};
 use tempfile::tempdir;
 
 /// The daemon's shape of the deferred policy — a commit count beside a byte
@@ -681,6 +681,83 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     assert_eq!(items(&k).len(), 9);
     assert_eq!(k.snapshot().world().sum, 9 * BLOB as u64);
     assert_eq!(k.current_seq(), Seq(9));
+}
+
+/// RETENTION AND RECLAMATION ARE TWO POLICIES (§6, `Reclaim`): the fixture
+/// of `reclamation_floor_is_the_oldest_retained_checkpoint` under
+/// `Reclaim::Never` — two retained, three landings, the journal rotating
+/// between them — keeps the newest two bases exactly as the reclaiming arm
+/// does, naming the one it removes, and reclaims NOTHING: every segment
+/// since genesis stands, each landing answering `Some(0)`, and a history
+/// read below the oldest base answers by the fold from genesis, where the
+/// reclaiming arm refuses it. Then the journal reopened under
+/// `Reclaim::BelowOldestRetained`: its first landing reclaims below the
+/// oldest base kept, the segments the other arm left are gone, and the same
+/// read refuses `Reclaimed` naming that base as the floor — the policy is an
+/// open's, read once and kept nowhere.
+#[test]
+fn never_keeps_every_segment_while_the_usual_bases_stand_and_folds_from_genesis_below_them() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_fsync(dir.path()); // retain 2
+    let Durability::Fsync { reclaim, .. } = &mut cfg.durability else { unreachable!("journaled") };
+    *reclaim = Reclaim::Never;
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    for _ in 0..4 {
+        commit_blob(&k); // Seqs 1..=4 fill seg-1 past the threshold
+    }
+    assert_eq!(k.checkpoint().unwrap(), Seq(4)); // A
+    assert_eq!(k.last_reclaimed_bytes(), Some(0));
+    for _ in 0..4 {
+        commit_blob(&k); // 5 rotates into seg-5; 6..=8 fill it
+    }
+    assert_eq!(commit_blob(&k), Seq(9)); // 9 rotates into seg-9, CLOSING seg-5
+    let a_len = fs::metadata(ckpt_file(dir.path(), 4)).unwrap().len();
+    assert_eq!(k.checkpoint().unwrap(), Seq(9)); // B: keeps {A, B}
+    // The reclaiming arm drops seg-1 here, wholly below A; this one keeps it.
+    assert!(seg_file(dir.path(), 1).exists(), "nothing reclaimed below the oldest base");
+    assert_eq!(k.last_reclaimed_bytes(), Some(0), "a landing that reclaimed nothing says so");
+    for _ in 0..3 {
+        commit_blob(&k); // 10..=12 fill seg-9 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(13)); // 13 rotates into seg-13, CLOSING seg-9
+    assert_eq!(k.checkpoint().unwrap(), Seq(13)); // C: keeps {B, C}, removes A
+    // Retention as under the other arm: the newest two, the oldest named.
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert!(!ckpt_file(dir.path(), 4).exists(), "A, the oldest of three, goes");
+    assert!(ckpt_file(dir.path(), 9).exists() && ckpt_file(dir.path(), 13).exists());
+    assert_eq!(k.last_removed_checkpoints(), vec![(Seq(4), a_len)]);
+    // …and the journal whole: every segment since genesis.
+    for first_seq in [1, 5, 9, 13] {
+        assert!(seg_file(dir.path(), first_seq).exists(), "seg-{first_seq} stands");
+    }
+    assert_eq!(k.last_reclaimed_bytes(), Some(0));
+    // Below the oldest base, B at 9: no retained checkpoint stands in, and
+    // genesis does, while the journal reaches it — the fold over 1..=6.
+    let below = k.world_at(Seq(6)).unwrap();
+    assert_eq!(world_items(&below).len(), 6, "folded from genesis through the kept journal");
+    assert_eq!(below.sum, 6 * BLOB as u64);
+    assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()).len(), 2);
+    assert!(k.chain_at(Seq(0)).is_ok(), "genesis itself answers, the journal reaching it");
+    assert!(k.attestation_at(Seq(1)).is_ok(), "…and the slot of the first transaction");
+    drop(k);
+
+    // The same journal under the reclaiming arm: one more landing, and the
+    // segments the other arm kept below the oldest base are gone.
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.recovery().unwrap().start_point, Seq(13), "C loaded");
+    assert_eq!(commit(&k, 14), Seq(14));
+    assert_eq!(k.checkpoint().unwrap(), Seq(14)); // D: keeps {C, D}, reclaims below C
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    for first_seq in [1, 5, 9] {
+        assert!(!seg_file(dir.path(), first_seq).exists(), "seg-{first_seq} reclaimed below C");
+    }
+    assert!(seg_file(dir.path(), 13).exists(), "the segment C stands in is the active one");
+    assert!(k.last_reclaimed_bytes().unwrap() > 0, "the bytes of the three segments");
+    let err = k.world_at(Seq(6)).expect_err("below the oldest base, genesis gone");
+    assert!(
+        matches!(err, HistoryError::Reclaimed { floor: Some(Seq(13)), .. }),
+        "the floor is the oldest base kept: {err:?}"
+    );
 }
 
 /// Retention keeps the newest `N` — and KEEPS THE BASES THAT LOAD (§6):

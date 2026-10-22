@@ -16,7 +16,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Reclaim, SaltSource, Seq,
     WorldState,
 };
 use skep_links::{
@@ -403,6 +403,7 @@ pub fn journaled() -> Journaled {
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

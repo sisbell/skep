@@ -1115,11 +1115,13 @@ impl Daemon {
     /// and the floor's re-read and the feed's figures, which
     /// [`Daemon::service_the_checkpoint_now`] runs). It becomes the newest
     /// retained checkpoint, which is what the head suite drives the head's
-    /// trigger (b) with, without committing a whole
-    /// `CHECKPOINT_EVERY_COMMITS` window; and it counts toward the two this
-    /// daemon retains, reclaiming the closed journal below the oldest, so a
-    /// test that takes more than two can find an old position answering
-    /// `history_reclaimed`.
+    /// trigger (b) with, without committing a whole cadence window (the
+    /// start's `checkpoint_every`, `CHECKPOINT_EVERY_COMMITS` by default);
+    /// and it counts toward the bases this daemon retains (the start's
+    /// `retain_checkpoints`, two by default), reclaiming the closed journal
+    /// below the oldest where the start's reclamation says so, so a test
+    /// that takes more than the count can find an old position answering
+    /// `history_reclaimed` — and, under `never`, answering the state.
     ///
     /// # Panics
     ///
@@ -1157,8 +1159,9 @@ impl Daemon {
     ///
     /// **Test hook** (the same standing). The move is
     /// `Kernel::set_cadence_bytes`, under the applier lock, so a suite makes
-    /// the next commit cross the cadence without committing a window of 1024
-    /// or the bound's 24 MiB, and watches the thread service the flag. The
+    /// the next commit cross the cadence without committing a window of the
+    /// cadence's count (1024 by default) or the bound's 24 MiB, and watches
+    /// the thread service the flag. The
     /// thread re-reads the bound from the checkpoint that lands, so one
     /// crossing is what a suite buys.
     ///
@@ -1310,6 +1313,19 @@ impl Daemon {
     #[doc(hidden)]
     pub fn last_reclaimed_bytes(&self) -> Option<u64> {
         self.engine.kernel().last_reclaimed_bytes()
+    }
+
+    /// Returns the checkpoints the last landed checkpoint's retention removed.
+    ///
+    /// **Test hook** (the same standing). They are
+    /// `Kernel::last_removed_checkpoints`'s — each by its position and its
+    /// file's length, oldest first; empty where the landing removed none —
+    /// the figures line 25's clause names as `checkpoint.{n} removed ({bytes}
+    /// bytes)`, so a suite pins the clause against the kernel's own account
+    /// under whatever retained count the start runs.
+    #[doc(hidden)]
+    pub fn last_removed_checkpoints(&self) -> Vec<(Seq, u64)> {
+        self.engine.kernel().last_removed_checkpoints()
     }
 
     /// Returns every line the checkpoint thread has rendered this uptime.

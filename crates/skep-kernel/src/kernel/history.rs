@@ -284,9 +284,12 @@ impl<W: WorldState> Kernel<W> {
     /// checkpoint stands at it, takes genesis while the journal reaches back
     /// to `Seq(1)`, and refuses [`HistoryError::Reclaimed`] once it does not,
     /// exactly as `attestation_at(Seq(1))` refuses; a `position` below the
-    /// oldest retained checkpoint refuses the same way, naming that checkpoint
-    /// as the `floor` — at which this read answers, its base sitting *at* the
-    /// floor where `attestation_at`'s must sit below it. Every marker above
+    /// oldest retained checkpoint takes genesis the same way while the
+    /// journal reaches it — every position, where nothing reclaims the
+    /// journal ([`crate::Reclaim::Never`]) — and refuses the same way once it
+    /// does not, naming that checkpoint as the `floor` — at which this read
+    /// answers, its base sitting *at* the floor where `attestation_at`'s must
+    /// sit below it. Every marker above
     /// the base is scanned and the chain verified from the base to the
     /// journal's end, as `chain_at` verifies it; what is answered is the
     /// boundaries above `position`.

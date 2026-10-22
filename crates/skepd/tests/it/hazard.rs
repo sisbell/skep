@@ -57,7 +57,7 @@ use common::{
 use serde_json::Value;
 use skep_blobs::Step;
 use skep_engine::{Engine, KernelConfig};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource};
 use skepd::{Daemon, HttpRequest, Reply, Routed, Seq};
 
 /// `HAZARD_EXHAUSTIVE=1` widens the trial counts.
@@ -1028,6 +1028,7 @@ fn kernel_below_the_door(dir: &Path) -> Engine {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

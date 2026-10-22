@@ -22,6 +22,7 @@ fn cfg(dir: &std::path::Path, burned_seq: BurnedSeqPolicy) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq,
             cut_damaged_tail: false,
         },
@@ -340,6 +341,7 @@ fn newest_checkpoint_is_the_newest_retained_and_never_an_older_stand_in() {
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -1259,6 +1261,7 @@ fn retain_checkpoints_zero_is_refused() {
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 0,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -1427,6 +1430,7 @@ fn concurrent_checkpoints_each_leave_the_base_their_name_claims() {
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 64, // keep every base a racing call wrote
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -1657,6 +1661,7 @@ fn picky_cfg(dir: &std::path::Path, retain: usize) -> KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },
@@ -1768,6 +1773,7 @@ fn a_skipped_base_under_another_stamp_is_named_without_the_exhausted_chains_reme
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

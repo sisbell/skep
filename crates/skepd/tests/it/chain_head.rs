@@ -24,7 +24,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use skep_engine::{Engine, KernelConfig};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, SaltSource};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Reclaim, SaltSource};
 
 use common::{
     acked_at, claim_board, get, json, op, op_at, open_session, spawn_unclaimed,
@@ -74,6 +74,7 @@ fn reopen(dir: &Path) -> Engine {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::BelowOldestRetained,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

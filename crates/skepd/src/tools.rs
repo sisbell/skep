@@ -97,7 +97,7 @@ use serde_json::Value;
 use skep_blobs::{Inspection, Store};
 use skep_engine::{Engine, EngineError};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, OpenError, SaltSource,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, OpenError, Reclaim, SaltSource,
 };
 use skep_media::cell::{DESIGNATION, HASH_BYTES, PINNED_DESIGNATIONS};
 use skep_media::gate::{wall_clock_ms, Counted, MediaGate, DEPOSIT_FUNCTION, STORE_DIR};
@@ -617,9 +617,10 @@ fn log_read_object(read: &skep_blobs::LogRead) -> Value {
 
 /// Opens the engine over `dir` through its ordinary public open.
 ///
-/// It is the daemon's own configuration but for the checkpoint cadence,
-/// manual here, so no checkpoint is ever taken: nothing commits through
-/// this handle.
+/// It is the daemon's default configuration but for the checkpoint cadence,
+/// manual here, so no checkpoint is ever taken — nothing commits through
+/// this handle — and the journal's reclamation, never: a tool over a copy
+/// reclaims nothing, and names the arm that says so.
 ///
 /// # Errors
 ///
@@ -640,6 +641,7 @@ fn open_journal(dir: &Path) -> Result<Engine, ToolError> {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 2,
+            reclaim: Reclaim::Never,
             burned_seq: BurnedSeqPolicy::Rollback,
             cut_damaged_tail: false,
         },

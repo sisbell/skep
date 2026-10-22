@@ -13,11 +13,12 @@ use sha2::{Digest, Sha256};
 ///
 /// Read once, at [`crate::Kernel::open`], and validated there first, before
 /// the journal's lock is taken or a file read; persisted nowhere. The
-/// journal records no retention count, no burned-`Seq` policy, no cadence
-/// and no salt source — each salt is read back off its own marker, and
-/// recovery tolerates burned gaps under either policy — so every field but
-/// the journal's directory, which names the journal itself, may differ from
-/// one open to the next, and a reopen is how any of them changes. Two
+/// journal records no retention count, no reclamation policy, no
+/// burned-`Seq` policy, no cadence and no salt source — each salt is read
+/// back off its own marker, and recovery tolerates burned gaps under either
+/// policy — so every field but the journal's directory, which names the
+/// journal itself, may differ from one open to the next, and a reopen is how
+/// any of them changes. Two
 /// figures alone move while a kernel runs, both the cadence's: its commit
 /// count and its byte bound ([`crate::Kernel::set_cadence_commits`],
 /// [`crate::Kernel::set_cadence_bytes`]).
@@ -212,11 +213,28 @@ pub enum Durability {
         journal_path: PathBuf,
         /// How many checkpoints are kept, `N ≥ 1`.
         ///
-        /// They are the newest `N` the open did not pass over. The journal is
-        /// reclaimed only below the oldest retained one, so `BadCheckpoint`
-        /// can fall back to an older retained base. `N = 1` ⇒ newest is the
-        /// sole base, no fallback (§6/§7).
+        /// They are the newest `N` the open did not pass over. Where
+        /// `reclaim` reclaims the journal at all, it is reclaimed only below
+        /// the oldest retained one, so `BadCheckpoint` can fall back to an
+        /// older retained base. `N = 1` ⇒ newest is the sole base, no
+        /// fallback (§6/§7). Retention alone: how many copies of the world
+        /// stand is this count's, and whether the journal below them stands
+        /// is `reclaim`'s.
         retain_checkpoints: usize,
+        /// Whether a landing reclaims the journal below the oldest kept base.
+        ///
+        /// [`Reclaim::BelowOldestRetained`] reclaims the closed segments lying
+        /// wholly below the oldest retained checkpoint at every landing, so
+        /// the journal holds the retained window and no more;
+        /// [`Reclaim::Never`] reclaims nothing, so every segment since genesis
+        /// stands whatever the bases, and a history read below the oldest
+        /// retained base folds from genesis through the journal it kept. Read
+        /// once at the open and persisted nowhere, as every knob here is: an
+        /// open under `Never` leaves the journal as it stood, reclaimed below
+        /// an earlier open's floor or whole, and the next open under
+        /// `BelowOldestRetained` reclaims at its first landing what the
+        /// earlier one kept.
+        reclaim: Reclaim,
         /// Policy for the `Seq`s a failed transaction burned.
         burned_seq: BurnedSeqPolicy,
         /// Whether this open accepts the cut of a damaged journal tail (§7).
@@ -331,6 +349,37 @@ pub enum BurnedSeqPolicy {
     /// Recovery tolerates the resulting gaps (§7 — no contiguity check; the
     /// corrupt-run classifier may then conservatively over-halt).
     TolerateGap,
+}
+
+/// Whether a landing reclaims the journal below the oldest retained base (§6).
+///
+/// Retention and reclamation are two policies: [`Durability::Fsync`]'s
+/// `retain_checkpoints` says how many copies of the world stand, and this
+/// says whether the journal below the oldest of them stands too. Space
+/// reclamation only, never a correctness mechanism: a kernel that reclaims
+/// nothing recovers as one that does, from the newest base that loads, and
+/// answers a history read below its oldest base by the fold from genesis the
+/// reclaiming kernel refuses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Reclaim {
+    /// Reclaims the closed segments wholly below the oldest retained base.
+    ///
+    /// At every landing, after retention: the journal holds the retained
+    /// window and no more, and a history read below the oldest retained
+    /// base refuses [`crate::HistoryError::Reclaimed`] naming that base as
+    /// the floor. The default.
+    #[default]
+    BelowOldestRetained,
+    /// Reclaims nothing: every segment since genesis stands.
+    ///
+    /// Retention runs as under the other arm, so the bases are the newest
+    /// `retain_checkpoints`; below the oldest of them the journal stands
+    /// whole, and a history read there folds from genesis through it. A
+    /// landing's [`crate::Kernel::last_reclaimed_bytes`] answers `Some(0)`,
+    /// a landing that reclaimed nothing. What an earlier open reclaimed
+    /// under the other arm stays reclaimed: the journal is kept from where
+    /// this open found it.
+    Never,
 }
 
 /// Auto-checkpoint cadence policy, evaluated on commit inside `transact` (§6).

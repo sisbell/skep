@@ -1,6 +1,7 @@
 //! The store (`client.md` §3): the modes, `O_EXCL`, a key file entering the
 //! store whole or not at all, the doctored files' refusals — read alone and
-//! met by a listing — the lookup's arms, the two line forms, the lock.
+//! met by a listing — the lookup's arms, the two line forms, each append a
+//! line of its own, the lock.
 
 use std::fs;
 
@@ -236,6 +237,41 @@ fn a_read_only_store_warns_with_the_line() {
     fs::set_permissions(store.root(), fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(warning.line, b.to_string());
     assert!(warning.to_string().ends_with(&format!("record this binding line yourself: {b}")), "{warning}");
+    assert!(warning.to_string().contains("a newline before it where the file does not end in one, and one after it"), "{warning}");
+}
+
+/// §3.7 — an append never changes how the bytes before it read.
+///
+/// Over every torn last line a bindings file can hold — each prefix of
+/// either line form, the whole line short of its newline, and none — a
+/// `bind` after it is read back, the torn bytes are no binding before the
+/// append or after it, and the bytes the file held stand unchanged ahead of
+/// the new ones. The words that close a torn line open with a space and are
+/// more than the four words a binding holds.
+#[test]
+fn an_append_after_any_torn_last_line_is_read_back_and_the_torn_line_never_is() {
+    assert!(TORN_MARK.starts_with(' ') && TORN_MARK.split_whitespace().count() > 4, "{TORN_MARK:?}");
+    let (_dir, store) = store();
+    fs::create_dir_all(store.root()).unwrap();
+    let path = store.root().join("bindings");
+    let dialed = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let ab = Fingerprint::parse_hex(&"ab".repeat(32)).unwrap();
+    let a = Binding::Enrollment { origin: dialed.clone(), principal: 1, account: "1.0.1".into(), fingerprint: ab };
+    let b = Binding::Enrollment { origin: dialed.clone(), principal: 7, account: "1.0.2".into(), fingerprint: ab };
+    let torn = [
+        Binding::Enrollment { origin: dialed.clone(), principal: 9, account: "1.0.3".into(), fingerprint: Fingerprint::parse_hex(&"cd".repeat(32)).unwrap() },
+        Binding::Signed { dialed: dialed.clone(), signed: Origin::parse("https://board.example:8443").unwrap() },
+    ];
+    for line in torn.iter().map(ToString::to_string) {
+        for cut in 0..=line.len() {
+            let before = format!("{a}\n{}", &line[..cut]);
+            fs::write(&path, &before).unwrap();
+            assert_eq!(store.all_bindings().unwrap(), std::slice::from_ref(&a), "{:?}", &line[..cut]);
+            store.bind(&b).unwrap();
+            assert_eq!(store.all_bindings().unwrap(), [a.clone(), b.clone()], "{:?}", &line[..cut]);
+            assert!(fs::read_to_string(&path).unwrap().starts_with(&before), "{:?}: the bytes before the append changed", &line[..cut]);
+        }
+    }
 }
 
 /// §3.5 as RULED (2026-10-04) — THE ONE-BINDING TEST ignores the agent

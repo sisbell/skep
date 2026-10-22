@@ -805,37 +805,31 @@ fn bind_on_a_store_it_cannot_append_warns_with_the_line_and_lands_the_facts() {
     let r = skep(&["bind", "--board", &b.board, "--dir", s(&b.store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
     assert!(r.err.contains(&format!("record this binding line yourself: {} 1 1.0.1 {}", b.board, b.fp)), "{}", r.err);
-    assert!(r.err.contains("on a line of its own, the file ending in a newline"), "how to record it: {}", r.err);
+    assert!(r.err.contains("a newline before it where the file does not end in one, and one after it"), "how to record it: {}", r.err);
     assert_eq!(r.lines(), ["account 1.0.1", "principal 1", format!("origin {}", b.board).as_str()]);
     assert_eq!(std::fs::read_to_string(b.store.join("bindings")).unwrap(), before, "nothing appended");
 }
 
-/// A BINDING SAID IS ONE THE STORE READS BACK (`binding_said`; §3.5 arm 2;
-/// §3.7): a bindings file whose last line was recorded by hand without its
-/// newline holds a line the reader takes for a torn append and ignores, and
-/// the next append is written onto it — the two then read back as one line
-/// that is no binding. `bind` there exits 0 with the facts landed, and says
-/// the line does NOT read back and how to record it, never `binding: <line>`;
-/// a session without `--principal` then finds no binding at the board, the
-/// cost the line names.
+/// A BINDING APPENDED AFTER A LINE RECORDED WITHOUT ITS NEWLINE READS BACK
+/// (`binding_said`; §3.5 arm 2; §3.7): the hand line stands as written,
+/// closed with the store's words and never read, and `bind`'s own line
+/// starts a line of its own — said as `binding: <line>`, with the facts
+/// landed, and found by a session that omits `--principal`.
 #[test]
-fn a_binding_said_is_one_the_store_reads_back() {
+fn a_binding_appended_after_a_line_recorded_without_its_newline_reads_back() {
     let dir = tempfile::tempdir().unwrap();
     let b = hosted_and_bound(dir.path());
     let line = format!("{} 1 1.0.1 {}", b.board, b.fp);
     std::fs::write(b.store.join("bindings"), &line).unwrap();
     let r = skep(&["bind", "--board", &b.board, "--dir", s(&b.store), "--account", "1.0.1", "--principal", "1"], &[], None);
     assert_eq!(r.code, 0, "{r:?}");
-    assert!(
-        r.err.contains("the binding line does not read back from") && r.err.contains("on a line of its own, the file ending in a newline") && r.err.contains(&format!(": {line}")),
-        "{}",
-        r.err
-    );
-    assert!(!r.err.contains(&format!("binding: {line}")), "never said as a binding the store holds: {}", r.err);
+    assert!(r.err.contains(&format!("binding: {line}")) && !r.err.contains("does not read back"), "{}", r.err);
     assert_eq!(r.lines(), ["account 1.0.1", "principal 1", format!("origin {}", b.board).as_str()]);
+    let text = std::fs::read_to_string(b.store.join("bindings")).unwrap();
+    assert!(text.starts_with(&line) && text.ends_with(&format!("\n{line}\n")) && text.lines().count() == 2, "{text}");
     let r = skep(&["session", "--board", &b.board, "--dir", s(&b.store)], &[], None);
-    assert_eq!(r.code, 3, "{r:?}");
-    assert!(r.err.contains(&format!("holds no binding at {}", b.board)), "{}", r.err);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert!(Token::parse(&r.out).is_some(), "{r:?}");
 }
 
 /// A KEY FILE OUTSIDE THE STORE BINDS NOTHING THERE (§3.5 arm 2: the line

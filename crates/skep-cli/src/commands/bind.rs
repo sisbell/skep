@@ -20,7 +20,7 @@ use skep_client::halt::Halt;
 use skep_client::sheet::{render_inert, Facts};
 use skep_client::store::{Binding, KeySelector, KeyStore, Purpose};
 
-use super::{binding_said, board_of, clipped, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop, BY_HAND};
+use super::{binding_said, board_of, clipped, compare_genesis, data, held_device, held_set, print_facts, read_payload, select_key, store_of, talk, Stop};
 use crate::args::{parse_principal, CommandLine, MAX_PRINCIPAL};
 use crate::terminal::answer;
 
@@ -376,7 +376,7 @@ pub fn bind(c: &CommandLine) -> Result<(), Stop> {
     let line = Binding::Enrollment { origin: origin.clone(), principal, account: account.clone(), fingerprint: key.fingerprint };
     match store.bind(&line) {
         Ok(()) => talk(binding_said(&store, &line.to_string())),
-        Err(w) => talk(format!("{w} — {BY_HAND}")),
+        Err(w) => talk(w.to_string()),
     }
     print_facts(&Facts { account, principal, origin })?;
     if let Some(s) = agent_space {

@@ -6,25 +6,25 @@
 //! its bytes under `O_EXCL` at mode `0600` to `<fingerprint>.key.tmp`,
 //! synced, then published by a rename and the directory's sync, so no
 //! lookup reads a key file cut short (§3.3, §3.7) — the append-only
-//! `bindings` file in its two line forms (§3.5) under the advisory lock
-//! `<store>/lock` (§3.7), and no anchor under the store, ever (§3.4;
-//! AUTH-5.54 step 3). The store is the seed's custodian (§3a: "signing and
-//! key lookup behind `Signer` and `KeyStore`"): a lookup answers a key's
-//! public facts, [`KeyFacts`], and the seed leaves a lookup only as the
-//! signer [`KeyStore::signer`] derives from it — [`FileStore::load`], the
-//! store's own reader, hands a file out with its seed — so a later custody
-//! rung is a different signer behind that one method, never a rewrite of a
-//! walk (§1.4). The refusals are the store's own faces ([`StoreError`],
-//! [`KeyFileError`]), never wire tokens, each converted into AUTH-5.67's
-//! halt naming the state, and the path where there is one, by
-//! `From<StoreError> for Halt`, so a walk's `?` carries it; a lookup that
-//! selects no key is §3.5 arm 4's fork, [`arm4_face`]. A binding line that
-//! cannot be appended is no refusal at all: [`Unappended`], the warning
-//! carrying the line (§3.7).
+//! `bindings` file in its two line forms (§3.5), each append a line of its
+//! own under the advisory lock `<store>/lock` (§3.7), and no anchor under
+//! the store, ever (§3.4; AUTH-5.54 step 3). The store is the seed's
+//! custodian (§3a: "signing and key lookup behind `Signer` and
+//! `KeyStore`"): a lookup answers a key's public facts, [`KeyFacts`], and
+//! the seed leaves a lookup only as the signer [`KeyStore::signer`] derives
+//! from it — [`FileStore::load`], the store's own reader, hands a file out
+//! with its seed — so a later custody rung is a different signer behind
+//! that one method, never a rewrite of a walk (§1.4). The refusals are the
+//! store's own faces ([`StoreError`], [`KeyFileError`]), never wire tokens,
+//! each converted into AUTH-5.67's halt naming the state, and the path
+//! where there is one, by `From<StoreError> for Halt`, so a walk's `?`
+//! carries it; a lookup that selects no key is §3.5 arm 4's fork,
+//! [`arm4_face`]. A binding line that cannot be appended is no refusal at
+//! all: [`Unappended`], the warning carrying the line (§3.7).
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
@@ -114,10 +114,12 @@ impl fmt::Display for Binding {
     }
 }
 
-/// A line of neither form — a hand-edited stray.
+/// A line of neither form — a hand-edited stray, or a torn line closed.
 ///
 /// The bindings file's reader ignores it as it ignores a torn final line
-/// (§3.7).
+/// (§3.7). An append that finds the file's last line torn closes it with
+/// `TORN_MARK`'s words, which make it a line of this kind, so the torn
+/// bytes stay unread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NotABinding;
 
@@ -238,9 +240,10 @@ impl std::error::Error for StoreError {}
 /// The one way [`KeyStore::bind`] fails.
 ///
 /// The bindings file could not be appended — a read-only mount, a missing
-/// permission — and the line rides the failure for the person to record by
-/// hand. It is a warning and never a refusal (§3.7): its `Display` is the
-/// warning a walk prints, and no walk halts on it.
+/// permission, a full volume — and the line rides the failure for the
+/// person to record by hand, as a line of its own. It is a warning and
+/// never a refusal (§3.7): its `Display` is the warning a walk prints, the
+/// line last and how to record it before it, and no walk halts on it.
 #[derive(Debug)]
 pub struct Unappended {
     /// The bindings file's path.
@@ -255,7 +258,8 @@ impl fmt::Display for Unappended {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "the bindings file {} could not be appended ({}); record this binding line yourself: {}",
+            "the bindings file {} could not be appended ({}); as a line of its own — a newline before it where the file does not end \
+             in one, and one after it, since a last line without one is never read — record this binding line yourself: {}",
             self.path.display(),
             self.error,
             self.line
@@ -404,7 +408,7 @@ pub trait KeyStore {
     /// The file store's [`StoreError::Io`] where the bindings file stands and
     /// cannot be read.
     fn bindings(&self, origin: &Origin) -> Result<Vec<Binding>, StoreError>;
-    /// Appends one line under the lock.
+    /// Appends `b` as a line of its own, under the lock (§3.7).
     ///
     /// # Errors
     ///
@@ -624,7 +628,8 @@ impl FileStore {
     /// Returns every binding line, in file order.
     ///
     /// A final line without `\n` is ignored (§3.7: a torn append is never a
-    /// torn record).
+    /// torn record), and the next append closes it as a line of neither form
+    /// (`TORN_MARK`), so it never becomes one.
     ///
     /// # Errors
     ///
@@ -815,19 +820,25 @@ impl FileStore {
         }
     }
 
-    /// Appends `line` to the bindings file in one `write` (§3.7).
+    /// Appends `line` to the bindings file as a line of its own (§3.7).
     ///
-    /// The write runs under the advisory lock on `<store>/lock`.
+    /// The append runs under the advisory lock on `<store>/lock` and is one
+    /// `write`. Where the file's last byte is not `\n` — an earlier append
+    /// cut short, a line recorded by hand without its newline — the write
+    /// first closes that line with `TORN_MARK`'s words and a newline, then
+    /// carries `line` and its own newline. So an append never changes how the
+    /// bytes before it read: the torn bytes were no binding, the line the
+    /// words close is none either, and `line` starts a line of its own.
     ///
     /// # Errors
     ///
-    /// A failed append — a read-only mount — is [`Unappended`], carrying the
-    /// line for the person to record.
+    /// A failed append — a read-only mount, a missing permission, a full
+    /// volume — is [`Unappended`], carrying the line for the person to
+    /// record.
     pub fn append_line(&self, line: &str) -> Result<(), Unappended> {
         let path = self.bindings_path();
-        let text = format!("{line}\n");
-        let read_only = |error: io::Error| Unappended { path: path.clone(), line: line.to_string(), error };
-        self.ensure_dirs().map_err(|(_, error)| read_only(error))?;
+        let unappended = |error: io::Error| Unappended { path: path.clone(), line: line.to_string(), error };
+        self.ensure_dirs().map_err(|(_, error)| unappended(error))?;
         let mut lock_opts = OpenOptions::new();
         lock_opts.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -835,24 +846,49 @@ impl FileStore {
             use std::os::unix::fs::OpenOptionsExt;
             lock_opts.mode(0o600);
         }
-        let lock = lock_opts.open(self.lock_path()).map_err(read_only)?;
-        lock.lock().map_err(read_only)?;
+        let lock = lock_opts.open(self.lock_path()).map_err(unappended)?;
+        lock.lock().map_err(unappended)?;
         let result = (|| -> io::Result<()> {
             let mut opts = OpenOptions::new();
-            opts.append(true).create(true);
+            opts.read(true).append(true).create(true);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::OpenOptionsExt;
                 opts.mode(0o600);
             }
             let mut file = opts.open(&path)?;
+            // The last byte is read under the lock, so no other append moves
+            // it before the write below.
+            let mut text = String::new();
+            if let Some(last) = file.metadata()?.len().checked_sub(1) {
+                let mut byte = [0u8; 1];
+                file.seek(SeekFrom::Start(last))?;
+                file.read_exact(&mut byte)?;
+                if byte[0] != b'\n' {
+                    text.push_str(TORN_MARK);
+                    text.push('\n');
+                }
+            }
+            text.push_str(line);
+            text.push('\n');
             file.write_all(text.as_bytes())?;
             file.sync_all()
         })();
         let _ = lock.unlock();
-        result.map_err(read_only)
+        result.map_err(unappended)
     }
 }
+
+/// The words that close a torn last line of the bindings file (§3.7).
+///
+/// Bytes after the file's last `\n` are no line the reader reads; an append
+/// that finds them closes them with these words and a newline first, so its
+/// own line starts a line of its own. The words are nine, opening with a
+/// space, so the line they close holds nine or more whatever its torn bytes
+/// held — neither of §3.5's forms, which hold three words or four: the
+/// reader ignores it as it ignored them, and a person opening the file
+/// reads why.
+const TORN_MARK: &str = " # not read: this line ended without a newline";
 
 /// Syncs the directory holding `path`, so a rename into it is durable.
 ///

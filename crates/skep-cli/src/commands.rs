@@ -267,11 +267,11 @@ fn print_facts(f: &Facts) -> Result<(), Halt> {
 
 /// What a binding line recorded by hand needs to read back (§3.7).
 ///
-/// It needs a line of its own, the file ending in a newline — the bindings
-/// file's reader takes a last line without one for a torn append and
-/// ignores it, and the store's next append is written straight onto it.
-const BY_HAND: &str = "on a line of its own, the file ending in a newline (a last line without one is read as a torn append and \
-     ignored, and the next append is written onto it — §3.7)";
+/// It needs a line of its own: a newline before it where the bindings file
+/// does not end in one, and one after it, since the file's reader never
+/// reads a last line without one.
+const BY_HAND: &str = "as a line of its own — a newline before it where the file does not end in one, and one after it (a last line \
+     without one is never read — §3.7)";
 
 /// Returns the line a binding a command landed is said by.
 ///
@@ -279,9 +279,8 @@ const BY_HAND: &str = "on a line of its own, the file ending in a newline (a las
 /// line is `binding: <line>` where the store reads it back as the newest
 /// line for its board and principal — the line every later lookup there
 /// answers with — and otherwise that it does not, the line beside it to
-/// record by hand ([`BY_HAND`]): an append the store refused, or one
-/// written onto a torn last line, the two then reading back as one line
-/// that is no binding while the command that wrote it passed.
+/// record by hand ([`BY_HAND`]): an append the store refused, or a bindings
+/// file the store cannot read back.
 fn binding_said(store: &FileStore, line: &str) -> String {
     let reads_back = match line.parse::<Binding>() {
         Ok(Binding::Enrollment { origin, principal, account, fingerprint }) => {

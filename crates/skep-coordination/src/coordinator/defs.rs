@@ -15,26 +15,30 @@
 //! `retract_pred`'s target probe all read M7's `LinkState` directly, and a
 //! def registered into a draft home is ever-registered as it was — signed,
 //! resolvable and evaluable — while the look the evaluator reads through
-//! hides its `pdef` tuple from `is_K`. Two more reads at no visibility class
-//! sit outside this module and complete the list: the divergence monitor's
+//! hides its `pdef` tuple from `is_K`. The def layer's writes see what its
+//! reads see: their writer (`Coordinator::def_writer`) reads every document,
+//! so M7's in-transaction dedup finds the active `pdef` or `pd_stable` naming
+//! a start wherever it is homed — the def's own draft included — and answers
+//! it (ASN-0130 PR0). Two more reads at no visibility class sit outside this
+//! module and complete the list: the divergence monitor's
 //! (`coordinator/engine.rs::fire_count`), whose attribution key pins the home
 //! to the rule's own action home; and a fire's gap discrimination
 //! (`coordinator/engine.rs::fired_or_deduped`), which probes residence of the
-//! address M7 just returned — the writer runs at guest class, so a returned
-//! incumbent is guest-readable and a fresh mint is absent from the fire
-//! snapshot under either reading, and the discrimination is the same at guest
-//! class or at none. Every read inside a *verdict* — this module's
+//! address M7 just returned — the fire's writer runs at guest class, so a
+//! returned incumbent is guest-readable and a fresh mint is absent from the
+//! fire snapshot under either reading, and the discrimination is the same at
+//! guest class or at none. Every read inside a *verdict* — this module's
 //! `evaluate_def` included — goes through `Coordinator::eval_ctx`'s look at
 //! guest class.
 //!
 //! The def layer matches a start by its coverage class, where PL's `is_K`
 //! matches by coverage (ASN-0128 D2): `register_pred` and `certify_stable`
 //! deposit `enc({start})`, and M7's idem dedup absorbs either deposit into
-//! an active tuple of the same I0 identity (ASN-0128 I0) that the guest
-//! class can see — so a def's registration and its certificate are the
-//! tuples whose F has `start`'s class, and every probe of them — the two
-//! registration probes, `is_certified_stable` and `retract_pred`'s target —
-//! asks `tuple_naming`. A tuple whose F merely *covers* an address names
+//! the active tuple of the same I0 identity (ASN-0128 I0), wherever it is
+//! homed — so a def's registration and its certificate are the tuples whose
+//! F has `start`'s class, and every probe of them — the two registration
+//! probes, `is_certified_stable` and `retract_pred`'s target — asks
+//! `tuple_naming`. A tuple whose F merely *covers* an address names
 //! nothing there. On the disciplined domain that refuses only wrong answers:
 //! no def start lies under another, a content address being minted one
 //! ordinal deep (M3's element field `[s_C, n]`), and an address under a def's
@@ -398,8 +402,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// Returns `(tuple, seq)`: the active `pdef` tuple's address — the fresh
     /// deposit's, or on an idem⊤ dedup hit the incumbent's, with M7's base
-    /// `Seq` and nothing committed — so ≤1 active `pdef` per start within the
-    /// guest class (PR0).
+    /// `Seq` and nothing committed — so ≤1 active `pdef` per start (ASN-0130
+    /// PR0). The emit runs through the def layer's writer, which reads every
+    /// document, so the incumbent is found wherever it is homed, the def's own
+    /// draft included, and its home may differ from `home` (ASN-0128 I1).
     ///
     /// **Postcondition.** The memo holds `start` defined, so
     /// `signature(start)` answers — unless a probe already froze `start`
@@ -468,12 +474,11 @@ impl<W: CoordinationWorld> Coordinator<W> {
             return Err(RegisterError::HomeNotRegistered);
         }
         // Valid ⇒ emit(home, [pdef], start, &[]) — Unary, |F| = 1; idem⊤ dedups
-        // to ≤1 active pdef per start within the guest class the System path
-        // writes at (PUB-6.28): a pdef tuple homed in a document unreadable
-        // at guest class is invisible to the dedup and a second is minted
-        // beside it.
+        // to ≤1 active pdef per start (PR0): the def writer reads every
+        // document, so the active pdef naming `start` absorbs the emit wherever
+        // it is homed, the def's own draft included.
         let pdef = self.catalog.reserved_type(ShippedType::PredDef);
-        let (tuple, seq) = self.link_writer().emit(Caller::System, home, pdef, start, &[])?;
+        let (tuple, seq) = self.def_writer().emit(Caller::System, home, pdef, start, &[])?;
         // The memo's second admission site, under `derive_def`'s rule: the
         // start is ever-registered now, and `def` is the content's own status,
         // checked at level 0.
@@ -624,7 +629,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         let (new_start, _pdef_seq) = self.define_predicate(home, new_term)?;
         let sup = self.catalog.reserved_type(ShippedType::Supersedes);
         let lineage =
-            self.link_writer().emit(Caller::System, home, sup, old_start, from_ref(&new_start));
+            self.def_writer().emit(Caller::System, home, sup, old_start, from_ref(&new_start));
         match lineage {
             Ok((_claim, seq)) => Ok((new_start, seq)),
             // Transactions 1–2 committed: the refusal carries the successor.
@@ -672,12 +677,10 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// which a retry resolves.
     ///
     /// Returns `(tuple, seq)`: the active `pd_stable` tuple's address — the
-    /// fresh deposit's, or, where the guest class can see an incumbent, the
-    /// incumbent's, with M7's base `Seq` and nothing committed: ≤1 active
-    /// `pd_stable` per start within the guest class, as `register_pred`
-    /// states for `pdef`. An incumbent homed where the guest predicate
-    /// refuses — a draft — is invisible to the writer's dedup, so
-    /// re-certifying into such a home mints a second certificate and commits.
+    /// fresh deposit's, or the incumbent's wherever it is homed, with M7's
+    /// base `Seq` and nothing committed: ≤1 active `pd_stable` per start, all
+    /// of a def's certificates being I0-equal (ASN-0130 PS2), through the def
+    /// layer's writer as `register_pred` states for `pdef`.
     ///
     /// # Errors
     ///
@@ -714,7 +717,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         if !st_plus(&self.catalog, &flat_expansion) {
             return Err(CertifyError::StabilityUnproven);
         }
-        let (tuple, seq) = self.link_writer().emit(
+        let (tuple, seq) = self.def_writer().emit(
             Caller::System,
             home,
             self.catalog.reserved_type(ShippedType::PredStable),
@@ -743,8 +746,8 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// The nullify is from the retracting `home`, on *one* such tuple — the
     /// T1-least, as `tuple_naming` returns it; a `pdef` whose F merely covers
     /// `start` is never taken for the def's own. One tuple per call: beside a
-    /// second active `pdef` naming the same start (a twin homed where the
-    /// guest class could not see it when the first was minted),
+    /// second active `pdef` naming the same start — which `register_pred`
+    /// never mints, but a write past the gate can (PR-DISC) —
     /// `is_active_pred` stays true until each is retracted. Content
     /// untouched; audit retains it; once no active `pdef` names `start`, the
     /// I0-class `register_pred` deposits into has no active member, and a
@@ -781,7 +784,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
                 .ok_or(RetractError::NotActive)?
                 .addr
         };
-        let (retraction, seq) = self.link_writer().nullify(Caller::System, home, &target)?;
+        let (retraction, seq) = self.def_writer().nullify(Caller::System, home, &target)?;
         Ok((retraction, seq))
     }
 

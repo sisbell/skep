@@ -75,7 +75,8 @@
 //! * the injected `mk_vstream`/`mk_link_writer` factories presuppose the
 //!   engine can construct a `Vstream` from `&Kernel<W>` and a `LinkWriter`
 //!   from `&Kernel<W>` plus a visibility class — the injected `guest`
-//!   predicate, lent at every construction — and each must build over
+//!   predicate, lent to every fire's writer, or the class that reads every
+//!   document, lent to every def write's — and each must build over
 //!   *exactly* the kernel (and, for the writer, the visibility class) it is
 //!   handed, with `guest` a pure function of the world it is passed: the
 //!   one-pinned-snapshot verdict and the byte-identical commit rest on both.

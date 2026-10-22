@@ -555,7 +555,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
         // in a draft cannot absorb a fire as `Deduped`, and a fire commits
         // byte-identically to a world with no drafts. PUB-6.28's three
         // registration conditions are not built.
-        let writer = self.link_writer();
+        let writer = self.fire_writer();
         // Rule fires run as `Caller::System`, the in-process automation path:
         // M9 ⟂ M10 — a fire carries no wire principal, and its authority is
         // the rule set the operator registered, not a session. The two actions
@@ -589,7 +589,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// This is the boundary, one of the guest class's three applications:
     /// what a verdict sees is `Coordinator::eval_ctx`'s (the look), and what
-    /// a deposit's own value-keyed gates see is `Coordinator::link_writer`'s.
+    /// a fire's own value-keyed gates see is `Coordinator::fire_writer`'s.
     fn draft_boundary(&self, w: &W, home: &Address, arg_addr: &Address) -> Option<Address> {
         let arg_doc = document_of(arg_addr).unwrap_or_else(|| arg_addr.clone());
         for doc in [home, &arg_doc] {
@@ -611,7 +611,7 @@ impl<W: CoordinationWorld> Coordinator<W> {
     ///
     /// Reads `LinkState` at no visibility class, as the def probes and the
     /// divergence monitor do (`coordinator/defs.rs` enumerates the regime):
-    /// the writer runs at guest class, so a returned incumbent is
+    /// the fire's writer runs at guest class, so a returned incumbent is
     /// guest-readable and a fresh mint is absent from this snapshot under
     /// either reading — the discrimination is the same at guest class or at
     /// none.

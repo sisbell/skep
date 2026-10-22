@@ -30,8 +30,8 @@
 //! PUB's model rule (PUB-1.13–1.16: addresses are not secret; a draft's bytes
 //! and structure are), not a registered rule. The verdict is the trigger's as
 //! much as the write's, so the guest class pinned on the action's home
-//! (`FireError::DraftBoundary`) and on the writer's gates is applied to the
-//! look too — in M9, the delegator that holds `guest`. M7 is told nothing.
+//! (`FireError::DraftBoundary`) and on the fire writer's gates is applied to
+//! the look too — in M9, the delegator that holds `guest`. M7 is told nothing.
 //!
 //! **Cost (PUB-7.15's shape).** One `document_of` (M1 arithmetic, no read)
 //! and one predicate call per candidate tuple a collection read tests — a

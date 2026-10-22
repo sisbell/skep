@@ -6,12 +6,14 @@
 //! recomputable hint or an in-memory working set (§Core data model).
 //!
 //! The handle's impl is cut one file per capability group. This file holds
-//! construction, the two guest-class surfaces (`eval_ctx`, `link_writer`),
-//! the checker's two invocations, the calling convention both evaluators
-//! bind Γ_D by (`bind_args`) and group A; its children `defs` (group B) and
-//! `engine` (group C) are the rest of the impl, and `memo` is the def-status
-//! cache the handle holds. Being children they share the private state this
-//! module declares — no other module of the crate can reach it.
+//! construction, a verdict's read context and the two writers M9 builds
+//! (`eval_ctx` and `fire_writer` at guest class, `def_writer` over every
+//! document), the checker's two invocations, the calling convention both
+//! evaluators bind Γ_D by (`bind_args`) and group A; its children `defs`
+//! (group B) and `engine` (group C) are the rest of the impl, and `memo` is
+//! the def-status cache the handle holds. Being children they share the
+//! private state this module declares — no other module of the crate can
+//! reach it.
 
 // The def-status memo the handle holds: permanence here, admission in `defs`.
 mod memo;
@@ -86,12 +88,14 @@ pub type VstreamFactory<W> = for<'k> fn(&'k Kernel<W>) -> Vstream<'k, W>;
 
 /// The M7 `LinkWriter` factory the engine injects.
 ///
-/// It builds a writer over the kernel *at a visibility class*. Called at one
-/// site, the coordinator's `link_writer`, which hands it the `guest`
-/// predicate [`Coordinator::new`] was given, so the value-keyed gates of
-/// every fire and every def write run at guest class. A plain `fn` pointer,
-/// for [`VstreamFactory`]'s reason: it can hold no kernel and no visibility
-/// class of its own.
+/// It builds a writer over the kernel *at a visibility class*. Called at two
+/// sites: the coordinator's `fire_writer`, which hands it the `guest`
+/// predicate [`Coordinator::new`] was given, so a fire's value-keyed gates
+/// run at guest class (PUB-6.28); and its `def_writer`, which hands it the
+/// class that reads every document, so a def write's gates see what the def
+/// layer's probes read (ASN-0130 PR0). A plain `fn` pointer, for
+/// [`VstreamFactory`]'s reason: it can hold no kernel and no visibility class
+/// of its own.
 pub type LinkWriterFactory<W> =
     for<'k> fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W>;
 
@@ -152,14 +156,15 @@ pub struct Coordinator<W: WorldState> {
     ///   deposit (`draft_boundary`), so a rule's effect never crosses the
     ///   draft boundary in either direction (a marker on a draft's content, or
     ///   a deposit into a draft home);
-    /// - **The gates** (PUB-6.28): every `LinkWriter` M9 builds is built *at*
-    ///   this visibility class ([`Coordinator::link_writer`] lends this
-    ///   closure to `mk_link_writer`), so M7's idempotency and dedup lookups
-    ///   see only guest-readable incumbents and a fire commits
+    /// - **The gates** (PUB-6.28): every fire's `LinkWriter` is built *at*
+    ///   this visibility class ([`Coordinator::fire_writer`] lends this
+    ///   closure to `mk_link_writer`), so a fire's idempotency and dedup
+    ///   lookups see only guest-readable incumbents and a fire commits
     ///   byte-identically to a world with no drafts.
     ///
-    /// M9 holds no publication state of its own — the predicate is injected
-    /// like the factories.
+    /// A def write is no fire, and its writer is built over every document
+    /// instead ([`Coordinator::def_writer`]). M9 holds no publication state of
+    /// its own — the predicate is injected like the factories.
     guest: Box<Visibility<'static, W>>,
 }
 
@@ -187,8 +192,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// projects its static `TypeCatalog` from and then need not retain; and
     /// the two op-handle factories, [`VstreamFactory`] and
     /// [`LinkWriterFactory`] (the latter takes the *visibility* class beside
-    /// the kernel: M9 lends it `guest` at every construction, a borrow of the
-    /// one closure it holds).
+    /// the kernel: M9 lends it `guest` for every fire's writer, a borrow of
+    /// the one closure it holds, and the class that reads every document for
+    /// every def write's).
     ///
     /// Infallible: the projection is a pure read of the injected registry,
     /// whose population is the compiled shipped five.
@@ -201,7 +207,9 @@ impl<W: CoordinationWorld> Coordinator<W> {
     /// `false` is invisible to `eval`, `evaluate_def` and every rule's domain
     /// and trigger); which fires are refused before any deposit
     /// (`FireError::DraftBoundary`); and what M7's value-keyed gates see at
-    /// every write M9 makes (PUB-6.28).
+    /// every fire (PUB-6.28). It does not decide what a def write's gates
+    /// see: those read every document, as the def layer's probes do
+    /// ([`Coordinator::register_pred`] states why).
     ///
     /// **Obligations on the three injected values.** Half of one is carried
     /// by the types, the rest owed by the assembler. The factories are `fn`
@@ -287,16 +295,30 @@ impl<W: CoordinationWorld> Coordinator<W> {
         }
     }
 
-    /// Returns the M7 write handle, at guest class (PUB-6.28).
+    /// Returns a fire's M7 write handle, at guest class (PUB-6.28).
     ///
-    /// It is the write side's twin of [`Coordinator::eval_ctx`], and the one
-    /// construction site: every `emit`/`nullify` M9 makes (`register_pred`,
-    /// `supersede`, `certify_stable`, `retract_pred`, and a rule's fire) goes
-    /// through a writer built here, so M7's idempotency and dedup lookups see
-    /// only guest-readable incumbents and every writer M9 builds runs at
-    /// guest class.
-    fn link_writer(&self) -> LinkWriter<'_, W> {
+    /// It is the write side's twin of [`Coordinator::eval_ctx`]: a rule's fire
+    /// writes through a writer built here, so M7's idempotency and dedup
+    /// lookups see only guest-readable incumbents, an incumbent homed in a
+    /// draft never absorbs a fire, and a fire commits byte-identically to a
+    /// world with no drafts.
+    fn fire_writer(&self) -> LinkWriter<'_, W> {
         (self.mk_link_writer)(self.kernel.as_ref(), &*self.guest)
+    }
+
+    /// Returns the def layer's M7 write handle, over every document.
+    ///
+    /// `register_pred`, `certify_stable`, `retract_pred` and `supersede`
+    /// write through it. Their gates and probes read M7 at no visibility class
+    /// — a def's registration is no trigger read — and their writes see what
+    /// those reads see, so M7's in-transaction dedup finds every active
+    /// incumbent, wherever it is homed: ≤1 active `pdef` and `pd_stable` per
+    /// start (ASN-0130 PR0, PS2), a hit answered with the incumbent, whose
+    /// home may differ from the one the caller names (ASN-0128 I1). A def's
+    /// home is a draft, which guest class cannot read; PUB-6.28's guest class
+    /// is a fire's, and a def write is no fire.
+    fn def_writer(&self) -> LinkWriter<'_, W> {
+        (self.mk_link_writer)(self.kernel.as_ref(), &every_document::<W>)
     }
 
     // ──────────────────── A. The predicate language ────────────────────
@@ -488,6 +510,16 @@ impl<W: CoordinationWorld> Coordinator<W> {
         );
         classify_term(&self.catalog, view, t.evaluable())
     }
+}
+
+/// Returns `true`, for every document: the def layer's visibility class.
+///
+/// It is what `Coordinator::def_writer` lends M7: the class the def layer's
+/// probes read at, which read `LinkState` directly and so at no visibility
+/// class. In M7's `Visibility` shape, and a `fn` item, so it holds nothing and
+/// its borrow is `'static`.
+fn every_document<W>(_: &W, _: &Address) -> bool {
+    true
 }
 
 /// Binds `args` to `params` by Γ_D's calling convention.

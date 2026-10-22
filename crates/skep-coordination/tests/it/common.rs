@@ -255,11 +255,10 @@ fn every_document(_: &World, _: &Address) -> bool {
 
 /// The engine-assembled Coordinator over the shared kernel — infallible: the
 /// catalog is a pure read of the injected registry. The guest-class read
-/// predicate answers `true` everywhere: this miniature world carries no
-/// publication state (M3's `published` bit is folded engine-side), so every
-/// fire crosses no draft boundary — and, THREADED into every writer the
-/// Coordinator builds (lane 3.3b), every fire and def write sees every
-/// incumbent, the PRIVATE seed's included. [`coord_with_guest`] injects a
+/// predicate answers `true` everywhere, so every fire crosses no draft
+/// boundary — and, threaded into every fire's writer, every fire sees every
+/// incumbent, the private seed's included; a def write's writer reads every
+/// document whatever the guest predicate says. [`coord_with_guest`] injects a
 /// refusing one.
 pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
     coord_with_guest(k, |_, _| true)
@@ -270,7 +269,7 @@ pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
 /// The two factories are non-capturing closures written at the argument,
 /// which `Coordinator::new`'s `fn`-pointer factory types admit: the writer's
 /// is handed the kernel and the visibility class the Coordinator lends it
-/// (its injected `guest`, lane 3.3b).
+/// (its injected `guest` for a fire, every document for a def write).
 pub fn coord_with_guest(
     k: &Arc<Kernel<World>>,
     guest: impl Fn(&World, &Address) -> bool + Send + Sync + 'static,

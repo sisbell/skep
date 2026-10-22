@@ -2,10 +2,12 @@
 //! per-handle policy, and the answer to every breach a level-0 derivation
 //! meets, a body too deep and a reference cycle included — and the two
 //! answers it never keeps, a never-registered start's and that of a start
-//! with nothing resident yet; and the registration probes, read at no
-//! visibility class beside the guest-class look, and matching a start by its
-//! coverage class — the identity M7's dedup keys a registration by — where
-//! PL's `is_K` matches by coverage.
+//! with nothing resident yet; the registration probes, read at no visibility
+//! class beside the guest-class look, and matching a start by its coverage
+//! class — the identity M7's dedup keys a registration by — where PL's `is_K`
+//! matches by coverage; and the def writes, whose dedup reads every home, so
+//! a start keeps one active registration and one active certificate whatever
+//! the guest class hides.
 
 use crate::common::*;
 use crate::defs::{envelope, forged_negations};
@@ -290,8 +292,9 @@ fn a_probe_of_a_start_with_no_content_yet_does_not_freeze_it() {
 /// The def-registration probes read at no visibility class by design, and the
 /// evaluator's look reads at guest class: a def registered into a document the
 /// guest predicate refuses is ever-registered, active, signed, evaluable,
-/// endorsable as a referent, certifiable and supersedable — and invisible to
-/// `is_K(pdef, ·)` at every term view.
+/// endorsable as a referent, certifiable — its certificate absorbing a
+/// re-certification — and supersedable, and invisible to `is_K(pdef, ·)` at
+/// every term view.
 #[test]
 fn def_probes_see_what_the_evaluator_s_look_hides() {
     let k = kernel();
@@ -326,13 +329,13 @@ fn def_probes_see_what_the_evaluator_s_look_hides() {
     for view in [View::Active, View::Audit, View::Default] {
         assert!(!decide_now(&k, &c, view, is_k(&pred_stable_ty(), lit_addr(&start))), "{view:?}");
     }
-    // ≤1 active `pd_stable` per start holds WITHIN THE GUEST CLASS the writer
-    // runs at: the draft's certificate is invisible to its dedup, so a
-    // re-certification into the draft mints a second one and commits.
+    // ≤1 active `pd_stable` per start (ASN-0130 PS2): the def layer's writer
+    // reads every document, so the draft's certificate, hidden from the look,
+    // absorbs a re-certification into the draft, and nothing is committed.
     let before = k.current_seq();
-    let (twin, seq) = c.certify_stable(&doc2(), &start).expect("re-certify into the draft");
-    assert_ne!(twin, certificate, "a guest-hidden incumbent absorbs no re-certification");
-    assert!(seq > before, "and the re-certification commits");
+    let (again, seq) = c.certify_stable(&doc2(), &start).expect("re-certify into the draft");
+    assert_eq!(again, certificate, "the draft's certificate absorbs the re-certification");
+    assert_eq!((seq, k.current_seq()), (before, before), "a hit commits nothing");
 
     // `current_version` walks M7's claims AT NO VISIBILITY CLASS, where the
     // `tip` atom rebuilds the walk over the VISIBLE ones — so one draft-homed
@@ -356,48 +359,94 @@ fn def_probes_see_what_the_evaluator_s_look_hides() {
     );
 }
 
-/// ≤1 active `pdef` per start (PR0) holds WITHIN the guest class the writer
-/// runs at (lane 3.3b): a pdef homed where the guest predicate refuses is
-/// invisible to M7's idempotency lookup, so a second registration mints a
-/// fresh tuple beside it — and `is_active_pred`, which reads at no visibility
-/// class, stays true until each of the two is retracted, one per call, the
-/// T1-least first: `retract_pred` takes the tuple `tuple_naming` returns.
+/// ≤1 active `pdef` per start (ASN-0130 PR0) holds whatever the guest class
+/// hides: the def layer's writer reads every document, so a `pdef` homed
+/// where the guest predicate refuses is the incumbent M7's idempotency lookup
+/// finds, and a second registration from a readable home answers it — homed
+/// where it is, nothing committed (ASN-0128 I1) — and one retraction clears
+/// the one registration there is. Alike where the guest class hides nothing.
 #[test]
-fn a_pdef_hidden_from_the_guest_class_does_not_absorb_a_second_registration() {
+fn a_pdef_hidden_from_the_guest_class_absorbs_a_second_registration() {
+    for hides_doc2 in [true, false] {
+        let k = kernel();
+        let c = if hides_doc2 { coord_with_guest(&k, |_, d| *d != doc2()) } else { coord(&k) };
+        let term = c.type_check(vec![], tru()).expect("closed True");
+        let (start, defined_at) = c.define_predicate(&doc2(), &term).expect("define into doc2");
+        let (hit, seq) = c.register_pred(&doc1(), &start).expect("register again, from doc1");
+        assert_eq!(document_of(&hit), Some(doc2()), "the incumbent (hides doc2: {hides_doc2})");
+        assert_eq!(
+            (seq, k.current_seq()),
+            (defined_at, defined_at),
+            "a hit commits nothing (hides doc2: {hides_doc2})"
+        );
+        c.retract_pred(&doc1(), &start).expect("the one pdef retracted");
+        assert!(
+            !c.is_active_pred(&start, &k.snapshot()),
+            "one retraction clears it: there was one (hides doc2: {hides_doc2})"
+        );
+    }
+}
+
+/// The guest class the engine injects reads PUBLISHED documents alone, and a
+/// def's home is a draft — the only kind `define_predicate`'s insert admits —
+/// so a def's own `pdef` is homed where that class cannot read. The def layer
+/// writes at the class that reads every document, so a re-registration into
+/// the same draft answers the incumbent with nothing committed, a
+/// registration from a published home answers it too (ASN-0128 I1), a
+/// re-certification answers the certificate, and one retraction clears the
+/// one registration there is (ASN-0130 PR0).
+#[test]
+fn a_def_re_registered_under_the_engine_s_guest_class_answers_its_incumbent() {
     let k = kernel();
-    let c = coord_with_guest(&k, |_, d| *d != doc2());
+    // The engine's guest class in miniature: published documents only.
+    let c = coord_with_guest(&k, |w, d| w.m3.published(d));
     let term = c.type_check(vec![], tru()).expect("closed True");
-    let (start, _) = c.define_predicate(&doc2(), &term).expect("define into the draft");
+    let (start, defined_at) = c.define_predicate(&doc1(), &term).expect("define into the draft");
+    let (registration, seq) = c.register_pred(&doc1(), &start).expect("re-register in its draft");
+    assert_eq!(document_of(&registration), Some(doc1()));
+    assert_eq!((seq, k.current_seq()), (defined_at, defined_at), "a hit commits nothing");
+    let (from_published, _) =
+        c.register_pred(&published_doc(), &start).expect("register from a published home");
+    assert_eq!(from_published, registration, "the incumbent, wherever it is homed");
+    let (certificate, certified_at) = c.certify_stable(&doc1(), &start).expect("certify");
+    let (again, seq) = c.certify_stable(&doc1(), &start).expect("re-certify");
+    assert_eq!(again, certificate);
+    assert_eq!((seq, k.current_seq()), (certified_at, certified_at), "a hit commits nothing");
+    c.retract_pred(&doc1(), &start).expect("the one pdef retracted");
+    assert!(!c.is_active_pred(&start, &k.snapshot()), "one retraction clears it: there was one");
+}
 
-    let (fresh, _) = c.register_pred(&doc1(), &start).expect("register again, visibly");
-    assert_eq!(
-        document_of(&fresh),
-        Some(doc1()),
-        "a fresh deposit — the draft's incumbent is invisible to the dedup"
-    );
-    let (again, _) = c.register_pred(&doc1(), &start).expect("now it dedups");
-    assert_eq!(again, fresh, "the VISIBLE incumbent absorbs the third");
-
-    assert!(c.is_active_pred(&start, &k.snapshot()));
-    c.retract_pred(&doc1(), &start).expect("one active pdef retracted");
-    assert!(
-        k.snapshot().world().links().is_nullified(&fresh),
-        "the T1-least of the two — doc1's sorts before the draft's — goes first"
-    );
-    assert!(c.is_active_pred(&start, &k.snapshot()), "the twin is still active");
-    c.retract_pred(&doc1(), &start).expect("the twin retracted");
-    assert!(!c.is_active_pred(&start, &k.snapshot()));
-
-    // The control: where the guest class hides nothing, the doc2 incumbent is
-    // visible to the lookup and absorbs the second registration — one active
-    // pdef per start, and one retraction clears it.
+/// `retract_pred` nullifies ONE active `pdef` per call — the T1-least
+/// `tuple_naming` returns — and `is_active_pred` stays true until each is
+/// retracted. `register_pred` mints no second tuple for a start, but a write
+/// past the gate can (PR-DISC; the open surface takes no dedup check): the
+/// witness is two such tuples, homed in doc2 and then doc1, and doc1's —
+/// the T1-least — goes first.
+#[test]
+fn retract_pred_takes_the_t1_least_of_two_active_pdefs_one_per_call() {
     let k = kernel();
     let c = coord(&k);
-    let term = c.type_check(vec![], tru()).expect("closed True");
-    let (start, _) = c.define_predicate(&doc2(), &term).expect("define");
-    let (hit, _) = c.register_pred(&doc1(), &start).expect("register again");
-    assert_eq!(document_of(&hit), Some(doc2()), "the incumbent, wherever it is homed");
-    c.retract_pred(&doc1(), &start).expect("the one pdef retracted");
+    let start = insert_raw(&k, &doc1(), forged_negations(0)); // the closed ⊤
+    let past_the_gate = |home: Address| {
+        link_writer(&k)
+            .makelink(
+                Caller::System,
+                &home,
+                SlotArg::Addrs(vec![start.clone()]),
+                SlotArg::Addrs(vec![]),
+                SlotArg::Addrs(vec![ra(PRED_DEF)]),
+            )
+            .expect("the breach: a pdef past the gate")
+            .0
+    };
+    let in_doc2 = past_the_gate(doc2());
+    let in_doc1 = past_the_gate(doc1());
+    assert!(in_doc1 < in_doc2, "doc1's link sorts first");
+    c.retract_pred(&doc1(), &start).expect("one retracted");
+    let s = k.snapshot();
+    assert!(s.world().links().is_nullified(&in_doc1), "the T1-least goes first");
+    assert!(c.is_active_pred(&start, &s), "the other stays active");
+    c.retract_pred(&doc1(), &start).expect("the other retracted");
     assert!(!c.is_active_pred(&start, &k.snapshot()));
 }
 

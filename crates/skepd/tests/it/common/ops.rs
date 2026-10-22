@@ -758,6 +758,29 @@ pub fn class_scan_frame(op_name: &str, ty_addr: &str) -> String {
     ftt_frame(op_name, r#""any""#, r#""any""#, r#""any""#, &unit_span(ty_addr))
 }
 
+/// The four-set frame constrained in the HOME slot alone — `home`'s unit
+/// span, `from`/`to`/`ty` all `"any"` — for `op` (`find_links_ftt` /
+/// `count_ftt` / `window_ftt`): the links homed at `home` or under it, a
+/// document's span covering its version members' (wire.md §Link discovery
+/// reads, the home slot).
+pub fn home_ftt_frame(op_name: &str, home: &str) -> String {
+    ftt_frame(op_name, &unit_span(home), r#""any""#, r#""any""#, r#""any""#)
+}
+
+/// `find_links_ftt` over [`home_ftt_frame`] as `token` (`None` = the guest):
+/// the active links homed at `home` or under it, filtered to the rows whose
+/// home `token`'s class may read (§The read predicate).
+pub fn find_links_ftt_home(port: u16, token: Option<&str>, home: &str) -> Vec<String> {
+    addrs_of(&op(port, token, &home_ftt_frame("find_links_ftt", home)))
+}
+
+/// `count_ftt` over [`home_ftt_frame`] as `token`: the census of
+/// [`find_links_ftt_home`]'s answer.
+pub fn count_ftt_home(port: u16, token: Option<&str>, home: &str) -> u64 {
+    let v = op(port, token, &home_ftt_frame("count_ftt", home));
+    expect_resp(&v, "count")["n"].as_u64().expect("n")
+}
+
 // ── history and the dump ─────────────────────────────────────────────────
 
 /// One `/op-at` exchange presenting `token` (`None` = the guest).

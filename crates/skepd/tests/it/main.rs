@@ -39,6 +39,7 @@ mod history;
 mod http_lifecycle;
 mod identity_slice;
 mod media;
+mod member_home;
 mod modes;
 mod nullify_class;
 mod open;

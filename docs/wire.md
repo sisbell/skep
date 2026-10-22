@@ -3610,6 +3610,11 @@ governance question for the lattice — explicitly deferred, not decided by
 omission. Failures are `not_owner` (permanent) with the failing home or
 target in `site.addr`.
 
+A version member is a home exactly as its document is: a link homed in
+`1.0.1.0.1.2` sits in that member's own link subspace at
+`1.0.1.0.1.2.0.2.n`, is found by its content at every version sharing it,
+and satisfies a home slot naming the member alone or naming the document.
+
 Readability (§The read predicate): a V-SPEC slot of `make_link`, or
 of `edit_link`'s successor, that resolves a document the session
 principal may not read is `withheld` naming it — address-form slots are

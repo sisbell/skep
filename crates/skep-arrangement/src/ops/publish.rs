@@ -119,7 +119,9 @@ where
     /// starts empty either way: the shot places content alone, and a link
     /// seated in the base stays the base's — a link is arranged only in its
     /// home document (CL-OWN, PUB-2.12), and the member is a home no link has
-    /// yet.
+    /// yet. A later link write may name the member as its `home`, and then
+    /// seats its link in the member's own link subspace, as in any document's
+    /// (CL-OWN).
     ///
     /// **Where the fresh identity lands** (PUB-2.40), stated because a reader
     /// the ack does not tell reads it back. The values

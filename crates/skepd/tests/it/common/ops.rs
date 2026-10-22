@@ -246,6 +246,18 @@ pub fn delete_frame(doc: &str, at: u64, width: u64) -> String {
     )
 }
 
+/// `reinstate` into `doc` at content ordinal `at`, each run `(origin,
+/// i_start, width)` — the write by identity (wire.md §Arrangement), whose
+/// runs take the form `publish`'s do.
+pub fn reinstate_frame(doc: &str, at: u64, runs: &[(&str, &str, u64)]) -> String {
+    let runs: Vec<String> =
+        runs.iter().map(|(origin, i_start, width)| run(origin, i_start, *width)).collect();
+    format!(
+        r#"{{"op":"reinstate","doc":"{doc}","at":{{"subspace":"1","ordinal":"{at}"}},"runs":[{}]}}"#,
+        runs.join(",")
+    )
+}
+
 pub fn rearrange_frame(doc: &str, cuts: [u64; 3]) -> String {
     let [a, b, c] = cuts;
     format!(
@@ -537,6 +549,21 @@ pub fn universal_grants(port: u16, token: Option<&str>) -> Vec<(String, Vec<Stri
 pub fn read_link(port: u16, token: Option<&str>, a: &str) -> Value {
     let v = op(port, token, &read_link_frame(a));
     expect_resp(&v, "link_value")["link"].clone()
+}
+
+/// The pointwise read `discoverable_from` (wire.md §Link discovery reads):
+/// is link `a` arrangement-reachable AND active from `d`? The document is
+/// consulted first, then the link.
+pub fn discoverable_from_frame(a: &str, d: &str) -> String {
+    format!(r#"{{"op":"discoverable_from","a":"{a}","d":"{d}"}}"#)
+}
+
+/// [`discoverable_from_frame`] asked as `token`: the `bool` answer's value.
+/// A bare document address answers its trunk head (head-float), a member
+/// its own arrangement.
+pub fn discoverable_from(port: u16, token: Option<&str>, a: &str, d: &str) -> bool {
+    let v = op(port, token, &discoverable_from_frame(a, d));
+    expect_resp(&v, "bool")["val"].as_bool().expect("val")
 }
 
 pub fn find_links_v(port: u16, token: Option<&str>, doc: &str, from: u64, width: u64) -> Vec<String> {

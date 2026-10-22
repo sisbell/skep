@@ -76,9 +76,32 @@ written by hand carries no such trailer.
 ## Issues
 
 Features and fixes are tracked as issues on this repository, and a commit
-that resolves one carries `Closes #N`. An issue is written in plain words:
-what it changes, what it does not do, the limits it sets, and how it is
-tested.
+that resolves one carries `Closes #N`. An issue's title is at most 70
+characters, plain words, no period, no `type(scope):` prefix. Its body
+has exactly this form:
+
+```text
+## Problem
+
+<what the code does today and what it costs the person who meets it,
+in plain short sentences>
+
+**Where:** <files and identifiers in this repository, in backticks>
+
+## Fix
+
+<what the code will do once fixed — the behaviour, and what stays
+unchanged>
+```
+
+Where the code needs a decision before it can be fixed, the second
+section is `## Design needed` instead — the decision as a question, with
+its options and what each costs, no fix chosen — and the issue carries
+the `needs-design` label until the decision is made. An issue names
+nothing outside this repository: no design document, no rule or decision
+id, no person, reviewer, seat or round. Every issue is given one of the
+four milestones when it is filed — Now, Next, Before release, Later —
+and the label of the crate it touches, spelled as the commit scope is.
 
 ## Code and comments
 

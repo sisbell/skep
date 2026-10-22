@@ -6,7 +6,7 @@ use crate::common::*;
 
 use serde::Serialize;
 use skep_address::{shift, validate, Level, Nat, Tumbler};
-use skep_kernel::Kernel;
+use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
     ghost_position, head_document, system_account, HasM3, M3Rec, M3State, MintError, Namespace,
     PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
@@ -28,7 +28,7 @@ fn alloc_range(first: &[u32], count: u32) -> M3Rec {
 #[cfg(debug_assertions)]
 #[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
-    let _ = M3State::genesis().apply_m3(&alloc(&[1, 0, 5]));
+    let _ = M3State::genesis().apply_m3(Seq(0), &alloc(&[1, 0, 5]));
 }
 
 /// The same guard in the other direction: a re-staged Allocate would
@@ -38,9 +38,9 @@ fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
 #[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
     let s = M3State::genesis()
-        .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&alloc(&[1, 0, 2]));
-    let _ = s.apply_m3(&alloc(&[1, 0, 1]));
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &alloc(&[1, 0, 2]));
+    let _ = s.apply_m3(Seq(0), &alloc(&[1, 0, 1]));
 }
 
 /// The range mint's commit half under the same guard: a range whose first
@@ -50,7 +50,7 @@ fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
 #[cfg(debug_assertions)]
 #[should_panic(expected = "a range's first ordinal must equal its namespace's effective frontier + 1")]
 fn a_jumped_range_first_ordinal_fail_stops_the_fold() {
-    let _ = M3State::genesis().apply_m3(&alloc_range(&[1, 0, 1, 0, 1, 0, 1, 5], 3));
+    let _ = M3State::genesis().apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 5], 3));
 }
 
 /// …and the other direction: a re-staged range would regress the frontier
@@ -59,8 +59,8 @@ fn a_jumped_range_first_ordinal_fail_stops_the_fold() {
 #[cfg(debug_assertions)]
 #[should_panic(expected = "a range's first ordinal must equal its namespace's effective frontier + 1")]
 fn a_regressed_range_first_ordinal_fail_stops_the_fold() {
-    let s = M3State::genesis().apply_m3(&alloc_range(&[1, 0, 1, 0, 1, 0, 1, 1], 3));
-    let _ = s.apply_m3(&alloc_range(&[1, 0, 1, 0, 1, 0, 1, 2], 2));
+    let s = M3State::genesis().apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 1], 3));
+    let _ = s.apply_m3(Seq(0), &alloc_range(&[1, 0, 1, 0, 1, 0, 1, 2], 2));
 }
 
 /// RANGE ≡ SINGLES (B2: a mint is a pure function of the frontier): after
@@ -80,13 +80,13 @@ fn a_range_mint_issues_the_addresses_n_single_mints_would_and_moves_the_frontier
     assert_eq!(first, a(&[1, 0, 1, 0, 1, 0, 1, 1]), "the chain's first slot");
     let M3Rec::AllocateRange(allocation) = &range else { panic!("a range mint returns its record") };
     assert_eq!((allocation.first(), allocation.count()), (&first, &Nat::from(n)));
-    let after_range = base.apply_m3(&range);
+    let after_range = base.apply_m3(Seq(0), &range);
     // The singles, folded one after another off the same base.
     let mut after_singles = base.clone();
     let mut singles = Vec::new();
     for _ in 0..n {
         let (addr, rec) = after_singles.mint_content(&doc).expect("doc is registered");
-        after_singles = after_singles.apply_m3(&rec);
+        after_singles = after_singles.apply_m3(Seq(0), &rec);
         singles.push(addr);
     }
     for (k, single) in singles.iter().enumerate() {
@@ -126,7 +126,7 @@ fn a_non_node_entry_in_the_node_registry_is_unreachable() {
     let s = [&acct, &doc, &ghost]
         .into_iter()
         .fold(M3State::genesis(), |s, addr| {
-            s.apply_m3(&M3Rec::register_node(addr.clone()))
+            s.apply_m3(Seq(0), &M3Rec::register_node(addr.clone()))
         });
     for addr in [&acct, &doc, &ghost] {
         assert!(
@@ -164,7 +164,7 @@ fn a_non_node_entry_in_the_node_registry_is_unreachable() {
 /// guard on both build profiles.
 #[test]
 fn a_replayed_seat_never_replaces_a_seated_principal() {
-    let s = M3State::genesis().apply_m3(&M3Rec::register_principal(system_account(), ID1));
+    let s = M3State::genesis().apply_m3(Seq(0), &M3Rec::register_principal(system_account(), ID1));
     assert_eq!(s.effective_owner(&head_document()), Some(SYSTEM_PRINCIPAL));
     assert_eq!(
         s.principal_prefix(SYSTEM_PRINCIPAL),
@@ -180,9 +180,9 @@ fn a_replayed_seat_never_replaces_a_seated_principal() {
     let acct = a(&[1, 0, 1]);
     let seat = |id| M3Rec::register_principal(acct.clone(), id);
     let seated = M3State::genesis()
-        .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&seat(ID1));
-    let replayed = seated.apply_m3(&seat(ID2));
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &seat(ID1));
+    let replayed = seated.apply_m3(Seq(0), &seat(ID2));
     assert_eq!(replayed.effective_owner(&acct), Some(ID1));
     assert_eq!(replayed.principal_prefix(ID1), Some(&acct));
     assert!(replayed.principal_prefix(ID2).is_none());
@@ -206,8 +206,8 @@ fn a_replayed_seat_never_replaces_a_seated_principal() {
 fn the_fold_leaves_the_seat_allocation_coupling_to_its_producers() {
     let (allocated, seated) = (a(&[1, 0, 1]), a(&[1, 0, 2]));
     let s = M3State::genesis()
-        .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&M3Rec::register_principal(seated.clone(), ID2));
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &M3Rec::register_principal(seated.clone(), ID2));
 
     // Allocated and seated nowhere: ω climbs to π₀'s node seat, so the
     // owner-of-address read calls the account free, an owner above it owns
@@ -542,28 +542,28 @@ fn two_slices_holding_the_same_entries_encode_to_one_byte_string() {
     let mut x = M3State::genesis();
     for (i, acct) in accounts.iter().enumerate() {
         x = x
-            .apply_m3(&alloc(acct))
-            .apply_m3(&seat(i))
-            .apply_m3(&document(i));
+            .apply_m3(Seq(0), &alloc(acct))
+            .apply_m3(Seq(0), &seat(i))
+            .apply_m3(Seq(0), &document(i));
     }
     for n in 2..=7 {
-        x = x.apply_m3(&node(n));
+        x = x.apply_m3(Seq(0), &node(n));
     }
     // History Y, off a SECOND genesis: the nodes first and descending, the
     // accounts (one chain, so in order), the documents in reverse — each is c₁
     // of its own chain — and the seats in reverse.
     let mut y = M3State::genesis();
     for n in (2..=7).rev() {
-        y = y.apply_m3(&node(n));
+        y = y.apply_m3(Seq(0), &node(n));
     }
     for acct in &accounts {
-        y = y.apply_m3(&alloc(acct));
+        y = y.apply_m3(Seq(0), &alloc(acct));
     }
     for i in (0..accounts.len()).rev() {
-        y = y.apply_m3(&document(i));
+        y = y.apply_m3(Seq(0), &document(i));
     }
     for i in (0..accounts.len()).rev() {
-        y = y.apply_m3(&seat(i));
+        y = y.apply_m3(Seq(0), &seat(i));
     }
 
     // One set of entries — nine frontiers, eight nodes, eight seats, eight

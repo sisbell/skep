@@ -34,8 +34,9 @@
 //! first ([`skep_registry::Definition::section`]) — inserted per byte, as
 //! prose is, into the staging draft the head writer keeps (`1.1.0.1.0.3`,
 //! reused through [`super::head::HeadWriter::ensure_draft`]: the system
-//! principal mints no other document, whichever of the two mints it first,
-//! and row 40's line is the fence), then one publish shot into `1.1.0.1.0.1`
+//! principal mints no other draft, whichever of its three writers mints it
+//! first — its one other document, the time writer's, comes after it — and
+//! row 40's line is the fence), then one publish shot into `1.1.0.1.0.1`
 //! minting the next
 //! member of its trunk chain, with `base` the current trunk head (the
 //! document itself while memberless) at extent 0, so every position the

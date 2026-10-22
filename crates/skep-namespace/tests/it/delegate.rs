@@ -338,11 +338,11 @@ fn delegate_rejection_order_is_pinned() {
     // its ω for the call below to reach (iv).)
     let seeded = World {
         m3: M3State::genesis()
-            .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
-            .apply_m3(&alloc(&[1, 0, 1, 1]))
-            .apply_m3(&alloc(&[1, 0, 1, 1, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1, 1, 1]), ID2)),
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), ID1))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1, 1, 1]), ID2)),
     };
     let flanked_k = mem_kernel(seeded);
     let flanked_ns = Namespace::new(&flanked_k);
@@ -411,7 +411,7 @@ fn delegate_rejection_order_is_pinned() {
     // the fold admits exactly the record shapes delegate itself stages
     // (apply_m3 totality domain), so seed one directly.
     let seeded = World {
-        m3: M3State::genesis().apply_m3(&alloc(&[1, 0, 1])),
+        m3: M3State::genesis().apply_m3(Seq(0), &alloc(&[1, 0, 1])),
     };
     let allocated_k = mem_kernel(seeded);
     let allocated_ns = Namespace::new(&allocated_k);
@@ -430,9 +430,9 @@ fn delegate_rejection_order_is_pinned() {
     // both).
     let seeded = World {
         m3: M3State::genesis()
-            .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&alloc(&[1, 0, 1, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2)),
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2)),
     };
     let nested_k = mem_kernel(seeded);
     let nested_ns = Namespace::new(&nested_k);
@@ -545,8 +545,8 @@ fn the_peek_and_the_delegate_gate_stop_at_the_same_nesting_depth() {
     at_cap.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS - 2));
     let below_cap = at_cap[..MAX_PRINCIPAL_COMPONENTS - 1].to_vec();
     let m3 = M3State::genesis()
-        .apply_m3(&alloc(&below_cap))
-        .apply_m3(&alloc(&at_cap));
+        .apply_m3(Seq(0), &alloc(&below_cap))
+        .apply_m3(Seq(0), &alloc(&at_cap));
     assert_eq!(a(&at_cap).tumbler().len(), MAX_PRINCIPAL_COMPONENTS);
 
     // One below the cap the chain still has a delegable slot…

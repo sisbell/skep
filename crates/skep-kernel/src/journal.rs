@@ -285,14 +285,27 @@ struct LogRecord {
 
 /// One committed record as the fold consumes it.
 ///
-/// The coordinate it was committed at, and the serialized `W::Record` bytes
+/// The coordinate it was committed at, the serialized `W::Record` bytes
 /// there — a [`LogRecord`] minus its `txn`, which the group that closed it has
-/// already established. Named for the only state in which one is ever read: a
-/// dead group releases its records unread, so every one that reaches
+/// already established — and the coordinate of the transaction that
+/// committed it. Named for the only state in which one is ever read: a dead
+/// group releases its records unread, so every one that reaches
 /// [`ScanOutcome::committed_records`] came through `PendingTxn::commits`.
 pub(crate) struct CommittedRecord {
     pub(crate) seq: u64,
     pub(crate) bytes: Vec<u8>,
+    /// The transaction's terminal coordinate: its marker's `last_seq`.
+    ///
+    /// It is the one position the transaction is known by outside the
+    /// kernel — the acknowledgment's `at`, the boundary a history read
+    /// names — and what the fold is handed for every record of the
+    /// transaction ([`crate::WorldState::apply`]'s `at`), so a world that
+    /// keeps a fact's position keeps the commit's, never an interior
+    /// coordinate of a composite. Stamped when the marker closes the group
+    /// (`ScanOutcome::collect_commit`); while the group is open it holds the
+    /// record's own `seq`, the right value for a transaction of one record
+    /// and a placeholder for the rest.
+    pub(crate) committed_at: u64,
 }
 
 /// Per-txn commit marker: the terminal frame of a transaction.

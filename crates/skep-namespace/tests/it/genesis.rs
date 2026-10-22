@@ -118,9 +118,16 @@ fn genesis_is_the_roots_and_the_seed_byte_for_byte() {
         (t(&[1, 1, 0, 1, 0, 2]), true),
     ])
     .expect("the publication map");
+    // The position map: the seed's two documents, minted at the genesis
+    // coordinate, each entry an address and an eight-byte position.
+    let minted_at = bincode::serialize(&vec![
+        (t(&[1, 1, 0, 1, 0, 1]), 0u64),
+        (t(&[1, 1, 0, 1, 0, 2]), 0u64),
+    ])
+    .expect("the position map");
     assert_eq!(
         bincode::serialize(&M3State::genesis()).expect("serialize genesis"),
-        [frontiers, nodes, principals, publication].concat(),
+        [frontiers, nodes, principals, publication, minted_at].concat(),
         "Σ₀ drifted: every journal replayed from genesis would fold onto another world"
     );
 }

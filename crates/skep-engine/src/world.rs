@@ -22,7 +22,7 @@ use skep_arrangement::{HasM5, M5Rec, M5State};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent};
 use skep_febe::EditionClaim;
 use skep_identity::IdentityState;
-use skep_kernel::{RebuildError, WorldState};
+use skep_kernel::{RebuildError, Seq, WorldState};
 use skep_links::{HasLinks, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
@@ -221,13 +221,14 @@ impl fmt::Debug for World {
 /// slice's top-level fields to the count, and says what it cannot see below
 /// that level.
 ///
-/// `1` names six layouts, each the one before it with one change: the first
+/// `1` names seven layouts, each the one before it with one change: the first
 /// carries M3's publication bit; the second appends M5's birth memo to its
 /// slice, and the third the shot terms after it; the fourth appends the
 /// identity slice after M7's (AUTH-2.79); the fifth holds each of M4's
 /// entries as a value or a stretch — a tagged enum where a bare value stood —
-/// and gains the stretch record, [`Record::ContentStretch`]; and the sixth
-/// appends the fork sources to the arrangement slice. They stand under one
+/// and gains the stretch record, [`Record::ContentStretch`]; the sixth
+/// appends the fork sources to the arrangement slice; and the seventh
+/// appends the position map to the namespace slice. They stand under one
 /// count because no served board exists and the dev boards are re-seeded,
 /// the kernel's golden regenerated under the current stamps. No base any
 /// build wrote in the first reaches this word through a header this build
@@ -240,9 +241,13 @@ impl fmt::Debug for World {
 /// variant or an overlong stretch (skep-content's suite pins both shapes);
 /// one that passes its content map — an empty one, or one of tagged entries
 /// — meets the arrangement slice short of its fork sources, which carry no
-/// default; and the board then opens from genesis where its journal still
-/// reaches it, replaying its per-byte frames into one-byte values the readers
-/// serve as they serve any value. A body that ends where the identity slice
+/// default; a body written before the position map reads the content slice's
+/// bytes as that map and every slice after it as the one before, and runs
+/// off the body's end (`a_base_written_before_the_position_map_fails_to_decode`
+/// holds it on genesis and on worlds holding links); and the board then
+/// opens from genesis where its journal still reaches it, replaying its
+/// per-byte frames into one-byte values the readers serve as they serve any
+/// value. A body that ends where the identity slice
 /// would begin reads as `identity: None` (`World`'s field states the
 /// reading), and is resolved or refused at load by AUTH-2.83's rule rather
 /// than defaulted into a table — the one layout change this count names
@@ -379,7 +384,11 @@ impl WorldState for World {
     /// It dispatches each variant into its store's own pure/total/deterministic
     /// fold, replacing that store's slice and the engine state that rides its
     /// arm (below; contract §The engine crate assembles). No semantics here —
-    /// the folds own every decision.
+    /// the folds own every decision. `at`, the record's own journal position
+    /// (DOCTRINE D1: a position is a fold input), goes to the one store that
+    /// keeps one — M3, whose position map dates every document, member and
+    /// link an `Allocate` mints — and to no other: M4, M5 and M7 keep no
+    /// position, so their arms do not read it.
     ///
     /// Two derived indexes ride these arms, one apiece, each on the arm whose
     /// records can move it (PUB-7.7's fold half). The exception set rides the
@@ -429,10 +438,10 @@ impl WorldState for World {
     /// fail-stops on a content stretch past its document's content frontier
     /// (`stretch_within_frontier`), and where the identity hook asserts
     /// (`identity::fold` states where).
-    fn apply(&self, r: &Record) -> World {
+    fn apply(&self, at: Seq, r: &Record) -> World {
         match r {
             Record::Namespace(x) => {
-                let namespace = self.namespace.apply_m3(x);
+                let namespace = self.namespace.apply_m3(at, x);
                 let drafts = publication::fold(&self.drafts, &namespace, x);
                 World { namespace, drafts, ..self.clone() }
             }

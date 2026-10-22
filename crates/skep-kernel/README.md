@@ -6,8 +6,10 @@ snapshot kernel over an engine-supplied world state.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **`WorldState`** — the one trait a world implements: a pure,
-  deterministic `apply` folds each journaled record; `rebuild_derived`
-  reseeds skip-serialized hints at load.
+  deterministic `apply` folds each journaled record at the position it
+  takes in the journal — handed in, so a world may keep a fact's commit
+  position as state, and the same number live and on replay;
+  `rebuild_derived` reseeds skip-serialized hints at load.
 - **Append-only journal** — CRC-framed records, committed by marker;
   recovery is replay: checkpoint (or genesis) plus every committed
   record reproduces the exact world. Every marker carries a commit-chain

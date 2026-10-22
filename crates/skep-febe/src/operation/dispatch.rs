@@ -437,13 +437,20 @@ where
             //    the one snapshot.
             Op::ReadLink { a } => {
                 // A link homed in an unreadable document reads as absent
-                // (PUB-6.6): `⊥`, exactly as a never-deposited address.
+                // (PUB-6.6): `⊥`, exactly as a never-deposited address — its
+                // age with it, so absence says nothing a link's position
+                // would. Where the link is read, `at` is the position M3's
+                // position map keeps for its mint (D6: the position in the
+                // world, never an index over the feed), `None` for a link
+                // a build before the map minted; the time is the transport's
+                // to add (`Response::mint_mut`).
                 let link = if home_readable(&a, &readable) {
                     world.links().readlink(&a).cloned()
                 } else {
                     None
                 };
-                Ok(Response::LinkValue { link, as_of })
+                let at = link.as_ref().and_then(|_| world.m3().minted_at(&a));
+                Ok(Response::LinkValue { link, at, time: None, as_of })
             }
             // Carries its own Result in-band, deliberately (§2): M7 defines
             // ⟨⟩ ≠ ⊥ as two answers of FOLLOWLINK; lowering Invalid to a
@@ -651,12 +658,15 @@ where
             // included — answers none. The source takes no gate of its own:
             // whoever may read the fork reads the address it was born sharing
             // (the record's decision 2), and nothing else of the source rides
-            // with it.
+            // with it. The mint position is read off the address named too
+            // (M3's position map; D6): a member answers its own mint, the
+            // document its own, and the time is the transport's to add.
             Op::DocMetadata { doc } => {
                 let m3 = world.m3();
                 require_registered_document(m3, kind, &doc)?;
                 let terms = world.m5().shot_terms(&doc).cloned();
                 let source = world.m5().fork_source(&doc).cloned();
+                let at = m3.minted_at(&doc);
                 let trunk = trunk_of(&doc);
                 let published = published_target(m3, &trunk);
                 let owner = m3.effective_owner_prefix(&trunk).cloned();
@@ -668,6 +678,8 @@ where
                     birth,
                     terms,
                     source,
+                    at,
+                    time: None,
                     as_of,
                 })
             }

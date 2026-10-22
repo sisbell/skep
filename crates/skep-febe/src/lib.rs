@@ -207,7 +207,9 @@ pub use lower::{lower_txn, Lower};
 pub use operation::{consult_read, OperationSurface, ReadPredicate};
 pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
 pub use request::{ISpan, ISpanFault, Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
-pub use response::{BirthVersion, EditionClaim, IItem, Response, UniversalGrant};
+pub use response::{
+    BirthVersion, EditionClaim, IItem, MintTime, Response, TimeSource, UniversalGrant,
+};
 pub use session::SessionId;
 // EDITLINK's successor build, for the daemon's composer of its entry frame
 // (signed ops): the one function the dispatch and the composer both resolve

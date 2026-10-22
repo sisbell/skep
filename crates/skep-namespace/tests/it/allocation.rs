@@ -525,3 +525,47 @@ fn membership_is_exact_chain_membership() {
     }
     assert!(m3.is_allocated(&c1)); // …while the real member still is
 }
+
+/// The position map (D1; the permanence record's D6): the record each mint
+/// hands back, folded at a position, enters that position for a document, a
+/// version member and a link — the three families a reader asks the age of —
+/// and for nothing else: a content element's record enters no position (a run
+/// of bytes is placed, not dated), an account's seat is dated by nothing,
+/// and an address never minted answers `None`. Read the same off a kernel's
+/// committed world as off the pure fold, at the position the kernel
+/// committed the record at. (That an entry is written once is the fold's
+/// `contains_key` guard, which a debug build's contiguity check stands in
+/// front of: a stale record re-folded fail-stops there, so no test here
+/// re-folds one.)
+#[test]
+fn each_mint_enters_its_position_for_a_document_a_member_and_a_link_and_for_nothing_else() {
+    let (k, acct, doc) = kernel_with_account_and_doc();
+    let m3 = k.snapshot().world().m3().clone();
+    let (d2, d2_rec) = m3.mint_document(&acct, false).expect("document mint");
+    let (v1, v1_rec) = m3.mint_version(&doc, false).expect("version mint");
+    let (l1, l1_rec) = m3.mint_link(&doc).expect("link mint");
+    let (c1, c1_rec) = m3.mint_content(&doc).expect("content mint");
+    let folded = m3
+        .apply_m3(Seq(40), &d2_rec)
+        .apply_m3(Seq(41), &v1_rec)
+        .apply_m3(Seq(42), &l1_rec)
+        .apply_m3(Seq(43), &c1_rec);
+    assert_eq!(folded.minted_at(&d2), Some(Seq(40)), "a document enters its mint's position");
+    assert_eq!(folded.minted_at(&v1), Some(Seq(41)), "a version member enters its mint's position");
+    assert_eq!(folded.minted_at(&l1), Some(Seq(42)), "a link enters its mint's position");
+    assert_eq!(folded.minted_at(&c1), None, "a content element enters no position");
+    assert_eq!(folded.minted_at(&acct), None, "an account enters no position");
+    assert_eq!(folded.minted_at(&a(&[1, 0, 1, 0, 9])), None, "an address never minted has none");
+    // Genesis's two seeded documents stand at the genesis coordinate.
+    assert_eq!(folded.minted_at(&a(&[1, 1, 0, 1, 0, 2])), Some(Seq(0)));
+
+    // Off the kernel: the committed position is the one the fold was handed.
+    let (_, at) = k
+        .transact::<_, MintError>(&[M3State::link_lock_key(&doc)], |stg| {
+            let (l, rec) = stg.working().m3().mint_link(&doc)?;
+            stg.push(rec.into());
+            Ok(l)
+        })
+        .expect("the link commits");
+    assert_eq!(k.snapshot().world().m3().minted_at(&l1), Some(at));
+}

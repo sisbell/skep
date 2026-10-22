@@ -177,7 +177,7 @@ impl Daemon {
                         Ok(permit) => permit,
                         Err(ScanBusy) => return refuse_scan_busy(frame.op.kind()),
                     };
-                    self.op_reply(&self.febe.execute(resolved.sid(), *frame))
+                    self.read_reply(self.febe.execute(resolved.sid(), *frame))
                 }
                 Some(meta) => self.write_sequence(resolved, meta, *frame, presented, req),
             },
@@ -360,7 +360,7 @@ impl Daemon {
     /// daemon holds no authorization policy of its own, so the refusal is
     /// M10's to word.
     fn guest_reply(&self, frame: Request) -> Reply {
-        self.op_reply(&self.febe.execute(SessionId::GUEST, frame))
+        self.read_reply(self.febe.execute(SessionId::GUEST, frame))
     }
 
     /// Runs the plain sequence (AUTH-3.35).
@@ -654,5 +654,27 @@ impl Daemon {
     /// is chosen.
     pub(super) fn op_reply(&self, resp: &Response) -> Reply {
         op_answer(self.codec.marshal(resp))
+    }
+
+    /// Returns one M10 read answer, dated, marshaled, as its reply.
+    ///
+    /// It is [`Daemon::op_reply`] for the read routes — `/op`'s read arm and
+    /// `/op-at` — with the one thing a read answer owes that M10 cannot
+    /// supply: the daemon's testimony of when a minted address's position
+    /// committed, on the two reads that answer an address's age
+    /// (`read_link`, `doc_metadata`; wire.md §Links (raw reads), §Namespace).
+    /// M10 answers the position off the world and leaves the time slot open
+    /// (`Response::mint_mut`); this fills it from the commits' testimony —
+    /// the change feed's line for the position, else the hourly time record
+    /// (`Commits::mint_time`) — off the head's world, where every record at
+    /// or below the position stands whichever snapshot the read was answered
+    /// from. Every other shape passes through untouched: one match, no
+    /// snapshot, for a read that carries no age.
+    pub(super) fn read_reply(&self, mut resp: Response) -> Reply {
+        if let Some((at, slot)) = resp.mint_mut() {
+            let head = self.engine.kernel().snapshot();
+            *slot = self.commits.mint_time(head.world(), at);
+        }
+        self.op_reply(&resp)
     }
 }

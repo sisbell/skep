@@ -17,8 +17,8 @@ use skep_arrangement::{Run, VPos};
 use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, OpKind, ParseError,
-    RejectCode, Rejection, Response, ShotTerms, UniversalGrant,
+    BirthVersion, Codec, Disposition, EditionClaim, FaultSite, IItem, MintTime, OpKind,
+    ParseError, RejectCode, Rejection, Response, ShotTerms, TimeSource, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -259,9 +259,11 @@ fn fixture(name: &str) -> Response {
                 ])
                 .expect("arity-3 link fixture"),
             ),
+            at: Some(Seq(7)),
+            time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
             as_of: Seq(9),
         },
-        "link_value_null" => Response::LinkValue { link: None, as_of: Seq(9) },
+        "link_value_null" => Response::LinkValue { link: None, at: None, time: None, as_of: Seq(9) },
         "follow" => Response::Follow {
             result: Ok([ispan()].into_iter().collect::<SpanSet>()),
             as_of: Seq(9),
@@ -309,6 +311,8 @@ fn fixture(name: &str) -> Response {
             birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
             terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
             source: None,
+            at: Some(Seq(7)),
+            time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
             as_of: Seq(9),
         },
         // A private draft with no chain member yet: birth/birth_extent null,
@@ -320,6 +324,8 @@ fn fixture(name: &str) -> Response {
             birth: None,
             terms: None,
             source: None,
+            at: Some(Seq(8)),
+            time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
             as_of: Seq(9),
         },
         // A cross-owner FORK (the fork-source design record's arm A): a
@@ -334,6 +340,8 @@ fn fixture(name: &str) -> Response {
             birth: None,
             terms: None,
             source: Some(a(&[1, 0, 1, 0, 1, 1])),
+            at: None,
+            time: None,
             as_of: Seq(9),
         },
         "edition_claims" => Response::EditionClaims {

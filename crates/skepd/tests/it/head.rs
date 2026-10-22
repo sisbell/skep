@@ -42,6 +42,11 @@ const H: &str = "1.1.0.1.0.2";
 /// head writer mints (PUB-6.65), private at every class.
 const STAGING_DRAFT: &str = "1.1.0.1.0.3";
 
+/// The time document — doc 4 of the system account, the one document the
+/// time writer mints, published; its records ride every forced hour here,
+/// since the time writer's hour is the head writer's clock.
+const TIME_DOCUMENT: &str = "1.1.0.1.0.4";
+
 /// The head record's `format` member — the journal stamp in force, `SKJ4`
 /// since the chain's salt. The one head member that moved at the bump.
 const FORMAT: &str = "SKJ4";
@@ -905,8 +910,9 @@ fn a_lost_sidecar_counts_the_commits_the_journal_shows_landed() {
     }
     let (i, at) = next.expect("a head by the 24th commit after the loss: the seq counts");
     assert!(
-        i >= 64 - 40 - 7,
-        "early by at most the head's own seven records, never more: the head came at +{i}"
+        i >= 64 - 40 - 7 - FIRST_TIME_RECORD_RECORDS,
+        "early by at most the head's own seven records and the first time record's eight, \
+         never more: the head came at +{i}"
     );
     let rec = expect_latest_head(port);
     assert_eq!(rec["position"].as_u64(), Some(at), "it names the commit that brought it: {rec}");
@@ -1036,22 +1042,28 @@ fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
     // The staging draft is minted by the open's registry seed, before the
     // claim: the claim's `H.1` finds it and costs what a later head costs —
     // the atom's insert and the publish shot — and never a document mint
-    // more.
+    // more. The forced hour brings the time writer's first record after the
+    // later head: the time document's one mint, then the record's insert
+    // and publish, the head's own shape.
     assert!(mint_cost > 0, "a document mint moves the position");
     assert_eq!(
-        later_head_cost, first_head_cost,
-        "the open's seed minted the draft; the claim's H.1 and the next head both reused it"
+        later_head_cost,
+        first_head_cost + mint_cost + TIME_RECORD_RECORDS,
+        "the open's seed minted the draft; the claim's H.1 and the next head both reused it, \
+         and the hour's first time record minted its document"
     );
 
-    // The second uptime's head: the same, the draft found at open.
+    // The second uptime's head: the same, the draft found at open — and the
+    // time document found too, so its record costs no mint.
     let sd = spawn(dir.path());
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
     let trigger = force_head(&sd, &owner, CLAIMANT_ACCOUNT, &mut clock);
     let second_uptime_head_cost = health(port).0 - trigger;
     assert_eq!(
-        second_uptime_head_cost, later_head_cost,
-        "the second uptime's head minted no draft: it reused the one the claim's head minted"
+        second_uptime_head_cost,
+        first_head_cost + TIME_RECORD_RECORDS,
+        "the second uptime's head minted no draft, and its time record no document: both found"
     );
     sd.shutdown();
 }
@@ -1059,12 +1071,14 @@ fn a_restarted_writer_finds_the_staging_draft_it_minted_and_mints_no_other() {
 /// The staging draft is minted ONCE FOR THE LIFE OF THE BOARD — the half the
 /// restart test above cannot see, since it writes one head per uptime: four
 /// heads in ONE uptime — the claim's `H.1` and three forced — leave exactly
-/// one document under the system account beyond the seed's two.
+/// two documents under the system account beyond the seed's two.
 /// `1.1.0.1.0.3` is the draft — registered and private, so the guest is
-/// `withheld` — and `1.1.0.1.0.4` was never minted, so the guest is told
-/// `doc_not_registered`. Named rather than measured: a writer that forgot the
-/// draft it minted this uptime would mint a private document per head for as
-/// long as it runs, and no guest-visible entry would name one.
+/// `withheld`; `1.1.0.1.0.4` is the time document the forced hours' time
+/// writer minted, published, so the guest reads it; and `1.1.0.1.0.5` was
+/// never minted, so the guest is told `doc_not_registered`. Named rather
+/// than measured: a writer that forgot the draft it minted this uptime would
+/// mint a private document per head for as long as it runs, and no
+/// guest-visible entry would name one.
 #[test]
 fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1078,11 +1092,17 @@ fn every_head_in_one_uptime_reuses_the_one_staging_draft() {
     }
     assert!(head_record(port, &head_member(4)).is_some(), "four heads were written: the claim's and three");
     assert_withheld(&doc_metadata(port, None, STAGING_DRAFT), STAGING_DRAFT);
-    let next = doc_metadata(port, None, "1.1.0.1.0.4");
+    let time_document = doc_metadata(port, None, "1.1.0.1.0.4");
+    assert_eq!(
+        expect_resp(&time_document, "doc_metadata")["published"].as_bool(),
+        Some(true),
+        "the forced hours' time writer minted the time document, published: {time_document}"
+    );
+    let next = doc_metadata(port, None, "1.1.0.1.0.5");
     assert_eq!(
         expect_resp(&next, "rejected")["code"].as_str(),
         Some("doc_not_registered"),
-        "the heads minted no second document under the system account: {next}"
+        "the heads minted no second draft under the system account: {next}"
     );
     sd.shutdown();
 }
@@ -1413,7 +1433,11 @@ fn the_head_writers_turn_after_the_claim_can_write_a_head_and_the_claim_still_co
     assert!(live > at, "the head's own commits landed past the claim's position: {live} > {at}");
     assert_eq!(rec, head_record(port, &head_member(1)).expect("H.1"), "the cadence's head IS H.1");
     assert!(head_record(port, &head_member(2)).is_none(), "the claim's step wrote no second head");
-    assert_eq!(live, at + H1_RECORDS, "one head's records above the claim, not two heads'");
+    assert_eq!(
+        live,
+        at + H1_RECORDS + FIRST_TIME_RECORD_RECORDS,
+        "one head's records above the claim, not two heads' — and the hour's first time record"
+    );
     sd.shutdown();
 }
 
@@ -1600,7 +1624,12 @@ fn a_refused_head_is_said_once_per_cause_with_its_position_and_cleared_when_a_he
     sd.daemon().set_head_writer_clock_millis(clock);
     sd.daemon().refuse_the_next_head_once();
     let p1 = commit(port, &owner, CLAIMANT_ACCOUNT);
-    assert_eq!(head_position(port), p1, "the refused head landed nothing, not a partial commit");
+    assert_eq!(
+        head_position(port),
+        p1 + FIRST_TIME_RECORD_RECORDS,
+        "the refused head landed nothing, not a partial commit; the time writer's first record, \
+         due at the same hour, landed whole after it"
+    );
     assert_eq!(
         head_record(port, H).expect("H.1")["position"].as_u64(),
         Some(CLAIM_POSITION),
@@ -1733,23 +1762,33 @@ fn the_head_is_guest_readable_its_feed_entry_is_system_and_the_draft_is_masked()
     let system_entries: Vec<&Value> =
         changes.iter().filter(|e| e["key"].as_str() == Some("system")).collect();
     assert!(!system_entries.is_empty(), "the head's publish carries key: system: {page}");
+    // The forced hour brings the time writer's first record too: the time
+    // document's mint, published, and the record's publish into it — two
+    // more guest-visible system entries beside the head's publish.
+    let is_member_of = |doc: &str, of: &str| doc == of || doc.starts_with(&format!("{of}."));
     for e in &system_entries {
-        assert_eq!(e["op"].as_str(), Some("publish"), "a guest-visible system entry is the publish: {e}");
-        for d in e["docs"].as_array().expect("docs") {
-            let doc = d.as_str().expect("doc");
-            assert!(
-                doc == H || doc.starts_with(&format!("{H}.")),
-                "a guest-visible system entry names only H or its members, never the private draft: {e}"
-            );
+        let docs: Vec<&str> =
+            e["docs"].as_array().expect("docs").iter().map(|d| d.as_str().expect("doc")).collect();
+        match e["op"].as_str() {
+            Some("publish") => assert!(
+                docs.iter().all(|doc| is_member_of(doc, H) || is_member_of(doc, TIME_DOCUMENT)),
+                "a guest-visible system publish names H's or T's members, never the private draft: {e}"
+            ),
+            Some("create_new_document") => assert_eq!(
+                docs,
+                [TIME_DOCUMENT],
+                "the one guest-visible system mint is the time document's: {e}"
+            ),
+            other => panic!("a guest-visible system entry is a publish or the time document's mint, not {other:?}: {e}"),
         }
     }
-    // No guest-visible entry names the staging draft (1.1.0.1.0.3+), the
+    // No guest-visible entry names the staging draft (1.1.0.1.0.3), the
     // insert into which is masked.
     for e in changes {
         for d in e["docs"].as_array().into_iter().flatten() {
             let doc = d.as_str().unwrap_or("");
             assert!(
-                !(doc.starts_with("1.1.0.1.0.") && doc != H && !doc.starts_with(&format!("{H}."))),
+                !(doc.starts_with("1.1.0.1.0.") && !is_member_of(doc, H) && !is_member_of(doc, TIME_DOCUMENT)),
                 "the staging draft's insert is masked at guest class: {e}"
             );
         }
@@ -1813,14 +1852,18 @@ struct Board {
     bytes: String,
 }
 
-fn board_under(dir: &Path, seed: Option<u64>) -> Board {
+/// `origin` is the clock the forced hour steps from, shared by the two boards
+/// a pin compares: the time record the forced hour brings carries the
+/// writer's clock reading, so one reading on both boards is what makes the
+/// records, and the chain over them, one byte string.
+fn board_under(dir: &Path, seed: Option<u64>, origin: u64) -> Board {
     let sd = match seed {
         Some(seed) => spawn_seeded(dir, seed),
         None => spawn(dir),
     };
     let port = sd.port();
     let owner = open_session(port, CLAIMANT_PRINCIPAL);
-    let mut clock = clock_origin();
+    let mut clock = origin;
     for _ in 0..3 {
         commit(port, &owner, CLAIMANT_ACCOUNT);
     }
@@ -1842,17 +1885,27 @@ fn board_under(dir: &Path, seed: Option<u64>) -> Board {
 const CLAIM_POSITION: u64 = SEED_HEAD + 12;
 const H1_RECORDS: u64 = 7;
 
+/// The time record's records (wire.md §The other endpoints, the time document):
+/// its insert into the staging draft (3) and its publish shot into `T` (4),
+/// the head's own shape — and, at the board's first record, the time
+/// document's mint ahead of them (1). The time writer measures its hour on
+/// the head writer's clock, so every forced hour here that moves the
+/// position writes a time record after the head: the first one minting `T`.
+const TIME_RECORD_RECORDS: u64 = 7;
+const FIRST_TIME_RECORD_RECORDS: u64 = 1 + TIME_RECORD_RECORDS;
+
 /// THE POSITIONS, pinned off the one constant: the head names the triggering
 /// commit — the seed's commits, the ceremony's (12 records), the claim's own
 /// `H.1` (7), three creates and the fourth — and the live head is that plus
-/// the head's own insert and publish (7 more). The salt adds no record and
+/// the head's own insert and publish (7 more) and the first time record's
+/// mint, insert and publish (8 more), due at the same forced hour. The salt adds no record and
 /// moves no coordinate: the same ops produced 16 and 24 at `d77bfa4`, before
 /// it, and again after it, until s1 (2026-09-25) moved the first head into
 /// the claim's own step and the registry seed (2026-10-21) put the seed's
 /// commits and the draft's mint ahead of the ceremony — the two re-pins. A
 /// position moving here otherwise is a STOP, not a number to update.
 const TRIGGER_POSITION: u64 = CLAIM_POSITION + H1_RECORDS + 4;
-const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + 7;
+const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + 7 + FIRST_TIME_RECORD_RECORDS;
 
 /// (viii) — two daemons over ONE op sequence write byte-identical heads. The
 /// head record carries no timestamp and no board-unique term, so identical
@@ -1868,8 +1921,9 @@ const LIVE_HEAD_POSITION: u64 = TRIGGER_POSITION + 7;
 fn two_daemons_over_one_sequence_write_byte_identical_heads() {
     let a = tempfile::tempdir().expect("tempdir");
     let b = tempfile::tempdir().expect("tempdir");
-    let a = board_under(a.path(), Some(ONE_SEED));
-    let b = board_under(b.path(), Some(ONE_SEED));
+    let origin = clock_origin();
+    let a = board_under(a.path(), Some(ONE_SEED), origin);
+    let b = board_under(b.path(), Some(ONE_SEED), origin);
     assert_eq!(a.bytes, b.bytes, "one op sequence under one seed writes one head byte string");
     assert_eq!((a.trigger, a.live_head), (b.trigger, b.live_head), "one pair of positions");
     assert_eq!(a.chains, b.chains, "one chain at every committed position");
@@ -1897,8 +1951,9 @@ fn two_daemons_over_one_sequence_write_byte_identical_heads() {
 fn two_daemons_under_two_seeds_differ_in_every_chain_value_and_in_the_head() {
     let a = tempfile::tempdir().expect("tempdir");
     let b = tempfile::tempdir().expect("tempdir");
-    let a = board_under(a.path(), Some(ONE_SEED));
-    let b = board_under(b.path(), Some(OTHER_SEED));
+    let origin = clock_origin();
+    let a = board_under(a.path(), Some(ONE_SEED), origin);
+    let b = board_under(b.path(), Some(OTHER_SEED), origin);
     assert_eq!((a.trigger, a.live_head), (b.trigger, b.live_head), "the salt moves no position");
     assert_eq!(
         (a.trigger, a.live_head),
@@ -1936,8 +1991,9 @@ fn two_daemons_under_two_seeds_differ_in_every_chain_value_and_in_the_head() {
 fn two_production_daemons_over_one_sequence_write_two_chains() {
     let a = tempfile::tempdir().expect("tempdir");
     let b = tempfile::tempdir().expect("tempdir");
-    let a = board_under(a.path(), None);
-    let b = board_under(b.path(), None);
+    let origin = clock_origin();
+    let a = board_under(a.path(), None, origin);
+    let b = board_under(b.path(), None, origin);
     assert_eq!(
         (a.trigger, a.live_head),
         (TRIGGER_POSITION, LIVE_HEAD_POSITION),

@@ -1,5 +1,6 @@
 use super::*;
 use crate::testutil::{a, doc1, pca, pdoc, seeded_m3};
+use skep_kernel::Seq;
 use skep_namespace::M3Rec;
 
 /// PUB-2.49/2.50/2.53/2.66 — the float, over every case it decides: a
@@ -18,9 +19,9 @@ fn a_bare_published_address_floats_to_its_trunk_head_and_nothing_else_moves() {
     let member2 = a(&[1, 0, 1, 0, 3, 2]);
     let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
     let m3 = m3
-        .apply_m3(&M3Rec::allocate(member1.clone(), true))
-        .apply_m3(&M3Rec::allocate(member2.clone(), true))
-        .apply_m3(&M3Rec::allocate(daughter.clone(), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(member1.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(member2.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(daughter.clone(), true));
     assert_eq!(trunk_head(&m3, &pdoc()), Some(member2.clone()));
     assert_eq!(reading_surface(&m3, &pdoc()), member2, "the bare address floats to the head");
     // Every version address answers itself, the head included — and
@@ -32,7 +33,7 @@ fn a_bare_published_address_floats_to_its_trunk_head_and_nothing_else_moves() {
     }
     // Inert on a private document, even one a fixture stamped a member
     // under: the float keys on the publication bit.
-    let stamped = m3.apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), true));
+    let stamped = m3.apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), true));
     assert_eq!(trunk_head(&stamped, &doc1()), Some(a(&[1, 0, 1, 0, 1, 1])));
     assert_eq!(reading_surface(&stamped, &doc1()), doc1(), "a private document never floats");
 }
@@ -53,9 +54,9 @@ fn a_declared_deposit_lands_on_the_head_whichever_chain_address_it_names() {
     let member2 = a(&[1, 0, 1, 0, 3, 2]);
     let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
     let m3 = m3
-        .apply_m3(&M3Rec::allocate(member1.clone(), true))
-        .apply_m3(&M3Rec::allocate(member2.clone(), true))
-        .apply_m3(&M3Rec::allocate(daughter.clone(), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(member1.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(member2.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(daughter.clone(), true));
     assert_eq!(m3.latest_version(&member1), Some(daughter.clone()), "member1's daughter chain");
     for named in [&edition, &member1, &member2, &daughter] {
         assert_eq!(
@@ -70,7 +71,7 @@ fn a_declared_deposit_lands_on_the_head_whichever_chain_address_it_names() {
     assert_ne!(deposit_surface(&m3, &member1), reading_surface(&m3, &member1));
     // A private document's declaration is inert: the insert edits the
     // arrangement named, even with a member stamped under it.
-    let stamped = m3.apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), true));
+    let stamped = m3.apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), true));
     assert_eq!(deposit_surface(&stamped, &doc1()), doc1());
 }
 
@@ -91,9 +92,9 @@ fn the_birth_version_is_the_trunks_first_member_whoever_asks() {
     let member2 = a(&[1, 0, 1, 0, 3, 2]);
     let daughter = a(&[1, 0, 1, 0, 3, 2, 1]);
     let m3 = m3
-        .apply_m3(&M3Rec::allocate(member1.clone(), true))
-        .apply_m3(&M3Rec::allocate(member2.clone(), true))
-        .apply_m3(&M3Rec::allocate(daughter.clone(), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(member1.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(member2.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(daughter.clone(), true));
     for named in [&trunk, &member1, &member2, &daughter] {
         assert_eq!(birth_version(&m3, named), Some(member1.clone()), "{named:?}");
         assert_eq!(is_birth_version(named), *named == member1, "{named:?}");
@@ -115,8 +116,8 @@ fn the_publication_read_judges_a_member_as_its_document() {
     let member_of_draft = a(&[1, 0, 1, 0, 1, 1]);
     let member_of_edition = a(&[1, 0, 1, 0, 3, 1]);
     let m3 = seeded_m3()
-        .apply_m3(&M3Rec::allocate(member_of_draft.clone(), true))
-        .apply_m3(&M3Rec::allocate(member_of_edition.clone(), false));
+        .apply_m3(Seq(0), &M3Rec::allocate(member_of_draft.clone(), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(member_of_edition.clone(), false));
     assert!(!published_target(&m3, &doc1()));
     assert!(!published_target(&m3, &member_of_draft), "a published-stamped member of a draft");
     assert!(published_target(&m3, &pdoc()));

@@ -172,7 +172,7 @@ impl Drop for PanicsOnDrop {
 impl WorldState for ProbedWorld {
     type Record = u64;
 
-    fn apply(&self, record: &u64) -> Self {
+    fn apply(&self, _at: Seq, record: &u64) -> Self {
         let mut items = self.items.clone();
         items.push(*record);
         ProbedWorld {

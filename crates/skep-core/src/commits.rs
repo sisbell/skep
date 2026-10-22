@@ -170,7 +170,7 @@ use parking_lot::{Condvar, Mutex};
 use skep_address::{document_of, Address};
 use skep_arrangement::HasM5;
 use skep_engine::{Engine, EngineStores, World};
-use skep_febe::{Op, OpKind, RejectCode, Rejection, Response, Stores};
+use skep_febe::{MintTime, Op, OpKind, RejectCode, Rejection, Response, Stores, TimeSource};
 use skep_kernel::{Attestation, Seq, Snapshot};
 use skep_media::cell::names_kind_by_prefix;
 use skep_media::index::CellIndex;
@@ -188,6 +188,11 @@ mod head;
 // The link-type registry's seed, which commits through the head writer's
 // helpers at every open.
 mod registry;
+
+// The time writer — the hourly `skep-time` record, through the head writer's
+// helpers on the write path's cadence — and the hour a position is answered
+// from it.
+mod time;
 
 pub use feed::{
     AttestStoreFigures, ChangesAnswer, ChangesQuery, FeedClass, FeedFigures, StoppedFile,
@@ -207,6 +212,7 @@ pub use registry::{
 
 use self::classify::derived_journal;
 use self::head::HeadWriter;
+use self::time::TimeWriter;
 use crate::limits::STANDING_INTERVAL;
 
 /// What [`Commits::write_first_head`] came to.
@@ -330,6 +336,14 @@ pub struct Commits {
     /// it writes `H` on the cadence through [`Commits::commit_recorded`],
     /// under the caller's serialization guard.
     head_writer: HeadWriter,
+    /// The time writer (the permanence record's D3 (c)), the other child.
+    ///
+    /// Given its turn after the head writer's, it writes the hourly
+    /// `skep-time` record into the time document `1.1.0.1.0.4` through the
+    /// head writer's helpers, on the one hour the head writer's clock
+    /// measures; its records are what [`Commits::mint_time`] falls back on
+    /// where the feed's line is gone.
+    time_writer: TimeWriter,
     /// The cell index, the media gate's, shared.
     ///
     /// It is entered by [`Commits::record`] at every commit that mints a cell
@@ -462,6 +476,10 @@ impl Commits {
         // the door, as `commits.log` does: a refused head and the landing that
         // clears it are lines of its own.
         let head_writer = HeadWriter::open(engine.stores(), &feed, &said);
+        // The time writer resumes beside it: `T`'s latest record off the same
+        // recovered root, and its hour's origin off the record, else off the
+        // feed's first entry, else the open (`time.rs`).
+        let time_writer = TimeWriter::open(engine.stores(), &feed, &said);
         // The walk, last (the module doc): over what the feed's open left
         // pending, on a thread of its own, the board serving meanwhile.
         let walk = pending.map(|snapshot| {
@@ -474,6 +492,7 @@ impl Commits {
             commit_stream,
             stores: engine.stores(),
             head_writer,
+            time_writer,
             index,
             halted: AtomicBool::new(false),
             halted_at: AtomicU64::new(0),
@@ -900,9 +919,33 @@ impl Commits {
         // every write this door runs, a refusal included, save one whose
         // execute panicked, re-raised above before this line: whether anything
         // landed is the writer's to decide — the kernel's seq, never the
-        // answer — so this door hands it nothing to decide it by.
+        // answer — so this door hands it nothing to decide it by. Then the
+        // time writer's, on the same terms, after the head's own commits have
+        // landed so a record names the position they left.
         self.head_writer.take_turn(self, serial);
+        self.time_writer.take_turn(self, serial);
         resp
+    }
+
+    /// Returns the daemon's testimony of when `at` committed, for a read of a
+    /// minted address's age.
+    ///
+    /// It is `read_link`'s and `doc_metadata`'s `time` (wire.md §Links (raw
+    /// reads), §Namespace): the feed's recorded `time` for the position
+    /// where the feed holds the line — exact to the minute, the line read by
+    /// position and never by a walk (`Feed::time_at`) — else the hour the
+    /// time document kept in `world` anchors it to (`time.rs`, `hour_at`:
+    /// the newest `skep-time` record at or below the position), each
+    /// answered with its source ([`TimeSource`]); `None` where neither
+    /// holds a reading — a board younger than an hour whose line is gone,
+    /// or a position below the first record. `world` is the snapshot the
+    /// read was answered from, or the head's: every record at or below `at`
+    /// stands in both.
+    pub fn mint_time(&self, world: &World, at: Seq) -> Option<MintTime> {
+        if let Some(millis) = self.feed.time_at(at.0) {
+            return Some(MintTime { millis, source: TimeSource::Feed });
+        }
+        time::hour_at(world, at.0).map(|millis| MintTime { millis, source: TimeSource::Anchor })
     }
 
     /// Gives the head writer its turn after a write refused ahead of the store.

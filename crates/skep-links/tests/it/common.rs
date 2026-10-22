@@ -16,7 +16,8 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    WorldState,
 };
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, SlotArg,
@@ -83,10 +84,10 @@ pub enum Record {
 
 impl WorldState for World {
     type Record = Record;
-    fn apply(&self, r: &Record) -> World {
+    fn apply(&self, at: Seq, r: &Record) -> World {
         match r {
             Record::M3(x) => World {
-                m3: self.m3.apply_m3(x),
+                m3: self.m3.apply_m3(at, x),
                 ..self.clone()
             },
             Record::Content(x) => World {
@@ -330,18 +331,18 @@ pub fn unregistered_ty(k: u32) -> Endset {
 /// account's `Allocate` carries no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 2]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
         // doc1 and doc2 are PRIVATE drafts: the link fixtures seed and
         // fragment their content in place, which a published document
         // refuses (PUB-2.11) — doc1 as an explicit-`false` first mint, the
         // state M3 produces below the daemon's door. The sibling's document
         // keeps its born-published bit: nothing edits it.
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 2, 0, 1]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2, 0, 1]), true))
 }
 
 /// The sibling principal's document: `[1,0,2,0,1]` (owned by principal 2).

@@ -9,7 +9,7 @@
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_kernel::{
-    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, TxnError, WorldState,
+    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, TxnError, WorldState,
 };
 use skep_namespace::{M3Rec, M3State, PrincipalId};
 
@@ -143,13 +143,13 @@ pub(crate) fn vp(subspace: u32, ordinal: u32) -> VPos {
 /// `Allocate` carries no publication state.
 pub(crate) fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 2]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
 }
 
 /// Returns an in-memory kernel over `world`.

@@ -39,12 +39,16 @@ impl HasM3 for World {
 
 impl WorldState for World {
     type Record = Rec;
-    fn apply(&self, r: &Rec) -> World {
+    fn apply(&self, at: Seq, r: &Rec) -> World {
         World {
-            m3: self.m3.apply_m3(&r.0),
+            m3: self.m3.apply_m3(at, &r.0),
         }
     }
 }
+
+// The position the fold is handed, re-exported so every suite that seeds a
+// slice through the fold spells it off `common`.
+pub use skep_kernel::Seq;
 
 // ---- helpers ----
 

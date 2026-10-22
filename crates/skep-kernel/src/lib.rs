@@ -141,19 +141,19 @@
 //! ```no_run
 //! use serde::{Deserialize, Serialize};
 //! use skep_kernel::{
-//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
+//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
 //!     WorldState,
 //! };
 //!
 //! #[derive(Clone, Serialize, Deserialize)]
-//! struct World { log: Vec<u64> }
+//! struct World { log: Vec<(Seq, u64)> }
 //! #[derive(Clone, Serialize, Deserialize)]
 //! struct Append(u64);
 //! impl WorldState for World {
 //!     type Record = Append;
-//!     fn apply(&self, record: &Append) -> World {
+//!     fn apply(&self, at: Seq, record: &Append) -> World {
 //!         let mut w = self.clone();
-//!         w.log.push(record.0);
+//!         w.log.push((at, record.0));
 //!         w
 //!     }
 //! }
@@ -226,7 +226,7 @@ pub use replay::SkippedBase;
 use std::fmt;
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The engine's contract to M2, dependency-inverted.
 ///
@@ -341,6 +341,25 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// record exactly once (the checkpoint embodies `Seq ≤ S_load`, replay
     /// covers `S_load < Seq ≤ W`; §6/§7).
     ///
+    /// **The position** (DOCTRINE D1: positions are fold inputs, the clock is
+    /// not). `at` is the coordinate of the transaction that commits the
+    /// record — its terminal `last_seq`, the one position a transaction is
+    /// known by outside the kernel: the acknowledgment's `at`, the boundary
+    /// a history read names — never an interior coordinate of a composite,
+    /// so a world may keep, as authoritative state, the position at which a
+    /// fact entered it and answer it in the coordinate every reader holds.
+    /// On the write path it is named before the transaction commits: the
+    /// order's high-water under the applier lock plus the records staged in
+    /// the same transaction ([`Staging::push`]) — the coordinate the
+    /// sequencer then mints as the transaction's last, since nothing else
+    /// draws from the order while the lock is held; a composite's records
+    /// are folded once more at that coordinate when the closure has staged
+    /// them all. At replay and at every history fold it is the marker's
+    /// `last_seq` of the group the record came in. The two agree by
+    /// construction, which is what lets a position folded live be the
+    /// position a fold from genesis answers; a world that ignores it loses
+    /// nothing.
+    ///
     /// **Where it runs.** Once per [`Staging::push`], inside the
     /// [`Kernel::transact`] closure and therefore on the applier lock's
     /// critical section, and once per replayed record at [`Kernel::open`] and
@@ -352,7 +371,7 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`Record`]: WorldState::Record
     ///
     /// [`rebuild_derived`]: WorldState::rebuild_derived
-    fn apply(&self, record: &Self::Record) -> Self;
+    fn apply(&self, at: Seq, record: &Self::Record) -> Self;
 
     /// Seeds derived hints from authoritative state, or refuses the base.
     ///
@@ -448,7 +467,11 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
 /// `Seq::default()` is `Seq(0)` — the genesis boundary, the coordinate before
 /// anything is committed: what [`Kernel::open`] installs under
 /// [`Durability::InMemory`], and what [`Kernel::world_at`] answers at.
-#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+///
+/// Serde-derived, so a world may keep a position as authoritative state
+/// ([`WorldState::apply`]'s `at`): under M2's codec a newtype is its inner
+/// `u64`, eight bytes, so a checkpoint carries it as the bare coordinate.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct Seq(pub u64);
 
 impl fmt::Display for Seq {

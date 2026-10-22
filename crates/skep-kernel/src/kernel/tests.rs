@@ -7,7 +7,7 @@ use std::fs;
 // so the impl on a foreign type is fine inside the crate's test cfg.
 impl WorldState for Vec<u64> {
     type Record = u64;
-    fn apply(&self, record: &u64) -> Self {
+    fn apply(&self, _at: Seq, record: &u64) -> Self {
         let mut v = self.clone();
         v.push(*record); // non-idempotent, as the design's replay argument assumes
         v
@@ -600,7 +600,7 @@ fn a_chain_break_halts_the_open_and_the_history_read_and_cuts_nothing() {
 // fixed 8-byte records cannot reach the frame cap or the budget.
 impl WorldState for Vec<Vec<u8>> {
     type Record = Vec<u8>;
-    fn apply(&self, record: &Vec<u8>) -> Self {
+    fn apply(&self, _at: Seq, record: &Vec<u8>) -> Self {
         let mut v = self.clone();
         v.push(record.clone());
         v
@@ -842,7 +842,7 @@ enum Narrow {
 
 impl WorldState for NarrowWorld {
     type Record = Narrow;
-    fn apply(&self, _: &Narrow) -> Self {
+    fn apply(&self, _: Seq, _: &Narrow) -> Self {
         self.clone()
     }
 }
@@ -1638,7 +1638,7 @@ const POISON: &[u8] = b"no start point here";
 
 impl WorldState for Picky {
     type Record = Vec<u8>;
-    fn apply(&self, record: &Vec<u8>) -> Self {
+    fn apply(&self, _at: Seq, record: &Vec<u8>) -> Self {
         let mut items = self.0.clone();
         items.push(record.clone());
         Picky(items)

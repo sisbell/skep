@@ -584,11 +584,15 @@ impl ScanOutcome {
         if bound.is_some_and(|b| marker.last_seq < b) {
             self.nearest_below_bound = self.nearest_below_bound.max(marker.last_seq);
         }
+        // Each record of the group is stamped with the transaction's own
+        // coordinate — the marker's `last_seq` — which is what the fold is
+        // handed for it (`CommittedRecord::committed_at`).
         self.committed_records.extend(
             group
                 .records
                 .into_iter()
-                .filter(|entry| bound.is_none_or(|b| entry.seq <= b)),
+                .filter(|entry| bound.is_none_or(|b| entry.seq <= b))
+                .map(|entry| CommittedRecord { committed_at: marker.last_seq, ..entry }),
         );
     }
 
@@ -1027,6 +1031,9 @@ impl PendingTxn {
             self.records.push(CommittedRecord {
                 seq: record.seq,
                 bytes: record.bytes,
+                // The marker's `last_seq` once it closes the group; its own
+                // coordinate until then.
+                committed_at: record.seq,
             });
         } else {
             // Dead: this group can never commit, so its records are released

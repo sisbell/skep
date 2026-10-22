@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, ContentStretch, Piece, Val};
-use skep_kernel::Kernel;
+use skep_kernel::{Kernel, Seq};
 use skep_namespace::PrincipalId;
 
 use super::*;
@@ -58,10 +58,10 @@ impl From<M5Rec> for ShotRec {
 
 impl WorldState for ShotWorld {
     type Record = ShotRec;
-    fn apply(&self, r: &ShotRec) -> ShotWorld {
+    fn apply(&self, at: Seq, r: &ShotRec) -> ShotWorld {
         match r {
             ShotRec::M3(x) => ShotWorld {
-                m3: self.m3.apply_m3(x),
+                m3: self.m3.apply_m3(at, x),
                 content: self.content.clone(),
                 m5: self.m5.clone(),
             },
@@ -109,7 +109,7 @@ fn pdoc_member() -> Address {
 /// stages an empty placement — and pdoc's content elements stored at the
 /// ordinals in `present`.
 fn shot_kernel(member_runs: Vec<Run>, present: &[u32]) -> Kernel<ShotWorld> {
-    let m3 = seeded_m3().apply_m3(&M3Rec::allocate(pdoc_member(), true));
+    let m3 = seeded_m3().apply_m3(Seq(0), &M3Rec::allocate(pdoc_member(), true));
     let m5 = if member_runs.is_empty() {
         M5State::genesis()
     } else {

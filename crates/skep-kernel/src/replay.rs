@@ -312,12 +312,17 @@ pub(crate) struct FoldFail {
 
 /// Applies the committed records of `(base.s_load, bound]` onto `base`.
 ///
-/// It applies them one at a time, decoding each. The order they arrive in is
-/// `Seq` order and each coordinate arrives once, because
-/// [`ScanOutcome::records_to`] settles both — they are facts about the set
-/// that scan derived, and it is the element holding the set (§6/§7). This
-/// fold therefore applies what it is handed, which is what
-/// [`WorldState::apply`] not being idempotent requires of it.
+/// It applies them one at a time, decoding each, and hands each to the fold
+/// at the coordinate of the transaction that committed it — its marker's
+/// `last_seq`, the position the write path folded it at once its
+/// transaction's count was known ([`crate::Staging::push`]), so a position a
+/// world kept live is the position it keeps when derived. The order they
+/// arrive in is `Seq` order
+/// and each coordinate arrives once, because [`ScanOutcome::records_to`]
+/// settles both — they are facts about the set that scan derived, and it is
+/// the element holding the set (§6/§7). This fold therefore applies what it
+/// is handed, which is what [`WorldState::apply`] not being idempotent
+/// requires of it.
 ///
 /// The scan is borrowed, so its other answers — the tail cut among them —
 /// outlive the fold. That is what lets a caller refuse on this fold's verdict
@@ -359,7 +364,11 @@ pub(crate) fn fold_to<W: WorldState>(
             at: entry.seq,
             cause: Some(e),
         })?;
-        world = world.apply(&record);
+        // The transaction's coordinate is the fold's input (D1): the marker's
+        // `last_seq`, the position the commit is known by, stamped on every
+        // record of the group by the scan — so a world that keeps positions
+        // keeps the ones the journal's own boundaries name.
+        world = world.apply(Seq(entry.committed_at), &record);
     }
     Ok(world)
 }

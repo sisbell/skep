@@ -10,7 +10,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::common::*;
 
-use skep_kernel::{Attestation, Kernel};
+use skep_kernel::{Attestation, Kernel, Seq};
 use skep_namespace::{
     CreateDocumentError, DelegateError, M3Rec, M3State, MintError, Namespace, PrincipalId,
     RegisterNodeError, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
@@ -115,12 +115,12 @@ fn in_closure_rejections_open_the_ops_own_transaction() {
     // op produces, seeded through the fold as the rejection-order test does.
     let seeded = World {
         m3: M3State::genesis()
-            .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
-            .apply_m3(&alloc(&[1, 0, 2]))
-            .apply_m3(&alloc(&[1, 0, 3]))
-            .apply_m3(&alloc(&[1, 0, 3, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 3, 1]), PrincipalId(3))),
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), ID1))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 2]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 3]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 3, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 3, 1]), PrincipalId(3))),
     };
     let k = mem_kernel(seeded);
     let ns = Namespace::new(&k);

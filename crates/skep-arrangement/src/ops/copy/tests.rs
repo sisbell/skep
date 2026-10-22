@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use skep_content::{stage_write, ContentStore, Val};
-use skep_kernel::Kernel;
+use skep_kernel::{Kernel, Seq};
 use skep_namespace::PrincipalId;
 
 use super::*;
@@ -26,7 +26,7 @@ struct GateWorld {
 
 impl WorldState for GateWorld {
     type Record = M5Rec;
-    fn apply(&self, r: &M5Rec) -> GateWorld {
+    fn apply(&self, _at: Seq, r: &M5Rec) -> GateWorld {
         GateWorld {
             m3: self.m3.clone(),
             content: self.content.clone(),

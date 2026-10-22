@@ -28,7 +28,7 @@ use skep_discovery::{
     QueryError, SupClaim, Window, MAX_IMAGE_RUNS,
 };
 use skep_kernel::{
-    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Snapshot, WorldState,
+    CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, Snapshot, WorldState,
 };
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, View,
@@ -56,10 +56,10 @@ pub enum Record {
 
 impl WorldState for World {
     type Record = Record;
-    fn apply(&self, r: &Record) -> World {
+    fn apply(&self, at: Seq, r: &Record) -> World {
         match r {
             Record::M3(x) => World {
-                m3: self.m3.apply_m3(x),
+                m3: self.m3.apply_m3(at, x),
                 ..self.clone()
             },
             Record::Content(x) => World {
@@ -346,11 +346,11 @@ pub fn link(store: &LinkWriter<'_, World>, home: &Address, from: &[Address], to:
 /// publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
 }
 
 pub fn genesis_world() -> World {

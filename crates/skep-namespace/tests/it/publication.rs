@@ -7,7 +7,7 @@ use crate::common::*;
 
 use serde::Serialize;
 use skep_address::{Address, Tumbler};
-use skep_kernel::Kernel;
+use skep_kernel::{Kernel, Seq};
 use skep_namespace::{
     first_document_address, ghost_home_document, head_document, prefix_contains, HasM3, M3Rec,
     M3State, Namespace, PrincipalId, BOOTSTRAP_PRINCIPAL, SYSTEM_PRINCIPAL,
@@ -63,10 +63,17 @@ fn a_flagless_first_create_is_born_published() {
         .expect("the empty account mints");
     assert_eq!(addr, slot);
     assert_eq!(rec, M3Rec::allocate(slot.clone(), true));
-    // …and folding that one record is the whole of what the op committed:
-    // the map is written by the fold, in the same step as the registration.
-    assert_eq!(before_create.apply_m3(&rec), *k.snapshot().world().m3());
-    assert!(before_create.apply_m3(&rec).published(&slot));
+    // …and folding that one record at the position it committed at is the
+    // whole of what the op committed: the publication map and the position
+    // map are written by the fold, in the same step as the registration.
+    let committed = k.current_seq();
+    assert_eq!(before_create.apply_m3(committed, &rec), *k.snapshot().world().m3());
+    assert!(before_create.apply_m3(committed, &rec).published(&slot));
+    assert_eq!(
+        k.snapshot().world().m3().minted_at(&slot),
+        Some(committed),
+        "the document's mint position is the commit's own"
+    );
 }
 
 /// PUB-8.21's other arm at the engine: an EXPLICIT `false` first mint is NOT
@@ -253,15 +260,15 @@ fn mint_document_applies_no_default_into_an_empty_account() {
 fn only_a_document_allocate_writes_the_publication_map() {
     let s = M3State::genesis()
         // An account, stamped `true`: outside the axis, not read.
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), true))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), true))
         // An element, stamped `true`: outside the axis, not read.
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1, 0, 1, 1]), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1, 0, 1, 1]), true));
     assert!(s.published(&a(&[1, 0, 1, 0, 1])));
     assert!(!s.published(&a(&[1, 0, 1])));
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
     // A version is a document, and its Allocate is folded like any other's.
-    let s = s.apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), false));
+    let s = s.apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1, 1]), false));
     assert!(s.is_registered_document(&a(&[1, 0, 1, 0, 1, 1])));
     assert!(!s.published(&a(&[1, 0, 1, 0, 1, 1])));
     // The enumeration is the registered documents and nothing else — the
@@ -314,15 +321,15 @@ fn the_publication_walk_is_in_address_order_not_mint_order() {
         vec![(&seed_1, true), (&seed_h, true)]
     );
     let s = s
-        .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&M3Rec::allocate(d1.clone(), true));
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &M3Rec::allocate(d1.clone(), true));
     assert_eq!(
         s.documents().collect::<Vec<_>>(),
         vec![(&d1, true), (&seed_1, true), (&seed_h, true)]
     );
     let s = s
-        .apply_m3(&M3Rec::allocate(d2.clone(), false))
-        .apply_m3(&M3Rec::allocate(v1.clone(), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(d2.clone(), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(v1.clone(), true));
 
     // Address order — d1, then d1's version, then d2, then the seed — not the
     // mint order (seed), d1, d2, v1.
@@ -454,14 +461,16 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
     );
 
     // The checkpointed slice: the frontier map, the node set, the principal
-    // map, and then the publication map — the field the bit appended. Genesis
-    // is no longer empty (PUB-6.65's seed: system node 1.1, the system account
-    // 1.1.0.1, its doc 1 and `H` born published), so the three trailing fields
-    // are hand-built from the seed's public pins — a `Vec` of pairs encodes
-    // exactly as the maps do — and pinned as the slice's suffix; the frontier
-    // map's key is the crate's own type, so its bytes lead the slice as the
-    // encoding writes them, ahead of the three. The old shape is then the
-    // slice short of the appended map, and it must not decode.
+    // map, then the publication map — the field the bit appended — and then
+    // the position map, appended after it. Genesis is no longer empty
+    // (PUB-6.65's seed: system node 1.1, the system account 1.1.0.1, its doc
+    // 1 and `H` born published, both minted at the genesis coordinate), so
+    // the four trailing fields are hand-built from the seed's public pins —
+    // a `Vec` of pairs encodes exactly as the maps do — and pinned as the
+    // slice's suffix; the frontier map's key is the crate's own type, so its
+    // bytes lead the slice as the encoding writes them, ahead of the four.
+    // The old shape is then the slice short of the two appended maps, and
+    // it must not decode; nor must the slice short of the position map alone.
     let new = bincode::serialize(&M3State::genesis()).expect("serialize genesis");
     let nodes = bincode::serialize(&vec![t(&[1]), t(&[1, 1])]).expect("the node set");
     let principals = bincode::serialize(&vec![
@@ -474,21 +483,34 @@ fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
         (t(&[1, 1, 0, 1, 0, 2]), true),
     ])
     .expect("the publication map");
+    let minted_at = bincode::serialize(&vec![
+        (t(&[1, 1, 0, 1, 0, 1]), 0u64),
+        (t(&[1, 1, 0, 1, 0, 2]), 0u64),
+    ])
+    .expect("the position map");
     assert!(
         new.ends_with(
             &[
                 nodes.as_slice(),
                 principals.as_slice(),
-                publication.as_slice()
+                publication.as_slice(),
+                minted_at.as_slice()
             ]
             .concat()
         ),
-        "the current checkpoint shape ends with the seed's nodes, principals and publication map"
+        "the current checkpoint shape ends with the seed's nodes, principals, publication map \
+         and position map"
     );
-    let old = &new[..new.len() - publication.len()];
+    let old = &new[..new.len() - publication.len() - minted_at.len()];
     assert!(
         bincode::deserialize::<M3State>(old).is_err(),
         "a pre-publication checkpoint decoded — it must fail, never read as everything-published"
+    );
+    let before_positions = &new[..new.len() - minted_at.len()];
+    assert!(
+        bincode::deserialize::<M3State>(before_positions).is_err(),
+        "a checkpoint written before the position map decoded — it must fail, never read as a \
+         slice that dates nothing"
     );
 }
 

@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use skep_content::ContentStore;
-use skep_kernel::Kernel;
+use skep_kernel::{Kernel, Seq};
 use skep_namespace::{M3State, PrincipalId};
 
 use super::*;
@@ -28,7 +28,7 @@ struct MiniWorld {
 
 impl WorldState for MiniWorld {
     type Record = M5Rec;
-    fn apply(&self, r: &M5Rec) -> MiniWorld {
+    fn apply(&self, _at: Seq, r: &M5Rec) -> MiniWorld {
         MiniWorld {
             m3: self.m3.clone(),
             m5: self.m5.apply_m5(r),
@@ -111,10 +111,10 @@ impl From<ContentStretch> for AllocRec {
 
 impl WorldState for AllocWorld {
     type Record = AllocRec;
-    fn apply(&self, r: &AllocRec) -> AllocWorld {
+    fn apply(&self, at: Seq, r: &AllocRec) -> AllocWorld {
         match r {
             AllocRec::M3(x) => AllocWorld {
-                m3: self.m3.apply_m3(x),
+                m3: self.m3.apply_m3(at, x),
                 content: self.content.clone(),
             },
             AllocRec::Content(x) => AllocWorld {

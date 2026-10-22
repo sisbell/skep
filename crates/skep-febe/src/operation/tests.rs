@@ -45,9 +45,9 @@ enum Record {
 
 impl WorldState for World {
     type Record = Record;
-    fn apply(&self, r: &Record) -> World {
+    fn apply(&self, at: Seq, r: &Record) -> World {
         match r {
-            Record::M3(x) => World { m3: self.m3.apply_m3(x), ..self.clone() },
+            Record::M3(x) => World { m3: self.m3.apply_m3(at, x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
             Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
             Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },

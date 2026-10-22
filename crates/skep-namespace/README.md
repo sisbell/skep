@@ -53,6 +53,14 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   chain, M3's own allocation oracle, and node/account/document
   classification over the entity registry, the registration check
   other stores and readers consult.
+- **The position map** — the commit position of every document,
+  version member and link minted, `minted_at`, written by the fold at
+  the record that mints the address (the fold is handed the record's
+  journal position) and kept in every checkpoint, so an address's age is
+  answered at any age and never rebuilt from the feed; a content element
+  and an account enter none. `time_document`, doc 4 of the system
+  account, is the daemon's hourly time record's home, beside
+  `head_document`.
 - **The publication bit** — one bit per document, resolved by the
   minting op and journaled on the document's own allocation record
   at mint; immutable thereafter, there being no publication

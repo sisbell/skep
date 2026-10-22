@@ -1224,16 +1224,36 @@ it (the row states the test).
 ```
 
 **`link_value`** — read_link. `link` is always present; `null` means no
-link resides at that address.
+link resides at that address. Beside it, THE LINK'S AGE, three members
+always present: `at` is the POSITION of the commit that minted the link —
+the same coordinate the `/changes` row for that commit carries as `at`,
+and the one `/op-at` answers the link at (at `at − 1` the address is
+`link: null`; at `at` it is the link) — kept IN THE WORLD, in the name
+space's position map, so it is answered at any age, below the journal's
+reclaim floor and after a lost feed alike; `time` is the daemon's
+testimony of when that position committed, unix milliseconds, and
+`time_from` says which testimony it is: `"feed"` where the change feed
+holds the row for `at` — the row's own `time`, exact to the minute
+(§The change feed, which is kept whole from genesis) — else `"anchor"`,
+the `time` of the newest hourly `skep-time` record at or below `at` (§The
+other endpoints, the time document), exact to the hour, which survives a
+lost `commits.log` as checkpoint state. `time` and `time_from` are
+`null` together where neither testimony holds a reading — a board
+younger than an hour whose feed line is gone — and all three are `null`
+where `link` is: a never-deposited address and a link homed where you
+may not read are one absence (§The read predicate), and so is a link a
+build before the position map minted. Served to whoever may read the
+link, as the link is. The example's link was minted at 7, the row still
+in the feed:
 
 <!-- wire: response link_value -->
 ```json
-{"as_of":9,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.2.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.3.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value"}
+{"as_of":9,"at":7,"link":{"slots":[[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],[{"start":"1.0.1.0.2.0.1.1","width":"0.0.0.0.0.0.0.6"}],[{"start":"1.0.1.0.3.0.1.1","width":"0.0.0.0.0.0.0.1"}]]},"resp":"link_value","time":1786838400047,"time_from":"feed"}
 ```
 
 <!-- wire: response link_value_null -->
 ```json
-{"as_of":9,"link":null,"resp":"link_value"}
+{"as_of":9,"at":null,"link":null,"resp":"link_value","time":null,"time_from":null}
 ```
 
 **`follow`** — follow_link. The result is in-band because "empty endset"
@@ -1334,28 +1354,49 @@ wants more of the source asks the source under its own gate. A merge of
 a cross-account fork takes it as the fork's base (the merge record's
 case (j)) where it names a member of the trunk being merged.
 
+`at`, `time` and `time_from` are THE AGE OF THE ADDRESS NAMED, exactly as
+`link_value` carries a link's: `at` the position of the commit that
+minted it — a version member answers ITS OWN mint, the one member of
+this response that does not project to the document, so a `version`'s
+member and a `publish` shot's member each date themselves, and the trunk
+document dates its own creation — kept in the board's state, so it is
+answered at any age and `/op-at` at `at − 1` answers the address
+`doc_not_registered`; `time` the daemon's testimony of when that position
+committed and `time_from` which testimony, `"feed"` (the `/changes` row's
+own `time`, the exact source) or `"anchor"` (the newest hourly
+`skep-time` record at or below `at`), `null` together where neither
+holds a reading; and `at` `null` — the two with it — for an address a
+build before the position map minted. Served to whoever may read the
+address named, as `source` is. The system account's two seeded documents
+answer `at: 0`, the genesis coordinate, with no time.
+
 This example is asked of the birth version `1.0.1.0.1.1`, which a shot
 placing five positions minted from the memberless document taken at
-three — a shot member, so `source` is `null`:
+three — a shot member, so `source` is `null` — the shot at 7, its row
+still in the feed:
 
 <!-- wire: response doc_metadata -->
 ```json
-{"as_of":9,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null}
+{"as_of":9,"at":7,"base_extent":"3","birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","placed":"5","published":true,"resp":"doc_metadata","source":null,"time":1786838400047,"time_from":"feed"}
 ```
+
+A private draft minted at 8 whose feed line is gone, dated by the
+hour's anchor:
 
 <!-- wire: response doc_metadata_unborn -->
 ```json
-{"as_of":9,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":null}
+{"as_of":9,"at":8,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","placed":null,"published":false,"resp":"doc_metadata","source":null,"time":1786838400052,"time_from":"anchor"}
 ```
 
 A cross-owner fork — a private document of another account, minted by
 `version` off `1.0.1.0.1` while `1.0.1.0.1.1` headed its chain, so born
 sharing that member, which is its `source`; its own chain has no member
-and no shot minted it:
+and no shot minted it — and minted by a build before the position map,
+so its age is unknown:
 
 <!-- wire: response doc_metadata_fork -->
 ```json
-{"as_of":9,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1"}
+{"as_of":9,"at":null,"base_extent":null,"birth":null,"birth_extent":null,"doc":"1.0.2.0.1","owner":"1.0.2","placed":null,"published":false,"resp":"doc_metadata","source":"1.0.1.0.1.1","time":null,"time_from":null}
 ```
 
 **`edition_claims`** — edition_claims (§Link discovery reads): the
@@ -2397,9 +2438,13 @@ version was still the head lies past it and is no part of what a claim
 is compared against, so a deposited edition still matches. `source` is
 the address the document named was born sharing — the member or bare
 document a `version` snapshotted into it — and `null` where no `version`
-minted it, served to whoever may read the address named. `doc` is
-a document argument (unreadable → `withheld`; unregistered →
-`doc_not_registered`); a version member answers its DOCUMENT's state.
+minted it, served to whoever may read the address named; `at`, `time`
+and `time_from` are the age of the address named — the position of the
+commit that minted it, kept in the board's state, and the daemon's
+testimony of when it committed (§The response envelope, `doc_metadata`).
+`doc` is a document argument (unreadable → `withheld`; unregistered →
+`doc_not_registered`); a version member answers its DOCUMENT's state,
+and its OWN age.
 → `doc_metadata`.
 
 <!-- wire: request doc_metadata -->
@@ -3851,7 +3896,12 @@ the two links' own addresses.
 
 ### Links (raw reads)
 
-**`read_link`** — the link value at `a`, verbatim. → `link_value`.
+**`read_link`** — the link value at `a`, verbatim, with the link's age:
+the position of the commit that minted it, kept in the board's state and
+answered at any age, and the daemon's testimony of when that position
+committed — the `/changes` row's own `time` where the feed holds the row,
+the hour record's where it does not (§The response envelope,
+`link_value`). → `link_value`.
 
 <!-- wire: request read_link -->
 ```json
@@ -4500,6 +4550,11 @@ Each entry:
   field is ABSENT on unsigned rows too — a consumer written to the four
   values must not treat absence as a protocol violation (AUTH-6.16).
 * `time` — the commit's wall-clock unix milliseconds, or `null` (below).
+  It is THE EXACT SOURCE of a position's time: `read_link`'s and
+  `doc_metadata`'s `time` answer this row's value, by position, for the
+  commit that minted the address (`time_from: "feed"`), and fall back on
+  the hourly time document only where this row is gone (§The other
+  endpoints).
 * `attest` — the entry's signature as its commit marker holds it (signed
   ops): `{"alg": <an ALGS token>, "sig": <hex>}`, byte-equal to the `attest`
   the request presented (§Operations) — `alg` the token the request took,
@@ -4958,6 +5013,33 @@ re-chained journal cannot pass while the byte compare of an untouched
 `H.k` still does. Each head shows on `/changes` as one public
 `publish` entry with `key: "system"`; the staging draft the record is composed
 in is a private document of the system account, masked at every class.
+
+**The time document** — `1.1.0.1.0.4`, the version-chain document `T`,
+doc 4 of the system account, beside `H`. The board's OWN daemon writes `T`
+as a NEW PUBLISHED VERSION of itself on the write path's cadence, a
+`skep-time` record: ONE JSON object whose members are, in this order and
+no other, `type` (`"skep-time"`), `position` (the committed head at the
+write, read before the record's own write opens) and `time` (the
+daemon's clock at the write, unix milliseconds, never below the record
+before it). No `sig`. It is the sparse TIME ANCHOR: written when an hour
+has passed since the last record AND the position moved — never on a
+peer's request, never while the position stands still, never twice for
+one position, and never at the open, so a board younger than an hour
+holds none — through the same staging draft and the same door as the
+head, as a published member of `T`, so it survives reclamation as
+checkpoint state and a lost or torn `commits.log` alike. The head record
+is UNTOUCHED by it: `H.k` carries no timestamp, so two heads of one board
+at one position stay byte-identical. What the anchor is for: the
+`/changes` row's `time` is the EXACT source of a position's time, and
+where that row is gone — the feed lost below the walk's re-covered
+window — a read of a link's or a member's age (`read_link`'s and
+`doc_metadata`'s `time`, `time_from: "anchor"`) answers the newest record
+at or below the position, so every address minted after the first record
+is dated forever, to the hour. `T` is minted by the first record's write,
+published from birth and guest-readable (`retrieve_v` on the bare `T`
+floats to the latest record; `T.k` is pinned); each record shows on
+`/changes` as one public `publish` entry with `key: "system"`, its insert
+into the staging draft masked at every class.
 
 **`GET /`** (only in builds with the `client` feature — **default-off**
 by ruling (AUTH-4.57(e); R89, the client rule): a board-served page is

@@ -149,16 +149,23 @@
 //! the system account owns `H` and its draft, and nothing in the engine is
 //! widened.
 //!
-//! **The door's other user.** The link-type registry's seed (`registry.rs`,
+//! **The door's other users.** The link-type registry's seed (`registry.rs`,
 //! this module's sibling) writes the registry document `1.1.0.1.0.1` at every
 //! open as the same principal with the same testimony, through the same
 //! helpers — [`HeadWriter::ensure_draft`], [`HeadWriter::commit_insert`],
 //! [`HeadWriter::commit_publish`] and [`HeadWriter::run_commit`], each
-//! `pub(super)` for it — and reuses the one staging draft: the system
-//! principal mints no other document, whichever of the two mints the draft
-//! first, and row 40's line is the fence for both. A refused commit of the
-//! seed's is the seed's to say, so the helpers take who says a refusal
-//! ([`Refused`]) rather than row 38's position.
+//! `pub(super)` for it — and reuses the one staging draft; and the time
+//! writer (`time.rs`, the other sibling) writes the time document
+//! `1.1.0.1.0.4` on the write path's cadence through the same helpers, by
+//! the same hour bound ([`TIME_BOUND_MILLIS`]) read off this writer's own
+//! clock ([`HeadWriter::now_millis`]), so one seam drives both hours. The
+//! system principal mints no document but the draft and the time document,
+//! whichever writer mints the draft first, and row 40's line is the fence
+//! for all three. A refused commit of the seed's or the time writer's is its
+//! own to say, so the helpers take who says a refusal ([`Refused`]) rather
+//! than row 38's position. The head's own bytes are untouched by the time
+//! record: no timestamp rides `H`, so two heads of one board at one
+//! position stay byte-identical.
 
 use std::io;
 use std::time::Instant;
@@ -233,8 +240,10 @@ const COUNT_BOUND: u64 = 64;
 /// position has moved, so a slow board's head is renewed by its first commit
 /// an hour or more after the last head — evaluated lazily on that commit,
 /// never by a thread, and never writing a duplicate for a position that has
-/// not moved.
-const TIME_BOUND_MILLIS: u64 = 3_600_000; // one hour
+/// not moved. The time writer (`time.rs`, this module's sibling) measures
+/// its own hour by the same bound, on the same clock, so the two cadences
+/// are one hour and one seam.
+pub(super) const TIME_BOUND_MILLIS: u64 = 3_600_000; // one hour
 
 /// The test seam's standing detail, for a refusal of the next head.
 ///
@@ -619,10 +628,20 @@ impl HeadWriter {
     /// The test seam behind `skepd::Daemon::set_head_writer_clock_millis`.
     ///
     /// It fixes the writer's clock at `millis`, so a test drives trigger (c)
-    /// without a `sleep`. Not a stable API.
+    /// without a `sleep` — the time writer's hour with it, which reads this
+    /// clock. Not a stable API.
     #[cfg(any(test, feature = "test-hooks"))]
     pub(super) fn set_clock_millis(&self, millis: u64) {
         self.clock.set_millis(millis);
+    }
+
+    /// Returns the writer's clock reading: the wall clock, or the seam's.
+    ///
+    /// It is the reading trigger (c) measures its hour by, offered to the
+    /// time writer (`time.rs`) so its hour is measured on the same clock and
+    /// driven by the same seam. Read outside every lock.
+    pub(super) fn now_millis(&self) -> u64 {
+        self.clock.now_millis()
     }
 
     /// The test seam behind `skepd::Daemon::refuse_the_next_head_once`.
@@ -907,9 +926,9 @@ impl HeadWriter {
     /// else minted now under the system account (a private document,
     /// `published: false`) — once for the life of the board where the mint
     /// lands at [`staging_draft_address`], since every later open finds it
-    /// there ([`find_staging_draft`]). The registry seed takes it too, so
-    /// whichever of the two writes first mints it, and the other finds it
-    /// held. A refusal of the mint is `refused`'s to say.
+    /// there ([`find_staging_draft`]). The registry seed and the time writer
+    /// take it too, so whichever of the three writes first mints it, and the
+    /// others find it held. A refusal of the mint is `refused`'s to say.
     pub(super) fn ensure_draft(
         &self,
         wp: &Commits,
@@ -935,11 +954,13 @@ impl HeadWriter {
                 .map_err(|e| lower_txn(OpKind::CreateNewDocument, e))
         })?;
         if draft != staging_draft_address() {
-            // The system principal mints nothing else, so the first mint under
-            // its account is doc 3 by the seed's frontier; anything else means
-            // some other writer minted under the system account — surfaced,
-            // and the head goes on with the draft it did mint, which the line
-            // says (`operations.md` §1.1 row 40).
+            // The system principal mints the draft ahead of its one other
+            // document (the time document, which the time writer mints after
+            // this draft stands), so the first mint under its account is doc
+            // 3 by the seed's frontier; anything else means some other
+            // writer minted under the system account — surfaced, and the
+            // head goes on with the draft it did mint, which the line says
+            // (`operations.md` §1.1 row 40).
             self.lines.say(
                 Class::Failure,
                 DraftMintedElsewhere { minted: &draft, expected: &staging_draft_address() },
@@ -1340,11 +1361,14 @@ pub(crate) fn board_term(world: &World) -> Option<BoardTerm> {
 ///
 /// It is `1.1.0.1.0.3`: genesis registers doc 1 and doc 2
 /// ([`skep_namespace::M3State::genesis`]), the system principal holds no key
-/// and has no session, so the head writer and the registry seed — which
-/// share this one draft through [`HeadWriter::ensure_draft`] — are the only
-/// writers under the account, and the first mint of either lands here by the
-/// document chain's frontier. Pinned so a reopened writer can find the draft
-/// (resume by reading) instead of minting a new private document per uptime.
+/// and has no session, so the head writer, the registry seed and the time
+/// writer — which share this one draft through [`HeadWriter::ensure_draft`]
+/// — are the only writers under the account, and the first mint of any of
+/// them lands here by the document chain's frontier; the time writer's own
+/// document, minted after it, lands at doc 4
+/// ([`skep_namespace::time_document`]). Pinned so a reopened writer can find
+/// the draft (resume by reading) instead of minting a new private document
+/// per uptime.
 ///
 /// # Panics
 ///

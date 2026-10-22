@@ -191,8 +191,8 @@ pub use record::{
     SYSTEM_PRINCIPAL,
 };
 pub use state::{
-    head_document, prefix_contains, system_account, system_node, M3State, MAX_NODE_COMPONENTS,
-    MAX_PRINCIPAL_COMPONENTS,
+    head_document, prefix_contains, system_account, system_node, time_document, M3State,
+    MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
 
 /// The engine's **read accessor** for M3's slice (§Public interface).

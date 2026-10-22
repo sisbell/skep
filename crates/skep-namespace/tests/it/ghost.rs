@@ -173,5 +173,5 @@ fn a_frontier_past_the_ghost_floor_survives_the_checkpoint_round_trip() {
 #[test]
 #[should_panic(expected = "effective frontier")]
 fn the_fold_fail_stops_on_an_allocate_inside_the_ghost_region() {
-    let _ = M3State::genesis().apply_m3(&alloc(&[1, 1, 0, 1, 0, 1, 0, 1, 1]));
+    let _ = M3State::genesis().apply_m3(Seq(0), &alloc(&[1, 1, 0, 1, 0, 1, 0, 1, 1]));
 }

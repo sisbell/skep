@@ -285,20 +285,37 @@ impl<W: WorldState> fmt::Debug for Snapshot<W> {
 /// `base` = Σ (the installed root at txn start), `working` = Σᵢ (base folded
 /// with the records staged so far — ASN-0047's "observable intermediate
 /// states", visible only to the executing closure, never to external
-/// readers), `records` = the staged authoritative deltas.
+/// readers), `records` = the staged authoritative deltas, `first` = the
+/// position the first of them will take.
 pub struct Staging<W: WorldState> {
     base: Arc<Committed<W>>,
     working: W,
     records: Vec<W::Record>,
+    /// The coordinate this transaction's first record commits at, if any.
+    ///
+    /// It is the order's high-water plus one as the applier lock was taken —
+    /// the committed head under [`BurnedSeqPolicy::Rollback`], and above it
+    /// after a burned range under [`BurnedSeqPolicy::TolerateGap`] or below
+    /// an accepted cut's claim (the sequencer's floor) — so it is the `first`
+    /// the sequencer mints once the closure returns: nothing else draws from
+    /// the order while the lock is held. The `i`-th record staged takes
+    /// `first + i`, and the transaction's own coordinate — the one the fold
+    /// is handed for every record of it — is `first + n − 1`, known once the
+    /// closure has staged its `n` ([`Staging::push`], `Staging::sealed`).
+    ///
+    /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
+    /// [`BurnedSeqPolicy::TolerateGap`]: crate::BurnedSeqPolicy::TolerateGap
+    first: u64,
 }
 
 impl<W: WorldState> Staging<W> {
-    fn new(base: Arc<Committed<W>>) -> Self {
+    fn new(base: Arc<Committed<W>>, first: u64) -> Self {
         let working = base.world.clone();
         Staging {
             base,
             working,
             records: Vec::new(),
+            first,
         }
     }
 
@@ -329,9 +346,46 @@ impl<W: WorldState> Staging<W> {
     /// staged record, inside the [`Kernel::transact`] closure and therefore
     /// on the applier lock's critical section — which is why a composite's
     /// record count is a cost that method's transaction budget accounts for.
+    /// The fold is handed the position the record will take — the
+    /// transaction's first position plus the records staged ahead of it
+    /// (the `first` field states why that is the journal's own number) — a
+    /// provisional coordinate where more records follow: the fold's input
+    /// is the transaction's own coordinate, `first + n − 1`, and a
+    /// transaction of more than one record is folded again from its base at
+    /// that coordinate once the closure has staged its `n`
+    /// (`Staging::sealed`), so a world that keeps a fact's position keeps,
+    /// live, what a fold from genesis will answer for it (D1: a position,
+    /// never a clock). The working state the closure reads is right for
+    /// everything but that one number, which no mint or gate reads.
     pub fn push(&mut self, record: W::Record) {
-        self.working = self.working.apply(&record);
+        let at = Seq(self.first + self.records.len() as u64);
+        self.working = self.working.apply(at, &record);
         self.records.push(record);
+    }
+
+    /// Returns the staging with every record folded at the transaction's own
+    /// coordinate.
+    ///
+    /// It is the one site the write path folds a record twice, and only a
+    /// composite's: a transaction of one record was folded at its own
+    /// coordinate already, and is returned as it stands; one of `n > 1`
+    /// records is refolded from its base, each record at `first + n − 1` —
+    /// the marker's `last_seq` replay will stamp on every one of them, so
+    /// the world installed is the world a fold from genesis derives. The
+    /// cost is `n` further folds under the applier lock, paid by composites
+    /// alone, and before any coordinate is drawn: an unwind here is the
+    /// closure phase's, repairing nothing.
+    fn sealed(self) -> Staging<W> {
+        let n = self.records.len() as u64;
+        if n <= 1 {
+            return self;
+        }
+        let last = Seq(self.first + n - 1);
+        let working = self
+            .records
+            .iter()
+            .fold(self.base.world.clone(), |world, record| world.apply(last, record));
+        Staging { working, ..self }
     }
 }
 
@@ -1433,7 +1487,13 @@ impl<W: WorldState> Kernel<W> {
         // obligation). What the code below reads of the root is its
         // coordinate.
         let base_seq = base.seq;
-        let mut stg = Staging::new(base);
+        // The position the first staged record will take: the order's next
+        // coordinate under this lock, which `mint` below hands out as `first`
+        // once the record count is known (the `Staging::first` card).
+        // Saturating, for an order at its top: `mint` refuses that
+        // transaction below, so the position it was folded at reaches no
+        // root.
+        let mut stg = Staging::new(base, applier.sequencer.high_water.saturating_add(1));
 
         // Closure phase. Nothing is allocated or appended yet, so an unwind
         // here needs no repair: staging is discarded, the lock releases on
@@ -1442,12 +1502,20 @@ impl<W: WorldState> Kernel<W> {
             Err(e) => return Err(TxnError::Rejected(e)),
             Ok(value) => value,
         };
+        // A composite's records are folded again at the transaction's own
+        // coordinate, now that its count is known (`Staging::sealed`): still
+        // the closure phase, no coordinate drawn. Bound to a name, so the
+        // destructure below is of a local that lives to the end of this call
+        // and not of a temporary, whose unmoved `base` would drop at the
+        // statement's end.
+        let stg = stg.sealed();
         let Staging {
             // Load-bearing: `_` moves nothing, so the superseded root stays
             // in `stg` until this call returns (above).
             base: _,
             working,
             records,
+            first: staged_first,
         } = stg;
         // Zero-step (A1: read-only / idem-hit / nullify-hit): nothing staged,
         // so no coordinate is drawn — and the non-emptiness the sequencer
@@ -1471,6 +1539,12 @@ impl<W: WorldState> Kernel<W> {
             ));
             return Err(TxnError::Poisoned);
         };
+        // The position the fold was handed is the one the order minted: the
+        // `Staging::first` card's claim, held here where both are in hand.
+        debug_assert_eq!(
+            staged_first, first,
+            "the position a staged record was folded at must be the position the order mints"
+        );
 
         // The commit region: one call into the journal, which serializes the
         // records, judges the size limits no mode may skip, and commits

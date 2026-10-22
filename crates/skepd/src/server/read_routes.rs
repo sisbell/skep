@@ -102,7 +102,7 @@ impl Daemon {
                     return self.op_reply(&Response::Rejected(rej));
                 }
                 match self.history.read_at(&self.engine, at, *frame, principal, &head) {
-                    Ok(resp) => self.op_reply(&resp),
+                    Ok(resp) => self.read_reply(resp),
                     Err(e) => self.refuse_history(e),
                 }
             }

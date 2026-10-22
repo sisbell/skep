@@ -23,7 +23,8 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    WorldState,
 };
 
 /// The smallest world the kernel opens: a count of the records applied.
@@ -36,7 +37,7 @@ struct Tick;
 impl WorldState for Count {
     type Record = Tick;
 
-    fn apply(&self, _: &Tick) -> Self {
+    fn apply(&self, _: Seq, _: &Tick) -> Self {
         Count(self.0 + 1)
     }
 }

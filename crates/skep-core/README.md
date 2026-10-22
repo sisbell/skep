@@ -59,7 +59,15 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `defines` link into `1.1.0.1.0.1` for every type of `skep-registry`'s
   vocabulary the board lacks, as the system principal through the head
   writer's door and its one staging draft, a refusal said once and the
-  open going on — `changes` (`ChangesQuery`,
+  open going on — `mint_time`, the daemon's testimony of when a minted
+  address's position committed, for the two reads that answer an address's
+  age (`read_link`'s and `doc_metadata`'s `time`): the change feed's
+  recorded time for the position, read by position and never by a walk,
+  else the hour the time writer's record anchors it to — the time writer
+  being the commits' other child, writing one `skep-time` record into the
+  time document `1.1.0.1.0.4` through the head writer's helpers whenever
+  an hour has passed on the head writer's clock and the position moved,
+  the head record itself untouched — `changes` (`ChangesQuery`,
   `ChangesAnswer`, `FeedClass` with `of`), `head_time`, `next_step`
   (`StreamStep`), `announced`, `halted_at`, `say_the_kernels_halt_once`,
   `feed_walk_gone` (`FeedPending` with `is_empty`, what the walk behind the

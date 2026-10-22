@@ -97,15 +97,18 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///
 /// * `authoritative.namespace` — kept whole. The addresses in it are not
 ///   secret (PUB-1.13, an address is not), but the slice is M3's whole serde
-///   form, and beside the node registry it carries three things: the
+///   form, and beside the node registry it carries four things: the
 ///   `publication` map (every registered document with its bit — so a reader
 ///   class reads the draft membership of documents it cannot open, and the
 ///   reduced `publication` section below reduces that section and not what a
 ///   reader class learns of publication state), the per-namespace frontier
 ///   counts (so a draft's content and link population is legible without any
-///   of its content), and the principal registry. Widening the reduction here
-///   would move bytes the crash and wire oracles pin, so what a reader class
-///   is owed of this slice is the format's question and not this filter's.
+///   of its content), the principal registry, and the `minted_at` map (every
+///   document, member and link with its commit position — addresses the
+///   publication map and the frontier counts already carry, dated). Widening
+///   the reduction here would move bytes the crash and wire oracles pin, so
+///   what a reader class is owed of this slice is the format's question and
+///   not this filter's.
 /// * `authoritative.content.map` — a content line leaves when its element's
 ///   document is unreadable.
 /// * `authoritative.arrangement.{arrangements, provenance}` — the entries

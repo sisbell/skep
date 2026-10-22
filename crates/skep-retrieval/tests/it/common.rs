@@ -12,7 +12,7 @@ use skep_arrangement::{
     deposit_class_types, Caller, Deposit, HasM5, M5State, Run, Shot, ShotRun, VPos, VSpec, Vstream,
 };
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{Delivery, DeliveryItem, RegionSpec, Spec};
 
@@ -72,10 +72,10 @@ impl HasM5 for World {
 
 impl WorldState for World {
     type Record = Rec;
-    fn apply(&self, r: &Rec) -> World {
+    fn apply(&self, at: Seq, r: &Rec) -> World {
         match r {
             Rec::M3(x) => World {
-                m3: self.m3.apply_m3(x),
+                m3: self.m3.apply_m3(at, x),
                 ..self.clone()
             },
             Rec::Content(x) => World {
@@ -258,13 +258,13 @@ pub fn err_of<T: fmt::Debug, E>(r: Result<T, E>) -> E {
 /// `Allocate` carries no publication state.
 fn genesis() -> World {
     let m3 = M3State::genesis()
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 2]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true));
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(2)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true));
     World {
         m3,
         content: ContentStore::default(),

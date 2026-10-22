@@ -79,7 +79,13 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   `defines` link for every link type of [skep-registry](../skep-registry)'s
   vocabulary the board lacks — all of them on a fresh board, the missing
   ones on an upgraded or interrupted one — said as one `open:` line where
-  it wrote, so a guest resolves any type's name by one `find_links_ftt`.
+  it wrote, so a guest resolves any type's name by one `find_links_ftt`;
+  and, on the write path's cadence, the time writer's `skep-time` record
+  into the time document `1.1.0.1.0.4` — the committed position and the
+  daemon's clock, once an hour while the position moves, the head record
+  untouched — the anchor a link's or a member's age (`read_link`'s and
+  `doc_metadata`'s `at`, `time`, `time_from`) falls back on where the
+  change feed's line is gone.
 - **Durability is configuration** — fsync policy and checkpoint
   cadence are chosen here, not baked into the kernel: a checkpoint every
   1024 commits or a byte bound — a quarter of the newest checkpoint's

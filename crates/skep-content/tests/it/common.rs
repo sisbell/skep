@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Piece, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, TxnError,
-    WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq,
+    TxnError, WorldState,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -48,7 +48,7 @@ impl HasContent for World {
 
 impl WorldState for World {
     type Record = Rec;
-    fn apply(&self, r: &Rec) -> World {
+    fn apply(&self, _at: Seq, r: &Rec) -> World {
         World {
             content: match r {
                 Rec::Write(x) => self.content.apply_write(x),

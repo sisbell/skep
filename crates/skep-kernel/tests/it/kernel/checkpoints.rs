@@ -235,7 +235,7 @@ impl<'de> Deserialize<'de> for GatedWorld {
 impl WorldState for GatedWorld {
     type Record = u64;
 
-    fn apply(&self, record: &u64) -> Self {
+    fn apply(&self, _at: Seq, record: &u64) -> Self {
         let mut next = self.clone();
         next.items.push(*record);
         next

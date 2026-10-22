@@ -66,29 +66,29 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     // candidate walk that truncates at depth is caught.
     let seeded = World {
         m3: M3State::genesis()
-            .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
-            .apply_m3(&alloc(&[1, 0, 1, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2))
-            .apply_m3(&alloc(&[1, 0, 1, 1, 1]))
-            .apply_m3(&M3Rec::register_principal(
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), ID1))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1, 1]), ID2))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(
                 a(&[1, 0, 1, 1, 1]),
                 PrincipalId(3),
             ))
-            .apply_m3(&alloc(&[1, 0, 2]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(4)))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 2]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 2]), PrincipalId(4)))
             // [1,0,3] stays allocated and principal-less, so the probe at it
             // keeps its meaning: an uncovered sibling resolving to π₀.
-            .apply_m3(&alloc(&[1, 0, 3]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 3]))
             // An INVERTED pair: the shallower principal carries the HIGHER id,
             // so "longest prefix" and "highest id" disagree here and nowhere
             // else in the suite. Ids are opaque and assigned by M10 — nothing
             // makes them monotone in depth, and ω must not read them as
             // ordering.
-            .apply_m3(&alloc(&[1, 0, 4]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 4]), PrincipalId(50)))
-            .apply_m3(&alloc(&[1, 0, 4, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 4, 1]), PrincipalId(5))),
+            .apply_m3(Seq(0), &alloc(&[1, 0, 4]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 4]), PrincipalId(50)))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 4, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 4, 1]), PrincipalId(5))),
     };
     let pi = [
         (a(&[1]), BOOTSTRAP_PRINCIPAL),
@@ -307,10 +307,10 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
     // it, and a memo of it would admit every principal seated under the
     // ancestor, the owner's siblings included, to the document:
     let to_an_account = M3State::genesis()
-        .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
-        .apply_m3(&alloc(&[1, 0, 1, 1]))
-        .apply_m3(&alloc(&[1, 0, 1, 1, 0, 1]));
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), ID1))
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1]))
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1, 0, 1]));
     let sub_doc = a(&[1, 0, 1, 1, 0, 1]);
     assert!(to_an_account.is_registered_document(&sub_doc));
     assert_eq!(
@@ -320,8 +320,8 @@ fn the_account_seat_is_omega_by_one_lookup_and_never_climbs() {
     assert_eq!(to_an_account.account_seat(&sub_doc), None);
     // …and to the NODE.
     let to_the_node = M3State::genesis()
-        .apply_m3(&alloc(&[1, 0, 1]))
-        .apply_m3(&alloc(&[1, 0, 1, 0, 1]));
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+        .apply_m3(Seq(0), &alloc(&[1, 0, 1, 0, 1]));
     let acct_doc = a(&[1, 0, 1, 0, 1]);
     assert!(to_the_node.is_registered_document(&acct_doc));
     assert_eq!(
@@ -562,14 +562,14 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
     let seeded = World {
         m3: M3State::genesis()
-            .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
-            .apply_m3(&alloc(&[1, 0, 1, 0, 1]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), ID1))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 0, 1]))
             // A DOCUMENT-tier seat — below O1a's bound.
-            .apply_m3(&M3Rec::register_principal(doc.clone(), ID2))
+            .apply_m3(Seq(0), &M3Rec::register_principal(doc.clone(), ID2))
             // …and an ELEMENT-tier seat beneath it, the bound's other side.
-            .apply_m3(&alloc(&[1, 0, 1, 0, 1, 0, 1, 1]))
-            .apply_m3(&M3Rec::register_principal(element.clone(), PrincipalId(3))),
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 0, 1, 0, 1, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(element.clone(), PrincipalId(3))),
     };
     let k = mem_kernel(seeded);
     let snap = k.snapshot();
@@ -617,11 +617,11 @@ fn omega_names_the_seat_it_matched_when_two_principals_carry_one_id() {
     let deep_seat = a(&[1, 0, 1, 1]);
     let seeded = World {
         m3: M3State::genesis()
-            .apply_m3(&alloc(&[1, 0, 1]))
-            .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), ID1))
-            .apply_m3(&alloc(&[1, 0, 1, 1]))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1]))
+            .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), ID1))
+            .apply_m3(Seq(0), &alloc(&[1, 0, 1, 1]))
             // The SAME id, seated again deeper — id-injectivity broken.
-            .apply_m3(&M3Rec::register_principal(deep_seat.clone(), ID1)),
+            .apply_m3(Seq(0), &M3Rec::register_principal(deep_seat.clone(), ID1)),
     };
     let m3 = seeded.m3;
 

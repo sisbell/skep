@@ -355,7 +355,14 @@ under that lock and never by a timer; under its deferred arm a crossing
 sets a due flag the caller's own thread services — `Kernel::checkpoint`
 clears it first, then runs — and a second crossing with the flag still set
 runs the checkpoint inline as the backstop. The world is a type parameter:
-the kernel folds records through `WorldState::apply` and never reads them.
+the kernel folds records through `WorldState::apply` and never reads them,
+handing each the position of the commit it belongs to — the transaction's
+terminal coordinate, the one every acknowledgment and history read names:
+on the write path the order's next coordinate plus the transaction's
+records less one, a composite folded once more at that number when its
+count is known; at replay the marker's `last_seq` the scan stamps on every
+record of the group — so a world may keep a fact's commit position as
+state (D1: a position is a fold input, the clock never is).
 Its modules are declared in `src/lib.rs` in dependency order, each with a
 line saying what it holds. Under `test-hooks` (default off, never in a
 shipped build) `src/hooks.rs` is the write-fault seam: the next checkpoint
@@ -2221,8 +2228,12 @@ creates — account, document, version, content, link — comes off one of its
 five mints, and every store that mints or writes under a chain
 (`skep-arrangement`, which places content and forks versions, and
 `skep-links`) holds a lock key M3 built. It also holds who exists, who
-owns what (ω, the longest seated prefix) and each document's publication
-bit, all in one slice, `M3State`. Node addresses come from provisioning
+owns what (ω, the longest seated prefix), each document's publication
+bit, and the commit position of every document, member and link it
+minted — the position map, `address → position`, written once by the
+fold at the record that mints the address and kept in every checkpoint,
+so a reader learns an address's age at any age and never from an index
+over the feed — all in one slice, `M3State`. Node addresses come from provisioning
 and are only admitted. Its modules are declared in `src/lib.rs` in
 dependency order, each with a line saying what it holds. `record.rs` is the
 journal delta, `M3Rec`, with its two field doors and the identity type it
@@ -2879,9 +2890,18 @@ it:
    document `1.1.0.1.0.1` for every type of `skep-registry`'s vocabulary
    the board lacks — every type on a fresh board, the missing ones on an
    upgraded or interrupted one, a refused commit said once and the open
-   going on). The head writer and the seed are the only writers under the
-   system account, and the staging draft `1.1.0.1.0.3` the one document
-   either mints. Beneath them, and reachable only from them:
+   going on) and the time writer (`commits/time.rs`, which writes through
+   the same helpers and the same staging draft: one `skep-time` record —
+   the committed position and the daemon's clock — as a published member
+   of the time document `1.1.0.1.0.4`, minted at the first record, whenever
+   an hour has passed on the head writer's clock and the position moved,
+   the head record untouched; and `hour_at`, the newest record at or below
+   a position, which `Commits::mint_time` falls back on for a minted
+   address's age where the feed's line is gone). The head writer, the seed
+   and the time writer are the only writers under the system account, and
+   the staging draft `1.1.0.1.0.3` and the time document `1.1.0.1.0.4` the
+   two documents any of them mints. Beneath them, and reachable only from
+   them:
    - `commits/feed.rs` — the change feed over its six files, kept whole
      from genesis (wire.md §The change feed, Retention): a resident window
      of the newest positions' entries and twins, `limits.rs`'s

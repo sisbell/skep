@@ -127,7 +127,7 @@ fn register_node_rejection_order_is_pinned() {
     // resource charge, and nothing more).
     let over_cap_node: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
     let seeded = World {
-        m3: M3State::genesis().apply_m3(&M3Rec::register_node(a(&over_cap_node))),
+        m3: M3State::genesis().apply_m3(Seq(0), &M3Rec::register_node(a(&over_cap_node))),
     };
     let over_cap_k = mem_kernel(seeded);
     assert_eq!(
@@ -139,7 +139,7 @@ fn register_node_rejection_order_is_pinned() {
     // the bootstrap lineage — a state `register_node` itself cannot reach,
     // so seed it through the fold.
     let seeded = World {
-        m3: M3State::genesis().apply_m3(&M3Rec::register_node(a(&[2]))),
+        m3: M3State::genesis().apply_m3(Seq(0), &M3Rec::register_node(a(&[2]))),
     };
     let off_lineage_k = mem_kernel(seeded);
     assert_eq!(

@@ -6,7 +6,12 @@ command layer, where wire requests become store transactions.
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
 
 - **`Op` / `Response`** — the typed enumeration of every operation a
-  client can request and every answer it can receive.
+  client can request and every answer it can receive. The two reads that
+  answer an address's age, `read_link` and `doc_metadata`, carry the
+  position of the commit that minted it off the name space's position
+  map, and a slot for the transport's testimony of when it committed
+  (`MintTime`, `TimeSource`), filled through `Response::mint_mut` by the
+  daemon that holds the change feed — never by this crate.
 - **`OperationSurface::execute`** — total by contract: every input yields a
   `Response`, never a panic; failures are typed rejections with
   fault-site localization.

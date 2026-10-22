@@ -119,6 +119,38 @@ pub struct UniversalGrant {
     pub issuers: BTreeSet<Address>,
 }
 
+/// When a minted address's position committed: the daemon's testimony.
+///
+/// It rides the two reads that answer an address's age beside the position
+/// the world keeps for it — [`Response::LinkValue`]'s and
+/// [`Response::DocMetadata`]'s `time` — and it is the transport's to fill
+/// ([`Response::mint_mut`]): M10 answers the position off the world, and the
+/// daemon that holds the change feed and reads the time document adds the
+/// clock, since a timestamp is transport metadata and never substrate state
+/// (wire.md §The change feed). `millis` is unix milliseconds; `source` says
+/// which testimony it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MintTime {
+    /// The commit's wall-clock unix milliseconds.
+    pub millis: u64,
+    /// Where the reading came from.
+    pub source: TimeSource,
+}
+
+/// Which testimony a [`MintTime`] is: the feed's line, or the hour record.
+///
+/// The wire spells it as `time_from`: `"feed"` where the change feed holds
+/// the position's own line, exact to the minute; `"anchor"` where it does
+/// not and the newest hourly `skep-time` record at or below the position
+/// answers instead, exact to the hour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TimeSource {
+    /// The change feed's recorded `time` for the position itself.
+    Feed,
+    /// The newest hourly time record at or below the position.
+    Anchor,
+}
+
 /// The marshaled response.
 ///
 /// Every variant but [`Response::Rejected`] carries one coordinate — `at` on
@@ -235,8 +267,17 @@ pub enum Response {
     Runs { runs: Vec<Run>, as_of: Seq },
     /// discoverable_from.
     Bool { val: bool, as_of: Seq },
-    /// readlink (`None` = ⊥).
-    LinkValue { link: Option<Link>, as_of: Seq },
+    /// readlink (`None` = ⊥), with the link's age.
+    ///
+    /// `at` is the position of the commit that minted the link, kept in the
+    /// world by M3's position map and answered where the link is — `None`
+    /// where the link reads as absent (never deposited, or homed where the
+    /// caller may not read, PUB-6.6, the two indistinguishable), and where
+    /// a build before the map minted it. `time` is the transport's testimony
+    /// of when that position committed ([`MintTime`]), filled through
+    /// [`Response::mint_mut`] and `None` until it is, or where no testimony
+    /// holds a reading.
+    LinkValue { link: Option<Link>, at: Option<Seq>, time: Option<MintTime>, as_of: Seq },
     /// followlink, the one response carrying a `Result` in-band, by design.
     ///
     /// ⟨⟩ ≠ ⊥ is a defined FOLLOWLINK answer (§2); `Invalid` is a query
@@ -277,7 +318,14 @@ pub enum Response {
     /// member, a `fork`-minted or created document. It is served to every
     /// reader of the address named and gated by nothing of the source's: an
     /// address is not secret, and the fork's readers already hold the
-    /// source's I-addresses through `image`.
+    /// source's I-addresses through `image`. `at` is the position of the
+    /// commit that minted the ADDRESS NAMED — a member answers its own mint,
+    /// the one member of this shape that does not project to the document —
+    /// kept in the world by M3's position map, and `None` where a build
+    /// before the map minted it; `time` is the transport's testimony of when
+    /// that position committed ([`MintTime`]), filled through
+    /// [`Response::mint_mut`]. Both are served to whoever may read the
+    /// address named, as `source` is.
     DocMetadata {
         /// The trunk document the argument projects to.
         doc: Address,
@@ -291,6 +339,10 @@ pub enum Response {
         terms: Option<ShotTerms>,
         /// Where a `version` minted the address named, its fork source.
         source: Option<Address>,
+        /// The position of the commit that minted the address named.
+        at: Option<Seq>,
+        /// The transport's testimony of when `at` committed.
+        time: Option<MintTime>,
         /// The coordinate of the snapshot the answer was read from.
         as_of: Seq,
     },
@@ -434,6 +486,26 @@ impl Response {
             | Response::AckAddr { .. }
             | Response::AckEdit { .. }
             | Response::Rejected(_) => None,
+        }
+    }
+
+    /// Returns the minted position an age read answered, and its time slot.
+    ///
+    /// It is the transport's door for dating the two reads that answer an
+    /// address's age — [`Response::LinkValue`] and [`Response::DocMetadata`]
+    /// — the shape [`Response::as_of_mut`] has, for the reason it has it:
+    /// which shapes carry an age is M10's classification, asked here rather
+    /// than restated at the handler. `Some` where the answer carries a
+    /// position, with the slot the caller fills from the testimony it holds
+    /// (the change feed's line, the hour record); `None` for every other
+    /// shape, and for an age read whose position is unknown, which carries
+    /// no time either. M10 itself never fills the slot: a timestamp is the
+    /// transport's testimony, never the world's.
+    pub fn mint_mut(&mut self) -> Option<(Seq, &mut Option<MintTime>)> {
+        match self {
+            Response::LinkValue { at: Some(at), time, .. }
+            | Response::DocMetadata { at: Some(at), time, .. } => Some((*at, time)),
+            _ => None,
         }
     }
 

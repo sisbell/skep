@@ -229,9 +229,14 @@ fn every_entry_at_each_level_of_the_tree_is_reduced_or_kept_by_name() {
     // its slice ships it to the guest with every path here still naming a
     // place, and with no compiler edge from that store to this file.
     for (slice, fields) in [
-        // M3's four, kept WHOLE with the reason in `filter_tree`'s
-        // statement — listed so a fifth is a decision and not a default.
-        ("namespace", &["frontiers", "nodes", "principals", "publication"][..]),
+        // M3's five, kept WHOLE with the reason in `filter_tree`'s
+        // statement — the position map among them, whose keys are the
+        // addresses the publication map and the frontier counts already
+        // carry — listed so a sixth is a decision and not a default.
+        (
+            "namespace",
+            &["frontiers", "minted_at", "nodes", "principals", "publication"][..],
+        ),
         ("content", &["map"]),
         // M5's three keyed fields reduced — the fork sources by the fork,
         // the key — and its birth memo and shot terms kept WHOLE with the

@@ -67,10 +67,14 @@ fn each_slice_serializes_the_fields_the_format_count_names() {
     );
     let world = World::genesis();
     for (slice, found, pinned) in [
+        // M3's fifth field, `minted_at` — the commit position of every
+        // document, member and link minted — joined the slice under the
+        // same ruling renewed (the permanence record, 2026-10-22), so the
+        // count did not move with it either.
         (
             "namespace",
             field_names(&world.namespace),
-            &["frontiers", "nodes", "principals", "publication"][..],
+            &["frontiers", "nodes", "principals", "publication", "minted_at"][..],
         ),
         ("content", field_names(&world.content), &["map"]),
         // M5's fifth field, `fork_sources`, joined the slice under the
@@ -293,10 +297,11 @@ fn the_format_stamp_leads_the_world_s_bytes() {
 /// the stamp. The premise is pinned first, so the hand-built shapes are
 /// the old ones and not a strawman: the current encoding IS the stamp
 /// followed by the four slices and then the identity slice, and M3's slice
-/// at genesis IS its old bytes followed by the publication map — since
-/// PUB-6.65's seed, the system account's two born-published documents
-/// behind an eight-byte length (M3's own test pins that half; this one
-/// rides it).
+/// at genesis IS its old bytes followed by the publication map and the
+/// position map — since PUB-6.65's seed, the system account's two
+/// born-published documents behind an eight-byte length, then the same two
+/// at the genesis coordinate behind another (M3's own test pins that half;
+/// this one rides it).
 #[test]
 fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
     use skep_namespace::{ghost_home_document, head_document};
@@ -324,18 +329,24 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
     // The pre-bit layout: additionally without M3's publication map, which
     // at genesis holds the seed's two born-published documents and nothing
     // else — hand-built from the seed's public pins (a `Vec` of pairs
-    // encodes exactly as the map does) and pinned as the bytes that end
-    // M3's slice.
+    // encodes exactly as the map does) — and without the position map after
+    // it, the same two documents at the genesis coordinate; the two maps
+    // are pinned as the bytes that end M3's slice.
     let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
     let publication_bytes =
         bincode::serialize(&vec![(ghost_home_document(), true), (head_document(), true)])
             .expect("the map's entries serialize");
+    let position_bytes =
+        bincode::serialize(&vec![(ghost_home_document(), 0u64), (head_document(), 0u64)])
+            .expect("the map's entries serialize");
+    let trailing = [publication_bytes.as_slice(), position_bytes.as_slice()].concat();
     assert!(
-        namespace_bytes.ends_with(&publication_bytes),
-        "genesis's publication map is the seed's two documents: their entries end M3's bytes"
+        namespace_bytes.ends_with(&trailing),
+        "genesis's publication map and position map are the seed's two documents: their \
+         entries end M3's bytes"
     );
     let mut pre_bit = pre_stamp.clone();
-    pre_bit.drain(namespace_bytes.len() - publication_bytes.len()..namespace_bytes.len());
+    pre_bit.drain(namespace_bytes.len() - trailing.len()..namespace_bytes.len());
     assert!(
         bincode::deserialize::<World>(&pre_bit).is_err(),
         "a pre-publication checkpoint decoded — it must fail, never read as everything-published"
@@ -355,6 +366,12 @@ fn a_checkpoint_without_the_bit_or_the_stamp_fails_to_decode() {
 /// of the draft (`true`) or none, and its type slot a never-minted address
 /// of the draft's own subspace 3.
 fn links_in_a_draft(shapes: &[(bool, bool)]) -> World {
+    links_in_a_draft_named(shapes).0
+}
+
+/// [`links_in_a_draft`] with the draft's address beside the world, for a pin
+/// that hand-builds the slice's bytes from the addresses the fixture minted.
+fn links_in_a_draft_named(shapes: &[(bool, bool)]) -> (World, Address) {
     let engine = mem_engine();
     let acct = delegated_account(&engine, USER);
     let (draft, _) = engine
@@ -372,7 +389,7 @@ fn links_in_a_draft(shapes: &[(bool, bool)]) -> World {
             .makelink(caller, &draft, slot(with_from, 1), slot(with_to, 1), slot(true, 3))
             .expect("a link in the owner's own draft");
     }
-    engine.kernel().snapshot().world().clone()
+    (engine.kernel().snapshot().world().clone(), draft)
 }
 
 /// `world`'s bytes as a build from before M5's birth memo wrote them: the
@@ -493,3 +510,73 @@ fn a_base_written_before_the_birth_memo_fails_to_decode() {
         );
     }
 }
+
+/// The bytes of `world` as a build before the position map wrote them: M3's
+/// slice without its trailing `minted_at` map, the rest as this build
+/// writes it. The map's bytes are hand-built from the public read, one
+/// entry per address the fixture minted — the seed's two documents and
+/// whatever `addresses` names — in address order, a `Vec` of pairs encoding
+/// exactly as the map does; the cut is pinned against the slice's own
+/// bytes first, so the shape is the old one and not a strawman.
+fn written_before_the_position_map(world: &World, addresses: &[Address]) -> Vec<u8> {
+    let mut entries: Vec<(Address, u64)> = [skep_namespace::ghost_home_document(), skep_namespace::head_document()]
+        .into_iter()
+        .chain(addresses.iter().cloned())
+        .map(|a| {
+            let at = world.namespace.minted_at(&a).unwrap_or_else(|| panic!("{a} was minted")).0;
+            (a, at)
+        })
+        .collect();
+    entries.sort();
+    let map_bytes = bincode::serialize(&entries).expect("the map's entries serialize");
+    let namespace_bytes = bincode::serialize(&world.namespace).expect("M3 serializes");
+    assert!(
+        namespace_bytes.ends_with(&map_bytes),
+        "the position map's entries end M3's bytes, one per document, member and link minted"
+    );
+    let stamp = bincode::serialize(&FormatStamp).expect("the stamp serializes");
+    let rest = bincode::serialize(&(&world.content, &world.arrangement, &world.links, &world.identity))
+        .expect("the slices serialize");
+    [stamp.as_slice(), &namespace_bytes[..namespace_bytes.len() - map_bytes.len()], rest.as_slice()]
+        .concat()
+}
+
+/// A base written before the position map — the seventh layout count 1
+/// names, under a current header — fails to DECODE, by the encoding's
+/// arithmetic: this build reads the content slice's bytes as the map, and
+/// every slice after it the bytes of the slice before, so the decode runs
+/// off the body's end — an unexpected end of file on every shape held here,
+/// never a decoded world. Held on genesis, where every slice is empty and
+/// the shifted read finds nothing to refuse until the body ends, and on the
+/// link worlds the birth-memo pin uses — each world's own bytes decoding
+/// beside it, so the cut and not the fixture is what refuses. The engine
+/// opens such a board from genesis where its journal still reaches it
+/// (`FormatStamp`'s card); what this pins is that it never opens it from
+/// the base.
+#[test]
+fn a_base_written_before_the_position_map_fails_to_decode() {
+    let genesis = World::genesis();
+    bincode::deserialize::<World>(&bincode::serialize(&genesis).expect("a world serializes"))
+        .expect("this build's own bytes decode");
+    assert!(
+        bincode::deserialize::<World>(&written_before_the_position_map(&genesis, &[])).is_err(),
+        "genesis written before the position map decoded"
+    );
+    let stores: [(&str, &[(bool, bool)]); 3] = [
+        ("one link, `from` and `to` empty", &[(false, false)]),
+        ("one link with a `from` and a `to`", &[(true, true)]),
+        ("two links", &[(false, false), (true, false)]),
+    ];
+    for (store, shapes) in stores {
+        let (world, draft) = links_in_a_draft_named(shapes);
+        let mut minted = vec![draft.clone()];
+        minted.extend((1..=shapes.len() as u32).map(|k| element(&draft, 2, k)));
+        bincode::deserialize::<World>(&bincode::serialize(&world).expect("a world serializes"))
+            .expect("this build's own bytes decode");
+        assert!(
+            bincode::deserialize::<World>(&written_before_the_position_map(&world, &minted)).is_err(),
+            "{store}: a base written before the position map decoded"
+        );
+    }
+}
+

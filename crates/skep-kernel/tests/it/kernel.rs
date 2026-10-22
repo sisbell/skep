@@ -23,7 +23,7 @@ use crate::mutilate::FRAME_MAGIC;
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     Attestation, BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource,
-    Seq, Step, WorldState,
+    Seq, Step, TxnError, WorldState,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for RefusesSerialization {
 impl WorldState for TestWorld {
     type Record = TestRec;
 
-    fn apply(&self, r: &TestRec) -> Self {
+    fn apply(&self, _at: Seq, r: &TestRec) -> Self {
         let mut next = self.clone();
         match r {
             // Non-idempotent on purpose: double-application is visible, so
@@ -171,7 +171,7 @@ enum Fragility {
 impl WorldState for FragileWorld {
     type Record = Fragility;
 
-    fn apply(&self, record: &Fragility) -> Self {
+    fn apply(&self, _at: Seq, record: &Fragility) -> Self {
         FragileWorld {
             commits: self.commits + 1,
             broken: self.broken || matches!(record, Fragility::Break),
@@ -335,4 +335,96 @@ fn segment_count(dir: &Path) -> usize {
         .filter_map(|e| e.unwrap().file_name().into_string().ok())
         .filter(|n| n.starts_with("seg-") && n.ends_with(".wal"))
         .count()
+}
+
+// ---- the position the fold is handed (D1: a position, never a clock) ----
+
+/// A world that keeps, for every record, the position the fold was handed
+/// beside the record itself — the shape a store keeping a fact's commit
+/// position takes, reduced to its pin.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct PositionedWorld {
+    log: im::Vector<(u64, u64)>,
+}
+
+impl WorldState for PositionedWorld {
+    type Record = u64;
+
+    fn apply(&self, at: Seq, record: &u64) -> Self {
+        let mut log = self.log.clone();
+        log.push_back((at.0, *record));
+        PositionedWorld { log }
+    }
+}
+
+/// The position `apply` is handed is the journal's own coordinate for the
+/// transaction that commits the record — its marker's `last_seq`, the one
+/// every record of a composite shares and the one its acknowledgment names:
+/// on the write path the transaction's first position plus its records
+/// less one, folded again at that number once the closure has staged them
+/// all, and at every derivation — recovery from genesis, bounded replay, and
+/// a load from a checkpoint — the marker's. Under `TolerateGap` a burned range
+/// is skipped live exactly as recovery skips it, so the live world and every
+/// derived one agree entry for entry.
+#[test]
+fn the_position_folded_is_the_journals_own_commit_position_live_and_derived() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = KernelConfig {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::TolerateGap,
+            cut_damaged_tail: false,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+        salt: SaltSource::Seeded(TEST_SEED),
+    };
+    let genesis = PositionedWorld { log: im::Vector::new() };
+    let k = Kernel::open(cfg.clone(), genesis.clone()).unwrap();
+    let push = |k: &Kernel<PositionedWorld>, xs: &[u64]| {
+        k.transact(&[], |stg| {
+            for &x in xs {
+                stg.push(x);
+            }
+            Ok::<(), ()>(())
+        })
+        .unwrap()
+        .1
+    };
+    // One record at 1; a composite committing at 4, every record of it
+    // folded at 4; a rejected closure draws no position; a burned range
+    // under TolerateGap is skipped.
+    assert_eq!(push(&k, &[10]), Seq(1));
+    assert_eq!(push(&k, &[20, 30, 40]), Seq(4));
+    let rejected: Result<((), Seq), TxnError<&str>> = k.transact(&[], |stg| {
+        stg.push(99);
+        Err("rejected: the staged position is discarded with the staging")
+    });
+    assert!(matches!(rejected, Err(TxnError::Rejected(_))));
+    k.fail_the_next(Step::JournalAppend, std::io::ErrorKind::StorageFull);
+    let burned: Result<((), Seq), TxnError<()>> = k.transact(&[], |stg| {
+        stg.push(98);
+        Ok(())
+    });
+    assert!(matches!(burned, Err(TxnError::Durability(_))), "got {burned:?}");
+    assert_eq!(push(&k, &[50, 60]), Seq(7), "position 5 was burned and is not reused");
+    let live = k.snapshot().world().clone();
+    assert_eq!(
+        live.log.iter().copied().collect::<Vec<_>>(),
+        vec![(1, 10), (4, 20), (4, 30), (4, 40), (7, 50), (7, 60)],
+        "live, each record was folded at the coordinate of the transaction that committed it"
+    );
+    assert_eq!(k.world_at(Seq(7)).unwrap(), live, "bounded replay folds the journal's seqs");
+    assert_eq!(k.checkpoint().unwrap(), Seq(7));
+    assert_eq!(push(&k, &[70]), Seq(8));
+    let live = k.snapshot().world().clone();
+    drop(k);
+    let k = Kernel::open(cfg, genesis).unwrap();
+    assert_eq!(k.snapshot().world(), &live, "a load from the checkpoint keeps every position");
+    assert_eq!(k.world_at(Seq(8)).unwrap(), live);
+    assert_eq!(
+        k.snapshot().world().log.back().copied(),
+        Some((8, 70)),
+        "the record replayed above the checkpoint folds at its own seq"
+    );
 }

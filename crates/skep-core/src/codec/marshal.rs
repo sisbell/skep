@@ -13,8 +13,8 @@ use skep_arrangement::{Run, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    Deposit, Disposition, EditionClaim, FaultSite, IItem, ISpan, Op, OpKind, RejectCode, Rejection,
-    Response, SlotArg, SuccessorSpec, UniversalGrant,
+    Deposit, Disposition, EditionClaim, FaultSite, IItem, ISpan, MintTime, Op, OpKind, RejectCode,
+    Rejection, Response, SlotArg, SuccessorSpec, TimeSource, UniversalGrant,
 };
 use skep_identity::{KeySet, SigAlgRow};
 use skep_kernel::{Attestation, Seq};
@@ -475,11 +475,19 @@ pub(super) fn j_response(r: &Response) -> Value {
         Response::Bool { val, as_of } => {
             ("bool", vec![("val", Value::Bool(*val)), ("as_of", j_seq(*as_of))])
         }
-        // The payload option: null = ⊥ (no link at that address).
-        Response::LinkValue { link, as_of } => (
+        // The payload option: null = ⊥ (no link at that address). The link's
+        // age beside it (wire.md §Links (raw reads)): `at`, the position of
+        // the commit that minted it, and `time` with `time_from` — three wire
+        // keys over two optional values, `time` and `time_from` null together
+        // where no testimony holds a reading, all three null where the
+        // position is unknown or the link reads as absent.
+        Response::LinkValue { link, at, time, as_of } => (
             "link_value",
             vec![
                 ("link", link.as_ref().map(j_link).unwrap_or(Value::Null)),
+                ("at", at.map(j_seq).unwrap_or(Value::Null)),
+                ("time", time.map(j_mint_time).unwrap_or(Value::Null)),
+                ("time_from", time.map(j_time_from).unwrap_or(Value::Null)),
                 ("as_of", j_seq(*as_of)),
             ],
         ),
@@ -514,7 +522,11 @@ pub(super) fn j_response(r: &Response) -> Value {
         // `source` (the fork-source design record) is a payload option over
         // the fork source of the address named: the member or bare document a
         // `version` snapshotted into it, null where no `version` minted it.
-        Response::DocMetadata { doc, published, owner, birth, terms, source, as_of } => (
+        // `at`, `time` and `time_from` are the age of the address named, as
+        // `link_value` carries a link's: the mint position off the world's
+        // map, null for an address a build before it minted; the time and
+        // its source null together where no testimony holds a reading.
+        Response::DocMetadata { doc, published, owner, birth, terms, source, at, time, as_of } => (
             "doc_metadata",
             vec![
                 ("doc", j_addr(doc)),
@@ -532,6 +544,9 @@ pub(super) fn j_response(r: &Response) -> Value {
                         .unwrap_or(Value::Null),
                 ),
                 ("source", source.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("at", at.map(j_seq).unwrap_or(Value::Null)),
+                ("time", time.map(j_mint_time).unwrap_or(Value::Null)),
+                ("time_from", time.map(j_time_from).unwrap_or(Value::Null)),
                 ("as_of", j_seq(*as_of)),
             ],
         ),
@@ -604,6 +619,27 @@ fn j_seq(s: Seq) -> Value {
 
 fn j_u64(n: u64) -> Value {
     Value::Number(n.into())
+}
+
+/// Renders an age read's `time`: the testimony's unix milliseconds.
+fn j_mint_time(t: MintTime) -> Value {
+    j_u64(t.millis)
+}
+
+/// Renders an age read's `time_from`: which testimony the time is.
+///
+/// `"feed"` is the change feed's own line for the position, exact to the
+/// minute; `"anchor"` the newest hourly `skep-time` record at or below it
+/// (wire.md §Links (raw reads)). The two spellings are the wire's, pinned by
+/// the wire doc's examples.
+fn j_time_from(t: MintTime) -> Value {
+    Value::String(
+        match t.source {
+            TimeSource::Feed => "feed",
+            TimeSource::Anchor => "anchor",
+        }
+        .to_string(),
+    )
 }
 
 fn j_usize(n: usize) -> Value {

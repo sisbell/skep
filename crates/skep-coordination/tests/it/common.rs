@@ -17,7 +17,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{Deposit, HasM5, M5Rec, M5State, VPos, Vstream};
 use skep_content::{ContentStore, ContentStretch, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, SaltSource, Seq, WorldState};
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, TypeRegistry,
 };
@@ -44,9 +44,9 @@ pub enum Record {
 
 impl WorldState for World {
     type Record = Record;
-    fn apply(&self, r: &Record) -> World {
+    fn apply(&self, at: Seq, r: &Record) -> World {
         match r {
-            Record::M3(x) => World { m3: self.m3.apply_m3(x), ..self.clone() },
+            Record::M3(x) => World { m3: self.m3.apply_m3(at, x), ..self.clone() },
             Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
             Record::Stretch(x) => World { content: self.content.apply_stretch(x), ..self.clone() },
             Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
@@ -211,11 +211,11 @@ pub fn uncataloged_ty(ordinal: u32) -> Endset {
 /// no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1]), false))
-        .apply_m3(&M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
-        .apply_m3(&M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::register_principal(a(&[1, 0, 1]), PrincipalId(1)))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 1]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 2]), false))
+        .apply_m3(Seq(0), &M3Rec::allocate(a(&[1, 0, 1, 0, 3]), true))
 }
 
 pub fn genesis_world() -> World {

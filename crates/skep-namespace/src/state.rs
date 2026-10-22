@@ -34,7 +34,8 @@ use std::sync::LazyLock;
 
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use skep_address::{ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
+use skep_address::{link_subspace, ordinal, validate, Address, GateViolation, Level, Nat, Tumbler};
+use skep_kernel::Seq;
 
 use crate::ghost::{ghost_floor, ghost_home_document};
 use crate::ns::{is_content_or_link_slot, namespace_of, nth_in, NsKey};
@@ -60,17 +61,18 @@ const NO_PUBLICATION_STATE: bool = false;
 /// All persistent (`im`), so each commit yields a cheap structurally-shared
 /// version — free MVCC snapshots for readers and free historical ω_Σ.
 ///
-/// **The journal is the sole authority** (M2); these four structures are the
+/// **The journal is the sole authority** (M2); these five structures are the
 /// *recovered working representation*, folded by [`M3State::apply_m3`]. All
-/// four are ordinary `Serialize`/`Deserialize` fields — **none** is
+/// five are ordinary `Serialize`/`Deserialize` fields — **none** is
 /// `#[serde(skip)]` — so they are restored verbatim from the loaded checkpoint
 /// and then advanced by replaying the post-checkpoint `M3Rec`s. They are
 /// authoritative working state, not derived hints, so M3 takes M2's **default
 /// `rebuild_derived`** (identity): nothing to re-seed before replay.
 ///
-/// Authoritative vs hint: `frontiers`/`nodes`/`principals`/`publication` are
-/// authoritative (the compressed allocation journal, and the per-document
-/// publication map beside it). The delegation forest, any
+/// Authoritative vs hint: `frontiers`/`nodes`/`principals`/`publication`/
+/// `minted_at` are authoritative (the compressed allocation journal, the
+/// per-document publication map beside it, and the commit position of every
+/// document, member and link minted). The delegation forest, any
 /// `address → owner` ω-cache, any `id → prefix` reverse index, and the
 /// exception set over `publication` are *hints* — recomputable from the
 /// authoritative fields alone — and are deliberately not stored here (Open
@@ -91,12 +93,12 @@ const NO_PUBLICATION_STATE: bool = false;
 /// bytes, which the world's leading format stamp exists to prevent.
 ///
 /// Equality is structural, and it is the meaning of the type: two slices are
-/// equal iff their three registries and the publication map hold the same
-/// entries. So a slice recovered from a checkpoint is comparable to the one
-/// it was taken from — the whole claim recovery makes — without going through
-/// a rendering. There is no [`Default`]: [`M3State::genesis`] is not an empty
-/// value (it seeds `[1]` into `nodes` and Π), and an empty one would be a
-/// world with no bootstrap principal.
+/// equal iff their three registries, the publication map and the position map
+/// hold the same entries. So a slice recovered from a checkpoint is comparable
+/// to the one it was taken from — the whole claim recovery makes — without
+/// going through a rendering. There is no [`Default`]: [`M3State::genesis`]
+/// is not an empty value (it seeds `[1]` into `nodes` and Π), and an empty
+/// one would be a world with no bootstrap principal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M3State {
     /// The baptismal registry (ASN-0040 B), in B1+B2 compressed form.
@@ -223,15 +225,16 @@ pub struct M3State {
     /// one-lookup cost [`M3State::published`] pays, and seeded by one walk of
     /// it, [`M3State::documents`].
     ///
-    /// Declared last, and that is load-bearing where this slice ends the
-    /// bytes: bincode encodes a struct as its fields in declaration order with
-    /// no names, so there a pre-publication slice decodes its three older
-    /// fields and then meets end-of-input where this one should begin — the
-    /// decode failure PUB-7.8 demands, never a default and never
-    /// everything-published. Inserted anywhere earlier, the same slice would
-    /// read a sibling's bytes as this map. In the engine's world more slices
-    /// follow this one, so there the checkpoint's format stamps refuse a
-    /// pre-publication body before any slice is read.
+    /// Declared after the three registries, and that is load-bearing where
+    /// this slice ends the bytes: bincode encodes a struct as its fields in
+    /// declaration order with no names, so there a pre-publication slice
+    /// decodes its three older fields and then meets end-of-input where this
+    /// one should begin — the decode failure PUB-7.8 demands, never a default
+    /// and never everything-published. Inserted anywhere earlier, the same
+    /// slice would read a sibling's bytes as this map. In the engine's world
+    /// more slices follow this one, so there the checkpoint's format stamps
+    /// refuse a pre-publication body before any slice is read. The position
+    /// map below is appended after it, under the same rule.
     ///
     /// **The budget.** It is stated in the form [`MAX_NODE_COMPONENTS`] and
     /// [`MAX_PRINCIPAL_COMPONENTS`] state theirs: this is the one structure in
@@ -257,6 +260,45 @@ pub struct M3State {
     /// them in address order. `nodes`, `principals` and `frontiers` pay that
     /// price for the same reason.
     publication: im::OrdMap<Address, bool>,
+
+    /// The position map: the commit position of every document, member and
+    /// link minted.
+    ///
+    /// It is the permanent order of arrival kept in the world, keyed by the
+    /// address — a document (`create_new_document`, `fork`, a cross-owner
+    /// `version`), a version member (an owned `version`'s mint and the publish
+    /// shot's) or a link (every link deposit) — and valued by the position of
+    /// the commit that minted it: the `Seq` [`M3State::apply_m3`] is handed
+    /// for the `Allocate` that realizes the address, which M2 makes the
+    /// transaction's own coordinate (its marker's `last_seq`, the one the
+    /// acknowledgment, the change feed's row and a history read name — never
+    /// an interior position of a composite), written once, at that record,
+    /// and never moved (an address is never reused, so no later record names
+    /// it). A content element is not entered — a run of bytes is minted per
+    /// byte, and its position is the placement's — and neither is an account,
+    /// whose seat the principal registry already dates by nothing: the map
+    /// is for the addresses a reader asks the age of, which `doc_metadata`
+    /// and `read_link` answer from it (`at`).
+    ///
+    /// Authoritative working state like its four siblings — an ordinary
+    /// serde field, restored from the checkpoint and advanced by replay,
+    /// never `#[serde(skip)]` — because the fact it keeps is a fact about
+    /// the journal's order, which nothing in the world can rebuild once the
+    /// journal below the reclaim floor is gone: the fork source's reason, in
+    /// its shape (`skep-arrangement`'s `fork_sources`). It is the one map in
+    /// the engine that keeps a position, and the fold alone writes it;
+    /// `rebuild_derived` stays the identity. Genesis's two seeded documents
+    /// are entered at `Seq(0)`, the coordinate the genesis state answers at.
+    ///
+    /// **The budget.** One full [`Address`] key and eight bytes per entry,
+    /// one entry per document, member and link ever minted, ordered and
+    /// re-serialized into every checkpoint — about 0.4 MB per 50,000 links
+    /// beside the address keys the link slice already pays for every one of
+    /// them; the `publication` map's one-entry-per-document charge, extended
+    /// to members and links. No cap, for the reason that map has none: the
+    /// count is the docuverse's. An `OrdMap` so the checkpoint's bytes are a
+    /// function of the contents, as every sibling is.
+    minted_at: im::OrdMap<Address, Seq>,
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +434,24 @@ pub fn head_document() -> Address {
     validate(t).expect("the head document 1.1.0.1.0.2 is T4-valid by construction")
 }
 
+/// Returns the time document `T` = `1.1.0.1.0.4`.
+///
+/// It is doc 4 of [`system_account`], the daemon's own document of hourly
+/// `skep-time` records — each a published version member holding one record
+/// that names a committed position and the daemon's clock at it — which a
+/// reader of a minted address's age falls back on where the change feed's
+/// line is gone (wire.md §The other endpoints, the time document). Not
+/// seeded by [`M3State::genesis`]: the daemon's time writer mints it,
+/// published, at its first record, after the staging draft doc 3 the head
+/// writer and the registry seed share, so by the document chain's frontier
+/// it lands here. One spelling for the writer and every reader, as
+/// [`head_document`] is for `H`.
+pub fn time_document() -> Address {
+    let t = Tumbler::new([1u32, 1, 0, 1, 0, 4].into_iter().map(Nat::from))
+        .expect("a six-component sequence is nonempty");
+    validate(t).expect("the time document 1.1.0.1.0.4 is T4-valid by construction")
+}
+
 impl M3State {
     /// Returns Σ₀ + O14, plus the system account seed (PUB-6.65, RES-304).
     ///
@@ -440,6 +500,7 @@ impl M3State {
             nodes: im::OrdSet::unit(root.clone()),
             principals: im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL),
             publication: im::OrdMap::new(),
+            minted_at: im::OrdMap::new(),
         };
         let seed = [
             // `register_node`: the system node 1.1.
@@ -465,13 +526,22 @@ impl M3State {
                 published: true,
             }),
         ];
-        seed.iter().fold(roots, |s, r| s.apply_m3(r))
+        // Folded at `Seq(0)`, the genesis coordinate: the two documents enter
+        // the position map there, which is where a reader of the genesis
+        // state finds them registered.
+        seed.iter().fold(roots, |s, r| s.apply_m3(Seq(0), r))
     }
 
-    /// Returns the slice with `r` folded in: M3's fold.
+    /// Returns the slice with `r` folded in at position `at`: M3's fold.
     ///
     /// It is `pub`: the engine crate wires `World::apply`'s dispatch of the
-    /// variant carrying an [`M3Rec`] to this.
+    /// variant carrying an [`M3Rec`] to this, handing it the position of the
+    /// commit the record belongs to (M2's `WorldState::apply`), which the
+    /// fold keeps for every document, member and link an `Allocate` mints
+    /// (the position map, `minted_at`): written once, at the record that
+    /// mints the address, and read by [`M3State::minted_at`]. A position is a
+    /// journal fact and never a clock (DOCTRINE D1), so the fold stays a pure
+    /// function of the journal's content and order.
     ///
     /// **Totality domain.** M2's total-apply obligation, stated here at the
     /// seam the engine wires: total — deterministic, side-effect-free,
@@ -583,7 +653,7 @@ impl M3State {
     /// first ordinal regresses or jumps meets the same check in a
     /// `debug_assert` of its own.
     #[must_use = "apply_m3 returns the folded slice; it does not modify the receiver"]
-    pub fn apply_m3(&self, r: &M3Rec) -> M3State {
+    pub fn apply_m3(&self, at: Seq, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
             M3Rec::Allocate(Allocation { addr, published }) => {
@@ -605,6 +675,15 @@ impl M3State {
                 // test holds it in release, where the check above is absent.
                 if addr.level() == Level::Document && !s.publication.contains_key(addr) {
                     s.publication.insert(addr.clone(), *published);
+                }
+                // The position map (the `minted_at` field's card): a document
+                // or a version member — Document-tier — and a link element;
+                // written once, at the record that mints the address, on
+                // every build, as the bit above is.
+                if (addr.level() == Level::Document || is_link_slot(addr))
+                    && !s.minted_at.contains_key(addr)
+                {
+                    s.minted_at.insert(addr.clone(), at);
                 }
             }
             M3Rec::RegisterNode { addr } => {
@@ -634,6 +713,33 @@ impl M3State {
             }
         }
         s
+    }
+}
+
+/// Returns whether `e` is an element of a link chain: `d·0·2·n`.
+///
+/// It is the position map's test for the one element family it enters —
+/// [`is_content_or_link_slot`] narrowed to the link subspace — asked of the
+/// address alone, as the fold must.
+fn is_link_slot(e: &Address) -> bool {
+    matches!(e.element_field(), Some([s, _]) if *s == link_subspace())
+}
+
+impl M3State {
+    /// Returns the position the record that minted `a` committed at.
+    ///
+    /// It is the position map's entry (the `minted_at` field's card): `Some`
+    /// for every document, version member and link minted by a build that
+    /// keeps the map — genesis's two seeded documents at `Seq(0)` — and
+    /// `None` for every other address: a content element, an account, a
+    /// node, an address never minted, and one minted by a build that kept no
+    /// map, which a checkpoint written without the field never carries. A
+    /// point lookup, `O(log |entries|)`; the same at every position from the
+    /// mint on, since an entry is written once and never moved. What a
+    /// reader is served for it, and the time beside it, is the wire's
+    /// (`doc_metadata`'s and `read_link`'s `at`, `time`, `time_from`).
+    pub fn minted_at(&self, a: &Address) -> Option<Seq> {
+        self.minted_at.get(a).copied()
     }
 }
 

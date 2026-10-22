@@ -12,9 +12,9 @@ use skep_arrangement::{Base, Run, RunError, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, ISpan, Op, OpKind,
-    ParseError, RejectCode, Rejection, ReqId, Request, Response, ShotTerms, SlotArg,
-    SuccessorSpec, UniversalGrant,
+    BirthVersion, Codec, Deposit, Disposition, EditionClaim, FaultSite, ISpan, MintTime, Op,
+    OpKind, ParseError, RejectCode, Rejection, ReqId, Request, Response, ShotTerms, SlotArg,
+    SuccessorSpec, TimeSource, UniversalGrant,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
@@ -925,10 +925,12 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                     ])
                     .expect("arity-3 link fixture"),
                 ),
+                at: Some(Seq(7)),
+                time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
                 as_of: Seq(9),
             },
         ),
-        ("link_value_null", Response::LinkValue { link: None, as_of: Seq(9) }),
+        (("link_value_null", Response::LinkValue { link: None, at: None, time: None, as_of: Seq(9) })),
         (
             "follow",
             Response::Follow {
@@ -983,6 +985,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: Some(BirthVersion { addr: a(&[1, 0, 1, 0, 1, 1]), extent: n(5) }),
                 terms: Some(ShotTerms { placed: n(5), base_extent: Some(n(3)) }),
                 source: None,
+                at: Some(Seq(7)),
+                time: Some(MintTime { millis: 1_786_838_400_047, source: TimeSource::Feed }),
                 as_of: Seq(9),
             },
         ),
@@ -995,6 +999,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: None,
                 terms: None,
                 source: None,
+                at: Some(Seq(8)),
+                time: Some(MintTime { millis: 1_786_838_400_052, source: TimeSource::Anchor }),
                 as_of: Seq(9),
             },
         ),
@@ -1009,6 +1015,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 birth: None,
                 terms: None,
                 source: Some(a(&[1, 0, 1, 0, 1, 1])),
+                at: None,
+                time: None,
                 as_of: Seq(9),
             },
         ),

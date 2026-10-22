@@ -198,11 +198,11 @@ fn a_zero_frontier_is_an_empty_chain_at_both_reads() {
     let acct = a(&[1, 0, 1]);
     let doc = a(&[1, 0, 1, 0, 1]);
     let mut s = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate(Allocation {
+        .apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
             addr: acct.clone(),
             published: false,
         }))
-        .apply_m3(&M3Rec::Allocate(Allocation {
+        .apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
             addr: doc.clone(),
             published: true,
         }));
@@ -248,11 +248,11 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
     let acct = a(&[1, 0, 1]);
     let doc = a(&[1, 0, 1, 0, 1]);
     let minted = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate(Allocation {
+        .apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
             addr: acct.clone(),
             published: false,
         }))
-        .apply_m3(&M3Rec::Allocate(Allocation {
+        .apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
             addr: doc.clone(),
             published: false,
         }));
@@ -260,7 +260,7 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
 
     let mut regressed = minted.clone();
     regressed.frontiers.insert(document_ns(&acct), Nat::zero());
-    let replayed = regressed.apply_m3(&M3Rec::Allocate(Allocation {
+    let replayed = regressed.apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
         addr: doc.clone(),
         published: true,
     }));
@@ -283,7 +283,7 @@ fn a_replayed_allocate_never_moves_a_documents_bit() {
 fn latest_version_reads_the_chain_not_the_registry() {
     let unregistered_doc = a(&[1, 0, 1, 0, 9]);
     let member = a(&[1, 0, 1, 0, 9, 1]);
-    let s = M3State::genesis().apply_m3(&M3Rec::Allocate(Allocation {
+    let s = M3State::genesis().apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
         addr: member.clone(),
         published: false,
     }));
@@ -306,7 +306,7 @@ fn latest_version_reads_the_chain_not_the_registry() {
 #[test]
 fn has_documents_reads_the_chain_not_the_registry() {
     let unregistered_acct = a(&[1, 0, 9]);
-    let s = M3State::genesis().apply_m3(&M3Rec::Allocate(Allocation {
+    let s = M3State::genesis().apply_m3(Seq(1), &M3Rec::Allocate(Allocation {
         addr: a(&[1, 0, 9, 0, 1]),
         published: false,
     }));
@@ -362,7 +362,7 @@ fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
             .iter()
             .enumerate()
             .fold(M3State::genesis(), |s, (nth, prefix)| {
-                s.apply_m3(&M3Rec::RegisterPrincipal(Principal {
+                s.apply_m3(Seq(1), &M3Rec::RegisterPrincipal(Principal {
                     prefix: a(prefix),
                     id: PrincipalId(nth as u64 + 1),
                 }))
@@ -435,11 +435,11 @@ fn effective_owner_pair_is_omega_unprojected() {
     let (x, x_id) = (a(&[1, 0, 1]), PrincipalId(7));
     let (sub_acct, sub_acct_id) = (a(&[1, 0, 1, 2]), PrincipalId(9));
     let s = M3State::genesis()
-        .apply_m3(&M3Rec::RegisterPrincipal(Principal {
+        .apply_m3(Seq(1), &M3Rec::RegisterPrincipal(Principal {
             prefix: x.clone(),
             id: x_id,
         }))
-        .apply_m3(&M3Rec::RegisterPrincipal(Principal {
+        .apply_m3(Seq(1), &M3Rec::RegisterPrincipal(Principal {
             prefix: sub_acct.clone(),
             id: sub_acct_id,
         }));

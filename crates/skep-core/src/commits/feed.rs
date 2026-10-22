@@ -1817,6 +1817,36 @@ impl Feed {
         above.extend(inner.log.entries_above(position));
         above
     }
+
+    /// Returns the recorded wall-clock time of the entry at `position`.
+    ///
+    /// It is the one line's `time` — the daemon's testimony of when that
+    /// commit landed, the minute a link's or a member's age is answered to
+    /// (wire.md §Links (raw reads), `read_link`'s `time`; §Namespace,
+    /// `doc_metadata`'s) — read off the resident window where the position
+    /// lies in it, else off `commits.log` by position through the one
+    /// on-disk read ([`Cursor`]): a binary search over the file, order
+    /// log₂(its bytes) probes, never a walk. `None` where the feed holds no
+    /// time for the position: a bare entry (its testimony lost), a position
+    /// the walk behind the listener has yet to land, one at or below the
+    /// fence an earlier build's compaction left, one no entry was ever
+    /// written for, or a file the OS refuses to read — every one a case the
+    /// reader falls back from to the hour record kept in the world
+    /// (`commits/time.rs`, `hour_at`), never an invented value.
+    pub(crate) fn time_at(&self, position: u64) -> Option<u64> {
+        let inner = self.inner.lock();
+        if position == 0 || position <= inner.log.fence() {
+            return None;
+        }
+        if position >= inner.log.resident_from() {
+            return inner.log.entries().get(&position).and_then(CommitMeta::time);
+        }
+        let mut lines = LogLines::above(&inner.dir, position - 1).ok()?;
+        match lines.next() {
+            Ok(Some((_, at, meta))) if at == position => meta.time(),
+            _ => None,
+        }
+    }
 }
 
 /// The lines of `commits.log` above a position, read off the file.

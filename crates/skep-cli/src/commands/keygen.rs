@@ -9,25 +9,22 @@
 //! store's `generate`, its lookup, `backup_moment` at the door side,
 //! `encode_enroll` — and so the carrier of this form's own text: the box's
 //! statements by venue, the custody line, the abandonment's disposition,
-//! the one-door line, and a generation's refusal.
+//! and the one-door line.
 //!
 //! **The order.** The device-name box, then at the door side the backup
 //! moment, then the device key's generation — so a moment stopped short
 //! leaves no unbound device key in the store for the next run's to stand
-//! beside, where §3.5 arm 3's "exactly one device key" would select none;
-//! and a generation the store could not write names the volume's room and
-//! the file its failed write left behind ([`generation_refused`]), which
-//! every later listing of the store would otherwise halt on, or select
-//! beside the next run's.
+//! beside, where §3.5 arm 3's "exactly one device key" would select none.
+//! A generation the store cannot write leaves nothing of the key behind
+//! (§3.7), and its halt is the store's own.
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 use skep_client::ceremony::backup::{backup_moment, BackupOptions, Venue};
 use skep_client::halt::Halt;
 use skep_client::person::{LabelBox, Person, Public, Statement};
 use skep_client::sheet::{group_hex, Label};
-use skep_client::store::{FileStore, KeySelector, KeyStore, Purpose, StoreError};
+use skep_client::store::{KeySelector, KeyStore, Purpose};
 use skep_identity::{encode_enroll, Enrollment};
 
 use super::{data, host_name_and_date, record_refused, require_terminal, store_of, talk, BoxDefault, Door, Stop, OUTSTANDING_ACT};
@@ -83,47 +80,6 @@ const ABANDONED: &str = "this form delegates nothing and leaves no board state b
 /// The generation is the device key's, which follows the moment (the
 /// module's order).
 const NOTHING_STORED: &str = "and nothing of this form is in the key store: its device key is generated after the moment";
-
-/// Returns the halt a generation the store could not write comes to.
-///
-/// It names the write's own cause beside the volume's room, never the
-/// "missing, unreadable or mis-pathed" face a lookup's read meets
-/// (`StoreError::Io`'s conversion). Where the file this run created stands
-/// — its write cut short at a full volume or a file-size limit, or written
-/// whole and its sync refused, as a filesystem that allocates late answers
-/// at a full volume — it is named as the one to remove, since no line
-/// printed its key and no board knows it: a partial file stops every later
-/// `skep` command that lists the store (`FileStore::list` refuses a store
-/// holding a file that does not parse), and a whole one stands beside the
-/// next run's as a second device key, where §3.5 arm 3's "exactly one"
-/// selects none. A file an `O_EXCL` open met standing is no file of this
-/// run's, and is never named.
-fn generation_refused(e: StoreError, store: &FileStore) -> Halt {
-    match e {
-        StoreError::Io { path, error } => {
-            let created = error.kind() != io::ErrorKind::AlreadyExists && path.is_file();
-            let remnant = match (created, created && store.load(&path).is_ok()) {
-                (false, _) => String::new(),
-                (true, false) => format!(
-                    "; then remove {}, the partial file this run left — no line printed its key and no board knows it, and every later \
-                     `skep` command that lists this store halts on it",
-                    path.display()
-                ),
-                (true, true) => format!(
-                    "; then remove {}, the key file this run wrote and never printed — no board knows its key, and left in place it \
-                     stands beside the next run's as a second device key, where a lookup selects none",
-                    path.display()
-                ),
-            };
-            Halt::face(
-                format!("the key store could not write {}: {error}", path.display()),
-                "the generation's write failed — at a full volume, the volume's room — and nothing was printed",
-                format!("free room on the volume holding {}{remnant}; then run `skep keygen` again", store.root().display()),
-            )
-        }
-        other => other.into(),
-    }
-}
 
 pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
     let store = store_of(c)?;
@@ -185,9 +141,9 @@ pub fn keygen(c: &CommandLine) -> Result<(), Stop> {
             entries.push(Enrollment::new(a.public.clone(), true, Some(a.label.as_str().to_string())).map_err(record_refused).inspect_err(|_| abandoned())?);
         }
     }
-    let id = store.generate(Some(label.clone())).map_err(|e| generation_refused(e, &store)).inspect_err(|_| {
+    let id = store.generate(Some(label.clone())).inspect_err(|_| {
         // The moment's anchors stand written: their disposition, beside the
-        // generation's halt, which names what the store holds.
+        // generation's halt, which says the store holds nothing of its key.
         if door_side {
             talk(ABANDONED);
         }

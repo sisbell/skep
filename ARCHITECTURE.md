@@ -1313,10 +1313,15 @@ Rules that hold across its files:
   composition names no walk. `tests/it/tidy.rs` checks it.
 - **Key material is written once, and no anchor rests in the store.**
   `FileStore::write_once` — `O_CREAT|O_EXCL`, mode `0600` at creation —
-  writes every key file and every anchor file; a path inside the store is
-  refused as an anchor's destination and as its source (§3.4). The store is
-  a stored key's custodian: a lookup answers public facts, and the seed
-  leaves the store only as the signer `KeyStore::signer` derives (§3a).
+  writes every key file and every anchor file, and a write that fails
+  removes what it made. A key file enters `keys/` only whole — written as
+  `<fingerprint>.key.tmp`, renamed to its name, the directory synced — so
+  no listing of the store meets one cut short (§3.3, §3.7); a `keys/` file
+  a listing cannot read is faced naming it and the act that clears it. A
+  path inside the store is refused as an anchor's destination and as its
+  source (§3.4). The store is a stored key's custodian: a lookup answers
+  public facts, and the seed leaves the store only as the signer
+  `KeyStore::signer` derives (§3a).
 - **No journal.** Every walk resumes by reading the board (P4); the one
   kind of line written ahead of a frame is the persist-first `new_id`
   binding line (§4.3; AUTH-5.20).

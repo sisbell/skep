@@ -15,8 +15,8 @@
 //! default store and its edges, the pending state beside a bound key,
 //! `bind`'s paste prompt on stderr; and the failures a board's or a
 //! volume's own state makes — a write refused `durability` or `poisoned`
-//! naming the act that clears it, a key file's write cut short naming the
-//! remnant, a binding said only where the store reads it back.
+//! naming the act that clears it, a key's generation cut short or killed
+//! leaving no key file, a binding said only where the store reads it back.
 
 use std::path::{Path, PathBuf};
 
@@ -33,7 +33,7 @@ use skep_signature::HybridSigner;
 use skepd::Skepd;
 
 #[cfg(unix)]
-use crate::common::under_a_file_size_limit;
+use crate::common::{killed_at_a_file_size_limit, under_a_file_size_limit};
 use crate::common::{canned, origin, s, skep, skep_in, skep_os, skep_stderr_closed, skep_stdout_closed, spawn, spawn_tapped};
 
 const SEVEN: [&str; 7] = ["keygen", "claim", "session", "fingerprint", "verify", "health", "bind"];
@@ -1302,36 +1302,58 @@ fn keygen_s_box_answered_with_bytes_that_are_not_text_says_why_it_is_abandoned()
     assert!(!store.exists(), "nothing generated");
 }
 
-/// A KEY FILE WHOSE WRITE WAS CUT SHORT IS NAMED AS THE REMNANT TO REMOVE
-/// (`keygen`'s `generation_refused`): under a file-size limit the key file's
-/// write fails partway — the short write a full volume makes — and `keygen`
-/// halts naming the write it could not make and the volume's room, never a
-/// "mis-pathed" key file, with the partial file it left named for removal.
-/// Left in place, that file stops every command that lists the store; once
-/// removed, the store lists again.
+/// Returns every file under `store`'s `keys/` whose name ends in `.<ext>`.
+#[cfg(unix)]
+fn keys_ending_in(store: &Path, ext: &str) -> Vec<PathBuf> {
+    let entries = std::fs::read_dir(store.join("keys")).expect("the keys directory");
+    entries.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == ext)).collect()
+}
+
+/// A GENERATION CUT SHORT LEAVES NO KEY FILE, AND THE STORE LISTS (§3.7; the
+/// store's `Unwritten`): under a file-size limit the key's write fails
+/// partway — the short write a full volume makes — and `keygen` halts naming
+/// the write it could not make and the volume's room, never a "mis-pathed"
+/// key file and never a file to remove: a key file enters `keys/` only
+/// whole, so nothing of the key is left, every listing goes on, and the next
+/// generation stands alone.
 #[cfg(unix)]
 #[test]
-fn a_key_file_its_write_cut_short_is_named_as_the_remnant_to_remove() {
+fn a_generation_cut_short_leaves_no_key_file_and_the_store_lists() {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("store");
     let out = under_a_file_size_limit(env!("CARGO_BIN_EXE_skep"), &["keygen", "--label", "k", "--dir", s(&store)], 1).output().expect("keygen under a file-size limit");
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code(), Some(3), "{err}");
     assert!(out.stdout.is_empty(), "no fingerprint printed: {}", String::from_utf8_lossy(&out.stdout));
-    let remnants: Vec<PathBuf> = std::fs::read_dir(store.join("keys")).expect("the keys directory").map(|e| e.unwrap().path()).collect();
-    let [remnant] = remnants.as_slice() else { panic!("one partial key file: {remnants:?}") };
-    assert!(
-        err.contains(&format!("the key store could not write {}", remnant.display()))
-            && err.contains("free room on the volume holding")
-            && err.contains(&format!("then remove {}, the partial file this run left", remnant.display())),
-        "{err}"
-    );
-    assert!(!err.contains("mis-pathed"), "{err}");
+    let left: Vec<PathBuf> = std::fs::read_dir(store.join("keys")).expect("the keys directory").map(|e| e.unwrap().path()).collect();
+    assert!(left.is_empty(), "nothing of the key is left in the store: {left:?}");
+    assert!(err.contains("the key store could not write") && err.contains("free room on the volume holding"), "{err}");
+    assert!(!err.contains("mis-pathed") && !err.contains("then remove"), "{err}");
     let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
-    assert_eq!(r.code, 3, "the remnant stops every listing of the store: {r:?}");
-    std::fs::remove_file(remnant).unwrap();
+    assert_eq!(r.code, 0, "the store lists with nothing removed: {r:?}");
+    let r = skep(&["keygen", "--label", "k", "--dir", s(&store)], &[], None);
+    assert_eq!(r.code, 0, "{r:?}");
+    assert_eq!(keys_ending_in(&store, "key").len(), 1, "the next generation stands alone");
+    assert!(keys_ending_in(&store, "tmp").is_empty());
+}
+
+/// A GENERATION KILLED INSIDE ITS WRITE LEAVES NO KEY FILE (§3.7): the
+/// file-size limit's own signal, left at its default, kills `keygen` partway
+/// through the key's bytes — where no failure path runs, and its `.tmp`
+/// stands — and still no `*.key` file stands in the store, so every listing
+/// goes on.
+#[cfg(unix)]
+#[test]
+fn a_generation_killed_mid_write_leaves_no_key_file_and_the_store_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("store");
+    let args = ["keygen", "--label", "k", "--dir", s(&store)];
+    let out = killed_at_a_file_size_limit(env!("CARGO_BIN_EXE_skep"), &args, 1, dir.path()).output().expect("keygen killed at a file-size limit");
+    assert_eq!(out.status.code(), None, "killed by its signal: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(keys_ending_in(&store, "tmp").len(), 1, "the kill came inside the key's write");
+    assert!(keys_ending_in(&store, "key").is_empty(), "no key file stands");
     let r = skep(&["fingerprint", "--dir", s(&store)], &[], None);
-    assert_eq!(r.code, 0, "removed, the store lists again: {r:?}");
+    assert_eq!(r.code, 0, "the store lists: {r:?}");
 }
 
 /// THE PENDING STATE BESIDE A BOUND KEY (AUTH-5.32; §2.2 `fingerprint`): in a

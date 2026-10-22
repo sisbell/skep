@@ -249,6 +249,21 @@ pub fn under_a_file_size_limit<A: AsRef<OsStr>>(program: &str, args: &[A], block
     cmd
 }
 
+/// `program` with `args` under `/bin/sh`'s file-size limit of `blocks`
+/// blocks, as [`under_a_file_size_limit`]'s, with `SIGXFSZ` left at its
+/// default: a write past the limit kills the program inside it, where no
+/// failure path of its own runs. Core dumps are off and the working
+/// directory is `cwd`, so nothing of the kill lands outside the test's own
+/// directory; the environment is scrubbed ([`scrub`]), stdin null and the
+/// two output streams piped.
+#[cfg(unix)]
+pub fn killed_at_a_file_size_limit<A: AsRef<OsStr>>(program: &str, args: &[A], blocks: u32, cwd: &Path) -> Command {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", &format!("ulimit -c 0 && ulimit -f {blocks} && exec \"$0\" \"$@\""), program]).args(args).current_dir(cwd);
+    scrub(&mut cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd
+}
+
 /// `text` quoted as one `/bin/sh` word.
 pub fn shell_word(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))

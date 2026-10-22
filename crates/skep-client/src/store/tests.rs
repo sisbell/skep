@@ -1,5 +1,6 @@
-//! The store (`client.md` §3): the modes, `O_EXCL`, the doctored files'
-//! refusals, the lookup's arms, the two line forms, the lock.
+//! The store (`client.md` §3): the modes, `O_EXCL`, a key file entering the
+//! store whole or not at all, the doctored files' refusals — read alone and
+//! met by a listing — the lookup's arms, the two line forms, the lock.
 
 use std::fs;
 
@@ -18,7 +19,8 @@ fn mode(path: &Path) -> u32 {
 }
 
 /// §3.3 — the directory `0700`, the file `0600`; §3.7 — a second `keygen`
-/// makes a second file under `O_EXCL` and never rewrites the first.
+/// makes a second file under `O_EXCL` and never rewrites the first, each
+/// published whole under its name with no `.tmp` left beside it.
 #[test]
 fn generate_writes_once_under_the_modes() {
     let (_dir, store) = store();
@@ -28,6 +30,11 @@ fn generate_writes_once_under_the_modes() {
     let keys = store.list().unwrap();
     assert_eq!(keys.len(), 2);
     assert!(keys.iter().all(|k| !k.anchor));
+    let mut names: Vec<String> = fs::read_dir(store.root().join("keys")).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    let mut expected = vec![format!("{}.key", a.0.to_hex()), format!("{}.key", b.0.to_hex())];
+    names.sort();
+    expected.sort();
+    assert_eq!(names, expected, "every key file under its own name, and nothing beside them");
     #[cfg(unix)]
     {
         assert_eq!(mode(store.root()), 0o700);
@@ -351,4 +358,81 @@ fn a_key_file_past_its_bound_or_no_regular_file_is_refused_unread() {
     assert_eq!(crate::sheet::read_key_file(&sparse).unwrap().len() as u64, MAX_KEY_FILE_BYTES + 1, "read no further than the byte past the bound");
     #[cfg(unix)]
     assert!(matches!(store.load(Path::new("/dev/zero")), Err(StoreError::Io { .. })), "a device is no key file");
+}
+
+/// §3.3, §3.7 — a key file not yet published, `<fingerprint>.key.tmp`, is
+/// never read: a listing, the device keys, §3.5 arm 3 and a `--select` of its
+/// name each answer as if it were absent, and a generation stands beside it.
+#[test]
+fn a_key_file_not_yet_published_is_never_listed() {
+    let (_dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let id = store.generate(Some(Label::new("whole").unwrap())).unwrap();
+    let text = fs::read(store.key_path(&id.0)).unwrap();
+    let pending = KeyFile::new(Seed::new([9u8; 32]), false, None, None).fingerprint;
+    fs::write(store.root().join("keys").join(format!("{}.key.tmp", pending.to_hex())), &text[..100]).unwrap();
+    assert_eq!(store.list().unwrap().iter().map(|k| k.fingerprint).collect::<Vec<_>>(), [id.0]);
+    assert_eq!(store.device_keys().unwrap().iter().map(|k| k.fingerprint).collect::<Vec<_>>(), [id.0]);
+    let lone = store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign).unwrap();
+    assert_eq!(lone.fingerprint, id.0, "arm 3 meets the one device key");
+    assert!(matches!(store.select(&KeySelector::select(&pending.to_hex()[..12]), Purpose::Read), Err(StoreError::NotFound { .. })));
+    let second = store.generate(None).unwrap();
+    assert_eq!(store.list().unwrap().len(), 2, "a generation stands beside it");
+    assert_ne!(second.0, pending);
+}
+
+/// §3.2; AUTH-5.67 — a `keys/` file its own contents refuse stops every
+/// listing of the store — `list`, the device keys, §3.5 arm 3 — as
+/// `Unlistable`, and its face names the file and the act that clears it:
+/// move it aside, or, for a newer skep's key, upgrade — never a generation,
+/// which lists nothing and leaves the halt standing. Moved aside, the store
+/// lists again.
+#[test]
+fn a_file_cut_short_in_the_store_halts_its_listing_naming_the_file_to_move() {
+    let (dir, store) = store();
+    let origin = Origin::parse("http://127.0.0.1:8642").unwrap();
+    let id = store.generate(Some(Label::new("whole").unwrap())).unwrap();
+    let text = fs::read_to_string(store.key_path(&id.0)).unwrap();
+    let cut = store.root().join("keys").join(format!("{}.key", "ab".repeat(32)));
+    fs::write(&cut, &text[..text.len() / 2]).unwrap();
+    let unlistable = |r: Result<(), StoreError>| matches!(r, Err(StoreError::Unlistable { path, error: KeyFileError::NotKeyFile }) if path == cut);
+    assert!(unlistable(store.list().map(drop)), "the listing");
+    assert!(unlistable(store.device_keys().map(drop)), "the device keys");
+    assert!(unlistable(store.select(&KeySelector::Board { origin: &origin, principal: Some(1) }, Purpose::Sign).map(drop)), "arm 3");
+    let face = Halt::from(store.list().unwrap_err()).to_string();
+    assert!(face.contains(&format!("move {} out of", cut.display())), "{face}");
+    assert!(!face.contains("run `skep keygen`"), "a generation lists nothing and leaves the halt standing: {face}");
+    fs::rename(&cut, dir.path().join("aside.key")).unwrap();
+    assert_eq!(store.list().unwrap().iter().map(|k| k.fingerprint).collect::<Vec<_>>(), [id.0], "moved aside, the store lists again");
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["v"] = serde_json::Value::from(2);
+    fs::write(store.root().join("keys").join(format!("{}.key", "cd".repeat(32))), v.to_string()).unwrap();
+    let newer = store.list().unwrap_err();
+    assert!(matches!(newer, StoreError::Unlistable { error: KeyFileError::Newer { v: 2 }, .. }), "{newer:?}");
+    let face = Halt::from(newer).to_string();
+    assert!(face.contains("upgrade skep") && !face.contains("move "), "{face}");
+}
+
+/// §3.3, §3.7 — a generation the store cannot finish is `Unwritten` and
+/// leaves nothing of the key: with `keys/` read-only the store holds the key
+/// it held and lists it, and the face names the write and the volume's
+/// room, never a "mis-pathed" key file a lookup reads.
+#[cfg(unix)]
+#[test]
+fn a_generation_that_cannot_write_leaves_no_key_and_is_faced_as_a_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, store) = store();
+    let first = store.generate(None).unwrap();
+    let keys = store.root().join("keys");
+    fs::set_permissions(&keys, fs::Permissions::from_mode(0o500)).unwrap();
+    let refused = store.generate(None);
+    fs::set_permissions(&keys, fs::Permissions::from_mode(0o700)).unwrap();
+    let error = refused.expect_err("a read-only keys directory takes no key");
+    assert!(matches!(error, StoreError::Unwritten { .. }), "{error:?}");
+    let face = Halt::from(error).to_string();
+    assert!(face.contains("could not write") && face.contains(&format!("free room on the volume holding {}", keys.display())), "{face}");
+    assert!(!face.contains("mis-pathed"), "{face}");
+    let names: Vec<String> = fs::read_dir(&keys).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    assert_eq!(names, [format!("{}.key", first.0.to_hex())], "nothing of the refused key stands");
+    assert_eq!(store.list().unwrap().len(), 1);
 }

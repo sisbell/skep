@@ -2,22 +2,25 @@
 //!
 //! It is the `KeyStore` seam (§1.4) — `generate`, `signer`, `bindings`,
 //! `bind` — and its `FileStore` arm, plain files with modes (§3a's rung 1):
-//! `<store>/keys/<fingerprint>.key` written once under `O_EXCL` at mode
-//! `0600` in a `0700` directory (§3.3), the append-only `bindings` file in
-//! its two line forms (§3.5) under the advisory lock `<store>/lock` (§3.7),
-//! and no anchor under the store, ever (§3.4; AUTH-5.54 step 3). The store
-//! is the seed's custodian (§3a: "signing and key lookup behind `Signer` and
-//! `KeyStore`"): a lookup answers a key's public facts, [`KeyFacts`], and
-//! the seed leaves a lookup only as the signer [`KeyStore::signer`] derives
-//! from it — [`FileStore::load`], the store's own reader, hands a file out
-//! with its seed — so a later custody rung is a different signer behind
-//! that one method, never a rewrite of a walk (§1.4). The refusals are the
-//! store's own faces ([`StoreError`], [`KeyFileError`]), never wire tokens,
-//! each converted into AUTH-5.67's halt naming the state, and the path where
-//! there is one, by `From<StoreError> for Halt`, so a walk's `?` carries it;
-//! a lookup that selects no key is §3.5 arm 4's fork, [`arm4_face`]. A
-//! binding line that cannot be appended is no refusal at all:
-//! [`Unappended`], the warning carrying the line (§3.7).
+//! `<store>/keys/<fingerprint>.key` in a `0700` directory, written once —
+//! its bytes under `O_EXCL` at mode `0600` to `<fingerprint>.key.tmp`,
+//! synced, then published by a rename and the directory's sync, so no
+//! lookup reads a key file cut short (§3.3, §3.7) — the append-only
+//! `bindings` file in its two line forms (§3.5) under the advisory lock
+//! `<store>/lock` (§3.7), and no anchor under the store, ever (§3.4;
+//! AUTH-5.54 step 3). The store is the seed's custodian (§3a: "signing and
+//! key lookup behind `Signer` and `KeyStore`"): a lookup answers a key's
+//! public facts, [`KeyFacts`], and the seed leaves a lookup only as the
+//! signer [`KeyStore::signer`] derives from it — [`FileStore::load`], the
+//! store's own reader, hands a file out with its seed — so a later custody
+//! rung is a different signer behind that one method, never a rewrite of a
+//! walk (§1.4). The refusals are the store's own faces ([`StoreError`],
+//! [`KeyFileError`]), never wire tokens, each converted into AUTH-5.67's
+//! halt naming the state, and the path where there is one, by
+//! `From<StoreError> for Halt`, so a walk's `?` carries it; a lookup that
+//! selects no key is §3.5 arm 4's fork, [`arm4_face`]. A binding line that
+//! cannot be appended is no refusal at all: [`Unappended`], the warning
+//! carrying the line (§3.7).
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -177,14 +180,29 @@ impl KeyFacts {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StoreError {
-    /// A key file refused by its own contents.
+    /// A key file refused by its own contents, read alone.
     ///
-    /// AUTH-5.67's halt names the path and the state.
+    /// The file is the one a caller named or a lookup selected; one refused
+    /// while the store was listed is [`StoreError::Unlistable`]. AUTH-5.67's
+    /// halt names the path and the state.
     KeyFile { path: PathBuf, error: KeyFileError },
-    /// A path missing, unreadable, unwritable or mis-pathed.
+    /// A `keys/` file a listing of the store could not read as a key.
+    ///
+    /// Its own contents refuse it (§3.2). Every lookup that lists the store
+    /// reads each `*.key` file under `keys/` — §3.5 arm 3, `--select`, the
+    /// device keys — so one such file stops them all, and AUTH-5.67's halt
+    /// names the file and the act that clears it.
+    Unlistable { path: PathBuf, error: KeyFileError },
+    /// A path missing, unreadable or mis-pathed.
     ///
     /// It is halt and surface naming it, never a fallback (AUTH-5.67).
     Io { path: PathBuf, error: io::Error },
+    /// A key the store could not write.
+    ///
+    /// Its directory or its file could not be made, written or synced. A key
+    /// file enters the store whole or not at all (§3.3, §3.7), so no lookup
+    /// meets a part of this key.
+    Unwritten { path: PathBuf, error: io::Error },
     /// A binding's fingerprint names no file in the store.
     MissingKey { path: PathBuf, fingerprint: Fingerprint },
     /// §3.5 arm 4: no key was selected.
@@ -203,8 +221,8 @@ pub enum StoreError {
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StoreError::KeyFile { path, error } => write!(f, "{}: {error}", path.display()),
-            StoreError::Io { path, error } => write!(f, "{}: {error}", path.display()),
+            StoreError::KeyFile { path, error } | StoreError::Unlistable { path, error } => write!(f, "{}: {error}", path.display()),
+            StoreError::Io { path, error } | StoreError::Unwritten { path, error } => write!(f, "{}: {error}", path.display()),
             StoreError::MissingKey { path, fingerprint } => {
                 write!(f, "{}: the bindings name key {fingerprint} and the store holds no file for it", path.display())
             }
@@ -264,11 +282,37 @@ impl From<StoreError> for Halt {
                     _ => "point `--key` at a key file `skep keygen` wrote, or run `skep keygen`",
                 },
             ),
+            StoreError::Unlistable { path, error } => {
+                let keys = path.parent().unwrap_or(path.as_path()).display().to_string();
+                Halt::face(
+                    format!("the key store holds a file it cannot read as a key: {}: {error}", path.display()),
+                    "every lookup that lists the store reads each `*.key` file under `keys/` — the lone device key's, `--select`, a walk's own \
+                     keys — and this file's own contents refuse it (client.md §3.2); a copy or a write that stopped part-way leaves such a \
+                     file, as does a hand edit",
+                    match error {
+                        KeyFileError::Newer { .. } => "upgrade skep: a newer skep wrote this key, and every listing of this store reads it".to_string(),
+                        _ => format!(
+                            "move {} out of {keys} — aside, not deleted, since it may be a key you hold nowhere else; once it is gone the store \
+                             lists again",
+                            path.display()
+                        ),
+                    },
+                )
+            }
             StoreError::Io { path, error } => Halt::face(
                 format!("the key file {} is missing, unreadable or mis-pathed: {error}", path.display()),
                 "AUTH-5.67: a key file missing, unreadable or mis-pathed is HALT AND SURFACE, never a fallback to a bare bind",
                 "check the path (`--key`, `SKEP_KEY`, `--dir`)",
             ),
+            StoreError::Unwritten { path, error } => {
+                let volume = path.parent().unwrap_or(path.as_path()).display().to_string();
+                Halt::face(
+                    format!("the key store could not write {}: {error}", path.display()),
+                    "a generation the store cannot finish — at a full volume or quota, a file-size limit, a read-only or failing volume — \
+                     makes no key: a key file enters `keys/` only whole, and what the run wrote toward one is removed",
+                    format!("free room on the volume holding {volume}, or make it writable; then run this again"),
+                )
+            }
             StoreError::MissingKey { path, fingerprint } => Halt::face(
                 format!("the bindings name key {fingerprint} and the store holds no file at {}", path.display()),
                 "the key file was removed from the store after the binding was written",
@@ -330,12 +374,14 @@ pub fn arm4_face(store: &FileStore, keys: &[KeyFacts], mode: Mode) -> Halt {
 pub trait KeyStore {
     /// Generates one device key of the production kind from a fresh OS seed.
     ///
-    /// Its file is written once; the fingerprint names it.
+    /// Its file is written once and enters the store whole or not at all
+    /// (§3.3, §3.7); the fingerprint names it.
     ///
     /// # Errors
     ///
-    /// The file store's [`StoreError::Io`], naming the directory it could
-    /// not make or the file it could not write.
+    /// The file store's [`StoreError::Unwritten`], naming the directory it
+    /// could not make or the key it could not write; the store removes what
+    /// the call wrote toward the key.
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError>;
     /// Returns the signer `sel` names, an anchor refused.
     ///
@@ -449,12 +495,15 @@ impl FileStore {
     ///
     /// The open is `O_CREAT|O_EXCL` with mode `0600` set at creation — never
     /// chmod'd after a world-readable moment. It is the one writer every key
-    /// file and anchor file of this crate goes through.
+    /// file and anchor file of this crate goes through. A write or a sync
+    /// that fails removes the file the call created, best effort; a kill
+    /// leaves what was written, so the store writes its key files beside
+    /// their names and renames them into place (`publish`).
     ///
     /// # Errors
     ///
     /// The open's, the write's and the sync's I/O errors — `AlreadyExists`
-    /// where a file stands at `path`.
+    /// where a file stands at `path`, which the call leaves as it stands.
     pub fn write_once(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let mut opts = OpenOptions::new();
         opts.write(true).create_new(true);
@@ -464,8 +513,43 @@ impl FileStore {
             opts.mode(0o600);
         }
         let mut file = opts.open(path)?;
-        file.write_all(bytes)?;
-        file.sync_all()
+        if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(path);
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Puts `bytes` at `path` whole or not at all (§3.3, §3.7).
+    ///
+    /// The bytes go to `<path>.tmp` — for a key file `<fingerprint>.key.tmp`,
+    /// a name [`FileStore::list`] never reads — under
+    /// [`FileStore::write_once`]; a rename then makes `path`, and the
+    /// directory is synced so the name is as durable as the bytes. A failure
+    /// removes what the call made, best effort; only a kill leaves a `.tmp`
+    /// behind.
+    ///
+    /// **Precondition.** No file stands at `path`, which a rename replaces:
+    /// the one caller names a fresh key by its fingerprint.
+    ///
+    /// # Errors
+    ///
+    /// The write's, the rename's and the directory sync's I/O errors.
+    fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        Self::write_once(&tmp, bytes)?;
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e);
+        }
+        if let Err(e) = sync_parent(path) {
+            let _ = fs::remove_file(path);
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Loads and judges one key file, the seed with it (§3.2's reader).
@@ -486,12 +570,15 @@ impl FileStore {
 
     /// Returns the public facts of every key file in the store.
     ///
-    /// They come in file name order.
+    /// They come in file name order. Only the `*.key` files under `keys/` are
+    /// read: a key not yet published, `*.key.tmp`, is never listed.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Io`] where the keys directory stands and cannot be read;
-    /// a key file's own refusal, [`FileStore::load`]'s, where one is refused.
+    /// [`StoreError::Io`] where the keys directory stands and cannot be read,
+    /// or a key file under it cannot be read; [`StoreError::Unlistable`]
+    /// where a key file's own contents refuse it — one such file stops the
+    /// whole listing, and its face names the file and the act that clears it.
     pub fn list(&self) -> Result<Vec<KeyFacts>, StoreError> {
         let dir = self.keys_dir();
         let entries = match fs::read_dir(&dir) {
@@ -505,7 +592,15 @@ impl FileStore {
             .filter(|p| p.extension().is_some_and(|x| x == "key"))
             .collect();
         paths.sort();
-        paths.iter().map(|p| self.facts_of(p)).collect()
+        paths
+            .iter()
+            .map(|p| {
+                self.facts_of(p).map_err(|e| match e {
+                    StoreError::KeyFile { path, error } => StoreError::Unlistable { path, error },
+                    other => other,
+                })
+            })
+            .collect()
     }
 
     /// Returns this store's device keys.
@@ -644,7 +739,8 @@ impl FileStore {
     /// [`StoreError::MissingKey`]; a prefix or a label that matches no key is
     /// [`StoreError::NotFound`], and one that matches more than one
     /// [`StoreError::Ambiguous`]; a key file is refused as [`FileStore::load`]
-    /// refuses it.
+    /// refuses it, and an arm that lists the store — arm 3, a prefix, a
+    /// label — meets [`FileStore::list`]'s refusals.
     pub fn select(&self, sel: &KeySelector<'_>, purpose: Purpose) -> Result<KeyFacts, StoreError> {
         let (path, file) = self.selected(sel, purpose)?;
         Ok(KeyFacts::of(path, &file))
@@ -758,6 +854,36 @@ impl FileStore {
     }
 }
 
+/// Syncs the directory holding `path`, so a rename into it is durable.
+///
+/// A directory that takes no sync is no failure: a filesystem that answers
+/// the sync `Unsupported`, or `InvalidInput` as some answer a directory's —
+/// there the name is as durable as the filesystem makes it.
+///
+/// # Errors
+///
+/// An I/O error opening or syncing the directory, save those two.
+#[cfg(unix)]
+fn sync_parent(path: &Path) -> io::Result<()> {
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    match fs::File::open(dir)?.sync_all() {
+        Err(e) if matches!(e.kind(), io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput) => Ok(()),
+        other => other,
+    }
+}
+
+/// Syncs nothing: on this platform a directory opens as no file.
+///
+/// A rename here is as durable as the filesystem makes it.
+///
+/// # Errors
+///
+/// Never.
+#[cfg(not(unix))]
+fn sync_parent(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// Returns `path` as the filesystem will resolve it.
 ///
 /// The resolution is the one that holds once its missing directories are
@@ -787,10 +913,10 @@ fn resolved(path: &Path) -> PathBuf {
 
 impl KeyStore for FileStore {
     fn generate(&self, label: Option<Label>) -> Result<KeyId, StoreError> {
-        self.ensure_dirs().map_err(|(path, error)| StoreError::Io { path, error })?;
+        self.ensure_dirs().map_err(|(path, error)| StoreError::Unwritten { path, error })?;
         let file = KeyFile::new(Seed::fresh(), false, label, None);
         let path = self.key_path(&file.fingerprint);
-        Self::write_once(&path, file.to_json().as_bytes()).map_err(|error| StoreError::Io { path, error })?;
+        Self::publish(&path, file.to_json().as_bytes()).map_err(|error| StoreError::Unwritten { path, error })?;
         Ok(KeyId(file.fingerprint))
     }
 
